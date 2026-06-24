@@ -307,6 +307,34 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# Loose top-level modules (ADR-023 M4a) — independent, low-cross-risk modules
+# flipped from the lenient default to strict islands. Spans the wire-boundary
+# serializer, config/routing/formsets/init plumbing, the public test client,
+# the JS-command builder, the simple/react/rust component shims, the CSS
+# framework adapters, the wizard/presence mixins, and the perf/profiler tooling.
+[[tool.mypy.overrides]]
+module = [
+    "djust.serialization",
+    "djust.config",
+    "djust.__init__",
+    "djust.routing",
+    "djust.formsets",
+    "djust.simple_live_view",
+    "djust.testing",
+    "djust.react",
+    "djust.rust_components",
+    "djust.frameworks",
+    "djust.js",
+    "djust.wizard",
+    "djust.performance",
+    "djust.profiler",
+    "djust.presence",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework
 # where mark_safe is expected and safe (content comes from trusted templates)

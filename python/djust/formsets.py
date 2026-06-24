@@ -48,7 +48,7 @@ def _resolve_prefix(formset_cls: Type[BaseFormSet], explicit: Optional[str] = No
     if explicit:
         return explicit
     if hasattr(formset_cls, "get_default_prefix"):
-        return formset_cls.get_default_prefix()
+        return str(formset_cls.get_default_prefix())
     return "form"
 
 
@@ -174,7 +174,7 @@ class FormSetHelpersMixin:
         return dict(data)
 
     @event_handler
-    def add_row(self, formset: str = "", **kwargs) -> None:
+    def add_row(self, formset: str = "", **kwargs: Any) -> None:
         """Append an empty row to the named formset and refresh the bound attr.
 
         The formset name doubles as the prefix — every entry in
@@ -191,7 +191,7 @@ class FormSetHelpersMixin:
         setattr(self, formset, updated)
 
     @event_handler
-    def remove_row(self, formset: str = "", prefix: str = "", **kwargs) -> None:
+    def remove_row(self, formset: str = "", prefix: str = "", **kwargs: Any) -> None:
         """Mark a row for deletion and refresh the bound attr.
 
         Args:

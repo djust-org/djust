@@ -17,13 +17,14 @@ class ReactComponentRegistry:
     server-side rendering with Rust and client-side hydration with React.
     """
 
-    def __init__(self):
-        self._components: Dict[str, Callable] = {}
-        self._component_modules: Dict[str, str] = {}
+    def __init__(self) -> None:
+        self._components: Dict[str, Callable[..., str]] = {}
+        # Each entry is ``{"module": <path>, "export": <name>}`` (see ``register``).
+        self._component_modules: Dict[str, Dict[str, str]] = {}
 
     def register(
         self, name: str, module_path: Optional[str] = None, component_name: Optional[str] = None
-    ):
+    ) -> Callable[[Callable[..., str]], Callable[..., str]]:
         """
         Decorator to register a React component.
 
@@ -38,7 +39,7 @@ class ReactComponentRegistry:
                 return f'<button class="{props.get("className", "")}">{children}</button>'
         """
 
-        def decorator(func: Callable):
+        def decorator(func: Callable[..., str]) -> Callable[..., str]:
             self._components[name] = func
             if module_path:
                 self._component_modules[name] = {
@@ -49,7 +50,7 @@ class ReactComponentRegistry:
 
         return decorator
 
-    def get(self, name: str) -> Optional[Callable]:
+    def get(self, name: str) -> Optional[Callable[..., str]]:
         """Get a registered component's renderer function."""
         return self._components.get(name)
 
@@ -103,7 +104,7 @@ react_components = ReactComponentRegistry()
 
 def register_react_component(
     name: str, module_path: Optional[str] = None, component_name: Optional[str] = None
-):
+) -> Callable[[Callable[..., str]], Callable[..., str]]:
     """
     Convenience function to register React components.
 

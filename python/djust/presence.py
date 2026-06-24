@@ -38,13 +38,16 @@ Template usage:
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
 
 from .decorators import event_handler
 from .push import push_to_view
+
+if TYPE_CHECKING:
+    from .backends.base import PresenceBackend
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +71,7 @@ class PresenceManager:
     """
 
     @staticmethod
-    def _backend():
+    def _backend() -> "PresenceBackend":
         from djust.backends.registry import get_presence_backend
 
         return get_presence_backend()
@@ -152,11 +155,11 @@ class PresenceMixin:
     # presence. See issue #1613.
     presence_unique_per_connection: bool = False
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._presence_tracked = False
-        self._presence_user_id = None
-        self._presence_meta = None
+        self._presence_user_id: Optional[str] = None
+        self._presence_meta: Optional[Dict[str, Any]] = None
 
     def _refresh_online_count(self) -> None:
         """Recompute ``self.online_count`` from the backend.
@@ -256,7 +259,7 @@ class PresenceMixin:
         # Last resort - use a default identifier
         return "unknown_user"
 
-    def track_presence(self, meta: Optional[Dict[str, Any]] = None):
+    def track_presence(self, meta: Optional[Dict[str, Any]] = None) -> None:
         """
         Start tracking this user's presence.
 
@@ -357,7 +360,7 @@ class PresenceMixin:
                 exc,
             )
 
-    def untrack_presence(self):
+    def untrack_presence(self) -> None:
         """Stop tracking this user's presence."""
         if not self._presence_tracked:
             return
@@ -385,7 +388,7 @@ class PresenceMixin:
         self._broadcast_presence_change()
 
     @event_handler
-    def _on_presence_change(self, **kwargs):
+    def _on_presence_change(self, **kwargs: Any) -> None:
         """Default handler invoked when another session's track/untrack broadcasts.
 
         Refreshes ``self.online_count`` from the backend. The body MUST NOT
@@ -411,7 +414,7 @@ class PresenceMixin:
         presence_key = self.get_presence_key()
         return PresenceManager.presence_count(presence_key)
 
-    def update_presence_heartbeat(self):
+    def update_presence_heartbeat(self) -> None:
         """Update the heartbeat for this user's presence."""
         if not self._presence_tracked or not self._presence_user_id:
             return
@@ -419,7 +422,7 @@ class PresenceMixin:
         presence_key = self.get_presence_key()
         PresenceManager.update_heartbeat(presence_key, self._presence_user_id)
 
-    def handle_presence_join(self, presence: Dict[str, Any]):
+    def handle_presence_join(self, presence: Dict[str, Any]) -> None:
         """
         Called when a user joins the presence group.
 
@@ -430,7 +433,7 @@ class PresenceMixin:
         """
         pass
 
-    def handle_presence_leave(self, presence: Dict[str, Any]):
+    def handle_presence_leave(self, presence: Dict[str, Any]) -> None:
         """
         Called when a user leaves the presence group.
 
@@ -441,7 +444,7 @@ class PresenceMixin:
         """
         pass
 
-    def broadcast_to_presence(self, event: str, payload: Dict[str, Any] = None):
+    def broadcast_to_presence(self, event: str, payload: Optional[Dict[str, Any]] = None) -> None:
         """
         Broadcast an event to all users in the presence group.
 
@@ -538,7 +541,7 @@ class LiveCursorMixin(PresenceMixin):
                 pass
     """
 
-    def update_cursor_position(self, x: int, y: int):
+    def update_cursor_position(self, x: int, y: int) -> None:
         """Update cursor position for this user."""
         if not self._presence_tracked or not self._presence_user_id:
             return
@@ -564,7 +567,7 @@ class LiveCursorMixin(PresenceMixin):
         presence_key = self.get_presence_key()
         return CursorTracker.get_cursors(presence_key)
 
-    def handle_cursor_move(self, x: int, y: int):
+    def handle_cursor_move(self, x: int, y: int) -> None:
         """
         Handler called when cursor position is received from client.
 
@@ -576,7 +579,7 @@ class LiveCursorMixin(PresenceMixin):
         """
         self.update_cursor_position(x, y)
 
-    def untrack_presence(self):
+    def untrack_presence(self) -> None:
         """Override to also remove cursor when leaving presence."""
         if self._presence_tracked and self._presence_user_id:
             presence_key = self.get_presence_key()

@@ -14,7 +14,7 @@ Example:
     >>> btn2 = Button("btn2", "Submit").with_variant("success").with_icon("✓")
 """
 
-from typing import Optional, Literal
+from typing import Any, Dict, Literal, Optional
 
 try:
     from djust._rust import RustButton
@@ -22,7 +22,6 @@ try:
     _rust_available = True
 except ImportError:
     _rust_available = False
-    RustButton = None
 
 
 class ComponentNotAvailableError(ImportError):
@@ -31,7 +30,7 @@ class ComponentNotAvailableError(ImportError):
     pass
 
 
-def _check_rust_available():
+def _check_rust_available() -> None:
     """Check if Rust components are available."""
     if not _rust_available:
         raise ComponentNotAvailableError(
@@ -86,10 +85,10 @@ class Button:
         icon: Optional[str] = None,
         on_click: Optional[str] = None,
         button_type: str = "button",
-    ):
+    ) -> None:
         _check_rust_available()
 
-        kwargs = {}
+        kwargs: Dict[str, Any] = {}
         if variant != "primary":
             kwargs["variant"] = variant
         if size not in ("md", "medium"):
@@ -120,7 +119,7 @@ class Button:
         return self._inner.label
 
     @label.setter
-    def label(self, value: str):
+    def label(self, value: str) -> None:
         """Set button label."""
         self._inner.label = value
 
@@ -130,7 +129,7 @@ class Button:
         return self._inner.disabled
 
     @disabled.setter
-    def disabled(self, value: bool):
+    def disabled(self, value: bool) -> None:
         """Set disabled state."""
         self._inner.disabled = value
 

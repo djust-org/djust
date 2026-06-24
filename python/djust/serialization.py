@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, FrozenSet, List, Optional, Union
 from uuid import UUID
 
 from django.db import models
@@ -60,7 +60,7 @@ _ALWAYS_EXCLUDED_FIELDS = frozenset({"password", "is_superuser", "is_staff"})
 _IDENTITY_KEYS = frozenset({"pk", "id", "__str__", "__model__"})
 
 
-def _resolve_sensitive_fields():
+def _resolve_sensitive_fields() -> FrozenSet[str]:
     """Return the set of field names to always drop during model serialization.
 
     Unions the built-in ``_ALWAYS_EXCLUDED_FIELDS`` floor with the optional
@@ -90,7 +90,7 @@ def _resolve_sensitive_fields():
         return _ALWAYS_EXCLUDED_FIELDS
 
 
-def fast_json_loads(s):
+def fast_json_loads(s: Union[str, bytes]) -> Any:
     """Parse JSON string using orjson if available, stdlib json otherwise."""
     if HAS_ORJSON:
         import orjson
@@ -119,13 +119,13 @@ class DjangoJSONEncoder(json.JSONEncoder):
     _property_cache: Dict[type, List[str]] = {}
 
     @staticmethod
-    def _get_max_depth():
+    def _get_max_depth() -> int:
         """Get max depth from config (lazy load to avoid circular import)"""
         from .config import config
 
-        return config.get("serialization_max_depth", 3)
+        return int(config.get("serialization_max_depth", 3))
 
-    def default(self, obj):
+    def default(self, obj: Any) -> Any:
         # Track recursion depth to prevent infinite loops
         DjangoJSONEncoder._depth += 1
         try:
@@ -133,7 +133,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         finally:
             DjangoJSONEncoder._depth -= 1
 
-    def _default_impl(self, obj):
+    def _default_impl(self, obj: Any) -> Any:
         # AsyncResult — emit dict so templates can read .loading/.ok/.failed/.result/.error.
         # Closes #1274. Must come before Component check (AsyncResult is a frozen
         # dataclass; doesn't subclass Component but Component check is duck-typed
@@ -223,7 +223,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
         return super().default(obj)
 
-    def _serialize_model_safely(self, obj):
+    def _serialize_model_safely(self, obj: models.Model) -> Any:
         """Cache-aware model serialization that prevents N+1 queries.
 
         Only accesses related objects if they were prefetched via
@@ -326,7 +326,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         return result
 
     @staticmethod
-    def _get_denied_fields(obj):
+    def _get_denied_fields(obj: models.Model) -> FrozenSet[str]:
         """Effective set of field names to drop for *obj* (finding #19).
 
         Union of the global denylist (built-in floor + DJUST_SENSITIVE_FIELDS)
@@ -345,7 +345,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         return denied
 
     @staticmethod
-    def _get_allowlist_fields(obj):
+    def _get_allowlist_fields(obj: models.Model) -> Optional[FrozenSet[str]]:
         """Per-model ``djust_serializable_fields`` allowlist, or None.
 
         When present, ONLY these field names (plus identity keys) are
@@ -365,7 +365,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
             return None
 
     @staticmethod
-    def _get_sensitive_optout_fields(obj):
+    def _get_sensitive_optout_fields(obj: models.Model) -> FrozenSet[str]:
         """Per-model ``djust_serialize_sensitive_fields`` opt-out set (#1868).
 
         The ONLY mechanism that re-enables a hardcore-floor field
@@ -388,7 +388,12 @@ class DjangoJSONEncoder(json.JSONEncoder):
             return frozenset()
 
     @staticmethod
-    def _field_is_serializable(field_name, denied, allowed, optout=frozenset()):
+    def _field_is_serializable(
+        field_name: str,
+        denied: FrozenSet[str],
+        allowed: Optional[FrozenSet[str]],
+        optout: FrozenSet[str] = frozenset(),
+    ) -> bool:
         """Return True if *field_name* may be serialized (finding #19 / #1868).
 
         Precedence (the denylist floor is UNCONDITIONAL — #1868):
@@ -416,7 +421,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
             return field_name in allowed or field_name in optout
         return True
 
-    def _is_relation_prefetched(self, obj, field_name):
+    def _is_relation_prefetched(self, obj: models.Model, field_name: str) -> bool:
         """Check if a relation was loaded via select_related/prefetch_related.
 
         This prevents N+1 queries by only accessing relations that are
@@ -436,7 +441,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
         return False
 
-    def _add_safe_model_methods(self, obj, result):
+    def _add_safe_model_methods(self, obj: models.Model, result: Dict[str, Any]) -> None:
         """Add only explicitly defined model methods, skip auto-generated ones.
 
         Django auto-generates methods like get_next_by_created_at(),
@@ -493,7 +498,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
                     "Skipping method '%s' on %s during serialization", attr_name, type(obj).__name__
                 )
 
-    def _is_method_explicit(self, model_class, method_name):
+    def _is_method_explicit(self, model_class: type, method_name: str) -> bool:
         """Check if method is explicitly defined, not auto-generated by Django.
 
         Auto-generated methods like get_next_by_* are not in the class __dict__
@@ -506,7 +511,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
                 return True
         return False
 
-    def _add_property_values(self, obj, result):
+    def _add_property_values(self, obj: models.Model, result: Dict[str, Any]) -> None:
         """Add @property values defined on user model classes (not Django base)."""
         model_class = obj.__class__
 
@@ -563,7 +568,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
 _encoder = DjangoJSONEncoder()
 
 
-def render_form_value(value):
+def render_form_value(value: Any) -> Any:
     """Render a Django Form or BoundField to SafeString HTML.
 
     BoundField.__str__() delegates to as_widget() → widget.render(),

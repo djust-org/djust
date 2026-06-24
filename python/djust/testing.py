@@ -49,7 +49,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type
 
 from django.test import RequestFactory
 
@@ -303,7 +303,7 @@ class LiveViewTestClient:
             # _initialize_rust_view() → _sync_state_to_rust() → _rust_view.render()
             # Same code path as production WebSocket rendering.
             request = getattr(self.view_instance, "request", None)
-            return self.view_instance.render(request)
+            return str(self.view_instance.render(request))
 
         # Django fallback
         context = self.view_instance.get_context_data()
@@ -315,7 +315,7 @@ class LiveViewTestClient:
             raise RuntimeError(f"View {self.view_class.__name__} has no template_name")
 
         template = get_template(template_name)
-        return template.render(context)
+        return str(template.render(context))
 
     def render_with_patches(self) -> tuple:
         """Render and return ``(html, patches_list, version)`` for VDOM-diff
@@ -666,6 +666,7 @@ class LiveViewTestClient:
             RuntimeError: View not mounted.
         """
         self._require_mounted()
+        assert self.view_instance is not None  # narrowed by _require_mounted
         tasks = getattr(self.view_instance, "_async_tasks", None)
         if not tasks:
             return
@@ -852,7 +853,7 @@ class LiveViewTestClient:
             raise RuntimeError("View not mounted. Call client.mount() first.")
 
 
-async def _await_coro(coro):
+async def _await_coro(coro: Any) -> Any:
     """Helper for ``render_async`` — awaits a coroutine under async_to_sync."""
     return await coro
 
@@ -889,7 +890,7 @@ class SnapshotTestMixin:
 
         return snapshot_path / f"{name}.snapshot"
 
-    def assert_snapshot(self, name: str, content: str):
+    def assert_snapshot(self, name: str, content: str) -> None:
         """
         Compare content against stored snapshot.
 
@@ -926,7 +927,7 @@ class SnapshotTestMixin:
                     f"Run with UPDATE_SNAPSHOTS=1 to update."
                 )
 
-    def assert_html_snapshot(self, name: str, html: str):
+    def assert_html_snapshot(self, name: str, html: str) -> None:
         """
         Compare HTML with normalization (whitespace, etc.).
 
@@ -963,7 +964,7 @@ def performance_test(
     max_queries: int = 10,
     track_memory: bool = False,
     max_memory_bytes: Optional[int] = None,
-):
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator for performance testing event handlers.
 
@@ -988,9 +989,9 @@ def performance_test(
         Memory tracking requires the `tracemalloc` module.
     """
 
-    def decorator(test_func: Callable) -> Callable:
+    def decorator(test_func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(test_func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             from django.db import connection, reset_queries
             from django.conf import settings
 
@@ -1000,7 +1001,7 @@ def performance_test(
             reset_queries()
 
             # Track memory if requested
-            memory_before = None
+            memory_before: Optional[int] = None
             if track_memory:
                 import tracemalloc
 
@@ -1021,7 +1022,7 @@ def performance_test(
                     import tracemalloc
 
                     memory_after = tracemalloc.get_traced_memory()[0]
-                    memory_used = memory_after - memory_before
+                    memory_used = memory_after - (memory_before or 0)
                     tracemalloc.stop()
 
                 # Restore settings
@@ -1130,7 +1131,7 @@ def assert_all_routed_liveviews_allowlisted() -> None:
     """
     from django.conf import settings
 
-    from djust.checks import _routed_liveview_classes
+    from djust.checks.components import _routed_liveview_classes
 
     allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
     if not allowed:
@@ -1167,7 +1168,7 @@ XSS_PAYLOADS = [
 ]
 
 # Type-confusion payloads — wrong types for common parameter signatures
-TYPE_PAYLOADS = {
+TYPE_PAYLOADS: Dict[str, List[Any]] = {
     "str": [None, 0, True, [], {}, "", "x" * 10000],
     "int": [None, "not_a_number", "", True, -1, 0, 2**31, 3.14],
     "float": [None, "nan", "", True, float("inf")],
@@ -1186,7 +1187,7 @@ _XSS_SENTINELS = [
 ]
 
 
-def _discover_views(app_label=None):
+def _discover_views(app_label: Optional[str] = None) -> Iterator[Type[Any]]:
     """Discover all LiveView subclasses, optionally filtered by app label.
 
     Auto-imports views modules from installed Django apps so that
@@ -1208,7 +1209,7 @@ def _discover_views(app_label=None):
             except ImportError:
                 pass  # Optional module — app may not have views/admin_views
 
-    def _walk(cls):
+    def _walk(cls: Type[Any]) -> Iterator[Type[Any]]:
         for sub in cls.__subclasses__():
             yield sub
             yield from _walk(sub)
@@ -1228,7 +1229,7 @@ def _discover_views(app_label=None):
         yield cls
 
 
-def _get_handlers(cls):
+def _get_handlers(cls: Type[Any]) -> Dict[str, Any]:
     """Get event handler names and their parameter metadata from a view class.
 
     Discovers both @event_handler decorated methods (with full param metadata)
@@ -1303,7 +1304,7 @@ def _get_handlers(cls):
     return handlers
 
 
-def _make_fuzz_params(handler_meta):
+def _make_fuzz_params(handler_meta: Dict[str, Any]) -> Iterator[Tuple[str, Dict[str, Any]]]:
     """Generate fuzz parameter dicts for a handler based on its signature.
 
     Yields (description, params_dict) tuples.
@@ -1313,7 +1314,7 @@ def _make_fuzz_params(handler_meta):
 
     # 1. XSS payloads — inject into every string parameter
     for payload in XSS_PAYLOADS:
-        fuzz_params = {}
+        fuzz_params: Dict[str, Any] = {}
         for p in params:
             ptype = p.get("type", "str")
             if ptype in ("str", None):
@@ -1379,7 +1380,7 @@ def _make_fuzz_params(handler_meta):
         yield f"missing({skip_param['name']})", fuzz_params
 
 
-def _check_xss_in_html(html):
+def _check_xss_in_html(html: str) -> List[str]:
     """Check if rendered HTML contains unescaped XSS sentinels.
 
     Returns list of found sentinels (empty = safe).
@@ -1434,7 +1435,7 @@ class LiveViewSmokeTest:
         skip_set = set(self.skip_views)
         return [v for v in views if v not in skip_set]
 
-    def _make_client(self, view_class) -> LiveViewTestClient:
+    def _make_client(self, view_class: Type[Any]) -> LiveViewTestClient:
         """Create and mount a test client for a view."""
         config = self.view_config.get(view_class, {})
         user = config.get("user")
@@ -1444,7 +1445,7 @@ class LiveViewSmokeTest:
         client.mount(**mount_params)
         return client
 
-    def test_smoke_render(self):
+    def test_smoke_render(self) -> None:
         """Every discovered view mounts and renders without exceptions."""
         errors = []
         views = self._get_views()
@@ -1465,7 +1466,7 @@ class LiveViewSmokeTest:
                 + "\n".join(f"  - {e}" for e in errors)
             )
 
-    def test_smoke_queries(self):
+    def test_smoke_queries(self) -> None:
         """Every discovered view renders within the query count threshold."""
         from django.conf import settings
         from django.db import connection, reset_queries
@@ -1498,7 +1499,7 @@ class LiveViewSmokeTest:
                 + "\n".join(f"  - {e}" for e in errors)
             )
 
-    def test_fuzz_xss(self):
+    def test_fuzz_xss(self) -> None:
         """XSS payloads in handler params don't appear unescaped in rendered output."""
         if not self.fuzz:
             return
@@ -1538,7 +1539,7 @@ class LiveViewSmokeTest:
                 f"XSS escaping failures ({len(errors)}):\n" + "\n".join(f"  - {e}" for e in errors)
             )
 
-    def test_fuzz_no_unhandled_crash(self):
+    def test_fuzz_no_unhandled_crash(self) -> None:
         """Fuzz payloads don't cause unhandled exceptions that escape send_event().
 
         This test catches exceptions that completely bypass the handler execution
@@ -1575,7 +1576,7 @@ class LiveViewSmokeTest:
                 + "\n".join(f"  - {e}" for e in crashes)
             )
 
-    def test_fuzz_handlers_succeed(self):
+    def test_fuzz_handlers_succeed(self) -> None:
         """Fuzz payloads should be handled gracefully by handlers (no success=False).
 
         Unlike test_fuzz_no_unhandled_crash which only catches exceptions that escape

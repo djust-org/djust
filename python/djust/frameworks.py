@@ -21,13 +21,13 @@ class FrameworkAdapter(ABC):
 
     @abstractmethod
     def render_field(
-        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs
+        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs: Any
     ) -> str:
         """Render a form field with framework-specific styling."""
         pass
 
     @abstractmethod
-    def render_errors(self, errors: List[str], **kwargs) -> str:
+    def render_errors(self, errors: List[str], **kwargs: Any) -> str:
         """Render field errors with framework-specific styling."""
         pass
 
@@ -55,7 +55,7 @@ class BaseAdapter(FrameworkAdapter):
     # --- public API (implements FrameworkAdapter) ---
 
     def render_field(
-        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs
+        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs: Any
     ) -> str:
         has_errors = len(errors) > 0
         field_type = self._get_field_type(field)
@@ -91,7 +91,7 @@ class BaseAdapter(FrameworkAdapter):
         html += "</div>"
         return html
 
-    def render_errors(self, errors: List[str], **kwargs) -> str:
+    def render_errors(self, errors: List[str], **kwargs: Any) -> str:
         error_class = config.get_framework_class("error_class_block") or config.get_framework_class(
             "error_class"
         )
@@ -176,7 +176,7 @@ class BaseAdapter(FrameworkAdapter):
             # Compare against the widget class's default input_type.
             default_type = getattr(type(widget), "input_type", None)
             if widget_type != default_type:
-                return widget_type
+                return str(widget_type)
 
         # Check EmailField before CharField (EmailField inherits from CharField)
         if isinstance(field, forms.EmailField):
@@ -204,7 +204,7 @@ class BaseAdapter(FrameworkAdapter):
         else:
             return "text"
 
-    def _render_label(self, field: forms.Field, field_name: str, **kwargs) -> str:
+    def _render_label(self, field: forms.Field, field_name: str, **kwargs: Any) -> str:
         label_class = config.get_framework_class("label_class")
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
         required = self.required_marker if field.required else ""
@@ -225,7 +225,7 @@ class BaseAdapter(FrameworkAdapter):
         value: Any,
         has_errors: bool,
         field_type: str,
-        **kwargs,
+        **kwargs: Any,
     ) -> str:
         field_class = self.get_field_class(field, has_errors)
         attrs: Dict[str, str] = {"name": field_name, "id": f"id_{field_name}"}
@@ -272,7 +272,7 @@ class BaseAdapter(FrameworkAdapter):
         return self._build_tag("select", attrs, options_html)
 
     def _render_checkbox(
-        self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs
+        self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs: Any
     ) -> str:
         wrapper_class = config.get_framework_class("checkbox_wrapper_class")
         field_class = self.get_field_class(field, has_errors)
@@ -305,7 +305,7 @@ class BaseAdapter(FrameworkAdapter):
         )
 
     def _render_radio(
-        self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs
+        self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs: Any
     ) -> str:
         if not hasattr(field, "choices"):
             return "<!-- ERROR: Radio field must have choices -->"
@@ -394,7 +394,7 @@ class PlainAdapter(BaseAdapter):
     help_text_class = ""
     error_wrapper = True
 
-    def _render_label(self, field: forms.Field, field_name: str, **kwargs) -> str:
+    def _render_label(self, field: forms.Field, field_name: str, **kwargs: Any) -> str:
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
         required = self.required_marker if field.required else ""
         return f'<label for="id_{field_name}">{escape(label_text)}{required}</label>'
@@ -404,7 +404,7 @@ class PlainAdapter(BaseAdapter):
             return "error"
         return ""
 
-    def render_errors(self, errors: List[str], **kwargs) -> str:
+    def render_errors(self, errors: List[str], **kwargs: Any) -> str:
         html = '<div class="error-message">'
         for error in errors:
             html += f"<div>{escape(error)}</div>"
@@ -441,7 +441,7 @@ def get_adapter(framework: Optional[str] = None) -> FrameworkAdapter:
     return _adapters.get(framework, _adapters["plain"])
 
 
-def register_adapter(name: str, adapter: FrameworkAdapter):
+def register_adapter(name: str, adapter: FrameworkAdapter) -> None:
     """
     Register a custom framework adapter.
 
