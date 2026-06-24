@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class FileDropzone(Component):
@@ -22,8 +23,8 @@ class FileDropzone(Component):
         multiple: bool = False,
         max_size_mb: int = 10,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             label=label,

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class LiveCounter(Component):
@@ -43,8 +44,8 @@ class LiveCounter(Component):
         stream_event: str = "counter_update",
         size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             value=value,
             label=label,

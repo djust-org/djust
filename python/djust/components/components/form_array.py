@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class FormArray(Component):
@@ -39,15 +40,15 @@ class FormArray(Component):
     def __init__(
         self,
         name: str = "items",
-        rows: list = None,
+        rows: Optional[list] = None,
         min: int = 1,
         max: int = 10,
         add_event: str = "add_row",
         remove_event: str = "remove_row",
         add_label: str = "Add row",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             rows=rows,

@@ -1,7 +1,7 @@
 """StatCard component for KPI/metric display."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -69,8 +69,8 @@ class StatCard(Component):
         icon: Optional[str] = None,
         variant: str = "default",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             label=label,
             value=value,

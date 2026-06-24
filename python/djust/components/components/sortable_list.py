@@ -1,7 +1,7 @@
 """Sortable List component — drag-and-drop reorderable list."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -47,8 +47,8 @@ class SortableList(Component):
         handle: bool = True,
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             move_event=move_event,

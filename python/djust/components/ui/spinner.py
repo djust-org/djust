@@ -6,7 +6,7 @@ Provides loading spinners for indicating activity.
 
 from typing import Dict, Any
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 
 class SpinnerComponent(LiveComponent):
@@ -39,7 +39,7 @@ class SpinnerComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize spinner state"""
         self.variant = kwargs.get(
             "variant", "primary"
@@ -63,27 +63,27 @@ class SpinnerComponent(LiveComponent):
             "visible": self.visible,
         }
 
-    def show(self):
+    def show(self) -> None:
         """Show the spinner"""
         self.visible = True
         self.trigger_update()
 
-    def hide(self):
+    def hide(self) -> None:
         """Hide the spinner"""
         self.visible = False
         self.trigger_update()
 
-    def toggle(self):
+    def toggle(self) -> None:
         """Toggle spinner visibility"""
         self.visible = not self.visible
         self.trigger_update()
 
-    def set_label(self, label: str):
+    def set_label(self, label: str) -> None:
         """Update spinner label"""
         self.label = label
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render spinner with inline HTML"""
         if not self.visible:
             return ""

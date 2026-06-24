@@ -18,7 +18,7 @@ conditional content loading).
 Legacy usage::
 
     class MyPage(TooltipMixin, LiveView):
-        def mount(self, request, **kwargs):
+        def mount(self, request, **kwargs: Any) -> None:
             self.init_tooltip("help")
             self.help_tip = self.get_tooltip_ctx("help")
 """
@@ -26,6 +26,8 @@ Legacy usage::
 from djust.decorators import event_handler
 
 from .base import ComponentMixin, TypedState
+from typing import Any, Dict, Optional
+
 
 __all__ = ["TooltipMixin", "TooltipState"]
 
@@ -43,9 +45,9 @@ class TooltipMixin(ComponentMixin):
     """
 
     component_name = "tooltip"
-    tooltip_instances = None
+    tooltip_instances: Optional[Dict[str, "TooltipState"]] = None
 
-    def init_tooltip(self, instance_id, is_visible=False):
+    def init_tooltip(self, instance_id: str, is_visible: bool = False) -> None:
         """Register a tooltip instance.
 
         Args:
@@ -57,24 +59,24 @@ class TooltipMixin(ComponentMixin):
         self.tooltip_instances[instance_id] = TooltipState(is_visible=bool(is_visible))
 
     @event_handler
-    def show_tooltip(self, component_id="", **kwargs):
+    def show_tooltip(self, component_id: str = "", **kwargs: Any) -> None:
         """Show a tooltip by component_id."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, TooltipState)
         if inst is None:
             return
         inst.is_visible = True
 
     @event_handler
-    def hide_tooltip(self, component_id="", **kwargs):
+    def hide_tooltip(self, component_id: str = "", **kwargs: Any) -> None:
         """Hide a tooltip by component_id."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, TooltipState)
         if inst is None:
             return
         inst.is_visible = False
 
-    def get_tooltip_ctx(self, instance_id):
+    def get_tooltip_ctx(self, instance_id: str) -> Dict[str, Any]:
         """Return template context dict for a tooltip instance."""
         inst = self._get_typed_instance(instance_id, TooltipState)
         if inst is None:

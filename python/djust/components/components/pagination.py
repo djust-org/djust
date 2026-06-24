@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Pagination(Component):
@@ -20,8 +21,8 @@ class Pagination(Component):
         prev_event: str = "page_prev",
         next_event: str = "page_next",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             page=page,
             total_pages=total_pages,

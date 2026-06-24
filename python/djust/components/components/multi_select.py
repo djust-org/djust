@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class MultiSelect(Component):
@@ -19,13 +20,13 @@ class MultiSelect(Component):
         self,
         name: str = "",
         label: str = "",
-        options: list = None,
-        selected: list = None,
+        options: Optional[list] = None,
+        selected: Optional[list] = None,
         event: str = "",
         placeholder: str = "Search...",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             label=label,

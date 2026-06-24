@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ConnectionStatus(Component):
@@ -42,8 +43,8 @@ class ConnectionStatus(Component):
         reconnecting_text: str = "Reconnecting...",
         connected_text: str = "Reconnected",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             reconnecting_text=reconnecting_text,
             connected_text=connected_text,

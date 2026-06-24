@@ -1,7 +1,7 @@
 """Chat Bubble component for message thread UI with sender, time, and status."""
 
 import html
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from djust import Component
 
@@ -50,8 +50,8 @@ class ChatBubble(Component):
         self,
         message: Optional[Dict] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             message=message,
             custom_class=custom_class,

@@ -12,6 +12,7 @@ Usage::
 """
 
 from .base import LiveComponent, TypedState
+from typing import Any, List, Union
 
 __all__ = ["Accordion"]
 
@@ -20,13 +21,15 @@ class Accordion(LiveComponent):
     """Accordion component with open/close state management."""
 
     class State(TypedState):
-        active: str = ""
+        # ``active`` is a single item id (``str``) in single mode, or a list
+        # of open item ids when ``multiple`` is True.
+        active: Union[str, List[str]] = ""
         multiple: bool = False
 
     class Meta:
         event = "accordion_toggle"
 
-    def _handle_event(self, state, value="", **kwargs):
+    def _handle_event(self, state: "State", value: str = "", **kwargs: Any) -> None:
         if state.multiple:
             actives = state.active
             if isinstance(actives, list):

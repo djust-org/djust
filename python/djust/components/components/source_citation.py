@@ -1,7 +1,7 @@
 """Source Citation component for inline footnote references."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -51,8 +51,8 @@ class SourceCitation(Component):
         url: str = "",
         relevance: Optional[float] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             index=index,
             title=title,

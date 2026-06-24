@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class CopyButton(Component):
@@ -22,8 +23,8 @@ class CopyButton(Component):
         variant: str = "outline",
         size: str = "sm",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             text=text,
             label=label,

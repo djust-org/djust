@@ -11,6 +11,8 @@ Usage::
 """
 
 from .base import LiveComponent, TypedState
+from typing import Any
+
 
 __all__ = ["Tabs"]
 
@@ -24,5 +26,5 @@ class Tabs(LiveComponent):
     class Meta:
         event = "set_tab"
 
-    def _handle_event(self, state, value="", **kwargs):
+    def _handle_event(self, state: "State", value: str = "", **kwargs: Any) -> None:
         state.active = value

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class MapPicker(Component):
@@ -46,8 +47,8 @@ class MapPicker(Component):
         zoom: int = 13,
         height: str = "400px",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             lat=lat,
             lng=lng,

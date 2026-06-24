@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class ContextMenu(Component):
@@ -16,8 +17,8 @@ class ContextMenu(Component):
         label: str = "Right-click area",
         content: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             label=label,
             content=content,

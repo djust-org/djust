@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Stepper(Component):
@@ -15,12 +16,12 @@ class Stepper(Component):
 
     def __init__(
         self,
-        steps: list = None,
+        steps: Optional[list] = None,
         active: int = 0,
         event: str = "set_step",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             steps=steps,
             active=active,

@@ -11,6 +11,8 @@ Usage::
 """
 
 from .base import LiveComponent, TypedState
+from typing import Any
+
 
 __all__ = ["Collapsible"]
 
@@ -24,5 +26,5 @@ class Collapsible(LiveComponent):
     class Meta:
         event = "toggle_collapsible"
 
-    def _handle_event(self, state, **kwargs):
+    def _handle_event(self, state: "State", **kwargs: Any) -> None:
         state.is_open = not state.is_open

@@ -4,6 +4,7 @@ import html
 import json
 
 from djust import Component
+from typing import Any, Optional
 
 
 class TagInput(Component):
@@ -26,13 +27,13 @@ class TagInput(Component):
     def __init__(
         self,
         name: str = "",
-        tags: list = None,
+        tags: Optional[list] = None,
         event: str = "",
         placeholder: str = "Add tag...",
         label: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             tags=tags,

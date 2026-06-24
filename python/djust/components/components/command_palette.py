@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class CommandPalette(Component):
@@ -22,8 +23,8 @@ class CommandPalette(Component):
         close_event: str = "close_palette",
         placeholder: str = "Search commands...",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             is_open=is_open,

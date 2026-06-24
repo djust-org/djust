@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class DataTable(Component):
@@ -19,16 +20,16 @@ class DataTable(Component):
 
     def __init__(
         self,
-        columns: list = None,
-        rows: list = None,
+        columns: Optional[list] = None,
+        rows: Optional[list] = None,
         sort_by: str = "",
         sort_desc: bool = False,
         sort_event: str = "on_table_sort",
         striped: bool = False,
         compact: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             columns=columns,
             rows=rows,

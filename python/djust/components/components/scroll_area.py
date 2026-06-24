@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class ScrollArea(Component):
@@ -18,8 +19,8 @@ class ScrollArea(Component):
         max_height: str = "400px",
         label: str = "Scrollable content",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             max_height=max_height,

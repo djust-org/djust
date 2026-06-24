@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class CookieConsent(Component):
@@ -44,8 +45,8 @@ class CookieConsent(Component):
         show_reject: bool = True,
         position: str = "bottom",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             message=message,
             accept_event=accept_event,

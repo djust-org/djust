@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Callout(Component):
@@ -20,8 +21,8 @@ class Callout(Component):
         title: str = "",
         icon: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             variant=variant,

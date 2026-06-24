@@ -1,7 +1,7 @@
 """Live Indicator component for showing per-field typing/editing indicators."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -45,8 +45,8 @@ class LiveIndicator(Component):
         action: str = "typing",
         active: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             user=user,
             field=field,

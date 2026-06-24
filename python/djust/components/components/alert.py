@@ -1,7 +1,7 @@
 """Alert component for dismissible notification messages."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -65,8 +65,8 @@ class Alert(Component):
         action: Optional[str] = None,
         icon: Optional[str] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             message=message,
             variant=variant,
@@ -84,22 +84,22 @@ class Alert(Component):
         self.custom_class = custom_class
 
     @classmethod
-    def info(cls, message: str, **kwargs) -> "Alert":
+    def info(cls, message: str, **kwargs: Any) -> "Alert":
         """Create an info alert."""
         return cls(message, variant="info", **kwargs)
 
     @classmethod
-    def success(cls, message: str, **kwargs) -> "Alert":
+    def success(cls, message: str, **kwargs: Any) -> "Alert":
         """Create a success alert."""
         return cls(message, variant="success", **kwargs)
 
     @classmethod
-    def warning(cls, message: str, **kwargs) -> "Alert":
+    def warning(cls, message: str, **kwargs: Any) -> "Alert":
         """Create a warning alert."""
         return cls(message, variant="warning", **kwargs)
 
     @classmethod
-    def danger(cls, message: str, **kwargs) -> "Alert":
+    def danger(cls, message: str, **kwargs: Any) -> "Alert":
         """Create a danger alert."""
         return cls(message, variant="danger", **kwargs)
 

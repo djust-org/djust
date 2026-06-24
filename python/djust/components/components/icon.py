@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Icon(Component):
@@ -18,8 +19,8 @@ class Icon(Component):
         size: str = "md",
         icon_set: str = "heroicons",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             size=size,

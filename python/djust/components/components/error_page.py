@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ErrorPage(Component):
@@ -40,8 +41,8 @@ class ErrorPage(Component):
         action_url: str = "/",
         action_label: str = "Go Home",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             code=code,
             title=title,

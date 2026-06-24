@@ -1,7 +1,7 @@
 """Progress bar component for task completion indicators."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -65,8 +65,8 @@ class Progress(Component):
         size: str = "md",
         show_value: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             value=value,
             max=max,

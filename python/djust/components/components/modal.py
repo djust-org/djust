@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Modal(Component):
@@ -15,8 +16,8 @@ class Modal(Component):
         size: str = "md",
         close_event: str = "close_modal",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             title=title,
             content=content,

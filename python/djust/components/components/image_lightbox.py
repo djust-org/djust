@@ -1,7 +1,7 @@
 """Image Lightbox component — full-screen image viewer overlay."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -45,8 +45,8 @@ class ImageLightbox(Component):
         navigate_event: str = "lightbox_navigate",
         show_counter: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             images=images,
             active=active,

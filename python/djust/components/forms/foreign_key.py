@@ -8,6 +8,7 @@ with support for autocomplete and large querysets.
 from typing import Any, Callable, Dict, List, Optional
 from django.db.models import QuerySet
 from ..base import LiveComponent
+from django.utils.safestring import SafeString
 
 
 class ForeignKeySelect(LiveComponent):
@@ -51,7 +52,7 @@ class ForeignKeySelect(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize the ForeignKey select component."""
         self.name: str = kwargs.get("name", "")
         self.queryset: Optional[QuerySet] = kwargs.get("queryset", None)
@@ -145,12 +146,12 @@ class ForeignKeySelect(LiveComponent):
             "validation_message": self.validation_message,
         }
 
-    def search(self, query: str):
+    def search(self, query: str) -> None:
         """Handle search input (called from template)."""
         self.search_query = query
         self.trigger_update()
 
-    def select(self, value: Any):
+    def select(self, value: Any) -> None:
         """Handle option selection."""
         # Convert value to appropriate type
         if value == "" or value is None:
@@ -167,7 +168,7 @@ class ForeignKeySelect(LiveComponent):
 
         self.trigger_update()
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear the selection."""
         self.value = None
         self.search_query = ""
@@ -175,7 +176,7 @@ class ForeignKeySelect(LiveComponent):
             self.on_change(None)
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render the component."""
         from django.utils.safestring import mark_safe
         from ...config import config
@@ -371,7 +372,7 @@ class ManyToManySelect(LiveComponent):
 
     template_name = None
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize the ManyToMany select component."""
         self.name: str = kwargs.get("name", "")
         self.queryset: Optional[QuerySet] = kwargs.get("queryset", None)
@@ -436,7 +437,7 @@ class ManyToManySelect(LiveComponent):
 
         return options
 
-    def toggle(self, value: Any):
+    def toggle(self, value: Any) -> None:
         """Toggle selection of a value."""
         # Try to convert to int for consistency with model PKs.
         # If conversion fails, use the original value (e.g., UUID, string PK).
@@ -472,26 +473,26 @@ class ManyToManySelect(LiveComponent):
             "validation_message": self.validation_message,
         }
 
-    def search(self, query: str):
+    def search(self, query: str) -> None:
         """Handle search input."""
         self.search_query = query
         self.trigger_update()
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all selections."""
         self.values = []
         if self.on_change:
             self.on_change([])
         self.trigger_update()
 
-    def select_all(self):
+    def select_all(self) -> None:
         """Select all options."""
         self.values = [opt["value"] for opt in self.get_options()]
         if self.on_change:
             self.on_change(self.values)
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render the component."""
         from django.utils.safestring import mark_safe
         from ...config import config

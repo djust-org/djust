@@ -1,7 +1,7 @@
 """Collaborative Selection component for highlighting text/cells other users selected."""
 
 import html
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from djust import Component
 
@@ -52,8 +52,8 @@ class CollabSelection(Component):
         self,
         users: Optional[List[Union[dict, object]]] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             users=users,
             custom_class=custom_class,

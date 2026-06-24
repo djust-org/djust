@@ -4,9 +4,9 @@ Alert component for djust.
 Provides dismissible alert/notification messages with framework-aware styling.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 
 class AlertComponent(LiveComponent):
@@ -38,7 +38,7 @@ class AlertComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize alert state"""
         self.message = kwargs.get("message", "")
         self.type = kwargs.get("type", "info")  # info, success, warning, danger, error
@@ -54,12 +54,12 @@ class AlertComponent(LiveComponent):
             "visible": self.visible,
         }
 
-    def dismiss(self):
+    def dismiss(self) -> None:
         """Dismiss the alert"""
         self.visible = False
         self.trigger_update()
 
-    def show(self, message: str = None, type: str = "info"):
+    def show(self, message: Optional[str] = None, type: str = "info") -> None:
         """Show the alert with a new message"""
         if message is not None:
             self.message = message
@@ -68,17 +68,17 @@ class AlertComponent(LiveComponent):
         self.visible = True
         self.trigger_update()
 
-    def set_message(self, message: str):
+    def set_message(self, message: str) -> None:
         """Update alert message"""
         self.message = message
         self.trigger_update()
 
-    def set_type(self, type: str):
+    def set_type(self, type: str) -> None:
         """Update alert type"""
         self.type = type
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render alert with inline HTML"""
         if not self.visible:
             return ""

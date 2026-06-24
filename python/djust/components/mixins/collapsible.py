@@ -14,7 +14,7 @@ CollapsibleMixin — collapsible section state management for djust LiveViews.
 Legacy usage::
 
     class MyPage(CollapsibleMixin, LiveView):
-        def mount(self, request, **kwargs):
+        def mount(self, request, **kwargs: Any) -> None:
             self.init_collapsible("details", is_open=True)
             self.details = self.get_collapsible_ctx("details")
 """
@@ -22,6 +22,8 @@ Legacy usage::
 from djust.decorators import event_handler
 
 from .base import ComponentMixin, TypedState
+from typing import Any, Dict, Optional
+
 
 __all__ = ["CollapsibleMixin", "CollapsibleState"]
 
@@ -39,9 +41,9 @@ class CollapsibleMixin(ComponentMixin):
     """
 
     component_name = "collapsible"
-    collapsible_instances = None
+    collapsible_instances: Optional[Dict[str, "CollapsibleState"]] = None
 
-    def init_collapsible(self, instance_id, is_open=False):
+    def init_collapsible(self, instance_id: str, is_open: bool = False) -> None:
         """Register a collapsible instance.
 
         Args:
@@ -53,15 +55,15 @@ class CollapsibleMixin(ComponentMixin):
         self.collapsible_instances[instance_id] = CollapsibleState(is_open=bool(is_open))
 
     @event_handler
-    def toggle_collapsible(self, component_id="", **kwargs):
+    def toggle_collapsible(self, component_id: str = "", **kwargs: Any) -> None:
         """Toggle a collapsible section open/closed."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, CollapsibleState)
         if inst is None:
             return
         inst.is_open = not inst.is_open
 
-    def get_collapsible_ctx(self, instance_id):
+    def get_collapsible_ctx(self, instance_id: str) -> Dict[str, Any]:
         """Return template context dict for a collapsible instance."""
         inst = self._get_typed_instance(instance_id, CollapsibleState)
         if inst is None:

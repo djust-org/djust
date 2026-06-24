@@ -1,7 +1,7 @@
 """Segmented Progress component for multi-step progress indicators."""
 
 import html
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from djust import Component
 
@@ -47,8 +47,8 @@ class SegmentedProgress(Component):
         current: int = 0,
         size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             steps=steps or [],
             current=current,

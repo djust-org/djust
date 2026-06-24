@@ -1,7 +1,7 @@
 """Notification Popover component — bell icon with unread badge + popover list."""
 
 import html
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from djust import Component
 
@@ -55,8 +55,8 @@ class NotificationPopover(Component):
         is_open: bool = False,
         title: str = "Notifications",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             notifications=notifications,
             unread_count=unread_count,

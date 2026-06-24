@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Accordion(Component):
@@ -15,12 +16,12 @@ class Accordion(Component):
 
     def __init__(
         self,
-        items: list = None,
+        items: Optional[list] = None,
         active: str = "",
         event: str = "accordion_toggle",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             active=active,

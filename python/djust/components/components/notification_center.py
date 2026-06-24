@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class NotificationCenter(Component):
@@ -15,14 +16,14 @@ class NotificationCenter(Component):
 
     def __init__(
         self,
-        notifications: list = None,
+        notifications: Optional[list] = None,
         unread_count: int = 0,
         open_event: str = "toggle_notifications",
         mark_read_event: str = "mark_notification_read",
         clear_event: str = "clear_notifications",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             notifications=notifications,
             unread_count=unread_count,

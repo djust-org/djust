@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class MarkdownEditor(Component):
@@ -57,8 +58,8 @@ class MarkdownEditor(Component):
         disabled: bool = False,
         event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             value=value,

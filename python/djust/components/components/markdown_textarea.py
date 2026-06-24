@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class MarkdownTextarea(Component):
@@ -59,8 +60,8 @@ class MarkdownTextarea(Component):
         rows: int = 6,
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             value=value,

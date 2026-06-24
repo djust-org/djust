@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class PageHeader(Component):
@@ -20,8 +21,8 @@ class PageHeader(Component):
         description: str = "",
         actions: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             title=title,
             subtitle=subtitle,

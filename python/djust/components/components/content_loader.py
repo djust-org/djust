@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ContentLoader(Component):
@@ -56,8 +57,8 @@ class ContentLoader(Component):
         error: str = "",
         error_event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             loading_event=loading_event,
             loaded=loaded,

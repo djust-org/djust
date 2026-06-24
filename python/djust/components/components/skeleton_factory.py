@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class SkeletonFactory(Component):
@@ -51,8 +52,8 @@ class SkeletonFactory(Component):
         columns: int = 4,
         rows: int = 5,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             component=component,
             columns=columns,

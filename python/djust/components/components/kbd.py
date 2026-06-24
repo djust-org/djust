@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Kbd(Component):
@@ -13,10 +14,10 @@ class Kbd(Component):
 
     def __init__(
         self,
-        keys: list = None,
+        keys: Optional[list] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             keys=keys,
             custom_class=custom_class,

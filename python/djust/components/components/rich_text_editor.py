@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class RichTextEditor(Component):
@@ -24,8 +25,8 @@ class RichTextEditor(Component):
         height: str = "200px",
         label: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             value=value,

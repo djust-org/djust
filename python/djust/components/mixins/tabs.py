@@ -14,7 +14,7 @@ TabsMixin — tab state management for djust LiveViews.
 Legacy usage::
 
     class MyPage(TabsMixin, LiveView):
-        def mount(self, request, **kwargs):
+        def mount(self, request, **kwargs: Any) -> None:
             self.init_tabs("nav", active="overview")
             self.nav = self.get_tabs_ctx("nav")
 """
@@ -22,6 +22,8 @@ Legacy usage::
 from djust.decorators import event_handler
 
 from .base import ComponentMixin, TypedState
+from typing import Any, Dict, Optional
+
 
 __all__ = ["TabsMixin", "TabsState"]
 
@@ -39,9 +41,9 @@ class TabsMixin(ComponentMixin):
     """
 
     component_name = "tabs"
-    tabs_instances = None
+    tabs_instances: Optional[Dict[str, "TabsState"]] = None
 
-    def init_tabs(self, instance_id, active=""):
+    def init_tabs(self, instance_id: str, active: str = "") -> None:
         """Register a tabs instance.
 
         Args:
@@ -53,15 +55,15 @@ class TabsMixin(ComponentMixin):
         self.tabs_instances[instance_id] = TabsState(active=active)
 
     @event_handler
-    def set_tab(self, value="", component_id="", **kwargs):
+    def set_tab(self, value: str = "", component_id: str = "", **kwargs: Any) -> None:
         """Set the active tab for a tab group."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, TabsState)
         if inst is None:
             return
         inst.active = value
 
-    def get_tabs_ctx(self, instance_id):
+    def get_tabs_ctx(self, instance_id: str) -> Dict[str, Any]:
         """Return template context dict for a tabs instance."""
         inst = self._get_typed_instance(instance_id, TabsState)
         if inst is None:

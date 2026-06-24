@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class HoverCard(Component):
@@ -49,8 +50,8 @@ class HoverCard(Component):
         delay_in: int = 200,
         delay_out: int = 300,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             trigger=trigger,
             content=content,

@@ -1,7 +1,7 @@
 """Status Indicator component for service health displays."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -51,8 +51,8 @@ class StatusIndicator(Component):
         pulse: bool = False,
         size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             status=status,
             label=label,

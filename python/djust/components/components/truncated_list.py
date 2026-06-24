@@ -1,7 +1,7 @@
 """TruncatedList component for showing N items with +X more overflow."""
 
 import html
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from djust import Component
 
@@ -55,8 +55,8 @@ class TruncatedList(Component):
         toggle_event: str = "toggle_list",
         overflow_label: str = "+{count} more",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             max=max,

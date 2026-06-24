@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class AnnouncementBar(Component):
@@ -20,8 +21,8 @@ class AnnouncementBar(Component):
         dismissible: bool = False,
         dismiss_event: str = "dismiss_announcement",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             variant=variant,

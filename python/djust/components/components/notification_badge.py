@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class NotificationBadge(Component):
@@ -50,8 +51,8 @@ class NotificationBadge(Component):
         pulse: bool = False,
         size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             count=count,
             max_count=max_count,

@@ -1,7 +1,7 @@
 """Presence Avatars component for stacked online user avatars with overflow count."""
 
 import html
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from djust import Component
 
@@ -48,8 +48,8 @@ class PresenceAvatars(Component):
         users: Optional[List[Union[dict, object]]] = None,
         max_display: int = 5,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             users=users,
             max_display=max_display,

@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class LoadingOverlay(Component):
@@ -20,8 +21,8 @@ class LoadingOverlay(Component):
         text: str = "",
         spinner_size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             active=active,

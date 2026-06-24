@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Fieldset(Component):
@@ -18,8 +19,8 @@ class Fieldset(Component):
         legend: str = "",
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             legend=legend,

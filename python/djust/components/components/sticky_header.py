@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class StickyHeader(Component):
@@ -18,8 +19,8 @@ class StickyHeader(Component):
         offset: str = "0",
         z_index: str = "10",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             offset=offset,

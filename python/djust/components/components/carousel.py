@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Carousel(Component):
@@ -15,14 +16,14 @@ class Carousel(Component):
 
     def __init__(
         self,
-        images: list = None,
+        images: Optional[list] = None,
         active: int = 0,
         prev_event: str = "carousel_prev",
         next_event: str = "carousel_next",
         go_event: str = "carousel_go",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             images=images,
             active=active,

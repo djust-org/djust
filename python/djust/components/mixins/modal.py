@@ -14,7 +14,7 @@ ModalMixin — modal dialog state management for djust LiveViews.
 Legacy usage::
 
     class MyPage(ModalMixin, LiveView):
-        def mount(self, request, **kwargs):
+        def mount(self, request, **kwargs: Any) -> None:
             self.init_modal("confirm")
             self.confirm = self.get_modal_ctx("confirm")
 """
@@ -22,6 +22,8 @@ Legacy usage::
 from djust.decorators import event_handler
 
 from .base import ComponentMixin, TypedState
+from typing import Any, Dict, Optional
+
 
 __all__ = ["ModalMixin", "ModalState"]
 
@@ -39,9 +41,9 @@ class ModalMixin(ComponentMixin):
     """
 
     component_name = "modal"
-    modal_instances = None
+    modal_instances: Optional[Dict[str, "ModalState"]] = None
 
-    def init_modal(self, instance_id, is_open=False):
+    def init_modal(self, instance_id: str, is_open: bool = False) -> None:
         """Register a modal instance.
 
         Args:
@@ -53,33 +55,33 @@ class ModalMixin(ComponentMixin):
         self.modal_instances[instance_id] = ModalState(is_open=bool(is_open))
 
     @event_handler
-    def open_modal(self, component_id="", **kwargs):
+    def open_modal(self, component_id: str = "", **kwargs: Any) -> None:
         """Open a modal by component_id."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, ModalState)
         if inst is None:
             return
         inst.is_open = True
 
     @event_handler
-    def close_modal(self, component_id="", **kwargs):
+    def close_modal(self, component_id: str = "", **kwargs: Any) -> None:
         """Close a modal by component_id."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, ModalState)
         if inst is None:
             return
         inst.is_open = False
 
     @event_handler
-    def toggle_modal(self, component_id="", **kwargs):
+    def toggle_modal(self, component_id: str = "", **kwargs: Any) -> None:
         """Toggle a modal open/closed."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, ModalState)
         if inst is None:
             return
         inst.is_open = not inst.is_open
 
-    def get_modal_ctx(self, instance_id):
+    def get_modal_ctx(self, instance_id: str) -> Dict[str, Any]:
         """Return template context dict for a modal instance."""
         inst = self._get_typed_instance(instance_id, ModalState)
         if inst is None:

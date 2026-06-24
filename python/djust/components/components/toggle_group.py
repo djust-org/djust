@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class ToggleGroup(Component):
@@ -18,13 +19,13 @@ class ToggleGroup(Component):
     def __init__(
         self,
         name: str = "",
-        options: list = None,
+        options: Optional[list] = None,
         value: str = "",
         event: str = "toggle_select",
         size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             options=options,

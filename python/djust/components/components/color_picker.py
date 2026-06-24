@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class ColorPicker(Component):
@@ -21,10 +22,10 @@ class ColorPicker(Component):
         value: str = "#3B82F6",
         event: str = "",
         label: str = "",
-        swatches: list = None,
+        swatches: Optional[list] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             value=value,

@@ -1,7 +1,7 @@
 """Token Counter component for displaying token usage vs limit."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -47,8 +47,8 @@ class TokenCounter(Component):
         label: Optional[str] = None,
         show_label: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             current=current,
             max=max,

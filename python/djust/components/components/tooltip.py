@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Tooltip(Component):
@@ -18,8 +19,8 @@ class Tooltip(Component):
         content: str = "",
         position: str = "top",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             text=text,
             content=content,

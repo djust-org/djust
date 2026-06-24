@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Sparkline(Component):
@@ -29,15 +30,15 @@ class Sparkline(Component):
 
     def __init__(
         self,
-        data: list = None,
+        data: Optional[list] = None,
         variant: str = "line",
         width: int = 100,
         height: int = 24,
         color: str = "",
         stroke_width: float = 1.5,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             data=data,
             variant=variant,

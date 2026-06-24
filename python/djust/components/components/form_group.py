@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class FormGroup(Component):
@@ -24,8 +25,8 @@ class FormGroup(Component):
         required: bool = False,
         for_input: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             label=label,

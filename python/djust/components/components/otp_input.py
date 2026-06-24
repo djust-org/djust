@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class OtpInput(Component):
@@ -20,8 +21,8 @@ class OtpInput(Component):
         event: str = "",
         label: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             digits=digits,

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class CopyableText(Component):
@@ -36,8 +37,8 @@ class CopyableText(Component):
         text: str = "",
         copied_label: str = "Copied!",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             text=text,
             copied_label=copied_label,

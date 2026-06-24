@@ -11,6 +11,8 @@ Usage::
 """
 
 from .base import LiveComponent, TypedState
+from typing import Any
+
 
 __all__ = ["Tooltip"]
 
@@ -30,5 +32,5 @@ class Tooltip(LiveComponent):
         # TODO(DEP-002 7.5): Add dj-update="ignore" to client-tier component
         # wrapper divs so server re-renders don't clobber client-managed state.
 
-    def _handle_event(self, state, **kwargs):
+    def _handle_event(self, state: "State", **kwargs: Any) -> None:
         state.is_visible = not state.is_visible

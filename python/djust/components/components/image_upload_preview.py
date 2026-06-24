@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class ImageUploadPreview(Component):
@@ -45,10 +46,10 @@ class ImageUploadPreview(Component):
         max: int = 5,
         event: str = "upload",
         accept: str = "image/*",
-        previews: list = None,
+        previews: Optional[list] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             max=max,

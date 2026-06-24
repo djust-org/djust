@@ -6,7 +6,7 @@ Provides buttons with multiple variants, sizes, and states.
 
 from typing import Dict, Any
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 
 class ButtonComponent(LiveComponent):
@@ -43,7 +43,7 @@ class ButtonComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize button state"""
         self.label = kwargs.get("label", "Button")
         self.variant = kwargs.get(
@@ -71,17 +71,17 @@ class ButtonComponent(LiveComponent):
             "icon_position": self.icon_position,
         }
 
-    def set_disabled(self, disabled: bool):
+    def set_disabled(self, disabled: bool) -> None:
         """Enable or disable the button"""
         self.disabled = disabled
         self.trigger_update()
 
-    def set_label(self, label: str):
+    def set_label(self, label: str) -> None:
         """Update button label"""
         self.label = label
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render button with inline HTML"""
         from ...config import config
 

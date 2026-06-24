@@ -6,7 +6,7 @@ Provides progress bars for showing completion status.
 
 from typing import Dict, Any
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 
 class ProgressComponent(LiveComponent):
@@ -39,7 +39,7 @@ class ProgressComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize progress state"""
         self.value = kwargs.get("value", 0)
         self.max_value = kwargs.get("max_value", 100)
@@ -70,26 +70,26 @@ class ProgressComponent(LiveComponent):
             return 0
         return int((self.value - self.min_value) / (self.max_value - self.min_value) * 100)
 
-    def set_value(self, value: float):
+    def set_value(self, value: float) -> None:
         """Update progress value"""
         self.value = max(self.min_value, min(value, self.max_value))
         self.trigger_update()
 
-    def increment(self, amount: float = 1):
+    def increment(self, amount: float = 1) -> None:
         """Increment progress value"""
         self.set_value(self.value + amount)
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset progress to minimum"""
         self.value = self.min_value
         self.trigger_update()
 
-    def complete(self):
+    def complete(self) -> None:
         """Set progress to maximum"""
         self.value = self.max_value
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render progress with inline HTML"""
         from ...config import config
 

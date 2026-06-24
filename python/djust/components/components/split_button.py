@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class SplitButton(Component):
@@ -19,14 +20,14 @@ class SplitButton(Component):
         self,
         label: str = "",
         event: str = "",
-        options: list = None,
+        options: Optional[list] = None,
         variant: str = "primary",
         size: str = "md",
         is_open: bool = False,
         toggle_event: str = "toggle_split_menu",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             label=label,
             event=event,

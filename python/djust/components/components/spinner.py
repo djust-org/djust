@@ -2,7 +2,7 @@
 
 import html
 
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -50,8 +50,8 @@ class Spinner(Component):
         variant: str = "default",
         label: Optional[str] = "Loading...",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             size=size,
             variant=variant,

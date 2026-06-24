@@ -1,7 +1,7 @@
 """Tag/Chip component for labels and categorization."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -65,8 +65,8 @@ class Tag(Component):
         dismissible: bool = False,
         action: Optional[str] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             label=label,
             variant=variant,

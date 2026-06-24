@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class TableOfContents(Component):
@@ -16,13 +17,13 @@ class TableOfContents(Component):
 
     def __init__(
         self,
-        items: list = None,
+        items: Optional[list] = None,
         title: str = "Contents",
         active: str = "",
         event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             title=title,

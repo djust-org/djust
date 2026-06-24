@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Toolbar(Component):
@@ -18,8 +19,8 @@ class Toolbar(Component):
         variant: str = "default",
         align: str = "left",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             variant=variant,

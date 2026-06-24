@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Meter(Component):
@@ -34,13 +35,13 @@ class Meter(Component):
 
     def __init__(
         self,
-        segments: list = None,
+        segments: Optional[list] = None,
         total: int = 100,
         label: str = "",
         show_legend: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             segments=segments,
             total=total,

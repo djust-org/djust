@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Gauge(Component):
@@ -24,8 +25,8 @@ class Gauge(Component):
         size: str = "md",
         show_value: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             value=value,
             max_value=max_value,
