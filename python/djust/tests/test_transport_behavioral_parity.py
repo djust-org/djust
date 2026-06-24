@@ -424,6 +424,23 @@ _WS_ONLY_MARKERS = {
     "_send_child_update": 1,  # sticky-child VDOM patches
     "group_add": 1,  # Channels groups (broadcast) — WS-only transport
     "channel_layer": 1,  # actor / broadcast channel layer — WS-only transport
+    # --- Mount-spine WS-only behaviors (ADR-022 Iter 3 Phase 3.0, #1911) ---
+    # Each is a genuinely-WS-only mount behavior that the runtime's dispatch_mount
+    # does NOT implement (and must NOT — they are HOOKS for Phases 3.1-3.3b, not
+    # Phase-3.0 grows). If a future iteration MOVES one onto ViewRuntime, the
+    # ``marker not in rt_src`` assertion trips → update this pin deliberately AND
+    # note the move in ADR-022. This keeps the mount-side WS↔runtime delta VISIBLE
+    # as the mount convergence proceeds.
+    "create_session_actor": 1,  # actor mount (Finding D — WS verbatim / SSE refuses)
+    "state_snapshot_signed": 1,  # signed session-snapshot emission on the mount frame (Phase 3.1)
+    "_find_sticky_slot_ids": 1,  # sticky_hold survivor scan (Finding B / live_redirect)
+    "tick_interval": 1,  # periodic tick task started at mount (Channels timer loop)
+    "register_view": 1,  # observability registry (WS register/unregister_view)
+    # NOTE: ``_run_tick`` is intentionally NOT a marker here — it already appears
+    # in runtime.py DOCSTRINGS (lines ~271/~567 reference the WS-only tick loop the
+    # event render-lock must serialize against), which would FALSE-POSITIVE the
+    # ``marker not in rt_src`` assertion. ``tick_interval`` (rt=0) is the precise
+    # mount-side WS-only attribute read, so it stands in for the tick mechanism.
 }
 
 
@@ -910,4 +927,378 @@ class TestEventSpineEnumeration:
         # source=event on all three update branches.
         assert src.count('"source": "event"') == 3, (
             "source=event must be stamped on all 3 update-frame branches"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Net 7 — MOUNT-spine parity grows (ADR-022 Iter 3 Phase 3.0, #1911).
+#
+# Phase 3.0 GROWS ``ViewRuntime.dispatch_mount`` toward the WS ``handle_mount``
+# by adding the transport-agnostic shared MOUNT behaviors the runtime lacked:
+#
+#   1. ``_djust_mount_request`` / ``_djust_mount_kwargs`` stash (#1895) — the
+#      runtime's OWN per-event session-save fallback reads it.
+#   2. ``_snapshot_user_private_attrs`` + ``_capture_dirty_baseline`` post-mount.
+#   3. ``has_prerendered`` → ``skip_html_for_resume`` machinery on the frame.
+#   4. ``optimistic_rules`` (DEP-002) + ``upload_configs`` on the mount frame.
+#   5. Mount-time ``_flush_push_events()`` + ``_dispatch_async_work(None)`` —
+#      ONLY those two (NOT ``_flush_all_pending``), pinned in
+#      test_handle_mount_drains_queues.py.
+#
+# Each behavioral pin drives the REAL ``dispatch_mount`` (object-permission
+# parity already does this in Net 2) and carries a gate-off witness (#1468).
+# These are the regression net the 3.3b mount flip rides.
+# --------------------------------------------------------------------------- #
+
+
+class _MountStashView(_RuntimeRenderMixin, LiveView):
+    """Mounts cleanly; used to assert the post-mount stash + baselines."""
+
+    def mount(self, request, **kwargs):
+        self.mounted = True
+
+
+class _MountPushAsyncView(_RuntimeRenderMixin, LiveView):
+    """``mount()`` queues a push event AND schedules background work — the two
+    queues the mount-time drain must flush (#1283 / #1280)."""
+
+    def mount(self, request, **kwargs):
+        self.value = 0
+        self.push_event("hello", {"x": 1})  # → _flush_push_events drains it
+
+        def _work():
+            self.value = 42
+
+        self.start_async(_work)  # → _dispatch_async_work spawns it
+
+    def get_context_data(self, **kwargs):
+        return {"value": self.value}
+
+
+class TestMountStashAndBaselines:
+    @pytest.mark.asyncio
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
+    async def test_mount_stashes_request_and_kwargs(self):
+        """#1895: ``dispatch_mount`` stashes the mount request + kwargs on the view
+        so the runtime's own per-event session-save fallback
+        (``_persist_state_after_event`` runtime.py:2030) can discover the save
+        session + ``liveview_{path}`` namespace on the converged event path.
+
+        Gate-off (#1468): delete the ``view_instance._djust_mount_request = request``
+        stash from ``dispatch_mount`` → this FAILS (and the per-event save silently
+        degrades to the scope session, dropping the mount-request path namespace).
+        """
+        view = _MountStashView()
+        runtime, transport = _runtime_with_view(view)
+
+        await runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": "djust.tests.test_transport_behavioral_parity._MountStashView",
+                "params": {"a": 1},
+                "url": "/items/7/",
+            }
+        )
+
+        assert getattr(view, "_djust_mount_request", None) is not None, (
+            "dispatch_mount must stash _djust_mount_request (#1895) — the runtime's "
+            "per-event session-save fallback reads it (runtime.py:2030/2109)"
+        )
+        # The stashed request is the one mount ran against (carries the path).
+        assert view._djust_mount_request.path == "/items/7/"
+        assert isinstance(getattr(view, "_djust_mount_kwargs", None), dict), (
+            "dispatch_mount must stash _djust_mount_kwargs (#1895)"
+        )
+
+    @pytest.mark.asyncio
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
+    async def test_mount_captures_private_and_dirty_baselines(self):
+        """``dispatch_mount`` calls ``_snapshot_user_private_attrs`` +
+        ``_capture_dirty_baseline`` post-mount (WS websocket.py:2598-2603) so
+        change-detection sees the correct since-mount delta.
+
+        Gate-off (#1468): delete the two baseline calls from ``dispatch_mount`` →
+        the spies below never fire → this FAILS.
+        """
+        from unittest.mock import MagicMock
+
+        view = _MountStashView()
+        snap_spy = MagicMock()
+        dirty_spy = MagicMock()
+        view._snapshot_user_private_attrs = snap_spy
+        view._capture_dirty_baseline = dirty_spy
+        runtime, _ = _runtime_with_view(view)
+
+        await runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": "djust.tests.test_transport_behavioral_parity._MountStashView",
+                "params": {},
+                "url": "/x/",
+            }
+        )
+
+        assert snap_spy.called, "_snapshot_user_private_attrs must be called at mount (#1911)"
+        assert dirty_spy.called, "_capture_dirty_baseline must be called at mount (#1911)"
+
+
+class TestMountAsyncAndPushDrain:
+    @pytest.mark.asyncio
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
+    async def test_mount_drains_push_events_after_frame(self):
+        """A ``push_event`` queued during ``mount()`` is drained AFTER the mount
+        frame (#1283) — a ``push_event`` frame reaches the transport.
+
+        Gate-off (#1468): delete the ``self._flush_push_events()`` call at the end
+        of ``dispatch_mount`` → no push_event frame is emitted → this FAILS.
+        """
+        import asyncio
+
+        view = _MountPushAsyncView()
+        runtime, transport = _runtime_with_view(view)
+
+        await runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": "djust.tests.test_transport_behavioral_parity._MountPushAsyncView",
+                "params": {},
+                "url": "/p/",
+            }
+        )
+        # _flush_push_events schedules the send fire-and-forget (ensure_future);
+        # yield once so the scheduled push frame lands on the transport.
+        await asyncio.sleep(0)
+
+        mount_frames = [f for f in transport.sent if f.get("type") == "mount"]
+        push_frames = [f for f in transport.sent if f.get("type") == "push_event"]
+        assert mount_frames, "the view must mount"
+        assert push_frames, (
+            "a push_event queued in mount() must drain after the mount frame "
+            "(#1283); got " + repr([f.get("type") for f in transport.sent])
+        )
+        # Ordering: mount frame BEFORE the push frame (the view must exist first).
+        mount_idx = transport.sent.index(mount_frames[0])
+        push_idx = transport.sent.index(push_frames[0])
+        assert mount_idx < push_idx, "the mount frame must precede the drained push frame"
+
+    @pytest.mark.asyncio
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
+    async def test_mount_dispatches_async_work(self):
+        """``start_async`` scheduled in ``mount()`` is dispatched after the mount
+        frame (#1280): the background callback runs and updates state.
+
+        Gate-off (#1468): delete the ``self._dispatch_async_work(None)`` call at
+        the end of ``dispatch_mount`` → ``_async_tasks`` stays queued, the callback
+        never runs, ``view.value`` stays 0 → this FAILS.
+        """
+        import asyncio
+
+        view = _MountPushAsyncView()
+        runtime, _ = _runtime_with_view(view)
+
+        await runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": "djust.tests.test_transport_behavioral_parity._MountPushAsyncView",
+                "params": {},
+                "url": "/p/",
+            }
+        )
+        # The async task runs in its own ensure_future; give it a turn to complete.
+        for _ in range(10):
+            if getattr(view, "value", 0) == 42:
+                break
+            await asyncio.sleep(0)
+
+        assert view.value == 42, (
+            "start_async() scheduled in mount() must be dispatched after the mount "
+            "frame (#1280) — the background callback must run and set value=42"
+        )
+
+    def test_mount_drain_is_exactly_two_queues(self):
+        """Source pin (#1646 / #1859 load-bearing): the mount drain at the end of
+        ``dispatch_mount`` calls EXACTLY ``_flush_push_events`` +
+        ``_dispatch_async_work`` and NOT ``_flush_all_pending``. Mount establishes
+        a baseline; it must not run the 8-queue turn-end flush."""
+        import inspect as _inspect
+
+        from djust.runtime import ViewRuntime
+
+        src = _inspect.getsource(ViewRuntime.dispatch_mount)
+        assert "_flush_push_events()" in src, "mount must drain push events"
+        assert "_dispatch_async_work(" in src, "mount must dispatch async work"
+        # Assert the CALL form (``_flush_all_pending(``) is absent — a bare
+        # substring would false-match the explanatory comment that names the
+        # method to explain why it must NOT be called.
+        assert "_flush_all_pending(" not in src, (
+            "dispatch_mount must NOT call _flush_all_pending — the mount drain is "
+            "ONLY the two queues (ADR-022 Iter 3 Phase 3.0)"
+        )
+
+
+class TestMountFrameOptimisticAndUpload:
+    @pytest.mark.asyncio
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
+    async def test_optimistic_rules_on_mount_frame(self):
+        """DEP-002: a view whose descriptor components declare optimistic rules
+        ships them on the mount frame via the runtime
+        ``_extract_optimistic_rules``.
+
+        Gate-off (#1468): delete the ``optimistic_rules`` block from
+        ``dispatch_mount`` → the key drops from the mount frame → this FAILS.
+        """
+
+        class _OptDescriptor:
+            class Meta:
+                tier = "optimistic"
+                event = "toggle"
+                optimistic_rule = {"action": "toggle_class", "class": "open"}
+
+        class _OptView(_RuntimeRenderMixin, LiveView):
+            _component_descriptors = {"acc": _OptDescriptor()}
+
+            def mount(self, request, **kwargs):
+                pass
+
+        view = _OptView()
+        runtime, transport = _runtime_with_view(view)
+
+        await runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": "djust.tests.test_transport_behavioral_parity._OptView",
+                "params": {},
+                "url": "/o/",
+            }
+        )
+
+        mount_frames = [f for f in transport.sent if f.get("type") == "mount"]
+        assert mount_frames, "the view must mount"
+        rules = mount_frames[0].get("optimistic_rules")
+        assert rules == {"toggle": {"action": "toggle_class", "class": "open"}}, (
+            "the mount frame must carry the optimistic rules from descriptor "
+            f"components (DEP-002); got {mount_frames[0]!r}"
+        )
+
+    @pytest.mark.asyncio
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
+    async def test_upload_configs_on_mount_frame(self):
+        """A view with an ``_upload_manager`` ships ``upload_configs`` on the mount
+        frame.
+
+        Gate-off (#1468): delete the ``upload_configs`` block from
+        ``dispatch_mount`` → the key drops → this FAILS.
+        """
+
+        class _FakeUploadManager:
+            def get_upload_state(self):
+                return {"avatar": {"config": {"max_size": 1024, "accept": "image/*"}}}
+
+        class _UploadView(_RuntimeRenderMixin, LiveView):
+            def mount(self, request, **kwargs):
+                self._upload_manager = _FakeUploadManager()
+
+        view = _UploadView()
+        runtime, transport = _runtime_with_view(view)
+
+        await runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": "djust.tests.test_transport_behavioral_parity._UploadView",
+                "params": {},
+                "url": "/u/",
+            }
+        )
+
+        mount_frames = [f for f in transport.sent if f.get("type") == "mount"]
+        assert mount_frames, "the view must mount"
+        cfgs = mount_frames[0].get("upload_configs")
+        assert cfgs == {"avatar": {"max_size": 1024, "accept": "image/*"}}, (
+            f"the mount frame must carry upload_configs; got {mount_frames[0]!r}"
+        )
+
+    @pytest.mark.asyncio
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
+    async def test_no_optimistic_or_upload_keys_when_absent(self):
+        """GATE-OFF / contrast: a plain view (no descriptors, no upload manager)
+        produces a mount frame with NEITHER key — proving the keys above come from
+        the view's actual config, not unconditional stamping."""
+        view = _MountStashView()
+        runtime, transport = _runtime_with_view(view)
+
+        await runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": "djust.tests.test_transport_behavioral_parity._MountStashView",
+                "params": {},
+                "url": "/x/",
+            }
+        )
+
+        mount_frames = [f for f in transport.sent if f.get("type") == "mount"]
+        assert mount_frames, "the view must mount"
+        assert "optimistic_rules" not in mount_frames[0], (
+            "a view with no optimistic descriptors must not carry optimistic_rules"
+        )
+        assert "upload_configs" not in mount_frames[0], (
+            "a view with no upload manager must not carry upload_configs"
+        )
+
+
+class TestMountFrameWireVersion:
+    @pytest.mark.asyncio
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
+    async def test_mount_frame_carries_baseline_version(self):
+        """The mount frame stamps a ``version`` field establishing the client's VDOM
+        baseline.
+
+        Phase-3.0 note (ADR-022 Finding C): the WS mount path uses the
+        consumer-owned monotonic ``_next_version()`` and crucially NOT
+        ``_next_version_armed`` (mount establishes the baseline; it does NOT arm
+        request_html recovery). The runtime mount currently stamps the raw Rust
+        ``version`` directly. The distinct ``transport.next_mount_version()`` hook
+        (WS no-arm; SSE raw) is a Phase-3.3a wiring task — NOT a Phase-3.0 grow.
+        This net pins the CURRENT invariant the flip must preserve: the mount frame
+        carries a baseline ``version`` (it does NOT route through the ARMING
+        ``transport.next_client_version`` the event path uses).
+
+        Gate-off (#1468): drop the ``version`` key from the mount_msg dict in
+        ``dispatch_mount`` → this FAILS.
+        """
+        view = _MountStashView()
+        runtime, transport = _runtime_with_view(view)
+
+        await runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": "djust.tests.test_transport_behavioral_parity._MountStashView",
+                "params": {},
+                "url": "/v/",
+            }
+        )
+
+        mount_frames = [f for f in transport.sent if f.get("type") == "mount"]
+        assert mount_frames, "the view must mount"
+        assert "version" in mount_frames[0], "the mount frame must carry a baseline version"
+        # Mount must NOT route through the ARMING wire-version path (next_client_version);
+        # arming is for event request_html recovery, not the mount baseline (Finding C).
+        assert not transport.version_calls, (
+            "mount must NOT call transport.next_client_version (that ARMS recovery) — "
+            "the mount baseline is unarmed (#1911 Finding C). The distinct "
+            "next_mount_version() hook is a Phase-3.3a wiring task."
+        )
+
+    def test_dispatch_mount_does_not_use_arming_wire_version(self):
+        """Source pin (Finding C): ``dispatch_mount`` must NOT stamp the mount
+        frame's version through the ARMING ``transport.next_client_version``
+        (that helper arms request_html recovery, which mount must not do)."""
+        import inspect as _inspect
+
+        from djust.runtime import ViewRuntime
+
+        src = _inspect.getsource(ViewRuntime.dispatch_mount)
+        assert "next_client_version" not in src, (
+            "dispatch_mount must not arm recovery via next_client_version on the "
+            "mount baseline (ADR-022 Finding C). A distinct next_mount_version() "
+            "hook lands in Phase 3.3a."
         )
