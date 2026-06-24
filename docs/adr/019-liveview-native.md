@@ -1,6 +1,6 @@
 # ADR-019: LiveView Native — Pluggable Rendering for SwiftUI + Jetpack Compose Clients
 
-**Status**: Accepted — pre-implementation (tracking issue TBD)
+**Status**: Accepted — LVN-I/II renderer groundwork (widget vocabulary, NativeRenderer scaffold, variant resolver + wiring, author guide; #1578/#1581) shipped v1.1.0rc1 (2026-06-24). The Rust-side widget-VDOM differ that produces real `Patch` streams from native templates is pending in a follow-up sequence (LVN-III/IV).
 **Date**: 2026-05-23
 **Deciders**: Project maintainers
 **Related**:
