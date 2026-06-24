@@ -3,13 +3,17 @@ HandlerMixin - Handler metadata extraction for LiveView.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class HandlerMixin:
     """Handler extraction: _extract_handler_metadata."""
+
+    # Lazily populated cache; initialized to None in LiveView.__init__ and
+    # filled on first _extract_handler_metadata() call (guarded by `is not None`).
+    _handler_metadata: Optional[Dict[str, Dict[str, Any]]] = None
 
     def _extract_handler_metadata(self) -> Dict[str, Dict[str, Any]]:
         """

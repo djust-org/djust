@@ -202,9 +202,10 @@ _SETATTR_WHITELIST = {
     # need safe_setattr's client-key guard. Two adjacent lines (callable vs not).
     # Line numbers shifted +11 in ADR-022 Iter 3 Phase 3.1 (#1913) when
     # ``_mounted_from_restore`` was added before the ``_framework_attrs`` snapshot
-    # in ``LiveView.__init__``.
-    ("live_view.py", 1195),
-    ("live_view.py", 1197),
+    # in ``LiveView.__init__``; shifted +8 again in ADR-023 M2 when type
+    # annotations were added to live_view.py (optional-import block grew).
+    ("live_view.py", 1203),
+    ("live_view.py", 1205),
 }
 
 

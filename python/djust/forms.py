@@ -6,7 +6,7 @@ enabling real-time validation, error display, and reactive form handling.
 """
 
 import logging
-from typing import Dict, Any, Optional, Type, List
+from typing import Dict, Any, Optional, Type, List, cast
 from django import forms
 from django.core.exceptions import ValidationError
 
@@ -46,11 +46,21 @@ class FormMixin:
     form_class: Optional[Type[forms.Form]] = None
     # Private: non-serializable form object, re-created as needed
     _form_instance: Optional[forms.Form] = None
-    _model_instance = None
+    _model_instance: Any = None
 
-    def mount(self, request, **kwargs):
+    # Reactive form state (initialized in mount()). Annotated at class level so
+    # accessors (get_field_value / get_field_errors) carry precise return types.
+    form_data: Dict[str, Any]
+    form_choices: Dict[str, Any]
+    form_errors: Any
+    field_errors: Dict[str, List[str]]
+    is_valid: bool
+    success_message: str
+    error_message: str
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
         """Initialize form on view mount"""
-        super().mount(request, **kwargs)
+        super().mount(request, **kwargs)  # type: ignore[misc]  # mixin: LiveView provides mount()
 
         # Store model PK for re-hydration after WS serialization.
         # Public attrs so they survive get_context_data() → session save → WS restore.
@@ -102,7 +112,7 @@ class FormMixin:
 
     # Keep form_instance as a property for backward compatibility
     @property
-    def form_instance(self):
+    def form_instance(self) -> Optional[forms.Form]:
         """Access the form instance (re-creates if lost after serialization)."""
         if self._form_instance is None and self.form_class:
             self._ensure_model_instance()
@@ -110,10 +120,10 @@ class FormMixin:
         return self._form_instance
 
     @form_instance.setter
-    def form_instance(self, value):
+    def form_instance(self, value: Optional[forms.Form]) -> None:
         self._form_instance = value
 
-    def _ensure_model_instance(self):
+    def _ensure_model_instance(self) -> None:
         """Re-hydrate _model_instance from stored PK if lost after WS serialization."""
         if self._model_instance is not None:
             return
@@ -146,7 +156,7 @@ class FormMixin:
         if not self.form_class:
             raise ValueError("form_class must be set to use FormMixin")
 
-        kwargs = {}
+        kwargs: Dict[str, Any] = {}
         if self._model_instance and issubclass(self.form_class, forms.ModelForm):
             kwargs["instance"] = self._model_instance
 
@@ -156,7 +166,7 @@ class FormMixin:
             return self.form_class(**kwargs)
 
     @event_handler
-    def validate_field(self, field_name: str = "", value: Any = None, **kwargs):
+    def validate_field(self, field_name: str = "", value: Any = None, **kwargs: Any) -> None:
         """
         Validate a single field in real-time.
 
@@ -217,7 +227,7 @@ class FormMixin:
         self._form_instance = form
 
     @event_handler
-    def submit_form(self, **kwargs):
+    def submit_form(self, **kwargs: Any) -> None:
         """
         Handle form submission.
 
@@ -262,7 +272,7 @@ class FormMixin:
             if hasattr(self, "form_invalid"):
                 self.form_invalid(form)
 
-    def _sync_form_data(self, form):
+    def _sync_form_data(self, form: forms.Form) -> None:
         """Sync form_data from the form's cleaned/saved values.
 
         After form_valid(), update form_data so the VDOM diff sends patches
@@ -284,7 +294,7 @@ class FormMixin:
                 continue
             self.form_data[field_name] = val if val is not None else ""
 
-    def reset_form(self, **kwargs):
+    def reset_form(self, **kwargs: Any) -> None:
         """Reset form to initial state"""
         # Reset form_data with all field keys initialized (matching mount() behavior)
         # This ensures consistent VDOM state and prevents alternating patches/html_update
@@ -323,7 +333,7 @@ class FormMixin:
         """Check if a field has errors"""
         return field_name in self.field_errors
 
-    def as_live(self, **kwargs) -> str:
+    def as_live(self, **kwargs: Any) -> str:
         """
         Render the entire form automatically using the configured CSS framework.
 
@@ -365,7 +375,7 @@ class FormMixin:
 
         return html
 
-    def as_live_field(self, field_name: str, adapter=None, **kwargs) -> str:
+    def as_live_field(self, field_name: str, adapter: Any = None, **kwargs: Any) -> str:
         """
         Render a single form field automatically using the configured CSS framework.
 
@@ -403,7 +413,7 @@ class FormMixin:
         errors = self.get_field_errors(field_name)
 
         # Render using adapter
-        return adapter.render_field(field, field_name, value, errors, **kwargs)
+        return cast(str, adapter.render_field(field, field_name, value, errors, **kwargs))
 
 
 class LiveViewForm(forms.Form):
@@ -416,7 +426,7 @@ class LiveViewForm(forms.Form):
         directly instead.
     """
 
-    def __init_subclass__(cls, **kwargs):
+    def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         # stacklevel=5: __init_subclass__ runs inside Django's
         # DeclarativeFieldsMetaclass __new__ chain, which adds two metaclass
