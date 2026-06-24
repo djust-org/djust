@@ -1148,6 +1148,49 @@ class ViewRuntime:
         if await self._dispatch_component_event(event_name, params, positional_args, event_ref):
             return
 
+        # v0.7.0 dj_activity gate (ADR-022 Iter 2 Phase 2.3a, #1903). Verbatim
+        # transport-agnostic port of the WS ``_handle_event_inner`` gate
+        # (websocket.py:3254-3273): if the event was triggered inside a HIDDEN
+        # (non-eager) ``{% dj_activity %}`` region, queue it per-activity and send
+        # a no-op so the client's loading state clears — the event replays when
+        # the panel is next shown (drained by ``_flush_deferred_activity_events``
+        # below). The view methods (``is_activity_visible`` / ``_is_activity_eager``
+        # / ``_queue_deferred_activity_event``) are the SAME transport-agnostic
+        # ActivityMixin API the WS path uses; only the send shape differs (the
+        # runtime's self-describing noop vs the WS ``_send_noop``). SSE views with
+        # no ``{% dj_activity %}`` region carry no ``_activity`` marker, so the
+        # whole block is a no-op for them (parity-improving but zero-cost when
+        # unused). Routes LIVE for SSE today (events run through this path since
+        # Iter 1, #1887); WS stays on its bespoke gate until Phase 2.3b.
+        _activity_name = params.pop("_activity", None)
+        if (
+            _activity_name
+            and hasattr(self.view_instance, "is_activity_visible")
+            and not self.view_instance.is_activity_visible(_activity_name)
+            and not self.view_instance._is_activity_eager(_activity_name)
+        ):
+            logger.debug(
+                "[djust] Runtime event %r on hidden activity %r — deferring",
+                sanitize_for_log(event_name or ""),
+                sanitize_for_log(_activity_name),
+            )
+            # Queued WITHOUT permission/rate-limit check (by design: per-handler
+            # auth runs on dispatch via the lock-free re-dispatcher
+            # ``_dispatch_single_event``). Per-activity cap bounds memory.
+            self.view_instance._queue_deferred_activity_event(_activity_name, event_name, params)
+            # No-op so the client clears its loading state. Mirrors the runtime's
+            # skip-render noop shape (type/source/event_name/ref) so the client
+            # can match the ack to its pending event (#560 sequencing).
+            noop_msg: Dict[str, Any] = {
+                "type": "noop",
+                "source": "event",
+                "event_name": event_name,
+            }
+            if event_ref is not None:
+                noop_msg["ref"] = event_ref
+            await self.transport.send(noop_msg)
+            return
+
         # Security
         handler = await _validate_event_security(
             self.transport, event_name, self.view_instance, self._rate_limiter
@@ -1323,6 +1366,12 @@ class ViewRuntime:
             # the correct WS behavior here FIXES the legacy SSE drop of
             # ``start_async`` work (#1887 / #1646). No-op when no tasks are queued.
             self._dispatch_async_work(event_name)
+            # dj_activity flush (Phase 2.3a, #1903): a skip-render handler can
+            # still flip an activity visible via set_activity_visible(); drain its
+            # queue so deferred events for that panel arrive in the same
+            # round-trip. Mirrors the WS flush placement after the async dispatch
+            # (websocket.py:4283-4294). Safe + no-op when no activities exist.
+            await self._flush_deferred_activity_events()
             return
 
         # Render
@@ -1339,11 +1388,163 @@ class ViewRuntime:
         # and stream their re-rendered result via the transport when ready.
         self._dispatch_async_work(event_name)
 
+        # dj_activity flush (Phase 2.3a, #1903): if this handler flipped any
+        # activity visible, drain its deferred-event queue now so in-flight events
+        # for that panel are delivered in-order in the SAME round-trip. The flush
+        # is async + awaited inline (websocket.py:4290-4294). Safe to call even
+        # when no activities exist (the flush early-returns on an empty queue).
+        await self._flush_deferred_activity_events()
+
         logger.debug(
             "Runtime: event '%s' handled in %.1fms",
             sanitize_for_log(event_name),
             (time.perf_counter() - start_time) * 1000,
         )
+
+    # ------------------------------------------------------------------ #
+    # dj_activity deferred-event drain (ADR-022 Iter 2 Phase 2.3a, #1903)
+    #
+    # The transport-agnostic flush + lock-free re-dispatcher that the runtime
+    # uses to drain queued events when a panel flips visible. The ActivityMixin
+    # flush method (mixins/activity.py:212) is consumer-blind: it takes any
+    # object exposing ``_dispatch_single_event(target_view, event_name, params)``
+    # and awaits it once per queued event. WS passes the consumer; the runtime
+    # passes ITSELF (option (a) — no change to the view-method semantics). The
+    # re-dispatcher runs INSIDE ``event_context`` (the flush is invoked from
+    # ``_dispatch_event_render``, which is wrapped in ``transport.event_context``),
+    # which on WS already holds the borrowed consumer ``_render_lock`` — so, like
+    # the WS ``_dispatch_single_event`` (websocket.py:1467), this method MUST NOT
+    # re-acquire any lock and MUST NOT re-enter ``event_context`` (that would
+    # deadlock on the non-reentrant ``asyncio.Lock``). On SSE ``event_context`` is
+    # a no-op, so there is no lock either way. Each queued event is re-VALIDATED
+    # through the full auth stack here (a denied queued event never dispatches).
+    # ------------------------------------------------------------------ #
+
+    async def _flush_deferred_activity_events(self) -> None:
+        """Drain the view's deferred-activity queues via the runtime re-dispatcher.
+
+        Thin wrapper: hands the runtime itself to the ActivityMixin flush as the
+        consumer-like dispatcher. No-op when the view has no ActivityMixin or no
+        queued events. Best-effort — a drain bug must never break the event turn
+        (mirrors the WS flush call-site guard, websocket.py:4290-4294)."""
+        view = self.view_instance
+        if view is None or not hasattr(view, "_flush_deferred_activity_events"):
+            return
+        try:
+            await view._flush_deferred_activity_events(self)
+        except Exception:  # noqa: BLE001 — never fail the event for a drain bug
+            logger.exception("dj_activity: runtime deferred-event flush raised")
+
+    async def _dispatch_single_event(
+        self,
+        target_view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """Lock-free single queued-event re-dispatch (the WS ``_dispatch_single_event`` twin).
+
+        Re-runs validate → handler → render for ONE deferred ``(event_name, params)``
+        pair WITHOUT acquiring a lock and WITHOUT re-entering ``event_context`` —
+        the caller (``_flush_deferred_activity_events`` → the ActivityMixin flush)
+        already runs inside ``event_context`` (which on WS holds the borrowed
+        ``_render_lock``). Invariants mirror the WS path (websocket.py:1456-1626):
+
+        * The activity gate is NOT re-run — events reach this path only because
+          the flush already decided they should dispatch (re-gating would re-queue
+          them forever). ``params`` arrives with ``_activity`` stripped by the
+          flush.
+        * Still runs the FULL security pipeline (unsafe name, missing handler,
+          decorator allowlist, per-handler rate limit, permission check), so a
+          denied queued event is dropped exactly as a live one would be.
+        * Exceptions are logged + swallowed so one bad queued event cannot break
+          the rest of the drain (the flush also catches, defense-in-depth).
+        """
+        from .websocket import _compute_changed_keys, _snapshot_assigns
+
+        # --- security / validation (shared with the live path) -------------
+        handler = await _validate_event_security(
+            self.transport, event_name, target_view, self._rate_limiter
+        )
+        if handler is None:
+            return
+
+        positional_args = (params or {}).pop("_args", []) if isinstance(params, dict) else []
+        coerce = get_handler_coerce_setting(handler)
+        validation = validate_handler_params(
+            handler,
+            params or {},
+            event_name,
+            coerce=coerce,
+            positional_args=positional_args,
+        )
+        if not validation["valid"]:
+            logger.warning(
+                "Runtime deferred-activity event %r failed param validation: %s",
+                sanitize_for_log(event_name or ""),
+                sanitize_for_log(validation["error"]),
+            )
+            return
+        coerced_params = validation.get("coerced_params", params)
+
+        # --- handler invocation -------------------------------------------
+        pre_assigns = _snapshot_assigns(self.view_instance)
+        try:
+            await _call_handler(handler, coerced_params if coerced_params else None)
+        except Exception:  # noqa: BLE001 — never break the flush
+            logger.exception(
+                "Runtime deferred-activity event %r on %s raised during dispatch",
+                sanitize_for_log(event_name or ""),
+                type(target_view).__name__,
+            )
+            return
+
+        # Waiter notification (ADR-002) — same posture as the live path.
+        if hasattr(target_view, "_notify_waiters"):
+            try:
+                target_view._notify_waiters(event_name, coerced_params or {})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Waiter notification for deferred %r failed: %s",
+                    sanitize_for_log(event_name or ""),
+                    exc,
+                )
+
+        # --- render + emit one frame (mirrors the live skip/render split) --
+        skip_render = getattr(self.view_instance, "_skip_render", False)
+        force_html = getattr(self.view_instance, "_force_full_html", False)
+        if not skip_render and not force_html:
+            post_assigns = _snapshot_assigns(self.view_instance)
+            if pre_assigns == post_assigns:
+                skip_render = True
+            else:
+                self.view_instance._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
+
+        has_async = getattr(self.view_instance, "_async_pending", None) is not None
+
+        if skip_render:
+            self.view_instance._skip_render = False
+            self._flush_push_events()
+            noop_msg: Dict[str, Any] = {
+                "type": "noop",
+                "source": "event",
+                "event_name": event_name,
+            }
+            if event_ref is not None:
+                noop_msg["ref"] = event_ref
+            if has_async:
+                noop_msg["async_pending"] = True
+            await self.transport.send(noop_msg)
+            self._dispatch_async_work(event_name)
+            return
+
+        await self._render_and_send(
+            event_name=event_name,
+            has_async=has_async,
+            force_html=force_html,
+            event_ref=event_ref,
+        )
+        self._dispatch_async_work(event_name)
 
     # ------------------------------------------------------------------ #
     # Time-travel push hook (ADR-022 Iter 2 Phase 2.2)
