@@ -1137,6 +1137,10 @@ class ViewRuntime:
 
         page_url = validate_mount_url(data.get("url", "/"))
         client_timezone = data.get("client_timezone")
+        # has_prerendered (ADR-022 Iter 3 Phase 3.0): the client signals it already
+        # holds server-rendered HTML for this view. Consumed below at the mount
+        # frame to decide ``skip_html_for_resume`` (WS websocket.py:2086).
+        has_prerendered = bool(data.get("has_prerendered", False))
 
         if not view_path:
             await self.transport.send_error("Missing view path in mount request")
@@ -1285,6 +1289,37 @@ class ViewRuntime:
             self.view_instance = None
             return
 
+        # ---- Mount-request stash + dirty/private baselines (ADR-022 Iter 3
+        # Phase 3.0 transport-agnostic grows) ----
+        # Ported from WS handle_mount (websocket.py:2596-2603), placed at the
+        # SAME point: AFTER mount() + the object-permission check, BEFORE
+        # handle_params.
+        #
+        # #1895 (KNOWN required fold): stash the mount request + kwargs on the
+        # view. The runtime's OWN per-event session-save fallback
+        # (_persist_state_after_event runtime.py:2030, _persist_sticky_child_
+        # after_event runtime.py:2109) ALREADY reads ``_djust_mount_request`` to
+        # discover the save session + namespace path. Without this stash that
+        # fallback silently degrades to the scope session on the converged
+        # event path; with it, the converged path persists under the SAME
+        # ``liveview_{request.path}`` key the WS bespoke path uses. Stashing it
+        # here makes that fallback LIVE on the runtime/SSE mount path (and, post
+        # 3.3b flip, the WS mount path). Behavioral-parity pin in
+        # test_transport_behavioral_parity.py (gate-off: delete this stash → the
+        # mount-stash net goes RED).
+        view_instance._djust_mount_request = request
+        view_instance._djust_mount_kwargs = mount_kwargs
+
+        # _snapshot_user_private_attrs + _capture_dirty_baseline (WS
+        # websocket.py:2598-2603): record the post-mount private-attr name set
+        # and the dirty-tracking baseline so subsequent renders/change-detection
+        # see the correct "since mount" delta. Both are pure view methods (no
+        # transport), hasattr-guarded to stay safe against duck-typed test views.
+        if hasattr(view_instance, "_snapshot_user_private_attrs"):
+            await sync_to_async(view_instance._snapshot_user_private_attrs)()
+        if hasattr(view_instance, "_capture_dirty_baseline"):
+            await sync_to_async(view_instance._capture_dirty_baseline)()
+
         # ---- handle_params (Phoenix-parity, fixes #1237 bug 3) ----
         try:
             from urllib.parse import urlencode
@@ -1331,14 +1366,55 @@ class ViewRuntime:
             "session_id": self.session_id,
             "view": view_path,
             "version": version,
-            "html": html,
-            "has_ids": "dj-id=" in (html or ""),
         }
+
+        # has_prerendered / skip_html_for_resume (ADR-022 Iter 3 Phase 3.0 grow,
+        # WS websocket.py:2804-2816). When the client carries pre-rendered HTML
+        # AND the view's state was restored from a session snapshot (a resume),
+        # the client's DOM already reflects the saved state, so sending the
+        # freshly-rendered HTML would force a redundant DOM swap — skip the
+        # ``html``/``has_ids`` keys (the ``version`` still flows so patches stay
+        # in sync). ``_mounted_from_restore`` is the runtime analogue of WS's
+        # ``mounted`` flag: it is DORMANT in Phase 3.0 (the runtime has no
+        # session-restore path yet — that lands in Phase 3.1), so
+        # ``skip_html_for_resume`` is always False today and HTML is always sent.
+        # The machinery is present + correct so Phase 3.1's restore can set the
+        # flag and the resume optimization activates without re-touching this
+        # frame construction.
+        mounted_from_restore = getattr(view_instance, "_mounted_from_restore", False)
+        skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)
+        if html is not None and not skip_html_for_resume:
+            mount_msg["html"] = html
+            mount_msg["has_ids"] = "dj-id=" in html
+        elif skip_html_for_resume:
+            logger.info(
+                "Runtime: skipping mount HTML for resume of %s — client already has DOM",
+                sanitize_for_log(view_path),
+            )
 
         # Optional cache_config (mirrors WS consumer)
         cache_config = self._extract_cache_config(view_instance)
         if cache_config:
             mount_msg["cache_config"] = cache_config
+
+        # optimistic_rules (DEP-002, WS websocket.py:2823-2826) — descriptor
+        # components with tier="optimistic" ship their client-side rules on the
+        # mount frame so the client can apply an optimistic UI update before the
+        # server round-trip.
+        optimistic_rules = self._extract_optimistic_rules(view_instance)
+        if optimistic_rules:
+            mount_msg["optimistic_rules"] = optimistic_rules
+
+        # upload_configs (WS websocket.py:2828-2834) — views using UploadMixin
+        # ship their upload configuration so the client knows the accept/size
+        # constraints before the first upload frame.
+        upload_manager = getattr(view_instance, "_upload_manager", None)
+        if upload_manager:
+            upload_state = upload_manager.get_upload_state()
+            if upload_state:
+                mount_msg["upload_configs"] = {
+                    name: info["config"] for name, info in upload_state.items()
+                }
 
         await self.transport.send(mount_msg)
         logger.info(
@@ -1346,6 +1422,20 @@ class ViewRuntime:
             sanitize_for_log(view_path),
             sanitize_for_log(self.session_id),
         )
+
+        # Mount-time queue drain (ADR-022 Iter 3 Phase 3.0, WS
+        # websocket.py:2916-2917). Drain push events queued during mount()/on_mount
+        # hooks (#1283) and dispatch any start_async()/assign_async() callbacks
+        # scheduled in mount() (#1280), AFTER the mount frame establishes the view
+        # on the client. CRITICAL (#1391 source-grep pin moved to this location in
+        # test_handle_mount_drains_queues.py): WS mount drains ONLY these two
+        # queues — NOT the 8-queue ``_flush_all_pending`` that the turn-end event
+        # path uses. Preserve EXACTLY: mount establishes the baseline, it does not
+        # run a full event turn-end flush. ``_flush_push_events`` is sync (queues
+        # the sends fire-and-forget); ``_dispatch_async_work`` takes the event_name
+        # (None at mount).
+        self._flush_push_events()
+        self._dispatch_async_work(None)
 
     # ------------------------------------------------------------------ #
     # Event dispatch (used by SSE in this PR; WS still uses handle_event)
@@ -2764,6 +2854,36 @@ class ViewRuntime:
             return cache_config or None
         except Exception:
             return None
+
+    def _extract_optimistic_rules(self, view_instance) -> Dict[str, Any]:
+        """Extract optimistic UI rules from descriptor components (DEP-002).
+
+        Mirror of ``LiveViewConsumer._extract_optimistic_rules``
+        (websocket.py:3385) ported to the runtime for ADR-022 Iter 3 Phase 3.0
+        so the converged mount frame carries the same optimistic-UI rules. Only
+        components with ``Meta.tier == "optimistic"`` contribute a rule; the
+        first event wins (matches WS's ``event not in rules`` guard).
+        """
+        if not view_instance:
+            return {}
+
+        descriptors = getattr(type(view_instance), "_component_descriptors", None)
+        if not descriptors:
+            return {}
+
+        rules: Dict[str, Any] = {}
+        for _name, descriptor in descriptors.items():
+            meta = getattr(type(descriptor), "Meta", None)
+            if meta is None:
+                continue
+            tier = getattr(meta, "tier", "server")
+            if tier != "optimistic":
+                continue
+            event = getattr(meta, "event", None)
+            rule = getattr(meta, "optimistic_rule", None)
+            if event and rule and event not in rules:
+                rules[event] = rule
+        return rules
 
     async def _render_and_send(
         self,
