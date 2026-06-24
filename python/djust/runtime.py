@@ -264,6 +264,46 @@ class Transport(Protocol):
         """
         raise NotImplementedError("Actor events are WS-only; SSE refuses use_actors mounts.")
 
+    async def recheck_event_auth(self, view: Any) -> bool:
+        """Opt-in per-event auth re-check for a live event turn (#1777, T3).
+
+        ADR-022 Iter 2 Phase 2.3a. Auth runs once at mount and the mount-time
+        principal is cached on the session, so a user who logs out / loses a
+        permission mid-session would keep dispatching events on the open
+        connection until they reconnect. When ``LIVEVIEW_CONFIG['reauth_on_event']``
+        is set AND the view declares ``login_required`` / ``permission_required``,
+        this hook re-resolves the CURRENT principal and re-runs the view's auth
+        check before the handler runs. Called by ``_dispatch_event_inner`` at the
+        same point the WS bespoke handler does — after the view-mounted check,
+        BEFORE the actor branch and the normal handler path.
+
+        Returns ``True`` to allow the event to proceed, ``False`` to refuse it.
+        On a ``False`` return the caller has ALREADY done nothing — it is the
+        hook's responsibility to emit any client-visible redirect/error and to
+        terminate the transport (matching the WS bespoke behavior: navigate to
+        the login url + ``close(4403)``). The caller then clears ``view_instance``
+        and aborts the event (see ``_dispatch_event_inner``).
+
+        - WS: when the flag is set + the view requires auth, re-resolves the user
+          from the scope session (``channels.auth.get_user``), reflects it onto
+          ``view.request.user``, re-runs ``check_view_auth_lightweight``; on
+          failure sends a ``navigate`` to the login url + ``close(4403)`` (verbatim
+          from websocket.py:3193-3222) and returns ``False``. Fail-safe: any error
+          (no session in scope, etc.) skips the re-check and returns ``True``.
+        - SSE: when the flag is set + the view requires auth, re-runs
+          ``check_view_auth_lightweight`` against the LIVE event-POST request
+          (``session._event_request`` — the current POSTer's request.user, not the
+          stale mount request); on failure sends an auth-error frame + ends the
+          stream and returns ``False``. The owner-binding check (Finding #24) runs
+          at the endpoint BEFORE dispatch, so this is the SSE analog of the WS
+          mid-session deauth gate — a still-owning POSTer whose auth was revoked is
+          refused. Fail-safe identical to WS.
+
+        Default (Protocol): returns ``True`` (no re-check). A transport that does
+        not implement this never blocks events.
+        """
+        return True
+
 
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
@@ -545,6 +585,60 @@ class WSConsumerTransport:
                 except Exception:  # noqa: BLE001
                     logger.exception("dj_activity: deferred-event flush raised (actor path)")
 
+    async def recheck_event_auth(self, view: Any) -> bool:
+        """WS per-event auth re-check — verbatim from websocket.py:3193-3222 (#1777).
+
+        Re-resolves the user from the scope session, reflects it onto
+        ``view.request.user`` (the mount request stored on the view), and re-runs
+        the view's auth check. On failure: navigate to the login url + ``close(4403)``
+        and return ``False``. On success or any error (fail-safe): return ``True``.
+
+        Gated on ``reauth_on_event`` + ``login_required``/``permission_required``
+        so default views never pay the session read. DORMANT until Phase 2.3b for
+        live WS events (WS events still run on the bespoke handler today); the WS
+        bespoke handler keeps its own inline copy until the flip — this is the
+        runtime port for when WS events route through ``dispatch_event``.
+        """
+        from .config import config as djust_config
+
+        if not (
+            djust_config.get("reauth_on_event")
+            and (
+                getattr(view, "login_required", None) or getattr(view, "permission_required", None)
+            )
+        ):
+            return True
+
+        consumer = self._consumer
+        try:
+            from channels.auth import get_user
+
+            from .auth.core import check_view_auth_lightweight
+
+            fresh_user = await get_user(consumer.scope)
+            # The mount request is stored on the view (handle_mount:
+            # ``view.request = request``), not on the consumer.
+            request = getattr(view, "request", None)
+            if request is None:
+                # No request to re-check against — fail-safe skip (matches the WS
+                # bespoke guard, which only re-checks when a request exists).
+                return True
+            request.user = fresh_user  # reflect current auth for the check + handler
+            authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
+            if not authorized:
+                from django.conf import settings as _dj_settings
+
+                login_url = getattr(view, "login_url", None) or getattr(
+                    _dj_settings, "LOGIN_URL", "/accounts/login/"
+                )
+                await consumer.send_json({"type": "navigate", "to": login_url})
+                await consumer.close(code=4403)
+                return False
+            return True
+        except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
+            logger.debug("reauth_on_event re-check skipped (non-fatal, WS)", exc_info=True)
+            return True
+
 
 class SSESessionTransport:
     """Transport adapter wrapping ``SSESession``.
@@ -665,6 +759,60 @@ class SSESessionTransport:
     ) -> None:
         """Never called on SSE (``uses_actors`` is ``False``) — guard with a raise."""
         raise NotImplementedError("Actor events are WS-only; SSE refuses use_actors mounts.")
+
+    async def recheck_event_auth(self, view: Any) -> bool:
+        """SSE per-event auth re-check against the LIVE event-POST request (#1777).
+
+        SSE parity for the WS mid-session deauth gate. The owner-binding check
+        (Finding #24) already runs at the ``/event/`` + ``/message/`` endpoints
+        BEFORE dispatch, so the POSTer is the session owner — but a still-owning
+        principal whose ``login_required`` / ``permission_required`` posture was
+        revoked mid-session would keep driving the view. When ``reauth_on_event``
+        is set + the view requires auth, re-run ``check_view_auth_lightweight``
+        against the CURRENT event-POST request (``session._event_request``, stamped
+        by the SSE endpoint just before ``dispatch_event`` — the live POSTer's
+        ``request.user``, NOT the stale mount request that ``build_request``
+        returns). On failure: send an auth-error frame + end the stream and return
+        ``False``. Fail-safe: any error skips the re-check and returns ``True``.
+
+        LIVE for SSE today: SSE events route through ``dispatch_event`` →
+        ``_dispatch_event_inner`` since Iter 1 (#1887), so this hook fires on the
+        live SSE event path the moment ``reauth_on_event`` is enabled.
+        """
+        from .config import config as djust_config
+
+        if not (
+            djust_config.get("reauth_on_event")
+            and (
+                getattr(view, "login_required", None) or getattr(view, "permission_required", None)
+            )
+        ):
+            return True
+
+        session = self._session
+        try:
+            from .auth.core import check_view_auth_lightweight
+
+            # The live event-POST request, stamped on the session by the SSE
+            # endpoint right before dispatch. Falls back to the mount request
+            # (``session._request``) defensively if the endpoint didn't stamp one
+            # (e.g. a direct runtime.dispatch_event call) — the mount request
+            # still carries a real user, so the re-check stays meaningful.
+            request = getattr(session, "_event_request", None) or getattr(session, "_request", None)
+            if request is None:
+                return True
+            authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
+            if not authorized:
+                await session.send_error(
+                    "Session is no longer authorized. Please reload the page.",
+                    code=4403,
+                )
+                await session.close(code=4403)
+                return False
+            return True
+        except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
+            logger.debug("reauth_on_event re-check skipped (non-fatal, SSE)", exc_info=True)
+            return True
 
 
 # ------------------------------------------------------------------ #
@@ -1045,6 +1193,27 @@ class ViewRuntime:
         """
         if not self.view_instance:
             await self.transport.send_error("View not mounted. Please reload the page.")
+            return
+
+        # Opt-in per-event auth re-check (#1777, T3, ADR-022 Iter 2 Phase 2.3a).
+        # Runs at the SAME point the WS bespoke handler does — after the
+        # view-mounted check, BEFORE the actor branch and the normal handler path
+        # (websocket.py:3193-3222 sits before the actor block at :3282). The hook
+        # is default-True (no re-check) unless ``reauth_on_event`` is set + the view
+        # requires auth; on a False return the transport has ALREADY emitted the
+        # redirect/error + terminated itself.
+        #
+        # #291 multiplexed-path care: the transport-TERMINATING side effect (close)
+        # is owned by the hook and gated there (events are NOT batched today —
+        # mount_batch is mount-only — but if events ever get collected, the hook
+        # gates its own close on "not in batch"). The STATE change that closes the
+        # security gap (clearing ``view_instance`` so no later frame on this session
+        # dispatches against the deauthorized view) is applied HERE,
+        # UNCONDITIONALLY, regardless of whether the close fired — mirroring the WS
+        # bespoke block which sets ``self.view_instance = None`` after the close.
+        recheck = getattr(self.transport, "recheck_event_auth", None)
+        if recheck is not None and not await recheck(self.view_instance):
+            self.view_instance = None  # unconditional state-clear (#291)
             return
 
         uses_actors = getattr(self.transport, "uses_actors", None)
@@ -2762,6 +2931,16 @@ class ViewRuntime:
         the transport's client-checked wire version (#1858) and drains the
         turn-end queues so push_events / deferred / etc. scheduled inside the
         background callback reach the client.
+
+        The result frame carries ``source="async"`` (ADR-022 Iter 2 Phase 2.3a)
+        so it matches the WS ``_run_async_work`` frames (websocket.py:1166/1186/
+        1223/1238), which all tag ``source="async"``. Without this, the runtime's
+        async-result frames were the lone untagged twin of the WS ones — a #1646
+        parallel-path drift INSIDE the convergence target. The client uses
+        ``source`` to distinguish an out-of-band background-completion update from
+        the in-turn ``source="event"`` response, so the tag must agree across
+        transports. Goes LIVE for SSE + ``url_change`` async work (both use the
+        runtime async dispatcher today); WS picks it up post-flip (Phase 2.3b).
         """
         view = self.view_instance
         if not view:
@@ -2778,6 +2957,7 @@ class ViewRuntime:
                 "patches": patch_list,
                 "version": wire_version,
                 "event_name": event_name,
+                "source": "async",
             }
         else:
             if hasattr(view, "_strip_comments_and_whitespace"):
@@ -2789,6 +2969,7 @@ class ViewRuntime:
                 "html": html,
                 "version": wire_version,
                 "event_name": event_name,
+                "source": "async",
             }
         await self.transport.send(msg)
         await self._flush_all_pending()
