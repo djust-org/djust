@@ -3,7 +3,45 @@
 import threading
 import time
 
+import pytest
 from django.test import override_settings
+
+
+class FakeClock:
+    """Controllable monotonic clock for the rate-limit tests (#1930).
+
+    Own the clock: the token-bucket refill math (``tokens + elapsed * rate``)
+    reads ``djust.rate_limit._monotonic``. Patching that name with a frozen
+    instance of this class makes ``elapsed == 0`` for every ``consume()`` call,
+    so no token ever refills between checks and burst-exhaustion assertions are
+    deterministic — immune to the wall-clock refill that flaked
+    ``test_ping_flood_triggers_disconnect`` under CPU-saturated parallel runs.
+
+    To exercise the refill path deterministically (no ``time.sleep``), call
+    ``.advance(dt)`` to add ``dt`` seconds of virtual time.
+    """
+
+    def __init__(self, start: float = 1000.0):
+        self.now = float(start)
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, dt: float) -> None:
+        self.now += dt
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    """A FakeClock that never advances, patched over ``rate_limit._monotonic``.
+
+    Tests using this fixture see ``elapsed == 0`` between every bucket read, so
+    no token refills — burst-exhaustion is deterministic. The clock instance is
+    returned so a test may ``.advance()`` it to drive the refill path explicitly.
+    """
+    clock = FakeClock()
+    monkeypatch.setattr("djust.rate_limit._monotonic", clock)
+    return clock
 
 
 class TestEventGuard:
@@ -120,9 +158,11 @@ class TestMessageSizeLimit:
 class TestRateLimiter:
     """Proposal 3: Rate limiting tests."""
 
-    def test_token_bucket_allows_burst(self):
+    def test_token_bucket_allows_burst(self, frozen_clock):
         from djust.rate_limit import TokenBucket
 
+        # frozen_clock: no time elapses between checks, so no token refills —
+        # the burst-exhaustion assertion is deterministic (#1930).
         bucket = TokenBucket(rate=10, burst=5)
         # Should allow 5 events in quick succession
         for _ in range(5):
@@ -130,22 +170,27 @@ class TestRateLimiter:
         # 6th should be rejected
         assert bucket.consume() is False
 
-    def test_token_bucket_refills(self):
+    def test_token_bucket_refills(self, frozen_clock):
         from djust.rate_limit import TokenBucket
 
+        # frozen_clock starts frozen, then we advance it explicitly — this drives
+        # the refill path deterministically and instantly, no wall-clock sleep (#1930).
         bucket = TokenBucket(rate=100, burst=5)
         # Drain bucket
         for _ in range(5):
             bucket.consume()
+        # Still frozen: no refill happened, bucket genuinely empty
         assert bucket.consume() is False
 
-        # Wait for refill (100 tokens/sec = 1 token per 0.01s)
-        time.sleep(0.05)
+        # Advance virtual time past one refill interval
+        # (100 tokens/sec => 1 token per 0.01s; advance 0.05s => ~5 tokens back).
+        frozen_clock.advance(0.05)
         assert bucket.consume() is True
 
-    def test_connection_rate_limiter_global(self):
+    def test_connection_rate_limiter_global(self, frozen_clock):
         from djust.rate_limit import ConnectionRateLimiter
 
+        # frozen_clock: deterministic burst exhaustion, no refill flake (#1930).
         limiter = ConnectionRateLimiter(rate=100, burst=3, max_warnings=2)
         # Consume burst
         assert limiter.check("evt") is True
@@ -159,9 +204,11 @@ class TestRateLimiter:
         assert limiter.check("evt") is False
         assert limiter.should_disconnect() is True
 
-    def test_per_handler_rate_limit(self):
+    def test_per_handler_rate_limit(self, frozen_clock):
         from djust.rate_limit import ConnectionRateLimiter
 
+        # frozen_clock: the per-handler bucket (rate=1, burst=2) cannot refill
+        # mid-test, so the 3rd check is deterministically rejected (#1930).
         limiter = ConnectionRateLimiter(rate=1000, burst=100, max_warnings=10)
         limiter.register_handler_limit("expensive", rate=1, burst=2)
         assert limiter.check_handler("expensive") is True
@@ -346,10 +393,11 @@ class TestRateLimitIntegration:
 class TestGlobalRateLimit:
     """Issue #107: All message types must be rate-limited, not just events."""
 
-    def test_non_event_messages_are_rate_limited(self):
+    def test_non_event_messages_are_rate_limited(self, frozen_clock):
         """After exhausting burst, mount and ping messages should be rejected."""
         from djust.rate_limit import ConnectionRateLimiter
 
+        # frozen_clock: deterministic burst exhaustion, no refill flake (#1930).
         limiter = ConnectionRateLimiter(rate=100, burst=3, max_warnings=10)
         # Exhaust burst with any message types
         assert limiter.check("ping") is True
@@ -360,10 +408,14 @@ class TestGlobalRateLimit:
         assert limiter.check("mount") is False
         assert limiter.check("event") is False
 
-    def test_ping_flood_triggers_disconnect(self):
+    def test_ping_flood_triggers_disconnect(self, frozen_clock):
         """Repeated ping messages should eventually trigger disconnect."""
         from djust.rate_limit import ConnectionRateLimiter
 
+        # frozen_clock: the reported flake (#1930). Under CPU-saturated parallel
+        # `make test`, real wall-clock between checks refilled a token
+        # (rate=100 => 1 token / 10ms) and the 3rd ping flipped False->True.
+        # A frozen clock keeps elapsed==0, so burst exhaustion is deterministic.
         limiter = ConnectionRateLimiter(rate=100, burst=2, max_warnings=2)
         # Exhaust burst
         limiter.check("ping")

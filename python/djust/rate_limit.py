@@ -15,6 +15,14 @@ from .security.log_sanitizer import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
+# Monotonic clock seam. Aliased once at module load so the token-bucket refill
+# math reads through a single indirection. Production behavior is identical to
+# calling ``time.monotonic()`` directly; the seam exists purely so tests can
+# OWN THE CLOCK — patch this name with a controllable fake instead of the global
+# ``time`` module — and assert burst-exhaustion deterministically (no wall-clock
+# refill flake under CPU-saturated parallel runs). See tests/unit/test_event_security.py.
+_monotonic = time.monotonic
+
 
 class TokenBucket:
     """
@@ -31,11 +39,11 @@ class TokenBucket:
         self.rate = rate
         self.burst = burst
         self.tokens = float(burst)
-        self.last_refill = time.monotonic()
+        self.last_refill = _monotonic()
 
     def consume(self) -> bool:
         """Try to consume one token. Returns True if allowed."""
-        now = time.monotonic()
+        now = _monotonic()
         elapsed = now - self.last_refill
         self.tokens = min(self.burst, self.tokens + elapsed * self.rate)
         self.last_refill = now
