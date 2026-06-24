@@ -353,8 +353,53 @@ issue or be explicitly closed with a reason.
 | 311 | Test-ordering pollution: `tests/unit/test_demo_views.py::TestDemoRegistration` — 4 urlconf-resolution failures under full `-n auto` | PR #1861 / v1.0.8-1 retro | #1862 | Open | Pre-existing; surfaced during T1-A. Passes in isolation; needs the polluter found (urlconf state leak). |
 | 312 | `_get_project_app_dirs()` returns 0 dirs when `manage.py check` runs from inside the djust repo tree (the `/djust/` path filter) — blinds S009/S011 dogfooding | PR #1864 / v1.0.8-1 retro | #1865 | Open | Pre-existing; makes in-repo dogfood of the new checks see 0 app dirs. Dogfood worked via the demo project instead. |
 | 313 | Per-model `djust_serializable_fields` allowlist can re-expose the sensitive-field floor (`password`/`is_superuser`/`is_staff`) — allowlist wins over `_ALWAYS_EXCLUDED_FIELDS` | PR #1867 / v1.0.8-1 retro | #1868 | Open | Surfaced by writing SECURE_DEFAULTS.md (`serialization.py:362`). Doc now states accurate precedence + WARNING; code-hardening question (make floor unconditional?) tracked here. |
-| 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Open | Shipped non-gating per #1534 (new gate needs a runner-green pass before it blocks). |
-| 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Open | Unrelated pre-existing flaky async test surfaced by WU4's 3-clean-runs gate; kept out of #1862's scope (#1079). Guards the #291 multiplexed-path rule (guard is correct; harness ordering is the flake). |
+| 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Closed | **Resolved (PR for #1869):** `playwright-tests` was `success` on the last 3 runner runs (precondition met per #1534), so `test_browser_smoke.py` was carved into its own BLOCKING `browser-smoke` CI job (no `continue-on-error`, mirrors the `demo-checks` pattern #1708/#1713) and wired into the `test-summary` AND-condition; the rest of the playwright suite stays non-blocking (the full suite can be flaky). #1848 was code-fixed by PR #1871 (re-execute classic `<script>` on the #1610 mount morph), so the inline-script known-xfail was flipped to a HARD regression assertion. |
+| 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Closed | **Resolved in v1.1.0-1 (PR #1881):** channel-layer isolation (`backends.clear()`) + deterministic ping/pong openness probe (replaced the wall-clock `receive_nothing`); the systemic test-isolation fixture (#1884) retired the shared-process-global flaky class. |
+
+## v1.1.0-3 — ViewRuntime dispatch convergence (ADR-022 headline) (PRs #1886/#1888/#1890/#1893/#1895/#1897/#1909/#1912/#1914/#1916/#1918/#1920 + followups #1910/#1923/#1924 + resync #1925)
+
+**Date**: 2026-06-24
+**Scope**: The ADR-022 ViewRuntime convergence — collapse djust's parallel dispatch paths (WebSocket, SSE, runtime) onto ONE `ViewRuntime` dispatch spine for BOTH mount and event, retiring the #1646 parallel-path-drift class at its root. Preceded by v1.1.0-1 (test hygiene: #1881 de-flake #1875, #1884 systemic test-isolation fixture #1883/#1882) + v1.1.0-2 (stale-tracker reconcile, no code). 4 iterations: Iter 0 (#1886 runtime gap-fixes — object-perm + 8-queue flush + behavioral-parity nets), Iter 1 (#1888 SSE→runtime, `build_request`/`on_view_mounted` hooks), Iter 2 (WS EVENT→runtime: #1890 spine, #1893 component/sticky/embedded routing, #1895 time-travel+state-save, #1897 parity net, #1909 THE FLIP), Iter 3 (WS MOUNT→runtime: #1912 spine+grows, #1914 state-restore, #1916 dormant hooks, #1918 wire hooks, #1920 THE FLIP). ~2600 lines of bespoke twin deleted; net negative across the arc. Then the main→1.1 resync (#1925).
+**Tests at close**: 8642 (full CI-way suite, 0 failed)
+
+### What We Learned
+
+**1. The #1646 convergence dividend — merging paths surfaces the drift the fork hid.**
+Every flip exposed latent bugs that had silently diverged between the parallel paths: `component_id`-over-WS returned an error frame (#1898), `live_redirect` dropped its navigation frame, async results lacked `source="async"`, time-travel didn't record on permission-denial, object-perm denial left the WS socket open on the runtime path, `mount_batch` leaked a failed view's error into survivors. NONE were found by inspection — all surfaced when the second path was deleted and the survivor had to become a true superset. The convergence didn't just prevent future drift; it paid down the drift already there.
+**Action taken**: skill_update — djust/CLAUDE.md "Process canonicalizations from v1.1.0-3" rule 1.
+
+**2. The dormant-define → wire → flip pattern for all-or-nothing-verb convergence.**
+A verb gated by `RUNTIME_OWNED_VERBS` membership cannot be partially flipped, so the safe shape is: (a) grow the target path to a functional superset + define transport hooks DORMANT (uncalled); (b) wire the hooks in + prove the superset via a direct-call over a REAL transport (not the routing switch — Phase 3.3a's 9/9 over a real `WSConsumerTransport`); (c) the atomic flip (tiny diff). Used identically for the event flip (2.0→2.3a→2.3b) and the mount flip (3.0→3.2→3.3a→3.3b).
+**Action taken**: skill_update — CLAUDE.md v1.1.0-3 rule 2.
+
+**3. Characterization-tests-first against the OLD path are the parity proof.**
+Before each flip, real-`WebsocketCommunicator` tests written against the bespoke path (passing NOW, must stay green post-flip) ARE the equivalence proof — AND they surface latent old-path bugs (the bespoke `component_id` error frame) that would otherwise read as flip regressions. PR #1897 (event) + #1912's gap-tests (mount) landed the net before the fold.
+**Action taken**: skill_update — CLAUDE.md v1.1.0-3 rule 3.
+
+**4. Stage-4 read-only scoping before each flip caught 3 #560-class landmines.**
+Scoping-before-coding on the high-blast-radius flips found: the runtime's `_render_lock` was DEAD CODE (a runtime-local lock can't serialize against the WS tick loop — naively wiring it ships the #560 interleave bug); the actor axis-misalignment (verb-flip is all-or-nothing but actor-vs-not is view-state-gated → needs a transport hook); and the stale `runtime.view_instance` idempotency collision (`live_redirect` re-mount silently no-ops). Each would have been a silent production bug.
+**Action taken**: skill_update — CLAUDE.md v1.1.0-3 rule 4.
+
+**5. Routing-flip PRs must run the FULL CI-way suite (all test roots), not the worktree subset.**
+The event flip's first pass shipped a RED suite — 2 stale tests in `tests/unit` + `tests/integration` that the `python/djust/tests` subset run missed (the #1391/#1399 symbol-removal class). Every subsequent flip ran `tests/ python/tests/ python/djust/tests/`.
+**Action taken**: skill_update — CLAUDE.md v1.1.0-3 rule 5 (reinforces #1391 for the routing-flip subclass).
+
+**6. The two-gate treatment for routing-flip PRs.**
+Each atomic flip (2.3b, 3.3b) got a MANDATORY worktree-isolated adversarial review (independent gate-off + the full suite via the runtime path) IN ADDITION to CI; build-up PRs got proportionate inline review. The adversarial pass caught the 2 stale tests on the event flip and confirmed-correct (8/8 empirical) on the mount flip. Reserving the heavy pass for the routing changes (and inline for the dormant build-up folds) kept ~18 PRs moving without rubber-stamping the dangerous ones.
+**Action taken**: skill_update — CLAUDE.md v1.1.0-3 rule 6.
+
+### Insights
+- The convergence retired the #1 recurring failure class of the entire v1.0.x arc (#1646 parallel-path-drift, 21× in RETRO history). A new transport control is now added once and lives on every transport — structurally, not by discipline.
+- ~18 PRs, zero production regressions; the per-PR worktree-implementer → review → CI → merge loop plus the two-gate flip treatment scaled cleanly across a multi-day fully-autonomous drain.
+- Scoping-before-coding paid for itself 3× (the dead-lock, actor-axis, and stale-view_instance landmines were caught read-only, before any code).
+- The split-foundation #1122 discipline was the through-line: Iter 0's nets+gap-fixes made Iter 1 safe; each event/mount build-up phase made the flip a tiny, provable diff.
+
+### Process Improvements Applied
+**CLAUDE.md**: new "Process canonicalizations from v1.1.0-3 retro arc (ViewRuntime convergence)" section — 6 rules (convergence-dividend, dormant→wire→flip, characterization-first, scope-before-flip, full-CI-way-suite-for-flips, two-gate flip review).
+**ADR-022**: sequencing refined throughout (Iter-2 4-phase split, Iter-3 5-phase split, the load-bearing findings A–E captured inline).
+
+### Open Items
+- [x] #1869 — promote the Playwright browser-smoke to a hard merge gate once runner-green (Action Tracker #314). DONE: own BLOCKING `browser-smoke` CI job + `test-summary` AND-condition; #1848 xfail flipped to a hard assertion (fixed by PR #1871).
 
 ## v1.0.8-2 — Post-prevention open-issue drain (PRs #1870, #1871, #1872, #1873, #1874)
 
@@ -400,7 +445,7 @@ WU4 (#1862) was a pollution-class fix, so the gate ran the full suite 3× under 
 ### Open Items
 
 - [ ] Flaky `test_ws_auth_close_socket` under `-n auto` — Action Tracker #315 (GitHub #1875)
-- [ ] Promote browser-smoke to a hard gate once runner-green — Action Tracker #314 (GitHub #1869), carried from v1.0.8-1
+- [x] Promote browser-smoke to a hard gate once runner-green — Action Tracker #314 (GitHub #1869), carried from v1.0.8-1 (DONE: PR for #1869)
 
 **Forward-link →** v1.1 planning: `/pipeline-strategy --deep` (2026-06-23) used this arc's data (#1646 = #1 recurring class, 21×) to commit the **v1.1 code-quality / single-path convergence** headline — **Path B (quality-first → ViewRuntime convergence)**. See [`docs/strategy-sessions/2026-06-23-v1.1-code-quality.md`](docs/strategy-sessions/2026-06-23-v1.1-code-quality.md) + [ADR-022](docs/adr/022-v1.1-code-quality-single-path-convergence.md). Several of this arc's open items (#1875 flaky test, #1869 gate, plus #1360/#1279/#1648/#1368/#1356) feed the v1.1.0-1 quality-groundwork sub-milestone.
 
@@ -471,7 +516,7 @@ S011 (#1864) reached 0 false-positives only because the dogfood pass (#1060) aga
 - [ ] Test-ordering pollution in `test_demo_views.py::TestDemoRegistration` — Action Tracker #311 (GitHub #1862)
 - [ ] `_get_project_app_dirs()` blind from inside the repo tree — Action Tracker #312 (GitHub #1865)
 - [ ] Allowlist can re-expose the serialization floor — Action Tracker #313 (GitHub #1868)
-- [ ] Promote browser-smoke to a hard gate once runner-green; flip #1848 xfail when the framework fix lands — Action Tracker #314 (GitHub #1869)
+- [x] Promote browser-smoke to a hard gate once runner-green; flip #1848 xfail when the framework fix lands — Action Tracker #314 (GitHub #1869) (DONE: PR for #1869; #1848 fixed by PR #1871)
 - [x] Framework fix for #1848 (re-execute classic `<script>` on the mount morph) — Action Tracker #310 (GitHub #1848) — resolved in v1.0.8-2 (PR #1871)
 
 ## v1.0.7-3 + v1.0.7-4 — Security audit drain + coordinated disclosure (private PRs #165–#177 → djust 1.0.7 + 13 GHSAs)

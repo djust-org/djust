@@ -30,8 +30,15 @@ Modeled on tests/playwright/test_nav_hooks.py / test_loading_attribute.py:
 standalone script, playwright async API, exits 0 on success / non-zero with a
 clear message on failure.
 
-Per #1534 this canary ships in the already-non-blocking ``playwright-tests``
-leg; it must go green on a runner before any promotion to a hard merge gate.
+This canary is now a HARD merge gate (#1869 / Action Tracker #314): it runs in
+its OWN blocking ``browser-smoke`` CI job (NOT ``continue-on-error``) and is
+wired into the ``test-summary`` AND-condition, so a runtime break of either
+class red-bars the PR. It was promoted per #1534 only after going green on the
+runner in the non-blocking ``playwright-tests`` leg (the rest of that leg —
+loading_attribute / cache_decorator / draft_mode / nav_hooks — stays
+non-blocking because the FULL playwright suite can be flaky; only this stable
+two-class canary gates). The #1848 inline-script branch was flipped from a
+tolerated known-xfail to a HARD assertion once PR #1871 fixed #1848.
 """
 
 import asyncio
@@ -115,20 +122,20 @@ async def test_browser_smoke():
         # the mount morph re-created that <script> without executing it, the
         # delegated listener never registered and .active will not move.
         #
-        # KNOWN-XFAIL: #1848 is an OPEN framework bug as of 1.0.7 — the mount
-        # morph (#1610) does NOT execute inline <script> it inserts into the
-        # dj-root, so this toggle does NOT work today. We assert the
-        # EXPECTED-correct behavior (so this becomes the regression guard once
-        # #1848 lands), but treat the *exact known signature* of #1848 — the
-        # inline script never ran, i.e. window.__smokeTabsWired is undefined —
-        # as a tolerated xfail (warn, not a hard failure) so this non-gating
-        # canary is not permanently red on a tracked bug. ANY OTHER class-2
-        # failure shape (script ran but toggle broke) IS a hard failure.
-        #
-        # WHEN #1848 IS FIXED: this branch will pass (toggle works) and the
-        # xfail tolerance becomes dead. At that point, DELETE the xfail block
-        # below so a future regression of #1848 hard-fails the canary.
-        print("➡️ Clicking inline-script-wired Tab 2 (#1848)...")
+        # HARD ASSERTION (was a tolerated known-xfail until #1848 landed):
+        # #1848 was FIXED by PR #1871 — the #1610 WS-mount morph now
+        # re-executes classic inline <script> via
+        # window.djust._runInsertedScripts (re-create each <script> via
+        # document.createElement + replaceWith, the only DOM op that makes the
+        # browser run an already-in-tree inert script). So the inline <script>
+        # inside the dj-root runs on mount, its delegated listener registers,
+        # and this toggle works. We now assert the EXPECTED-correct behavior as
+        # a HARD regression guard: ANY failure (the inline script silently not
+        # running again — the exact #1848 regression — OR the toggle otherwise
+        # broken) red-bars this now-gating canary. The former xfail tolerance
+        # (warn-not-fail when window.__smokeTabsWired was undefined) was
+        # removed when #1848 was fixed (Action Tracker #314 / #1869).
+        print("➡️ Clicking inline-script-wired Tab 2 (#1848 regression guard)...")
         active_before = await page.evaluate(
             "() => document.querySelector('.smoke-tab-button.active')?.id"
         )
@@ -145,37 +152,23 @@ async def test_browser_smoke():
                 """,
                 timeout=4000,
             )
-            print(
-                "✅ #1848 inline-script toggle worked — #1848 appears FIXED. "
-                "Remove the xfail tolerance in this test (see comment)."
-            )
+            print("✅ #1848 inline-script toggle worked (regression guard green).")
         except Exception:
             active_after = await page.evaluate(
                 "() => document.querySelector('.smoke-tab-button.active')?.id"
             )
             handled = await page.evaluate("() => window.__smokeTabsHandled || 0")
             inline_ran = await page.evaluate("() => !!window.__smokeTabsWired")
-            detail = (
+            failures.append(
                 "#1848-inline-script: tab toggle did not fire — active tab "
                 f"stayed {active_after!r} (before={active_before!r}), "
-                f"handler invocations={handled}, inline-script-ran={inline_ran}."
+                f"handler invocations={handled}, inline-script-ran={inline_ran}. "
+                "#1848 was fixed by PR #1871 (re-execute classic <script> on "
+                "the #1610 mount morph via window.djust._runInsertedScripts); "
+                "this is a REGRESSION of that fix — the inline <script> inside "
+                "the dj-root was not executed under the mount morph, so its "
+                "delegated listener never registered."
             )
-            if not inline_ran:
-                # Exact #1848 signature: the inline <script> inside the dj-root
-                # was never executed under the mount morph. Tolerated xfail.
-                print(
-                    "⚠️  KNOWN-XFAIL #1848 (tolerated, non-gating): "
-                    + detail
-                    + " The inline <script> inside the dj-root was not executed "
-                    "under the mount morph (#1610). Tracked at #1848."
-                )
-            else:
-                # Inline script DID run but the toggle still failed — that is a
-                # NEW break, not #1848. Hard-fail.
-                failures.append(
-                    detail + " Inline script executed but toggle broke — this "
-                    "is NOT the known #1848 signature; treating as a real break."
-                )
 
         # --- No console errors (the mount canary should be clean) ---
         if console_errors:

@@ -307,7 +307,26 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         """
         Strip HTML comments and normalize whitespace to match Rust VDOM parser behavior.
 
-        IMPORTANT: Preserve whitespace inside <pre>, <code>, and <textarea> tags.
+        IMPORTANT: Preserve whitespace inside <pre>, <code>, <textarea>, <script>,
+        and <style> tags.
+
+        IMPORTANT (#1927): ``<script>`` and ``<style>`` are whitespace-preserving
+        in the Rust VDOM parser (``crates/djust_vdom/src/parser.rs:475`` —
+        ``matches!(tag_ref, "pre" | "code" | "textarea" | "script" | "style")``),
+        and this normalizer exists explicitly to "match Rust VDOM parser
+        behavior" — yet it previously collapsed whitespace ONLY around
+        ``<pre>``/``<code>``/``<textarea>``. The ``re.sub(r"\\s+", " ", html)``
+        pass below turned every newline inside an inline ``<script>`` into a
+        single space, collapsing the whole body onto ONE line. A ``//`` line
+        comment then swallows the rest of the script, so an inline
+        ``<script>`` inside the dj-root silently never executed — its
+        ``addEventListener`` was never called, with no console error (the live
+        symptom #1927/#1848's ``_runInsertedScripts`` fix could not cure
+        because the script was already neutered before any morph re-execution).
+        This is the #1646 parallel-path-drift twin of the Rust parser's
+        preserve set: keep the two in lock-step. Collapsing whitespace inside a
+        ``<style>`` block can likewise corrupt CSS, so both are preserved
+        verbatim.
 
         IMPORTANT (#1678): Preserve ``<!--dj-if …-->`` / ``<!--/dj-if-->``
         boundary markers. These are load-bearing VDOM structure — the Rust
@@ -322,18 +341,43 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         a marker-less DOM) and every subsequent event fell back to
         ``html_recovery``.
         """
-        # Remove HTML comments — but NOT dj-if boundary markers (#1678). The
-        # negative lookahead skips comments whose body is ``dj-if …`` or
-        # ``/dj-if`` so they survive; all other comments are stripped.
-        html = re.sub(r"<!--(?!\s*/?dj-if\b).*?-->", "", html, flags=re.DOTALL)
-
-        # Preserve whitespace inside <pre>, <code>, and <textarea> tags
         preserved_blocks = []
 
         def preserve_block(match):
             preserved_blocks.append(match.group(0))
             return f"__PRESERVED_BLOCK_{len(preserved_blocks) - 1}__"
 
+        # #1927: <script> and <style> are RAW-TEXT, whitespace-preserving
+        # elements in the Rust VDOM parser (crates/djust_vdom/src/parser.rs:475),
+        # and this normalizer exists to match Rust parser behavior. Their bodies
+        # (JS / CSS) carry significant newlines — collapsing them breaks `//`
+        # line comments in scripts (the whole single-lined body gets commented
+        # out) and can corrupt CSS — so preserve them verbatim, exactly as the
+        # Rust parser does. They are raw-text per the HTML spec (`<` inside is
+        # literal, no nesting), so the non-greedy `.*?</tag>` match to the first
+        # close tag is correct.
+        #
+        # CRITICAL ORDERING: extract <script>/<style> BEFORE the HTML-comment
+        # strip below. A token that LOOKS like an HTML comment inside a raw-text
+        # body (e.g. `var s = '<!-- x -->'` in JS, or `/* <!-- */` in CSS) is
+        # literal text, NOT a comment — stripping it would corrupt the script.
+        # Hiding raw-text blocks behind placeholders first makes the
+        # comment-strip pass see only real markup comments. (pre/code/textarea
+        # are NOT raw-text — a real `<!-- -->` inside them is a genuine comment
+        # and is stripped as before, so they stay extracted AFTER the strip.)
+        html = re.sub(
+            r"<script[^>]*>.*?</script>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+        )
+        html = re.sub(
+            r"<style[^>]*>.*?</style>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+        )
+
+        # Remove HTML comments — but NOT dj-if boundary markers (#1678). The
+        # negative lookahead skips comments whose body is ``dj-if …`` or
+        # ``/dj-if`` so they survive; all other comments are stripped.
+        html = re.sub(r"<!--(?!\s*/?dj-if\b).*?-->", "", html, flags=re.DOTALL)
+
+        # Preserve whitespace inside <pre>, <code>, and <textarea> tags
         html = re.sub(r"<pre[^>]*>.*?</pre>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(
             r"<code[^>]*>.*?</code>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE

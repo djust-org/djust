@@ -3,7 +3,8 @@
 The autouse ``_reset_djust_globals`` fixture (``tests/conftest.py`` and
 ``python/djust/tests/conftest.py``) resets djust's leak-prone process-globals
 before every test, retiring the shared-process-global flaky-test class that
-produced #1862 (PR #1874), #1875 (PR #1881), and #1882.
+produced #1862 (PR #1874), #1875 (PR #1881), #1882, and #1928 (the Rust
+tag-handler registry wiped by a ``clear_tag_handlers()`` polluter).
 
 This file pins:
 
@@ -88,6 +89,77 @@ def test_reset_clears_route_map_cache():
         "reset_djust_globals must clear the route-map cache so a stale "
         "URLconf-derived map doesn't leak across tests"
     )
+
+
+def test_reset_reasserts_theme_and_component_tag_handlers_1928():
+    """The reset re-registers the ``ready()``-time Rust theme/component handlers.
+
+    The #1928 class: ``clear_tag_handlers()`` (the benchmark / unit tag-registry
+    suites) wipes the process-global Rust tag-handler registry shared across an
+    xdist worker. ``DjustThemingConfig.ready()`` /
+    ``DjustComponentsConfig.ready()`` register the ``{% theme_X %}`` /
+    ``{% render_slot %}`` handlers, but ``ready()`` runs only once per process,
+    so once cleared they stay gone — and the 17 #1721 theme-tag tests then 500
+    with "Unsupported template tag". ``reset_djust_globals`` must re-assert them.
+
+    Models the polluter directly: clear the registry, prove the handlers are
+    gone, then prove the reset brings them back.
+    """
+    rust = pytest.importorskip("djust._rust")
+    has_tag_handler = rust.has_tag_handler
+    clear_tag_handlers = rust.clear_tag_handlers
+
+    from djust.test_isolation import reset_djust_globals
+
+    # The polluter: wipe the whole Rust tag-handler registry.
+    clear_tag_handlers()
+    assert not has_tag_handler("theme_panel"), (
+        "precondition: clear_tag_handlers() should have wiped the theme handler"
+    )
+    assert not has_tag_handler("render_slot"), (
+        "precondition: clear_tag_handlers() should have wiped the component handler"
+    )
+
+    # The cure: reset_djust_globals re-asserts both ready()-time registrars.
+    reset_djust_globals()
+
+    assert has_tag_handler("theme_panel"), (
+        "reset_djust_globals must re-register the theme tag handlers wiped by a "
+        "clear_tag_handlers() polluter, or the #1721 theme-tag tests 500 under "
+        "-n auto (#1928)"
+    )
+    assert has_tag_handler("render_slot"), (
+        "reset_djust_globals must re-register the component tag handlers wiped "
+        "by a clear_tag_handlers() polluter (#1928)"
+    )
+
+
+def test_gate_off_clear_without_reset_loses_theme_handler_1928():
+    """GATE-OFF (#1468): a bare ``clear_tag_handlers()`` (no reset) loses them.
+
+    Proves the reproduction is real and that the previous test's pass is owed to
+    the reset, not to some ambient re-registration: after the polluter wipes the
+    registry, the theme handler is genuinely absent until something re-registers
+    it. (The autouse fixture re-asserts before the NEXT test, so this leaves no
+    cross-test pollution.)
+    """
+    rust = pytest.importorskip("djust._rust")
+    has_tag_handler = rust.has_tag_handler
+    clear_tag_handlers = rust.clear_tag_handlers
+
+    clear_tag_handlers()
+    assert not has_tag_handler("theme_panel"), (
+        "gate-off: without a re-register, clear_tag_handlers() must leave the "
+        "theme handler absent — this is the #1928 symptom the reset cures. If "
+        "this no longer reproduces, the reproduction has drifted."
+    )
+
+    # Restore for the rest of THIS process tick (the autouse fixture also does
+    # this before the next test, but be a good citizen within the test body).
+    from djust.test_isolation import reset_djust_globals
+
+    reset_djust_globals()
+    assert has_tag_handler("theme_panel")
 
 
 def test_reset_is_optional_dep_safe(monkeypatch):
