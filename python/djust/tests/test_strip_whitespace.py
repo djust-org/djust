@@ -187,6 +187,96 @@ class TestStripCommentsAndWhitespace:
         # Outside whitespace collapsed
         assert "><div" in result
 
+    # ── <script> / <style> preservation (#1927) ──
+    #
+    # The Rust VDOM parser preserves whitespace inside <script>/<style>
+    # (crates/djust_vdom/src/parser.rs:475), and this normalizer exists to
+    # match Rust parser behavior — but previously collapsed every newline
+    # inside an inline <script>, neutering it. The canonical #1927 trigger: a
+    # `//`-led line comment on the first line. Once the body is one line, the
+    # `//` swallows the rest, so the script silently never executes (no console
+    # error). This is the live-morph "inline <script> never runs" symptom the
+    # browser-smoke canary (tests/playwright/test_browser_smoke.py #1848 class)
+    # catches — the #1871 `_runInsertedScripts` morph fix couldn't cure it
+    # because the script was already neutered before any re-execution.
+
+    def test_script_newlines_preserved(self, mixin):
+        """Regression (#1927): inline <script> newlines must NOT be collapsed."""
+        html = "<div><script>\n  // setup\n  window.x = 1;\n</script></div>"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "// setup\n  window.x = 1;" in result
+
+    def test_script_line_comment_not_swallowed(self, mixin):
+        """The exact #1927 bug shape: a `//` line comment leading the body.
+
+        If newlines collapse, the `//` comments out the entire single-line
+        body and `window.__wired` never gets set — the silent-no-execute bug.
+        """
+        html = (
+            "<div dj-root>"
+            "<script>\n"
+            "  // delegated listener — must keep its own line\n"
+            "  (function(){ window.__wired = true; })();\n"
+            "</script>"
+            "</div>"
+        )
+        result = mixin._strip_comments_and_whitespace(html)
+        # The newline AFTER the comment line must survive so the IIFE is on its
+        # own line and is not commented out.
+        assert "// delegated listener — must keep its own line\n" in result
+        assert "window.__wired = true;" in result
+        # The code line is NOT on the same line as the `//` comment.
+        comment_idx = result.index("// delegated listener")
+        code_idx = result.index("window.__wired = true;")
+        between = result[comment_idx:code_idx]
+        assert "\n" in between, "a newline must separate the // comment from the code"
+
+    def test_style_newlines_preserved(self, mixin):
+        """Inline <style> CSS newlines must be preserved (#1927)."""
+        html = "<div><style>\n  .a { color: red; }\n  .b { color: blue; }\n</style></div>"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert ".a { color: red; }\n" in result
+        assert ".b { color: blue; }" in result
+
+    def test_script_with_attributes_preserved(self, mixin):
+        html = '<script type="text/javascript">\n  var a = 1;\n  var b = 2;\n</script>'
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "var a = 1;\n  var b = 2;" in result
+
+    def test_script_case_insensitive(self, mixin):
+        html = "<SCRIPT>\n  // c\n  go();\n</SCRIPT>"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "// c\n  go();" in result
+
+    def test_multiple_scripts_preserved(self, mixin):
+        html = (
+            "<div>"
+            "<script>\n  // one\n  a();\n</script>"
+            "   "
+            "<script>\n  // two\n  b();\n</script>"
+            "</div>"
+        )
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "// one\n  a();" in result
+        assert "// two\n  b();" in result
+
+    def test_non_script_whitespace_still_collapsed_with_script_present(self, mixin):
+        """The fix preserves <script> WITHOUT disabling collapse elsewhere."""
+        html = "<div>   lots   of   space   <script>\n  // x\n  y();\n</script></div>"
+        result = mixin._strip_comments_and_whitespace(html)
+        # Script body intact
+        assert "// x\n  y();" in result
+        # Ordinary text still collapsed to single spaces
+        assert "lots of space" in result
+
+    def test_html_comment_inside_script_not_stripped(self, mixin):
+        """A comment-strip pass must not eat an HTML-comment-looking token that
+        lives inside a <script> raw-text body (the script is preserved whole)."""
+        html = "<div><script>\n  var s = '<!-- not a comment -->';\n  use(s);\n</script></div>"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "<!-- not a comment -->" in result
+        assert "use(s);" in result
+
 
 class TestSkipRender:
     """Tests for the _skip_render flag on LiveView instances.
