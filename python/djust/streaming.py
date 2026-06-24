@@ -24,7 +24,7 @@ Usage:
 import asyncio
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,18 @@ class StreamingMixin:
     during async handler execution (not just after handler returns).
     """
 
-    def __init__(self, **kwargs) -> None:
+    if TYPE_CHECKING:
+        # Cooperating attributes/methods supplied by the host class (LiveView).
+        # Declared type-only so the strict-island mypy run resolves them on the
+        # mixin without a runtime change — the real definitions live on LiveView
+        # (template_name/template at live_view.py:291-292; get_context_data on
+        # mixins/context.py). This mixin is never instantiated standalone.
+        template_name: Optional[str]
+        template: Optional[str]
+
+        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
+
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._ws_consumer = None  # Set by LiveViewConsumer
         self._stream_batch: Dict[str, List[dict]] = {}  # Pending ops by stream name

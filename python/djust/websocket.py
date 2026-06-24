@@ -7,7 +7,7 @@ import inspect
 import json
 import logging
 import msgpack
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, ContextManager, Dict, List, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .serialization import DjangoJSONEncoder, fast_json_loads
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
 
 
-def _tenant_context(tenant):
+def _tenant_context(tenant: Any) -> ContextManager[Any]:
     """Bind *tenant* as the current tenant for a live dispatch (Finding #6).
 
     Lazily imports ``djust.tenants.middleware.tenant_context`` so the WS path
@@ -52,7 +52,7 @@ def _tenant_context(tenant):
         return nullcontext()
 
 
-def _bind_tenant(tenant):
+def _bind_tenant(tenant: Any) -> None:
     """Set the current tenant ContextVar for the live path (Finding #6).
 
     Used on the mount path: after the view resolves its tenant via
@@ -75,8 +75,15 @@ __all__ = [
     "_ensure_handler_rate_limit",
 ]
 
+# Optional PyO3 actor surface (typed by _rust.pyi). When the compiled extension
+# lacks the actor build, both names fall back to None — annotate as Optional so
+# the import and the None fallback are type-compatible. (The runtime variable
+# shadows the _rust class name, so the annotation uses the structural
+# Callable/type rather than a self-referential forward ref.)
+create_session_actor: Optional[Callable[[str], Awaitable[Any]]]
+SessionActorHandle: Optional[type]
 try:
-    from ._rust import create_session_actor, SessionActorHandle
+    from ._rust import create_session_actor, SessionActorHandle  # noqa: F811
 except ImportError:
     create_session_actor = None
     SessionActorHandle = None
@@ -189,7 +196,7 @@ def _host_in_allowed_hosts(host: str) -> bool:
         else:
             return False
 
-    return validate_host(match_host, allowed_hosts)
+    return bool(validate_host(match_host, allowed_hosts))
 
 
 def validated_host_from_scope(
@@ -298,7 +305,7 @@ def _should_expose_timing() -> bool:
     )
 
 
-def _snapshot_assigns(view_instance):
+def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     """Fast identity+hash snapshot of public assigns for change detection.
 
     Uses id() for all values plus a shallow fingerprint for mutable
@@ -316,8 +323,8 @@ def _snapshot_assigns(view_instance):
     from .live_view import _FRAMEWORK_INTERNAL_ATTRS
 
     _static_skip = set(getattr(view_instance, "static_assigns", []))
-    _fw_attrs = getattr(view_instance, "_framework_attrs", frozenset())
-    snapshot = {}
+    _fw_attrs: frozenset[str] = getattr(view_instance, "_framework_attrs", frozenset())
+    snapshot: Dict[str, Any] = {}
     for k, v in view_instance.__dict__.items():
         if k in _fw_attrs or k in _static_skip or k in _FRAMEWORK_INTERNAL_ATTRS:
             continue
@@ -391,7 +398,7 @@ def _snapshot_assigns(view_instance):
     return snapshot
 
 
-def _compute_changed_keys(pre, post):
+def _compute_changed_keys(pre: Dict[str, Any], post: Dict[str, Any]) -> set[str]:
     """Return set of keys that differ between two snapshots.
 
     Detects added, removed, and modified keys (by identity or fingerprint).
@@ -405,13 +412,13 @@ def _compute_changed_keys(pre, post):
     return changed
 
 
-def _build_context_snapshot(context, max_value_len=100):
+def _build_context_snapshot(context: Dict[str, Any], max_value_len: int = 100) -> Dict[str, Any]:
     """Build a JSON-safe snapshot of template context for diagnostics.
 
     Truncates long values, converts non-serializable types to repr strings,
     and limits to 20 keys to keep the payload small.
     """
-    snapshot = {}
+    snapshot: Dict[str, Any] = {}
     for key, value in list(context.items())[:20]:
         if isinstance(value, (str, int, float, bool, type(None))):
             if isinstance(value, str) and len(value) > max_value_len:
@@ -427,7 +434,7 @@ def _build_context_snapshot(context, max_value_len=100):
     return snapshot
 
 
-def _emit_liveview_server_error(view_instance, error: str, context: dict) -> None:
+def _emit_liveview_server_error(view_instance: Any, error: str, context: Dict[str, Any]) -> None:
     """Emit the liveview_server_error signal from send_error()."""
     if view_instance is not None:
         view_cls = view_instance.__class__
@@ -444,16 +451,16 @@ def _emit_liveview_server_error(view_instance, error: str, context: dict) -> Non
 
 
 def _emit_full_html_update(
-    view_instance,
-    reason,
-    event_name,
-    html,
-    version,
-    patch_count=None,
-    context_snapshot=None,
-    html_snippet=None,
-    previous_html_snippet=None,
-):
+    view_instance: Any,
+    reason: str,
+    event_name: Optional[str],
+    html: Optional[str],
+    version: int,
+    patch_count: Optional[int] = None,
+    context_snapshot: Optional[Dict[str, Any]] = None,
+    html_snippet: Optional[str] = None,
+    previous_html_snippet: Optional[str] = None,
+) -> None:
     """Emit the full_html_update signal with context about why patches weren't used."""
     view_cls = view_instance.__class__
     view_name = f"{view_cls.__module__}.{view_cls.__qualname__}"
@@ -474,7 +481,7 @@ def _emit_full_html_update(
     )
 
 
-def render_embedded_child_html(child_view) -> str:
+def render_embedded_child_html(child_view: Any) -> str:
     """Render an embedded child view's template and return its inner HTML.
 
     Transport-agnostic render core for the embedded-child subsystem. Re-renders
@@ -502,7 +509,7 @@ def render_embedded_child_html(child_view) -> str:
             from .utils import get_template_dirs
 
             child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
-        return html
+        return str(html)
     except Exception as e:
         logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
         # SECURITY (#1646 parallel-path drift): this site bypassed the
@@ -537,16 +544,16 @@ def _find_sticky_slot_ids(html: str) -> set[str]:
     from html.parser import HTMLParser as _HTMLParser
 
     class _SlotCollector(_HTMLParser):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__(convert_charrefs=False)
             self.ids: set[str] = set()
 
-        def handle_starttag(self, tag, attrs):
+        def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
             for name, value in attrs:
                 if name == "dj-sticky-slot" and value:
                     self.ids.add(value)
 
-        def handle_startendtag(self, tag, attrs):
+        def handle_startendtag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
             self.handle_starttag(tag, attrs)
 
     p = _SlotCollector()
@@ -571,10 +578,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     - File uploads via binary WebSocket frames
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.view_instance: Optional[Any] = None
-        self.actor_handle: Optional[SessionActorHandle] = None
+        # SessionActorHandle is an optional PyO3 type bound at module load (None
+        # when the actor build is absent); annotate the handle as Any since the
+        # name is a runtime variable, not usable as a static type.
+        self.actor_handle: Any = None
         self.session_id: Optional[str] = None
         self.use_binary = False  # Use JSON for now (MessagePack support TODO)
         self.use_actors = False  # Will be set based on view class
@@ -989,7 +999,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception:
                 logger.warning("Failed to flush focus command", exc_info=True)
 
-    async def send_error(self, error: str, **context) -> None:
+    async def send_error(self, error: str, **context: Any) -> None:
         """
         Send an error response to the client with consistent formatting.
         Also emits the liveview_server_error signal for monitor integrations.
@@ -1077,7 +1087,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
 
     async def _run_async_work(
-        self, task_name: str, callback, args, kwargs, event_name=None
+        self,
+        task_name: str,
+        callback: Callable[..., Any],
+        args: Any,
+        kwargs: Any,
+        event_name: Optional[str] = None,
     ) -> None:
         """
         Execute a start_async callback in a thread, then re-render the view.
@@ -1099,10 +1114,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             event_name: The event that triggered this async work. Included in
                 the response so the client can clear the correct loading state.
         """
+        # Bind the mounted view to a non-None local. Background work runs after
+        # mount; if the view was torn down (view_instance nulled) there is nothing
+        # to re-render — return early (behavior-equivalent to the existing
+        # hasattr(None, ...) == False short-circuits, and the unguarded
+        # render_with_diff below would otherwise require a non-None view).
+        view = self.view_instance
+        if view is None:
+            return
+
         # Check if task was cancelled before starting
-        if hasattr(self.view_instance, "_async_cancelled"):
-            if task_name in self.view_instance._async_cancelled:
-                self.view_instance._async_cancelled.discard(task_name)
+        if hasattr(view, "_async_cancelled"):
+            if task_name in view._async_cancelled:
+                view._async_cancelled.discard(task_name)
                 logger.debug("Async task %s was cancelled, skipping execution", task_name)
                 return
 
@@ -1127,23 +1151,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     result = await result
 
             # Check if task was cancelled during execution
-            if hasattr(self.view_instance, "_async_cancelled"):
-                if task_name in self.view_instance._async_cancelled:
-                    self.view_instance._async_cancelled.discard(task_name)
+            if hasattr(view, "_async_cancelled"):
+                if task_name in view._async_cancelled:
+                    view._async_cancelled.discard(task_name)
                     logger.debug("Async task %s was cancelled, skipping re-render", task_name)
                     return
 
             # Call handle_async_result if defined (success path)
-            if hasattr(self.view_instance, "handle_async_result"):
-                await sync_to_async(self.view_instance.handle_async_result)(
-                    task_name, result=result, error=None
-                )
+            if hasattr(view, "handle_async_result"):
+                await sync_to_async(view.handle_async_result)(task_name, result=result, error=None)
 
             # Re-render and send patches (mirrors the server_push path)
-            if hasattr(self.view_instance, "_sync_state_to_rust"):
-                await sync_to_async(self.view_instance._sync_state_to_rust)()
+            if hasattr(view, "_sync_state_to_rust"):
+                await sync_to_async(view._sync_state_to_rust)()
 
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            html, patches, version = await sync_to_async(view.render_with_diff)()
 
             if patches is not None:
                 patch_list = fast_json_loads(patches) if patches else []
@@ -1168,10 +1190,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Full HTML fallback
                 html_stripped, html_content = await sync_to_async(
                     lambda h: (
-                        self.view_instance._strip_comments_and_whitespace(h),
-                        self.view_instance._extract_liveview_content(
-                            self.view_instance._strip_comments_and_whitespace(h)
-                        ),
+                        view._strip_comments_and_whitespace(h),
+                        view._extract_liveview_content(view._strip_comments_and_whitespace(h)),
                     )
                 )(html)
                 # The fallback sends the full render to the client, so the
@@ -1192,23 +1212,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             logger.exception(
                 "[djust] Error in start_async callback '%s' on %s",
                 task_name,
-                self.view_instance.__class__.__name__ if self.view_instance else "?",
+                view.__class__.__name__ if view else "?",
             )
 
             # Call handle_async_result if defined (error path)
-            if hasattr(self.view_instance, "handle_async_result"):
+            if hasattr(view, "handle_async_result"):
                 try:
-                    await sync_to_async(self.view_instance.handle_async_result)(
+                    await sync_to_async(view.handle_async_result)(
                         task_name, result=None, error=error
                     )
 
                     # Re-render to show error state
-                    if hasattr(self.view_instance, "_sync_state_to_rust"):
-                        await sync_to_async(self.view_instance._sync_state_to_rust)()
+                    if hasattr(view, "_sync_state_to_rust"):
+                        await sync_to_async(view._sync_state_to_rust)()
 
-                    html, patches, version = await sync_to_async(
-                        self.view_instance.render_with_diff
-                    )()
+                    html, patches, version = await sync_to_async(view.render_with_diff)()
 
                     if patches is not None:
                         patch_list = fast_json_loads(patches) if patches else []
@@ -1224,9 +1242,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     else:
                         html_stripped, html_content = await sync_to_async(
                             lambda h: (
-                                self.view_instance._strip_comments_and_whitespace(h),
-                                self.view_instance._extract_liveview_content(
-                                    self.view_instance._strip_comments_and_whitespace(h)
+                                view._strip_comments_and_whitespace(h),
+                                view._extract_liveview_content(
+                                    view._strip_comments_and_whitespace(h)
                                 ),
                             )
                         )(html)
@@ -1282,7 +1300,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         ``_next_version()`` FIRST, THEN arm recovery (which captures
         ``_last_sent_version == v``), THEN send the frame with ``version=v``.
         """
-        self._recovery_html = html
+        # Optional: cleared to None on one-time use (the recovery clear at the
+        # request_html path), so the attribute is str | None across its lifetime.
+        self._recovery_html: Optional[str] = html
         self._recovery_version = getattr(self, "_last_sent_version", 0)
 
     def _next_version_armed(self, html: str) -> int:
@@ -1529,21 +1549,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.warning("Waiter notification for deferred %r failed: %s", event_name, exc)
 
         # --- render + emit one update frame ----------------------------
+        # Bind the mounted view to a non-None local for the direct-attribute
+        # accesses below. The caller (the activity-deferral flush) only reaches
+        # this method with a mounted view + held render lock; the guard narrows
+        # Optional[Any] and is behavior-equivalent.
+        view = self.view_instance
+        if view is None:  # pragma: no cover — caller guarantees a mounted view
+            return
         # Auto-skip when no public assigns changed (same rule as
         # handle_event). This keeps a deferred side-effect-only handler
         # from triggering an unnecessary render frame on the client.
-        skip_render = getattr(self.view_instance, "_skip_render", False)
-        force_html = getattr(self.view_instance, "_force_full_html", False)
+        skip_render = getattr(view, "_skip_render", False)
+        force_html = getattr(view, "_force_full_html", False)
         if not skip_render and not force_html:
-            post_assigns = _snapshot_assigns(self.view_instance)
+            post_assigns = _snapshot_assigns(view)
             if pre_assigns == post_assigns:
                 skip_render = True
             else:
-                self.view_instance._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
+                view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
         if skip_render:
-            self.view_instance._skip_render = False
-            has_async = getattr(self.view_instance, "_async_pending", None) is not None
+            view._skip_render = False
+            has_async = getattr(view, "_async_pending", None) is not None
             await self._flush_all_pending()
             await self._send_noop(async_pending=has_async, ref=event_ref)
             if has_async:
@@ -1551,10 +1578,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         # Render + diff (mirrors the simpler arm of handle_event).
-        _gcd = self.view_instance.get_context_data
-        _skip_thread = inspect.iscoroutinefunction(_gcd) or getattr(
-            self.view_instance, "sync_safe", False
-        )
+        _gcd = view.get_context_data
+        _skip_thread = inspect.iscoroutinefunction(_gcd) or getattr(view, "sync_safe", False)
         t0 = time.perf_counter()
         try:
             if _skip_thread:
@@ -1563,13 +1588,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 else:
                     _gcd()
                 with profiler.profile(profiler.OP_RENDER):
-                    html, patches, version = self.view_instance.render_with_diff()
+                    html, patches, version = view.render_with_diff()
             else:
 
-                def _sync_context_and_render():
+                def _sync_context_and_render() -> Any:
                     _gcd()
                     with profiler.profile(profiler.OP_RENDER):
-                        return self.view_instance.render_with_diff()
+                        return view.render_with_diff()
 
                 html, patches, version = await sync_to_async(_sync_context_and_render)()
         except Exception:  # noqa: BLE001
@@ -1581,7 +1606,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if patches is not None:
             patch_list = fast_json_loads(patches) if patches else []
 
-        has_async = getattr(self.view_instance, "_async_pending", None) is not None
+        has_async = getattr(view, "_async_pending", None) is not None
         if patch_list is not None:
             # Render-send: arm recovery so _recovery_version tracks this deferred
             # render's version (#1817). ``html`` is the pre-strip render.
@@ -1604,9 +1629,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             recovery_html = html
             try:
 
-                def _sync_strip_and_extract(raw_html):
-                    stripped = self.view_instance._strip_comments_and_whitespace(raw_html)
-                    content = self.view_instance._extract_liveview_content(stripped)
+                def _sync_strip_and_extract(raw_html: str) -> tuple[Any, Any]:
+                    stripped = view._strip_comments_and_whitespace(raw_html)
+                    content = view._extract_liveview_content(stripped)
                     return stripped, content
 
                 html, html_content = await sync_to_async(_sync_strip_and_extract)(html)
@@ -1680,7 +1705,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         peer = client[0] if client else None
         return resolve_client_ip(fwd, peer)
 
-    async def connect(self):
+    async def connect(self) -> None:
         """Handle WebSocket connection"""
         # CSWSH defense (#653): reject the handshake if the Origin header is
         # not in settings.ALLOWED_HOSTS *before* calling self.accept(). This
@@ -1739,7 +1764,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             }
         )
 
-    async def disconnect(self, close_code):
+    async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection"""
         # Clear the tenant ContextVar bound at mount (Finding #6) so the
         # consumer task doesn't carry a stale tenant if the executor/context is
@@ -1860,7 +1885,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if runtime is not None:
             runtime.view_instance = None
 
-    async def receive(self, text_data=None, bytes_data=None):
+    async def receive(
+        self, text_data: Optional[str] = None, bytes_data: Optional[bytes] = None
+    ) -> None:
         """Handle incoming WebSocket messages"""
         logger.debug(
             "[WebSocket] receive called: text_data=%s, bytes_data=%s",
@@ -1902,12 +1929,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if not self._rate_limiter.check_upload():
                         if self._rate_limiter.should_disconnect():
                             logger.warning("Upload-frame rate limit exceeded, disconnecting client")
-                            if getattr(self, "_client_ip", None):
+                            client_ip = getattr(self, "_client_ip", None)
+                            if client_ip:
                                 _rl = djust_config.get("rate_limit", {})
                                 cooldown = (
                                     _rl.get("reconnect_cooldown", 5) if isinstance(_rl, dict) else 5
                                 )
-                                ip_tracker.add_cooldown(self._client_ip, cooldown)
+                                ip_tracker.add_cooldown(client_ip, cooldown)
                             await self.close(code=4429)
                             return
                         await self.send_json(
@@ -1924,7 +1952,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if bytes_data:
                 data = msgpack.unpackb(bytes_data, raw=False)
             else:
-                data = json.loads(text_data)
+                # text_data is Optional[str] per the Channels signature; in the
+                # no-binary branch a real frame always carries text. Behavior is
+                # preserved verbatim (a None here raises TypeError, caught by the
+                # surrounding handler, exactly as before this annotation).
+                data = json.loads(text_data)  # type: ignore[arg-type]
 
             msg_type = data.get("type")
 
@@ -1932,10 +1964,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if not self._rate_limiter.check(msg_type or "unknown"):
                 if self._rate_limiter.should_disconnect():
                     logger.warning("Rate limit exceeded, disconnecting client")
-                    if getattr(self, "_client_ip", None):
+                    client_ip = getattr(self, "_client_ip", None)
+                    if client_ip:
                         _rl = djust_config.get("rate_limit", {})
                         cooldown = _rl.get("reconnect_cooldown", 5) if isinstance(_rl, dict) else 5
-                        ip_tracker.add_cooldown(self._client_ip, cooldown)
+                        ip_tracker.add_cooldown(client_ip, cooldown)
                     await self.close(code=4429)
                     return
                 await self.send_json(
@@ -2058,7 +2091,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         data: Dict[str, Any],
         sticky_preserved: Optional[Dict[str, Any]] = None,
         state_snapshot: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> None:
         """Handle view mounting by routing through :class:`ViewRuntime`.
 
         ADR-022 Iter 3 Phase 3.3b (#1919, THE MOUNT FLIP). Until this phase,
@@ -2132,7 +2165,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # an auth/hook block, which dispatch_mount cleared on the runtime).
         self.view_instance = runtime.view_instance
 
-    async def _mount_one(self, data_view: Dict[str, Any]):
+    async def _mount_one(
+        self, data_view: Dict[str, Any]
+    ) -> tuple[bool, Dict[str, Any], Optional[str], Optional[Dict[str, Any]], List[Any]]:
         """Mount + render a single view and return a payload WITHOUT sending.
 
         Collector seam for :meth:`handle_mount_batch`. Delegates to
@@ -2173,7 +2208,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         captured: list = []
         orig_send_json = self.send_json
 
-        async def _collect(payload):
+        async def _collect(payload: Dict[str, Any]) -> None:
             captured.append(payload)
 
         self.send_json = _collect  # type: ignore[assignment]
@@ -2273,7 +2308,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         mount_frame["target_id"] = target_id
         return True, mount_frame, None, None, push_events
 
-    async def handle_mount_batch(self, data: Dict[str, Any]):
+    async def handle_mount_batch(self, data: Dict[str, Any]) -> None:
         """Mount multiple views in one frame and reply with one batch frame.
 
         Wire format:
@@ -2347,7 +2382,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         for frame in all_push_events:
             await self.send_json(frame)
 
-    async def handle_event(self, data: Dict[str, Any]):
+    async def handle_event(self, data: Dict[str, Any]) -> None:
         """Handle a client event by routing through :class:`ViewRuntime`.
 
         ADR-022 Iter 2 Phase 2.3b (#1907, THE FLIP). Until this phase, ``event``
@@ -2392,7 +2427,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     # Embedded LiveView Rendering
     # ========================================================================
 
-    def _render_embedded_child(self, child_view) -> str:
+    def _render_embedded_child(self, child_view: Any) -> str:
         """
         Render an embedded child view's template and return the inner HTML.
 
@@ -2497,10 +2532,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Defensive — resume must never crash the consumer.
             logger.exception("upload_resume: active-ref check failed")
 
+        # Snapshot the current ``active`` value into the ref-check callable
+        # (mypy cannot infer a defaulted-param lambda, so use a typed nested def;
+        # the default-arg capture preserves the original snapshot-at-build intent).
+        def _active_ref(_uid: str, _a: bool = active) -> bool:
+            return _a
+
         payload = resolve_resume_request(
             upload_id=upload_id,
             session_key=session_key,
-            active_refs=(lambda _uid, _a=active: _a),
+            active_refs=_active_ref,
         )
         await self.send_json(payload)
 
@@ -2562,12 +2603,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             mgr.cancel_upload(ref)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
 
-    async def send_json(self, data: Dict[str, Any]):
+    async def send_json(self, data: Dict[str, Any]) -> None:
         """Send JSON message to client with Django type support"""
         await self.send(text_data=json.dumps(data, cls=DjangoJSONEncoder))
 
     @staticmethod
-    def _clear_template_caches():
+    def _clear_template_caches() -> int:
         """
         Clear Django's template loader caches.
 
@@ -2603,7 +2644,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         hotreload_logger.debug("Cleared %d template caches", caches_cleared)
         return caches_cleared
 
-    async def hotreload(self, event):
+    async def hotreload(self, event: Dict[str, Any]) -> None:
         """
         Handle hot reload broadcast messages from channel layer.
 
@@ -2804,7 +2845,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
-    def _get_runtime(self):
+    def _get_runtime(self) -> Any:
         """Lazy-construct the shared :class:`ViewRuntime` for this consumer.
 
         Returns the same runtime instance across calls so per-runtime state
@@ -2883,7 +2924,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if data.get("type") == "mount":
             self.view_instance = runtime.view_instance
 
-    async def handle_url_change(self, data: Dict[str, Any]):
+    async def handle_url_change(self, data: Dict[str, Any]) -> None:
         """
         Handle URL change from browser back/forward (popstate) or dj-patch clicks.
 
@@ -2907,7 +2948,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         runtime.view_instance = self.view_instance
         await runtime.dispatch_url_change(data)
 
-    async def handle_live_redirect_mount(self, data: Dict[str, Any]):
+    async def handle_live_redirect_mount(self, data: Dict[str, Any]) -> None:
         """
         Handle mounting a new view via live_redirect (no WS reconnect).
 
@@ -3120,7 +3161,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return None
         return f"{view_class.__module__}.{view_class.__qualname__}"
 
-    def _build_live_redirect_request(self, data: Dict[str, Any]):
+    def _build_live_redirect_request(self, data: Dict[str, Any]) -> Any:
         """Reconstruct a minimal Django request for the live_redirect target.
 
         Used to re-check sticky children's auth against the destination
@@ -3176,7 +3217,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return None
         return request
 
-    async def handle_presence_heartbeat(self, data: Dict[str, Any]):
+    async def handle_presence_heartbeat(self, data: Dict[str, Any]) -> None:
         """Handle presence heartbeat from client."""
         if not self.view_instance or not hasattr(self.view_instance, "update_presence_heartbeat"):
             return
@@ -3186,7 +3227,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error("Error updating presence heartbeat: %s", e)
 
-    async def handle_cursor_move(self, data: Dict[str, Any]):
+    async def handle_cursor_move(self, data: Dict[str, Any]) -> None:
         """Handle cursor movement for live cursors."""
         if not self.view_instance or not hasattr(self.view_instance, "handle_cursor_move"):
             return
@@ -3225,7 +3266,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return False
         return any(getattr(child, "sticky_id", None) for child in children.values())
 
-    async def handle_request_html(self, data: Dict[str, Any]):
+    async def handle_request_html(self, data: Dict[str, Any]) -> None:
         """
         Handle client request for full HTML when VDOM patches fail.
 
@@ -3248,6 +3289,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not self.view_instance:
             await self.send_error("View not mounted")
             return
+        # Non-None handle for the nested render closure below (mypy doesn't carry
+        # the guard's narrowing into the closure; the view is mounted here).
+        view = self.view_instance
 
         # The html_recovery frame carries the CONSUMER version of the frame it
         # replaces (#1788): the client sets ``clientVdomVersion = data.version``
@@ -3265,10 +3309,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # render_with_diff for the full raw HTML). The fresh Rust version is
             # DISCARDED (#1788) — only the HTML is taken; ``version`` stays the
             # consumer-owned ``_recovery_version``.
-            def _sync_and_render():
-                if hasattr(self.view_instance, "_sync_state_to_rust"):
-                    self.view_instance._sync_state_to_rust()
-                fresh_html, _patches, _fresh_version = self.view_instance.render_with_diff()
+            def _sync_and_render() -> Any:
+                if hasattr(view, "_sync_state_to_rust"):
+                    view._sync_state_to_rust()
+                fresh_html, _patches, _fresh_version = view.render_with_diff()
                 return fresh_html
 
             try:
@@ -3421,7 +3465,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             ),
         }
 
-    async def handle_time_travel_jump(self, data: Dict[str, Any]):
+    async def handle_time_travel_jump(self, data: Dict[str, Any]) -> None:
         """Jump the view to a past :class:`EventSnapshot`.
 
         Dev-only. The debug panel's Time Travel tab emits
@@ -3492,7 +3536,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._build_time_travel_state(self.view_instance, buffer, index, which)
         )
 
-    async def handle_time_travel_component_jump(self, data: Dict[str, Any]):
+    async def handle_time_travel_component_jump(self, data: Dict[str, Any]) -> None:
         """Scrub a SINGLE component's state (#1151, v0.9.4).
 
         Dev-only. Mirrors :meth:`handle_time_travel_jump` but restores
@@ -3567,7 +3611,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._build_time_travel_state(self.view_instance, buffer, index, which)
         )
 
-    async def handle_forward_replay(self, data: Dict[str, Any]):
+    async def handle_forward_replay(self, data: Dict[str, Any]) -> None:
         """Forward-replay a recorded event with optional override params (#1151, v0.9.4).
 
         Dev-only. Restores the view to ``state_before`` of the snapshot at
@@ -3663,7 +3707,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._build_time_travel_state(self.view_instance, buffer, new_cursor, "after")
         )
 
-    async def presence_event(self, event):
+    async def presence_event(self, event: Dict[str, Any]) -> None:
         """
         Handle presence-related events from the channel layer.
 
@@ -3677,7 +3721,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             }
         )
 
-    async def server_push(self, event):
+    async def server_push(self, event: Dict[str, Any]) -> None:
         """
         Handle a server-push message from the channel layer.
 
@@ -3810,7 +3854,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.exception("Error in server_push: %s", e)
 
-    async def client_push_event(self, event):
+    async def client_push_event(self, event: Dict[str, Any]) -> None:
         """
         Handle a direct push_event from the channel layer (via push_event_to_view).
 
@@ -3824,7 +3868,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             }
         )
 
-    async def db_notify(self, event):
+    async def db_notify(self, event: Dict[str, Any]) -> None:
         """Handle a PostgreSQL NOTIFY forwarded by ``PostgresNotifyListener``.
 
         The listener calls ``group_send("djust_db_notify_<channel>", ...)``
@@ -3932,7 +3976,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as e:  # noqa: BLE001
             logger.exception("Error in db_notify: %s", e)
 
-    async def _run_tick(self, interval_ms):
+    async def _run_tick(self, interval_ms: int) -> None:
         """
         Periodic tick loop. Calls handle_tick() on the view instance every
         interval_ms milliseconds, then re-renders and sends patches.
@@ -4017,7 +4061,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             pass  # Normal shutdown path when tick loop is cancelled
 
     @classmethod
-    async def broadcast_reload(cls, file_path: str):
+    async def broadcast_reload(cls, file_path: str) -> None:
         """
         Broadcast a reload message to all connected clients.
 
@@ -4049,7 +4093,7 @@ class LiveViewRouter:
     _routes: Dict[str, type] = {}
 
     @classmethod
-    def register(cls, path: str, view_class: type):
+    def register(cls, path: str, view_class: type) -> None:
         """Register a LiveView route"""
         cls._routes[path] = view_class
 

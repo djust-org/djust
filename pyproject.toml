@@ -291,6 +291,22 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# Dispatch/runtime core (ADR-023 M3) — the WebSocket/SSE/runtime spine that
+# every event + mount flows through. Strict-typing these protects the transport
+# dispatch contract (ViewRuntime convergence, ADR-022) against signature drift.
+[[tool.mypy.overrides]]
+module = [
+    "djust.runtime",
+    "djust.websocket",
+    "djust.websocket_utils",
+    "djust.sse",
+    "djust.streaming",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework
 # where mark_safe is expected and safe (content comes from trusted templates)

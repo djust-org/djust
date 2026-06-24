@@ -42,7 +42,17 @@ import inspect
 import json
 import logging
 import time
-from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    ContextManager,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 
 from asgiref.sync import sync_to_async
 
@@ -60,7 +70,7 @@ from .websocket_utils import (
 logger = logging.getLogger(__name__)
 
 
-def _tenant_context(tenant):
+def _tenant_context(tenant: Any) -> ContextManager[Any]:
     """Bind *tenant* as the current tenant for a runtime dispatch (Finding #6).
 
     The runtime drives the SSE mount/event/url-change path and the WS
@@ -648,7 +658,7 @@ class WSConsumerTransport:
         PRE-STRIP HTML returned by ``render_with_diff()`` (see
         ``LiveViewConsumer._next_version_armed``). ``rust_version`` is ignored on WS.
         """
-        return self._consumer._next_version_armed(html)
+        return int(self._consumer._next_version_armed(html))
 
     def build_request(self) -> Optional[Any]:
         """WS has no captured HTTP request — the runtime synthesizes from
@@ -1323,6 +1333,11 @@ class WSConsumerTransport:
         view_path = data.get("view")
         consumer.use_actors = True
         logger.info("Creating SessionActor for %s", view_path)
+        if create_session_actor is None:  # pragma: no cover — actor build absent
+            # Reached only when the compiled extension lacks the actor surface;
+            # the actor mount path is gated upstream on actor availability, so
+            # this guard narrows the Optional and never fires in an actor mount.
+            raise RuntimeError("SessionActor support is not available in this build")
         consumer.actor_handle = await create_session_actor(consumer.session_id)
         logger.info("SessionActor created: %s", consumer.actor_handle.session_id)
 
@@ -1342,7 +1357,7 @@ class WSConsumerTransport:
         ``html`` and ``rust_version`` are accepted for signature parity with the
         Protocol but are unused on WS (the no-arm consumer counter is the source).
         """
-        return self._consumer._next_version()
+        return int(self._consumer._next_version())
 
     async def on_mount_render_ready(self, view: Any, html: Optional[str]) -> Optional[str]:
         """Sticky preservation + ``sticky_hold`` frame before the mount frame (#1915, Finding B residual).
@@ -1372,7 +1387,7 @@ class WSConsumerTransport:
         try:
             matched_ids = _find_sticky_slot_ids(html or "")
             survivors_final: Dict[str, Any] = {}
-            auto_reattached = getattr(consumer, "_sticky_auto_reattached", set())
+            auto_reattached: set[str] = getattr(consumer, "_sticky_auto_reattached", set())
             for sticky_id, child in list(sticky_preserved.items()):
                 if sticky_id in auto_reattached:
                     # The tag already re-registered this survivor at render time;
@@ -1470,7 +1485,7 @@ class SSESessionTransport:
 
     @property
     def session_id(self) -> str:
-        return self._session.session_id
+        return str(self._session.session_id)
 
     @property
     def client_ip(self) -> Optional[str]:
@@ -1774,6 +1789,9 @@ class ViewRuntime:
         self.view_instance: Optional[Any] = None
         self.scope = scope
         self._rate_limiter = rate_limiter or ConnectionRateLimiter()
+        # Stashed mount-failure error frame (set by _instantiate_view, awaited +
+        # cleared by dispatch_mount). See _instantiate_view for the #1919 rationale.
+        self._instantiate_error_frame: Optional[Dict[str, Any]] = None
         # NOTE: the runtime does NOT own a render lock. Render serialization is
         # consumer-owned (``LiveViewConsumer._render_lock``, websocket.py:619) and
         # SHARED with the WS-only tick / server-push / db-notify loops; a
@@ -2581,7 +2599,9 @@ class ViewRuntime:
             cache_request_id = params.get("_cacheRequestId")
             await self.transport.dispatch_actor_event(
                 self.view_instance,
-                event_name,
+                # frame-dynamic: forwarded verbatim like the WS bespoke actor block;
+                # the actor handler validates the name downstream (dormant path today)
+                event_name,  # type: ignore[arg-type]
                 params,
                 event_ref=event_ref,
                 cache_request_id=cache_request_id,
@@ -2607,7 +2627,7 @@ class ViewRuntime:
         view_id = params.get("view_id")
         if not view_id:
             return False
-        return view_id != getattr(self.view_instance, "_view_id", None)
+        return bool(view_id != getattr(self.view_instance, "_view_id", None))
 
     async def _dispatch_event_render(self, data: Dict[str, Any]) -> None:
         """Parse, validate, run the handler, and render one event turn.
@@ -2630,6 +2650,17 @@ class ViewRuntime:
 
         if not event_name:
             await self.transport.send_error("Missing 'event' field")
+            return
+
+        # Bind the mounted view to a local non-None handle. _dispatch_event_render
+        # is only ever entered from _dispatch_event_inner AFTER its
+        # `if not self.view_instance: return` guard (and inside event_context,
+        # which holds the render lock so view_instance can't be nulled mid-turn),
+        # so this guard never fires in practice — it narrows Optional[Any] for the
+        # type checker and is behavior-equivalent to the caller's contract.
+        view = self.view_instance
+        if view is None:  # pragma: no cover — caller guarantees a mounted view
+            await self.transport.send_error("View not mounted. Please reload the page.")
             return
 
         start_time = time.perf_counter()
@@ -2682,9 +2713,9 @@ class ViewRuntime:
         _activity_name = params.pop("_activity", None)
         if (
             _activity_name
-            and hasattr(self.view_instance, "is_activity_visible")
-            and not self.view_instance.is_activity_visible(_activity_name)
-            and not self.view_instance._is_activity_eager(_activity_name)
+            and hasattr(view, "is_activity_visible")
+            and not view.is_activity_visible(_activity_name)
+            and not view._is_activity_eager(_activity_name)
         ):
             logger.debug(
                 "[djust] Runtime event %r on hidden activity %r — deferring",
@@ -2694,7 +2725,7 @@ class ViewRuntime:
             # Queued WITHOUT permission/rate-limit check (by design: per-handler
             # auth runs on dispatch via the lock-free re-dispatcher
             # ``_dispatch_single_event``). Per-activity cap bounds memory.
-            self.view_instance._queue_deferred_activity_event(_activity_name, event_name, params)
+            view._queue_deferred_activity_event(_activity_name, event_name, params)
             # No-op so the client clears its loading state. Mirrors the runtime's
             # skip-render noop shape (type/source/event_name/ref) so the client
             # can match the ack to its pending event (#560 sequencing).
@@ -2722,20 +2753,20 @@ class ViewRuntime:
         # view opted into time-travel, so default views pay nothing.
         from .time_travel import record_event_end, record_event_start
 
-        _tt_snapshot = record_event_start(self.view_instance, event_name, params, event_ref)
+        _tt_snapshot = record_event_start(view, event_name, params, event_ref)
         _tt_error: Optional[str] = None
 
         # Security
         handler = await _validate_event_security(
-            self.transport, event_name, self.view_instance, self._rate_limiter
+            self.transport, event_name, view, self._rate_limiter
         )
         if handler is None:
             # Permission denied / rate-limited / unsafe name — record the denial
             # in the time-travel buffer (with error) before returning, matching the
             # WS bespoke path (websocket.py:3550-3553).
             _tt_error = "permission_denied"
-            record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
-            await self._push_tt_event(self.view_instance, _tt_snapshot)
+            record_event_end(view, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(view, _tt_snapshot)
             return
 
         # Parameter validation
@@ -2752,8 +2783,8 @@ class ViewRuntime:
             # bespoke path set ``_tt_error = "validation_failed"`` + ``_tt_end``
             # before the error send, websocket.py:3563-3565).
             _tt_error = "validation_failed"
-            record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
-            await self._push_tt_event(self.view_instance, _tt_snapshot)
+            record_event_end(view, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(view, _tt_snapshot)
             await self.transport.send_error(
                 validation["error"],
                 validation_details={
@@ -2769,17 +2800,15 @@ class ViewRuntime:
         # Snapshot pre-handler assigns for change detection.
         from .websocket import _compute_changed_keys, _snapshot_assigns
 
-        pre_assigns = _snapshot_assigns(self.view_instance)
+        pre_assigns = _snapshot_assigns(view)
         # Identity snapshot for the #700 push_commands-only auto-skip below:
         # {attr: id(value)} over the public assigns. Immune to the deep-copy
         # sentinel false-positives _snapshot_assigns can produce for non-copyable
         # public attrs (querysets, file handles), so a handler that only calls
         # push_event()/push_commands() without touching real state is detected as
         # a true no-op (mirrors WS handle_event websocket.py:3551-3556).
-        _fw_attrs = getattr(self.view_instance, "_framework_attrs", frozenset())
-        pre_identity = {
-            k: id(v) for k, v in self.view_instance.__dict__.items() if k not in _fw_attrs
-        }
+        _fw_attrs: frozenset[str] = getattr(view, "_framework_attrs", frozenset())
+        pre_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
 
         # Call handler. The time-travel record is finalized + pushed in the
         # ``finally`` for BOTH the success and the raising path (mirrors WS
@@ -2797,15 +2826,15 @@ class ViewRuntime:
                     exc,
                     error_type="event",
                     event_name=event_name,
-                    view_class=self.view_instance.__class__.__name__,
+                    view_class=view.__class__.__name__,
                     logger=logger,
-                    log_message=f"Error in handler {self.view_instance.__class__.__name__}.{sanitize_for_log(event_name)}()",
+                    log_message=f"Error in handler {view.__class__.__name__}.{sanitize_for_log(event_name)}()",
                 )
                 await self.transport.send(response)
                 return
         finally:
-            record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
-            await self._push_tt_event(self.view_instance, _tt_snapshot)
+            record_event_end(view, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(view, _tt_snapshot)
 
         # Per-handler percentile telemetry (#1907, THE FLIP). The WS bespoke
         # view-path recorded ``record_handler_timing`` right after a SUCCESSFUL
@@ -2818,7 +2847,7 @@ class ViewRuntime:
         on_handler_timing = getattr(self.transport, "on_handler_timing", None)
         if on_handler_timing is not None:
             on_handler_timing(
-                self.view_instance,
+                view,
                 event_name,
                 (time.perf_counter() - _handler_start) * 1000.0,
             )
@@ -2830,9 +2859,9 @@ class ViewRuntime:
         # the deferred-event path at websocket.py:1478-1482). No-op when the view
         # has no pending waiters. Best-effort: a waiter-callback failure must never
         # break the event turn (matches WS posture).
-        if hasattr(self.view_instance, "_notify_waiters"):
+        if hasattr(view, "_notify_waiters"):
             try:
-                self.view_instance._notify_waiters(event_name, coerced_params or {})
+                view._notify_waiters(event_name, coerced_params or {})
             except Exception as exc:  # noqa: BLE001 — waiter bugs must not break events
                 logger.warning(
                     "Waiter notification for %r failed: %s",
@@ -2860,14 +2889,14 @@ class ViewRuntime:
         # requested a full-HTML render (``_force_full_html``) — mirrors the WS
         # ``force_html`` guard on the skip path (websocket.py:3851-3852). The
         # render branch consumes + resets the flag (see _render_and_send).
-        skip_render = getattr(self.view_instance, "_skip_render", False)
-        force_html = getattr(self.view_instance, "_force_full_html", False)
+        skip_render = getattr(view, "_skip_render", False)
+        force_html = getattr(view, "_force_full_html", False)
         if not skip_render and not force_html:
-            post_assigns = _snapshot_assigns(self.view_instance)
+            post_assigns = _snapshot_assigns(view)
             if pre_assigns == post_assigns:
                 skip_render = True
             else:
-                self.view_instance._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
+                view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
         # #700: push_commands-only handlers auto-skip the render. When push events
         # are pending and the *identity* of every public attr is unchanged, the
@@ -2878,18 +2907,16 @@ class ViewRuntime:
         # websocket.py:3867-3891. Guarded by force_html so an explicit
         # full-HTML request still renders.
         if not skip_render and not force_html:
-            pending = getattr(self.view_instance, "_pending_push_events", None)
+            pending = getattr(view, "_pending_push_events", None)
             if pending:
-                post_identity = {
-                    k: id(v) for k, v in self.view_instance.__dict__.items() if k not in _fw_attrs
-                }
+                post_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
                 if pre_identity == post_identity:
                     skip_render = True
 
-        has_async = getattr(self.view_instance, "_async_pending", None) is not None
+        has_async = getattr(view, "_async_pending", None) is not None
 
         if skip_render:
-            self.view_instance._skip_render = False
+            view._skip_render = False
             # Drain ALL queued side-effects BEFORE the noop, matching the WS
             # bespoke skip-render path (websocket.py:3941 — ``await
             # self._flush_all_pending()`` then ``_send_noop``). #1907 THE FLIP:
@@ -2908,7 +2935,7 @@ class ViewRuntime:
             # (_send_noop, websocket.py:776-781); ``source``/``event_name`` are a
             # runtime ADD (the WS noop omits them) for self-describing #560
             # sequencing — harmless extra fields the client tolerates.
-            noop_msg: Dict[str, Any] = {
+            noop_msg = {
                 "type": "noop",
                 "source": "event",
                 "event_name": event_name,
@@ -3072,19 +3099,25 @@ class ViewRuntime:
                 )
 
         # --- render + emit one frame (mirrors the live skip/render split) --
-        skip_render = getattr(self.view_instance, "_skip_render", False)
-        force_html = getattr(self.view_instance, "_force_full_html", False)
+        # Bind the mounted view to a non-None local for the direct-attribute
+        # writes below (caller guarantees a mounted view on this re-dispatch path;
+        # the guard narrows Optional[Any] and is behavior-equivalent).
+        view = self.view_instance
+        if view is None:  # pragma: no cover — caller guarantees a mounted view
+            return
+        skip_render = getattr(view, "_skip_render", False)
+        force_html = getattr(view, "_force_full_html", False)
         if not skip_render and not force_html:
-            post_assigns = _snapshot_assigns(self.view_instance)
+            post_assigns = _snapshot_assigns(view)
             if pre_assigns == post_assigns:
                 skip_render = True
             else:
-                self.view_instance._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
+                view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
-        has_async = getattr(self.view_instance, "_async_pending", None) is not None
+        has_async = getattr(view, "_async_pending", None) is not None
 
         if skip_render:
-            self.view_instance._skip_render = False
+            view._skip_render = False
             self._flush_push_events()
             noop_msg: Dict[str, Any] = {
                 "type": "noop",
@@ -3312,6 +3345,8 @@ class ViewRuntime:
         no ``view_id``, or no child registry, or the id is the top-level view).
         """
         view = self.view_instance
+        if view is None:  # pragma: no cover — caller guarantees a mounted view
+            return False
         view_id = params.pop("view_id", None)
         if not view_id or view_id == getattr(view, "_view_id", None):
             # No child routing requested (or the id IS the top-level view):
@@ -3473,6 +3508,8 @@ class ViewRuntime:
         ``False`` to fall through (the SSE no-op case + every plain event).
         """
         view = self.view_instance
+        if view is None:  # pragma: no cover — caller guarantees a mounted view
+            return False
         component_id = params.get("component_id")
         if not component_id:
             return False
@@ -3744,6 +3781,11 @@ class ViewRuntime:
             }
             return None
         view_class = resolution.view_class
+        if view_class is None:  # pragma: no cover — truthy resolution => view_class set
+            # ViewResolution.__bool__ is `view_class is not None`, so a truthy
+            # `resolution` (checked above) guarantees this; the guard narrows
+            # Optional[type] for the type checker and is behavior-equivalent.
+            return None
 
         try:
             return view_class()
@@ -3758,7 +3800,7 @@ class ViewRuntime:
             self._instantiate_error_frame = response
             return None
 
-    async def _build_request(self, *, page_url: str, params: Dict[str, Any]):
+    async def _build_request(self, *, page_url: str, params: Dict[str, Any]) -> Any:
         """Build a Django request representing the mount target page.
 
         If the transport carries a REAL request (SSE — the HTTP request that
@@ -3802,7 +3844,7 @@ class ViewRuntime:
         from .websocket import validated_host_from_scope
 
         host, is_secure = validated_host_from_scope(self.scope)
-        request_extra = {}
+        request_extra: Dict[str, Any] = {}
         if host:
             request_extra["HTTP_HOST"] = host
         if is_secure:
@@ -3831,7 +3873,7 @@ class ViewRuntime:
 
         return request
 
-    async def _check_auth(self, request) -> Optional[bool]:
+    async def _check_auth(self, request: Any) -> Optional[bool]:
         """Run the shared pre-mount security sequence. Returns:
         - ``None`` if mount may proceed.
         - Truthy value if blocked (and a navigate/error/mount-error frame was sent).
@@ -3927,7 +3969,7 @@ class ViewRuntime:
         except Exception:
             return {}
 
-    def _extract_cache_config(self, view_instance) -> Optional[Dict[str, Any]]:
+    def _extract_cache_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
         """Extract @cache decorator metadata from the view's handlers.
 
         Sole live copy after the mount flip (#1919/#1920): the bespoke
@@ -3947,7 +3989,7 @@ class ViewRuntime:
         except Exception:
             return None
 
-    def _extract_optimistic_rules(self, view_instance) -> Dict[str, Any]:
+    def _extract_optimistic_rules(self, view_instance: Any) -> Dict[str, Any]:
         """Extract optimistic UI rules from descriptor components (DEP-002).
 
         Ported to the runtime for ADR-022 Iter 3 Phase 3.0 so the converged
@@ -4003,11 +4045,20 @@ class ViewRuntime:
         ``event_ref`` (#560): echoed back on every emitted frame so the client
         can match the response to its pending event request.
         """
+        # Bind the mounted view to a non-None local. _render_and_send is only
+        # entered after a view-mounted check (and inside event_context, which holds
+        # the render lock), so this guard never fires in practice — it narrows
+        # Optional[Any] for the type checker and is behavior-equivalent.
+        view = self.view_instance
+        if view is None:  # pragma: no cover — caller guarantees a mounted view
+            await self.transport.send_error("View not mounted. Please reload the page.")
+            return
+
         # Consume the explicit full-HTML request (#560/#700 sibling): reset the
         # flag so it forces exactly one render, mirroring WS
         # (websocket.py:4039-4040 / _dispatch_single_event websocket.py:1489).
-        if force_html and getattr(self.view_instance, "_force_full_html", False):
-            self.view_instance._force_full_html = False
+        if force_html and getattr(view, "_force_full_html", False):
+            view._force_full_html = False
         # Measure render duration for the DEBUG-only top-level ``timing`` field the
         # bespoke ``_send_update`` carried (#1908 item 1). Inert in production: the
         # value is stamped onto the frame as ``_timing_render_ms`` and ``on_event_frame``
@@ -4015,12 +4066,12 @@ class ViewRuntime:
         # is true. Cheap (one ``perf_counter`` pair) so it stays unconditional.
         _render_start = time.perf_counter()
         try:
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            html, patches, version = await sync_to_async(view.render_with_diff)()
         except Exception as exc:
             response = handle_exception(
                 exc,
                 error_type="render",
-                view_class=self.view_instance.__class__.__name__,
+                view_class=view.__class__.__name__,
                 logger=logger,
                 log_message="Runtime: render error",
             )
@@ -4038,7 +4089,7 @@ class ViewRuntime:
             _hook = getattr(self.transport, "on_event_frame", None)
             if _hook is not None:
                 _hook(
-                    self.view_instance,
+                    view,
                     frame,
                     event_name=event_name,
                     event_ref=event_ref,
@@ -4049,9 +4100,9 @@ class ViewRuntime:
             frame.pop("_timing_render_ms", None)
             return frame
 
-        should_reset_form = getattr(self.view_instance, "_should_reset_form", False)
+        should_reset_form = getattr(view, "_should_reset_form", False)
         if should_reset_form:
-            self.view_instance._should_reset_form = False
+            view._should_reset_form = False
 
         # Honor the explicit full-HTML request: discard the VDOM patches so the
         # render falls into the no-diff ``html_update`` branch below (mirrors WS
@@ -4081,8 +4132,8 @@ class ViewRuntime:
                 patches_size = len(patches.encode("utf-8")) if isinstance(patches, str) else 0
                 html_size = len(html.encode("utf-8")) if html else 0
                 if patches_size and html_size < patches_size * 0.7:
-                    if hasattr(self.view_instance, "_rust_view") and self.view_instance._rust_view:
-                        self.view_instance._rust_view.reset()
+                    if hasattr(view, "_rust_view") and view._rust_view:
+                        view._rust_view.reset()
                     _compressed_patch_count = len(patch_list)
                     patch_list = None
 
@@ -4105,8 +4156,8 @@ class ViewRuntime:
                 await self.transport.send(_send_event_frame(msg))
             else:
                 # Compression fallback — send full HTML.
-                html_stripped = self.view_instance._strip_comments_and_whitespace(html)
-                html_content = self.view_instance._extract_liveview_content(html_stripped)
+                html_stripped = view._strip_comments_and_whitespace(html)
+                html_content = view._extract_liveview_content(html_stripped)
                 # Observability fold (#1907): the WS bespoke path emitted a
                 # ``patch_compression`` ``_emit_full_html_update`` signal here
                 # (websocket.py:4129). DJE-053 does NOT fire on this branch (it had
@@ -4115,7 +4166,7 @@ class ViewRuntime:
                 _on_render = getattr(self.transport, "on_render_emitted", None)
                 if _on_render is not None:
                     _on_render(
-                        self.view_instance,
+                        view,
                         reason="patch_compression",
                         version=version,
                         event_name=event_name,
@@ -4140,10 +4191,10 @@ class ViewRuntime:
                 await self.transport.send(_send_event_frame(msg))
         else:
             # No VDOM diff available — send HTML directly.
-            if html and hasattr(self.view_instance, "_strip_comments_and_whitespace"):
-                html = self.view_instance._strip_comments_and_whitespace(html)
-            if html and hasattr(self.view_instance, "_extract_liveview_content"):
-                html = self.view_instance._extract_liveview_content(html)
+            if html and hasattr(view, "_strip_comments_and_whitespace"):
+                html = view._strip_comments_and_whitespace(html)
+            if html and hasattr(view, "_extract_liveview_content"):
+                html = view._extract_liveview_content(html)
             # Observability fold (#1907): the WS bespoke path emitted the DJE-053
             # warning + an ``_emit_full_html_update`` signal on this no-patch branch
             # (websocket.py:4215-4269 / 4091 for force). ``force_full_html`` is the
@@ -4175,16 +4226,16 @@ class ViewRuntime:
             if (
                 _reason == "no_patches"
                 and getattr(_dj_settings, "DEBUG", False)
-                and hasattr(self.view_instance, "get_context_data")
+                and hasattr(view, "get_context_data")
             ):
                 try:
-                    _ctx_snapshot = await sync_to_async(self.view_instance.get_context_data)()
+                    _ctx_snapshot = await sync_to_async(view.get_context_data)()
                 except Exception:  # noqa: BLE001 — snapshot is best-effort DEBUG metadata
                     _ctx_snapshot = None
             _on_render = getattr(self.transport, "on_render_emitted", None)
             if _on_render is not None:
                 _on_render(
-                    self.view_instance,
+                    view,
                     reason=_reason,
                     version=version,
                     event_name=event_name,
@@ -4457,9 +4508,9 @@ class ViewRuntime:
     async def _execute_async_task(
         self,
         task_name: str,
-        callback,
-        args,
-        kwargs,
+        callback: Callable[..., Any],
+        args: Any,
+        kwargs: Any,
         event_name: Optional[str],
     ) -> None:
         """Run one background task and stream the re-rendered result.
