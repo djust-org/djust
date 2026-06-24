@@ -46,7 +46,6 @@ import asyncio
 import inspect
 import json
 import logging
-import time
 import uuid
 from typing import Any, Dict, Optional
 
@@ -57,20 +56,10 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
 from .rate_limit import ConnectionRateLimiter
-from .security import handle_exception, sanitize_for_log
+from .security import sanitize_for_log
 from .serialization import DjangoJSONEncoder
-from .validation import validate_handler_params
 from .websocket import (
-    _compute_changed_keys,
     _is_allowed_origin,
-    _snapshot_assigns,
-    _tenant_context,
-)
-from .websocket_utils import (
-    _call_handler,
-    _safe_error,
-    _validate_event_security,
-    get_handler_coerce_setting,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,6 +136,13 @@ class SSESession:
         #     are tied to the browser session cookie)
         self._owner_user_pk: Optional[Any] = None
         self._owner_session_key: Optional[str] = None
+
+        # The live event-POST request, stamped by the /event/ + /message/ endpoints
+        # just before dispatch so the per-event auth re-check
+        # (SSESessionTransport.recheck_event_auth, #1777) validates against the
+        # CURRENT POSTer's request.user — not the stale mount request. None until
+        # the first event POST (the re-check falls back to ``_request`` defensively).
+        self._event_request: Optional[Any] = None
 
         # Lazy: avoid circular import at module load. The runtime is the
         # transport-agnostic dispatcher (#1237) and is shared with the WS
@@ -275,439 +271,6 @@ def _client_ip_from_request(request) -> Optional[str]:
     )
 
 
-# ------------------------------------------------------------------ #
-# Mount helper
-# ------------------------------------------------------------------ #
-
-
-async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
-    """
-    Mount a LiveView into *session* and push the initial ``mount`` message.
-
-    This is the SSE equivalent of ``LiveViewConsumer.handle_mount()``. It shares
-    the same security model (module allowlist, LiveView subclass check, auth) and
-    the same render path (``render_with_diff``).
-
-    Differences from the WebSocket path:
-    - The real HTTP ``request`` object is used directly (no fake RequestFactory).
-    - No channel groups, presence tracking, or actor-based state.
-    - No pre-rendered content optimisation (SSE always sends fresh HTML).
-    """
-
-    # ---- Security (F22 — unsafe reflection / arbitrary module import) ----
-    # Resolve the client-supplied dotted view path through the single shared
-    # resolver: shape-check → allowlist BEFORE importing anything (fail-closed
-    # to LIVEVIEW_ALLOWED_MODULES, else INSTALLED_APPS roots + djust) →
-    # import_module + vars() (PEP 562-safe) → LiveView subclass check. Shared
-    # with the WebSocket / runtime paths so they cannot drift (#1646).
-    from .security.mount import resolve_view_class
-
-    resolution = resolve_view_class(view_path)
-    if not resolution:
-        logger.warning(
-            "SSE: blocked/failed mount of view: %s (%s)",
-            sanitize_for_log(view_path),
-            resolution.generic,
-        )
-        session.push({"type": "error", "error": _safe_error(resolution.detail, resolution.generic)})
-        return False
-    view_class = resolution.view_class
-
-    # ---- Instantiate view ----
-    try:
-        view_instance = view_class()
-    except Exception as exc:
-        response = handle_exception(
-            exc,
-            error_type="mount",
-            view_class=view_path,
-            logger=logger,
-            log_message="Failed to instantiate %s" % view_path,
-        )
-        session.push(response)
-        return False
-
-    # Mark this view as using the SSE transport (for introspection / limits)
-    view_instance._sse_session_id = session.session_id
-    view_instance._sse_session = session
-    view_instance._websocket_path = request.path
-    view_instance._websocket_query_string = request.META.get("QUERY_STRING", "")
-    # Use a stable session-scoped ID so VDOM caching works the same as WS
-    view_instance._websocket_session_id = session.session_id
-
-    session.view_instance = view_instance
-
-    # ---- Pre-mount security sequence (auth + tenant resolve/bind) ----
-    # Single-sourced through djust.auth.core.run_pre_mount_auth so this legacy
-    # SSE mount path cannot drift from the WS (handle_mount) + runtime
-    # (dispatch_mount) paths in WHICH checks run or in WHAT ORDER (#1646 / #1853).
-    # The helper runs the same leaf chokepoints this path used inline before:
-    # check_view_auth (may raise PermissionDenied / return a redirect URL), then
-    # — only on auth success — _ensure_tenant + the tenant ContextVar bind. The
-    # SSE-specific verdict→envelope mapping (error/navigate push, return False)
-    # stays here. A tenant-resolution failure (or a buggy custom check_permissions
-    # hook raising a non-PermissionDenied) gets the mount-error envelope and
-    # aborts (fail-closed), consolidating the legacy split tenant/auth catches.
-    from .auth import run_pre_mount_auth
-    from django.core.exceptions import PermissionDenied
-
-    try:
-        redirect_url = await sync_to_async(run_pre_mount_auth)(view_instance, request)
-    except PermissionDenied:
-        session.push({"type": "error", "error": "Permission denied"})
-        return False
-    except Exception as exc:  # noqa: BLE001 — fail-closed (tenant / auth-hook error)
-        response = handle_exception(
-            exc,
-            error_type="mount",
-            view_class=view_path,
-            logger=logger,
-            log_message="Error in pre-mount security sequence for %s" % sanitize_for_log(view_path),
-        )
-        session.push(response)
-        return False
-
-    if redirect_url:
-        session.push({"type": "navigate", "to": redirect_url})
-        # Auth succeeded but the view redirects elsewhere — no usable view is
-        # mounted, so this is treated as a non-mount: the navigate message is
-        # delivered over the stream, then the session is torn down and never
-        # registered for POST routing (Finding #25 register-after-mount).
-        return False
-
-    # ---- Resolve URL kwargs (for path-based params like pk, slug) ----
-    mount_kwargs: Dict[str, Any] = {}
-    page_url = request.path
-    try:
-        from django.urls import resolve
-
-        match = resolve(page_url)
-        if match.kwargs:
-            mount_kwargs.update(match.kwargs)
-    except Exception:
-        pass  # URL may not resolve (e.g. plain path like "/items/123") — skip kwargs extraction
-
-    # Merge query-string params passed by the client
-    for key, value in request.GET.items():
-        if key != "view":  # "view" is the view-path param, not a mount kwarg
-            mount_kwargs[key] = value
-
-    # ---- Store request and call mount() ----
-    try:
-        view_instance.request = request
-        await sync_to_async(view_instance._initialize_temporary_assigns)()
-        await sync_to_async(view_instance.mount)(request, **mount_kwargs)
-    except Exception as exc:
-        response = handle_exception(
-            exc,
-            error_type="mount",
-            view_class=view_path,
-            logger=logger,
-            log_message="Error in %s.mount()" % sanitize_for_log(view_path),
-        )
-        session.push(response)
-        return False
-
-    # ---- Object-permission check (ADR-017, post-mount) ----
-    # mount() has populated the access-determining state (e.g. self.<x>_id) that
-    # get_object() reads; enforce the object-level check HERE — after view-level
-    # auth (run_pre_mount_auth above), before the initial render — so the legacy
-    # SSE transport can't render a DENIED object (IDOR; finding #10/#11/#12 on
-    # the SSE transport). Mirrors the WS handle_mount post-mount check. No-op for
-    # views without a custom get_object; fail-closed on denial / None request /
-    # any non-PermissionDenied exception (see enforce_object_permission). Denial
-    # maps to the SSE error-frame + abort shape (matching the auth-denial above).
-    from .auth.core import enforce_object_permission
-
-    try:
-        await sync_to_async(enforce_object_permission)(view_instance, request)
-    except PermissionDenied:
-        session.push({"type": "error", "error": "Permission denied"})
-        return False
-
-    # ---- Initial render ----
-    try:
-        await sync_to_async(view_instance._initialize_rust_view)(request)
-        await sync_to_async(view_instance._sync_state_to_rust)()
-        html, _patches, version = await sync_to_async(view_instance.render_with_diff)()
-        html = await sync_to_async(view_instance._strip_comments_and_whitespace)(html)
-        html = await sync_to_async(view_instance._extract_liveview_content)(html)
-    except Exception as exc:
-        response = handle_exception(
-            exc,
-            error_type="render",
-            view_class=view_path,
-            logger=logger,
-            log_message="Error rendering %s" % sanitize_for_log(view_path),
-        )
-        session.push(response)
-        return False
-
-    # ---- Push mount message ----
-    mount_msg: Dict[str, Any] = {
-        "type": "mount",
-        "session_id": session.session_id,
-        "view": view_path,
-        "version": version,
-        "html": html,
-        "has_ids": "dj-id=" in html,
-    }
-
-    # Include @cache decorator configuration if present
-    cache_config = _extract_cache_config(view_instance)
-    if cache_config:
-        mount_msg["cache_config"] = cache_config
-
-    session.push(mount_msg)
-    logger.info(
-        "SSE: mounted view %s (session %s)",
-        sanitize_for_log(view_path),
-        sanitize_for_log(session.session_id),
-    )
-    return True
-
-
-def _extract_cache_config(view_instance) -> Optional[Dict[str, Any]]:
-    """Extract @cache decorator configuration from a view instance (mirrors WS consumer)."""
-    try:
-        cache_config: Dict[str, Any] = {}
-        for attr_name in dir(type(view_instance)):
-            if attr_name.startswith("_"):
-                continue
-            method = getattr(view_instance, attr_name, None)
-            if method and hasattr(method, "_djust_decorators"):
-                cache_info = method._djust_decorators.get("cache")
-                if cache_info:
-                    cache_config[attr_name] = cache_info
-        return cache_config or None
-    except Exception:
-        return None
-
-
-# ------------------------------------------------------------------ #
-# Event dispatch helper
-# ------------------------------------------------------------------ #
-
-
-async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[str, Any]) -> None:
-    """Dispatch a client event over the legacy SSE path, tenant-scoped.
-
-    Thin wrapper that binds the tenant context (Finding #6) for the duration of
-    the event so the handler + render see the correct tenant in the
-    tenant-scoped managers. Cleared on exit.
-    """
-    view_instance = session.view_instance
-    tenant = getattr(view_instance, "_tenant", None) if view_instance else None
-    with _tenant_context(tenant):
-        await _sse_handle_event_inner(session, event_name, params)
-
-
-async def _sse_handle_event_inner(
-    session: SSESession, event_name: str, params: Dict[str, Any]
-) -> None:
-    """
-    Dispatch a client event to the mounted LiveView and push the result.
-
-    This is a simplified version of ``LiveViewConsumer.handle_event()`` that
-    handles the common case (single view, no embedded children, no actors).
-    Component events and embedded-child routing are not supported over SSE.
-    """
-    view_instance = session.view_instance
-    if not view_instance:
-        await session.send_error("View not mounted. Please reload the page.")
-        return
-
-    start_time = time.perf_counter()
-
-    # Extract internal params
-    cache_request_id = params.pop("_cacheRequestId", None)
-    positional_args = params.pop("_args", [])
-
-    # ---- Security checks ----
-    handler = await _validate_event_security(
-        session, event_name, view_instance, session._rate_limiter
-    )
-    if handler is None:
-        return
-
-    # ---- Parameter validation ----
-    coerce = get_handler_coerce_setting(handler)
-    validation = validate_handler_params(
-        handler, params, event_name, coerce=coerce, positional_args=positional_args
-    )
-    if not validation["valid"]:
-        logger.error("SSE: parameter validation failed: %s", sanitize_for_log(validation["error"]))
-        await session.send_error(
-            validation["error"],
-            validation_details={
-                "expected_params": validation["expected"],
-                "provided_params": validation["provided"],
-                "type_errors": validation["type_errors"],
-            },
-        )
-        return
-
-    coerced_params = validation.get("coerced_params", params)
-
-    # ---- Snapshot before handler ----
-    pre_assigns = _snapshot_assigns(view_instance)
-
-    # ---- Call handler ----
-    try:
-        await _call_handler(handler, coerced_params if coerced_params else None)
-    except Exception as exc:
-        response = handle_exception(
-            exc,
-            error_type="event",
-            event_name=event_name,
-            view_class=view_instance.__class__.__name__,
-            logger=logger,
-            log_message="Error in SSE event handler %s.%s()"
-            % (view_instance.__class__.__name__, sanitize_for_log(event_name)),
-        )
-        session.push(response)
-        return
-
-    # ---- Auto-detect unchanged state ----
-    skip_render = getattr(view_instance, "_skip_render", False)
-    if not skip_render:
-        post_assigns = _snapshot_assigns(view_instance)
-        if pre_assigns == post_assigns:
-            skip_render = True
-        else:
-            view_instance._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
-
-    # Detect scheduled async work
-    has_async = getattr(view_instance, "_async_pending", None) is not None
-
-    if skip_render:
-        view_instance._skip_render = False
-        # Push any queued push_events before noop
-        _flush_push_events_to_queue(session, view_instance)
-        noop_msg: Dict[str, Any] = {"type": "noop"}
-        if has_async:
-            noop_msg["async_pending"] = True
-        session.push(noop_msg)
-        if has_async:
-            asyncio.ensure_future(_sse_run_async_work(session, event_name))
-        return
-
-    # ---- Render ----
-    try:
-
-        def _sync_render():
-            return view_instance.render_with_diff()
-
-        html, patches, version = await sync_to_async(_sync_render)()
-    except Exception as exc:
-        response = handle_exception(
-            exc,
-            error_type="render",
-            view_class=view_instance.__class__.__name__,
-            logger=logger,
-            log_message="SSE: render error",
-        )
-        session.push(response)
-        return
-
-    should_reset_form = getattr(view_instance, "_should_reset_form", False)
-    if should_reset_form:
-        view_instance._should_reset_form = False
-
-    # ---- Build update message ----
-    if patches is not None:
-        patch_list = json.loads(patches) if patches else []
-
-        # Patch compression: if too many patches, send full HTML instead
-        PATCH_THRESHOLD = 100
-        if patch_list and len(patch_list) > PATCH_THRESHOLD:
-            patches_size = len(patches.encode("utf-8"))
-            html_size = len(html.encode("utf-8"))
-            if html_size < patches_size * 0.7:
-                if hasattr(view_instance, "_rust_view") and view_instance._rust_view:
-                    view_instance._rust_view.reset()
-                patch_list = None
-
-        if patch_list is not None:
-            update_msg: Dict[str, Any] = {
-                "type": "patch",
-                "patches": patch_list,
-                "version": version,
-                "event_name": event_name,
-            }
-            if cache_request_id:
-                update_msg["cache_request_id"] = cache_request_id
-            if should_reset_form:
-                update_msg["reset_form"] = True
-            if has_async:
-                update_msg["async_pending"] = True
-            session.push(update_msg)
-        else:
-            # Compression fallback: send HTML
-            html_stripped = view_instance._strip_comments_and_whitespace(html)
-            html_content = view_instance._extract_liveview_content(html_stripped)
-            update_msg = {
-                "type": "html_update",
-                "html": html_content,
-                "version": version,
-                "event_name": event_name,
-            }
-            if cache_request_id:
-                update_msg["cache_request_id"] = cache_request_id
-            if should_reset_form:
-                update_msg["reset_form"] = True
-            if has_async:
-                update_msg["async_pending"] = True
-            session.push(update_msg)
-    else:
-        # VDOM diff unavailable — send full HTML
-        html_stripped = view_instance._strip_comments_and_whitespace(html)
-        html_content = view_instance._extract_liveview_content(html_stripped)
-        update_msg = {
-            "type": "html_update",
-            "html": html_content,
-            "version": version,
-            "event_name": event_name,
-        }
-        if cache_request_id:
-            update_msg["cache_request_id"] = cache_request_id
-        if should_reset_form:
-            update_msg["reset_form"] = True
-        if has_async:
-            update_msg["async_pending"] = True
-        session.push(update_msg)
-
-    # Flush push_events, navigation commands, and deferred callbacks
-    _flush_push_events_to_queue(session, view_instance)
-    _flush_navigation_to_queue(session, view_instance)
-    await _flush_deferred_to_sse(view_instance)
-
-    if has_async:
-        asyncio.ensure_future(_sse_run_async_work(session, event_name))
-
-    logger.debug(
-        "SSE: event '%s' handled in %.1fms",
-        sanitize_for_log(event_name),
-        (time.perf_counter() - start_time) * 1000,
-    )
-
-
-def _flush_push_events_to_queue(session: SSESession, view_instance) -> None:
-    """Drain push_events from the view and send them via SSE."""
-    if not hasattr(view_instance, "_drain_push_events"):
-        return
-    for event_name, payload in view_instance._drain_push_events():
-        session.push({"type": "push_event", "event": event_name, "payload": payload})
-
-
-def _flush_navigation_to_queue(session: SSESession, view_instance) -> None:
-    """Drain navigation commands from the view and send them via SSE."""
-    if not hasattr(view_instance, "_drain_navigation"):
-        return
-    for cmd in view_instance._drain_navigation():
-        session.push({**cmd, "type": "navigation", "action": cmd["type"]})
-
-
 async def _flush_deferred_to_sse(view_instance) -> None:
     """Drain ``self.defer(...)`` callbacks from the view and execute them.
 
@@ -744,109 +307,6 @@ async def _flush_deferred_to_sse(view_instance) -> None:
                 view_instance.__class__.__name__,
                 exc_info=True,
             )
-
-
-async def _sse_run_async_work(session: SSESession, event_name: Optional[str]) -> None:
-    """
-    Run background work scheduled by ``start_async()`` and push the result via SSE.
-
-    Mirrors ``LiveViewConsumer._dispatch_async_work`` and
-    ``LiveViewConsumer._run_async_work``.
-    """
-    view_instance = session.view_instance
-    if not view_instance:
-        return
-
-    # Collect pending tasks
-    tasks = getattr(view_instance, "_async_tasks", None)
-    pending = getattr(view_instance, "_async_pending", None)
-
-    if tasks:
-        for task_name, (callback, args, kwargs) in list(tasks.items()):
-            asyncio.ensure_future(
-                _sse_execute_async_task(session, task_name, callback, args, kwargs, event_name)
-            )
-        view_instance._async_tasks = {}
-
-    if pending:
-        view_instance._async_pending = None
-        callback, args, kwargs = pending
-        asyncio.ensure_future(
-            _sse_execute_async_task(session, "_default", callback, args, kwargs, event_name)
-        )
-
-
-async def _sse_execute_async_task(
-    session: SSESession,
-    task_name: str,
-    callback,
-    args,
-    kwargs,
-    event_name: Optional[str],
-) -> None:
-    """Execute a single async task and push the rendered result via SSE."""
-    view_instance = session.view_instance
-    if not view_instance:
-        return
-
-    try:
-        result = await sync_to_async(callback)(*args, **kwargs)
-
-        if hasattr(view_instance, "handle_async_result"):
-            await sync_to_async(view_instance.handle_async_result)(
-                task_name, result=result, error=None
-            )
-
-        if hasattr(view_instance, "_sync_state_to_rust"):
-            await sync_to_async(view_instance._sync_state_to_rust)()
-
-        html, patches, version = await sync_to_async(view_instance.render_with_diff)()
-
-        if patches is not None:
-            patch_list = json.loads(patches) if patches else []
-            msg: Dict[str, Any] = {
-                "type": "patch",
-                "patches": patch_list,
-                "version": version,
-                "event_name": event_name,
-            }
-        else:
-            html_stripped = view_instance._strip_comments_and_whitespace(html)
-            html_content = view_instance._extract_liveview_content(html_stripped)
-            msg = {
-                "type": "html_update",
-                "html": html_content,
-                "version": version,
-                "event_name": event_name,
-            }
-
-        session.push(msg)
-        _flush_push_events_to_queue(session, view_instance)
-        await _flush_deferred_to_sse(view_instance)
-
-    except Exception as exc:
-        logger.exception(
-            "SSE: error in start_async callback '%s' on %s",
-            task_name,
-            view_instance.__class__.__name__ if view_instance else "?",
-        )
-        if hasattr(view_instance, "handle_async_result"):
-            try:
-                await sync_to_async(view_instance.handle_async_result)(
-                    task_name, result=None, error=exc
-                )
-                if hasattr(view_instance, "_sync_state_to_rust"):
-                    await sync_to_async(view_instance._sync_state_to_rust)()
-                html, patches, version = await sync_to_async(view_instance.render_with_diff)()
-                if patches is not None:
-                    patch_list = json.loads(patches) if patches else []
-                    session.push({"type": "patch", "patches": patch_list, "version": version})
-                else:
-                    html_stripped = view_instance._strip_comments_and_whitespace(html)
-                    html_content = view_instance._extract_liveview_content(html_stripped)
-                    session.push({"type": "html_update", "html": html_content, "version": version})
-            except Exception:
-                logger.exception("SSE: error in handle_async_result for task '%s'", task_name)
 
 
 # ------------------------------------------------------------------ #
@@ -921,8 +381,9 @@ class DjustSSEStreamView(View):
         # mount. This is acceptable because (a) the two-step CSRF attack is
         # broken at the POST step — every client->server POST is Origin-gated
         # below; (b) the attacker cannot read the opaque cross-origin
-        # text/event-stream; and (c) _sse_mount_view enforces the view-import
-        # allowlist + check_view_auth, so only victim-authorized views mount and
+        # text/event-stream; and (c) the runtime mount path (dispatch_mount)
+        # enforces the view-import allowlist + check_view_auth, so only
+        # victim-authorized views mount and
         # only mount-time write side effects remain (the same residual as the
         # framework's HTTP GET-render path). Requiring an Origin on GET would
         # break legitimate non-browser SSE clients (curl, native).
@@ -990,10 +451,36 @@ class DjustSSEStreamView(View):
         session._client_ip = _client_ip_from_request(request)
         session._owner_user_pk = owner_user_pk
         session._owner_session_key = owner_session_key
+        # Stash the REAL HTTP request so the runtime mounts against it (real
+        # request.user / session / path for auth + object-perm) — the converged
+        # runtime mount path reads it via SSESessionTransport.build_request
+        # (#1887, ADR-022 Iter 1). Without this the runtime would synthesize a
+        # userless RequestFactory request and deny every authenticated SSE view.
+        session._request = request
 
-        # Mount the view; pushes "mount" message (or "error"/"navigate") to the
-        # queue. Returns True only when a usable view is fully mounted.
-        mounted = await _sse_mount_view(session, request, view_path)
+        # Mount the view through the shared ViewRuntime (#1887, ADR-022 Iter 1):
+        # converges the legacy bespoke _sse_mount_view onto dispatch_mount, the
+        # SAME spine the WS url_change path + the SSE /message/ endpoint already
+        # use, so the SSE mount can no longer drift from the runtime (#1646).
+        # dispatch_mount pushes "mount" (or "error"/"navigate") onto the queue
+        # and sets runtime.view_instance only on a fully-successful mount; that
+        # is the SSE 'mounted' gate (it replaces the legacy bool return).
+        #
+        # Data-dict shape mirrors the WS mount frame + the existing dispatch_*
+        # callers: 'view' is the ?view= path; 'url' is the real request.path so
+        # _resolve_url_kwargs extracts pk/slug pattern kwargs; 'params' carries
+        # the query-string params the legacy path merged into mount_kwargs
+        # (every GET item except the 'view' selector itself).
+        mount_params = {k: v for k, v in request.GET.items() if k != "view"}
+        await session.runtime.dispatch_mount(
+            {
+                "type": "mount",
+                "view": view_path,
+                "url": request.path,
+                "params": mount_params,
+            }
+        )
+        mounted = session.runtime.view_instance is not None
         if mounted:
             _sse_sessions[session_id] = session
         else:
@@ -1110,6 +597,15 @@ class DjustSSEEventView(View):
 
         event_name = body.get("event")
         params = body.get("params") or {}
+        # Forward the client-sent ``ref`` (#560 ref echo, ADR-022 Iter 2 Phase
+        # 2.0; #1891). The runtime's ``_dispatch_event_render`` reads ``ref`` from
+        # the TOP LEVEL of the data dict (runtime.py:1489) to echo it on the noop /
+        # update frame so the client can match responses to requests. The original
+        # ``{type,event,params}`` rebuild dropped it, so the end-to-end ref echo
+        # worked via the SSE ``/message/`` endpoint (which forwards the raw body)
+        # but NOT via this ``/event/`` alias. Carry it through verbatim — the
+        # runtime coerces it to int / None, so no validation is needed here.
+        ref = body.get("ref")
 
         if not event_name:
             return JsonResponse({"error": "Missing 'event' field in request body"}, status=400)
@@ -1117,7 +613,24 @@ class DjustSSEEventView(View):
         if not isinstance(params, dict):
             return JsonResponse({"error": "'params' must be a JSON object"}, status=400)
 
-        await _sse_handle_event(session, event_name, params)
+        # Dispatch through the shared ViewRuntime (#1887, ADR-022 Iter 1):
+        # converges the legacy bespoke _sse_handle_event onto dispatch_event,
+        # the SAME spine the SSE /message/ endpoint already routes through, so
+        # the legacy /event/ alias can no longer drift from the runtime (#1646).
+        # The runtime's dispatch_event applies the tenant context, runs the same
+        # event security + param validation, renders, and (this PR) dispatches
+        # start_async / @background work + the full 8-queue flush. Data-dict
+        # shape matches the existing dispatch_message 'event' frame.
+        #
+        # Stamp the LIVE event-POST request on the session so the per-event auth
+        # re-check (SSESessionTransport.recheck_event_auth, #1777 / ADR-022 Iter 2
+        # Phase 2.3a) re-validates against the CURRENT POSTer's request.user — not
+        # the stale mount request. Owner-binding (Finding #24) already ran above,
+        # so this request is the session owner's.
+        session._event_request = request
+        await session.runtime.dispatch_event(
+            {"type": "event", "event": event_name, "params": params, "ref": ref}
+        )
         return JsonResponse({"ok": True})
 
 
@@ -1189,6 +702,13 @@ class DjustSSEMessageView(View):
         # Route through the shared runtime. Validation of frame-specific
         # shape (e.g., mount needs 'view') is handled by the runtime,
         # which pushes structured error envelopes onto the SSE queue.
+        #
+        # Stamp the LIVE POST request so an ``event`` frame routed through
+        # dispatch_message → dispatch_event re-validates per-event auth against the
+        # current POSTer (SSESessionTransport.recheck_event_auth, #1777). Same
+        # rationale as the /event/ alias; the /message/ endpoint carries the same
+        # owner-bound request.
+        session._event_request = request
         await session.runtime.dispatch_message(body)
         return JsonResponse({"ok": True})
 

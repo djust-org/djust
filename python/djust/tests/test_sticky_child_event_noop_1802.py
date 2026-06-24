@@ -243,30 +243,40 @@ async def test_notifications_view_dismiss_works_standalone_control():
 
 
 def test_handle_event_autoskip_snapshots_target_view_source():
-    """Belt-and-suspenders source pin: the pre/post assigns snapshots in the
-    non-actor arm of ``handle_event`` must be taken against ``target_view``
-    (the view the handler mutates) — NOT ``self.view_instance`` — so embedded
-    children's state changes are detected. Fails fast if a refactor reverts
-    the snapshot subject even when the integration test is skipped.
-    """
-    import djust.websocket as ws_mod
+    """Belt-and-suspenders source pin: a ``view_id``-routed sticky-child event must
+    run the handler + render against the CHILD (``target_view``), not the parent —
+    so an embedded child's state change is reflected (never noop'd, #1802).
 
-    # Finding #6: handle_event is a thin tenant-context wrapper; the auto-skip
-    # block lives in _handle_event_inner now.
-    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
-    # The auto-skip block binds ``change_target = target_view`` and snapshots
-    # against it — so an embedded child's mutations are detected. (For a
-    # top-level event ``target_view IS self.view_instance``, so this is a no-op
-    # there.)
-    assert "change_target = target_view" in source, (
-        "handle_event's auto-skip-render block must bind change_target to "
-        "target_view (the embedded child when view_id routes to one), not the "
-        "parent self.view_instance — else embedded-child events noop (#1802)."
+    #1907 THE FLIP: WS events route through ``ViewRuntime.dispatch_event``; the
+    sticky-child handling moved off the deleted ``_handle_event_inner`` into the
+    runtime's ``_dispatch_sticky_child_event``. The runtime's design RETIRES the
+    bespoke ``change_target = target_view`` skip-render snapshot entirely: a
+    ``view_id``-routed event is dispatched to a DEDICATED method that resolves the
+    child, validates + calls the handler against the CHILD, and ALWAYS re-renders
+    the child's subtree (``render_embedded_child_html(target_view)``) → a scoped
+    ``embedded_update`` frame. There is no parent-snapshot skip path to mis-target,
+    so the #1802 noop bug is structurally impossible. Pin the runtime structure.
+    """
+    import djust.runtime as rt_mod
+
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_sticky_child_event)
+    # The child (target_view) is resolved from the registry and is the handler +
+    # render subject — NOT the parent self.view_instance.
+    assert "target_view = all_children.get(view_id)" in source, (
+        "the runtime sticky-child path must resolve target_view (the CHILD) from "
+        "_get_all_child_views() by view_id (#1802)."
     )
-    assert "_snapshot_assigns(change_target)" in source, (
-        "handle_event must snapshot change_target (the handler's view) for the auto-skip decision."
+    # The child subtree is ALWAYS re-rendered via the single-sourced render core
+    # (wrapped in sync_to_async, hence the whitespace-tolerant collapse).
+    source_collapsed = " ".join(source.split())
+    assert "render_embedded_child_html)(target_view)" in source_collapsed or (
+        "render_embedded_child_html" in source and "(target_view)" in source_collapsed
+    ), (
+        "the runtime sticky-child path must ALWAYS re-render the CHILD's subtree "
+        "(render_embedded_child_html(target_view)) — so an embedded child's "
+        "mutation is reflected, never auto-skipped to a parent noop (#1802 / #1907)."
     )
-    assert "_snapshot_assigns(self.view_instance)" not in source, (
-        "handle_event must no longer snapshot self.view_instance for the "
-        "auto-skip decision — it misses embedded-child mutations (#1802)."
+    assert '"type": "embedded_update"' in source and "view_id" in source, (
+        "the runtime sticky-child render must emit a child-scoped embedded_update "
+        "frame keyed by view_id (#1802)."
     )
