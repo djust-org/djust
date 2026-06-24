@@ -475,6 +475,54 @@ def _emit_full_html_update(
     )
 
 
+def render_embedded_child_html(child_view) -> str:
+    """Render an embedded child view's template and return its inner HTML.
+
+    Transport-agnostic render core for the embedded-child subsystem. Re-renders
+    just the child's template via Django's template engine, bypassing the
+    parent's VDOM entirely. Single-sourced (ADR-022 Iter 2 Phase 2.1, the #1646
+    cure) so the WS consumer (:meth:`LiveViewConsumer._render_embedded_child`)
+    and :class:`~djust.runtime.ViewRuntime` share ONE implementation — including
+    the security-hardened error path below — with no parallel copy to drift.
+    """
+    try:
+        context = child_view.get_context_data()
+        from django.template import engines
+
+        template_str = child_view.get_template()
+        engine = engines["django"] if "django" in engines else list(engines.all())[0]
+        tmpl = engine.from_string(template_str)
+        html = tmpl.render(context)
+        # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
+        # SOURCE — child update_model events gate against the child's
+        # _dj_model_fields, and this is the child's only render path (it
+        # bypasses render_with_diff). Derived from the Rust template AST
+        # (Text-node literals), immune to rendered-output poisoning
+        # (#3 review #1646).
+        if hasattr(child_view, "_record_dj_model_fields_from_source"):
+            from .utils import get_template_dirs
+
+            child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
+        return html
+    except Exception as e:
+        logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
+        # SECURITY (#1646 parallel-path drift): this site bypassed the
+        # central handle_exception / create_safe_error_response path, which
+        # is DEBUG-gated and generic in production. Returning the raw str(e)
+        # here (a) leaked exception detail into the live page in production
+        # (CWE-209) and (b) was unescaped, so an attacker-influenced message
+        # containing ``-->`` broke out of the HTML comment into live DOM
+        # (CWE-79 DOM XSS). escape() neutralises the comment-breakout and any
+        # tag injection in BOTH modes; production additionally emits no
+        # detail. Mirrors the DEBUG gate in simple_live_view.render_template.
+        from django.conf import settings
+        from django.utils.html import escape
+
+        if getattr(settings, "DEBUG", False):
+            return f"<!-- Error rendering embedded child: {escape(str(e))} -->"
+        return "<!-- Error rendering embedded child -->"
+
+
 def _find_sticky_slot_ids(html: str) -> set[str]:
     """Return the set of ``dj-sticky-slot`` attribute values in ``html``.
 
@@ -4274,43 +4322,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         This re-renders just the child's template using Django's template engine,
         without going through the parent's VDOM at all.
+
+        Thin shim over the module-level :func:`render_embedded_child_html` so the
+        WS consumer and :class:`~djust.runtime.ViewRuntime` (ADR-022 Iter 2
+        Phase 2.1) render embedded children through ONE implementation — the
+        #1646 cure for the embedded-render subsystem. The pure (transport-blind)
+        render core, including the security-hardened error path, lives in that
+        function so there is no parallel copy to drift.
         """
-        try:
-            context = child_view.get_context_data()
-            from django.template import engines
-
-            template_str = child_view.get_template()
-            engine = engines["django"] if "django" in engines else list(engines.all())[0]
-            tmpl = engine.from_string(template_str)
-            html = tmpl.render(context)
-            # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
-            # SOURCE — child update_model events gate against the child's
-            # _dj_model_fields, and this is the child's only render path (it
-            # bypasses render_with_diff). Derived from the Rust template AST
-            # (Text-node literals), immune to rendered-output poisoning
-            # (#3 review #1646).
-            if hasattr(child_view, "_record_dj_model_fields_from_source"):
-                from .utils import get_template_dirs
-
-                child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
-            return html
-        except Exception as e:
-            logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
-            # SECURITY (#1646 parallel-path drift): this site bypassed the
-            # central handle_exception / create_safe_error_response path, which
-            # is DEBUG-gated and generic in production. Returning the raw str(e)
-            # here (a) leaked exception detail into the live page in production
-            # (CWE-209) and (b) was unescaped, so an attacker-influenced message
-            # containing ``-->`` broke out of the HTML comment into live DOM
-            # (CWE-79 DOM XSS). escape() neutralises the comment-breakout and any
-            # tag injection in BOTH modes; production additionally emits no
-            # detail. Mirrors the DEBUG gate in simple_live_view.render_template.
-            from django.conf import settings
-            from django.utils.html import escape
-
-            if getattr(settings, "DEBUG", False):
-                return f"<!-- Error rendering embedded child: {escape(str(e))} -->"
-            return "<!-- Error rendering embedded child -->"
+        return render_embedded_child_html(child_view)
 
     # ========================================================================
     # File Upload Handling

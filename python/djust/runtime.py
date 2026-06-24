@@ -675,6 +675,33 @@ class ViewRuntime:
         cache_request_id = params.pop("_cacheRequestId", None)
         positional_args = params.pop("_args", [])
 
+        # Embedded-child routing (ADR-022 Iter 2 Phase 2.1).
+        #
+        # Two transport-agnostic child-routing subsystems route the event AWAY
+        # from the top-level view before the single-view path below runs (per
+        # #1467 canon they are DISTINCT mechanisms with different wire frames):
+        #
+        #   1. ``view_id`` → a sticky-child LiveView (resolved via
+        #      ``_get_all_child_views()``; emits a scoped ``embedded_update``).
+        #   2. ``component_id`` → a LiveComponent (resolved via
+        #      ``_components``; validates the handler against the COMPONENT and
+        #      emits a full-HTML ``component_event`` frame; does NOT reassign
+        #      the target view, per #1467).
+        #
+        # Both mirror the WS ``_handle_event_inner`` subsystems verbatim while
+        # WS routing stays on its own bespoke path (Phase 2.1 ADDs the runtime
+        # copy; Phase 2.3 deletes the WS copy). SSE has neither components nor
+        # sticky children, so both checks fall straight through to the
+        # single-view path — the empty-registry no-op. Each helper returns
+        # ``True`` when it fully handled the event (we return), ``False`` to
+        # fall through.
+        if await self._dispatch_sticky_child_event(
+            data, event_name, params, positional_args, event_ref
+        ):
+            return
+        if await self._dispatch_component_event(event_name, params, positional_args, event_ref):
+            return
+
         # Security
         handler = await _validate_event_security(
             self.transport, event_name, self.view_instance, self._rate_limiter
@@ -833,6 +860,279 @@ class ViewRuntime:
             sanitize_for_log(event_name),
             (time.perf_counter() - start_time) * 1000,
         )
+
+    # ------------------------------------------------------------------ #
+    # Embedded-child routing (ADR-022 Iter 2 Phase 2.1)
+    #
+    # Two transport-agnostic child-routing subsystems, ported from the WS
+    # ``_handle_event_inner`` (websocket.py) verbatim for the security-critical
+    # bits. WS keeps its own copy until Phase 2.3; these are the runtime ADDs.
+    # ------------------------------------------------------------------ #
+
+    async def _dispatch_sticky_child_event(
+        self,
+        data: Dict[str, Any],
+        event_name: str,
+        params: Dict[str, Any],
+        positional_args: List[Any],
+        event_ref: Optional[int],
+    ) -> bool:
+        """Route a ``view_id``-targeted event to a sticky/embedded child view.
+
+        Mirrors the WS ``_handle_event_inner`` sticky-child block
+        (websocket.py:3176-3198 + the embedded framing at ~4010-4019):
+
+        * resolve the child via ``view_instance._get_all_child_views()``,
+        * validate the handler against the CHILD (``target_view``), call it,
+        * notify the child's waiters (ADR-002), render the child's template via
+          the single-sourced :func:`~djust.websocket.render_embedded_child_html`,
+        * emit a scoped ``embedded_update {view_id, html, event_name}`` frame.
+
+        Security: the client-supplied ``view_id`` is NEVER echoed into the
+        user-facing error string — only logged sanitized via
+        ``sanitize_for_log(view_id)`` in the structured ``extra`` (verbatim from
+        the WS path, websocket.py:3191-3197).
+
+        Returns ``True`` if the event was routed to a child (caller returns),
+        ``False`` to fall through to the single-view path (the SSE no-op case:
+        no ``view_id``, or no child registry, or the id is the top-level view).
+        """
+        view = self.view_instance
+        view_id = params.pop("view_id", None)
+        if not view_id or view_id == getattr(view, "_view_id", None):
+            # No child routing requested (or the id IS the top-level view):
+            # fall through to the single-view path.
+            return False
+
+        all_children = view._get_all_child_views() if hasattr(view, "_get_all_child_views") else {}
+        target_view = all_children.get(view_id)
+        if target_view is None:
+            # Security: don't echo a client-supplied view_id into the
+            # user-facing error string. The id is already logged via the
+            # structured event for callers that need to trace it.
+            await self.transport.send_error(
+                "Embedded view not found",
+                extra={"view_id": sanitize_for_log(view_id)},
+            )
+            return True
+
+        # Validate the handler against the CHILD (not the parent) — mirrors WS
+        # using ``target_view`` for handler lookup (websocket.py:3498).
+        handler = await _validate_event_security(
+            self.transport, event_name, target_view, self._rate_limiter
+        )
+        if handler is None:
+            return True
+
+        coerce = get_handler_coerce_setting(handler)
+        validation = validate_handler_params(
+            handler, params, event_name, coerce=coerce, positional_args=positional_args
+        )
+        if not validation["valid"]:
+            logger.error(
+                "Runtime: parameter validation failed (embedded child): %s",
+                sanitize_for_log(validation["error"]),
+            )
+            await self.transport.send_error(
+                validation["error"],
+                validation_details={
+                    "expected_params": validation["expected"],
+                    "provided_params": validation["provided"],
+                    "type_errors": validation["type_errors"],
+                },
+            )
+            return True
+
+        coerced_params = validation.get("coerced_params", params)
+
+        try:
+            await _call_handler(handler, coerced_params if coerced_params else None)
+        except Exception as exc:
+            response = handle_exception(
+                exc,
+                error_type="event",
+                event_name=event_name,
+                view_class=target_view.__class__.__name__,
+                logger=logger,
+                log_message=(
+                    f"Error in embedded child {target_view.__class__.__name__}."
+                    f"{sanitize_for_log(event_name)}()"
+                ),
+            )
+            await self.transport.send(response)
+            return True
+
+        # Waiter notification (ADR-002 Phase 1b) — resolve waiters on the CHILD
+        # view. Best-effort: a waiter bug must never break the event.
+        if hasattr(target_view, "_notify_waiters"):
+            try:
+                target_view._notify_waiters(event_name, coerced_params or {})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Waiter notification for embedded child %r failed: %s",
+                    sanitize_for_log(event_name),
+                    exc,
+                )
+
+        # Render just the child's subtree (single-sourced render core) and emit
+        # the scoped full-HTML ``embedded_update`` frame. Mirrors the WS
+        # ``_render_embedded_child`` + ``_emit_full_html_update("embedded_child")``
+        # + the ``embedded_update`` send (websocket.py:3905-3920 / 4010-4018).
+        from .websocket import _emit_full_html_update, render_embedded_child_html
+
+        html = await sync_to_async(render_embedded_child_html)(target_view)
+        _emit_full_html_update(target_view, "embedded_child", event_name, html, 0)
+
+        msg: Dict[str, Any] = {
+            "type": "embedded_update",
+            "view_id": view_id,
+            "html": html,
+            "event_name": event_name,
+        }
+        if event_ref is not None:
+            msg["ref"] = event_ref
+        await self.transport.send(msg)
+        await self._flush_all_pending()
+
+        # Dispatch any background work the child handler scheduled (WS parity).
+        self._dispatch_async_work(event_name)
+        return True
+
+    async def _dispatch_component_event(
+        self,
+        event_name: str,
+        params: Dict[str, Any],
+        positional_args: List[Any],
+        event_ref: Optional[int],
+    ) -> bool:
+        """Route a ``component_id``-targeted event to a child LiveComponent.
+
+        Mirrors the WS ``_handle_event_inner`` component block
+        (websocket.py:3336/3354-3479 + the ``component_event`` framing at
+        ~4024-4032). Per #1467 canon, ``component_id`` routing does NOT reassign
+        ``target_view`` — the handler runs on the COMPONENT but waiters and the
+        emitted frame are scoped to the PARENT view (LiveComponents have no
+        separate VDOM/waiter buffer in Phase 1).
+
+        Key invariants carried verbatim from WS:
+
+        * the handler is validated against the COMPONENT, not the parent;
+        * ``_notify_waiters`` is called on the PARENT view with ``component_id``
+          injected into the kwargs so predicates can disambiguate which
+          component fired (websocket.py:3468-3469);
+        * the parent re-renders to full HTML (``component_event`` frame) because
+          component VDOM is separate from the parent's.
+
+        Returns ``True`` if a ``component_id`` was present (handled here),
+        ``False`` to fall through (the SSE no-op case + every plain event).
+        """
+        view = self.view_instance
+        component_id = params.get("component_id")
+        if not component_id:
+            return False
+
+        component = view._components.get(component_id) if hasattr(view, "_components") else None
+        if not component:
+            # Verbatim WS shape (websocket.py:3358-3362): the component_id is
+            # server-assigned (not free-form client text), so echoing it in the
+            # error is the existing behavior.
+            error_msg = f"Component not found: {component_id}"
+            logger.error("Runtime: %s", sanitize_for_log(error_msg))
+            await self.transport.send_error(error_msg)
+            return True
+
+        # Validate the handler against the COMPONENT (websocket.py:3380-3382).
+        handler = await _validate_event_security(
+            self.transport, event_name, component, self._rate_limiter
+        )
+        if handler is None:
+            return True
+
+        # Strip component_id from the params passed to the handler (the handler
+        # signature never expects it). Mirrors websocket.py:3388-3389.
+        event_data = dict(params)
+        event_data.pop("component_id", None)
+
+        coerce = get_handler_coerce_setting(handler)
+        validation = validate_handler_params(
+            handler, event_data, event_name, coerce=coerce, positional_args=positional_args
+        )
+        if not validation["valid"]:
+            logger.error(
+                "Runtime: parameter validation failed (component): %s",
+                sanitize_for_log(validation["error"]),
+            )
+            await self.transport.send_error(
+                validation["error"],
+                validation_details={
+                    "expected_params": validation["expected"],
+                    "provided_params": validation["provided"],
+                    "type_errors": validation["type_errors"],
+                },
+            )
+            return True
+
+        coerced_event_data = validation.get("coerced_params", event_data)
+
+        try:
+            await _call_handler(handler, coerced_event_data if coerced_event_data else None)
+        except Exception as exc:
+            response = handle_exception(
+                exc,
+                error_type="event",
+                event_name=event_name,
+                view_class=view.__class__.__name__,
+                logger=logger,
+                log_message=(
+                    f"Error in {view.__class__.__name__}."
+                    f"{sanitize_for_log(event_name)}() (component event)"
+                ),
+            )
+            await self.transport.send(response)
+            return True
+
+        # Propagate the component event to the PARENT view's waiters with the
+        # component_id injected (ADR-002 Phase 1b/1c, websocket.py:3456-3479).
+        notify_kwargs = dict(coerced_event_data or {})
+        notify_kwargs.setdefault("component_id", component_id)
+        if hasattr(view, "_notify_waiters"):
+            try:
+                view._notify_waiters(event_name, notify_kwargs)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Waiter notification for component event %r on %s failed: %s",
+                    sanitize_for_log(event_name),
+                    sanitize_for_log(str(component_id)),
+                    exc,
+                )
+
+        # Component VDOM is separate from the parent's, so re-render the parent
+        # to full HTML and emit a ``component_event`` frame (websocket.py:4024-4032).
+        from .websocket import _emit_full_html_update
+
+        html, _patches, version = await sync_to_async(view.render_with_diff)()
+        if html and hasattr(view, "_strip_comments_and_whitespace"):
+            html = view._strip_comments_and_whitespace(html)
+        if html and hasattr(view, "_extract_liveview_content"):
+            html = view._extract_liveview_content(html)
+        _emit_full_html_update(view, "component_event", event_name, html, version)
+
+        wire_version = self.transport.next_client_version(html, version)
+        msg: Dict[str, Any] = {
+            "type": "html_update",
+            "html": html,
+            "version": wire_version,
+            "event_name": event_name,
+            "source": "event",
+        }
+        if event_ref is not None:
+            msg["ref"] = event_ref
+        await self.transport.send(msg)
+        await self._flush_all_pending()
+
+        # Dispatch any background work the component handler scheduled (WS parity).
+        self._dispatch_async_work(event_name)
+        return True
 
     # ------------------------------------------------------------------ #
     # URL-change dispatch (shared between WS and SSE in this PR)
