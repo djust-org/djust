@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class InputGroup(Component):
@@ -18,8 +19,8 @@ class InputGroup(Component):
         size: str = "md",
         error: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             size=size,

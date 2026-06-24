@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ScrollToTop(Component):
@@ -39,8 +40,8 @@ class ScrollToTop(Component):
         threshold: str = "300px",
         label: str = "Back to top",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(threshold=threshold, label=label, custom_class=custom_class, **kwargs)
         self.threshold = threshold
         self.label = label

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class CodeSnippet(Component):
@@ -40,8 +41,8 @@ class CodeSnippet(Component):
         code: str = "",
         language: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(code=code, language=language, custom_class=custom_class, **kwargs)
         self.code = code
         self.language = language

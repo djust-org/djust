@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ResizablePanel(Component):
@@ -42,8 +43,8 @@ class ResizablePanel(Component):
         initial_size: str = "50%",
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             direction=direction,

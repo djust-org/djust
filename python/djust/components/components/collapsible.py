@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Collapsible(Component):
@@ -20,8 +21,8 @@ class Collapsible(Component):
         is_open: bool = False,
         event: str = "toggle_collapsible",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             trigger=trigger,
             content=content,

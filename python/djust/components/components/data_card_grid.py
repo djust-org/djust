@@ -1,7 +1,7 @@
 """Data Card Grid component — filterable card grid layout."""
 
 import html
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from djust import Component
 
@@ -48,8 +48,8 @@ class DataCardGrid(Component):
         filter_key: str = "category",
         event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             columns=columns,

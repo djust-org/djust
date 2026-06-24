@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class CodeBlock(Component):
@@ -20,8 +21,8 @@ class CodeBlock(Component):
         filename: str = "",
         theme: str = "github-dark",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             code=code,
             language=language,

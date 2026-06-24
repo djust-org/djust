@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Tabs(Component):
@@ -16,13 +17,13 @@ class Tabs(Component):
 
     def __init__(
         self,
-        tabs: list = None,
+        tabs: Optional[list] = None,
         active: str = "",
         content: str = "",
         event: str = "set_tab",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             tabs=tabs,
             active=active,

@@ -2,7 +2,7 @@
 
 import html
 from datetime import date, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -39,8 +39,8 @@ class CalendarHeatmap(Component):
 
     def __init__(
         self,
-        data: dict = None,
-        year: int = None,
+        data: Optional[dict] = None,
+        year: Optional[int] = None,
         title: Optional[str] = None,
         color_empty: str = "#ebedf0",
         color_min: str = "#9be9a8",
@@ -50,8 +50,8 @@ class CalendarHeatmap(Component):
         show_month_labels: bool = True,
         show_day_labels: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         if year is None:
             year = date.today().year
         super().__init__(

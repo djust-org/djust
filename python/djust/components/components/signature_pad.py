@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class SignaturePad(Component):
@@ -43,8 +44,8 @@ class SignaturePad(Component):
         pen_width: int = 2,
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             save_event=save_event,

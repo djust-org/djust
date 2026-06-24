@@ -1,7 +1,7 @@
 """Activity Feed component for real-time activity stream via WebSocket."""
 
 import html
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from djust import Component
 
@@ -49,8 +49,8 @@ class ActivityFeed(Component):
         stream_event: str = "",
         max_items: int = 50,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             events=events,
             stream_event=stream_event,

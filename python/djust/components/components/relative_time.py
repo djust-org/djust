@@ -2,7 +2,7 @@
 
 import html
 from datetime import datetime
-from typing import Union
+from typing import Any, Union
 
 from djust import Component
 
@@ -32,8 +32,8 @@ class RelativeTime(Component):
         auto_update: bool = True,
         interval: int = 60,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             datetime=datetime,
             auto_update=auto_update,

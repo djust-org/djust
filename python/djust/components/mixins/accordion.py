@@ -25,6 +25,7 @@ Legacy usage::
 from djust.decorators import event_handler
 
 from .base import ComponentMixin, TypedState
+from typing import Any, Dict, List, Optional, Union, cast
 
 __all__ = ["AccordionMixin", "AccordionState"]
 
@@ -32,7 +33,9 @@ __all__ = ["AccordionMixin", "AccordionState"]
 class AccordionState(TypedState):
     """Typed state for a single accordion instance."""
 
-    active: str = ""
+    # ``active`` is a single item id (``str``) when ``multiple`` is False, or a
+    # list of open item ids when ``multiple`` is True.
+    active: Union[str, List[str]] = ""
     multiple: bool = False
 
 
@@ -43,9 +46,14 @@ class AccordionMixin(ComponentMixin):
     """
 
     component_name = "accordion"
-    accordion_instances = None
+    accordion_instances: Optional[Dict[str, "AccordionState"]] = None
 
-    def init_accordion(self, instance_id, active="", multiple=False):
+    def init_accordion(
+        self,
+        instance_id: str,
+        active: Union[str, List[str]] = "",
+        multiple: bool = False,
+    ) -> None:
         """Register an accordion instance.
 
         Args:
@@ -63,14 +71,15 @@ class AccordionMixin(ComponentMixin):
         )
 
     @event_handler
-    def accordion_toggle(self, value="", component_id="", **kwargs):
+    def accordion_toggle(self, value: str = "", component_id: str = "", **kwargs: Any) -> None:
         """Toggle an accordion item open/closed."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, AccordionState)
         if inst is None:
             return
         if inst.multiple:
-            actives = inst.active
+            # In multiple mode ``active`` is always a list (see init_accordion).
+            actives = cast(List[str], inst.active)
             if value in actives:
                 actives.remove(value)
             else:
@@ -78,7 +87,7 @@ class AccordionMixin(ComponentMixin):
         else:
             inst.active = "" if inst.active == value else value
 
-    def get_accordion_ctx(self, instance_id):
+    def get_accordion_ctx(self, instance_id: str) -> Dict[str, Any]:
         """Return template context dict for an accordion instance."""
         inst = self._get_typed_instance(instance_id, AccordionState)
         if inst is None:

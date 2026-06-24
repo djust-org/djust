@@ -7,7 +7,7 @@ Similar to shadcn/ui components - framework-agnostic with customizable styles.
 
 from typing import Dict, Any, Optional
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 from ...config import config
 
 
@@ -24,7 +24,7 @@ class NavItem:
         target: Optional[str] = None,
         badge: Optional[int] = None,
         badge_variant: str = "primary",
-    ):
+    ) -> None:
         self.label = label
         self.href = href
         self.active = active
@@ -76,7 +76,7 @@ class NavbarComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize navbar state"""
         self.brand_name = kwargs.get("brand_name", "App")
         self.brand_logo = kwargs.get("brand_logo", None)
@@ -100,18 +100,18 @@ class NavbarComponent(LiveComponent):
             "logo_height": self.logo_height,
         }
 
-    def add_item(self, item: NavItem):
+    def add_item(self, item: NavItem) -> None:
         """Add a navigation item"""
         self.items.append(item)
         self.trigger_update()
 
-    def set_active(self, href: str):
+    def set_active(self, href: str) -> None:
         """Set the active navigation item by href"""
         for item in self.items:
             item.active = item.href == href
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render navbar with framework-specific styling"""
         framework = config.get("css_framework", "bootstrap5")
 

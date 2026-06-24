@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ApprovalGate(Component):
@@ -67,8 +68,8 @@ class ApprovalGate(Component):
         approve_label: str = "Approve",
         reject_label: str = "Reject",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             message=message,
             risk=risk,

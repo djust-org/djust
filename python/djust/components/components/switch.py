@@ -1,7 +1,7 @@
 """Switch/toggle component for boolean state."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -70,8 +70,8 @@ class Switch(Component):
         disabled: bool = False,
         action: Optional[str] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             checked=checked,
@@ -88,7 +88,7 @@ class Switch(Component):
         self.action = action
         self.custom_class = custom_class
 
-    def toggle(self):
+    def toggle(self) -> None:
         """Toggle the checked state."""
         self.checked = not self.checked
 

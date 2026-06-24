@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Timeline(Component):
@@ -14,11 +15,11 @@ class Timeline(Component):
 
     def __init__(
         self,
-        items: list = None,
+        items: Optional[list] = None,
         content: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             content=content,

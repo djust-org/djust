@@ -1,7 +1,7 @@
 """Toast component for transient notification messages."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -66,8 +66,8 @@ class Toast(Component):
         dismissible: bool = True,
         action: Optional[str] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             message=message,
             type=type,
@@ -85,22 +85,22 @@ class Toast(Component):
         self.custom_class = custom_class
 
     @classmethod
-    def info(cls, message: str, **kwargs) -> "Toast":
+    def info(cls, message: str, **kwargs: Any) -> "Toast":
         """Create an info toast."""
         return cls(message, type="info", **kwargs)
 
     @classmethod
-    def success(cls, message: str, **kwargs) -> "Toast":
+    def success(cls, message: str, **kwargs: Any) -> "Toast":
         """Create a success toast."""
         return cls(message, type="success", **kwargs)
 
     @classmethod
-    def warning(cls, message: str, **kwargs) -> "Toast":
+    def warning(cls, message: str, **kwargs: Any) -> "Toast":
         """Create a warning toast."""
         return cls(message, type="warning", **kwargs)
 
     @classmethod
-    def error(cls, message: str, **kwargs) -> "Toast":
+    def error(cls, message: str, **kwargs: Any) -> "Toast":
         """Create an error toast."""
         return cls(message, type="error", **kwargs)
 

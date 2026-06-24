@@ -14,7 +14,7 @@ DropdownMixin — dropdown menu state management for djust LiveViews.
 Legacy usage::
 
     class MyPage(DropdownMixin, LiveView):
-        def mount(self, request, **kwargs):
+        def mount(self, request, **kwargs: Any) -> None:
             self.init_dropdown("actions")
             self.actions = self.get_dropdown_ctx("actions")
 """
@@ -22,6 +22,8 @@ Legacy usage::
 from djust.decorators import event_handler
 
 from .base import ComponentMixin, TypedState
+from typing import Any, Dict, Optional
+
 
 __all__ = ["DropdownMixin", "DropdownState"]
 
@@ -39,9 +41,9 @@ class DropdownMixin(ComponentMixin):
     """
 
     component_name = "dropdown"
-    dropdown_instances = None
+    dropdown_instances: Optional[Dict[str, "DropdownState"]] = None
 
-    def init_dropdown(self, instance_id, is_open=False):
+    def init_dropdown(self, instance_id: str, is_open: bool = False) -> None:
         """Register a dropdown instance.
 
         Args:
@@ -53,24 +55,24 @@ class DropdownMixin(ComponentMixin):
         self.dropdown_instances[instance_id] = DropdownState(is_open=bool(is_open))
 
     @event_handler
-    def toggle_dropdown(self, component_id="", **kwargs):
+    def toggle_dropdown(self, component_id: str = "", **kwargs: Any) -> None:
         """Toggle a dropdown open/closed."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, DropdownState)
         if inst is None:
             return
         inst.is_open = not inst.is_open
 
     @event_handler
-    def close_dropdown(self, component_id="", **kwargs):
+    def close_dropdown(self, component_id: str = "", **kwargs: Any) -> None:
         """Close a dropdown by component_id."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, DropdownState)
         if inst is None:
             return
         inst.is_open = False
 
-    def get_dropdown_ctx(self, instance_id):
+    def get_dropdown_ctx(self, instance_id: str) -> Dict[str, Any]:
         """Return template context dict for a dropdown instance."""
         inst = self._get_typed_instance(instance_id, DropdownState)
         if inst is None:

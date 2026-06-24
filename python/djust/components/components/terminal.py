@@ -2,7 +2,7 @@
 
 import html
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -69,8 +69,8 @@ class Terminal(Component):
         show_line_numbers: bool = False,
         wrap: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             output=output,
             title=title,

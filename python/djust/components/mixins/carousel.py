@@ -14,7 +14,7 @@ CarouselMixin — carousel/slideshow state management for djust LiveViews.
 Legacy usage::
 
     class MyPage(CarouselMixin, LiveView):
-        def mount(self, request, **kwargs):
+        def mount(self, request, **kwargs: Any) -> None:
             self.init_carousel("gallery", total=5)
             self.gallery = self.get_carousel_ctx("gallery")
 """
@@ -22,6 +22,8 @@ Legacy usage::
 from djust.decorators import event_handler
 
 from .base import ComponentMixin, TypedState
+from typing import Any, Dict, Optional
+
 
 __all__ = ["CarouselMixin", "CarouselState"]
 
@@ -40,9 +42,9 @@ class CarouselMixin(ComponentMixin):
     """
 
     component_name = "carousel"
-    carousel_instances = None
+    carousel_instances: Optional[Dict[str, "CarouselState"]] = None
 
-    def init_carousel(self, instance_id, active=0, total=0):
+    def init_carousel(self, instance_id: str, active: int = 0, total: int = 0) -> None:
         """Register a carousel instance.
 
         Args:
@@ -58,9 +60,9 @@ class CarouselMixin(ComponentMixin):
         )
 
     @event_handler
-    def carousel_prev(self, component_id="", **kwargs):
+    def carousel_prev(self, component_id: str = "", **kwargs: Any) -> None:
         """Go to the previous slide (wraps around)."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, CarouselState)
         if inst is None:
             return
@@ -68,9 +70,9 @@ class CarouselMixin(ComponentMixin):
             inst.active = (inst.active - 1) % inst.total
 
     @event_handler
-    def carousel_next(self, component_id="", **kwargs):
+    def carousel_next(self, component_id: str = "", **kwargs: Any) -> None:
         """Go to the next slide (wraps around)."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, CarouselState)
         if inst is None:
             return
@@ -78,9 +80,9 @@ class CarouselMixin(ComponentMixin):
             inst.active = (inst.active + 1) % inst.total
 
     @event_handler
-    def carousel_go(self, value="0", component_id="", **kwargs):
+    def carousel_go(self, value: str = "0", component_id: str = "", **kwargs: Any) -> None:
         """Go to a specific slide by index."""
-        component_id = self._resolve_component_id(component_id)
+        component_id = self._resolve_component_id(component_id) or ""
         inst = self._get_typed_instance(component_id, CarouselState)
         if inst is None:
             return
@@ -91,7 +93,7 @@ class CarouselMixin(ComponentMixin):
         if inst.total > 0 and 0 <= index < inst.total:
             inst.active = index
 
-    def get_carousel_ctx(self, instance_id):
+    def get_carousel_ctx(self, instance_id: str) -> Dict[str, Any]:
         """Return template context dict for a carousel instance."""
         inst = self._get_typed_instance(instance_id, CarouselState)
         if inst is None:

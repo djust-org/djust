@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Rating(Component):
@@ -22,8 +23,8 @@ class Rating(Component):
         event: str = "set_rating",
         size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             value=value,
             max_stars=max_stars,

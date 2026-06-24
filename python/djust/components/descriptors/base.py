@@ -7,6 +7,7 @@ so descriptors can be instantiated as class attributes on view classes.
 
 from djust.components.base import LiveComponent as _DjustLiveComponent
 from djust.components.mixins.base import TypedState
+from typing import Any
 
 
 class LiveComponent(_DjustLiveComponent):
@@ -18,7 +19,7 @@ class LiveComponent(_DjustLiveComponent):
     subclassing them further.
     """
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """No-op — descriptors don't have their own lifecycle."""
 
     def get_context_data(self) -> dict:

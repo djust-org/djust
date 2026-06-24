@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class FilterBar(Component):
@@ -18,8 +19,8 @@ class FilterBar(Component):
         clear_event: str = "clear_filters",
         active_count: int = 0,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             clear_event=clear_event,

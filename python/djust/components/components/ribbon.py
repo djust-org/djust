@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class Ribbon(Component):
@@ -53,8 +54,8 @@ class Ribbon(Component):
         variant: str = "primary",
         position: str = "top-right",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             text=text,
             variant=variant,

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ResponsiveImage(Component):
@@ -47,8 +48,8 @@ class ResponsiveImage(Component):
         sizes: str = "",
         placeholder: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             src=src,
             alt=alt,

@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Sheet(Component):
@@ -22,8 +23,8 @@ class Sheet(Component):
         is_open: bool = False,
         close_event: str = "close_sheet",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             title=title,

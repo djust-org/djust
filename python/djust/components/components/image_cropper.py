@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ImageCropper(Component):
@@ -41,8 +42,8 @@ class ImageCropper(Component):
         min_height: int = 50,
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             src=src,
             crop_event=crop_event,

@@ -1,7 +1,7 @@
 """Feedback widget component for rating responses."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -49,8 +49,8 @@ class FeedbackWidget(Component):
         mode: str = "thumbs",
         value: Optional[str] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             event=event,
             mode=mode,

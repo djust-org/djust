@@ -12,6 +12,8 @@ Usage::
 """
 
 from .base import LiveComponent, TypedState
+from typing import Any
+
 
 __all__ = ["Sheet"]
 
@@ -26,5 +28,5 @@ class Sheet(LiveComponent):
     class Meta:
         event = "toggle_sheet"
 
-    def _handle_event(self, state, **kwargs):
+    def _handle_event(self, state: "State", **kwargs: Any) -> None:
         state.is_open = not state.is_open

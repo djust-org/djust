@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class ScrollSpy(Component):
@@ -33,13 +34,13 @@ class ScrollSpy(Component):
 
     def __init__(
         self,
-        sections: list = None,
+        sections: Optional[list] = None,
         active: str = "",
         active_event: str = "section_changed",
         offset: str = "0px",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             sections=sections,
             active=active,

@@ -6,6 +6,7 @@ Provides data tables with sorting, selection, and actions.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from django.utils.safestring import SafeString
 
 
 class TableComponent(LiveComponent):
@@ -41,7 +42,7 @@ class TableComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize table state"""
         self.columns = kwargs.get("columns", [])  # List of {key, label, sortable, badge, action}
         self.rows = kwargs.get("rows", [])  # List of dicts with column keys
@@ -67,7 +68,7 @@ class TableComponent(LiveComponent):
             "sort_direction": self.sort_direction,
         }
 
-    def sort_by(self, column_key: str):
+    def sort_by(self, column_key: str) -> None:
         """Sort table by column"""
         if self.sort_column == column_key:
             # Toggle direction
@@ -81,7 +82,7 @@ class TableComponent(LiveComponent):
         self.rows = sorted(self.rows, key=lambda x: x.get(column_key, ""), reverse=reverse)
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render table with inline HTML"""
         from django.utils.safestring import mark_safe
         from ...config import config

@@ -2,7 +2,7 @@
 
 import html
 import math
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -49,7 +49,7 @@ class PieChart(Component):
 
     def __init__(
         self,
-        segments: list = None,
+        segments: Optional[list] = None,
         title: Optional[str] = None,
         width: int = 300,
         height: int = 300,
@@ -58,8 +58,8 @@ class PieChart(Component):
         show_labels: bool = True,
         show_legend: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             segments=segments,
             title=title,

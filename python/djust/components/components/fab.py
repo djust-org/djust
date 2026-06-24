@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Fab(Component):
@@ -24,8 +25,8 @@ class Fab(Component):
         size: str = "md",
         variant: str = "primary",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             icon=icon,
             event=event,

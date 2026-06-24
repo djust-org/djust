@@ -1,7 +1,7 @@
 """Data Grid component for programmatic use in LiveViews."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -63,8 +63,8 @@ class DataGrid(Component):
         new_row_event: str = "",
         delete_row_event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             columns=columns,
             rows=rows,

@@ -1,7 +1,7 @@
 """Conversation thread component for chat-style message display."""
 
 import html
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from djust import Component
 
@@ -47,8 +47,8 @@ class ConversationThread(Component):
         stream_event: str = "new_message",
         streaming: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             messages=messages,
             stream_event=stream_event,

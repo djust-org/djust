@@ -1,7 +1,7 @@
 """Reactions component for Slack-style emoji reactions with live counts."""
 
 import html
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from djust import Component
 
@@ -48,8 +48,8 @@ class Reactions(Component):
         event: str = "react",
         active: Optional[List[str]] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             options=options,
             counts=counts,

@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class AspectRatio(Component):
@@ -16,8 +17,8 @@ class AspectRatio(Component):
         content: str = "",
         ratio: str = "16/9",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             ratio=ratio,

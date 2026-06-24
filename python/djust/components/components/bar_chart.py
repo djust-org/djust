@@ -1,7 +1,7 @@
 """Bar Chart component — pure SVG bar chart with hover tooltips."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -42,16 +42,16 @@ class BarChart(Component):
 
     def __init__(
         self,
-        data: list = None,
-        labels: list = None,
+        data: Optional[list] = None,
+        labels: Optional[list] = None,
         title: Optional[str] = None,
         width: int = 400,
         height: int = 250,
         color: str = "",
         show_values: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             data=data,
             labels=labels,

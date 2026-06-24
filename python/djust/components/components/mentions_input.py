@@ -2,7 +2,7 @@
 
 import html
 import json
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from djust import Component
 
@@ -54,8 +54,8 @@ class MentionsInput(Component):
         placeholder: str = "Type @ to mention...",
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             users=users,

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class AgentStep(Component):
@@ -52,8 +53,8 @@ class AgentStep(Component):
         content: str = "",
         duration: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             tool=tool,
             status=status,

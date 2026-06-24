@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class SplitPane(Component):
@@ -20,8 +21,8 @@ class SplitPane(Component):
         direction: str = "horizontal",
         initial: int = 50,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             left=left,
             right=right,

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ErrorBoundary(Component):
@@ -34,8 +35,8 @@ class ErrorBoundary(Component):
         retry_event: str = "",
         custom_class: str = "",
         content: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             fallback=fallback,
             error=error,

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class BottomSheet(Component):
@@ -36,8 +37,8 @@ class BottomSheet(Component):
         close_event: str = "close_sheet",
         custom_class: str = "",
         content: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             title=title,
             open=open,

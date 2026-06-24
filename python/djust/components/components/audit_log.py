@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class AuditLog(Component):
@@ -51,13 +52,13 @@ class AuditLog(Component):
 
     def __init__(
         self,
-        entries: list = None,
+        entries: Optional[list] = None,
         stream_event: str = "",
-        columns: list = None,
-        allowed_actions: set = None,
+        columns: Optional[list] = None,
+        allowed_actions: Optional[set] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             entries=entries,
             stream_event=stream_event,

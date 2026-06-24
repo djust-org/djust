@@ -4,9 +4,9 @@ Modal/dialog component for djust.
 Provides modal dialogs with customizable content and sizes.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 
 class ModalComponent(LiveComponent):
@@ -42,7 +42,7 @@ class ModalComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize modal state"""
         self.title = kwargs.get("title", "")
         self.body = kwargs.get("body", "")
@@ -58,7 +58,7 @@ class ModalComponent(LiveComponent):
             "size": self.size,
         }
 
-    def show(self, title: str = None, body: str = None):
+    def show(self, title: Optional[str] = None, body: Optional[str] = None) -> None:
         """Show the modal"""
         if title:
             self.title = title
@@ -67,22 +67,22 @@ class ModalComponent(LiveComponent):
         self.show_modal = True
         self.trigger_update()
 
-    def hide(self):
+    def hide(self) -> None:
         """Hide the modal"""
         self.show_modal = False
         self.trigger_update()
 
-    def set_title(self, title: str):
+    def set_title(self, title: str) -> None:
         """Update modal title"""
         self.title = title
         self.trigger_update()
 
-    def set_body(self, body: str):
+    def set_body(self, body: str) -> None:
         """Update modal body"""
         self.body = body
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render modal with inline HTML"""
         if not self.show_modal:
             return ""

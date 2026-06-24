@@ -1,7 +1,7 @@
 """File Tree component — file browser with icons and context menu."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -72,8 +72,8 @@ class FileTree(Component):
         event: str = "select_file",
         show_icons: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             nodes=nodes,
             selected=selected,

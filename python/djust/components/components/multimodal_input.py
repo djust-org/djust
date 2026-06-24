@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class MultimodalInput(Component):
@@ -54,8 +55,8 @@ class MultimodalInput(Component):
         file_accept: str = "*/*",
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             event=event,

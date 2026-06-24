@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class StreamingText(Component):
@@ -48,8 +49,8 @@ class StreamingText(Component):
         auto_scroll: bool = True,
         cursor: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             stream_event=stream_event,
             text=text,

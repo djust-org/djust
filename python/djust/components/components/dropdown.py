@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Dropdown(Component):
@@ -22,8 +23,8 @@ class Dropdown(Component):
         toggle_event: str = "toggle_dropdown",
         variant: str = "default",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             label=label,
             content=content,

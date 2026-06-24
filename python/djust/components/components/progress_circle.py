@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ProgressCircle(Component):
@@ -42,8 +43,8 @@ class ProgressCircle(Component):
         color: str = "primary",
         show_value: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             value=value,
             size=size,

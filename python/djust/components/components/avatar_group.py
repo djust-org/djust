@@ -1,7 +1,7 @@
 """Avatar Group component for stacked overlapping avatars with overflow count."""
 
 import html
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from djust import Component
 
@@ -50,8 +50,8 @@ class AvatarGroup(Component):
         max_display: int = 5,
         size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             users=users,
             max_display=max_display,

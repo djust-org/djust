@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class ExportDialog(Component):
@@ -40,16 +41,16 @@ class ExportDialog(Component):
 
     def __init__(
         self,
-        formats: list = None,
-        columns: list = None,
+        formats: Optional[list] = None,
+        columns: Optional[list] = None,
         event: str = "export",
         open: bool = False,
         close_event: str = "close_export",
         selected_format: str = "",
         title: str = "Export Data",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             formats=formats,
             columns=columns,

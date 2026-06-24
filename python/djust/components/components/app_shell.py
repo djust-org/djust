@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class AppShell(Component):
@@ -20,8 +21,8 @@ class AppShell(Component):
         content: str = "",
         variant: str = "default",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             sidebar=sidebar,
             header=header,

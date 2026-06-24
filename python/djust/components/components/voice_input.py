@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class VoiceInput(Component):
@@ -41,8 +42,8 @@ class VoiceInput(Component):
         lang: str = "en-US",
         continuous: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             event=event,
             lang=lang,

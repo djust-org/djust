@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ThinkingIndicator(Component):
@@ -43,8 +44,8 @@ class ThinkingIndicator(Component):
         status: str = "thinking",
         label: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(status=status, label=label, custom_class=custom_class, **kwargs)
         self.status = status
         self.label = label

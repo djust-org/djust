@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class VirtualList(Component):
@@ -17,14 +18,14 @@ class VirtualList(Component):
 
     def __init__(
         self,
-        items: list = None,
+        items: Optional[list] = None,
         total: int = 0,
         page: int = 1,
         page_size: int = 20,
         load_more_event: str = "load_more",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             total=total,

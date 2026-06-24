@@ -1,7 +1,7 @@
 """Tour / Onboarding Guide component — product tour with spotlight highlights."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -56,8 +56,8 @@ class Tour(Component):
         show_progress: bool = True,
         show_skip: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             steps=steps,
             active=active,

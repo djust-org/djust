@@ -11,6 +11,8 @@ Usage::
 """
 
 from .base import LiveComponent, TypedState
+from typing import Any
+
 
 __all__ = ["Carousel"]
 
@@ -25,7 +27,7 @@ class Carousel(LiveComponent):
     class Meta:
         event = "carousel_go"
 
-    def _handle_event(self, state, value="", **kwargs):
+    def _handle_event(self, state: "State", value: str = "", **kwargs: Any) -> None:
         try:
             state.active = int(value) % state.total if state.total > 0 else 0
         except (ValueError, TypeError):

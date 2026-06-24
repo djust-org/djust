@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Combobox(Component):
@@ -22,13 +23,13 @@ class Combobox(Component):
         name: str = "",
         label: str = "",
         value: str = "",
-        options: list = None,
+        options: Optional[list] = None,
         event: str = "",
         search_event: str = "",
         placeholder: str = "Search...",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             label=label,

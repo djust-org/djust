@@ -6,7 +6,7 @@ Provides card/panel layout with optional title, body, footer, and image.
 
 from typing import Dict, Any
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 
 class CardComponent(LiveComponent):
@@ -35,7 +35,7 @@ class CardComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize card state"""
         self.title = kwargs.get("title", "")
         self.body = kwargs.get("body", "")
@@ -51,7 +51,7 @@ class CardComponent(LiveComponent):
             "image": self.image,
         }
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render card with inline HTML"""
         from ...config import config
 

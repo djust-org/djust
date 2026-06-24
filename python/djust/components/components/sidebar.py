@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Sidebar(Component):
@@ -16,14 +17,14 @@ class Sidebar(Component):
 
     def __init__(
         self,
-        items: list = None,
+        items: Optional[list] = None,
         title: str = "",
         collapsed: bool = False,
         content: str = "",
         toggle_event: str = "toggle_sidebar",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             title=title,

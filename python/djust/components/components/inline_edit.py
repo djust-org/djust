@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class InlineEdit(Component):
@@ -22,8 +23,8 @@ class InlineEdit(Component):
         editing: bool = False,
         edit_event: str = "inline_edit",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             value=value,
             name=name,

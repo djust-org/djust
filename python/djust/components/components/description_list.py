@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class DescriptionList(Component):
@@ -14,11 +15,11 @@ class DescriptionList(Component):
 
     def __init__(
         self,
-        items: list = None,
+        items: Optional[list] = None,
         layout: str = "vertical",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             layout=layout,

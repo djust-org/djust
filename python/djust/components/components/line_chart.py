@@ -1,7 +1,7 @@
 """Line Chart component — SVG line/area chart with multiple series."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -39,8 +39,8 @@ class LineChart(Component):
 
     def __init__(
         self,
-        series: list = None,
-        labels: list = None,
+        series: Optional[list] = None,
+        labels: Optional[list] = None,
         title: Optional[str] = None,
         width: int = 400,
         height: int = 250,
@@ -48,8 +48,8 @@ class LineChart(Component):
         show_dots: bool = True,
         show_legend: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             series=series,
             labels=labels,

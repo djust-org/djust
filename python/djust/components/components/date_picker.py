@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class DatePicker(Component):
@@ -26,8 +27,8 @@ class DatePicker(Component):
         next_event: str = "date_next_month",
         select_event: str = "date_select",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             label=label,

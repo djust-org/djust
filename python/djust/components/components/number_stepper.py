@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any, Optional
 
 
 class NumberStepper(Component):
@@ -20,14 +21,14 @@ class NumberStepper(Component):
         self,
         name: str = "",
         value: int = 0,
-        min_val: int = None,
-        max_val: int = None,
+        min_val: Optional[int] = None,
+        max_val: Optional[int] = None,
         step: int = 1,
         event: str = "",
         label: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             value=value,

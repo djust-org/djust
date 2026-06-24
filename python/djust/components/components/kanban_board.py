@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class KanbanBoard(Component):
@@ -15,12 +16,12 @@ class KanbanBoard(Component):
 
     def __init__(
         self,
-        columns: list = None,
+        columns: Optional[list] = None,
         move_event: str = "kanban_move",
         add_card_event: str = "kanban_add_card",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             columns=columns,
             move_event=move_event,

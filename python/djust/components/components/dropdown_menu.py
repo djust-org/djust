@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class DropdownMenu(Component):
@@ -38,13 +39,13 @@ class DropdownMenu(Component):
     def __init__(
         self,
         label: str = "Menu",
-        items: list = None,
+        items: Optional[list] = None,
         open: bool = False,
         toggle_event: str = "toggle_menu",
         align: str = "left",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             label=label,
             items=items,

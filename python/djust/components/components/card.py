@@ -1,7 +1,7 @@
 """Card component for content containers."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -82,8 +82,8 @@ class Card(Component):
         action: Optional[str] = None,
         data: Optional[dict] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             content=content,
             header=header,

@@ -1,7 +1,7 @@
 """Badge component for status and priority indicators."""
 
 import html
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from djust import Component
 
@@ -102,8 +102,8 @@ class Badge(Component):
         variant: str = "default",
         size: str = "md",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             label=label, variant=variant, size=size, custom_class=custom_class, **kwargs
         )

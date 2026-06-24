@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class Avatar(Component):
@@ -22,8 +23,8 @@ class Avatar(Component):
         size: str = "md",
         status: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             src=src,
             alt=alt,

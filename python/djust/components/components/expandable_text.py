@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class ExpandableText(Component):
@@ -57,8 +58,8 @@ class ExpandableText(Component):
         more_label: str = "Read more",
         less_label: str = "Show less",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             text=text,
             max_lines=max_lines,

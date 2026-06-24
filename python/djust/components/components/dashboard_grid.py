@@ -1,7 +1,7 @@
 """Dashboard Grid component — CSS Grid with draggable, resizable panels."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -48,8 +48,8 @@ class DashboardGrid(Component):
         move_event: str = "dashboard_move",
         resize_event: str = "dashboard_resize",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             panels=panels,
             columns=columns,

@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class EmptyState(Component):
@@ -22,8 +23,8 @@ class EmptyState(Component):
         action_label: str = "",
         action_event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             title=title,
             description=description,

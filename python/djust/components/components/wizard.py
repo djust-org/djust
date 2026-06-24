@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Wizard(Component):
@@ -36,13 +37,13 @@ class Wizard(Component):
 
     def __init__(
         self,
-        steps: list = None,
+        steps: Optional[list] = None,
         active: str = "",
         event: str = "set_step",
         show_numbers: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             steps=steps,
             active=active,

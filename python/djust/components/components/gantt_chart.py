@@ -1,7 +1,7 @@
 """Gantt Chart component — timeline bar chart for project management."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -54,8 +54,8 @@ class GanttChart(Component):
         row_height: int = 32,
         width: int = 600,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             tasks=tasks,
             title=title,

@@ -6,7 +6,7 @@ Provides small labels/badges for counts, statuses, and categories.
 
 from typing import Dict, Any
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 
 class BadgeComponent(LiveComponent):
@@ -46,7 +46,7 @@ class BadgeComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize badge state"""
         self.text = kwargs.get("text", "")
         self.variant = kwargs.get(
@@ -67,17 +67,17 @@ class BadgeComponent(LiveComponent):
             "visible": self.visible,
         }
 
-    def dismiss(self):
+    def dismiss(self) -> None:
         """Dismiss the badge"""
         self.visible = False
         self.trigger_update()
 
-    def set_text(self, text: str):
+    def set_text(self, text: str) -> None:
         """Update badge text"""
         self.text = text
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render badge with inline HTML"""
         if not self.visible:
             return ""

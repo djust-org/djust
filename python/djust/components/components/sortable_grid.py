@@ -1,7 +1,7 @@
 """Sortable Grid component — 2D drag-and-drop grid."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -44,8 +44,8 @@ class SortableGrid(Component):
         gap: str = "0.75rem",
         disabled: bool = False,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             columns=columns,

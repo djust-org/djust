@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from typing import Any
 
 
 class ThemeToggle(Component):
@@ -16,8 +17,8 @@ class ThemeToggle(Component):
         current: str = "system",
         event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             current=current,
             event=event,

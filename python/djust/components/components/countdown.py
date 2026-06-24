@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Countdown(Component):
@@ -36,10 +37,10 @@ class Countdown(Component):
         event: str = "",
         show_days: bool = True,
         show_seconds: bool = True,
-        labels: dict = None,
+        labels: Optional[dict] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             target=target,
             event=event,

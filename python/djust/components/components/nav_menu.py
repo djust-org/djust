@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class NavMenu(Component):
@@ -16,13 +17,13 @@ class NavMenu(Component):
 
     def __init__(
         self,
-        items: list = None,
+        items: Optional[list] = None,
         brand: str = "",
         brand_href: str = "/",
         content: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             brand=brand,

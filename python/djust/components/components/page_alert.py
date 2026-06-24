@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any
 
 
 class PageAlert(Component):
@@ -40,8 +41,8 @@ class PageAlert(Component):
         dismiss_event: str = "dismiss_alert",
         icon: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             message=message,
             type=type,

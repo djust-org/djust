@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class Breadcrumb(Component):
@@ -13,10 +14,10 @@ class Breadcrumb(Component):
 
     def __init__(
         self,
-        items: list = None,
+        items: Optional[list] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             custom_class=custom_class,

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from typing import Any, Optional
 
 
 class ImportWizard(Component):
@@ -37,13 +38,13 @@ class ImportWizard(Component):
     def __init__(
         self,
         accepted_formats: str = ".csv",
-        model_fields: list = None,
+        model_fields: Optional[list] = None,
         event: str = "import_data",
         step: str = "upload",
         upload_event: str = "upload_file",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             accepted_formats=accepted_formats,
             model_fields=model_fields,
