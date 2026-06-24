@@ -1421,19 +1421,34 @@ class WSConsumerTransport:
         ``close(code=4403)`` the WS bespoke ``handle_mount`` performed
         (websocket.py:2344-2399).
 
-        ``verdict`` is a marker string describing the block kind:
-          * ``"permission_denied"`` → close UNCONDITIONALLY (websocket.py:2345),
-            matching the WS bespoke PermissionDenied branch;
+        ``verdict`` is a marker string describing the block kind. ALL verdicts
+        gate the ``close(4403)`` on ``not consumer._mounting_in_batch`` (#291 /
+        #1780, #1922): inside a ``mount_batch`` the socket is SHARED across
+        sibling mounts, so closing it on ANY single view's blocking verdict —
+        login redirect OR object/permission denial — collaterally drops the
+        siblings (the #291 multiplexed-path failure). The denial still holds
+        regardless: the runtime already sent the verdict frame (error /
+        navigate) and cleared ``view_instance`` BEFORE this hook runs, so the
+        blocked view is not mounted; only the socket-level close is suppressed
+        in the batch case (the denied view simply reports in ``failed[]`` /
+        ``navigate[]``, exactly as the redirect case already did).
+
+          * ``"permission_denied"`` → close GATED on ``not mounting_in_batch``
+            (#1922 — was unconditional, websocket.py:2345; over-closed the
+            shared socket on a batched object/perm denial);
           * ``"redirect"`` / ``"hook_redirect"`` → close GATED on
             ``not consumer._mounting_in_batch`` (websocket.py:2368 / 2398) so a
             batched login-required view does NOT drop the shared socket's sibling
             mounts (#291 / #1780).
+
+        A SINGLE (non-batch) blocking mount still closes 4403 for every verdict
+        (``mounting_in_batch`` is ``False`` outside a batch).
         """
         consumer = self._consumer
-        if verdict == "permission_denied":
-            await consumer.close(code=4403)
-            return
-        # redirect / hook_redirect — gate on the batch flag (#291 / #1780).
+        # #1922 / #291: gate the close on the batch flag for ALL verdicts so a
+        # single denied/redirected view inside a shared-socket mount_batch does
+        # not kill the sibling mounts. The denial itself is already enforced
+        # upstream (verdict frame sent + view_instance cleared).
         if not self.mounting_in_batch:
             await consumer.close(code=4403)
 

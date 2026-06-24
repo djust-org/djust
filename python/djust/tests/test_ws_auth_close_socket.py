@@ -75,12 +75,50 @@ class _PublicView(LiveView):
         self.ok = True
 
 
+class _ObjPermDeniedView(LiveView):
+    """An object-scoped view that ALWAYS denies object permission (#1922).
+
+    Mirrors the ``_DocAPIView`` / ``_DocSSEView`` shape from
+    ``test_object_perm_api_sse_paths.py``: a custom ``get_object`` +
+    ``has_object_permission`` activates the ADR-017 object-permission lifecycle,
+    and ``has_object_permission`` returns ``False`` so the runtime mount path
+    raises ``PermissionDenied`` post-mount (runtime.py:2215) → sends an
+    ``error`` (``permission_denied``) frame → calls
+    ``_finalize_mount_auth("permission_denied")`` → clears ``view_instance``.
+
+    Pre-#1922 ``WSConsumerTransport.finalize_mount_auth`` closed ``4403``
+    UNCONDITIONALLY on this verdict, so a batched denial dropped the SHARED
+    socket and killed the sibling mounts (#291 multiplexed-path failure).
+
+    ``login_required = False`` for the same S005 test-isolation reason as
+    ``_PublicView`` (this is a module-level subclass walked by S005).
+    """
+
+    login_required = False
+
+    template = (
+        '<div dj-view="djust.tests.test_ws_auth_close_socket._ObjPermDeniedView"'
+        ' dj-id="0">secret</div>'
+    )
+
+    def mount(self, request, **kwargs):
+        self.loaded = True
+
+    def get_object(self):
+        return type("Obj", (), {"id": 99})()
+
+    def has_object_permission(self, request, obj):
+        return False  # always denied → permission_denied verdict
+
+
 # Ensure the dotted paths resolve for the consumer's import.
 setattr(sys.modules[__name__], "_LoginRequiredView", _LoginRequiredView)
 setattr(sys.modules[__name__], "_PublicView", _PublicView)
+setattr(sys.modules[__name__], "_ObjPermDeniedView", _ObjPermDeniedView)
 
 _VIEW_PATH = f"{__name__}._LoginRequiredView"
 _PUBLIC_PATH = f"{__name__}._PublicView"
+_OBJPERM_PATH = f"{__name__}._ObjPermDeniedView"
 
 
 async def _connect_and_mount(communicator):
@@ -221,4 +259,107 @@ async def test_mount_batch_with_login_view_does_not_close_shared_socket():
         "shared socket did not pong after the batch — it was likely closed "
         f"mid-batch (a websocket.close would suppress the pong); got {pong!r}"
     )
+    await communicator.disconnect()
+
+
+# --------------------------------------------------------------------------- #
+# Object-permission denial: batch gate parity (#1922 / #291-consistency)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.django_db
+@override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__])
+async def test_mount_batch_with_objperm_denied_view_does_not_close_shared_socket():
+    """Regression (#1922 / #291-consistency): an OBJECT-PERMISSION-DENIED view
+    inside a ``mount_batch`` must NOT close the shared socket — the surviving
+    public view mounts, the denied view is reported in ``failed[]``, and the
+    transport stays open for the siblings.
+
+    Pre-#1922 ``finalize_mount_auth`` closed ``4403`` UNCONDITIONALLY on the
+    ``permission_denied`` verdict (it gated only the redirect verdicts on
+    ``not _mounting_in_batch``), so a single batched object-perm denial dropped
+    the SHARED socket and killed the sibling mounts (the #291 multiplexed-path
+    failure). The fix gates the ``permission_denied`` close on
+    ``not mounting_in_batch`` too.
+
+    Channel-layer isolation + deterministic ping→pong openness probe follow the
+    sibling ``..._with_login_view_...`` test (see its docstring for the #1875 /
+    #1830 rationale).
+    """
+    from channels.layers import channel_layers
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    channel_layers.backends.clear()
+
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    connected, _ = await communicator.connect()
+    assert connected
+    try:
+        await communicator.receive_json_from(timeout=2)
+    except Exception:
+        pass
+    await communicator.send_json_to(
+        {
+            "type": "mount_batch",
+            "views": [
+                {"view": _PUBLIC_PATH, "target_id": "pub", "url": "/pub/"},
+                {"view": _OBJPERM_PATH, "target_id": "secret", "url": "/secret/"},
+            ],
+        }
+    )
+    resp = await communicator.receive_json_from(timeout=3)
+    assert resp.get("type") == "mount_batch", f"got {resp!r}"
+    # Public view survived; object-perm-denied view is isolated into failed[].
+    survivor_targets = [v.get("target_id") for v in resp.get("views", [])]
+    failed_targets = [f.get("target_id") for f in resp.get("failed", [])]
+    assert "pub" in survivor_targets, f"public view dropped by a sibling denial: {resp!r}"
+    assert "secret" in failed_targets, f"object-perm-denied view not reported in failed[]: {resp!r}"
+    # The denied object's content must not leak into the batch response.
+    assert "secret" not in str(resp.get("views", [])), (
+        "denied object rendered into a survivor frame"
+    )
+    # The shared socket must still be open (no mid-batch close): a closed socket
+    # cannot pong. Deterministic openness probe, not a wall-clock window.
+    await communicator.send_json_to({"type": "ping"})
+    pong = await communicator.receive_json_from(timeout=3)
+    assert pong.get("type") == "pong", (
+        "shared socket did not pong after a batched object-perm denial — it was "
+        f"likely closed mid-batch (#1922 regression); got {pong!r}"
+    )
+    await communicator.disconnect()
+
+
+@pytest.mark.django_db
+@override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__])
+async def test_single_objperm_denied_mount_still_closes_socket():
+    """Regression guard (#1922): a SINGLE (non-batch) object-permission-denied
+    mount STILL closes the socket (4403) — the batch gate must NOT over-gate the
+    single-mount path. ``_mounting_in_batch`` is ``False`` outside a batch, so the
+    close fires exactly as it did pre-#1922 for the unbatched denial.
+
+    Mirrors ``test_login_required_ws_mount_closes_socket_after_redirect`` but for
+    the object-permission verdict: error frame THEN ``websocket.close`` 4403.
+    """
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    connected, _ = await communicator.connect()
+    assert connected
+    try:
+        await communicator.receive_json_from(timeout=2)
+    except Exception:
+        pass
+    await communicator.send_json_to({"type": "mount", "view": _OBJPERM_PATH})
+
+    err = await communicator.receive_json_from(timeout=2)
+    assert err.get("type") == "error", f"expected an object-perm error frame, got {err!r}"
+
+    # The denial must terminate the transport on the single-mount path.
+    out = await communicator.receive_output(timeout=2)
+    assert out["type"] == "websocket.close", f"socket not closed after object-perm denial: {out!r}"
+    assert out.get("code") == 4403
     await communicator.disconnect()
