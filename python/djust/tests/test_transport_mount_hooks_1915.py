@@ -278,12 +278,18 @@ def test_ws_next_mount_version_distinct_from_next_client_version():
     assert consumer._recovery_html is None, "next_mount_version must NOT arm recovery"
 
 
-def test_sse_next_mount_version_raises_until_wired():
-    """SSE still stamps the raw Rust version inline (runtime.py:1554); the SSE
-    hook is a dormant placeholder that raises until Phase 3.3a routes it."""
+def test_sse_next_mount_version_returns_raw_rust_version():
+    """Phase 3.3a (#1917): SSE ``next_mount_version`` is now IMPLEMENTED — it
+    returns the raw Rust ``render_with_diff()`` version (its ``rust_version`` arg)
+    unchanged, since SSE has no consumer-owned counter (the #1788 unification
+    never reached SSE). Mirrors ``next_client_version`` returning ``rust_version``.
+    """
     transport = SSESessionTransport(_FakeSession())
-    with pytest.raises(NotImplementedError):
-        transport.next_mount_version("<div>x</div>")
+    assert transport.next_mount_version("<div>x</div>", 7) == 7, (
+        "SSE next_mount_version returns the raw Rust version unchanged"
+    )
+    # ``html`` is ignored; only ``rust_version`` matters.
+    assert transport.next_mount_version("<div>different</div>", 42) == 42
 
 
 # --------------------------------------------------------------------------- #
@@ -456,39 +462,77 @@ def _dispatch_mount_source() -> str:
         "dispatch_actor_mount",
         "next_mount_version",
         "on_mount_render_ready",
-        "finalize_mount_auth",
     ],
 )
-def test_dispatch_mount_does_not_call_hook_yet(hook):
-    """DORMANT pin (#1915): Phase 3.2 only DEFINES the hooks; Phase 3.3a wires
-    them. ``dispatch_mount`` must not reference any of the 5 mount hooks yet."""
+def test_dispatch_mount_wires_hook(hook):
+    """WIRED pin (#1917, Phase 3.3a, INVERTS the Phase-3.2 dormant pin):
+    ``dispatch_mount`` now REFERENCES each of these mount hooks (via the
+    getattr-guarded transport call). Load-bearing (#1859): if the wiring is
+    deleted, this goes RED."""
     src = _dispatch_mount_source()
-    assert f".{hook}(" not in src, (
-        f"dispatch_mount must NOT call transport.{hook}() until Phase 3.3a "
-        f"(this PR is DORMANT scaffolding only)"
+    assert hook in src, (
+        f"dispatch_mount must wire transport.{hook}() in Phase 3.3a "
+        f"(the mount hooks are now LIVE, not dormant)"
     )
 
 
-def test_dispatch_mount_still_stamps_raw_rust_version_inline():
-    """Finding C dormant proof: dispatch_mount still stamps the raw Rust version
-    from render_with_diff() inline (NOT via next_mount_version) until 3.3a."""
-    src = _dispatch_mount_source()
-    assert "render_with_diff" in src, "dispatch_mount still renders inline"
-    assert '"version": version' in src, (
-        "dispatch_mount stamps the raw render_with_diff version on the mount frame "
-        "(Finding C: next_mount_version is NOT wired in yet)"
+def test_finalize_mount_auth_wired_into_auth_block():
+    """WIRED pin (#1917, Finding E): ``finalize_mount_auth`` is reached from the
+    runtime auth-block paths via the ``_finalize_mount_auth`` helper, which
+    ``_check_auth`` (permission_denied + redirect) and ``dispatch_mount`` (the
+    run_on_mount_hooks redirect) call. Pins all three verdict call-sites."""
+    from djust.runtime import ViewRuntime
+
+    helper_src = inspect.getsource(ViewRuntime._finalize_mount_auth)
+    assert "finalize_mount_auth" in helper_src, (
+        "_finalize_mount_auth must route through transport.finalize_mount_auth"
     )
-    assert "next_mount_version" not in src, "next_mount_version must not be wired yet"
+    auth_src = inspect.getsource(ViewRuntime._check_auth)
+    assert '_finalize_mount_auth("permission_denied")' in auth_src, (
+        "_check_auth must finalize the permission_denied verdict"
+    )
+    assert '_finalize_mount_auth("redirect")' in auth_src, (
+        "_check_auth must finalize the auth-redirect verdict"
+    )
+    mount_src = _dispatch_mount_source()
+    assert '_finalize_mount_auth("hook_redirect")' in mount_src, (
+        "dispatch_mount must finalize the run_on_mount_hooks redirect verdict"
+    )
 
 
-def test_dispatch_mount_still_refuses_actor_mount():
-    """Finding D dormant proof: dispatch_mount still REFUSES use_actors (it does
-    not yet route through uses_actors_for_mount / dispatch_actor_mount)."""
+def test_dispatch_mount_stamps_version_via_next_mount_version():
+    """Finding C WIRED proof (INVERTS the Phase-3.2 dormant pin): dispatch_mount
+    stamps the mount-frame version via ``next_mount_version`` (NO-ARM), not the
+    raw render_with_diff version inline; and crucially NOT via the arming
+    ``next_client_version`` the event path uses."""
     src = _dispatch_mount_source()
-    assert 'getattr(view_instance, "use_actors", False)' in src, (
-        "dispatch_mount still has the inline use_actors refusal guard"
+    assert "render_with_diff" in src, "dispatch_mount still renders inline (non-actor branch)"
+    assert "next_mount_version" in src, (
+        "Finding C: the mount frame version now routes through next_mount_version (no-arm)"
     )
-    assert "is not supported over SSE" in src, "the actor refusal envelope is still inline"
+    assert "next_client_version" not in src, (
+        "mount must NOT arm recovery via the event-path wire-version helper (Finding C)"
+    )
+
+
+def test_dispatch_mount_routes_actor_mount_not_refuses():
+    """Finding D WIRED proof (INVERTS the Phase-3.2 dormant pin): a WS actor view
+    is now ROUTED through ``dispatch_actor_mount`` (not refused). The SSE refusal
+    (``uses_actors_for_mount`` False) stays — the structured error envelope is
+    only emitted when the transport does NOT support actor mounts."""
+    src = _dispatch_mount_source()
+    assert "dispatch_actor_mount" in src, (
+        "dispatch_mount routes actor views through transport.dispatch_actor_mount"
+    )
+    assert "uses_actors_for_mount" in src, (
+        "the actor branch + the top gate consult transport.uses_actors_for_mount"
+    )
+    # The refusal envelope is preserved (SSE-only path), now gated on the
+    # transport NOT supporting actor mounts rather than unconditional.
+    assert "is not supported over SSE" in src, (
+        "the SSE actor refusal envelope stays (only reached when the transport "
+        "does not support actor mounts)"
+    )
 
 
 def test_bespoke_handle_mount_still_does_work_inline():
