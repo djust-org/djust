@@ -10,7 +10,7 @@ Provides centralized configuration for:
 """
 
 import logging
-from typing import Dict, Any
+from typing import Any, ClassVar, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class LiveViewConfig:
     """
 
     # Default configuration
-    _defaults = {
+    _defaults: ClassVar[Dict[str, Any]] = {
         # Rate limiting for WebSocket events (token bucket)
         "rate_limit": {
             "rate": 100,
@@ -238,11 +238,11 @@ class LiveViewConfig:
         ],
     }
 
-    def __init__(self):
-        self._config = self._defaults.copy()
+    def __init__(self) -> None:
+        self._config: Dict[str, Any] = self._defaults.copy()
         self._load_from_settings()
 
-    def _load_from_settings(self):
+    def _load_from_settings(self) -> None:
         """Load configuration from Django settings if available"""
         try:
             from django.conf import settings
@@ -287,7 +287,7 @@ class LiveViewConfig:
 
             os.environ.setdefault("DJUST_VDOM_TRACE", "1")
 
-    def _validate_config(self):
+    def _validate_config(self) -> None:
         """Validate security-critical config values on startup."""
         valid_modes = ("open", "warn", "strict")
         mode = self._config.get("event_security")
@@ -359,7 +359,7 @@ class LiveViewConfig:
         """
         # Support dot notation for nested keys
         keys = key.split(".")
-        value = self._config
+        value: Any = self._config
 
         for k in keys:
             if isinstance(value, dict):
@@ -371,7 +371,7 @@ class LiveViewConfig:
 
         return value if value is not None else default
 
-    def set(self, key: str, value: Any):
+    def set(self, key: str, value: Any) -> None:
         """
         Set a configuration value.
 
@@ -414,14 +414,15 @@ class LiveViewConfig:
         if framework is None:
             framework = "plain"
 
-        return self.get(f"{framework}.{class_type}", "")
+        result = self.get(f"{framework}.{class_type}", "")
+        return str(result) if result is not None else ""
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset configuration to defaults"""
         self._config = self._defaults.copy()
         self._load_from_settings()
 
-    def update(self, config_dict: Dict[str, Any]):
+    def update(self, config_dict: Dict[str, Any]) -> None:
         """
         Update multiple configuration values at once.
 
@@ -464,6 +465,7 @@ def get_djust_config() -> Dict[str, Any]:
     try:
         from django.conf import settings
 
-        return getattr(settings, "DJUST_CONFIG", {})
+        result: Dict[str, Any] = getattr(settings, "DJUST_CONFIG", {})
+        return result
     except Exception:
         return {}

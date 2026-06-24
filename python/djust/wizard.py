@@ -65,7 +65,7 @@ Several design decisions here work around known djust serialization constraints:
 
 import logging
 import math
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Dict
 
 from .decorators import event_handler
 
@@ -130,9 +130,11 @@ class WizardMixin:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: Any, **kwargs: Any) -> None:
         """Initialise wizard state on first load."""
-        super().mount(request, **kwargs)
+        # WizardMixin is mixed into a LiveView subclass at runtime; the MRO
+        # supplies mount()/get_context_data(). mypy only sees object here.
+        super().mount(request, **kwargs)  # type: ignore[misc]
         self.wizard_step_index: int = 0
         self.wizard_step_data: dict[str, dict[str, Any]] = {}
         self.wizard_step_errors: dict[str, dict[str, list]] = {}
@@ -156,7 +158,7 @@ class WizardMixin:
         }
     )
 
-    def _default_dom_event_for(self, field) -> str:
+    def _default_dom_event_for(self, field: Any) -> str:
         """Pick the correct default ``dom_event`` for a form field's widget.
 
         Click-fired widgets (radio / checkbox / select) commit exactly one
@@ -181,7 +183,9 @@ class WizardMixin:
                     return "dj-change"
         return self.wizard_input_event
 
-    def as_live_field(self, field_name: str, event_name: str = "validate_field", **kwargs) -> str:
+    def as_live_field(
+        self, field_name: str, event_name: str = "validate_field", **kwargs: Any
+    ) -> str:
         """Render a form field as HTML with djust event bindings.
 
         Returns an HTML string containing the widget markup with
@@ -260,9 +264,10 @@ class WizardMixin:
     # Template context
     # ------------------------------------------------------------------
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Inject wizard state into the template context."""
-        context = super().get_context_data(**kwargs)
+        # super() resolves to LiveView.get_context_data() at runtime (mixin MRO).
+        context: Dict[str, Any] = super().get_context_data(**kwargs)  # type: ignore[misc]
 
         # Guard: the Rust bridge may call get_context_data() before mount()
         # initialises instance attributes.  Use getattr() with safe defaults.
@@ -387,7 +392,7 @@ class WizardMixin:
     # ------------------------------------------------------------------
 
     @event_handler()
-    def next_step(self, **kwargs):
+    def next_step(self, **kwargs: Any) -> None:
         """Validate the current step and advance to the next one."""
         if not self._steps or self.wizard_step_index >= len(self._steps) - 1:
             return
@@ -397,13 +402,13 @@ class WizardMixin:
             self.wizard_step_index += 1
 
     @event_handler()
-    def prev_step(self, **kwargs):
+    def prev_step(self, **kwargs: Any) -> None:
         """Go back one step without validation."""
         if self.wizard_step_index > 0:
             self.wizard_step_index -= 1
 
     @event_handler()
-    def go_to_step(self, step_index: int = 0, **kwargs):
+    def go_to_step(self, step_index: int = 0, **kwargs: Any) -> None:
         """Jump to a specific already-completed step for editing.
 
         Only allows jumping to completed steps or the current step to prevent
@@ -415,7 +420,7 @@ class WizardMixin:
             self.wizard_step_index = step_index
 
     @event_handler()
-    def update_step_field(self, field: str = "", value: Any = "", **kwargs):
+    def update_step_field(self, field: str = "", value: Any = "", **kwargs: Any) -> None:
         """Store a single field value for the current step.
 
         Called by dj-change events on form inputs.  The ``field`` parameter
@@ -429,7 +434,9 @@ class WizardMixin:
         self.wizard_step_data[step_name][field] = value
 
     @event_handler()
-    def validate_field(self, field: str = "", field_name: str = "", value: Any = "", **kwargs):
+    def validate_field(
+        self, field: str = "", field_name: str = "", value: Any = "", **kwargs: Any
+    ) -> None:
         """Store a field value triggered by as_live_field() dj-change events.
 
         ``as_live_field()`` generates ``dj-change="validate_field"`` and
@@ -446,7 +453,7 @@ class WizardMixin:
         self.wizard_step_data[step_name][name] = value
 
     @event_handler()
-    def submit_wizard(self, **kwargs):
+    def submit_wizard(self, **kwargs: Any) -> None:
         """Validate all steps and call on_wizard_complete() if everything passes.
 
         Security note: dj-click events can be replayed over the WebSocket so
@@ -492,7 +499,7 @@ class WizardMixin:
     # Hook for subclasses
     # ------------------------------------------------------------------
 
-    def on_wizard_complete(self, step_data: dict[str, Any]):
+    def on_wizard_complete(self, step_data: dict[str, Any]) -> None:
         """Called when the wizard is fully completed and all steps are valid.
 
         Override this in your subclass to persist the collected data.

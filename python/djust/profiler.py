@@ -36,7 +36,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class ProfileMetric:
     samples: List[float] = field(default_factory=list)
     max_samples: int = 100
 
-    def record(self, duration_ms: float):
+    def record(self, duration_ms: float) -> None:
         """Record a timing sample."""
         self.count += 1
         self.total_ms += duration_ms
@@ -121,7 +121,7 @@ class ProfileMetric:
             "std_dev_ms": round(self.std_dev_ms, 3),
         }
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset all metrics."""
         self.count = 0
         self.total_ms = 0.0
@@ -150,7 +150,7 @@ class DjustProfiler:
     OP_COMPRESSION = "compression"
     OP_TEMPLATE_COMPILE = "template_compile"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._enabled = False
         self._metrics: Dict[str, ProfileMetric] = {}
         self._lock = threading.Lock()
@@ -162,12 +162,12 @@ class DjustProfiler:
         # Per-request tracking (thread-local)
         self._request_timings = threading.local()
 
-    def enable(self):
+    def enable(self) -> None:
         """Enable profiling."""
         self._enabled = True
         logger.info("[Profiler] Profiling enabled")
 
-    def disable(self):
+    def disable(self) -> None:
         """Disable profiling."""
         self._enabled = False
         logger.info("[Profiler] Profiling disabled")
@@ -177,7 +177,7 @@ class DjustProfiler:
         """Check if profiling is enabled."""
         return self._enabled
 
-    def record(self, operation: str, duration_ms: float):
+    def record(self, operation: str, duration_ms: float) -> None:
         """
         Record a timing metric.
 
@@ -194,7 +194,7 @@ class DjustProfiler:
             self._metrics[operation].record(duration_ms)
 
     @contextmanager
-    def profile(self, operation: str):
+    def profile(self, operation: str) -> Iterator[None]:
         """
         Context manager for profiling a code block.
 
@@ -213,7 +213,7 @@ class DjustProfiler:
             duration_ms = (time.perf_counter() - start) * 1000
             self.record(operation, duration_ms)
 
-    def start_request(self, request_id: Optional[str] = None):
+    def start_request(self, request_id: Optional[str] = None) -> None:
         """
         Start tracking a new request.
 
@@ -250,7 +250,7 @@ class DjustProfiler:
             "operations": timings["operations"],
         }
 
-    def record_memory(self, state_bytes: int, metadata: Optional[Dict[str, Any]] = None):
+    def record_memory(self, state_bytes: int, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
         Record memory usage sample.
 
@@ -341,14 +341,14 @@ class DjustProfiler:
                 return metric.to_dict()
             return None
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset all metrics."""
         with self._lock:
             self._metrics.clear()
             self._memory_samples.clear()
         logger.info("[Profiler] Metrics reset")
 
-    def reset_metric(self, operation: str):
+    def reset_metric(self, operation: str) -> None:
         """Reset metrics for a specific operation."""
         with self._lock:
             if operation in self._metrics:
@@ -359,7 +359,7 @@ class DjustProfiler:
 profiler = DjustProfiler()
 
 
-def profile(operation: str):
+def profile(operation: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to profile a function or method.
 
@@ -374,9 +374,9 @@ def profile(operation: str):
                 ...
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not profiler.is_enabled:
                 return func(*args, **kwargs)
 
@@ -403,10 +403,10 @@ class ProfilerMiddleware:
         ]
     """
 
-    def __init__(self, get_response):
+    def __init__(self, get_response: Callable[..., Any]) -> None:
         self.get_response = get_response
 
-    def __call__(self, request):
+    def __call__(self, request: Any) -> Any:
         if not profiler.is_enabled:
             return self.get_response(request)
 
@@ -424,7 +424,7 @@ class ProfilerMiddleware:
 
 
 # Auto-enable profiler in DEBUG mode
-def auto_configure():
+def auto_configure() -> None:
     """Auto-configure profiler based on Django settings."""
     try:
         from django.conf import settings

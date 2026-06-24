@@ -58,18 +58,22 @@ def _normalise_target(
     to: Optional[str] = None,
     inner: Optional[str] = None,
     closest: Optional[str] = None,
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Build the target kwargs dict.
 
     At most one of ``to`` / ``inner`` / ``closest`` may be supplied; if
     none is set the command targets the event origin element itself.
+
+    Returns ``Dict[str, Any]`` (not ``Dict[str, str]``): callers extend the
+    dict with non-string op args — ``time`` (int), ``attr`` (list), ``detail``
+    (dict), ``bubbles`` (bool) — before passing it to ``_append``.
     """
     supplied = [k for k in ("to", "inner", "closest") if locals()[k]]
     if len(supplied) > 1:
         raise ValueError(
             f"JS commands accept at most one of to=, inner=, closest= — got {', '.join(supplied)}"
         )
-    out: Dict[str, str] = {}
+    out: Dict[str, Any] = {}
     if to:
         out["to"] = to
     if inner:
@@ -328,7 +332,7 @@ class JSChain:
         """
         from .security import escape_json_for_script
 
-        return mark_safe(escape_json_for_script(self.to_json()))
+        return str(mark_safe(escape_json_for_script(self.to_json())))
 
 
 class _JSFactory:
@@ -345,37 +349,37 @@ class _JSFactory:
 
     # The factory's methods mirror JSChain's in both signature and
     # semantics — they just start from an empty chain.
-    def show(self, *args, **kwargs) -> JSChain:
+    def show(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().show(*args, **kwargs)
 
-    def hide(self, *args, **kwargs) -> JSChain:
+    def hide(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().hide(*args, **kwargs)
 
-    def toggle(self, *args, **kwargs) -> JSChain:
+    def toggle(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().toggle(*args, **kwargs)
 
-    def add_class(self, *args, **kwargs) -> JSChain:
+    def add_class(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().add_class(*args, **kwargs)
 
-    def remove_class(self, *args, **kwargs) -> JSChain:
+    def remove_class(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().remove_class(*args, **kwargs)
 
-    def transition(self, *args, **kwargs) -> JSChain:
+    def transition(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().transition(*args, **kwargs)
 
-    def set_attr(self, *args, **kwargs) -> JSChain:
+    def set_attr(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().set_attr(*args, **kwargs)
 
-    def remove_attr(self, *args, **kwargs) -> JSChain:
+    def remove_attr(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().remove_attr(*args, **kwargs)
 
-    def focus(self, *args, **kwargs) -> JSChain:
+    def focus(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().focus(*args, **kwargs)
 
-    def dispatch(self, *args, **kwargs) -> JSChain:
+    def dispatch(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().dispatch(*args, **kwargs)
 
-    def push(self, *args, **kwargs) -> JSChain:
+    def push(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().push(*args, **kwargs)
 
 

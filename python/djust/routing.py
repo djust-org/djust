@@ -191,12 +191,13 @@ def live_session(
         new_pattern = path(django_route, pattern.callback, pattern.default_args, pattern.name)
         result.append(new_pattern)
 
-    # Store route map entries for the template tag to emit
-    if not hasattr(live_session, "_route_maps"):
-        live_session._route_maps = {}
-
+    # Store route map entries for the template tag to emit. ``live_session`` is
+    # a module-level function used as an attribute namespace here; ``setattr`` /
+    # ``getattr`` keep the dynamic-attribute access type-clean.
+    route_maps: Dict[str, Any] = getattr(live_session, "_route_maps", {})
     session_key = session_name or prefix
-    live_session._route_maps[session_key] = route_map_entries
+    route_maps[session_key] = route_map_entries
+    setattr(live_session, "_route_maps", route_maps)
 
     return result
 
@@ -213,7 +214,8 @@ def _resolve_view_class(pattern: URLPattern) -> Optional[type]:
     if cb is None:
         return None
     if hasattr(cb, "view_class"):
-        return cb.view_class
+        view_class: Optional[type] = cb.view_class
+        return view_class
     wrapped = getattr(cb, "__wrapped__", None)
     if wrapped is not None:
         return getattr(wrapped, "view_class", None)
@@ -292,9 +294,9 @@ def _pattern_route(pattern: Any) -> str:
     """
     p = pattern.pattern
     if isinstance(p, RegexPattern):
-        return p._regex.lstrip("^").rstrip("$")
+        return str(p._regex).lstrip("^").rstrip("$")
     if isinstance(p, RoutePattern):
-        return p._route
+        return str(p._route)
     return str(p).lstrip("^").rstrip("$")
 
 
@@ -479,12 +481,16 @@ def get_route_map_script(request: Any = None) -> str:
     # user-derived data into a <script> body — that WOULD be an XSS surface.)
     nonce = get_csp_nonce(request)
     if nonce:
-        return format_html(
-            '<script nonce="{}">window.djust=window.djust||{{}};window.djust._routeMap={};</script>',
-            nonce,
+        return str(
+            format_html(
+                '<script nonce="{}">window.djust=window.djust||{{}};window.djust._routeMap={};</script>',
+                nonce,
+                mark_safe(route_json),  # developer-defined URL config; see safety note above
+            )
+        )
+    return str(
+        format_html(
+            "<script>window.djust=window.djust||{{}};window.djust._routeMap={};</script>",
             mark_safe(route_json),  # developer-defined URL config; see safety note above
         )
-    return format_html(
-        "<script>window.djust=window.djust||{{}};window.djust._routeMap={};</script>",
-        mark_safe(route_json),  # developer-defined URL config; see safety note above
     )

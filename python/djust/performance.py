@@ -9,7 +9,7 @@ timing breakdowns.
 import time
 import threading
 import functools
-from typing import Dict, List, Any, Optional, Callable
+from typing import Any, Callable, Dict, Iterator, List, Optional
 from dataclasses import dataclass, field
 from contextlib import contextmanager
 
@@ -32,13 +32,13 @@ class TimingNode:
         self.duration_ms = (self.end_time - self.start_time) * 1000
         return self.duration_ms
 
-    def add_child(self, name: str, **metadata) -> "TimingNode":
+    def add_child(self, name: str, **metadata: Any) -> "TimingNode":
         """Add a child timing node."""
         child = TimingNode(name=name, start_time=time.perf_counter(), metadata=metadata)
         self.children.append(child)
         return child
 
-    def add_warning(self, warning_type: str, message: str, **details):
+    def add_warning(self, warning_type: str, message: str, **details: Any) -> None:
         """Add a performance warning to this node."""
         self.warnings.append({"type": warning_type, "message": message, **details})
 
@@ -60,12 +60,12 @@ class TimingNode:
 class QueryTracker:
     """Tracks database queries during request execution."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.queries: List[Dict[str, Any]] = []
         self._original_debug_cursor = None
         self._tracking = False
 
-    def start_tracking(self):
+    def start_tracking(self) -> None:
         """Start tracking database queries."""
         if self._tracking:
             return
@@ -156,7 +156,7 @@ class QueryTracker:
 class MemoryTracker:
     """Tracks memory usage during request execution."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.initial_memory = None
         self.peak_memory = None
         self.final_memory = None
@@ -170,7 +170,7 @@ class MemoryTracker:
         except ImportError:
             pass  # psutil not installed; memory tracking disabled
 
-    def start_tracking(self):
+    def start_tracking(self) -> None:
         """Start tracking memory usage."""
         if not self.enabled:
             return
@@ -185,7 +185,7 @@ class MemoryTracker:
         except ImportError:
             self.enabled = False
 
-    def update_peak(self):
+    def update_peak(self) -> None:
         """Update peak memory usage."""
         if not self.enabled:
             return
@@ -233,13 +233,13 @@ class PerformanceTracker:
         return getattr(cls._thread_local, "tracker", None)
 
     @classmethod
-    def set_current(cls, tracker: Optional["PerformanceTracker"]):
+    def set_current(cls, tracker: Optional["PerformanceTracker"]) -> None:
         """Set the current performance tracker for this thread."""
         cls._thread_local.tracker = tracker
 
-    def __init__(self):
-        self.root_node = None
-        self.current_node = None
+    def __init__(self) -> None:
+        self.root_node: Optional[TimingNode] = None
+        self.current_node: Optional[TimingNode] = None
         self.query_tracker = QueryTracker()
         self.memory_tracker = MemoryTracker()
         self.context_size = 0
@@ -259,7 +259,7 @@ class PerformanceTracker:
         return node
 
     @contextmanager
-    def track(self, operation: str, **metadata):
+    def track(self, operation: str, **metadata: Any) -> Iterator["TimingNode"]:
         """Context manager for tracking an operation."""
         node = self.start(operation)
         node.metadata.update(metadata)
@@ -340,7 +340,7 @@ class PerformanceTracker:
                     )
 
             # Move back to parent node
-            if self.current_node and self.current_node.name == operation:
+            if self.root_node and self.current_node and self.current_node.name == operation:
                 # Find parent node
                 parent = self._find_parent_node(self.root_node, self.current_node)
                 self.current_node = parent
@@ -359,7 +359,7 @@ class PerformanceTracker:
 
         return None
 
-    def track_context_size(self, context: Dict[str, Any]):
+    def track_context_size(self, context: Dict[str, Any]) -> None:
         """Track the size of the context data.
 
         Uses key count and shallow getsizeof instead of str(context) to avoid
@@ -382,7 +382,9 @@ class PerformanceTracker:
         except Exception:
             self.context_size = 0
 
-    def track_patches(self, patch_count: int, patches: Optional[List[Dict[str, Any]]] = None):
+    def track_patches(
+        self, patch_count: int, patches: Optional[List[Dict[str, Any]]] = None
+    ) -> None:
         """Track the number of patches generated and provide actionable recommendations.
 
         Args:
@@ -520,12 +522,12 @@ class PerformanceTracker:
 
 
 # Decorator for tracking function performance
-def track_performance(operation: str):
+def track_performance(operation: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to track performance of a function."""
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             tracker = PerformanceTracker.get_current()
             if not tracker:
                 return func(*args, **kwargs)
@@ -534,7 +536,7 @@ def track_performance(operation: str):
                 return func(*args, **kwargs)
 
         @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             tracker = PerformanceTracker.get_current()
             if not tracker:
                 return await func(*args, **kwargs)
