@@ -1112,28 +1112,67 @@ class TestMountAsyncAndPushDrain:
         """``start_async`` scheduled in ``mount()`` is dispatched after the mount
         frame (#1280): the background callback runs and updates state.
 
+        Deflake (#1931, #1830/#1815 family): the dispatched callback runs
+        fire-and-forget in its own ``asyncio.ensure_future`` task that ITSELF
+        awaits a ``sync_to_async`` thread-pool round-trip before setting
+        ``value=42``. The original test bounded-polled a fixed 10 ``sleep(0)``
+        yields for that to land — a wall-clock race the saturated ``-n auto``
+        loop lost intermittently (the scheduler can fail to run the task within
+        the bound). We instead OWN the completion: capture the exact task handle
+        the runtime spawns via ``ensure_future`` and ``await`` it, so completion
+        is deterministic regardless of scheduler load — no timing bound.
+
         Gate-off (#1468): delete the ``self._dispatch_async_work(None)`` call at
-        the end of ``dispatch_mount`` → ``_async_tasks`` stays queued, the callback
-        never runs, ``view.value`` stays 0 → this FAILS.
+        the end of ``dispatch_mount`` → ``_async_tasks`` stays queued, no task is
+        spawned, nothing to await, ``view.value`` stays 0 → this FAILS.
         """
         import asyncio
+        from unittest.mock import patch
+
+        from djust import runtime as runtime_module
 
         view = _MountPushAsyncView()
         runtime, _ = _runtime_with_view(view)
 
-        await runtime.dispatch_mount(
-            {
-                "type": "mount",
-                "view": "djust.tests.test_transport_behavioral_parity._MountPushAsyncView",
-                "params": {},
-                "url": "/p/",
-            }
+        # Capture the actual async-work task handle the runtime spawns so we can
+        # await it directly — a deterministic completion signal, NOT a bounded
+        # poll racing the scheduler. The runtime spawns the background callback
+        # via ``asyncio.ensure_future(self._execute_async_task(...))`` inside
+        # ``_dispatch_async_work``; we wrap that primitive and keep only the
+        # ``_execute_async_task`` task (``_flush_push_events`` also spawns a
+        # fire-and-forget send via the same primitive — that one is NOT the
+        # async-work task and must be excluded so the gate-off below is sharp).
+        async_work_tasks: List[asyncio.Future] = []
+        real_ensure_future = asyncio.ensure_future
+
+        def _capturing_ensure_future(coro_or_future, *args, **kwargs):
+            fut = real_ensure_future(coro_or_future, *args, **kwargs)
+            name = getattr(getattr(coro_or_future, "cr_code", None), "co_name", "")
+            if name == "_execute_async_task":
+                async_work_tasks.append(fut)
+            return fut
+
+        with patch.object(runtime_module.asyncio, "ensure_future", _capturing_ensure_future):
+            await runtime.dispatch_mount(
+                {
+                    "type": "mount",
+                    "view": "djust.tests.test_transport_behavioral_parity._MountPushAsyncView",
+                    "params": {},
+                    "url": "/p/",
+                }
+            )
+
+        # The dispatch must have spawned the start_async() background task
+        # (gate-off #1468: with the ``_dispatch_async_work(None)`` call removed
+        # from dispatch_mount, ``_execute_async_task`` is never spawned → empty
+        # list → this assertion fails before we even reach the value check).
+        assert async_work_tasks, (
+            "dispatch_mount must spawn the start_async() callback as an "
+            "_execute_async_task via ensure_future (#1280); "
+            "_dispatch_async_work(None) was not called"
         )
-        # The async task runs in its own ensure_future; give it a turn to complete.
-        for _ in range(10):
-            if getattr(view, "value", 0) == 42:
-                break
-            await asyncio.sleep(0)
+        # Await the REAL task handle(s) to completion — deterministic, no poll.
+        await asyncio.gather(*async_work_tasks)
 
         assert view.value == 42, (
             "start_async() scheduled in mount() must be dispatched after the mount "
