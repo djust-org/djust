@@ -285,6 +285,9 @@ class TestDjustSSEEventViewPost:
 
         # Post-#1887 the /event/ endpoint dispatches through the shared runtime
         # (``session.runtime.dispatch_event``) with the WS-shaped event frame.
+        # Post-#1891 the frame also carries a top-level ``ref`` (the runtime reads
+        # it from the top level to echo it); ``ref`` is ``None`` when the body
+        # omits one, matching ``data.get("ref")``.
         session.runtime.dispatch_event = AsyncMock(return_value=None)
         response = await view.post(request, session_id=session.session_id)
 
@@ -292,7 +295,33 @@ class TestDjustSSEEventViewPost:
         data = json.loads(response.content)
         assert data == {"ok": True}
         session.runtime.dispatch_event.assert_called_once_with(
-            {"type": "event", "event": "increment", "params": {}}
+            {"type": "event", "event": "increment", "params": {}, "ref": None}
+        )
+
+    @pytest.mark.asyncio
+    async def test_forwards_ref_to_dispatch_event(self):
+        """The /event/ alias forwards a client-sent top-level ``ref`` into the
+        dispatch frame so the runtime can echo it (#560 ref echo, #1891).
+
+        Before #1891 the rebuild was ``{type,event,params}`` and dropped ``ref``,
+        so the end-to-end echo worked only via the ``/message/`` endpoint."""
+        session = make_session()
+        session.view_instance = MagicMock()
+
+        request = self.factory.post(
+            f"/djust/sse/{session.session_id}/event/",
+            data=json.dumps({"event": "increment", "params": {"a": 1}, "ref": 42}),
+            content_type="application/json",
+        )
+        _attach_owner(request)
+        view = DjustSSEEventView()
+
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
+
+        assert response.status_code == 200
+        session.runtime.dispatch_event.assert_called_once_with(
+            {"type": "event", "event": "increment", "params": {"a": 1}, "ref": 42}
         )
 
 

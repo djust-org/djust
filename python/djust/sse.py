@@ -597,6 +597,15 @@ class DjustSSEEventView(View):
 
         event_name = body.get("event")
         params = body.get("params") or {}
+        # Forward the client-sent ``ref`` (#560 ref echo, ADR-022 Iter 2 Phase
+        # 2.0; #1891). The runtime's ``_dispatch_event_render`` reads ``ref`` from
+        # the TOP LEVEL of the data dict (runtime.py:1489) to echo it on the noop /
+        # update frame so the client can match responses to requests. The original
+        # ``{type,event,params}`` rebuild dropped it, so the end-to-end ref echo
+        # worked via the SSE ``/message/`` endpoint (which forwards the raw body)
+        # but NOT via this ``/event/`` alias. Carry it through verbatim — the
+        # runtime coerces it to int / None, so no validation is needed here.
+        ref = body.get("ref")
 
         if not event_name:
             return JsonResponse({"error": "Missing 'event' field in request body"}, status=400)
@@ -620,7 +629,7 @@ class DjustSSEEventView(View):
         # so this request is the session owner's.
         session._event_request = request
         await session.runtime.dispatch_event(
-            {"type": "event", "event": event_name, "params": params}
+            {"type": "event", "event": event_name, "params": params, "ref": ref}
         )
         return JsonResponse({"ok": True})
 
