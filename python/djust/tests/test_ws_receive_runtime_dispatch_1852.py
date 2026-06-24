@@ -378,12 +378,13 @@ class TestWSOnlyFramesPreserved:
 
     @pytest.mark.django_db
     @pytest.mark.asyncio
-    async def test_event_still_handled_by_ws_handle_event(self, monkeypatch):
-        """``event`` is a runtime-owned verb that is DELIBERATELY NOT routed
-        through the chokepoint in T1-B (the WS handle_event carries ~16 WS-only
-        behaviors). Pin that an event does NOT go through dispatch_message and
-        still produces the correct patch — guards against an over-eager future
-        change routing ``event`` before the runtime grows those hooks.
+    async def test_event_routes_through_runtime_dispatch_message(self, monkeypatch):
+        """``event`` is now a runtime-owned verb (#1907 THE FLIP): ``receive()``
+        routes it through the single ``ViewRuntime.dispatch_message`` chokepoint,
+        NOT the deleted bespoke ``_handle_event_inner``. Pin that an event DOES go
+        through dispatch_message exactly once and still produces the correct render
+        frame — the inverse of the pre-flip pin, and the load-bearing proof that
+        the convergence landed.
         """
         from django.test import override_settings
 
@@ -406,13 +407,14 @@ class TestWSOnlyFramesPreserved:
             )
             frame = await _receive_until(communicator, "patch")
             assert frame.get("type") in ("patch", "html_update"), (
-                f"event must still be handled by WS handle_event, got {frame!r}"
+                f"event must still produce a render frame via the runtime, got {frame!r}"
             )
-            # event must NOT have gone through the runtime chokepoint in T1-B.
+            # event MUST now route through the runtime chokepoint exactly once.
             event_calls = [c for c in calls if c.get("type") == "event"]
-            assert event_calls == [], (
-                "event must NOT route through ViewRuntime.dispatch_message in "
-                f"T1-B (it stays on WS handle_event); saw {event_calls!r}"
+            assert len(event_calls) == 1, (
+                "event must route through ViewRuntime.dispatch_message exactly once "
+                f"(#1907 THE FLIP — RUNTIME_OWNED_VERBS now includes 'event'); "
+                f"saw {event_calls!r}"
             )
 
             await communicator.disconnect()
@@ -456,14 +458,16 @@ class TestWSOnlyFramesPreserved:
 
 
 class TestRuntimeOwnedVerbsContract:
-    def test_runtime_owned_verbs_is_exactly_url_change(self):
+    def test_runtime_owned_verbs_is_exactly_url_change_and_event(self):
         """The explicit chokepoint set pins which verbs go through
-        dispatch_message. If a future PR routes ``event`` or ``mount`` it MUST
+        dispatch_message. ``event`` was added in #1907 THE FLIP (ADR-022 Iter 2
+        Phase 2.3b); ``mount`` is the remaining runtime-owned verb still on the
+        bespoke WS handler (T1-A #1853). If a future PR routes ``mount`` it MUST
         update this set (and the routing + this test) deliberately.
         """
         from djust.websocket import LiveViewConsumer
 
-        assert LiveViewConsumer.RUNTIME_OWNED_VERBS == frozenset({"url_change"}), (
+        assert LiveViewConsumer.RUNTIME_OWNED_VERBS == frozenset({"url_change", "event"}), (
             "RUNTIME_OWNED_VERBS pins the verbs routed through the #1852 "
             f"dispatch_message chokepoint; got {LiveViewConsumer.RUNTIME_OWNED_VERBS!r}"
         )
@@ -484,16 +488,16 @@ class TestRuntimeOwnedVerbsContract:
                 f"error envelope."
             )
 
-    def test_event_spine_grown_but_event_not_yet_ws_owned(self):
-        """ADR-022 Iter 2 Phase 2.0 contract: the runtime event SPINE is grown to
-        parity (``dispatch_message`` routes ``event`` → ``dispatch_event``, the
-        SSE event path), but ``event`` is DELIBERATELY still NOT in
-        ``RUNTIME_OWNED_VERBS`` — the WS event flip is Phase 2.3.
+    def test_event_spine_flipped_onto_runtime(self):
+        """ADR-022 Iter 2 Phase 2.3b contract (#1907 THE FLIP): the runtime event
+        spine (``dispatch_message`` → ``dispatch_event``) is now the LIVE WS event
+        path. ``event`` is in ``RUNTIME_OWNED_VERBS``, so ``receive()`` routes every
+        WS event through the single ``dispatch_message`` chokepoint and the bespoke
+        ``_handle_event_inner`` is deleted.
 
-        This pins the Phase-2.0 ↔ 2.3 boundary: a premature addition of ``event``
-        to ``RUNTIME_OWNED_VERBS`` (flipping WS events onto the runtime before the
-        actor / render-lock / observability hooks land) trips this test, forcing
-        the flip to be a deliberate Phase-2.3 change.
+        This pins the post-flip state: a revert that drops ``event`` from the set
+        (or deletes the runtime spine) trips this test, so the convergence can't
+        silently regress.
         """
         from djust.runtime import ViewRuntime
         from djust.websocket import LiveViewConsumer
@@ -501,18 +505,23 @@ class TestRuntimeOwnedVerbsContract:
         # The spine exists + is routable: dispatch_message has an event arm.
         dispatch_src = inspect.getsource(ViewRuntime.dispatch_message)
         assert '== "event"' in dispatch_src, (
-            "the runtime event spine must be routable via dispatch_message "
-            "(Phase 2.0 grew it); dispatch_message lost its event arm"
+            "the runtime event spine must be routable via dispatch_message; "
+            "dispatch_message lost its event arm"
         )
         assert hasattr(ViewRuntime, "dispatch_event") and hasattr(
             ViewRuntime, "_dispatch_event_inner"
-        ), "the runtime event spine methods must exist (Phase 2.0)"
+        ), "the runtime event spine methods must exist"
 
-        # But the WS verb flip has NOT happened — event stays on _handle_event_inner.
-        assert "event" not in LiveViewConsumer.RUNTIME_OWNED_VERBS, (
-            "'event' must NOT be in RUNTIME_OWNED_VERBS until the Phase-2.3 WS flip "
-            "(actor / render-lock / observability hooks must land first, ADR-022). "
-            "Adding it here flips ALL WS events onto the runtime prematurely."
+        # The WS verb flip HAS happened — event routes through the runtime.
+        assert "event" in LiveViewConsumer.RUNTIME_OWNED_VERBS, (
+            "'event' must be in RUNTIME_OWNED_VERBS after the Phase-2.3b WS flip "
+            "(#1907) — receive() routes every WS event through the runtime "
+            "chokepoint and the bespoke _handle_event_inner is deleted."
+        )
+        # The bespoke handler is gone (the deletion is the convergence, #1646).
+        assert not hasattr(LiveViewConsumer, "_handle_event_inner"), (
+            "the bespoke _handle_event_inner must be DELETED at THE FLIP (#1907) — "
+            "the runtime dispatch_event is the single event path now."
         )
 
     # -- Behavioral contract: the SET DRIVES routing (load-bearing) -------- #
@@ -593,29 +602,32 @@ class TestRuntimeOwnedVerbsContract:
 
     @pytest.mark.asyncio
     async def test_non_runtime_owned_verbs_route_to_their_own_handlers(self):
-        """(b) Verbs NOT in ``RUNTIME_OWNED_VERBS`` are NOT dispatched via
-        ``_dispatch_runtime_owned``: ``event`` → ``handle_event``,
-        ``mount`` → ``handle_mount``.
+        """(b) Verbs NOT in ``RUNTIME_OWNED_VERBS`` route to their bespoke handler:
+        ``mount`` → ``handle_mount`` (NOT the runtime helper).
 
-        Guards the inverse drift: if a future change adds ``event`` or ``mount``
-        to the set (or the membership arm is mis-ordered so it shadows the
-        sibling arms), this test goes RED — the verb would land in
-        ``_dispatch_runtime_owned`` instead of its bespoke WS handler.
+        Post-#1907 THE FLIP, ``event`` IS runtime-owned (see the companion
+        assertion below + ``test_event_routes_through_runtime_dispatch_message``);
+        ``mount`` is the remaining runtime-owned verb still on the bespoke WS
+        handler (T1-A #1853). Guards the inverse drift: if a future change adds
+        ``mount`` to the set (or the membership arm is mis-ordered so it shadows
+        the sibling arm), this test goes RED — ``mount`` would land in
+        ``_dispatch_runtime_owned`` instead of ``handle_mount``.
         """
         import json
 
         from djust.websocket import LiveViewConsumer
 
-        # Pre-condition: these are deliberately NOT runtime-owned today.
-        assert "event" not in LiveViewConsumer.RUNTIME_OWNED_VERBS
+        # Pre-condition: event IS runtime-owned (#1907); mount is NOT (yet, #1853).
+        assert "event" in LiveViewConsumer.RUNTIME_OWNED_VERBS
         assert "mount" not in LiveViewConsumer.RUNTIME_OWNED_VERBS
 
-        # event → handle_event, not the runtime helper.
+        # event → the runtime helper (#1907 THE FLIP), NOT handle_event.
         consumer, routed = self._consumer_with_routing_spies()
         await consumer.receive(text_data=json.dumps({"type": "event", "event": "bump"}))
-        assert [c.get("type") for c in routed["event"]] == ["event"], routed
-        assert routed["runtime"] == [], (
-            f"'event' must route to handle_event, NOT _dispatch_runtime_owned; routed={routed!r}"
+        assert [c.get("type") for c in routed["runtime"]] == ["event"], routed
+        assert routed["event"] == [], (
+            "'event' must route to _dispatch_runtime_owned (the runtime chokepoint), "
+            f"NOT the deleted bespoke handle_event path; routed={routed!r}"
         )
 
         # mount → handle_mount, not the runtime helper.

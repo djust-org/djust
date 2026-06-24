@@ -1,22 +1,23 @@
 """Real-``WebsocketCommunicator`` event parity net for the 2.3 flip (#1896, ADR-022).
 
-Phase 2.3b will flip ALL WS events from the bespoke ``_handle_event_inner``
-(``websocket.py``) onto ``ViewRuntime.dispatch_event`` by adding ``"event"`` to
-``RUNTIME_OWNED_VERBS``. Before that flip lands, this file CHARACTERIZES what
-the flip must preserve: the observable response frames the *current* bespoke
-WS event path produces for six behaviors that the existing Phase-2.1/2.2 runtime
-tests cover only against a ``MockTransport``
-(``test_runtime_child_routing_1892.py``), NOT a live consumer.
+Phase 2.3b (#1907, THE FLIP) flipped ALL WS events from the (now deleted) bespoke
+``_handle_event_inner`` (``websocket.py``) onto ``ViewRuntime.dispatch_event`` by
+adding ``"event"`` to ``RUNTIME_OWNED_VERBS``. This file CHARACTERIZES the six
+behaviors the flip had to preserve — behaviors the Phase-2.1/2.2 runtime tests
+cover only against a ``MockTransport`` (``test_runtime_child_routing_1892.py``),
+NOT a live consumer.
 
 Every test here drives a real channels ``WebsocketCommunicator`` against
 ``LiveViewConsumer.as_asgi()`` end-to-end (mount → event frame → assert on the
-response frame), so it exercises the WS path the flip will replace. These pass
-NOW; 2.3b requires them to stay green after the flip — that equivalence IS the
-parity proof (#1466 / #1780 / #1468). Where the bespoke path diverges from the
-runtime path (component_id — see ``TestComponentIdRouting``), the test pins the
-bespoke behavior verbatim and the docstring flags the divergence as a 2.3a
-finding: that test will need to be UPDATED at the flip, and the update is itself
-the signal that the flip changed behavior on that axis.
+response frame), so it exercises the WS event path — which is now the RUNTIME
+path. Five behaviors are pure-equivalent and stay green unchanged across the flip
+(time-travel, dj_activity, actor, ref echo, force_full_html) — that equivalence IS
+the parity proof (#1466 / #1780 / #1468). The SIXTH (``component_id`` — see
+``TestComponentIdRouting``) is the ONE intended behavioral change: the deleted
+bespoke path returned an ``error`` frame (it never re-rendered the parent — #1898),
+the runtime path renders the parent and emits ``html_update``. That test was
+UPDATED at the flip (error → html_update); the update is itself the signal that
+the flip fixed #1898 on that axis.
 
 Each behavior carries a gate-off / contrast sibling (#1468) proving the
 assertion distinguishes the real behavior from a vacuous one (a handler that
@@ -316,34 +317,39 @@ _ALLOWED = "djust.tests.test_ws_event_flip_parity_1896"
 @pytest.mark.django_db
 @pytest.mark.asyncio
 class TestComponentIdRouting:
-    """``component_id`` event routing on the bespoke WS path.
+    """``component_id`` event routing — UPDATED at THE FLIP (#1907, closes #1898).
 
-    **2.3a FINDING (the load-bearing divergence).** The bespoke
-    ``_handle_event_inner`` ``component_id`` branch resolves + runs the
-    component handler, but NEVER re-renders the parent: ``html`` stays ``None``
+    **The load-bearing divergence the flip CLOSES.** Before Phase 2.3b, the
+    bespoke ``_handle_event_inner`` ``component_id`` branch resolved + ran the
+    component handler but NEVER re-rendered the parent: ``html`` stayed ``None``
     (initialized at the top of the non-actor block, never reassigned in the
-    component branch), so the html_update fallback strips ``None`` and the path
-    raises ``TypeError: expected string or bytes-like object, got 'NoneType'``,
-    which ``handle_exception`` turns into an ``error`` frame. The
-    Phase-2.1 runtime path (``test_runtime_child_routing_1892.py``
-    ``TestRuntimeComponentRouting``) renders correctly and emits a parent-scoped
-    ``html_update`` — so the flip will CHANGE this axis from ``error`` to
-    ``html_update``. This test therefore pins the *current* bespoke behavior;
-    it MUST be updated at 2.3b (error → html_update), and that update is the
-    parity signal that the flip fixed the component path.
+    component branch), so the html_update fallback stripped ``None`` and the path
+    raised ``TypeError: expected string or bytes-like object, got 'NoneType'``,
+    which ``handle_exception`` turned into an ``error`` frame (#1898 — the bespoke
+    component_id bug). This test originally PINNED that broken behavior as the 2.3a
+    finding and flagged that the flip would change it from ``error`` to
+    ``html_update``.
+
+    Phase 2.3b (#1907) flipped WS events onto ``ViewRuntime.dispatch_event``,
+    whose ``_dispatch_component_event`` (the Phase-2.1 port,
+    ``test_runtime_child_routing_1892.py`` ``TestRuntimeComponentRouting``)
+    renders the parent correctly and emits a parent-scoped ``html_update``. This
+    test is now UPDATED to assert that correct behavior — the update IS the parity
+    signal that the flip fixed #1898 (the change from ``error`` → ``html_update``
+    on this axis is the SINGLE intended behavioral change of THE FLIP).
     """
 
-    async def test_component_id_event_resolves_component_handler_then_errors(self):
-        """The component handler runs (component state mutates, parent notified),
-        but the bespoke path then crashes on the None parent-html render and
-        returns an ``error`` frame — NOT a parent ``patch`` and NOT a component
-        ``html_update``.
+    async def test_component_id_event_resolves_component_handler_then_renders_parent(self):
+        """The component handler runs (component state mutates, parent notified via
+        ``send_parent``), and the runtime then re-renders the PARENT and emits a
+        parent-scoped ``html_update`` carrying the parent's updated state — NOT the
+        ``error`` frame the deleted bespoke path produced (#1898 fixed by #1907).
 
-        Reproduce-first: a ``component_id``-routed event must reach the
-        COMPONENT's ``relabel`` (not the parent, which has no such handler) —
-        proven by the absence of a 'Component not found' / permission error and
-        by the bespoke crash being inside ``CompParentView.relabel`` (the
-        component-event arm), not a handler-not-found rejection.
+        Reproduce-first: a ``component_id``-routed event must reach the COMPONENT's
+        ``relabel`` (not the parent, which has no such handler) — proven by the
+        parent's ``last_label`` reflecting the value the component handler pushed up
+        via ``send_parent("relabelled", {"label": "DONE"})``, and by the absence of
+        a 'Component not found' / permission error.
         """
         from django.test import override_settings
 
@@ -360,24 +366,25 @@ class TestComponentIdRouting:
             )
             resp = await communicator.receive_json_from(timeout=3)
 
-            # Bespoke component path does not render the parent → error frame.
-            assert resp.get("type") == "error", (
-                "2.3a finding: the bespoke component_id path does not re-render "
-                "the parent (html stays None) and returns an error frame. The "
-                "Phase-2.1 runtime path renders a parent-scoped html_update — "
-                f"the flip will change this axis. Got {resp!r}"
+            # #1898 FIX (#1907 THE FLIP): the runtime component_id path re-renders
+            # the parent and emits a parent-scoped html_update — NOT the bespoke
+            # error frame.
+            assert resp.get("type") == "html_update", (
+                "#1907 THE FLIP fixed #1898: the runtime component_id path now "
+                "re-renders the parent and emits a parent-scoped html_update "
+                f"(the deleted bespoke path returned an error frame). Got {resp!r}"
             )
-            # It is NOT a component-not-found / handler-not-found rejection: the
-            # routing reached the COMPONENT handler (the crash is downstream of
-            # resolution).
-            assert "not found" not in resp.get("error", "").lower(), (
-                f"component_id must resolve the component (not a not-found error); got {resp!r}"
+            # The component handler genuinely ran: it called send_parent, which the
+            # parent's handle_component_event consumed into last_label="DONE", and
+            # the parent re-render reflects it. (Proves the event resolved the
+            # COMPONENT's relabel, not a parent handler / not-found rejection.)
+            assert "last=DONE" in resp.get("html", ""), (
+                "the component_id event must resolve the COMPONENT's relabel "
+                "handler, which pushes 'DONE' to the parent via send_parent; the "
+                f"parent re-render must reflect last=DONE. Got {resp!r}"
             )
-            # And it is NOT a successful parent patch / component html_update —
-            # that is exactly the divergence the flip closes.
-            assert resp.get("type") not in ("patch", "html_update"), (
-                f"the bespoke component path produces no render frame today; got {resp!r}"
-            )
+            # And it echoes the client ref (#560) on the parent render frame.
+            assert resp.get("ref") == 5, f"the component render frame must echo ref=5; got {resp!r}"
 
             await communicator.disconnect()
 
@@ -554,8 +561,7 @@ class TestActivityDeferral:
             resp = await _receive_until(communicator, "patch")
 
             assert resp.get("type") in ("patch", "html_update"), (
-                "an ungated bump must render immediately (not defer); got "
-                f"{resp!r}"
+                f"an ungated bump must render immediately (not defer); got {resp!r}"
             )
             assert resp.get("event_name") == "bump"
             assert "n=1" in str(resp), f"the ungated bump applies immediately; got {resp!r}"
@@ -665,7 +671,9 @@ class TestRefEcho:
             assert html_update.get("type") == "html_update", (
                 f"_force_full_html must html_update; got {html_update!r}"
             )
-            assert html_update.get("ref") == 33, f"html_update must echo ref=33; got {html_update!r}"
+            assert html_update.get("ref") == 33, (
+                f"html_update must echo ref=33; got {html_update!r}"
+            )
 
             await communicator.disconnect()
 
@@ -750,8 +758,195 @@ class TestForceFullHtml:
             )
             resp = await _receive_until(communicator, "patch")
             assert resp.get("type") == "patch", (
-                "a text change with no _force_full_html must patch (not html_update); "
-                f"got {resp!r}"
+                f"a text change with no _force_full_html must patch (not html_update); got {resp!r}"
+            )
+
+            await communicator.disconnect()
+
+
+# ===========================================================================
+# 7. Residual-fold observability (#1907): DJE-053 warning + record_handler_timing
+#
+# THE FLIP deletes the bespoke _handle_event_inner, which owned the DJE-053
+# warning (websocket.py:4215 — production-visible, MUST SURVIVE per #1079) and
+# the record_handler_timing telemetry (websocket.py:3645). The runtime re-emits
+# both via the on_render_emitted / on_handler_timing transport hooks. These tests
+# pin that the production-visible residual survives the flip + the gate-off
+# discipline (the warning is reason/version-gated, not unconditional).
+# ===========================================================================
+
+
+class TestResidualFoldObservability:
+    """Unit tests for the WSConsumerTransport hooks the flip introduced (#1907)."""
+
+    def _make_transport(self):
+        from djust.runtime import WSConsumerTransport
+
+        class _FakeConsumer:
+            _last_sent_version = 7
+
+            def _next_version_armed(self, html):
+                return 8
+
+            def _next_version(self):
+                return 8
+
+            def _arm_recovery(self, html):
+                pass
+
+        return WSConsumerTransport(_FakeConsumer())
+
+    class _V:
+        template_name = "tmpl.html"
+
+    def test_dje053_warning_fires_on_no_patches_with_baseline(self, caplog):
+        """The DJE-053 developer warning (production-visible, #1079) MUST fire when
+        a runtime event render falls back to full HTML with an established VDOM
+        baseline (reason='no_patches', version>1). This is the ONE residual the
+        flip had to preserve that is NOT DEBUG-gated."""
+        t = self._make_transport()
+        with caplog.at_level("WARNING", logger="djust.runtime"):
+            t.on_render_emitted(
+                self._V(), reason="no_patches", version=3, event_name="bump", html="<p>x</p>"
+            )
+        assert any("DJE-053" in r.message for r in caplog.records), (
+            "the DJE-053 warning must survive THE FLIP — it fires on a no-patches "
+            "html_update fallback with version>1 (#1079 / #1907)."
+        )
+
+    def test_dje053_gate_off_first_render_logs_debug_not_warning(self, caplog):
+        """GATE-OFF (#1468): a genuine first render (version<=1) must NOT emit the
+        DJE-053 WARNING (it's a benign first paint, not a diff failure) — proving
+        the warning is reason/version-gated, not emitted on every full-HTML frame."""
+        t = self._make_transport()
+        with caplog.at_level("WARNING", logger="djust.runtime"):
+            t.on_render_emitted(
+                self._V(), reason="first_render", version=1, event_name="bump", html="<p>x</p>"
+            )
+        assert not any("DJE-053" in r.message for r in caplog.records), (
+            "DJE-053 must NOT fire for a first render (version<=1) — that would be "
+            "a false-positive on a benign first paint (#1907)."
+        )
+
+    def test_dje053_gate_off_patch_compression_no_warning(self, caplog):
+        """GATE-OFF (#1468): patch_compression chose HTML over patches that DID
+        exist — it is not a diff failure, so DJE-053 must NOT fire (matches the WS
+        bespoke gate, where compression emitted only its own signal)."""
+        t = self._make_transport()
+        with caplog.at_level("WARNING", logger="djust.runtime"):
+            t.on_render_emitted(
+                self._V(),
+                reason="patch_compression",
+                version=9,
+                event_name="bump",
+                html="<p>x</p>",
+                patch_count=200,
+            )
+        assert not any("DJE-053" in r.message for r in caplog.records), (
+            "DJE-053 must NOT fire on patch_compression (patches existed; "
+            "compression chose HTML for size) (#1907)."
+        )
+
+    def test_record_handler_timing_forwarded(self):
+        """record_handler_timing telemetry MUST survive the flip (#1907): the
+        on_handler_timing hook forwards (view_class, event_name, duration_ms) to
+        the global percentile registry the bespoke view-path populated."""
+        from unittest.mock import patch as _patch
+
+        t = self._make_transport()
+        with _patch("djust.observability.timings.record_handler_timing") as mock_rht:
+            t.on_handler_timing(self._V(), "bump", 12.5)
+        assert mock_rht.called, "on_handler_timing must call record_handler_timing (#1907)."
+        assert mock_rht.call_args.args == ("_V", "bump", 12.5), (
+            f"record_handler_timing must receive (view_class, event_name, ms); "
+            f"got {mock_rht.call_args!r}"
+        )
+
+    def test_record_handler_timing_swallows_errors(self):
+        """The telemetry hook is best-effort: a record_handler_timing failure must
+        never propagate (a telemetry bug can't break the event turn)."""
+        from unittest.mock import patch as _patch
+
+        t = self._make_transport()
+        with _patch(
+            "djust.observability.timings.record_handler_timing", side_effect=RuntimeError("boom")
+        ):
+            # Must not raise.
+            t.on_handler_timing(self._V(), "bump", 1.0)
+
+
+# ===========================================================================
+# 8. start_async / @background on a WS event (post-flip path, #1907)
+#
+# Before THE FLIP, a WS event's start_async/@background work dispatched through
+# the CONSUMER's _dispatch_async_work / _run_async_work. Post-flip it routes
+# through ViewRuntime._dispatch_async_work → _execute_async_task → the
+# source="async" result frame. No prior test drove this end-to-end over a real
+# WebsocketCommunicator, so this pins that background work still streams its
+# re-rendered result frame after a WS event (the runtime async path is otherwise
+# only soaked via SSE + url_change).
+# ===========================================================================
+
+
+class _BackgroundView(LiveView):
+    """A handler that flushes a loading state immediately, then completes
+    background work that updates state + clears the flag (the @background
+    pattern)."""
+
+    template = (
+        '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896._BackgroundView" '
+        'dj-id="0"><p>val={{ val }} loading={{ loading }}</p></div>'
+    )
+
+    def mount(self, request, **kwargs):
+        self.val = 0
+        self.loading = False
+
+    @event_handler()
+    def go(self, **kwargs):
+        self.loading = True
+
+        def _work():
+            self.val = 99
+            self.loading = False
+
+        self.start_async(_work)
+
+    def get_context_data(self, **kwargs):
+        return {"val": self.val, "loading": self.loading}
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+class TestBackgroundWorkOverRuntime:
+    async def test_start_async_streams_result_frame_after_ws_event(self):
+        """A WS event whose handler schedules ``start_async`` work must (1) return
+        the immediate event frame reflecting the loading flag, then (2) stream a
+        second ``source="async"`` frame once the background callback completes —
+        proving the runtime async dispatcher (now the WS event async path post-flip)
+        re-renders + streams the result."""
+        from django.test import override_settings
+
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
+            communicator, _ = await _connect_and_mount(f"{_ALLOWED}._BackgroundView")
+
+            await communicator.send_json_to(
+                {"type": "event", "event": "go", "params": {}, "ref": 1}
+            )
+
+            frames = await _drain_available(communicator, max_frames=8, timeout=3)
+            # The background completion frame is tagged source="async" and carries
+            # the post-work state (val=99, loading cleared).
+            async_frames = [f for f in frames if f.get("source") == "async"]
+            assert async_frames, (
+                "start_async background work must stream a source='async' result "
+                f"frame after the WS event (runtime async dispatcher, #1907); got "
+                f"{[(f.get('type'), f.get('source')) for f in frames]}"
+            )
+            blob = "".join(str(f) for f in async_frames)
+            assert "val=99" in blob, (
+                f"the streamed background result must reflect the post-work state "
+                f"(val=99); got {async_frames!r}"
             )
 
             await communicator.disconnect()

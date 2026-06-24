@@ -374,7 +374,8 @@ def test_every_client_checked_send_path_uses_next_version():
     armed_assign = len(re.findall(r"\b[a-z_]+ = self\._next_version_armed\(", ws_src))
     armed_invocations = armed_inline + armed_assign
 
-    # Render-send sites routed through the armed helper (verified at #1817):
+    # Render-send sites routed through the armed helper (verified at #1817;
+    # event sites removed at #1907 THE FLIP — see below):
     #   INLINE (version=self._next_version_armed(html)), 10:
     #     _run_async_work error arms: 2 (patch + html fallback)
     #     deferred-activity render: 2 (patch + html fallback)
@@ -384,12 +385,22 @@ def test_every_client_checked_send_path_uses_next_version():
     #     handle_forward_replay: 1
     #     db_notify: 1
     #     _run_tick: 1
-    #   ASSIGNMENT (X = self._next_version_armed(html)), 5:
+    #   ASSIGNMENT (X = self._next_version_armed(html)), 3:
     #     _run_async_work success arms: 2
-    #     handle_event patch + html fallback: 2 (wire_version)
     #     server_push: 1 (wire_version)
-    # Total armed invocations = 15.
-    EXPECTED_ARMED_INVOCATIONS = 15
+    # Total armed invocations = 13.
+    #
+    # #1907 THE FLIP: the 2 ``handle_event`` ASSIGN sites (the event patch +
+    # html_update fallback ``wire_version = self._next_version_armed(html)``) were
+    # DELETED with the bespoke ``_handle_event_inner``. Event render-send recovery
+    # arming now flows through ``WSConsumerTransport.next_client_version`` (runtime.py)
+    # → ``consumer._next_version_armed(html)`` — the SAME helper, called from the
+    # runtime render path rather than the consumer. This ws_src grep counts only the
+    # consumer-file sites, so the event arming is correctly no longer here; the #1788
+    # wire-version + recovery arming on the WS event path is end-to-end pinned by
+    # ``test_recovery_version_staleness_1817`` + ``test_ws_send_version_1788``'s
+    # WebsocketCommunicator integration cases (which DID stay green across the flip).
+    EXPECTED_ARMED_INVOCATIONS = 13
     assert armed_invocations == EXPECTED_ARMED_INVOCATIONS, (
         f"expected {EXPECTED_ARMED_INVOCATIONS} self._next_version_armed() invocations "
         f"across RENDER-SEND paths; found {armed_invocations} "
@@ -411,13 +422,19 @@ def test_every_client_checked_send_path_uses_next_version():
     helper_internal = len(re.findall(r"\b[a-z_]+ = self\._next_version\(\)", helper_src))
     bare_send_sites = bare_inline + bare_assign - helper_internal
 
-    # Bare send-site invocations (verified at #1817):
-    #   INLINE: 1 — actor event path (left unarmed pending follow-up).
+    # Bare send-site invocations (verified at #1817; actor site moved at #1907):
     #   ASSIGNMENT: 1 — handle_mount baseline (non-render; covers actor mount).
-    EXPECTED_BARE_SEND_SITES = 2
+    #
+    # #1907 THE FLIP: the actor event path's INLINE ``version=self._next_version()``
+    # moved to ``WSConsumerTransport.dispatch_actor_event`` (runtime.py) in Phase
+    # 2.3a — it calls ``consumer._next_version()`` (still the consumer counter, still
+    # unarmed pending the #1817 actor follow-up), but the call site is now in
+    # runtime.py, so this consumer-file grep no longer counts it. Only the mount
+    # baseline remains in websocket.py.
+    EXPECTED_BARE_SEND_SITES = 1
     assert bare_send_sites == EXPECTED_BARE_SEND_SITES, (
         f"expected {EXPECTED_BARE_SEND_SITES} bare self._next_version() send-site "
-        f"invocations (mount baseline + actor event path); found {bare_send_sites} "
+        f"invocations (mount baseline); found {bare_send_sites} "
         f"(inline={bare_inline}, assign={bare_assign}, helper_internal={helper_internal}). "
         "A render-send path on the BARE helper is the #1817 drift — route it through "
         "self._next_version_armed(html). Update this count ONLY if you intentionally "
