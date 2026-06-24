@@ -199,24 +199,36 @@ class TestValidatedUrlIsSafeForRequestFactory:
 # --------------------------------------------------------------------------- #
 class TestBothCallSitesValidate:
     def test_both_request_factory_sites_use_validate_mount_url(self):
-        """#1646: the fix is one shared helper applied at BOTH mount sites.
-
-        Pins that no RequestFactory.get(data.get("url"...)) site reintroduces
-        the raw-URL path. Counts the validated assignments in source.
+        """#1646: the fix is one shared helper applied at EVERY mount request-build
+        site. Post-#1919 (THE MOUNT FLIP) the bespoke ``handle_mount`` body — which
+        held one of websocket.py's two validated sites — was deleted; the WS mount
+        request is now built by ``ViewRuntime.dispatch_mount`` / ``_build_request``,
+        which validate via ``validate_mount_url``. websocket.py keeps ONE validated
+        client-URL site (``_build_live_redirect_request``); the runtime carries the
+        mount-path validation. Pins that no raw-URL path reappears at either home.
         """
         import inspect
 
+        import djust.runtime as rt_mod
         import djust.websocket as ws_mod
 
-        src = inspect.getsource(ws_mod)
-        # Every `page_url = data.get("url"...)` assignment must go through the
-        # validator. The raw form must not reappear.
-        assert 'page_url = data.get("url"' not in src, (
-            "A RequestFactory mount site still reads the raw client url without "
+        ws_src = inspect.getsource(ws_mod)
+        rt_src = inspect.getsource(rt_mod)
+        # No RequestFactory mount site may read the raw client url unvalidated.
+        assert 'page_url = data.get("url"' not in ws_src, (
+            "A WS RequestFactory mount site still reads the raw client url without "
             "_validate_mount_url — parallel-path drift (#1819/#1646)."
         )
-        # And the validated form is present at both sites.
-        assert src.count('_validate_mount_url(data.get("url"') == 2, (
-            "Expected exactly 2 validated mount-url sites (handle_mount + "
-            "live_redirect request rebuild); found a different count."
+        # websocket.py: exactly ONE validated site post-flip (the live_redirect
+        # request rebuild). The handle_mount site moved to the runtime.
+        assert ws_src.count('_validate_mount_url(data.get("url"') == 1, (
+            "Expected exactly 1 validated mount-url site in websocket.py post-#1919 "
+            "(live_redirect request rebuild); the handle_mount site moved to the "
+            "runtime. Found a different count."
+        )
+        # runtime.py: the mount path validates the client url via validate_mount_url
+        # (dispatch_mount's page_url + the defensive _build_request re-validation).
+        assert rt_src.count("validate_mount_url(") >= 2, (
+            "Expected the runtime mount path to validate the client url via "
+            "validate_mount_url (dispatch_mount + _build_request, #1819/#1646)."
         )

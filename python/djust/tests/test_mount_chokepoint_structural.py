@@ -391,13 +391,17 @@ class TestFactoryGetChokepoint:
     def test_known_factory_get_sites_are_validated(self):
         """Pin the known client-URL request-build sites as validated (count-test).
 
-        These are the WS handle_mount (2 sites) + runtime _build_request sites that
-        rebuild a request from the client URL. They must remain inside a
+        Post-#1919 (ADR-022 Iter 3 Phase 3.3b, THE MOUNT FLIP) the bespoke WS
+        ``handle_mount`` body — which carried one of websocket.py's two validated
+        ``factory.get`` sites — was deleted; the mount request is now built by
+        ``runtime.py`` ``_build_request`` (already pinned). websocket.py therefore
+        keeps exactly ONE validated client-URL build site:
+        ``_build_live_redirect_request``. They must remain inside a
         validate_mount_url-calling function.
         """
         # (filename, the function those .get(non-literal) calls live in)
         expected = {
-            "websocket.py": 2,  # handle_mount + handle_live_redirect_mount
+            "websocket.py": 1,  # handle_live_redirect_mount (_build_live_redirect_request)
             "runtime.py": 1,  # _build_request
         }
         for label, count in expected.items():
@@ -481,23 +485,28 @@ _API_DISPATCH = _PKG_DIR / "api" / "dispatch.py"
 #                                 auth), left in place on WS + runtime.
 _MOUNT_ORCHESTRATION_PINS = {
     # 4a — the shared pre-mount auth+tenant sequence. Post-#1887 (ADR-022 Iter 1)
-    # the legacy SSE mount (``_sse_mount_view``) was deleted: SSE now mounts via
-    # ``runtime.py`` ``dispatch_mount`` (the SAME runtime spine), so sse.py no
-    # longer carries its own ``run_pre_mount_auth`` reference — it inherits the
-    # sequence through the runtime. Two live mount modules remain (WS handle_mount
-    # + runtime dispatch_mount), each pinned here.
-    "run_pre_mount_auth": {"websocket.py": 1, "runtime.py": 1},
+    # the legacy SSE mount (``_sse_mount_view``) was deleted: SSE mounts via
+    # ``runtime.py`` ``dispatch_mount``. Post-#1919 (ADR-022 Iter 3 Phase 3.3b, THE
+    # MOUNT FLIP) the bespoke WS ``handle_mount`` body was deleted too — the WS
+    # mount now routes through the SAME ``dispatch_mount`` (via ``_check_auth`` →
+    # ``run_pre_mount_auth``). So websocket.py no longer carries its OWN
+    # ``run_pre_mount_auth`` reference; it inherits the sequence through the
+    # runtime. The single LIVE mount module is now ``runtime.py`` — the #1646
+    # mount convergence COMPLETE.
+    "run_pre_mount_auth": {"runtime.py": 1},
     # Object-permission family: any of these names counts toward the module's req.
-    # sse.py was DROPPED from this pin post-#1887: the SSE mount's post-mount
-    # object-perm check now runs inside ``runtime.py`` ``dispatch_mount`` (the
-    # converged path), not in sse.py. api/dispatch.py is a subpackage module
-    # pinned explicitly in concern 4c below (not via this dict, which path-joins
-    # labels under _PKG_DIR top-level).
+    # sse.py was DROPPED post-#1887; websocket.py was DROPPED post-#1919 (the WS
+    # mount's post-mount object-perm check now runs inside ``runtime.py``
+    # ``dispatch_mount`` via ``enforce_object_permission``, the converged path).
+    # api/dispatch.py is a subpackage module pinned explicitly in concern 4c below.
     ("check_object_permission", "enforce_object_permission"): {
-        "websocket.py": 1,
         "runtime.py": 1,
     },
-    "validated_host_from_scope": {"websocket.py": 1, "runtime.py": 1},
+    # validated_host_from_scope (reconstructed-Host binding) is referenced in
+    # runtime.py (the WS ``on_view_instantiated`` hook stamps it + ``_build_request``
+    # uses it). websocket.py still DEFINES the helper but no longer Load-references
+    # it post-#1919 (the bespoke ``handle_mount`` site that did was deleted).
+    "validated_host_from_scope": {"runtime.py": 1},
 }
 
 # 4b — the leaf chokepoints run_pre_mount_auth itself MUST still invoke, so the
@@ -537,18 +546,20 @@ def _count_symbol_refs(tree: ast.Module, names: "tuple | set", import_lines: set
 class TestMountOrchestrationChokepoint:
     def test_shared_security_calls_present_at_mount_chokepoints(self):
         """Each pinned mount-orchestration symbol is still referenced by the
-        modules that must carry it post-#1853 (count-canary, #1125 / #1850 / #1853).
+        module that must carry it post-#1919 (count-canary, #1125 / #1850 / #1853 /
+        #1919).
 
-        Concern 4a + 4c: all three transports reference the shared
-        ``run_pre_mount_auth`` sequence; the object-permission family and
-        ``validated_host_from_scope`` (deliberately NOT folded into the helper)
-        still live on WS / runtime.
+        Concern 4a + 4c: post-#1919 (THE MOUNT FLIP) the single LIVE mount module
+        is ``runtime.py`` — it references the shared ``run_pre_mount_auth``
+        sequence, the object-permission family (``enforce_object_permission``), and
+        ``validated_host_from_scope`` (reconstructed-Host binding). The bespoke WS
+        ``handle_mount`` body that used to carry these was deleted; the WS mount now
+        inherits them all through ``dispatch_mount`` (the #1646 mount convergence
+        COMPLETE).
 
         Gate-off (#1468): deleting (or no longer routing through)
-        ``run_pre_mount_auth`` from websocket.py OR runtime.py OR sse.py drops
-        that module's count below the pin → FAILS. Recorded gate-off in the PR
-        body: removing the ``run_pre_mount_auth`` reference in handle_mount makes
-        this test report "websocket.py references run_pre_mount_auth 0 time(s)
+        ``run_pre_mount_auth`` from runtime.py drops its count below the pin →
+        FAILS, reporting "runtime.py references run_pre_mount_auth 0 time(s)
         but expected >= 1".
         """
         shortfalls = []
@@ -565,13 +576,12 @@ class TestMountOrchestrationChokepoint:
                         f"{label} references {human} {found} time(s) but expected >= {expected}"
                     )
         assert not shortfalls, (
-            "Mount-orchestration security symbol(s) dropped from a shared mount "
-            "chokepoint. Post-#1853, the WS (handle_mount), runtime "
-            "(dispatch_mount via _check_auth), and legacy SSE (_sse_mount_view) "
-            "paths each MUST route the pre-mount auth+tenant sequence through the "
-            "shared run_pre_mount_auth; the object-permission family and "
-            "validated_host_from_scope must remain where they were left. If this "
-            "fired because of a further refactor, update _MOUNT_ORCHESTRATION_PINS "
+            "Mount-orchestration security symbol(s) dropped from the shared mount "
+            "chokepoint. Post-#1919 (THE MOUNT FLIP) the single LIVE mount module is "
+            "``runtime.py`` ``dispatch_mount`` (via ``_check_auth``); WS + SSE both "
+            "route their mount through it. It MUST reference run_pre_mount_auth, the "
+            "object-permission family, and validated_host_from_scope. If this fired "
+            "because of a further refactor, update _MOUNT_ORCHESTRATION_PINS "
             "deliberately. Shortfalls: " + "; ".join(shortfalls)
         )
 
@@ -581,10 +591,12 @@ class TestMountOrchestrationChokepoint:
         transport carries its own hand-copied orchestration.
 
         Post-#1887 (ADR-022 Iter 1) the legacy SSE mount (``_sse_mount_view``) was
-        deleted; SSE now mounts through ``runtime.py`` ``dispatch_mount``, so the
-        live mount modules are WS (``handle_mount``) + runtime (``dispatch_mount``
-        via ``_check_auth``). sse.py is no longer a mount module and is correctly
-        NOT in this list — it inherits the shared sequence through the runtime.
+        deleted; SSE mounts through ``runtime.py`` ``dispatch_mount``. Post-#1919
+        (ADR-022 Iter 3 Phase 3.3b, THE MOUNT FLIP) the bespoke WS ``handle_mount``
+        body was deleted too — the WS mount routes through the SAME
+        ``dispatch_mount`` (via ``_check_auth``). So the single LIVE mount module is
+        now ``runtime.py``; websocket.py + sse.py both inherit the shared sequence
+        through the runtime (the #1646 mount convergence COMPLETE).
 
         This is the strengthened #1850 pin: previously each transport carried its
         OWN ``check_view_auth`` + ``_ensure_tenant`` + tenant-bind copy; #1853
@@ -592,11 +604,11 @@ class TestMountOrchestrationChokepoint:
         private copy of the auth/tenant order) is caught here.
 
         Gate-off (#1468): replace ``run_pre_mount_auth`` with an inline
-        ``check_view_auth`` copy on ANY one transport and that transport's count
-        drops to 0 → FAILS.
+        ``check_view_auth`` copy on the runtime mount path and the count drops to
+        0 → FAILS.
         """
         missing = []
-        for label in ("websocket.py", "runtime.py"):
+        for label in ("runtime.py",):
             tree = _parse(_PKG_DIR / label)
             import_lines = _import_aliased_lines(tree)
             found = _count_symbol_refs(tree, ("run_pre_mount_auth",), import_lines)
@@ -606,7 +618,7 @@ class TestMountOrchestrationChokepoint:
             "A mount transport no longer routes its pre-mount auth+tenant sequence "
             "through the shared djust.auth.core.run_pre_mount_auth helper — it has "
             "re-grown a private copy of the auth/tenant orchestration "
-            "(parallel-path drift, #1646 / #1853). Offenders: " + "; ".join(missing)
+            "(parallel-path drift, #1646 / #1853 / #1919). Offenders: " + "; ".join(missing)
         )
 
     def test_shared_helper_body_still_invokes_the_leaf_chokepoints(self):
@@ -657,20 +669,20 @@ class TestMountOrchestrationChokepoint:
     def test_object_permission_controls_left_in_place_post_1853(self):
         """Concern 4c: the object-permission controls were deliberately NOT folded
         into run_pre_mount_auth (they are post-mount / url-change, not part of the
-        pre-mount sequence). Pin that WS still uses check_object_permission (the
-        post-mount inner step) and runtime still uses enforce_object_permission
-        (the ADR-017 url-change re-check).
+        pre-mount sequence). Pin that the runtime uses enforce_object_permission on
+        BOTH the dispatch_mount post-mount check AND the ADR-017 url-change re-check.
 
-        Extended by #1857, refined by #1887: the HTTP-API dispatch paths
-        (api/dispatch.py — both dispatch_api and dispatch_server_function) enforce
-        the object-perm check via enforce_object_permission; pin those so a future
-        removal re-opens finding #10/#11/#12 on the API transport. The SSE mount's
-        post-mount object-perm check was originally added to sse.py
-        (``_sse_mount_view``, #1857), but #1887 (ADR-022 Iter 1) deleted that
-        legacy mount and converged SSE onto ``runtime.py`` ``dispatch_mount`` — so
-        the SSE object-perm check now lives in the runtime (already pinned via
-        ``rt_*`` below, which includes dispatch_mount's post-mount check). sse.py
-        is therefore NOT pinned here anymore.
+        Extended by #1857, refined by #1887, completed by #1919: the HTTP-API
+        dispatch paths (api/dispatch.py — both dispatch_api and
+        dispatch_server_function) enforce the object-perm check via
+        enforce_object_permission; pin those so a future removal re-opens finding
+        #10/#11/#12 on the API transport. The SSE mount's check moved into the
+        runtime under #1887; the WS mount's check moved into the runtime under
+        #1919 (THE MOUNT FLIP deleted the bespoke ``handle_mount`` body that held
+        the WS ``check_object_permission`` inner step — the WS mount now runs the
+        runtime's ``enforce_object_permission`` post-mount check via
+        ``dispatch_mount``). websocket.py is therefore NOT pinned here anymore — the
+        #1646 mount convergence COMPLETE.
 
         A regression that drops ANY of these re-opens finding #10/#11/#12.
 
@@ -680,30 +692,24 @@ class TestMountOrchestrationChokepoint:
         FAILS (api/dispatch.py imports it lazily inside each function, so the
         import-line exclusion leaves only the genuine call references).
         """
-        ws_tree = _parse(_PKG_DIR / "websocket.py")
         rt_tree = _parse(_PKG_DIR / "runtime.py")
         api_tree = _parse(_API_DISPATCH)
-        ws_imports = _import_aliased_lines(ws_tree)
         rt_imports = _import_aliased_lines(rt_tree)
         api_imports = _import_aliased_lines(api_tree)
 
-        ws_inner = _count_symbol_refs(ws_tree, ("check_object_permission",), ws_imports)
         # runtime.py now carries BOTH the dispatch_mount post-mount object-perm
-        # check (the converged SSE path, #1887) AND the url-change re-check → >= 2.
+        # check (the converged SSE+WS path, #1887/#1919) AND the url-change
+        # re-check → >= 2.
         rt_wrapper = _count_symbol_refs(rt_tree, ("enforce_object_permission",), rt_imports)
         # dispatch_api + dispatch_server_function each call it → expect >= 2.
         api_wrapper = _count_symbol_refs(api_tree, ("enforce_object_permission",), api_imports)
 
-        assert ws_inner >= 1, (
-            "websocket.py mount path no longer references check_object_permission "
-            "(ADR-017 post-mount object-perm inner step) — finding #10/#11/#12 "
-            "regression."
-        )
         assert rt_wrapper >= 2, (
             "runtime.py must reference enforce_object_permission on BOTH the "
-            "dispatch_mount post-mount check (the converged SSE path, #1887) and the "
-            "dispatch_url_change re-check (ADR-017). Dropping either re-opens finding "
-            "#10/#11/#12 on the runtime/SSE transport. Found %d." % rt_wrapper
+            "dispatch_mount post-mount check (the converged SSE+WS path, "
+            "#1887/#1919) and the dispatch_url_change re-check (ADR-017). Dropping "
+            "either re-opens finding #10/#11/#12 on the runtime transport (which now "
+            "serves WS + SSE mounts). Found %d." % rt_wrapper
         )
         assert api_wrapper >= 2, (
             "api/dispatch.py no longer references enforce_object_permission on BOTH "

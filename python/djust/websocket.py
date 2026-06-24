@@ -24,7 +24,6 @@ from .websocket_utils import (
     _validate_event_security,
     get_handler_coerce_setting,
 )
-from .presence import PresenceManager
 from .signals import full_html_update, liveview_server_error
 
 logger = logging.getLogger(__name__)
@@ -1854,6 +1853,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Clean up session state
         self.view_instance = None
         self.actor_handle = None
+        # (#1919, Finding A) Also null the shared runtime's view so a later
+        # re-mount on a reused consumer/runtime is never silently no-op'd by
+        # ``dispatch_mount``'s ``if view_instance is not None`` idempotency guard.
+        runtime = getattr(self, "_runtime", None)
+        if runtime is not None:
+            runtime.view_instance = None
 
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages"""
@@ -1968,13 +1973,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             #     ``_emit_full_html_update`` signal, via the ``on_render_emitted``
             #     / ``on_handler_timing`` hooks). One event path, not two (#1646).
             #
-            # NOT YET ROUTED (runtime owns the verb but the WS handler still
-            # carries behavior the runtime path does not yet implement):
-            #   * mount  — the WS ``handle_mount`` does sticky-child
-            #     preservation, signed ``state_snapshot`` restore, and actor
-            #     channel-layer wiring that ``ViewRuntime.dispatch_mount`` does
-            #     NOT (it even refuses ``use_actors``). Routing it now would
-            #     bypass those. Folded into runtime hooks by T1-A (#1853).
+            #   * mount       — flipped onto the runtime in ADR-022 Iter 3 Phase
+            #     3.3b (#1919, THE MOUNT FLIP). Phases 3.0-3.3a grew
+            #     ``dispatch_mount`` into a functional SUPERSET of the (now
+            #     deleted) bespoke ``handle_mount`` body: the F22 view resolver,
+            #     pre-mount auth+tenant sequence (``run_pre_mount_auth`` via
+            #     ``_check_auth``), ``on_mount`` hooks, session/signed-snapshot
+            #     state restore (#1466/#1552), post-mount object-permission
+            #     (ADR-017), ``handle_params``, the actor mount hook
+            #     (``dispatch_actor_mount``, #1915 Finding D), the no-arm mount
+            #     wire version (``next_mount_version``, Finding C), the sticky_hold
+            #     pre-mount frame (``on_mount_render_ready``, Finding B residual),
+            #     the auth verdict→close finalize (``finalize_mount_auth``, Finding
+            #     E), the WS post-mount channel-layer wiring + tick + flags
+            #     (``on_view_mounted``, Finding B residual), and the 2-queue
+            #     mount-time drain. One mount path, not two — the #1646 mount
+            #     convergence COMPLETE.
             #
             # WS-ONLY EXTENSION SET (no runtime equivalent; binary upload
             # frames 0x01/0x02/0x03 are handled above before decode):
@@ -1990,12 +2004,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # ``RUNTIME_OWNED_VERBS`` LOAD-BEARING (#1852): adding a verb to
                 # the set automatically routes it here, and the contract test
                 # (``TestRuntimeOwnedVerbsContract``) fails if the set and this
-                # arm ever drift. This is the FIRST arm, so ``event`` (now in the
-                # set, #1907) lands here — NOT the deleted ``elif`` that used to
-                # call the bespoke ``handle_event``.
+                # arm ever drift. This is the FIRST arm, so ``event`` (#1907) AND
+                # ``mount`` (#1919, THE MOUNT FLIP) both land here — NOT the deleted
+                # ``elif`` arms that used to call the bespoke ``handle_event`` /
+                # ``handle_mount``.
                 await self._dispatch_runtime_owned(data)
-            elif msg_type == "mount":
-                await self.handle_mount(data)
             elif msg_type == "mount_batch":
                 await self.handle_mount_batch(data)
             elif msg_type == "ping":
@@ -2046,875 +2059,78 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         sticky_preserved: Optional[Dict[str, Any]] = None,
         state_snapshot: Optional[Dict[str, Any]] = None,
     ):
+        """Handle view mounting by routing through :class:`ViewRuntime`.
+
+        ADR-022 Iter 3 Phase 3.3b (#1919, THE MOUNT FLIP). Until this phase,
+        ``mount`` was handled by a ~870-line bespoke WS-only body (a twin of the
+        runtime's mount path). Phases 3.0-3.3a grew
+        :meth:`ViewRuntime.dispatch_mount` into a functional SUPERSET of that
+        bespoke handler (F22 view resolver, ``run_pre_mount_auth`` pre-mount
+        auth+tenant sequence via ``_check_auth``, ``on_mount`` hooks, session +
+        signed-snapshot state restore, post-mount object-permission, ``handle_params``,
+        actor mount + render, the no-arm mount wire version, the ``sticky_hold``
+        pre-mount frame, the auth verdict→``close(4403)`` finalize, the WS
+        post-mount channel-layer wiring + tick + flags, and the 2-queue mount-time
+        drain), all wired through ``WSConsumerTransport`` hooks. Phase 3.3b adds
+        ``"mount"`` to :attr:`RUNTIME_OWNED_VERBS` so ``receive()`` now routes mount
+        frames through the single ``dispatch_message`` chokepoint (the #1646 mount
+        convergence — one mount path, not two). This method is therefore a THIN SHIM
+        mirroring :meth:`handle_url_change` / :meth:`handle_event`.
+
+        ``receive()`` no longer calls this directly for the ``mount`` verb (that
+        goes via :meth:`_dispatch_runtime_owned` → ``dispatch_message`` →
+        ``dispatch_mount``), but it is retained as a stable public entry point /
+        backward-compatible shim for the WS-only callers that invoke it directly
+        with the extra kwargs: :meth:`handle_live_redirect_mount` (passes
+        ``sticky_preserved`` so the ``sticky_hold`` frame precedes the mount frame)
+        and :meth:`_mount_one` (the ``mount_batch`` collector).
+
+        Three flip findings (ADR-022 Iter 3) handled here / by the runtime:
+
+        * **(A) Idempotency reset** — ``dispatch_mount`` early-returns when
+          ``runtime.view_instance is not None`` (the legacy GET-mount double-fire
+          guard). The consumer nulls ``self.view_instance`` on disconnect /
+          auth-fail / ``live_redirect`` teardown but NEVER ``runtime.view_instance``,
+          so a re-mount on a runtime that already mounted once would silently
+          no-op (the #560-class landmine). We null ``runtime.view_instance`` BEFORE
+          dispatching so every (re-)mount actually runs.
+        * **(B) Ownership inverts** — ``url_change`` / ``event`` mirror
+          consumer→runtime; ``mount`` CREATES the view (runtime→consumer), so we
+          read back ``self.view_instance = runtime.view_instance`` after dispatch.
+          The WS post-mount consumer attrs (``_view_group`` / ``_tick_task`` /
+          ``use_actors`` / presence + db_notify groups / ``_sticky_preserved``)
+          are written onto the consumer by the ``on_view_mounted`` /
+          ``on_mount_render_ready`` transport hooks during the runtime mount.
+        * **(C) Mount wire version** — the ``next_mount_version`` hook stamps the
+          consumer-owned monotonic ``_next_version()`` WITHOUT arming request_html
+          recovery (mount establishes the baseline; it has no prior frame to
+          recover to).
         """
-        Handle view mounting with proper view resolution.
-
-        Dynamically imports and instantiates a LiveView class, creates a request
-        context, mounts the view, and returns the initial HTML.
-
-        Sticky LiveViews (Phase B): when ``sticky_preserved`` is provided
-        (passed by ``handle_live_redirect_mount``), a ``sticky_hold``
-        frame is emitted immediately BEFORE the ``mount`` frame so the
-        client can reconcile its stickyStash against the authoritative
-        survivor list BEFORE ``reattachStickyAfterMount`` runs inside
-        the mount-frame handler. The survivor set is computed by
-        slot-scanning the just-rendered HTML; survivors whose
-        ``sticky_id`` has no matching ``[dj-sticky-slot]`` get
-        ``_on_sticky_unmount()`` called and are dropped from the dict
-        (which the caller stores on ``self._sticky_preserved``).
-
-        State snapshot (v0.6.0): when ``state_snapshot`` is provided
-        AND the view class opts in via ``enable_state_snapshot = True``
-        AND ``view_slug`` matches the view path AND
-        ``_should_restore_snapshot(request)`` returns True, the view's
-        public state is restored from the snapshot in lieu of calling
-        ``mount()``. Authentication and ``on_mount`` hooks still run
-        before restoration; malformed JSON or restore errors fall back
-        to a fresh ``mount()`` call.
-        """
-        from django.test import RequestFactory
-        from django.conf import settings
-
-        logger = logging.getLogger(__name__)
-
-        # Reset auto-reattach tracker (ADR-014): each mount starts with
-        # an empty set; the tag pushes ids onto it as it claims survivors.
-        self._sticky_auto_reattached = set()
-
-        view_path = data.get("view")
-        params = data.get("params", {})
-        has_prerendered = data.get("has_prerendered", False)
-        client_timezone = data.get("client_timezone")
-
-        if not view_path:
-            await self.send_error("Missing view path in mount request")
-            return
-
-        # Security (F22 — unsafe reflection / arbitrary module import + insecure
-        # default allowlist + boundary-less prefix match): resolve the
-        # client-supplied dotted view path through the single shared resolver.
-        # It validates the path SHAPE, checks the allowlist BEFORE importing
-        # anything (fail-closed to LIVEVIEW_ALLOWED_MODULES, else INSTALLED_APPS
-        # roots + djust), imports via import_module + vars() (PEP 562-safe), and
-        # confirms the LiveView subclass. Shared with the runtime/SSE paths so
-        # they cannot drift (#1646). See djust.security.mount.
-        from .security.mount import available_liveview_names, resolve_view_class
-
-        resolution = resolve_view_class(view_path)
-        if not resolution:
-            logger.warning(
-                "Blocked/failed mount of view: %s (%s)",
-                sanitize_for_log(view_path),
-                resolution.generic,
-            )
-            hint = None
-            # DEBUG-only enumeration hint for the "class not found" case — only
-            # meaningful once the module imported (allowlist passed). Enumerate
-            # via vars()/__dict__ (PEP 562-safe), never getattr.
-            if getattr(settings, "DEBUG", False) and resolution.generic == "View not found":
-                names = available_liveview_names(view_path)
-                if names:
-                    module_path = view_path.rsplit(".", 1)[0]
-                    hint = "Available LiveView classes in %s: %s" % (module_path, ", ".join(names))
-            await self.send_error(_safe_error(resolution.detail, resolution.generic), hint=hint)
-            return
-        view_class = resolution.view_class
-
-        # Instantiate the view
-        try:
-            self.view_instance = view_class()
-
-            # Store reference to WS consumer for streaming support
-            self.view_instance._ws_consumer = self
-
-            # Wire push-event flush callback so @background handlers
-            # (like TutorialMixin.start_tutorial) can send push_commands
-            # to the client mid-execution without waiting for the handler
-            # to return. See PushEventMixin._flush_pending_push_events.
-            if hasattr(self.view_instance, "_push_events_flush_callback"):
-                self.view_instance._push_events_flush_callback = self._flush_push_events
-
-            # Store client timezone for local time rendering
-            self.view_instance.client_timezone = None
-            if client_timezone:
-                try:
-                    from zoneinfo import ZoneInfo
-
-                    ZoneInfo(client_timezone)  # Validate IANA timezone string
-                    self.view_instance.client_timezone = client_timezone
-                except (KeyError, Exception):
-                    logger.warning("Invalid client timezone: %s", client_timezone)
-
-            # Store WebSocket session_id in view for consistent VDOM caching
-            # This ensures mount and all subsequent events use the same VDOM instance
-            self.view_instance._websocket_session_id = self.session_id
-            # Store path and query string for path-aware cache keys
-            # This ensures /emails/ and /emails/?sender=1 get separate VDOM caches
-            self.view_instance._websocket_path = self.scope.get("path", "/")
-            self.view_instance._websocket_query_string = self.scope.get("query_string", b"").decode(
-                "utf-8"
-            )
-
-            # Register this view in the observability session registry so the
-            # djust MCP can introspect live state via its HTTP endpoints.
-            # Registry uses weakrefs — no leak if unregister is missed.
-            try:
-                from djust.observability.registry import register_view
-
-                register_view(self.session_id, self.view_instance)
-            except Exception as e:  # noqa: BLE001
-                # Observability must never break a WS connection.
-                logger.warning("Failed to register view in observability registry: %s", e)
-
-            # Join per-view channel group for server-push
-            from .push import view_group_name
-
-            self._view_path = view_path
-            self._view_group = view_group_name(view_path)
-            await self.channel_layer.group_add(self._view_group, self.channel_name)
-
-            # Join presence group if view supports presence tracking
-            self._presence_group = None
-            if hasattr(self.view_instance, "get_presence_key"):
-                try:
-                    presence_key = self.view_instance.get_presence_key()
-                    self._presence_group = PresenceManager.presence_group_name(presence_key)
-                    await self.channel_layer.group_add(self._presence_group, self.channel_name)
-                except Exception as e:
-                    logger.warning("Error setting up presence group: %s", e)
-
-            # Join db_notify groups for every channel the view subscribed to
-            # via NotificationMixin.listen() during mount(). The groups are
-            # addressed per-channel (djust_db_notify_<channel>) so a NOTIFY
-            # on one channel never fans out to views listening on another.
-            self._db_notify_channels = set()
-            listen_channels = getattr(self.view_instance, "_listen_channels", None)
-            if listen_channels:
-                for ch in listen_channels:
-                    try:
-                        await self.channel_layer.group_add(
-                            f"djust_db_notify_{ch}", self.channel_name
-                        )
-                        self._db_notify_channels.add(ch)
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("Error joining db_notify group for %s: %s", ch, e)
-
-            # Start periodic tick if subclass overrides handle_tick
-            tick_interval = getattr(view_class, "tick_interval", None)
-            if tick_interval:
-                from .live_view import LiveView as _LV
-
-                if view_class.handle_tick is not _LV.handle_tick:
-                    self._tick_task = asyncio.create_task(self._run_tick(tick_interval))
-
-            # Check if view uses actor-based state management
-            self.use_actors = getattr(view_class, "use_actors", False)
-
-            if self.use_actors and create_session_actor:
-                # Create SessionActor for this session
-                logger.info("Creating SessionActor for %s", view_path)
-                self.actor_handle = await create_session_actor(self.session_id)
-                logger.info("SessionActor created: %s", self.actor_handle.session_id)
-
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="mount",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Failed to instantiate {view_path}",
-            )
-            await self.send_json(response)
-            return
-
-        # Create request with session
-        try:
-            from urllib.parse import urlencode
-
-            factory = RequestFactory()
-            # Include URL query params (e.g., ?sender=80) in the request
-            query_string = urlencode(params) if params else ""
-            # Use the actual page URL from the client, not hardcoded "/".
-            # The client-supplied URL is attacker-controlled — validate it
-            # against path traversal / CRLF / absolute-URL injection (#1819).
-            page_url = _validate_mount_url(data.get("url", "/"))
-            path_with_query = f"{page_url}?{query_string}" if query_string else page_url
-
-            # Finding #26: propagate the validated client Host (and TLS scheme)
-            # from the handshake scope into the reconstructed request so
-            # host/subdomain TenantResolvers — and every other
-            # ``request.get_host()`` consumer — resolve identically on the live
-            # path to the HTTP (SSR) path. Without HTTP_HOST the request defaults
-            # to RequestFactory's "testserver", misresolving the tenant to None
-            # (cross-tenant disclosure with STRICT_MODE=False, broken tenancy by
-            # default). ``validated_host_from_scope`` validates the Host against
-            # ALLOWED_HOSTS using the SAME logic as the CSWSH Origin check, and
-            # returns ``(None, ...)`` for absent/invalid Hosts so non-browser
-            # clients (WebsocketCommunicator) keep working.
-            host, is_secure = validated_host_from_scope(self.scope)
-            request_extra = {}
-            if host:
-                request_extra["HTTP_HOST"] = host
-            if is_secure:
-                request_extra["secure"] = True
-                request_extra["HTTP_X_FORWARDED_PROTO"] = "https"
-            request = factory.get(path_with_query, **request_extra)
-
-            # Stash the validated host on the view so runtime-rebuilt requests
-            # (``ViewRuntime._build_request`` for url_change etc.) carry the same
-            # host. Mirrors the ``_websocket_path`` stash above (#1646: one seam,
-            # both reconstructed-request paths). ``None`` when absent/invalid so
-            # the runtime falls back to the same RequestFactory default.
-            if self.view_instance is not None:
-                self.view_instance._websocket_host = host
-                self.view_instance._websocket_secure = is_secure
-
-            # Add session from WebSocket scope.
-            # session_key is an ATTRIBUTE of the session object, not a dict key.
-            # Django Channels' AuthMiddlewareStack wraps scope["session"] in a
-            # LazyObject.  hasattr() catches AttributeError if the attribute is
-            # absent, but will not suppress other exceptions (e.g. OperationalError
-            # from a db-backed session backend).  Use getattr(obj, name, None) for
-            # a more robust single-call alternative on LazyObjects.
-            # Lazy import: avoids pulling in the db backend when the project
-            # uses a different session backend (e.g. cached_db, file, redis).
-            from django.contrib.sessions.backends.db import SessionStore  # noqa: PLC0415
-
-            scope_session = self.scope.get("session")
-            # getattr(obj, name, default) is used instead of a hasattr() +
-            # getattr() pair.  Django Channels' AuthMiddlewareStack wraps
-            # scope["session"] in a LazyObject; a two-step hasattr/getattr
-            # approach resolves the object twice and can disagree if the
-            # LazyObject is in a partially-resolved state.  The single
-            # getattr() call resolves the LazyObject once and returns the
-            # value (or None) atomically.
-            session_key = getattr(scope_session, "session_key", None) if scope_session else None
-            if session_key:
-                request.session = SessionStore(session_key=session_key)
-                self.view_instance._django_session_key = session_key
-            else:
-                request.session = SessionStore()
-
-            # Add user if available.
-            # scope["user"] is a Django Channels LazyObject (set by AuthMiddlewareStack).
-            # Assigning it directly to request.user is safe — Django's auth machinery
-            # and template context both handle lazy user proxies correctly.
-            if "user" in self.scope:
-                request.user = self.scope["user"]
-
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="mount",
-                logger=logger,
-                log_message="Failed to create request context",
-            )
-            await self.send_json(response)
-            return
-
-        # Mount the view (needs sync_to_async for database operations)
-
-        try:
-            # Initialize temporary assigns before mount
-            await sync_to_async(self.view_instance._initialize_temporary_assigns)()
-
-            # Store request on the view so self.request works in handlers
-            # (Django's View.dispatch() does this for HTTP, but WS skips dispatch)
-            self.view_instance.request = request
-
-            # --- Pre-mount security sequence (auth + tenant resolve/bind) ---
-            # Single-sourced through djust.auth.core.run_pre_mount_auth so the
-            # WS, runtime, and SSE mount paths cannot drift in WHICH checks run
-            # or in WHAT ORDER (#1646 / #1853). The helper runs the same leaf
-            # chokepoints this path used inline before: check_view_auth (may
-            # raise PermissionDenied / return a redirect URL), then — only when
-            # auth passes — _ensure_tenant + the tenant ContextVar bind. The
-            # WS-specific verdict→envelope mapping (close 4403 / navigate frame /
-            # clear view) stays HERE; the helper only owns the sequence.
-            from .auth import run_pre_mount_auth
-            from django.core.exceptions import PermissionDenied
-
-            try:
-                redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
-            except PermissionDenied as exc:
-                # Authenticated user lacks permissions → 403 (not a redirect)
-                logger.info(
-                    "Permission denied for %s: %s", self.view_instance.__class__.__name__, exc
-                )
-                await self.send_json({"type": "error", "message": "Permission denied"})
-                await self.close(code=4403)
-                return
-            if redirect_url:
-                # Auth failure (e.g. anonymous user on a login_required view).
-                # Send the redirect frame so a browser navigates to LOGIN_URL,
-                # THEN close the socket — otherwise a raw WS client can ignore
-                # the navigate and keep sending events to handlers with no
-                # authenticated session (the mount left view_instance set but
-                # never ran mount(), and handle_event does not re-check auth).
-                # Mirrors the PermissionDenied/4403 branch above. (Threat model
-                # T1, docs/audits/websocket-auth-2026-06.md.)
-                await self.send_json(
-                    {
-                        "type": "navigate",
-                        "to": redirect_url,
-                    }
-                )
-                # Clear the unmounted view so handle_event can't dispatch against
-                # it, then close — UNLESS we're inside a multiplexed mount_batch
-                # on a shared socket, where the navigate frame is collected into
-                # navigate[] and closing would kill sibling mounts (the batch
-                # reports this view as a redirect, not a bypass). (T1)
-                self.view_instance = None
-                if not getattr(self, "_mounting_in_batch", False):
-                    await self.close(code=4403)
-                return
-            # On auth success, run_pre_mount_auth has already resolved the
-            # tenant via _ensure_tenant and bound it into the ContextVar for the
-            # rest of this consumer task (mount() + initial render run later in
-            # the same task). Finding #6: TenantMiddleware only binds on the HTTP
-            # path; without the bind the tenant-scoped managers see None and
-            # (fail-closed) return empty querysets. Cleared in disconnect(). A
-            # raise from _ensure_tenant (e.g. Http404 for a required-but-missing
-            # tenant) propagates to the outer mount exception handler below —
-            # the same envelope this path produced when the call was inline.
-            # See: https://github.com/djust-org/djust/issues/342
-            # --- End pre-mount security sequence ---
-
-            # --- on_mount hooks (after auth, before mount) ---
-            from .hooks import run_on_mount_hooks
-
-            hook_redirect = await sync_to_async(run_on_mount_hooks)(
-                self.view_instance, request, **params
-            )
-            if hook_redirect:
-                # Same shape as the auth redirect above (T2): the view never
-                # mounted (we return before mount()), so the socket is orphaned
-                # — close it + clear view_instance so a raw client can't dispatch
-                # events against the unmounted view. (docs/audits/websocket-auth-2026-06.md.)
-                await self.send_json({"type": "navigate", "to": hook_redirect})
-                # Same as the auth branch (T2): clear the unmounted view, and
-                # close only when not inside a multiplexed mount_batch.
-                self.view_instance = None
-                if not getattr(self, "_mounting_in_batch", False):
-                    await self.close(code=4403)
-                return
-            # --- End on_mount hooks ---
-
-            # --- State restoration (skip mount when pre-rendered state exists) ---
-            # Loosened from `if has_prerendered:` — also fire on plain WS
-            # reconnect when saved state exists in the session. Pairs with
-            # the WS-event-handler save in handle_event so state survives
-            # reconnects (page refresh, network blip, snapshot/restore).
-            #
-            # #1552 fix: gate the saved_state read on
-            # ``enable_state_snapshot`` to mirror the SAVE-block gate added
-            # in #1475 (commit 066d7f05). PR #1466 widened this read from
-            # ``if has_prerendered:`` to ``if has_prerendered or saved_state:``
-            # AND made the ``aget`` itself unconditional — so views that
-            # DIDN'T opt in were still getting state restored from the
-            # HTTP-path session save onto every WS mount, AFTER mount()
-            # had already initialized the view. The next render_with_diff
-            # then diffed against that clobbered baseline, producing
-            # patches the client's DOM couldn't resolve. Bisect confirmed:
-            # 0.9.7rc1 (pre-#1466) → no bug. 0.9.7rc2 (post-#1466) → bug
-            # reproduces. Gating the LOAD symmetrically with the SAVE
-            # restores 0.9.7rc1 behavior for non-opt-in views while
-            # preserving #1466's reconnect-resume capability for opt-in
-            # views (``enable_state_snapshot = True``).
-            mounted = False
-            view_key = f"liveview_{page_url}"
-            saved_state = (
-                await request.session.aget(view_key, {})
-                if request.session and getattr(self.view_instance, "enable_state_snapshot", False)
-                else {}
-            )
-            if has_prerendered or saved_state:
-                if saved_state:
-                    from .security import safe_setattr
-
-                    for key, value in saved_state.items():
-                        safe_setattr(self.view_instance, key, value, allow_private=False)
-
-                    # Restore user-defined _private attributes (mirrors HTTP POST path)
-                    private_state = await request.session.aget(f"{view_key}__private", {})
-                    if private_state:
-                        await sync_to_async(self.view_instance._restore_private_state)(
-                            private_state
-                        )
-
-                    # Issues #889, #893, #894 — replay process-wide side
-                    # effects that mount() would have re-issued.
-                    # Pattern: session round-trip preserves instance
-                    # attrs but loses registrations with per-process
-                    # singletons (UploadManager, PresenceManager,
-                    # PostgresNotifyListener). Each affected mixin
-                    # exposes a _restore_* method that reconstructs
-                    # its side effects from the restored attrs.
-                    if hasattr(self.view_instance, "_restore_upload_configs"):
-                        await sync_to_async(self.view_instance._restore_upload_configs)()
-                    if hasattr(self.view_instance, "_restore_presence"):
-                        await sync_to_async(self.view_instance._restore_presence)()
-                    if hasattr(self.view_instance, "_restore_listen_channels"):
-                        await sync_to_async(self.view_instance._restore_listen_channels)()
-
-                    await sync_to_async(self.view_instance._initialize_temporary_assigns)()
-                    await sync_to_async(self.view_instance._assign_component_ids)()
-
-                    # Restore component state
-                    from .components.base import Component, LiveComponent
-
-                    component_state = await request.session.aget(f"{view_key}_components", {})
-                    for key, state in component_state.items():
-                        component = getattr(self.view_instance, key, None)
-                        if component and isinstance(component, (Component, LiveComponent)):
-                            await sync_to_async(self.view_instance._restore_component_state)(
-                                component, state
-                            )
-
-                    mounted = True
-
-            if not mounted:
-                # Resolve URL kwargs from the page path (e.g., slug, pk)
-                # Django's URL resolver extracts these during HTTP dispatch, but
-                # the WebSocket consumer doesn't go through URL routing, so we
-                # resolve them here and merge into mount() kwargs.
-                mount_kwargs = dict(params)
-                try:
-                    from django.urls import resolve
-
-                    match = resolve(page_url)
-                    if match.kwargs:
-                        mount_kwargs.update(match.kwargs)
-                except Exception:
-                    pass  # URL may not resolve (e.g., root "/") — that's fine
-
-                # State snapshot restore path (v0.6.0) — when the client
-                # sends a state_snapshot with live_redirect_mount AND the
-                # view opts in, restore the public state dict in lieu of
-                # calling mount(). Auth + on_mount hooks already ran above.
-                mounted_from_snapshot = False
-                # Fix #11 — operator-level master switch. Allows ops to
-                # disable snapshot restoration globally (e.g. during an
-                # incident) without touching each view class.
-                state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-                if (
-                    state_master_on
-                    and state_snapshot
-                    and getattr(self.view_instance, "enable_state_snapshot", False)
-                ):
-                    snapshot_slug = state_snapshot.get("view_slug", "")
-                    if snapshot_slug == view_path:
-                        state_dict = None
-                        # Finding #4 (CWE-345 → CWE-915): the snapshot is
-                        # client-supplied and MUST carry a server HMAC
-                        # signature. ``state_json`` is now the OPAQUE signed
-                        # blob the client echoes back verbatim (see the emit
-                        # path below + 46-state-snapshot.js). Verify the
-                        # signature + TTL + identity (slug + session) BEFORE
-                        # trusting any bytes. An unsigned/forged/tampered/
-                        # expired/cross-context snapshot returns None here and
-                        # falls through to a normal mount() — there is no
-                        # bypass via the legacy plain ``state_json``.
-                        from .security import unsign_snapshot
-
-                        signed_blob = state_snapshot.get("state_json", "")
-                        session_key = getattr(self.view_instance, "_django_session_key", None)
-                        raw_state = unsign_snapshot(signed_blob, view_path, session_key)
-                        if raw_state is None:
-                            # Rejected at the signature/identity/TTL gate.
-                            # unsign_snapshot already logged the reason.
-                            state_dict = None
-                        # Fix #6 — hard server-side size cap on the VERIFIED
-                        # inner snapshot JSON. Matches the 64 KB client clamp
-                        # and guards against oversized payloads.
-                        elif len(raw_state) > 65536:
-                            logger.warning(
-                                "state_snapshot state_json too large "
-                                "(%d bytes > 64KB) for %s; ignoring",
-                                len(raw_state),
-                                sanitize_for_log(view_path),
-                            )
-                            state_dict = None
-                        else:
-                            try:
-                                state_dict = json.loads(raw_state)
-                            except (ValueError, TypeError):
-                                logger.warning(
-                                    "state_snapshot malformed JSON for view %s; "
-                                    "proceeding with fresh mount",
-                                    sanitize_for_log(view_path),
-                                )
-                                state_dict = None
-                            # Fix #8 — enforce dict type after decode.
-                            # JSON allows arrays, numbers, strings — any
-                            # of which would trip over ``state.items()``
-                            # in ``_restore_snapshot``.
-                            if state_dict is not None and not isinstance(state_dict, dict):
-                                logger.warning(
-                                    "state_snapshot state_json is not a dict "
-                                    "(got %s) for %s; ignoring",
-                                    type(state_dict).__name__,
-                                    sanitize_for_log(view_path),
-                                )
-                                state_dict = None
-                            # Fix #7 — keyset DoS cap. Real views have
-                            # <20 public attrs; 256 is an absurd upper
-                            # bound that still fits legitimate bulk
-                            # views while blocking adversarial payloads
-                            # that exhaust CPU via safe_setattr calls.
-                            if state_dict is not None and len(state_dict) > 256:
-                                logger.warning(
-                                    "state_snapshot keyset too large "
-                                    "(%d keys > 256) for %s; ignoring",
-                                    len(state_dict),
-                                    sanitize_for_log(view_path),
-                                )
-                                state_dict = None
-                        if state_dict is not None and await sync_to_async(
-                            self.view_instance._should_restore_snapshot
-                        )(request):
-                            try:
-                                await sync_to_async(self.view_instance._restore_snapshot)(
-                                    state_dict
-                                )
-                                mounted_from_snapshot = True
-                            except Exception:  # noqa: BLE001
-                                logger.exception(
-                                    "state_snapshot _restore_snapshot failed "
-                                    "for %s; falling back to mount()",
-                                    sanitize_for_log(view_path),
-                                )
-                                mounted_from_snapshot = False
-
-                if not mounted_from_snapshot:
-                    # Run synchronous view operations in a thread pool
-                    await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
-                # Stash request + kwargs so observability/reset_view_state/
-                # can replay mount() without page reload. Minor memory cost
-                # (one request ref per live view) in exchange for a cheap
-                # reset primitive.
-                self.view_instance._djust_mount_request = request
-                self.view_instance._djust_mount_kwargs = mount_kwargs
-                self.view_instance._snapshot_user_private_attrs()
-                # Dirty tracking baseline (v0.5.1) — captures the post-mount
-                # state so ``is_dirty`` / ``changed_fields`` reflect changes
-                # made by subsequent event handlers.
-                if hasattr(self.view_instance, "_capture_dirty_baseline"):
-                    self.view_instance._capture_dirty_baseline()
-
-                # --- Object-permission check (ADR-017 §Decision 5, post-mount) ---
-                # check_view_auth handled login + role + custom checks pre-mount
-                # at line ~1947. The fourth (object-level) step is split out
-                # into a separate helper here because get_object() reads
-                # `self.<x>_id` which only exists after mount() has populated it.
-                # See ADR-017 § "Physical call sites" for the full rationale.
-                from .auth.core import check_object_permission
-
-                try:
-                    await sync_to_async(check_object_permission)(self.view_instance, request)
-                except PermissionDenied as exc:
-                    logger.info(
-                        "Object-permission denied for %s: %s",
-                        self.view_instance.__class__.__name__,
-                        exc,
-                    )
-                    await self.send_json({"type": "error", "message": "Permission denied"})
-                    await self.close(code=4403)
-                    return
-                # --- End object-permission check ---
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="mount",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
-            )
-            await self.send_json(response)
-            return
-
-        # Call handle_params() after mount (Phoenix parity: handle_params is
-        # invoked on initial render AND on subsequent URL changes).  Build the
-        # URI from the page URL and query params the client sent.
-        try:
-            uri = path_with_query  # already built above as page_url + query_string
-            await sync_to_async(self.view_instance.handle_params)(params, uri)
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="mount",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
-            )
-            await self.send_json(response)
-            return
-
-        # Get initial HTML (skip if client already has pre-rendered content)
-        html = None
-        version = 1
-
-        try:
-            if has_prerendered:
-                # Client has pre-rendered HTML but we still need to send hydrated HTML
-                # when using ID-based patching (data-dj attributes) for reliable VDOM sync
-                logger.info(
-                    "Client has pre-rendered content - sending hydrated HTML for ID-based patching"
-                )
-
-                if self.use_actors and self.actor_handle:
-                    # Initialize actor with empty render (just establish state)
-                    context_data = await sync_to_async(self.view_instance.get_context_data)()
-                    result = await self.actor_handle.mount(
-                        view_path,
-                        context_data,
-                        self.view_instance,
-                    )
-                    html = result.get("html")
-                    version = result.get("version", 1)
-                else:
-                    # Initialize Rust view and sync state for future patches
-                    await sync_to_async(self.view_instance._initialize_rust_view)(request)
-                    await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-                    # Generate hydrated HTML with data-dj attributes for reliable patch targeting
-                    html, _, version = await sync_to_async(self.view_instance.render_with_diff)()
-
-                    # Strip comments and normalize whitespace
-                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
-                        html
-                    )
-
-                    # Extract innerHTML of [dj-root]
-                    html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
-
-            elif self.use_actors and self.actor_handle:
-                # Phase 5: Use actor system for rendering
-                logger.info("Mounting %s with actor system", view_path)
-
-                # Get initial state from Python view
-                context_data = await sync_to_async(self.view_instance.get_context_data)()
-
-                # Mount with actor system (passes Python view instance)
-                result = await self.actor_handle.mount(
-                    view_path,
-                    context_data,
-                    self.view_instance,  # Pass Python view for event handlers!
-                )
-
-                html = result["html"]
-                logger.info("Actor mount successful, HTML length: %d", len(html))
-
-            else:
-                # Non-actor mode: Use traditional flow
-
-                # Initialize Rust view and sync state
-                await sync_to_async(self.view_instance._initialize_rust_view)(request)
-                await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-                # IMPORTANT: Use render_with_diff() to establish initial VDOM baseline
-                # This ensures the first event will be able to generate patches instead of falling back to html_update
-                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
-
-                # Strip comments and normalize whitespace to match Rust VDOM parser
-                html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
-
-                # Extract innerHTML of [dj-root] for WebSocket client
-                # Client expects just the content to insert into existing container
-                html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
-
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="render",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Error rendering {sanitize_for_log(view_path)}",
-            )
-            await self.send_json(response)
-            return
-
-        # Send success response (HTML only if generated)
-        logger.info("Successfully mounted view: %s", view_path)
-        # Stamp the consumer-owned wire version (#1788) rather than the Rust
-        # ``version`` (or the actor ``result['version']``). On a fresh
-        # connection this is 1, so the client baseline = 1 and the first event
-        # (version 2) satisfies ``clientVdomVersion === data.version - 1``. The
-        # client sets ``clientVdomVersion = data.version`` directly on mount
-        # (``static/djust/src/03-websocket.js:382``), so the source MUST be the
-        # consumer counter to keep every subsequent frame in sequence.
-        version = self._next_version()
-        response = {
-            "type": "mount",
-            "session_id": self.session_id,
-            "view": view_path,
-            "version": version,  # Include VDOM version for client sync
-        }
-
-        # Fix #1 — end-to-end wiring for state-snapshot capture.
-        # When the view opts in via ``enable_state_snapshot = True`` AND
-        # the master switch is enabled, emit the public state alongside
-        # the mount frame so the client can populate
-        # ``djust._clientState[<view_slug>]`` for the next before-navigate
-        # capture. Non-opt-in views never have their state shipped —
-        # matches the security posture of the opt-in-only model.
-        #
-        # Finding #4 (CWE-345 → CWE-915): the snapshot is now SIGNED with a
-        # ``TimestampSigner`` (keyed on ``SECRET_KEY``) and the OPAQUE signed
-        # blob is what crosses the wire (``state_snapshot_signed``). The
-        # client stores it verbatim and echoes it back unchanged; the restore
-        # path verifies the signature + TTL + identity before applying any
-        # state. This closes the unsigned-snapshot forgery vector — a client
-        # can no longer fabricate ``{"is_admin": true, ...}`` and inject it.
-        # The signature binds the view slug + Django session key so a valid
-        # snapshot cannot be replayed across views or sessions.
-        try:
-            state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-            if state_master_on and getattr(self.view_instance, "enable_state_snapshot", False):
-                snapshot_fn = getattr(self.view_instance, "_capture_snapshot_state", None)
-                if callable(snapshot_fn):
-                    public_state = await sync_to_async(snapshot_fn)()
-                    if isinstance(public_state, dict) and public_state:
-                        from .security import sign_snapshot
-
-                        # Canonical serialization so the signed bytes are
-                        # stable (and match the inner JSON the restore path
-                        # json.loads-es after unsigning).
-                        state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
-                        session_key = getattr(self.view_instance, "_django_session_key", None)
-                        response["state_snapshot_signed"] = sign_snapshot(
-                            state_json, view_path, session_key
-                        )
-        except Exception:  # noqa: BLE001 — snapshot emission must never break mount
-            logger.exception(
-                "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
-                sanitize_for_log(view_path),
-            )
-
-        # Only include HTML if it was generated (not skipped due to pre-rendering).
-        #
-        # Resume optimization: when state was restored from the Django session
-        # (mounted=True, my WS-event-save-companion patch fires) AND the client
-        # carries pre-rendered HTML (has_prerendered=True), the client's DOM
-        # already reflects the saved state. Sending the freshly-rendered HTML
-        # would trigger a redundant DOM swap on the client. Skip the html
-        # field; client.js's `e.html && (n.innerHTML=e.html)` short-circuits
-        # cleanly, leaving the existing DOM in place. The `version` field
-        # below still flows so subsequent patches stay in sync.
-        skip_html_for_resume = mounted and has_prerendered
-        if html is not None and not skip_html_for_resume:
-            response["html"] = html
-            # Flag indicating HTML has dj-id attributes for ID-based patching.
-            # Must match the attribute name emitted by the Rust renderer ("dj-id",
-            # not "data-dj-id"). Mirrors the equivalent check in sse.py.
-            has_ids = "dj-id=" in html
-            response["has_ids"] = has_ids
-        elif skip_html_for_resume:
-            logger.info(
-                "Skipping mount HTML for resume of %s — client already has DOM",
-                sanitize_for_log(view_path),
-            )
-
-        # Include cache configuration for handlers with @cache decorator
-        cache_config = self._extract_cache_config()
-        if cache_config:
-            response["cache_config"] = cache_config
-
-        # Include optimistic rules from descriptor components (DEP-002)
-        optimistic_rules = self._extract_optimistic_rules()
-        if optimistic_rules:
-            response["optimistic_rules"] = optimistic_rules
-
-        # Include upload configurations if view uses UploadMixin
-        if hasattr(self.view_instance, "_upload_manager") and self.view_instance._upload_manager:
-            upload_state = self.view_instance._upload_manager.get_upload_state()
-            if upload_state:
-                response["upload_configs"] = {
-                    name: info["config"] for name, info in upload_state.items()
-                }
-
-        # Sticky LiveViews (Phase B): if the caller passed a
-        # ``sticky_preserved`` dict (i.e. we're on the live_redirect
-        # path), compute the authoritative survivor set by scanning the
-        # just-rendered HTML for ``[dj-sticky-slot="<id>"]`` and emit
-        # the ``sticky_hold`` frame BEFORE the ``mount`` frame. Ordering
-        # matters: the client's mount handler calls
-        # reattachStickyAfterMount() which walks stickyStash and
-        # replaces matching slot elements — if sticky_hold arrived
-        # AFTER the mount frame, auth-revoked stickys would already be
-        # reattached and reconcileStickyHold would no-op on them.
-        if sticky_preserved:
-            try:
-                matched_ids = _find_sticky_slot_ids(html or "")
-                survivors_final: Dict[str, Any] = {}
-                for sticky_id, child in sticky_preserved.items():
-                    if sticky_id in self._sticky_auto_reattached:
-                        # ADR-014: tag already re-registered the survivor onto
-                        # the new parent at template-render time. Don't call
-                        # ``_register_child`` again (it would ``ValueError``);
-                        # do still include in survivors_final so the
-                        # ``sticky_hold`` frame's ``views`` list stays
-                        # authoritative for the client's reconcileStickyHold.
-                        survivors_final[sticky_id] = child
-                    elif sticky_id in matched_ids:
-                        # Re-register onto the new parent. _register_child
-                        # updates child._parent_view and child._view_id.
-                        if hasattr(self.view_instance, "_register_child"):
-                            try:
-                                self.view_instance._register_child(sticky_id, child)
-                                survivors_final[sticky_id] = child
-                            except ValueError:
-                                # sticky_id collided with a freshly-embedded
-                                # (non-preserved) child in the new template —
-                                # discard the preserved one.
-                                logger.warning(
-                                    "sticky_id %s collided with new child on reattach",
-                                    sticky_id,
-                                )
-                                hook = getattr(child, "_on_sticky_unmount", None)
-                                if callable(hook):
-                                    try:
-                                        hook()
-                                    except Exception:  # noqa: BLE001
-                                        logger.exception("sticky child _on_sticky_unmount raised")
-                    else:
-                        hook = getattr(child, "_on_sticky_unmount", None)
-                        if callable(hook):
-                            try:
-                                hook()
-                            except Exception:  # noqa: BLE001
-                                logger.exception("sticky child _on_sticky_unmount raised")
-                # Update caller-visible dict so handle_live_redirect_mount
-                # sees the final survivors (it stashes this on
-                # self._sticky_preserved for app-level introspection).
-                self._sticky_preserved = survivors_final
-
-                # Emit sticky_hold BEFORE the mount frame. Even an empty
-                # list is meaningful — tells the client "drop everything
-                # in your stash". Only skip when the caller passed an
-                # empty dict (pure defensive, no stickys staged).
-                await self.send_json(
-                    {
-                        "type": "sticky_hold",
-                        "views": list(survivors_final.keys()),
-                    }
-                )
-            except Exception:  # noqa: BLE001 — defensive: never break mount
-                logger.exception("failed to emit sticky_hold frame before mount")
-
-        await self.send_json(response)
-
-        # Mount-time queues: drain push events queued during mount() (or
-        # on_mount hooks) so the client receives them after the mount frame
-        # establishes the view; then dispatch any start_async()/assign_async()
-        # callbacks scheduled in mount() so they run in the background and
-        # send patches once they complete. The send-then-drain ordering
-        # mirrors the established pattern in handle_event /
-        # _flush_deferred_activity_events. Closes #1280 (silent
-        # mount()-time async failure) and #1283 (mount-time push events
-        # never delivered).
-        await self._flush_push_events()
-        await self._dispatch_async_work()
+        runtime = self._get_runtime()
+        # (A) Null the runtime's view BEFORE dispatch so a reconnect / live_redirect
+        # re-mount is never silently no-op'd by the idempotency early-return.
+        runtime.view_instance = None
+
+        # Thread the WS-only direct-caller kwargs into the shape dispatch_mount +
+        # its hooks read:
+        #   * ``sticky_preserved`` — the ``on_mount_render_ready`` hook reads
+        #     ``consumer._sticky_preserved`` (set by handle_live_redirect_mount
+        #     already; set it here too for any direct caller passing the kwarg).
+        #   * ``state_snapshot`` — ``dispatch_mount`` reads ``data.get("state_snapshot")``
+        #     (handle_live_redirect_mount already puts it in ``data``; thread the
+        #     kwarg in for direct callers without mutating the caller's dict).
+        if sticky_preserved is not None:
+            self._sticky_preserved = sticky_preserved
+        if state_snapshot is not None and data.get("state_snapshot") is None:
+            data = {**data, "state_snapshot": state_snapshot}
+
+        await runtime.dispatch_mount(data)
+
+        # (B) Mount creates the view on the runtime — read it back onto the consumer
+        # so disconnect cleanup, request_html recovery, upload/presence handlers,
+        # and the batch collector all see the freshly-mounted view (or ``None`` on
+        # an auth/hook block, which dispatch_mount cleared on the runtime).
+        self.view_instance = runtime.view_instance
 
     async def _mount_one(self, data_view: Dict[str, Any]):
         """Mount + render a single view and return a payload WITHOUT sending.
@@ -3692,12 +2908,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     #: state-save, ``dj_activity``, #1777 reauth), so every WS event now flows
     #: through the single chokepoint — the #1646 convergence.
     #:
-    #: ``mount`` is a runtime-owned verb too but is deliberately NOT in this set
-    #: yet — the WS ``handle_mount`` still carries sticky-child preservation,
-    #: signed ``state_snapshot`` restore, and actor channel-layer wiring the
-    #: runtime ``dispatch_mount`` does not (T1-A #1853). See the routing comment
-    #: in :meth:`receive`.
-    RUNTIME_OWNED_VERBS = frozenset({"url_change", "event"})
+    #: ``mount`` was added in ADR-022 Iter 3 Phase 3.3b (#1919, THE MOUNT FLIP):
+    #: Phases 3.0-3.3a grew ``dispatch_mount`` into a functional superset of the
+    #: deleted bespoke ``handle_mount`` body (F22 resolver, ``run_pre_mount_auth``
+    #: pre-mount auth+tenant via ``_check_auth``, ``on_mount`` hooks, session +
+    #: signed-snapshot restore, post-mount object-perm, ``handle_params``, actor
+    #: mount, the no-arm mount wire version, the sticky_hold pre-mount frame, the
+    #: auth verdict→close finalize, the WS post-mount channel-layer wiring + tick +
+    #: flags, the 2-queue mount-time drain) via ``WSConsumerTransport`` hooks, so
+    #: every WS mount now flows through the single chokepoint — the #1646 mount
+    #: convergence COMPLETE. See the routing comment in :meth:`receive`.
+    RUNTIME_OWNED_VERBS = frozenset({"url_change", "event", "mount"})
 
     async def _dispatch_runtime_owned(self, data: Dict[str, Any]) -> None:
         """Route a runtime-owned frame through :meth:`ViewRuntime.dispatch_message`.
@@ -3707,11 +2928,32 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         chokepoint so a future security/policy control added there auto-applies
         to the WebSocket transport. The consumer's ``view_instance`` is mirrored
         onto the shared runtime before dispatch (the runtime is the source of
-        truth for ``view_instance`` once mount migrates in T1-A).
+        truth for ``view_instance`` once mount migrated in #1919).
+
+        ``view_instance`` ownership INVERTS for ``mount`` (#1919, Finding B):
+        ``url_change`` / ``event`` mirror consumer→runtime, but ``mount`` CREATES
+        the view, and ``dispatch_mount`` early-returns when ``runtime.view_instance
+        is not None`` (the legacy GET-mount double-fire guard, runtime.py). So for
+        a ``mount`` frame we NULL the runtime's view first — otherwise a
+        reconnect / re-mount on a runtime that already mounted once would silently
+        no-op (the #560-class idempotency landmine, Finding A). The shim path
+        (``handle_mount`` / ``handle_live_redirect_mount`` / ``_mount_one``) does
+        the same null+readback; this is the wire-frame twin.
         """
         runtime = self._get_runtime()
-        runtime.view_instance = self.view_instance
+        if data.get("type") == "mount":
+            runtime.view_instance = None
+        else:
+            runtime.view_instance = self.view_instance
         await runtime.dispatch_message(data)
+        # Mount CREATES the view on the runtime (runtime→consumer read-back,
+        # Finding B): mirror it back so the consumer's ``view_instance`` (read by
+        # disconnect cleanup, request_html recovery, upload/presence handlers, the
+        # batch collector, etc.) reflects the freshly-mounted view. On an
+        # auth/hook block ``dispatch_mount`` cleared ``runtime.view_instance`` so
+        # this reads back ``None`` — matching the bespoke "clear on auth fail".
+        if data.get("type") == "mount":
+            self.view_instance = runtime.view_instance
 
     async def handle_url_change(self, data: Dict[str, Any]):
         """
@@ -3842,6 +3084,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     logger.warning("Failed to clean up uploads for old view", exc_info=True)
 
         self.view_instance = None
+        # (#1919, Finding A) Null the shared runtime's view too BEFORE the
+        # re-mount below. ``handle_mount`` (the shim) also nulls it, but doing it
+        # here keeps the teardown self-consistent: a re-mount on this connection
+        # must never be no-op'd by ``dispatch_mount``'s idempotency early-return —
+        # this is the live_redirect re-mount landmine the Finding-A net guards.
+        runtime = getattr(self, "_runtime", None)
+        if runtime is not None:
+            runtime.view_instance = None
 
         # Parse state_snapshot if the client sent one (v0.6.0) so it can
         # be forwarded to handle_mount for back-nav state restoration.

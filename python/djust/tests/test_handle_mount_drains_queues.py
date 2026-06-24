@@ -124,41 +124,30 @@ class TestRuntimeDispatchMountSourceShape:
 
 
 class TestHandleMountSourceShape:
-    """``handle_mount`` (WS, untouched until 3.3b) must still include the
-    post-frame queue drains — a 3.0-era WS refactor can't silently drop them."""
+    """Post-#1919 (THE MOUNT FLIP): ``handle_mount`` is a THIN SHIM that delegates
+    to ``ViewRuntime.dispatch_mount`` — the two queue drains MOVED into the runtime
+    (the primary pin ``TestRuntimeDispatchMountSourceShape`` above). The drains are
+    NO LONGER in the WS shim source; pinning them here would FALSE-FAIL. Instead pin
+    that the shim delegates to the runtime (so it inherits the runtime's drains)."""
 
     def _source(self) -> str:
         return inspect.getsource(LiveViewConsumer.handle_mount)
 
-    def test_calls_dispatch_async_work(self):
-        """``handle_mount`` must call ``_dispatch_async_work``. Closes #1280."""
-        assert "_dispatch_async_work()" in self._source(), (
-            "handle_mount must drain _async_tasks. Without this, "
-            "start_async()/assign_async() called from mount() are queued "
-            "but never spawned (see #1280)."
+    def test_shim_delegates_to_runtime_dispatch_mount(self):
+        """The WS ``handle_mount`` shim routes through ``runtime.dispatch_mount``,
+        which owns the #1280/#1283 drains (pinned by the runtime class above)."""
+        assert "dispatch_mount(" in self._source(), (
+            "handle_mount must delegate to runtime.dispatch_mount post-#1919 — the "
+            "mount-time _async_tasks (#1280) + _pending_push_events (#1283) drains "
+            "live in the runtime now, so the shim inherits them via delegation."
         )
 
-    def test_calls_flush_push_events(self):
-        """``handle_mount`` must call ``_flush_push_events``. Closes #1283."""
-        assert "_flush_push_events()" in self._source(), (
-            "handle_mount must drain _pending_push_events. Without this, "
-            "push_event() called from mount() never reaches the client "
-            "(see #1283)."
-        )
-
-    def test_drains_run_after_final_mount_frame(self):
-        """Drain calls must occur AFTER the final ``send_json(response)``."""
+    def test_drains_not_duplicated_in_shim(self):
+        """The drains must NOT also run inline in the shim (double-drain) — they are
+        the runtime's responsibility post-flip."""
         src = self._source()
-        last_send = src.rfind("send_json(response)")
-        assert last_send != -1, "could not find send_json(response) in handle_mount source"
-        flush_after = src.find("_flush_push_events()", last_send)
-        dispatch_after = src.find("_dispatch_async_work()", last_send)
-        assert flush_after > last_send, (
-            "_flush_push_events() must come AFTER the final send_json("
-            "response); otherwise push events would arrive before the "
-            "mount frame establishes the view."
-        )
-        assert dispatch_after > last_send, (
-            "_dispatch_async_work() must come AFTER the final send_json("
-            "response); otherwise async-driven patches could race the mount."
+        assert "_dispatch_async_work" not in src and "_flush_push_events" not in src, (
+            "handle_mount is a thin shim post-#1919 — the mount-time drains belong "
+            "to runtime.dispatch_mount, not the shim. Re-adding them here would "
+            "double-drain. Found a drain call in the shim source."
         )

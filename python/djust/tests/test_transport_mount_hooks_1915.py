@@ -535,21 +535,31 @@ def test_dispatch_mount_routes_actor_mount_not_refuses():
     )
 
 
-def test_bespoke_handle_mount_still_does_work_inline():
-    """The WS bespoke handle_mount keeps doing everything inline (untouched until
-    3.3b). Pin the inline sites the hooks will later replace."""
+def test_bespoke_handle_mount_inline_work_moved_to_hooks_post_flip():
+    """Post-#1919 (THE MOUNT FLIP): the ~870-line bespoke ``handle_mount`` body was
+    DELETED — ``handle_mount`` is now a THIN SHIM over ``runtime.dispatch_mount``.
+    The inline sites this test used to pin (the back-ref stamps, the no-arm version
+    stamp, the #291 batch-gated close) MOVED into the ``WSConsumerTransport`` hooks
+    (``on_view_instantiated`` / ``next_mount_version`` / ``finalize_mount_auth``).
+    Pin the post-flip shape so a revert that re-grows the inline body trips here;
+    the hook IMPLS are exercised by the real-WebsocketCommunicator tests below."""
     from djust.websocket import LiveViewConsumer
 
     src = inspect.getsource(LiveViewConsumer.handle_mount)
-    # Hook 1 sites
-    assert "_ws_consumer = self" in src
-    # Hook 3 site — handle_mount stamps the NO-ARM consumer version inline.
-    assert "self._next_version()" in src, (
-        "handle_mount still stamps version via self._next_version() inline (Finding C)"
+    # The shim delegates to the runtime; the inline work is gone.
+    assert "dispatch_mount(" in src, "handle_mount must be a shim over dispatch_mount post-flip"
+    assert "_ws_consumer = self" not in src, (
+        "the _ws_consumer back-ref stamp MOVED to on_view_instantiated (Finding B); "
+        "it must NOT be inline in the shim"
     )
-    # Hook 5 site — the #291 batch-gated close is still inline.
-    assert "_mounting_in_batch" in src, "the #291 close-gate is still inline in handle_mount"
-    assert "close(code=4403)" in src
+    assert "self._next_version()" not in src, (
+        "the no-arm version stamp MOVED to the next_mount_version hook (Finding C); "
+        "it must NOT be inline in the shim"
+    )
+    assert "_mounting_in_batch" not in src and "close(code=4403)" not in src, (
+        "the #291 batch-gated close MOVED to the finalize_mount_auth hook "
+        "(Finding E); it must NOT be inline in the shim"
+    )
 
 
 # --------------------------------------------------------------------------- #
