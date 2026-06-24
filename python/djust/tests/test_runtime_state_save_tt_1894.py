@@ -31,6 +31,7 @@ the ``on_event_recorded`` hook) is real.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import uuid
 from typing import Any, Dict, List, Optional
@@ -123,6 +124,13 @@ class MockTransport:
         # Mirrors the SSE no-op shape (records the call so tests can assert the
         # hook fired) but does NOT emit a frame.
         self.recorded.append((view, snapshot))
+
+    @contextlib.asynccontextmanager
+    async def event_context(self, view: Any):
+        """No-op event context (#1899): the mock has no consumer lock to borrow —
+        the runtime wraps the event handler+render in ``transport.event_context``,
+        so the mock must provide one."""
+        yield
 
 
 # ------------------------------------------------------------------ #
@@ -396,18 +404,23 @@ def test_runtime_save_block_present_and_gated():
 
     The WS pin asserts these exact strings in
     ``LiveViewConsumer._handle_event_inner``; this asserts them in the runtime's
-    save path (``_dispatch_event_inner`` gate + ``_persist_state_after_event``
+    save path (``_dispatch_event_render`` gate + ``_persist_state_after_event``
     body). Drift between the two save gates goes red on whichever pin's source
     lost the string.
+
+    (#1899, ADR-022 Phase 2.3a: the event body was extracted from
+    ``_dispatch_event_inner`` into ``_dispatch_event_render`` so the handler+render
+    runs inside ``transport.event_context``; the save gate moved with the body, so
+    this pin reads ``_dispatch_event_render``.)
     """
     import djust.runtime as rt_mod
 
-    gate_src = inspect.getsource(rt_mod.ViewRuntime._dispatch_event_inner)
+    gate_src = inspect.getsource(rt_mod.ViewRuntime._dispatch_event_render)
     body_src = inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event)
     gate_collapsed = " ".join(gate_src.split())
     body_collapsed = " ".join(body_src.split())
 
-    # --- Gate (in _dispatch_event_inner): identity AND enable_state_snapshot ---
+    # --- Gate (in _dispatch_event_render): identity AND enable_state_snapshot ---
     # Mirrors websocket.py:3700-3702 / WS pin line 313 + 320.
     assert "target_view is self.view_instance" in gate_collapsed, (
         "Runtime save gate must keep the top-level-identity clause (#1466) — "
