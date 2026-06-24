@@ -34,7 +34,9 @@ class ContextProviderMixin:
         Walks ``_djust_context_parent`` upward; returns ``default`` if no
         provider is found.
         """
-        node = self
+        # ``node`` walks the parent chain via getattr (returns Any | None), so
+        # it is typed Any rather than the narrower ContextProviderMixin.
+        node: Any = self
         while node is not None:
             providers = getattr(node, "_djust_context_providers", None)
             if providers and key in providers:

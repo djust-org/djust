@@ -110,7 +110,9 @@ class PermissionsFinding:
     details: Optional[str] = None
 
     @classmethod
-    def make(cls, code: str, view: str, message: str, details: Optional[str] = None):
+    def make(
+        cls, code: str, view: str, message: str, details: Optional[str] = None
+    ) -> "PermissionsFinding":
         """Build a finding using the canonical severity from FINDING_CODES."""
         severity = FINDING_CODES.get(code, ("error", ""))[0]
         return cls(code=code, view=view, message=message, severity=severity, details=details)
@@ -503,4 +505,5 @@ def dump_starter_document(audits: List[Dict[str, Any]]) -> str:
         "# in CI to catch any future deviation.\n"
         "\n"
     )
-    return header + yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
+    # yaml.safe_dump returns str; str() narrows it from Any (PyYAML is untyped).
+    return header + str(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))

@@ -23,7 +23,7 @@ Usage:
 
 import logging
 import re
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 # Maximum length for logged values (prevents log flooding)
 MAX_LOG_LENGTH = 500
@@ -177,7 +177,9 @@ def sanitize_dict_for_log(
             "cookie",
         }
 
-    result = {}
+    # Heterogeneous values: redacted strings, nested sanitized dicts, and
+    # sanitized item lists all coexist, so the value type is ``Any``.
+    result: dict[str, Any] = {}
 
     for key, value in data.items():
         # Sanitize the key

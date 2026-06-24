@@ -1164,7 +1164,7 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
 
 def _extract_routes() -> List[Dict[str, str]]:
     """Extract URL routes that map to LiveView classes."""
-    routes = []
+    routes: List[Dict[str, str]] = []
     try:
         from django.urls import get_resolver
 

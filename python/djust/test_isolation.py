@@ -90,6 +90,8 @@ Explicitly NOT reset (would be too aggressive / not a leak):
 
 from __future__ import annotations
 
+from typing import Callable, Optional
+
 
 def _reset_channel_layer() -> None:
     """Drop the cached Channels backend so each test gets a fresh layer.
@@ -182,6 +184,7 @@ def _reset_rust_tag_handlers() -> None:
     extension is unavailable, so this is cheap. Same class #1771 patched only
     in ``tests/unit/test_tag_registry.py``; this is the worker-wide cure.
     """
+    _theme: Optional[Callable[[], None]]
     try:
         from djust.theming.rust_handlers import register_with_rust_engine as _theme
     except Exception:  # noqa: BLE001 — theming is optional; never break the fixture.
@@ -192,6 +195,7 @@ def _reset_rust_tag_handlers() -> None:
         except Exception:  # noqa: BLE001
             pass
 
+    _components: Optional[Callable[[], None]]
     try:
         from djust.components.rust_handlers import register_with_rust_engine as _components
     except Exception:  # noqa: BLE001 — components are optional; stay defensive.

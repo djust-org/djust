@@ -24,8 +24,11 @@ Usage:
 import re
 from typing import Any, Set, Optional
 
-# Attributes that should never be settable from untrusted input
-DANGEROUS_ATTRIBUTES: Set[str] = frozenset(
+# Attributes that should never be settable from untrusted input.
+# Typed as frozenset (not Set) to match the immutable security-denylist value:
+# this set is membership-checked only (`name in DANGEROUS_ATTRIBUTES`) and must
+# never be mutated. The previous ``Set[str]`` annotation lied about mutability.
+DANGEROUS_ATTRIBUTES: frozenset[str] = frozenset(
     {
         # Python special attributes
         "__class__",

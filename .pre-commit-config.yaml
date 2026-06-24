@@ -117,6 +117,21 @@ repos:
         files: ^python/djust/static/djust/[^/]*\.js$
         pass_filenames: true
 
+  # Python - mypy type-checking (lenient global + strict islands; ADR-023)
+  # Scoped to python/djust source changes. The config (pyproject [tool.mypy])
+  # makes the gate GREEN against the legacy baseline while enforcing strict
+  # rules on the strict-island modules (security/*, rate_limit, validation,
+  # permissions, the _rust.pyi boundary, etc.). Runs the full package because
+  # mypy needs cross-module context; warm runs are ~0.3s thanks to the cache.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy type-check (ADR-023 strict islands)
+        entry: bash -c 'bash scripts/run-with-venv-python.sh -m mypy python/djust'
+        language: system
+        files: ^python/djust/.*\.pyi?$
+        pass_filenames: false
+
   # Security - Secret detection
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0

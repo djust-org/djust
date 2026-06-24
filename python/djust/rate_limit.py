@@ -164,7 +164,7 @@ class ConnectionRateLimiter:
 class IPConnectionTracker:
     """Process-level tracker for per-IP connection counts and reconnection cooldowns."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._connections: Dict[str, int] = {}
         self._cooldowns: Dict[str, float] = {}
         self._lock = threading.Lock()
@@ -199,7 +199,7 @@ class IPConnectionTracker:
 ip_tracker = IPConnectionTracker()
 
 
-def get_rate_limit_settings(handler) -> Optional[dict]:
+def get_rate_limit_settings(handler: Any) -> Optional[dict]:
     """
     Get rate limit settings from a handler's @rate_limit decorator metadata.
 

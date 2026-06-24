@@ -247,6 +247,11 @@ lint-ci: ## Run linters in CI mode (warnings as errors)
 	@uv run ruff check python/
 	@cargo clippy -- -D warnings
 
+.PHONY: typecheck
+typecheck: ## Run mypy type-checking (lenient global + strict islands; see ADR-023)
+	@echo "$(GREEN)Type-checking python/djust with mypy...$(NC)"
+	@$(PYTHON) -m mypy python/djust
+
 .PHONY: format
 format: ## Format code
 	@echo "$(GREEN)Formatting code...$(NC)"
@@ -272,7 +277,7 @@ pre-commit-install: ## Install pre-commit hooks (run once after clone)
 	@echo "$(GREEN)Pre-push hooks installed! Tests will run before git push.$(NC)"
 
 .PHONY: check
-check: lint check-bundle-init-order test ## Run linters and tests
+check: lint typecheck check-bundle-init-order test ## Run linters, type-check, and tests
 
 .PHONY: check-changelog
 check-changelog: ## Validate CHANGELOG test-count claims against actual tests (closes #908)

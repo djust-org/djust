@@ -214,9 +214,21 @@ class TestView(LiveView):
         assert hasattr(PushEventMixin, "push_event")
 
     def test_mypy_catches_missing_required_arg(self):
-        """Mypy catches missing required arguments."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            test_code = """
+        """Mypy catches missing required arguments.
+
+        This exercises the LiveView STUB's contract (``live_redirect`` has a
+        required ``path`` arg), independent of the project's gate config. The
+        project ``pyproject.toml`` runs a lenient-global mypy config (ADR-023:
+        ``ignore_errors = true`` outside the strict islands) so the incremental
+        gate stays green against the legacy baseline — but that would park the
+        error in this snippet's throwaway module. Pin an isolated empty config
+        (``--config-file``) so mypy uses its own defaults and genuinely reports
+        the missing-arg error this test asserts on.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snippet = Path(tmpdir) / "snippet.py"
+            snippet.write_text(
+                """
 from djust import LiveView
 
 class TestView(LiveView):
@@ -225,32 +237,38 @@ class TestView(LiveView):
     def my_handler(self) -> None:
         self.live_redirect()  # Missing required 'path' argument
 """
-            f.write(test_code)
-            f.flush()
+            )
+            # Empty config → mypy's own defaults (which report call-arg /
+            # missing-positional), NOT the project's lenient ADR-023 gate config.
+            cfg = Path(tmpdir) / "mypy.ini"
+            cfg.write_text("[mypy]\n")
 
-            try:
-                result = subprocess.run(
-                    [
-                        _MYPY_EXE,
-                        "--no-error-summary",
-                        "--python-executable",
-                        sys.executable,
-                        f.name,
-                    ],
-                    capture_output=True,
-                    text=True,
-                )
-                # Should catch missing required argument
-                has_error = (
-                    result.returncode != 0
-                    or "Missing positional argument" in result.stdout
-                    or "Too few arguments" in result.stdout
-                )
-                assert (
-                    has_error
-                ), f"Mypy should have caught missing argument. Output: {result.stdout}"
-            finally:
-                Path(f.name).unlink()
+            env = os.environ.copy()
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"{_DJUST_PYTHON_PATH}:{existing}" if existing else _DJUST_PYTHON_PATH
+            )
+            result = subprocess.run(
+                [
+                    _MYPY_EXE,
+                    "--no-error-summary",
+                    "--config-file",
+                    str(cfg),
+                    "--python-executable",
+                    sys.executable,
+                    str(snippet),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            # Should catch missing required argument
+            has_error = (
+                result.returncode != 0
+                or "Missing positional argument" in result.stdout
+                or "Too few arguments" in result.stdout
+            )
+            assert has_error, f"Mypy should have caught missing argument. Output: {result.stdout}"
 
 
 class TestStubSignatures:

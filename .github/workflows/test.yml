@@ -148,6 +148,18 @@ jobs:
       - name: Run Python linter
         run: uv run ruff check python/
 
+      # mypy type-check — incremental enforcement gate (ADR-023).
+      # The pyproject [tool.mypy] config is lenient globally (legacy baseline
+      # parked) and STRICT on the strict-island modules (security/*, rate_limit,
+      # validation, permissions, the _rust.pyi PyO3 boundary, etc.). It is GREEN
+      # by construction, so it ships as a BLOCKING step (no continue-on-error)
+      # from its first run, per the #1534 "green-on-first-run → gate" rule. This
+      # makes mypy a new MERGE GATE (#1236 governance): a regression in any
+      # strict island, or a future module flipped to strict that doesn't pass,
+      # fails this step → fails python-tests → fails the test-summary AND-gate.
+      - name: Run mypy type-check (ADR-023 strict islands)
+        run: .venv/bin/python -m mypy python/djust
+
       - name: ADR status/version-line consistency (#1501)
         run: .venv/bin/python scripts/check-adr-status.py
 

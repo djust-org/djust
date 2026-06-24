@@ -176,10 +176,105 @@ line-length = 100
 target-version = "py310"
 
 [tool.mypy]
+# --------------------------------------------------------------------------- #
+# Incremental type enforcement — see docs/adr/023-incremental-type-enforcement.md
+#
+# The global default is intentionally LENIENT so the gate is GREEN today
+# (`mypy python/djust` exits 0) against the ~8.4k-error legacy baseline. Strict
+# enforcement is applied per-module via the `[[tool.mypy.overrides]]` "strict
+# islands" below — a small set of modules that pass clean under strict rules.
+# The ratchet: flip one module at a time from lenient to a strict island, fixing
+# its annotations/real errors in that PR. Prioritise the developer-facing public
+# API (live_view / component / decorators / forms) since py.typed exposes our
+# types to consumers, with `_rust.pyi` typing the PyO3 boundary.
+# --------------------------------------------------------------------------- #
 python_version = "3.10"
-warn_return_any = true
 warn_unused_configs = true
+
+# Kill third-party + Django + PyYAML "missing library stubs" noise (and any
+# stale _rust import noise). The `_rust.pyi` stub still types the PyO3 surface
+# for the strict islands below.
+ignore_missing_imports = true
+
+# Lenient global default (legacy modules not yet on a strict island). The legacy
+# baseline carries ~8.4k errors (≈6.8k missing annotations + ~700 real type
+# errors); enforcing strict globally would make the gate permanently red, so the
+# global default parks legacy errors via `ignore_errors`. This is the canonical
+# mypy incremental-adoption pattern (NOT a blanket free pass — the strict islands
+# below flip `ignore_errors` back OFF and genuinely enforce every error class).
+# The ratchet flips one module at a time out of this lenient default into a
+# strict island, triaging its real errors in that PR.
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+warn_return_any = false
+ignore_errors = true
+
+# Third-party libraries consumed BY a strict island but lacking type stubs.
+# `ignore_missing_imports` in the global section is honored by lenient modules,
+# but a strict island (ignore_errors=false) still surfaces `import-untyped` for
+# an installed-but-unstubbed dependency (e.g. PyYAML, consumed by
+# djust.permissions). Mark those libraries untyped explicitly so the strict
+# islands stay green without weakening the island's own def/return strictness.
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
+# --------------------------------------------------------------------------- #
+# STRICT ISLANDS — modules enforced under full strict rules. Each is verified to
+# pass clean (0 errors) under disallow_untyped_defs + disallow_incomplete_defs +
+# warn_return_any. Adding a module here is the "ratchet" — do it one module per
+# PR. Do NOT add a module that doesn't pass clean; fix its annotations first.
+# --------------------------------------------------------------------------- #
+
+# Security boundary (highest-value island: the trust surface).
+[[tool.mypy.overrides]]
+module = [
+    "djust.security.*",
+    "djust._rust",
+]
+ignore_errors = false
 disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# Rate limiting + connection guard (DoS surface).
+[[tool.mypy.overrides]]
+module = ["djust.rate_limit"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# Input validation + permissions audit (security-adjacent).
+[[tool.mypy.overrides]]
+module = [
+    "djust.validation",
+    "djust.permissions",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# Well-annotated utility / leaf modules (low-churn, easy to keep green).
+[[tool.mypy.overrides]]
+module = [
+    "djust.markdown",
+    "djust.schema",
+    "djust.signals",
+    "djust.async_result",
+    "djust.test_isolation",
+    "djust._client_ip",
+    "djust._log_utils",
+    "djust._html",
+    "djust._view_resolution",
+    "djust._deprecation",
+    "djust._context_provider",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
 
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework

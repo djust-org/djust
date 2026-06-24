@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
+from typing import Optional, cast
 
 from django.conf import settings
 from django.core import signing
@@ -121,7 +121,9 @@ def sign_snapshot(state_json: str, view_slug: str, session_key: Optional[str]) -
         sort_keys=True,
         separators=(",", ":"),
     )
-    return _signer().sign(envelope)
+    # Django's TimestampSigner.sign() returns str; cast to satisfy the strict
+    # gate (django is treated as untyped under ignore_missing_imports).
+    return cast(str, _signer().sign(envelope))
 
 
 def unsign_snapshot(
