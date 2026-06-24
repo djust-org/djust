@@ -422,19 +422,23 @@ def test_every_client_checked_send_path_uses_next_version():
     helper_internal = len(re.findall(r"\b[a-z_]+ = self\._next_version\(\)", helper_src))
     bare_send_sites = bare_inline + bare_assign - helper_internal
 
-    # Bare send-site invocations (verified at #1817; actor site moved at #1907):
-    #   ASSIGNMENT: 1 — handle_mount baseline (non-render; covers actor mount).
+    # Bare send-site invocations (verified at #1817; actor site moved at #1907;
+    # mount baseline moved at #1919):
+    #   (none remain in websocket.py).
     #
     # #1907 THE FLIP: the actor event path's INLINE ``version=self._next_version()``
     # moved to ``WSConsumerTransport.dispatch_actor_event`` (runtime.py) in Phase
-    # 2.3a — it calls ``consumer._next_version()`` (still the consumer counter, still
-    # unarmed pending the #1817 actor follow-up), but the call site is now in
-    # runtime.py, so this consumer-file grep no longer counts it. Only the mount
-    # baseline remains in websocket.py.
-    EXPECTED_BARE_SEND_SITES = 1
+    # 2.3a. #1919 THE MOUNT FLIP: the ``handle_mount`` baseline
+    # ``version = self._next_version()`` moved to
+    # ``WSConsumerTransport.next_mount_version`` (runtime.py, Finding C) — it calls
+    # ``consumer._next_version()`` (still the consumer counter, still the NO-ARM
+    # mount baseline), but the call site is now in runtime.py, so this consumer-file
+    # grep no longer counts it. No bare send-site remains in websocket.py.
+    EXPECTED_BARE_SEND_SITES = 0
     assert bare_send_sites == EXPECTED_BARE_SEND_SITES, (
         f"expected {EXPECTED_BARE_SEND_SITES} bare self._next_version() send-site "
-        f"invocations (mount baseline); found {bare_send_sites} "
+        f"invocations in websocket.py (mount baseline moved to the next_mount_version "
+        f"runtime hook at #1919); found {bare_send_sites} "
         f"(inline={bare_inline}, assign={bare_assign}, helper_internal={helper_internal}). "
         "A render-send path on the BARE helper is the #1817 drift — route it through "
         "self._next_version_armed(html). Update this count ONLY if you intentionally "
@@ -452,10 +456,17 @@ def test_every_client_checked_send_path_uses_next_version():
     )
 
     # The mount frame must stamp the consumer counter (covers actor mount too).
-    mount_src = inspect.getsource(ws_mod.LiveViewConsumer.handle_mount)
-    assert "self._next_version()" in mount_src, (
-        "handle_mount must stamp the mount frame version via self._next_version() so the "
-        "client baseline = 1 and the actor mount path does not trust result['version']."
+    # Post-#1919 (THE MOUNT FLIP) the bespoke handle_mount baseline stamp moved to
+    # the ``WSConsumerTransport.next_mount_version`` hook (runtime.py, Finding C),
+    # which returns ``self._consumer._next_version()`` — the SAME monotonic counter,
+    # NO-ARM (mount has no prior frame to recover to). Pin it at its converged home.
+    import djust.runtime as rt_mod
+
+    mount_ver_src = inspect.getsource(rt_mod.WSConsumerTransport.next_mount_version)
+    assert "self._consumer._next_version()" in mount_ver_src, (
+        "WSConsumerTransport.next_mount_version must stamp the mount frame version via "
+        "the consumer counter (consumer._next_version()) so the client baseline = 1 and "
+        "the actor mount path does not trust result['version']."
     )
 
     # handle_request_html must send the consumer-owned recovery version, NOT a fresh

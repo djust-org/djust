@@ -119,16 +119,19 @@ def test_cold_prerender_html_diverging_from_prerender_is_sent_to_client() -> Non
 
 
 def test_skip_html_logic_present_in_source() -> None:
-    """Source-text pin: the live `handle_mount` source contains the
-    skip-html conditional shape that the truth-table tests above
-    reproduce. Prevents the in-test reproduction from drifting away
-    from the production code.
+    """Source-text pin: the live mount source contains the skip-html conditional
+    shape that the truth-table tests above reproduce. Post-#1919 (THE MOUNT FLIP)
+    the WS mount routes through ``ViewRuntime.dispatch_mount`` (the bespoke
+    ``handle_mount`` body was deleted), where the runtime analogue is
+    ``skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)``
+    (``_mounted_from_restore`` is the runtime's ``mounted`` flag). Prevents the
+    in-test reproduction from drifting away from the production code.
     """
-    import djust.websocket as ws_mod
+    import djust.runtime as rt_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_mount)
-    assert "skip_html_for_resume = mounted and has_prerendered" in source
+    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
+    assert "skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)" in source
     assert "if html is not None and not skip_html_for_resume:" in source
     # has_ids must be emitted on the cold-prerender path so the
     # client's #1610 morph branch can gate on it.
-    assert 'response["has_ids"] = has_ids' in source or "has_ids =" in source
+    assert 'mount_msg["has_ids"] = "dj-id=" in html' in source

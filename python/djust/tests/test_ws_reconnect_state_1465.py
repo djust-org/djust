@@ -90,48 +90,42 @@ def _build_consumer():
 
 
 def test_load_gate_loosened_fires_on_saved_state_without_has_prerendered():
-    """The load gate in handle_mount was widened from
-    ``if has_prerendered`` to ``if has_prerendered or saved_state``. Pin this
-    boolean by reading the source: the new gate evaluates True whenever
-    saved_state is non-empty, regardless of has_prerendered. Verifying via
-    source-text is sufficient because the change IS the boolean.
+    """The session-restore load gate fires on saved_state independent of
+    ``has_prerendered``. Post-#1919 (THE MOUNT FLIP) the WS mount routes through
+    ``ViewRuntime.dispatch_mount`` (the bespoke ``handle_mount`` body was deleted);
+    the runtime gates the restore on ``opt_in and session is not None`` then
+    ``if saved_state:`` — semantically the #1466/#1552 behavior (restore on plain
+    reconnect when state exists AND the view opted in), pinned at its converged home.
 
     Companion: the integration test below proves the runtime effect.
     """
-    import djust.websocket as ws_mod
+    import djust.runtime as rt_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
 
-    # Old gate: `if has_prerendered:` (exactly) wrapping the aget.
-    # New gate: `if has_prerendered or saved_state:` wrapping it.
-    assert "if has_prerendered or saved_state:" in source, (
-        "Load gate must be widened to `if has_prerendered or saved_state:` "
-        "so plain WS reconnect can restore state from session."
+    # The runtime gate: restore whenever saved_state is non-empty (independent of
+    # has_prerendered), inside the opt_in + session guard.
+    assert "if saved_state:" in source, (
+        "dispatch_mount must restore on a non-empty saved_state (plain WS reconnect "
+        "resume), not only when has_prerendered."
     )
 
-    # The aget must be guarded for the no-session case (tests without sessions)
-    # AND for views without ``enable_state_snapshot`` (#1552 fix). Pre-#1552
-    # the guard was just ``if request.session else {}``; #1552 widened it to
-    # also require the view to opt in, so non-opt-in views don't get their
-    # state restored from session on every WS mount (which produced patches
-    # the client's DOM couldn't resolve — the wizard step-leak bug). Refs
-    # #1466 (introduced the unconditional load) and #1552 (gated it).
-    assert "request.session" in source and "enable_state_snapshot" in source, (
-        "aget must short-circuit when request.session is None AND when "
-        "the view doesn't opt in via enable_state_snapshot (#1552)."
+    # The restore must be guarded for the no-session case AND for views without
+    # ``enable_state_snapshot`` (#1552 fix): non-opt-in views don't get their state
+    # restored from session on every mount (the wizard step-leak bug). Refs #1466
+    # (introduced the load) and #1552 (gated it). The runtime sources opt_in from
+    # ``enable_state_snapshot`` and the session from ``request.session``.
+    assert "enable_state_snapshot" in source and "session" in source, (
+        "restore must short-circuit when the session is None AND when the view "
+        "doesn't opt in via enable_state_snapshot (#1552)."
     )
 
-    # And the OLD gate text MUST NOT remain — otherwise the boolean is broken.
-    # The executable line should still build view_key before the gate.
-    # #1552's comment block mentions the gate phrase for context, so we
-    # find the LAST occurrence of each fragment (the actual code) rather
-    # than the first. Both must be present and view_key must precede the
-    # executable gate line.
+    # view_key must be assigned BEFORE the gate, not inside it.
     new_shape_idx = source.rfind('view_key = f"liveview_{page_url}"')
-    gate_idx = source.rfind("if has_prerendered or saved_state:")
+    gate_idx = source.rfind("if saved_state:")
     assert new_shape_idx != -1 and gate_idx != -1
     assert new_shape_idx < gate_idx, (
-        "view_key must be assigned BEFORE the (widened) gate, not inside it."
+        "view_key must be assigned BEFORE the saved_state gate, not inside it."
     )
 
 
@@ -183,14 +177,17 @@ def test_skip_html_for_resume_truth_table():
 
 
 def test_skip_html_logic_present_in_source():
-    """Belt-and-suspenders: the actual handle_mount source must contain the
-    ``skip_html_for_resume = mounted and has_prerendered`` line so the
-    truth-table test above pins the source's actual behavior, not a stale
-    re-implementation."""
-    import djust.websocket as ws_mod
+    """Belt-and-suspenders: the actual mount source must contain the
+    skip-html-for-resume conditional so the truth-table test above pins the
+    source's actual behavior, not a stale re-implementation. Post-#1919 (THE MOUNT
+    FLIP) the WS mount routes through ``ViewRuntime.dispatch_mount``, where the
+    runtime analogue is ``skip_html_for_resume = bool(mounted_from_restore) and
+    bool(has_prerendered)`` (``_mounted_from_restore`` is the runtime's ``mounted``
+    flag)."""
+    import djust.runtime as rt_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_mount)
-    assert "skip_html_for_resume = mounted and has_prerendered" in source
+    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
+    assert "skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)" in source
     assert "if html is not None and not skip_html_for_resume:" in source
 
 

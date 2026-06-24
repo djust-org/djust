@@ -461,28 +461,43 @@ class TestRuntimeStateRestoreParity:
 # ===========================================================================
 
 
-def test_mount_not_in_runtime_owned_verbs():
-    """HARD constraint (#1917): routing stays bespoke — ``mount`` must NOT be in
-    ``RUNTIME_OWNED_VERBS`` (3.3a is build-up; the flip is 3.3b)."""
+def test_mount_in_runtime_owned_verbs_post_flip():
+    """Post-#1919 (ADR-022 Iter 3 Phase 3.3b, THE MOUNT FLIP): ``mount`` is now in
+    ``RUNTIME_OWNED_VERBS`` alongside ``url_change`` + ``event`` — every WS mount
+    routes through the single ``dispatch_message`` chokepoint (the #1646 mount
+    convergence COMPLETE). Pin the post-flip set so a revert trips here."""
     from djust.websocket import LiveViewConsumer
 
-    assert "mount" not in LiveViewConsumer.RUNTIME_OWNED_VERBS, (
-        "mount must NOT be in RUNTIME_OWNED_VERBS until the 3.3b flip"
+    assert "mount" in LiveViewConsumer.RUNTIME_OWNED_VERBS, (
+        "mount must be in RUNTIME_OWNED_VERBS after the 3.3b flip (#1919)"
     )
-    assert LiveViewConsumer.RUNTIME_OWNED_VERBS == frozenset({"url_change", "event"}), (
-        "RUNTIME_OWNED_VERBS must be unchanged in 3.3a"
+    assert LiveViewConsumer.RUNTIME_OWNED_VERBS == frozenset({"url_change", "event", "mount"}), (
+        "RUNTIME_OWNED_VERBS must be exactly {url_change, event, mount} post-#1919"
     )
 
 
-def test_handle_mount_untouched_still_bespoke():
-    """HARD constraint (#1917): ``handle_mount`` is UNTOUCHED — it still does the
-    mount work inline (it is NOT a shim over dispatch_mount yet)."""
+def test_handle_mount_is_a_thin_shim_post_flip():
+    """Post-#1919: ``handle_mount`` is a THIN SHIM that delegates to
+    ``ViewRuntime.dispatch_mount`` (mirroring ``handle_url_change`` /
+    ``handle_event``) — it no longer carries the ~870-line bespoke mount body.
+    The shim nulls the runtime view (Finding A), dispatches, then reads back the
+    created view (Finding B)."""
     import inspect
 
     from djust.websocket import LiveViewConsumer
 
     src = inspect.getsource(LiveViewConsumer.handle_mount)
-    assert "dispatch_mount" not in src, (
-        "handle_mount must NOT delegate to dispatch_mount until the 3.3b flip"
+    assert "dispatch_mount" in src, (
+        "handle_mount must delegate to dispatch_mount after the 3.3b flip (#1919)"
     )
-    assert "self._next_version()" in src, "handle_mount still stamps the version inline"
+    # The bespoke inline version stamp is GONE — the wire version is now stamped by
+    # the runtime's next_mount_version hook (Finding C), not inline here.
+    assert "self._next_version()" not in src, (
+        "handle_mount must NOT stamp the version inline post-flip — that moved into "
+        "the next_mount_version transport hook (#1915, Finding C)"
+    )
+    # Finding A (null before dispatch) + Finding B (read back after).
+    assert "runtime.view_instance = None" in src, "shim must null runtime.view_instance (Finding A)"
+    assert "self.view_instance = runtime.view_instance" in src, (
+        "shim must read back the created view (Finding B)"
+    )

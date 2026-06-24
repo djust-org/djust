@@ -422,8 +422,16 @@ _WS_ONLY_MARKERS = {
     "handle_mount_batch": 1,  # mount_batch multiplexer (no runtime equivalent)
     "_send_sticky_update": 1,  # sticky-child preservation across live_redirect
     "_send_child_update": 1,  # sticky-child VDOM patches
-    "group_add": 1,  # Channels groups (broadcast) — WS-only transport
-    "channel_layer": 1,  # actor / broadcast channel layer — WS-only transport
+    # ``group_add`` / ``channel_layer`` / ``tick_interval`` MOVED to ViewRuntime in
+    # ADR-022 Iter 3 Phase 3.3b (#1919, THE MOUNT FLIP): the WS ``on_view_mounted``
+    # transport hook now performs the WS post-mount channel-layer wiring (view /
+    # presence / db_notify ``group_add``) + the periodic ``tick_interval`` task
+    # start (Finding B residual), writing onto the consumer during the runtime
+    # mount. They textually appear in runtime.py now (inside the WS transport hook),
+    # so they are no longer WS-ONLY *symbols* and are removed from this
+    # enumeration (mirrors the Phase-3.1 ``state_snapshot_signed`` move). The WS
+    # behavior is pinned by test_ws_mount_flip_parity_1911.py
+    # (TestGroupAddReachability + TestTickAtMount, real-WebsocketCommunicator).
     # --- Mount-spine WS-only behaviors (ADR-022 Iter 3 Phase 3.0, #1911) ---
     # Each is a genuinely-WS-only mount behavior that the runtime's dispatch_mount
     # does NOT implement (and must NOT — they are HOOKS for Phases 3.1-3.3b, not
@@ -453,12 +461,11 @@ _WS_ONLY_MARKERS = {
     # this enumeration. The signed-snapshot HMAC caps are pinned by
     # test_runtime_mount_state_restore_1913.py (runtime) +
     # test_state_snapshot_signing.py (WS).
-    "tick_interval": 1,  # periodic tick task started at mount (Channels timer loop)
-    # NOTE: ``_run_tick`` is intentionally NOT a marker here — it already appears
-    # in runtime.py DOCSTRINGS (lines ~271/~567 reference the WS-only tick loop the
-    # event render-lock must serialize against), which would FALSE-POSITIVE the
-    # ``marker not in rt_src`` assertion. ``tick_interval`` (rt=0) is the precise
-    # mount-side WS-only attribute read, so it stands in for the tick mechanism.
+    # NOTE: ``tick_interval`` was removed from this enumeration in #1919 (it MOVED
+    # into the runtime's WS ``on_view_mounted`` hook — see the block above).
+    # ``_run_tick`` was never a marker here (it already appears in runtime.py
+    # docstrings that reference the WS-only tick loop the event render-lock
+    # serializes against).
 }
 
 

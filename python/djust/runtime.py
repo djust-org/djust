@@ -155,15 +155,19 @@ class Transport(Protocol):
         """
         return None
 
-    def on_view_mounted(self, view_instance: Any) -> None:
-        """Stamp transport-specific identity on the freshly-mounted view.
+    async def on_view_mounted(self, view_instance: Any) -> None:
+        """Stamp transport-specific identity + post-mount setup on the freshly-mounted view.
 
         Called by ``dispatch_mount`` once ``self.view_instance`` is set, so a
         transport can attach its own back-references the way the legacy bespoke
         mount paths did. SSE stamps ``_sse_session_id`` / ``_sse_session`` (used
-        for introspection + limits) and the real query string; WS is a no-op
-        (its consumer already owns those attrs). Behavior-preserving extension
-        hook — the runtime stays wire-blind (#1887, ADR-022 Iter 1).
+        for introspection + limits) and the real query string. WS performs the
+        WS-only post-mount channel-layer wiring (server-push view group, presence
+        group, db_notify groups), the periodic ``_tick_task`` start, the
+        ``use_actors`` flag, and the real-scope path/query-string stamps (ADR-022
+        Iter 3 Phase 3.3b, Finding B residual). Async because the WS impl awaits
+        ``channel_layer.group_add(...)``. Behavior-preserving extension hook — the
+        runtime stays wire-blind (#1887, ADR-022 Iter 1 / #1919, ADR-022 Iter 3).
         """
 
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
@@ -605,12 +609,124 @@ class WSConsumerTransport:
         ``self.scope`` (carrying the authenticated user + session)."""
         return None
 
-    def on_view_mounted(self, view_instance: Any) -> None:
-        """No-op for WS: the consumer's own ``handle_mount`` already stamps the
-        WS-specific view attrs; the runtime path is used for ``url_change`` and
-        ``event`` on WS (RUNTIME_OWNED_VERBS = {"url_change", "event"} since #1907),
-        but NOT ``mount`` — so this hook never fires on the WS path today."""
-        return None
+    async def on_view_mounted(self, view_instance: Any) -> None:
+        """WS post-mount channel-layer wiring + tick + flags (#1919, Finding B residual).
+
+        Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation setup
+        block (websocket.py:2148-2217 + the per-mount ``_sticky_auto_reattached``
+        reset at websocket.py:2082) that ``dispatch_mount`` did NOT carry pre-flip.
+        The runtime calls this hook at the SAME point the bespoke path ran the
+        block: AFTER instantiation + back-refs, BEFORE the request build / auth /
+        mount(). It writes onto the CONSUMER (the runtime→consumer ownership
+        direction at mount, Finding B):
+
+          * real-scope path/query-string stamps for path-aware VDOM cache keys
+            (websocket.py:2153-2156) — the runtime set ``_websocket_path =
+            page_url`` + ``_websocket_query_string = ""``; the WS bespoke path uses
+            the handshake ``scope`` values, so overwrite them here for parity;
+          * server-push view group join (``view_group_name`` + ``group_add``,
+            websocket.py:2172-2174);
+          * presence group join when the view supports presence
+            (websocket.py:2177-2184);
+          * db_notify group joins for every channel the view subscribed to
+            (websocket.py:2190-2200) — reads ``_listen_channels`` PRE-mount() (the
+            bespoke ordering: only non-empty on a session-restore that repopulated
+            it; preserved EXACTLY, not "fixed");
+          * periodic tick task start when the subclass overrides ``handle_tick``
+            (websocket.py:2202-2208);
+          * the ``use_actors`` flag off the view class (websocket.py:2211) so
+            ``disconnect``'s actor-cleanup guard (``if self.use_actors and
+            self.actor_handle``) reflects reality. The actor HANDLE is NOT created
+            here — ``dispatch_actor_mount`` (#1915, Finding D) creates it at the
+            render step, WS-verbatim, so a non-actor view never spins one up.
+
+        Async because ``channel_layer.group_add`` is a coroutine. Mirrors the
+        bespoke try/except envelope shape (a setup failure surfaces the same way
+        the bespoke instantiation try/except did — see ``dispatch_mount``'s
+        instantiation guard, which wraps this hook's call site is the
+        instantiation block; here we keep the per-step ``try/except`` the bespoke
+        path used for presence + db_notify).
+        """
+        consumer = self._consumer
+
+        # Reset the per-mount sticky auto-reattach tracker (websocket.py:2082): each
+        # mount starts with an empty set; the template tag pushes ids onto it as it
+        # claims survivors. The live_redirect path also resets it before calling the
+        # shim (websocket.py:3768), but a plain mount needs the reset too — and this
+        # hook fires for EVERY runtime mount, so it is the single source post-flip.
+        consumer._sticky_auto_reattached = set()
+
+        # Real-scope path + query string for path-aware VDOM cache keys
+        # (websocket.py:2153-2156). The runtime stamped ``page_url`` + ``""``; the
+        # WS bespoke path sources these from the handshake ``scope`` so /emails/ and
+        # /emails/?sender=1 get separate VDOM caches. Overwrite for parity.
+        scope = getattr(consumer, "scope", None) or {}
+        view_instance._websocket_path = scope.get("path", "/")
+        view_instance._websocket_query_string = scope.get("query_string", b"").decode("utf-8")
+
+        # The dotted view path is the client-supplied frame value
+        # (``data["view"]``), stashed on the view by ``dispatch_mount`` as
+        # ``_djust_mount_view_path``. The bespoke path keyed the server-push group
+        # name on this EXACT string (websocket.py:2172-2174), and external
+        # broadcasters (``apush_to_view("app.MyView")``) string-mangle the same
+        # value — so they MUST agree byte-for-byte. The consumer also stashes it as
+        # ``_view_path`` (websocket.py:2172) for server-push introspection.
+        dotted = getattr(view_instance, "_djust_mount_view_path", None) or ""
+        consumer._view_path = dotted
+
+        # Join per-view channel group for server-push (websocket.py:2169-2174).
+        from .push import view_group_name
+
+        consumer._view_group = view_group_name(dotted)
+        await consumer.channel_layer.group_add(consumer._view_group, consumer.channel_name)
+
+        # Join presence group if the view supports presence tracking
+        # (websocket.py:2176-2184).
+        consumer._presence_group = None
+        if hasattr(view_instance, "get_presence_key"):
+            try:
+                from .presence import PresenceManager
+
+                presence_key = view_instance.get_presence_key()
+                consumer._presence_group = PresenceManager.presence_group_name(presence_key)
+                await consumer.channel_layer.group_add(
+                    consumer._presence_group, consumer.channel_name
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error setting up presence group: %s", e)
+
+        # Join db_notify groups for every channel the view subscribed to via
+        # NotificationMixin.listen() (websocket.py:2186-2200). Addressed
+        # per-channel (djust_db_notify_<channel>) so a NOTIFY on one channel never
+        # fans out to views listening on another. Reads ``_listen_channels``
+        # PRE-mount() — preserve the bespoke ordering EXACTLY (only non-empty on a
+        # session-restore branch that repopulated it).
+        consumer._db_notify_channels = set()
+        listen_channels = getattr(view_instance, "_listen_channels", None)
+        if listen_channels:
+            for ch in listen_channels:
+                try:
+                    await consumer.channel_layer.group_add(
+                        f"djust_db_notify_{ch}", consumer.channel_name
+                    )
+                    consumer._db_notify_channels.add(ch)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Error joining db_notify group for %s: %s", ch, e)
+
+        # Start periodic tick if the subclass overrides handle_tick
+        # (websocket.py:2202-2208).
+        view_class = type(view_instance)
+        tick_interval = getattr(view_class, "tick_interval", None)
+        if tick_interval:
+            from .live_view import LiveView as _LV
+
+            if view_class.handle_tick is not _LV.handle_tick:
+                consumer._tick_task = asyncio.create_task(consumer._run_tick(tick_interval))
+
+        # Set the use_actors flag off the view class (websocket.py:2211) so
+        # disconnect's actor cleanup guard reflects reality. The actor HANDLE is
+        # created later by dispatch_actor_mount (#1915, Finding D), not here.
+        consumer.use_actors = getattr(view_class, "use_actors", False)
 
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
         """Emit the DEBUG-gated ``time_travel_event`` frame for WS.
@@ -1254,7 +1370,7 @@ class SSESessionTransport:
         """
         return getattr(self._session, "_request", None)
 
-    def on_view_mounted(self, view_instance: Any) -> None:
+    async def on_view_mounted(self, view_instance: Any) -> None:
         """Stamp SSE-transport identity on the mounted view (legacy parity).
 
         ``_sse_mount_view`` set ``session.view_instance`` (the endpoint-level
@@ -1603,7 +1719,18 @@ class ViewRuntime:
         # ---- Instantiate view (extension hook for tests) ----
         view_instance = self._instantiate_view(view_path)
         if view_instance is None:
-            return  # _instantiate_view already pushed an error
+            # _instantiate_view stashed the error frame (#1919): AWAIT-send it HERE
+            # so the send lands inside this dispatch (and, under the mount_batch
+            # collector, inside the CORRECT _mount_one window — a fire-and-forget
+            # send leaked a failed view's error into the next survivor's collector).
+            # getattr-guarded: a MagicMock-stubbed _instantiate_view that returns a
+            # view never sets it, and a stub returning None without setting it sends
+            # nothing (the test contract — the stubs assert on dispatch, not frames).
+            error_frame = getattr(self, "_instantiate_error_frame", None)
+            if error_frame is not None:
+                await self.transport.send(error_frame)
+                self._instantiate_error_frame = None
+            return
 
         # ---- Transport back-references on the freshly-instantiated view ----
         # ADR-022 Iter 3 Phase 3.3a (#1917, Finding B). Wire the
@@ -1643,19 +1770,34 @@ class ViewRuntime:
 
         self.view_instance = view_instance
 
+        # Stash the client-supplied dotted view path from the mount frame so the
+        # transport hook (WS ``on_view_mounted``) can derive the server-push channel
+        # group name from the SAME string external broadcasters use
+        # (``view_group_name(data["view"])`` — websocket.py:2172-2174 / push.py). It
+        # MUST be the frame value, NOT ``module.qualname`` of the instance, because
+        # ``apush_to_view("app.MyView")`` string-mangles whatever the caller passes
+        # and the two must match byte-for-byte for delivery (#1919, Finding B).
+        view_instance._djust_mount_view_path = view_path
+
         # Stash transport identity on the view (used by VDOM caching).
         view_instance._websocket_session_id = self.session_id
         view_instance._websocket_path = page_url
         view_instance._websocket_query_string = ""
 
-        # Transport-specific identity hook (#1887): SSE stamps _sse_session_id /
-        # _sse_session + the real query string here so the converged runtime
-        # mount preserves everything legacy _sse_mount_view exposed. WS no-op.
-        # getattr-guarded so duck-typed test transport fakes that predate this
-        # Protocol method don't need to implement it.
+        # Transport-specific identity + post-mount setup hook (#1887 / #1919):
+        # SSE stamps _sse_session_id / _sse_session + the real query string here so
+        # the converged runtime mount preserves everything legacy _sse_mount_view
+        # exposed. WS performs its post-mount channel-layer wiring (view/presence/
+        # db_notify group_add), tick-task start, use_actors flag, and real-scope
+        # path/query-string stamps (ADR-022 Iter 3 Phase 3.3b, Finding B residual).
+        # Async (the WS impl awaits group_add). getattr-guarded + awaitable-guarded
+        # so duck-typed test transport fakes that predate this Protocol method (or
+        # still expose a SYNC no-op) keep working.
         on_view_mounted = getattr(self.transport, "on_view_mounted", None)
         if on_view_mounted is not None:
-            on_view_mounted(view_instance)
+            result = on_view_mounted(view_instance)
+            if inspect.isawaitable(result):
+                await result
 
         # Optional client timezone (validate IANA string).
         view_instance.client_timezone = None
@@ -1933,6 +2075,14 @@ class ViewRuntime:
             await self.transport.send_error(
                 "Access denied for this object.", code="permission_denied"
             )
+            # ADR-022 Iter 3 Phase 3.3b (#1919, Finding E): the runtime sent the
+            # error frame; finalize_mount_auth adds the transport-level
+            # ``close(4403)`` the bespoke WS handle_mount performed UNCONDITIONALLY
+            # on an object-perm denial (websocket.py:2622 — matching the
+            # PermissionDenied verdict, NOT the batch-gated redirect verdicts). SSE
+            # no-op. Without this the WS socket stayed open after a denied mount
+            # (the test_object_permission_denied_mount_refused net).
+            await self._finalize_mount_auth("permission_denied")
             self.view_instance = None
             return
 
@@ -3398,9 +3548,21 @@ class ViewRuntime:
     # ------------------------------------------------------------------ #
 
     def _instantiate_view(self, view_path: str) -> Optional[Any]:
-        """Import + instantiate the LiveView class. Pushes error frames on
-        failure and returns ``None``. Override-friendly for tests.
+        """Import + instantiate the LiveView class. On failure, STASHES the error
+        frame on ``self._instantiate_error_frame`` (sent by ``dispatch_mount``) and
+        returns ``None``. Override-friendly for tests.
+
+        #1919 (THE MOUNT FLIP): this previously fire-and-forgot the error send via
+        ``asyncio.ensure_future`` (it is a sync method and cannot await). Under the
+        ``mount_batch`` collector (``_mount_one`` swaps ``send_json`` per view), a
+        deferred send from a FAILED view leaked into the NEXT view's collector — a
+        bad view's error frame surfaced in a survivor's ``captured[]`` and flipped
+        the survivor to ``failed[]``. Stashing the frame and letting the async
+        ``dispatch_mount`` AWAIT it (mirroring the bespoke ``handle_mount``, which
+        ``await self.send_json(...)``-ed the error inline) keeps the send inside the
+        correct ``_mount_one`` window — no cross-entry contamination.
         """
+        self._instantiate_error_frame = None
 
         # Security (F22 — unsafe reflection / arbitrary module import): resolve
         # through the single shared resolver (shape-check → allowlist-before-
@@ -3414,14 +3576,10 @@ class ViewRuntime:
             logger.error(
                 "Failed to load view %s: %s", sanitize_for_log(view_path), resolution.detail
             )
-            asyncio.ensure_future(
-                self.transport.send(
-                    {
-                        "type": "error",
-                        "error": _safe_error(resolution.detail, resolution.generic),
-                    }
-                )
-            )
+            self._instantiate_error_frame = {
+                "type": "error",
+                "error": _safe_error(resolution.detail, resolution.generic),
+            }
             return None
         view_class = resolution.view_class
 
@@ -3435,7 +3593,7 @@ class ViewRuntime:
                 logger=logger,
                 log_message=f"Failed to instantiate {view_path}",
             )
-            asyncio.ensure_future(self.transport.send(response))
+            self._instantiate_error_frame = response
             return None
 
     async def _build_request(self, *, page_url: str, params: Dict[str, Any]):

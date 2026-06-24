@@ -199,6 +199,21 @@ class TestStateSnapshotAPI:
 # ---------------------------------------------------------------------------
 
 
+class _AllowAllRateLimiter:
+    """Permissive rate limiter for the fake consumer. ``_get_runtime`` (#1919)
+    constructs ``ViewRuntime(..., rate_limiter=self._rate_limiter)`` when the
+    handle_mount shim runs, so the fake needs one that never throttles."""
+
+    def check(self, _msg_type):
+        return True
+
+    def check_upload(self):
+        return True
+
+    def should_disconnect(self):
+        return False
+
+
 def _make_fake_consumer():
     from djust.websocket import LiveViewConsumer
 
@@ -225,9 +240,20 @@ def _make_fake_consumer():
             self.channel_name = "test-channel"
             self.use_actors = False
             self.actor_handle = None
-            # Rate limiter — handle_mount_batch goes through ``receive``
-            # but our tests call handle_mount_batch directly so we skip it.
             self._debug_panel_active = False
+            # Wire-version counter attrs the runtime mount path reads via the
+            # next_mount_version hook (#1919 THE MOUNT FLIP: handle_mount is now a
+            # thin shim over ViewRuntime.dispatch_mount, so these fakes drive the
+            # runtime path). ``_next_version`` uses getattr-with-default, but set
+            # them explicitly for clarity + a clean fresh baseline.
+            self._last_sent_version = 0
+            self._recovery_html = None
+            self._recovery_version = 0
+            # Permissive rate limiter — the runtime is constructed with
+            # ``rate_limiter=self._rate_limiter`` in ``_get_runtime`` (post-#1919
+            # the shim calls it). Allow-all so the direct handle_mount /
+            # handle_mount_batch calls these tests make reach the mount logic.
+            self._rate_limiter = _AllowAllRateLimiter()
 
         @property
         def channel_layer(self):  # type: ignore[override]
