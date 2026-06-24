@@ -454,7 +454,7 @@ class Transport(Protocol):
         """
         raise NotImplementedError("Actor mounts are WS-only; SSE refuses use_actors mounts.")
 
-    def next_mount_version(self, html: Optional[str]) -> int:
+    def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:
         """Return the wire ``version`` to stamp on the MOUNT frame.
 
         ADR-022 Iter 3 Phase 3.2 (#1915, Finding C). Mount ESTABLISHES the client
@@ -467,16 +467,23 @@ class Transport(Protocol):
         version MUST come from the SAME monotonic per-connection source as
         ``event`` — just WITHOUT the recovery arm.
 
+        ``rust_version`` is the raw ``render_with_diff()`` version (SSE's source);
+        it mirrors :meth:`next_client_version`'s second arg so the runtime can hand
+        every transport the same inputs. WS ignores it (returns the consumer
+        counter); SSE returns it unchanged. The default keeps the Phase-3.2
+        single-arg callers (the dormant tests) working.
+
         - WS: returns ``consumer._next_version()`` — the no-arm counter the
           bespoke ``handle_mount`` uses (websocket.py:2746). It does NOT call
           ``_next_version_armed`` / ``_arm_recovery``, so ``_recovery_html`` stays
           ``None`` after a mount.
-        - SSE: returns the raw Rust ``render_with_diff()`` version (the value the
-          runtime already stamps today, runtime.py:1554) — SSE has no consumer
-          counter; ``html`` is accepted for signature parity and ignored.
+        - SSE: returns ``rust_version`` (the raw Rust ``render_with_diff()``
+          version the runtime stamped inline before Phase 3.3a) — SSE has no
+          consumer counter (the #1788 unification never reached SSE); ``html`` is
+          accepted for signature parity and ignored.
 
-        DORMANT until Phase 3.3a: ``dispatch_mount`` still stamps the raw Rust
-        version inline (runtime.py:1554); this hook is not called yet.
+        Wired into ``dispatch_mount`` (Phase 3.3a). The Protocol default raises so
+        a transport that participates in mounts MUST override it.
         """
         raise NotImplementedError("next_mount_version is transport-specific.")
 
@@ -1078,7 +1085,7 @@ class WSConsumerTransport:
         result = await consumer.actor_handle.mount(view_path, context_data, view)
         return result
 
-    def next_mount_version(self, html: Optional[str]) -> int:
+    def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:
         """Stamp the consumer-owned NO-ARM wire version for the mount frame (#1915, Finding C).
 
         Returns ``consumer._next_version()`` — the SAME monotonic per-connection
@@ -1087,8 +1094,8 @@ class WSConsumerTransport:
         ESTABLISHES the client VDOM baseline and has no prior frame to recover to,
         so ``_recovery_html`` MUST stay unset after a mount (distinct from
         :meth:`next_client_version`, which arms recovery for render-SEND frames).
-        ``html`` is accepted for signature parity with the Protocol but is unused
-        on WS (the no-arm counter takes no html).
+        ``html`` and ``rust_version`` are accepted for signature parity with the
+        Protocol but are unused on WS (the no-arm consumer counter is the source).
         """
         return self._consumer._next_version()
 
@@ -1420,20 +1427,20 @@ class SSESessionTransport:
         """Never called on SSE (``uses_actors_for_mount`` is ``False``) — guard with a raise."""
         raise NotImplementedError("Actor mounts are WS-only; SSE refuses use_actors mounts.")
 
-    def next_mount_version(self, html: Optional[str]) -> int:
+    def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:
         """SSE stamps the raw Rust ``render_with_diff()`` version on its mount frame.
 
-        ADR-022 Iter 3 Phase 3.2 (#1915, Finding C). SSE has no consumer-owned
+        ADR-022 Iter 3 Phase 3.3a (#1917, Finding C). SSE has no consumer-owned
         counter (the #1788 unification never reached SSE — see
         :meth:`next_client_version`), so the mount frame keeps the raw Rust
-        version the runtime already stamps today (runtime.py:1554). This hook is
-        a placeholder for when ``dispatch_mount`` routes the mount version through
-        the transport in Phase 3.3a; until then the runtime stamps the raw
-        version inline and this is never called. ``html`` is unused.
+        ``render_with_diff()`` version. Phase 3.3a wires ``dispatch_mount`` to
+        route the mount version through this hook; SSE returns the ``rust_version``
+        the runtime computed inline (the value it stamped before the wiring), so
+        SSE clients stay calibrated to the Rust counter exactly as before. ``html``
+        is unused (mirrors :meth:`next_client_version`, which returns its
+        ``rust_version`` unchanged for the same reason).
         """
-        raise NotImplementedError(
-            "SSE mount version stamping stays inline until Phase 3.3a wires next_mount_version."
-        )
+        return rust_version
 
     async def on_mount_render_ready(self, view: Any, html: Optional[str]) -> Optional[str]:
         """No-op for SSE (#1915, Finding B residual).
@@ -1598,19 +1605,41 @@ class ViewRuntime:
         if view_instance is None:
             return  # _instantiate_view already pushed an error
 
-        # ---- use_actors limitation guard (#1240 / ADR-016 §Implementation) ----
-        # SSE doesn't have a bidirectional channel for actor messages and
-        # the actor channel-layer code lives in `websocket.py`, which the
-        # runtime path doesn't traverse. Emit a structured error envelope
-        # rather than letting the mount partially succeed and fail
-        # downstream with an opaque AttributeError.
+        # ---- Transport back-references on the freshly-instantiated view ----
+        # ADR-022 Iter 3 Phase 3.3a (#1917, Finding B). Wire the
+        # ``on_view_instantiated`` hook at the SAME point the bespoke WS
+        # ``handle_mount`` stamps its consumer back-refs (websocket.py:2128 ff):
+        # IMMEDIATELY after instantiation, BEFORE the actor branch / auth / mount /
+        # render. WS: stamps ``_ws_consumer`` / ``_push_events_flush_callback`` /
+        # observability ``register_view`` / validated handshake host. SSE: no-op.
+        # getattr-guarded so duck-typed test transport fakes that predate this
+        # Protocol method (and the default-bearing Protocol itself) keep working.
+        on_view_instantiated = getattr(self.transport, "on_view_instantiated", None)
+        if on_view_instantiated is not None:
+            on_view_instantiated(view_instance)
+
+        # ---- use_actors transport gate (#1240 / ADR-016; ADR-022 Iter 3 Phase
+        # 3.3a Finding D) ----
+        # Phase 3.3a wires ``uses_actors_for_mount`` so a WS actor view is no
+        # longer REFUSED — it is mounted through the actor system at the render
+        # step below (``dispatch_actor_mount``), WS-verbatim. SSE has no
+        # bidirectional actor channel (``uses_actors_for_mount`` → False), so an
+        # ``use_actors`` view over SSE still gets the structured refusal here
+        # rather than partially mounting and failing downstream with an opaque
+        # AttributeError. getattr-guarded; a transport without the hook (a bare
+        # test fake) falls back to the legacy unconditional refusal.
         if getattr(view_instance, "use_actors", False):
-            await self.transport.send_error(
-                "use_actors is not supported over SSE; mount over WebSocket instead",
-                error_type="mount_error",
-                view_class=view_path,
+            uses_actors_for_mount = getattr(self.transport, "uses_actors_for_mount", None)
+            actor_mount_ok = (
+                uses_actors_for_mount(view_instance) if uses_actors_for_mount else False
             )
-            return
+            if not actor_mount_ok:
+                await self.transport.send_error(
+                    "use_actors is not supported over SSE; mount over WebSocket instead",
+                    error_type="mount_error",
+                    view_class=view_path,
+                )
+                return
 
         self.view_instance = view_instance
 
@@ -1691,21 +1720,21 @@ class ViewRuntime:
         # registered ``on_mount`` hooks (djust.hooks.run_on_mount_hooks) run
         # against the live view + request and may return a redirect URL.
         #
-        # Transport-agnostic redirect handling: the WS path additionally
-        # ``close(4403)``s the orphaned socket (unless in a mount_batch). The
-        # runtime has no socket-level close in its hands (the runtime is the
-        # SSE mount path; closing is the transport's concern post-3.3a), so —
-        # matching the runtime's existing auth-redirect handling in _check_auth
-        # (which sends a ``navigate`` frame + aborts WITHOUT a socket close) —
-        # this path emits the navigate frame, clears the unmounted view, and
-        # returns. The transport-level ``close`` belongs to the
-        # ``finalize_mount_auth`` hook landing in Phase 3.2/3.3a; it is NOT
-        # added here.
+        # Transport-agnostic redirect handling: the runtime emits the navigate
+        # frame, then the ``finalize_mount_auth`` hook (#1917, Finding E) applies
+        # the transport-level ``close(4403)`` — WS gated on
+        # ``not _mounting_in_batch`` (#291 / #1780: a batched login-required view
+        # reports as ``navigate[]`` and closing would kill sibling mounts);
+        # SSE no-op. The ``"hook_redirect"`` verdict honors the SAME batch gate as
+        # the auth ``"redirect"`` verdict (websocket.py:2389-2400). The hook is
+        # called BEFORE clearing ``view_instance`` so the WS impl's view arg is
+        # valid (it routes the close through the consumer regardless).
         from .hooks import run_on_mount_hooks
 
         hook_redirect = await sync_to_async(run_on_mount_hooks)(view_instance, request, **params)
         if hook_redirect:
             await self.transport.send({"type": "navigate", "to": hook_redirect})
+            await self._finalize_mount_auth("hook_redirect")
             self.view_instance = None
             return
         # ---- End on_mount hooks ----
@@ -1958,26 +1987,84 @@ class ViewRuntime:
             return
 
         # ---- Initial render ----
-        try:
-            if hasattr(view_instance, "_initialize_rust_view"):
-                await sync_to_async(view_instance._initialize_rust_view)(request)
-            if hasattr(view_instance, "_sync_state_to_rust"):
-                await sync_to_async(view_instance._sync_state_to_rust)()
-            html, _patches, version = await sync_to_async(view_instance.render_with_diff)()
-            if hasattr(view_instance, "_strip_comments_and_whitespace"):
-                html = await sync_to_async(view_instance._strip_comments_and_whitespace)(html)
-            if hasattr(view_instance, "_extract_liveview_content"):
-                html = await sync_to_async(view_instance._extract_liveview_content)(html)
-        except Exception as exc:
-            response = handle_exception(
-                exc,
-                error_type="render",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Error rendering {sanitize_for_log(view_path)}",
-            )
-            await self.transport.send(response)
-            return
+        # ADR-022 Iter 3 Phase 3.3a (#1917, Finding D): a WS ``use_actors`` view
+        # renders through the actor system instead of the Rust render path, exactly
+        # as the bespoke ``handle_mount`` does (websocket.py:2691-2706 — actor mount
+        # runs AFTER auth + mount() + handle_params, using the fully-initialized
+        # view). ``uses_actors_for_mount`` already passed the top gate for this
+        # branch to be reachable (SSE returns False and was refused above).
+        rust_version = 1
+        actor_mounted = False
+        if getattr(view_instance, "use_actors", False):
+            uses_actors_for_mount = getattr(self.transport, "uses_actors_for_mount", None)
+            if uses_actors_for_mount and uses_actors_for_mount(view_instance):
+                try:
+                    result = await self.transport.dispatch_actor_mount(view_instance, data)
+                    # The actor render is authoritative — its HTML is sent verbatim
+                    # (the bespoke WS actor branch does NOT strip/extract, only the
+                    # consumer-owned no-arm version is stamped, websocket.py:2705/2746).
+                    html = result["html"] if isinstance(result, dict) else result.get("html")
+                    rust_version = result.get("version", 1) if isinstance(result, dict) else 1
+                    actor_mounted = True
+                except Exception as exc:
+                    response = handle_exception(
+                        exc,
+                        error_type="render",
+                        view_class=view_path,
+                        logger=logger,
+                        log_message=f"Error mounting {sanitize_for_log(view_path)} via actor",
+                    )
+                    await self.transport.send(response)
+                    return
+
+        if not actor_mounted:
+            try:
+                if hasattr(view_instance, "_initialize_rust_view"):
+                    await sync_to_async(view_instance._initialize_rust_view)(request)
+                if hasattr(view_instance, "_sync_state_to_rust"):
+                    await sync_to_async(view_instance._sync_state_to_rust)()
+                html, _patches, rust_version = await sync_to_async(view_instance.render_with_diff)()
+                if hasattr(view_instance, "_strip_comments_and_whitespace"):
+                    html = await sync_to_async(view_instance._strip_comments_and_whitespace)(html)
+                if hasattr(view_instance, "_extract_liveview_content"):
+                    html = await sync_to_async(view_instance._extract_liveview_content)(html)
+            except Exception as exc:
+                response = handle_exception(
+                    exc,
+                    error_type="render",
+                    view_class=view_path,
+                    logger=logger,
+                    log_message=f"Error rendering {sanitize_for_log(view_path)}",
+                )
+                await self.transport.send(response)
+                return
+
+        # ---- Post-render mount hook (#1917, Finding B residual) ----
+        # ``on_mount_render_ready`` runs AFTER the render produced ``html`` but
+        # BEFORE the mount frame is sent, so a transport can adjust the outgoing
+        # HTML and/or emit pre-mount frames at the WS-faithful position
+        # (websocket.py:2836-2903 emits the ``sticky_hold`` frame here, BEFORE the
+        # mount frame — the ordering the client's reattachStickyAfterMount needs).
+        # WS: sticky preservation + ``sticky_hold``; SSE: returns ``html``
+        # unchanged. getattr-guarded for duck-typed test fakes.
+        on_mount_render_ready = getattr(self.transport, "on_mount_render_ready", None)
+        if on_mount_render_ready is not None:
+            html = await on_mount_render_ready(view_instance, html)
+
+        # ---- Mount-frame wire version (#1917, Finding C) ----
+        # ``next_mount_version`` stamps the baseline the client calibrates to. WS:
+        # the consumer-owned monotonic ``_next_version()`` (NO arm — mount has no
+        # prior frame to recover to, websocket.py:2746). SSE: the raw Rust
+        # ``render_with_diff()`` version (``rust_version``), unchanged. Crucially
+        # this is the NO-ARM mount baseline — it does NOT route through the ARMING
+        # wire-version helper the event path uses (mount has no prior frame to
+        # recover to). getattr-guarded: a transport without the hook falls back to
+        # the raw Rust version (the pre-3.3a inline behavior).
+        next_mount_version = getattr(self.transport, "next_mount_version", None)
+        if next_mount_version is not None:
+            version = next_mount_version(html, rust_version)
+        else:
+            version = rust_version
 
         mount_msg: Dict[str, Any] = {
             "type": "mount",
@@ -3457,6 +3544,12 @@ class ViewRuntime:
             redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
         except PermissionDenied:
             await self.transport.send({"type": "error", "error": "Permission denied"})
+            # ADR-022 Iter 3 Phase 3.3a (#1917, Finding E): the runtime already
+            # sent the verdict frame; finalize_mount_auth adds ONLY the
+            # transport-level close (WS close(4403) — unconditional for a
+            # permission denial, matching websocket.py:2345; SSE no-op). It does
+            # NOT re-send the frame. getattr-guarded for duck-typed fakes.
+            await self._finalize_mount_auth("permission_denied")
             return True
         except Exception as exc:  # noqa: BLE001 — fail-closed (tenant / auth-hook error)
             response = handle_exception(
@@ -3468,13 +3561,38 @@ class ViewRuntime:
                 % sanitize_for_log(self.view_instance.__class__.__name__),
             )
             await self.transport.send(response)
+            # No close: the WS bespoke path lets a non-auth-verdict exception
+            # (tenant Http404 / buggy custom check_permissions) flow to the outer
+            # mount-error envelope WITHOUT a socket close (websocket.py:2305-2313).
+            # finalize_mount_auth is NOT called here — parity with WS.
             return True
 
         if redirect_url:
             await self.transport.send({"type": "navigate", "to": redirect_url})
+            # Finding E: the redirect verdict gates the WS close on
+            # ``not _mounting_in_batch`` (#291 / #1780) — a batched login-required
+            # view reports as ``navigate[]`` and closing would kill sibling mounts.
+            # finalize_mount_auth applies that gated close (SSE no-op).
+            await self._finalize_mount_auth("redirect")
             return True
 
         return None
+
+    async def _finalize_mount_auth(self, verdict: str) -> None:
+        """Apply the transport-level finalization of a blocking mount-auth verdict.
+
+        ADR-022 Iter 3 Phase 3.3a (#1917, Finding E). The runtime's auth-block
+        paths (``_check_auth`` / the ``run_on_mount_hooks`` redirect in
+        ``dispatch_mount``) ALREADY send the verdict frame + clear
+        ``view_instance``; this adds ONLY the transport-level close
+        (``WSConsumerTransport.finalize_mount_auth`` → ``close(4403)``, gated on
+        ``not mounting_in_batch`` for the redirect verdicts). SSE is a no-op.
+        getattr-guarded so duck-typed test transport fakes (and the
+        default-bearing Protocol) keep working.
+        """
+        finalize = getattr(self.transport, "finalize_mount_auth", None)
+        if finalize is not None:
+            await finalize(self.view_instance, verdict)
 
     def _resolve_url_kwargs(self, page_url: str) -> Dict[str, Any]:
         """Resolve URL-pattern kwargs (e.g. ``pk``, ``slug``) from
