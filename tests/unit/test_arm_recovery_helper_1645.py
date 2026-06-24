@@ -59,10 +59,18 @@ def test_render_send_paths_route_through_arm_recovery():
     step) rather than a hand-copied ``_next_version()`` + ``_arm_recovery(html)``
     pair. Accept either form so the pin survives the #1817 consolidation while
     still enforcing that each path arms and never hand-assigns ``_recovery_html``.
+
+    #1907 THE FLIP: WS events route through ``ViewRuntime.dispatch_event`` and the
+    bespoke ``_handle_event_inner`` is deleted, so the EVENT render-send path's
+    arming moved off the consumer. It now flows through the runtime's render path
+    (``_render_and_send`` → ``self.transport.next_client_version(html, version)``),
+    which on WS is ``WSConsumerTransport.next_client_version`` → the SAME
+    ``consumer._next_version_armed(html)`` helper. So ``_handle_event_inner`` is
+    dropped from the consumer tuple below, and the event arming is pinned on the
+    runtime path it now owns (keeping the #1645 invariant covered, not deleted).
     """
-    # Finding #6: ``handle_event`` is now a thin tenant-context wrapper around
-    # ``_handle_event_inner``; the arm-recovery code lives in the inner method.
-    for name in ("_handle_event_inner", "server_push", "_run_async_work"):
+    # WS-only render-send paths still on the consumer (tick / broadcast / async).
+    for name in ("server_push", "_run_async_work"):
         method_src = inspect.getsource(getattr(LiveViewConsumer, name))
         arms = "_arm_recovery(" in method_src or "_next_version_armed(" in method_src
         assert arms, (
@@ -75,6 +83,27 @@ def test_render_send_paths_route_through_arm_recovery():
             f"{name} still hand-assigns _recovery_html; route it through "
             f"_arm_recovery / _next_version_armed instead (#1645)."
         )
+
+    # The EVENT render-send path now lives on the runtime (#1907). Its arming
+    # routes through the transport's next_client_version hook, which on WS calls
+    # the consumer's _next_version_armed helper. Pin BOTH halves so the #1645
+    # invariant stays covered on the path that now owns it: (a) the runtime
+    # render-send computes the wire version via the transport hook, and (b) the WS
+    # transport hook delegates to _next_version_armed (advance + arm in one step).
+    import djust.runtime as rt_mod
+
+    render_src = inspect.getsource(rt_mod.ViewRuntime._render_and_send)
+    assert "self.transport.next_client_version(" in render_src, (
+        "ViewRuntime._render_and_send (the WS event render-send path since #1907) "
+        "must route the wire version through self.transport.next_client_version so "
+        "the WS event path arms recovery via the consumer helper (#1645/#1817/#1907)."
+    )
+    hook_src = inspect.getsource(rt_mod.WSConsumerTransport.next_client_version)
+    assert "_next_version_armed(" in hook_src, (
+        "WSConsumerTransport.next_client_version must delegate to "
+        "consumer._next_version_armed(html) so the runtime-routed WS event render-send "
+        "arms the recovery baseline in one step (#1645/#1817/#1907)."
+    )
 
 
 def test_arm_recovery_call_site_count_matches_known_send_paths():

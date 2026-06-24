@@ -1569,11 +1569,34 @@ class ViewRuntime:
             await self.transport.send(noop_msg)
             return
 
+        # Time-travel record (v0.6.1 dev-only, ADR-022 Iter 2 Phase 2.2). Capture
+        # ``state_before`` BEFORE the security check so a PERMISSION-DENIED or
+        # VALIDATION-FAILED event STILL records a snapshot (with the error set +
+        # state_after == state_before) for the debug panel — mirrors WS
+        # ``_handle_event_inner`` (websocket.py:3541-3565), which did
+        # ``_tt_start`` → validate → on ``handler is None`` set
+        # ``_tt_error = "permission_denied"`` + ``_tt_end`` BEFORE returning.
+        # #1907 THE FLIP regression fix: the first flip ran ``record_event_start``
+        # AFTER the security check, so a denied handler on a time-travel view
+        # recorded ZERO entries (the bespoke recorded one with
+        # error="permission_denied"). ``record_event_start`` is a no-op unless the
+        # view opted into time-travel, so default views pay nothing.
+        from .time_travel import record_event_end, record_event_start
+
+        _tt_snapshot = record_event_start(self.view_instance, event_name, params, event_ref)
+        _tt_error: Optional[str] = None
+
         # Security
         handler = await _validate_event_security(
             self.transport, event_name, self.view_instance, self._rate_limiter
         )
         if handler is None:
+            # Permission denied / rate-limited / unsafe name — record the denial
+            # in the time-travel buffer (with error) before returning, matching the
+            # WS bespoke path (websocket.py:3550-3553).
+            _tt_error = "permission_denied"
+            record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(self.view_instance, _tt_snapshot)
             return
 
         # Parameter validation
@@ -1586,6 +1609,12 @@ class ViewRuntime:
                 "Runtime: parameter validation failed: %s",
                 sanitize_for_log(validation["error"]),
             )
+            # Record the validation failure in the time-travel buffer too (the WS
+            # bespoke path set ``_tt_error = "validation_failed"`` + ``_tt_end``
+            # before the error send, websocket.py:3563-3565).
+            _tt_error = "validation_failed"
+            record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(self.view_instance, _tt_snapshot)
             await self.transport.send_error(
                 validation["error"],
                 validation_details={
@@ -1612,18 +1641,6 @@ class ViewRuntime:
         pre_identity = {
             k: id(v) for k, v in self.view_instance.__dict__.items() if k not in _fw_attrs
         }
-
-        # Time-travel record (v0.6.1 dev-only, ADR-022 Iter 2 Phase 2.2). Capture
-        # ``state_before`` BEFORE the handler so the snapshot pairs with
-        # ``record_event_end`` in the finally below — mirrors WS
-        # ``_handle_event_inner`` (websocket.py:3536-3635). ``record_event_start``
-        # is a no-op unless the view opted into time-travel, so default views pay
-        # nothing. The error string is captured so a raising handler still records
-        # a snapshot (with ``state_after``) for the debug panel.
-        from .time_travel import record_event_end, record_event_start
-
-        _tt_snapshot = record_event_start(self.view_instance, event_name, params, event_ref)
-        _tt_error: Optional[str] = None
 
         # Call handler. The time-travel record is finalized + pushed in the
         # ``finally`` for BOTH the success and the raising path (mirrors WS
