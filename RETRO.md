@@ -353,7 +353,7 @@ issue or be explicitly closed with a reason.
 | 311 | Test-ordering pollution: `tests/unit/test_demo_views.py::TestDemoRegistration` — 4 urlconf-resolution failures under full `-n auto` | PR #1861 / v1.0.8-1 retro | #1862 | Open | Pre-existing; surfaced during T1-A. Passes in isolation; needs the polluter found (urlconf state leak). |
 | 312 | `_get_project_app_dirs()` returns 0 dirs when `manage.py check` runs from inside the djust repo tree (the `/djust/` path filter) — blinds S009/S011 dogfooding | PR #1864 / v1.0.8-1 retro | #1865 | Open | Pre-existing; makes in-repo dogfood of the new checks see 0 app dirs. Dogfood worked via the demo project instead. |
 | 313 | Per-model `djust_serializable_fields` allowlist can re-expose the sensitive-field floor (`password`/`is_superuser`/`is_staff`) — allowlist wins over `_ALWAYS_EXCLUDED_FIELDS` | PR #1867 / v1.0.8-1 retro | #1868 | Open | Surfaced by writing SECURE_DEFAULTS.md (`serialization.py:362`). Doc now states accurate precedence + WARNING; code-hardening question (make floor unconditional?) tracked here. |
-| 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Open | Shipped non-gating per #1534 (new gate needs a runner-green pass before it blocks). |
+| 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Closed | **Resolved (PR for #1869):** `playwright-tests` was `success` on the last 3 runner runs (precondition met per #1534), so `test_browser_smoke.py` was carved into its own BLOCKING `browser-smoke` CI job (no `continue-on-error`, mirrors the `demo-checks` pattern #1708/#1713) and wired into the `test-summary` AND-condition; the rest of the playwright suite stays non-blocking (the full suite can be flaky). #1848 was code-fixed by PR #1871 (re-execute classic `<script>` on the #1610 mount morph), so the inline-script known-xfail was flipped to a HARD regression assertion. |
 | 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Closed | **Resolved in v1.1.0-1 (PR #1881):** channel-layer isolation (`backends.clear()`) + deterministic ping/pong openness probe (replaced the wall-clock `receive_nothing`); the systemic test-isolation fixture (#1884) retired the shared-process-global flaky class. |
 
 ## v1.1.0-3 — ViewRuntime dispatch convergence (ADR-022 headline) (PRs #1886/#1888/#1890/#1893/#1895/#1897/#1909/#1912/#1914/#1916/#1918/#1920 + followups #1910/#1923/#1924 + resync #1925)
@@ -399,7 +399,7 @@ Each atomic flip (2.3b, 3.3b) got a MANDATORY worktree-isolated adversarial revi
 **ADR-022**: sequencing refined throughout (Iter-2 4-phase split, Iter-3 5-phase split, the load-bearing findings A–E captured inline).
 
 ### Open Items
-- [ ] #1869 — promote the Playwright browser-smoke to a hard merge gate once runner-green (Action Tracker #314, blocked on a runner-green pass).
+- [x] #1869 — promote the Playwright browser-smoke to a hard merge gate once runner-green (Action Tracker #314). DONE: own BLOCKING `browser-smoke` CI job + `test-summary` AND-condition; #1848 xfail flipped to a hard assertion (fixed by PR #1871).
 
 ## v1.0.8-2 — Post-prevention open-issue drain (PRs #1870, #1871, #1872, #1873, #1874)
 
@@ -445,7 +445,7 @@ WU4 (#1862) was a pollution-class fix, so the gate ran the full suite 3× under 
 ### Open Items
 
 - [ ] Flaky `test_ws_auth_close_socket` under `-n auto` — Action Tracker #315 (GitHub #1875)
-- [ ] Promote browser-smoke to a hard gate once runner-green — Action Tracker #314 (GitHub #1869), carried from v1.0.8-1
+- [x] Promote browser-smoke to a hard gate once runner-green — Action Tracker #314 (GitHub #1869), carried from v1.0.8-1 (DONE: PR for #1869)
 
 **Forward-link →** v1.1 planning: `/pipeline-strategy --deep` (2026-06-23) used this arc's data (#1646 = #1 recurring class, 21×) to commit the **v1.1 code-quality / single-path convergence** headline — **Path B (quality-first → ViewRuntime convergence)**. See [`docs/strategy-sessions/2026-06-23-v1.1-code-quality.md`](docs/strategy-sessions/2026-06-23-v1.1-code-quality.md) + [ADR-022](docs/adr/022-v1.1-code-quality-single-path-convergence.md). Several of this arc's open items (#1875 flaky test, #1869 gate, plus #1360/#1279/#1648/#1368/#1356) feed the v1.1.0-1 quality-groundwork sub-milestone.
 
@@ -516,7 +516,7 @@ S011 (#1864) reached 0 false-positives only because the dogfood pass (#1060) aga
 - [ ] Test-ordering pollution in `test_demo_views.py::TestDemoRegistration` — Action Tracker #311 (GitHub #1862)
 - [ ] `_get_project_app_dirs()` blind from inside the repo tree — Action Tracker #312 (GitHub #1865)
 - [ ] Allowlist can re-expose the serialization floor — Action Tracker #313 (GitHub #1868)
-- [ ] Promote browser-smoke to a hard gate once runner-green; flip #1848 xfail when the framework fix lands — Action Tracker #314 (GitHub #1869)
+- [x] Promote browser-smoke to a hard gate once runner-green; flip #1848 xfail when the framework fix lands — Action Tracker #314 (GitHub #1869) (DONE: PR for #1869; #1848 fixed by PR #1871)
 - [x] Framework fix for #1848 (re-execute classic `<script>` on the mount morph) — Action Tracker #310 (GitHub #1848) — resolved in v1.0.8-2 (PR #1871)
 
 ## v1.0.7-3 + v1.0.7-4 — Security audit drain + coordinated disclosure (private PRs #165–#177 → djust 1.0.7 + 13 GHSAs)

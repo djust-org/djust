@@ -260,17 +260,62 @@ jobs:
           .venv/bin/python tests/playwright/test_draft_mode.py
           echo "Running nav + dj-hook regression guard (#1742)..."
           .venv/bin/python tests/playwright/test_nav_hooks.py
-          # Browser-smoke canary (#1849/#1848): mount + inline-in-dj-root
-          # script. Lives in this already-non-blocking leg per #1534 — it must
-          # go green on a runner before any promotion to a hard merge gate.
-          echo "Running browser-smoke canary (#1849/#1848)..."
-          .venv/bin/python tests/playwright/test_browser_smoke.py
+          # NOTE: the browser-smoke canary (#1849/#1848) was promoted OUT of
+          # this non-blocking leg into its own BLOCKING `browser-smoke` job
+          # (#1869 / Action Tracker #314) — see below. This `playwright-tests`
+          # leg stays non-blocking because the FULL playwright suite
+          # (loading_attribute / cache_decorator / draft_mode / nav_hooks) can
+          # be flaky; only the stable two-class browser-smoke canary gates.
 
       - name: Upload server logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-server-logs
+          path: examples/demo_project/server.log
+
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f examples/demo_project/server.pid ]; then
+            kill $(cat examples/demo_project/server.pid) || true
+            rm examples/demo_project/server.pid
+          fi
+
+  # Browser-smoke canary — BLOCKING dedicated job (#1869 / Action Tracker #314,
+  # enforces #1534 + #1713). The #1849/#1848 runtime-break canary
+  # (tests/playwright/test_browser_smoke.py) drives /demos/browser-smoke/ and
+  # guards the 1.0.7 runtime-break class: a LiveView refused at WS mount (a
+  # dj-click no-op) and an inline <script> inside the dj-root whose delegated
+  # listener never registers under the #1610 mount morph (#1848, fixed by
+  # PR #1871). It first shipped as a `continue-on-error` step inside
+  # playwright-tests (#1866); now that it has shipped green on the runner across
+  # multiple PRs (rc4 retro finding #3: a new CI check exercising an env the dev
+  # machine can't fully mirror needs >=1 runner-only iteration before
+  # promotion), it is promoted to this dedicated BLOCKING job (no
+  # continue-on-error) and wired into the test-summary aggregate gate, so a
+  # re-introduced runtime break red-bars the PR. Mirrors the demo-checks
+  # blocking-job pattern (#1708/#1713). The OTHER 4 playwright tests stay in the
+  # non-blocking `playwright-tests` leg above (the full suite can be flaky;
+  # only this stable canary gates).
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Same shared harness as playwright-tests / nav-hooks-guard (setup +
+      # build + playwright + migrate + start demo on :8002).
+      - name: Set up Playwright server
+        uses: ./.github/actions/djust-playwright-server
+
+      - name: Run browser-smoke canary (BLOCKING, #1849/#1848)
+        run: .venv/bin/python tests/playwright/test_browser_smoke.py
+
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-smoke-server-logs
           path: examples/demo_project/server.log
 
       - name: Stop server
@@ -510,7 +555,7 @@ jobs:
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [rust-tests, python-tests, javascript-tests, playwright-tests, nav-hooks-guard, security-scan, security-tests, demo-checks]
+    needs: [rust-tests, python-tests, javascript-tests, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks]
     if: always()
     steps:
       - name: Check test results
@@ -520,17 +565,21 @@ jobs:
           echo "  Python tests: ${{ needs.python-tests.result }}"
           echo "  JavaScript tests: ${{ needs.javascript-tests.result }}"
           echo "  Playwright tests: ${{ needs.playwright-tests.result }} (optional)"
+          echo "  Browser-smoke: ${{ needs.browser-smoke.result }}"
           echo "  Nav/hooks guard: ${{ needs.nav-hooks-guard.result }}"
           echo "  Security scan: ${{ needs.security-scan.result }}"
           echo "  Security tests: ${{ needs.security-tests.result }}"
           echo "  Demo checks: ${{ needs.demo-checks.result }}"
 
-          # Core tests must pass (Rust, Python, JavaScript, Security tests,
-          # Demo checks). Playwright tests and security scan are informational
-          # (not blocking).
+          # Core tests must pass (Rust, Python, JavaScript, Browser-smoke,
+          # Nav/hooks guard, Security tests, Demo checks). The full
+          # playwright-tests leg and security scan are informational (not
+          # blocking) — only the stable browser-smoke canary gates from the
+          # playwright family (#1869 / Action Tracker #314).
           if [ "${{ needs.rust-tests.result }}" == "success" ] && \
              [ "${{ needs.python-tests.result }}" == "success" ] && \
              [ "${{ needs.javascript-tests.result }}" == "success" ] && \
+             [ "${{ needs.browser-smoke.result }}" == "success" ] && \
              [ "${{ needs.nav-hooks-guard.result }}" == "success" ] && \
              [ "${{ needs.security-tests.result }}" == "success" ] && \
              [ "${{ needs.demo-checks.result }}" == "success" ]; then
