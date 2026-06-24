@@ -432,7 +432,14 @@ _WS_ONLY_MARKERS = {
     # note the move in ADR-022. This keeps the mount-side WS↔runtime delta VISIBLE
     # as the mount convergence proceeds.
     "create_session_actor": 1,  # actor mount (Finding D — WS verbatim / SSE refuses)
-    "state_snapshot_signed": 1,  # signed session-snapshot emission on the mount frame (Phase 3.1)
+    # ``state_snapshot_signed`` MOVED to ViewRuntime.dispatch_mount in ADR-022
+    # Iter 3 Phase 3.1 (#1913): the signed session-snapshot EMIT + restore are now
+    # transport-agnostic (LIVE for the SSE mount path, gated on
+    # ``enable_state_snapshot``). It remains on the WS path too (handle_mount,
+    # untouched until 3.3b), so it is no longer a WS-ONLY behavior — removed from
+    # this enumeration. The signed-snapshot HMAC caps are pinned by
+    # test_runtime_mount_state_restore_1913.py (runtime) +
+    # test_state_snapshot_signing.py (WS).
     "_find_sticky_slot_ids": 1,  # sticky_hold survivor scan (Finding B / live_redirect)
     "tick_interval": 1,  # periodic tick task started at mount (Channels timer loop)
     "register_view": 1,  # observability registry (WS register/unregister_view)

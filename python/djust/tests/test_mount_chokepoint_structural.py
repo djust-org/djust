@@ -200,8 +200,11 @@ _SETATTR_WHITELIST = {
     # state dict onto a locally-constructed DynamicLiveView. The keys come from the
     # app author's function return value, not from a client frame — so they don't
     # need safe_setattr's client-key guard. Two adjacent lines (callable vs not).
-    ("live_view.py", 1184),
-    ("live_view.py", 1186),
+    # Line numbers shifted +11 in ADR-022 Iter 3 Phase 3.1 (#1913) when
+    # ``_mounted_from_restore`` was added before the ``_framework_attrs`` snapshot
+    # in ``LiveView.__init__``.
+    ("live_view.py", 1195),
+    ("live_view.py", 1197),
 }
 
 

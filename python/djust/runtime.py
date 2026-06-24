@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import json
 import logging
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, runtime_checkable
@@ -1211,6 +1212,19 @@ class ViewRuntime:
 
         try:
             view_instance.request = request
+            # _django_session_key (ADR-022 Iter 3 Phase 3.1): the signed
+            # state-snapshot HMAC binds ``sid`` to the Django session key (see
+            # below + python/djust/security/state_snapshot.py). WS handle_mount
+            # stamps this off the scope session (websocket.py:2294); the runtime
+            # path sources it from ``request.session`` so the runtime/SSE mount's
+            # ``unsign_snapshot`` / ``sign_snapshot`` calls validate + emit the
+            # SAME session binding (a snapshot signed under session S1 cannot
+            # restore under S2 on this path either). None/empty for anonymous —
+            # the envelope degrades to slug-only, matching WS.
+            session_obj = getattr(request, "session", None)
+            view_instance._django_session_key = (
+                getattr(session_obj, "session_key", None) if session_obj is not None else None
+            )
             if hasattr(view_instance, "_initialize_temporary_assigns"):
                 await sync_to_async(view_instance._initialize_temporary_assigns)()
         except Exception as exc:
@@ -1239,24 +1253,196 @@ class ViewRuntime:
             self.view_instance = None
             return
 
+        # ---- on_mount hooks (after auth, before mount) ----
+        # Ported from WS handle_mount (websocket.py:2383-2401), placed at the
+        # SAME point: AFTER the pre-mount auth sequence, BEFORE mount(). The
+        # registered ``on_mount`` hooks (djust.hooks.run_on_mount_hooks) run
+        # against the live view + request and may return a redirect URL.
+        #
+        # Transport-agnostic redirect handling: the WS path additionally
+        # ``close(4403)``s the orphaned socket (unless in a mount_batch). The
+        # runtime has no socket-level close in its hands (the runtime is the
+        # SSE mount path; closing is the transport's concern post-3.3a), so —
+        # matching the runtime's existing auth-redirect handling in _check_auth
+        # (which sends a ``navigate`` frame + aborts WITHOUT a socket close) —
+        # this path emits the navigate frame, clears the unmounted view, and
+        # returns. The transport-level ``close`` belongs to the
+        # ``finalize_mount_auth`` hook landing in Phase 3.2/3.3a; it is NOT
+        # added here.
+        from .hooks import run_on_mount_hooks
+
+        hook_redirect = await sync_to_async(run_on_mount_hooks)(view_instance, request, **params)
+        if hook_redirect:
+            await self.transport.send({"type": "navigate", "to": hook_redirect})
+            self.view_instance = None
+            return
+        # ---- End on_mount hooks ----
+
         # ---- Mount kwargs ----
         mount_kwargs = dict(params)
         url_kwargs = self._resolve_url_kwargs(page_url)
         if url_kwargs:
             mount_kwargs.update(url_kwargs)
 
-        try:
-            await sync_to_async(view_instance.mount)(request, **mount_kwargs)
-        except Exception as exc:
-            response = handle_exception(
-                exc,
-                error_type="mount",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
-            )
-            await self.transport.send(response)
-            return
+        # ---- State restoration (ADR-022 Iter 3 Phase 3.1) ----
+        # Ported from WS handle_mount (websocket.py:2403-2587), VERBATIM gates +
+        # caps. Two restore mechanisms run in lieu of calling mount(); each sets
+        # the ``_mounted_from_restore`` resume flag (the runtime analogue of WS's
+        # ``mounted`` / ``mounted_from_snapshot``) that the mount-frame
+        # construction below reads for ``skip_html_for_resume``.
+        #
+        # GATE (#1552): BOTH mechanisms are gated on
+        # ``enable_state_snapshot = True``. Default views never restore — a fresh
+        # mount() runs unconditionally for them (parity with WS, which gated the
+        # saved_state read on the same flag to fix the #1466-clobbered-baseline
+        # regression). For SSE this is a no-op unless the view opts in AND a
+        # snapshot / saved-state is present in the request/frame.
+        mounted_from_restore = False
+
+        # (1) Session-saved-state restore (WS websocket.py:2424-2474). Reattaches
+        # public + private state + per-process side-effect registrations +
+        # component state saved by the per-event session-save (#1466) onto a
+        # plain reconnect. Gated on ``enable_state_snapshot`` (#1552).
+        opt_in = getattr(view_instance, "enable_state_snapshot", False)
+        session = getattr(request, "session", None)
+        if opt_in and session is not None:
+            view_key = f"liveview_{page_url}"
+            try:
+                saved_state = await session.aget(view_key, {})
+            except Exception:  # noqa: BLE001 — session backend may be absent
+                saved_state = {}
+            if saved_state:
+                from .security import safe_setattr
+
+                for key, value in saved_state.items():
+                    safe_setattr(view_instance, key, value, allow_private=False)
+
+                # Restore user-defined _private attributes (mirrors WS + HTTP).
+                private_state = await session.aget(f"{view_key}__private", {})
+                if private_state:
+                    await sync_to_async(view_instance._restore_private_state)(private_state)
+
+                # Issues #889/#893/#894 — replay process-wide side effects that
+                # mount() would have re-issued (UploadManager, PresenceManager,
+                # PostgresNotifyListener registrations). hasattr-guarded.
+                if hasattr(view_instance, "_restore_upload_configs"):
+                    await sync_to_async(view_instance._restore_upload_configs)()
+                if hasattr(view_instance, "_restore_presence"):
+                    await sync_to_async(view_instance._restore_presence)()
+                if hasattr(view_instance, "_restore_listen_channels"):
+                    await sync_to_async(view_instance._restore_listen_channels)()
+
+                await sync_to_async(view_instance._initialize_temporary_assigns)()
+                await sync_to_async(view_instance._assign_component_ids)()
+
+                # Restore component state.
+                from .components.base import Component, LiveComponent
+
+                component_state = await session.aget(f"{view_key}_components", {})
+                for key, state in component_state.items():
+                    component = getattr(view_instance, key, None)
+                    if component and isinstance(component, (Component, LiveComponent)):
+                        await sync_to_async(view_instance._restore_component_state)(
+                            component, state
+                        )
+
+                mounted_from_restore = True
+
+        # (2) Signed state_snapshot HMAC restore (WS websocket.py:2491-2587,
+        # SECURITY-BOUNDARY). Only fires when NOT already restored from the
+        # session above (WS gates this inside ``if not mounted:``). The client
+        # echoes back an OPAQUE server-signed blob; the caps + HMAC binding below
+        # are byte-identical to WS — see python/djust/security/state_snapshot.py.
+        if not mounted_from_restore:
+            from django.conf import settings
+
+            state_snapshot = data.get("state_snapshot")
+            # Fix #11 — operator-level master switch (WS websocket.py:2499).
+            state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+            if state_master_on and state_snapshot and opt_in:
+                snapshot_slug = state_snapshot.get("view_slug", "")
+                if snapshot_slug == view_path:
+                    state_dict = None
+                    # Finding #4 (CWE-345 → CWE-915): verify signature + TTL +
+                    # identity (slug + session) BEFORE trusting any bytes. An
+                    # unsigned/forged/tampered/expired/cross-context snapshot
+                    # returns None and falls through to a normal mount().
+                    from .security import unsign_snapshot
+
+                    signed_blob = state_snapshot.get("state_json", "")
+                    session_key = getattr(view_instance, "_django_session_key", None)
+                    raw_state = unsign_snapshot(signed_blob, view_path, session_key)
+                    if raw_state is None:
+                        # Rejected at the signature/identity/TTL gate.
+                        # unsign_snapshot already logged the reason.
+                        state_dict = None
+                    # Fix #6 — hard server-side size cap on the VERIFIED inner
+                    # snapshot JSON (64 KB; matches client clamp).
+                    elif len(raw_state) > 65536:
+                        logger.warning(
+                            "state_snapshot state_json too large "
+                            "(%d bytes > 64KB) for %s; ignoring",
+                            len(raw_state),
+                            sanitize_for_log(view_path),
+                        )
+                        state_dict = None
+                    else:
+                        try:
+                            state_dict = json.loads(raw_state)
+                        except (ValueError, TypeError):
+                            logger.warning(
+                                "state_snapshot malformed JSON for view %s; "
+                                "proceeding with fresh mount",
+                                sanitize_for_log(view_path),
+                            )
+                            state_dict = None
+                        # Fix #8 — enforce dict type after decode.
+                        if state_dict is not None and not isinstance(state_dict, dict):
+                            logger.warning(
+                                "state_snapshot state_json is not a dict (got %s) for %s; ignoring",
+                                type(state_dict).__name__,
+                                sanitize_for_log(view_path),
+                            )
+                            state_dict = None
+                        # Fix #7 — keyset DoS cap (256 keys).
+                        if state_dict is not None and len(state_dict) > 256:
+                            logger.warning(
+                                "state_snapshot keyset too large (%d keys > 256) for %s; ignoring",
+                                len(state_dict),
+                                sanitize_for_log(view_path),
+                            )
+                            state_dict = None
+                    if state_dict is not None and await sync_to_async(
+                        view_instance._should_restore_snapshot
+                    )(request):
+                        try:
+                            await sync_to_async(view_instance._restore_snapshot)(state_dict)
+                            mounted_from_restore = True
+                        except Exception:  # noqa: BLE001
+                            logger.exception(
+                                "state_snapshot _restore_snapshot failed "
+                                "for %s; falling back to mount()",
+                                sanitize_for_log(view_path),
+                            )
+                            mounted_from_restore = False
+
+        # Expose the resume flag for the mount-frame construction below
+        # (skip_html_for_resume) — Phase 3.0 wired the read; this sets it.
+        view_instance._mounted_from_restore = mounted_from_restore
+
+        if not mounted_from_restore:
+            try:
+                await sync_to_async(view_instance.mount)(request, **mount_kwargs)
+            except Exception as exc:
+                response = handle_exception(
+                    exc,
+                    error_type="mount",
+                    view_class=view_path,
+                    logger=logger,
+                    log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
+                )
+                await self.transport.send(response)
+                return
 
         # ---- Object-permission check (ADR-017 §Decision 5, post-mount) ----
         # Iter 0 / #1885: mirrors the WS handle_mount post-mount object check
@@ -1375,12 +1561,10 @@ class ViewRuntime:
         # freshly-rendered HTML would force a redundant DOM swap — skip the
         # ``html``/``has_ids`` keys (the ``version`` still flows so patches stay
         # in sync). ``_mounted_from_restore`` is the runtime analogue of WS's
-        # ``mounted`` flag: it is DORMANT in Phase 3.0 (the runtime has no
-        # session-restore path yet — that lands in Phase 3.1), so
-        # ``skip_html_for_resume`` is always False today and HTML is always sent.
-        # The machinery is present + correct so Phase 3.1's restore can set the
-        # flag and the resume optimization activates without re-touching this
-        # frame construction.
+        # ``mounted`` flag. Phase 3.0 wired this read while the flag was DORMANT;
+        # Phase 3.1's state-restore block above now SETS it on a session /
+        # signed-snapshot resume, so the resume optimization is LIVE for the
+        # runtime/SSE mount path.
         mounted_from_restore = getattr(view_instance, "_mounted_from_restore", False)
         skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)
         if html is not None and not skip_html_for_resume:
@@ -1389,6 +1573,40 @@ class ViewRuntime:
         elif skip_html_for_resume:
             logger.info(
                 "Runtime: skipping mount HTML for resume of %s — client already has DOM",
+                sanitize_for_log(view_path),
+            )
+
+        # state_snapshot_signed EMIT (ADR-022 Iter 3 Phase 3.1, WS
+        # websocket.py:2754-2792). When the view opts in (``enable_state_snapshot``)
+        # AND the master switch is on, ship the SIGNED public-state blob on the
+        # mount frame so the client can store it verbatim and echo it back on the
+        # next back-navigation (the restore path above verifies the HMAC + TTL +
+        # slug/sid binding). Non-opt-in views never have state shipped. The
+        # signature binds slug + session key (``_django_session_key``, stamped
+        # above), so a valid snapshot cannot be replayed across views or sessions.
+        # Wrapped so snapshot emission can NEVER break the mount (#1788 posture).
+        try:
+            from django.conf import settings
+
+            state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+            if state_master_on and getattr(view_instance, "enable_state_snapshot", False):
+                snapshot_fn = getattr(view_instance, "_capture_snapshot_state", None)
+                if callable(snapshot_fn):
+                    public_state = await sync_to_async(snapshot_fn)()
+                    if isinstance(public_state, dict) and public_state:
+                        from .security import sign_snapshot
+
+                        # Canonical serialization so the signed bytes are stable
+                        # (and match the inner JSON the restore path json.loads-es
+                        # after unsigning).
+                        state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
+                        session_key = getattr(view_instance, "_django_session_key", None)
+                        mount_msg["state_snapshot_signed"] = sign_snapshot(
+                            state_json, view_path, session_key
+                        )
+        except Exception:  # noqa: BLE001 — snapshot emission must never break mount
+            logger.exception(
+                "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
                 sanitize_for_log(view_path),
             )
 
