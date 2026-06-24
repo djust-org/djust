@@ -90,48 +90,42 @@ def _build_consumer():
 
 
 def test_load_gate_loosened_fires_on_saved_state_without_has_prerendered():
-    """The load gate in handle_mount was widened from
-    ``if has_prerendered`` to ``if has_prerendered or saved_state``. Pin this
-    boolean by reading the source: the new gate evaluates True whenever
-    saved_state is non-empty, regardless of has_prerendered. Verifying via
-    source-text is sufficient because the change IS the boolean.
+    """The session-restore load gate fires on saved_state independent of
+    ``has_prerendered``. Post-#1919 (THE MOUNT FLIP) the WS mount routes through
+    ``ViewRuntime.dispatch_mount`` (the bespoke ``handle_mount`` body was deleted);
+    the runtime gates the restore on ``opt_in and session is not None`` then
+    ``if saved_state:`` — semantically the #1466/#1552 behavior (restore on plain
+    reconnect when state exists AND the view opted in), pinned at its converged home.
 
     Companion: the integration test below proves the runtime effect.
     """
-    import djust.websocket as ws_mod
+    import djust.runtime as rt_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
 
-    # Old gate: `if has_prerendered:` (exactly) wrapping the aget.
-    # New gate: `if has_prerendered or saved_state:` wrapping it.
-    assert "if has_prerendered or saved_state:" in source, (
-        "Load gate must be widened to `if has_prerendered or saved_state:` "
-        "so plain WS reconnect can restore state from session."
+    # The runtime gate: restore whenever saved_state is non-empty (independent of
+    # has_prerendered), inside the opt_in + session guard.
+    assert "if saved_state:" in source, (
+        "dispatch_mount must restore on a non-empty saved_state (plain WS reconnect "
+        "resume), not only when has_prerendered."
     )
 
-    # The aget must be guarded for the no-session case (tests without sessions)
-    # AND for views without ``enable_state_snapshot`` (#1552 fix). Pre-#1552
-    # the guard was just ``if request.session else {}``; #1552 widened it to
-    # also require the view to opt in, so non-opt-in views don't get their
-    # state restored from session on every WS mount (which produced patches
-    # the client's DOM couldn't resolve — the wizard step-leak bug). Refs
-    # #1466 (introduced the unconditional load) and #1552 (gated it).
-    assert "request.session" in source and "enable_state_snapshot" in source, (
-        "aget must short-circuit when request.session is None AND when "
-        "the view doesn't opt in via enable_state_snapshot (#1552)."
+    # The restore must be guarded for the no-session case AND for views without
+    # ``enable_state_snapshot`` (#1552 fix): non-opt-in views don't get their state
+    # restored from session on every mount (the wizard step-leak bug). Refs #1466
+    # (introduced the load) and #1552 (gated it). The runtime sources opt_in from
+    # ``enable_state_snapshot`` and the session from ``request.session``.
+    assert "enable_state_snapshot" in source and "session" in source, (
+        "restore must short-circuit when the session is None AND when the view "
+        "doesn't opt in via enable_state_snapshot (#1552)."
     )
 
-    # And the OLD gate text MUST NOT remain — otherwise the boolean is broken.
-    # The executable line should still build view_key before the gate.
-    # #1552's comment block mentions the gate phrase for context, so we
-    # find the LAST occurrence of each fragment (the actual code) rather
-    # than the first. Both must be present and view_key must precede the
-    # executable gate line.
+    # view_key must be assigned BEFORE the gate, not inside it.
     new_shape_idx = source.rfind('view_key = f"liveview_{page_url}"')
-    gate_idx = source.rfind("if has_prerendered or saved_state:")
+    gate_idx = source.rfind("if saved_state:")
     assert new_shape_idx != -1 and gate_idx != -1
     assert new_shape_idx < gate_idx, (
-        "view_key must be assigned BEFORE the (widened) gate, not inside it."
+        "view_key must be assigned BEFORE the saved_state gate, not inside it."
     )
 
 
@@ -183,14 +177,17 @@ def test_skip_html_for_resume_truth_table():
 
 
 def test_skip_html_logic_present_in_source():
-    """Belt-and-suspenders: the actual handle_mount source must contain the
-    ``skip_html_for_resume = mounted and has_prerendered`` line so the
-    truth-table test above pins the source's actual behavior, not a stale
-    re-implementation."""
-    import djust.websocket as ws_mod
+    """Belt-and-suspenders: the actual mount source must contain the
+    skip-html-for-resume conditional so the truth-table test above pins the
+    source's actual behavior, not a stale re-implementation. Post-#1919 (THE MOUNT
+    FLIP) the WS mount routes through ``ViewRuntime.dispatch_mount``, where the
+    runtime analogue is ``skip_html_for_resume = bool(mounted_from_restore) and
+    bool(has_prerendered)`` (``_mounted_from_restore`` is the runtime's ``mounted``
+    flag)."""
+    import djust.runtime as rt_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_mount)
-    assert "skip_html_for_resume = mounted and has_prerendered" in source
+    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
+    assert "skip_html_for_resume = bool(mounted_from_restore) and bool(has_prerendered)" in source
     assert "if html is not None and not skip_html_for_resume:" in source
 
 
@@ -273,10 +270,13 @@ async def test_handle_event_save_block_persists_state_to_session():
 
 
 def test_save_block_present_in_handle_event_source():
-    """Pin the save block's presence in handle_event. If a future refactor
-    deletes or moves this block, this test fails fast.
+    """Pin the #1466 session-save block. #1907 THE FLIP moved WS events onto
+    ``ViewRuntime.dispatch_event``; the save block moved off the deleted
+    ``_handle_event_inner`` into the runtime's ``_persist_state_after_event``
+    (the body) gated by ``_dispatch_event_render`` (the opt-in + identity gate).
+    If a future refactor deletes or moves the block, this fails fast.
 
-    The block must:
+    The block (``_persist_state_after_event``) must:
     - Read ``target_view._djust_mount_request`` (preferred session source)
     - Fall back to ``self.scope.get("session")`` when no mount_request
     - Build ``save_view_key = f"liveview_{save_path}"``
@@ -284,15 +284,10 @@ def test_save_block_present_in_handle_event_source():
     - Call ``save_session.aset(...)`` then ``save_session.asave()``
     - Wrap everything in try/except so saves never break event handling
     """
-    import djust.websocket as ws_mod
+    import djust.runtime as rt_mod
 
-    # Finding #6: handle_event is a thin tenant-context wrapper; the save block
-    # lives in _handle_event_inner now.
-    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
-
-    # Critical markers from the inserted block. Use a whitespace-tolerant
-    # check so re-indentation (e.g. the Stage 11 fix that nested the block
-    # under `if target_view is self.view_instance:`) doesn't break the grep.
+    # The save BODY lives in the runtime's _persist_state_after_event (#1907).
+    source = inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event)
     source_collapsed = " ".join(source.split())
 
     assert '"_djust_mount_request"' in source
@@ -306,29 +301,28 @@ def test_save_block_present_in_handle_event_source():
     assert 'f"{save_view_key}__private"' in source
     # Components path:
     assert "_save_components_to_session" in source
-    # Save MUST be wrapped so failures don't break event handling.
-    assert "Failed to save LiveView state after WS event" in source
-    # Stage 11 (PR #1466): save block MUST be gated on top-level view
-    # identity so child LiveComponent events don't write to "liveview_/".
-    assert "target_view is self.view_instance" in source
-    # #1475 / 0.9.7rc3: save block MUST be gated on
-    # ``enable_state_snapshot`` so default views (which don't opt in)
-    # don't pay the per-event async-DB-write overhead. djustlive
-    # 0.9.7rc2 was bricked by unconditional saves leaving async work
-    # in flight across a host snapshot. The two gates are AND'd in the
-    # `if (...)` condition immediately above the save block.
-    assert '"enable_state_snapshot"' in source, (
-        "Save block must read enable_state_snapshot. PR #1466 omitted the "
-        "gate; #1475 added it because unconditional WS saves left async "
-        "session-backend I/O in flight, which a host snapshot captured "
-        "unrecoverably (djustlive 0.9.7rc2 production block)."
-    )
+    # Save MUST be wrapped so failures don't break event handling (runtime msg).
+    assert "Failed to save LiveView state after runtime event" in source
     # #1475: 150ms timeout MUST wrap the save body. Even opt-in views
     # need close-time tail latency bounded so a stalled session backend
     # can't recreate the snapshot-poisoning failure mode.
     assert "asyncio.wait_for" in source
     assert "timeout=0.150" in source
     assert "asyncio.TimeoutError" in source
+
+    # The GATE (top-level identity + enable_state_snapshot opt-in) lives at the
+    # call site in _dispatch_event_render. Stage 11 (PR #1466): gated on top-level
+    # view identity so child LiveComponent events don't write to "liveview_/".
+    # #1475 / 0.9.7rc3: gated on enable_state_snapshot so default views don't pay
+    # the per-event async-DB-write overhead (djustlive 0.9.7rc2 production block).
+    gate_src = inspect.getsource(rt_mod.ViewRuntime._dispatch_event_render)
+    assert "target_view is self.view_instance" in gate_src, (
+        "the runtime save call must be gated on top-level view identity (#1466)."
+    )
+    assert '"enable_state_snapshot"' in gate_src, (
+        "the runtime save call must be gated on enable_state_snapshot (#1475) so "
+        "default views don't pay per-event async-DB-write overhead."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -626,12 +620,16 @@ def test_save_block_gates_on_enable_state_snapshot_source():
     WebsocketCommunicator level. This test pins the gate's lexical
     presence so a future refactor that drops the keyword would fail
     fast even if the runtime test were skipped under some CI config.
-    """
-    import djust.websocket as ws_mod
 
-    # Finding #6: handle_event is a thin tenant-context wrapper; the gated save
-    # block lives in _handle_event_inner now.
-    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
+    #1907 THE FLIP: WS events route through ``ViewRuntime.dispatch_event``; the
+    gated save call lives at the ``_dispatch_event_render`` call site now (the body
+    is ``_persist_state_after_event``). The runtime docstring (runtime.py) notes the
+    identity clause is kept in the condition specifically so this AND-form gate
+    string matches the WS pin verbatim — drift between the two save gates goes red.
+    """
+    import djust.runtime as rt_mod
+
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_event_render)
     source_collapsed = " ".join(source.split())
 
     # The exact form of the gate: AND'd with the existing top-level

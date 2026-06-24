@@ -37,7 +37,27 @@ from djust.rate_limit import ConnectionRateLimiter
 from djust.websocket import LiveViewConsumer
 
 
-class _WaitingView(WaiterMixin):
+class _RenderStubMixin:
+    """Minimal render surface the runtime component-event path needs.
+
+    #1907 THE FLIP: the runtime's ``_dispatch_component_event`` re-renders the
+    PARENT view (the #1898 fix — the deleted bespoke path never did, which was the
+    bug) via ``render_with_diff()`` + strip/extract, then emits a ``component_event``
+    html_update. These tests assert handler-run + waiter resolution (not the frame),
+    so a trivial render stub is enough to exercise the real runtime path."""
+
+    def render_with_diff(self, *args: Any, **kwargs: Any):
+        # (html, patches, version) — patches=None drives the full-HTML branch.
+        return ("<div>stub</div>", None, 1)
+
+    def _strip_comments_and_whitespace(self, html: str) -> str:
+        return html
+
+    def _extract_liveview_content(self, html: str) -> str:
+        return html
+
+
+class _WaitingView(_RenderStubMixin, WaiterMixin):
     """Minimal LiveView-like object that hosts a waiter registry and
     the component map the consumer's component branch reads."""
 
@@ -67,7 +87,15 @@ class _ClickComponent(LiveComponent):
 def _make_consumer(view: _WaitingView) -> LiveViewConsumer:
     """Build a LiveViewConsumer instance with just enough state to
     exercise ``handle_event`` for the component branch. Avoids the
-    real ``connect`` path which needs channels + an actual socket."""
+    real ``connect`` path which needs channels + an actual socket.
+
+    #1907 THE FLIP: ``handle_event`` now routes through
+    ``ViewRuntime.dispatch_event`` (the bespoke ``_handle_event_inner`` was
+    deleted), so the consumer needs the attrs ``_get_runtime`` /
+    ``WSConsumerTransport`` read — ``scope`` (to construct the runtime) and
+    ``_client_ip`` (the transport observability/rate-limit field). The
+    component-event waiter propagation behavior these tests assert is unchanged;
+    it now lives in ``ViewRuntime._dispatch_component_event`` (verbatim port)."""
     consumer = LiveViewConsumer.__new__(LiveViewConsumer)
     consumer.view_instance = view
     consumer._render_lock = asyncio.Lock()
@@ -77,6 +105,11 @@ def _make_consumer(view: _WaitingView) -> LiveViewConsumer:
     consumer._rate_limiter = ConnectionRateLimiter(rate=10000, burst=10000)
     consumer.use_actors = False
     consumer.actor_handle = None
+    # #1907: minimal state the runtime path reads.
+    consumer.scope = {"session": None, "headers": [], "client": ("127.0.0.1", 0)}
+    consumer._client_ip = "127.0.0.1"
+    consumer.channel_name = "test-channel"
+    consumer._last_sent_version = 0
     # Methods the dispatch path can invoke — stubbed out so a test
     # failure shows the real assertion, not a ``send_json is missing``
     # AttributeError.
@@ -209,7 +242,7 @@ class TestComponentEventPropagation:
         This is the pre-existing Phase 1b behavior — we didn't touch
         it, but a sloppy refactor could break it."""
 
-        class _ViewWithHandler(WaiterMixin):
+        class _ViewWithHandler(_RenderStubMixin, WaiterMixin):
             def __init__(self) -> None:
                 super().__init__()
                 self._components: Dict[str, LiveComponent] = {}
@@ -262,7 +295,10 @@ class TestComponentEventPropagation:
 
         consumer = _make_consumer(view)
 
-        with caplog.at_level("WARNING", logger="djust.websocket"):
+        # #1907 THE FLIP: the component-event waiter notification (with its
+        # best-effort warning on failure) moved to ViewRuntime._dispatch_component_event,
+        # so the warning is now logged on the ``djust.runtime`` logger.
+        with caplog.at_level("WARNING", logger="djust.runtime"):
             await consumer.handle_event(
                 {
                     "event": "item_clicked",

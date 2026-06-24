@@ -289,18 +289,38 @@ def _allowlist():
     return override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__.split(".")[0]])
 
 
-def test_sse_mount_denies_forbidden_object():
-    from djust.sse import _sse_mount_view
+# Post-#1887 (ADR-022 Iter 1) the SSE mount converged onto
+# ``session.runtime.dispatch_mount`` (deleting the legacy ``_sse_mount_view``).
+# The object-permission check still fires post-mount + pre-render via the SAME
+# shared ``enforce_object_permission`` chokepoint inside ``dispatch_mount``
+# (Iter 0 / #1885). The 'mounted' verdict is now ``runtime.view_instance is not
+# None`` (it replaced the legacy bool return). These tests drive the converged
+# path with the real request stashed on the session (``session._request``, as
+# the GET stream does) so the runtime mounts against the real request.user.
+def _run_sse_mount(session, request, view_path):
+    session._request = request
+    # Mirror DjustSSEStreamView.get: 'params' carries the query-string items the
+    # GET stream merges into mount_kwargs (every GET item except the 'view'
+    # selector), so URL params like doc_id reach mount() exactly as before.
+    params = {k: v for k, v in request.GET.items() if k != "view"}
+    asyncio.run(
+        session.runtime.dispatch_mount(
+            {"type": "mount", "view": view_path, "url": request.path, "params": params}
+        )
+    )
+    return session.runtime.view_instance is not None
 
+
+def test_sse_mount_denies_forbidden_object():
     sys.modules[__name__]._DocSSEView = _DocSSEView  # type: ignore[attr-defined]
     session = _sse_session()
     path = f"{__name__}._DocSSEView"
 
     with _allowlist():
-        mounted = asyncio.run(_sse_mount_view(session, _sse_request(doc_id=2), path))
+        mounted = _run_sse_mount(session, _sse_request(doc_id=2), path)
 
     msgs = _drain(session)
-    assert mounted is False, "SSE mount of a denied object must abort (return False)"
+    assert mounted is False, "SSE mount of a denied object must abort (no view_instance)"
     assert any(m.get("type") == "error" for m in msgs), "denied SSE mount must push an error frame"
     assert not any(m.get("type") == "mount" for m in msgs), (
         "denied object must NOT be mounted/rendered"
@@ -309,14 +329,12 @@ def test_sse_mount_denies_forbidden_object():
 
 
 def test_sse_mount_allows_permitted_object():
-    from djust.sse import _sse_mount_view
-
     sys.modules[__name__]._DocSSEView = _DocSSEView  # type: ignore[attr-defined]
     session = _sse_session()
     path = f"{__name__}._DocSSEView"
 
     with _allowlist():
-        mounted = asyncio.run(_sse_mount_view(session, _sse_request(doc_id=1), path))
+        mounted = _run_sse_mount(session, _sse_request(doc_id=1), path)
 
     msgs = _drain(session)
     assert mounted is True, "permitted object wrongly denied on the SSE path"
@@ -325,14 +343,12 @@ def test_sse_mount_allows_permitted_object():
 
 
 def test_sse_mount_noop_for_non_object_scoped_view():
-    from djust.sse import _sse_mount_view
-
     sys.modules[__name__]._PublicSSEView = _PublicSSEView  # type: ignore[attr-defined]
     session = _sse_session()
     path = f"{__name__}._PublicSSEView"
 
     with _allowlist():
-        mounted = asyncio.run(_sse_mount_view(session, _sse_request(), path))
+        mounted = _run_sse_mount(session, _sse_request(), path)
 
     msgs = _drain(session)
     assert mounted is True, "non-object-scoped SSE view must be unaffected (pure no-op)"

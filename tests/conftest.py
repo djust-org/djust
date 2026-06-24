@@ -67,6 +67,27 @@ def sample_template():
 
 
 @pytest.fixture(autouse=True)
+def _reset_djust_globals():
+    """Reset djust process-global mutable state BEFORE each test (#1883).
+
+    Systemic cure for the shared-process-global flaky-test class: one autouse
+    fixture clears djust's leak-prone process-globals (the Channels layer
+    manager, Django's URLconf caches, djust's route-map cache, and the
+    module-level id counters) so every test in an xdist worker starts from a
+    clean slate. Retires the whack-a-mole class that produced #1862 (PR #1874),
+    #1875 (PR #1881), and #1882 — see ``djust.test_isolation`` for the full
+    inventory and the conservative-inclusion rationale.
+
+    Pre-yield (resets before the test runs) so tests that set up their own
+    global state in their body still work.
+    """
+    from djust.test_isolation import reset_djust_globals
+
+    reset_djust_globals()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def cleanup_session_cache():
     """Clean up session cache after each test."""
     # Setup: Ensure we use in-memory backend for tests

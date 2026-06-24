@@ -284,8 +284,17 @@ async def test_permission_denied_view_handler_records_with_error():
     consumer.send_error = AsyncMock()
     consumer.send_json = AsyncMock()
     consumer._rate_limiter = None
+    # #1907 THE FLIP: handle_event routes through ViewRuntime.dispatch_event, which
+    # constructs ViewRuntime(WSConsumerTransport(consumer), scope=self.scope, ...),
+    # so the consumer needs a minimal scope + client_ip the runtime/transport read.
+    consumer.scope = {"session": None, "headers": [], "client": ("127.0.0.1", 0)}
+    consumer._client_ip = "127.0.0.1"
+    consumer.channel_name = "test-channel"
 
-    # Stub _validate_event_security to return None (permission denied).
+    # Stub _validate_event_security to return None (permission denied). The runtime
+    # event path calls it as _validate_event_security(transport, name, view, rl), so
+    # self_arg is the WSConsumerTransport; transport.send_error delegates to the
+    # mocked consumer.send_error.
     async def _fake_validate(self_arg, name, v, rl):
         await self_arg.send_error("forbidden")
         return None
@@ -294,9 +303,13 @@ async def test_permission_denied_view_handler_records_with_error():
 
     consumer._render_lock = _asyncio.Lock()
 
+    # #1907: the runtime resolves _validate_event_security via its OWN module-level
+    # import (djust.runtime._validate_event_security), NOT djust.websocket's — the
+    # runtime event path no longer consults the websocket symbol. Patch the runtime
+    # binding so the stub actually intercepts the denial.
     with (
         override_settings(DEBUG=True),
-        patch("djust.websocket._validate_event_security", side_effect=_fake_validate),
+        patch("djust.runtime._validate_event_security", side_effect=_fake_validate),
     ):
         await consumer.handle_event({"event": "increment", "params": {}, "ref": 1})
 

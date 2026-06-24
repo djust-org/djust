@@ -547,7 +547,15 @@ class TestRuntimeMountSequence:
 
 
 # --------------------------------------------------------------------------- #
-# Legacy SSE mount path (_sse_mount_view).
+# SSE mount path — converged onto the shared runtime (dispatch_mount), #1887.
+#
+# Post-#1887 (ADR-022 Iter 1) the SSE mount runs the SAME pre-mount auth+tenant
+# SEQUENCE (run_pre_mount_auth via dispatch_mount → _check_auth) as the WS +
+# runtime paths — the legacy bespoke _sse_mount_view is gone. SSE still mounts
+# against the REAL HTTP request (real request.user), preserved via
+# SSESessionTransport.build_request reading session._request (stashed here as the
+# GET stream does); without it auth would run against a userless request. The
+# 'mounted' verdict is now runtime.view_instance is not None.
 # --------------------------------------------------------------------------- #
 def _sse_request(user):
     from unittest.mock import MagicMock
@@ -558,6 +566,15 @@ def _sse_request(user):
     return request
 
 
+async def _sse_mount(session, request, view_path):
+    """Drive the converged SSE mount and return the legacy-equivalent bool."""
+    session._request = request
+    await session.runtime.dispatch_mount(
+        {"type": "mount", "view": view_path, "url": request.path, "params": {}}
+    )
+    return session.runtime.view_instance is not None
+
+
 @pytest.mark.django_db
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_allow_this_module")
@@ -565,11 +582,11 @@ class TestSSEMountSequence:
     async def test_authed_normal_mount_succeeds(self):
         import uuid
 
-        from djust.sse import SSESession, _sse_mount_view
+        from djust.sse import SSESession
 
         session = SSESession(str(uuid.uuid4()))
         session._owner_user_pk = 1
-        mounted = await _sse_mount_view(session, _sse_request(_AuthedUser()), _PUBLIC_PATH)
+        mounted = await _sse_mount(session, _sse_request(_AuthedUser()), _PUBLIC_PATH)
         assert mounted is True
         # A "mount" message was pushed to the stream queue.
         msgs = []
@@ -578,15 +595,15 @@ class TestSSEMountSequence:
         assert any(m and m.get("type") == "mount" for m in msgs), f"no mount msg: {msgs!r}"
 
     async def test_anon_login_required_mount_denied(self):
-        """Legacy SSE denial envelope preserved: returns False + pushes a
-        navigate message; no usable session registered."""
+        """SSE denial envelope preserved through the runtime: no view_instance +
+        a navigate message; no usable session registered."""
         import uuid
 
-        from djust.sse import SSESession, _sse_mount_view
+        from djust.sse import SSESession
 
         session = SSESession(str(uuid.uuid4()))
         session._owner_user_pk = None
-        mounted = await _sse_mount_view(session, _sse_request(_AnonUser()), _LOGIN_PATH)
+        mounted = await _sse_mount(session, _sse_request(_AnonUser()), _LOGIN_PATH)
         assert mounted is False, "anon mounted a login_required view over SSE"
         msgs = []
         while not session.queue.empty():

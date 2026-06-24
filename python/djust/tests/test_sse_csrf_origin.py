@@ -323,13 +323,11 @@ class TestSSEEventOrigin:
             HTTP_ORIGIN=FOREIGN_ORIGIN,
         )
         view = DjustSSEEventView()
-        from unittest.mock import patch
-
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            response = await view.post(request, session_id=session.session_id)
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 403
-        mock_dispatch.assert_not_called()
+        session.runtime.dispatch_event.assert_not_called()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -345,14 +343,11 @@ class TestSSEEventOrigin:
         )
         _attach_owner(request)
         view = DjustSSEEventView()
-        from unittest.mock import patch
-
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            mock_dispatch.return_value = None
-            response = await view.post(request, session_id=session.session_id)
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 200
-        mock_dispatch.assert_called_once()
+        session.runtime.dispatch_event.assert_called_once()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -367,10 +362,8 @@ class TestSSEEventOrigin:
             HTTP_ORIGIN=ALLOWED_ORIGIN,
         )
         view = DjustSSEEventView()
-        from unittest.mock import patch
-
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            response = await view.post(request, session_id=session.session_id)
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 415
-        mock_dispatch.assert_not_called()
+        session.runtime.dispatch_event.assert_not_called()

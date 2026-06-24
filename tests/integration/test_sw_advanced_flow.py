@@ -57,6 +57,20 @@ class _FlowSnapshotView(LiveView):
 # ---------------------------------------------------------------------------
 
 
+class _AllowAllRateLimiter:
+    """Permissive rate limiter for the fake consumer — the runtime mount path
+    (#1919) constructs ``ViewRuntime(..., rate_limiter=self._rate_limiter)``."""
+
+    def check(self, _msg_type):
+        return True
+
+    def check_upload(self):
+        return True
+
+    def should_disconnect(self):
+        return False
+
+
 class _FakeConsumer(LiveViewConsumer):
     def __init__(self):  # type: ignore[no-untyped-def]
         self.view_instance: Optional[LiveView] = None
@@ -74,6 +88,14 @@ class _FakeConsumer(LiveViewConsumer):
         self.use_actors = False
         self.actor_handle = None
         self._debug_panel_active = False
+        # Wire-version + rate-limiter attrs the runtime mount path reads (#1919
+        # THE MOUNT FLIP: handle_mount is now a thin shim over
+        # ViewRuntime.dispatch_mount, constructed in _get_runtime with
+        # rate_limiter=self._rate_limiter). The fake drives the runtime path now.
+        self._last_sent_version = 0
+        self._recovery_html = None
+        self._recovery_version = 0
+        self._rate_limiter = _AllowAllRateLimiter()
 
     class _NullChannelLayer:
         async def group_add(self, *a, **kw):

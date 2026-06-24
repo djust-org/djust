@@ -34,7 +34,7 @@ if not settings.configured:
     django.setup()
 
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -81,6 +81,13 @@ class MockTransport:
 
     async def close(self, code: int = 1000) -> None:
         self.closed_with = code
+
+    @asynccontextmanager
+    async def event_context(self, view: Any):
+        """No-op event context (#1899): mock transports have no render lock to
+        borrow — the runtime's event dispatch wraps the handler+render in
+        ``transport.event_context``, so the mock must provide one."""
+        yield
 
 
 # ------------------------------------------------------------------ #

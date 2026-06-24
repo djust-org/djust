@@ -548,6 +548,17 @@ class LiveView(
         # derived from the template each render).
         self._dj_model_fields: frozenset = frozenset()
 
+        # _mounted_from_restore (ADR-022 Iter 3 Phase 3.1): a transient mount-time
+        # flag set by ``ViewRuntime.dispatch_mount`` when the view's state was
+        # restored from a session save / signed snapshot in lieu of calling
+        # mount() (the runtime analogue of WS handle_mount's local ``mounted``
+        # var). Drives the ``skip_html_for_resume`` optimization. Assigned HERE —
+        # BEFORE the _framework_attrs snapshot — so it is treated as a framework
+        # slot: reset on reconnect and EXCLUDED from user-private state
+        # serialization (it must never be persisted; it describes THIS mount, not
+        # user state). #1393 snapshot-order invariant.
+        self._mounted_from_restore: bool = False
+
         # Snapshot framework-set attrs so we can distinguish them from
         # user-defined _private attrs set in mount() or event handlers.
         #

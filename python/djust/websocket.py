@@ -24,7 +24,6 @@ from .websocket_utils import (
     _validate_event_security,
     get_handler_coerce_setting,
 )
-from .presence import PresenceManager
 from .signals import full_html_update, liveview_server_error
 
 logger = logging.getLogger(__name__)
@@ -473,6 +472,54 @@ def _emit_full_html_update(
         html_snippet=html_snippet,
         previous_html_snippet=previous_html_snippet,
     )
+
+
+def render_embedded_child_html(child_view) -> str:
+    """Render an embedded child view's template and return its inner HTML.
+
+    Transport-agnostic render core for the embedded-child subsystem. Re-renders
+    just the child's template via Django's template engine, bypassing the
+    parent's VDOM entirely. Single-sourced (ADR-022 Iter 2 Phase 2.1, the #1646
+    cure) so the WS consumer (:meth:`LiveViewConsumer._render_embedded_child`)
+    and :class:`~djust.runtime.ViewRuntime` share ONE implementation — including
+    the security-hardened error path below — with no parallel copy to drift.
+    """
+    try:
+        context = child_view.get_context_data()
+        from django.template import engines
+
+        template_str = child_view.get_template()
+        engine = engines["django"] if "django" in engines else list(engines.all())[0]
+        tmpl = engine.from_string(template_str)
+        html = tmpl.render(context)
+        # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
+        # SOURCE — child update_model events gate against the child's
+        # _dj_model_fields, and this is the child's only render path (it
+        # bypasses render_with_diff). Derived from the Rust template AST
+        # (Text-node literals), immune to rendered-output poisoning
+        # (#3 review #1646).
+        if hasattr(child_view, "_record_dj_model_fields_from_source"):
+            from .utils import get_template_dirs
+
+            child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
+        return html
+    except Exception as e:
+        logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
+        # SECURITY (#1646 parallel-path drift): this site bypassed the
+        # central handle_exception / create_safe_error_response path, which
+        # is DEBUG-gated and generic in production. Returning the raw str(e)
+        # here (a) leaked exception detail into the live page in production
+        # (CWE-209) and (b) was unescaped, so an attacker-influenced message
+        # containing ``-->`` broke out of the HTML comment into live DOM
+        # (CWE-79 DOM XSS). escape() neutralises the comment-breakout and any
+        # tag injection in BOTH modes; production additionally emits no
+        # detail. Mirrors the DEBUG gate in simple_live_view.render_template.
+        from django.conf import settings
+        from django.utils.html import escape
+
+        if getattr(settings, "DEBUG", False):
+            return f"<!-- Error rendering embedded child: {escape(str(e))} -->"
+        return "<!-- Error rendering embedded child -->"
 
 
 def _find_sticky_slot_ids(html: str) -> set[str]:
@@ -1806,6 +1853,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Clean up session state
         self.view_instance = None
         self.actor_handle = None
+        # (#1919, Finding A) Also null the shared runtime's view so a later
+        # re-mount on a reused consumer/runtime is never silently no-op'd by
+        # ``dispatch_mount``'s ``if view_instance is not None`` idempotency guard.
+        runtime = getattr(self, "_runtime", None)
+        if runtime is not None:
+            runtime.view_instance = None
 
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages"""
@@ -1904,25 +1957,38 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             #
             # ROUTED via dispatch_message (RUNTIME_OWNED_VERBS):
             #   * url_change  — wire-blind, fully shared with SSE since #1237.
+            #   * event       — flipped onto the runtime in ADR-022 Iter 2 Phase
+            #     2.3b (#1907, THE FLIP). Phase 2.3a grew ``dispatch_event`` into a
+            #     functional SUPERSET of the (now deleted) bespoke
+            #     ``_handle_event_inner``: the ``event_context`` render-lock +
+            #     #1677 origin + PerformanceTracker/SQL observability, the actor
+            #     hook, ``view_id`` sticky-child + ``component_id`` LiveComponent
+            #     routing, ``dj_activity`` gate + flush, time-travel recording +
+            #     #1466 session state-save + ADR-018 sticky-child save, #1777
+            #     reauth, #700 identity push-only auto-skip, patch compression,
+            #     ``_force_full_html`` + ``embedded_update`` framing, the #1788/
+            #     #1858 consumer-owned wire version + recovery arming (via the
+            #     ``next_client_version`` hook), and the per-render observability
+            #     (DJE-053 warning + ``record_handler_timing`` +
+            #     ``_emit_full_html_update`` signal, via the ``on_render_emitted``
+            #     / ``on_handler_timing`` hooks). One event path, not two (#1646).
             #
-            # NOT YET ROUTED (runtime owns the verb but the WS handler still
-            # carries behavior the runtime path does not yet implement):
-            #   * mount  — the WS ``handle_mount`` does sticky-child
-            #     preservation, signed ``state_snapshot`` restore, and actor
-            #     channel-layer wiring that ``ViewRuntime.dispatch_mount`` does
-            #     NOT (it even refuses ``use_actors``). Routing it now would
-            #     bypass those. Folded into runtime hooks by T1-A (#1853).
-            #   * event  — the WS ``handle_event`` carries ~16 WS-only
-            #     behaviors the runtime ``dispatch_event`` lacks: event-``ref``
-            #     echo (#560), the actor path, ``view_id`` sticky-child and
-            #     ``component_id`` LiveComponent routing, ``dj_activity``
-            #     gating, time-travel recording, the tick render-lock, push
-            #     origin-channel tagging (#1677), SQL observability, waiter
-            #     notification, session state-save (#1466), sticky-child
-            #     state-save (ADR-018), identity-snapshot push-only auto-skip
-            #     (#700), patch compression, ``_force_full_html`` and
-            #     ``embedded_update`` framing. Routing it now would regress all
-            #     of those. Deferred until the runtime grows those hooks.
+            #   * mount       — flipped onto the runtime in ADR-022 Iter 3 Phase
+            #     3.3b (#1919, THE MOUNT FLIP). Phases 3.0-3.3a grew
+            #     ``dispatch_mount`` into a functional SUPERSET of the (now
+            #     deleted) bespoke ``handle_mount`` body: the F22 view resolver,
+            #     pre-mount auth+tenant sequence (``run_pre_mount_auth`` via
+            #     ``_check_auth``), ``on_mount`` hooks, session/signed-snapshot
+            #     state restore (#1466/#1552), post-mount object-permission
+            #     (ADR-017), ``handle_params``, the actor mount hook
+            #     (``dispatch_actor_mount``, #1915 Finding D), the no-arm mount
+            #     wire version (``next_mount_version``, Finding C), the sticky_hold
+            #     pre-mount frame (``on_mount_render_ready``, Finding B residual),
+            #     the auth verdict→close finalize (``finalize_mount_auth``, Finding
+            #     E), the WS post-mount channel-layer wiring + tick + flags
+            #     (``on_view_mounted``, Finding B residual), and the 2-queue
+            #     mount-time drain. One mount path, not two — the #1646 mount
+            #     convergence COMPLETE.
             #
             # WS-ONLY EXTENSION SET (no runtime equivalent; binary upload
             # frames 0x01/0x02/0x03 are handled above before decode):
@@ -1932,19 +1998,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             #   time_travel_component_jump, forward_replay.
             if msg_type in self.RUNTIME_OWNED_VERBS:
                 # Runtime-owned: route through the dispatch_message chokepoint
-                # rather than calling dispatch_url_change directly, so future
+                # rather than calling the bespoke handler directly, so future
                 # chokepoint-level controls cover this verb on the WS path. The
                 # membership check (not a hardcoded ``== "url_change"``) makes
                 # ``RUNTIME_OWNED_VERBS`` LOAD-BEARING (#1852): adding a verb to
                 # the set automatically routes it here, and the contract test
                 # (``TestRuntimeOwnedVerbsContract``) fails if the set and this
-                # arm ever drift. This is the FIRST elif-arm, so it cannot shadow
-                # ``event``/``mount``/etc. — those verbs are not in the set.
+                # arm ever drift. This is the FIRST arm, so ``event`` (#1907) AND
+                # ``mount`` (#1919, THE MOUNT FLIP) both land here — NOT the deleted
+                # ``elif`` arms that used to call the bespoke ``handle_event`` /
+                # ``handle_mount``.
                 await self._dispatch_runtime_owned(data)
-            elif msg_type == "event":
-                await self.handle_event(data)
-            elif msg_type == "mount":
-                await self.handle_mount(data)
             elif msg_type == "mount_batch":
                 await self.handle_mount_batch(data)
             elif msg_type == "ping":
@@ -1995,907 +2059,78 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         sticky_preserved: Optional[Dict[str, Any]] = None,
         state_snapshot: Optional[Dict[str, Any]] = None,
     ):
+        """Handle view mounting by routing through :class:`ViewRuntime`.
+
+        ADR-022 Iter 3 Phase 3.3b (#1919, THE MOUNT FLIP). Until this phase,
+        ``mount`` was handled by a ~870-line bespoke WS-only body (a twin of the
+        runtime's mount path). Phases 3.0-3.3a grew
+        :meth:`ViewRuntime.dispatch_mount` into a functional SUPERSET of that
+        bespoke handler (F22 view resolver, ``run_pre_mount_auth`` pre-mount
+        auth+tenant sequence via ``_check_auth``, ``on_mount`` hooks, session +
+        signed-snapshot state restore, post-mount object-permission, ``handle_params``,
+        actor mount + render, the no-arm mount wire version, the ``sticky_hold``
+        pre-mount frame, the auth verdict→``close(4403)`` finalize, the WS
+        post-mount channel-layer wiring + tick + flags, and the 2-queue mount-time
+        drain), all wired through ``WSConsumerTransport`` hooks. Phase 3.3b adds
+        ``"mount"`` to :attr:`RUNTIME_OWNED_VERBS` so ``receive()`` now routes mount
+        frames through the single ``dispatch_message`` chokepoint (the #1646 mount
+        convergence — one mount path, not two). This method is therefore a THIN SHIM
+        mirroring :meth:`handle_url_change` / :meth:`handle_event`.
+
+        ``receive()`` no longer calls this directly for the ``mount`` verb (that
+        goes via :meth:`_dispatch_runtime_owned` → ``dispatch_message`` →
+        ``dispatch_mount``), but it is retained as a stable public entry point /
+        backward-compatible shim for the WS-only callers that invoke it directly
+        with the extra kwargs: :meth:`handle_live_redirect_mount` (passes
+        ``sticky_preserved`` so the ``sticky_hold`` frame precedes the mount frame)
+        and :meth:`_mount_one` (the ``mount_batch`` collector).
+
+        Three flip findings (ADR-022 Iter 3) handled here / by the runtime:
+
+        * **(A) Idempotency reset** — ``dispatch_mount`` early-returns when
+          ``runtime.view_instance is not None`` (the legacy GET-mount double-fire
+          guard). The consumer nulls ``self.view_instance`` on disconnect /
+          auth-fail / ``live_redirect`` teardown but NEVER ``runtime.view_instance``,
+          so a re-mount on a runtime that already mounted once would silently
+          no-op (the #560-class landmine). We null ``runtime.view_instance`` BEFORE
+          dispatching so every (re-)mount actually runs.
+        * **(B) Ownership inverts** — ``url_change`` / ``event`` mirror
+          consumer→runtime; ``mount`` CREATES the view (runtime→consumer), so we
+          read back ``self.view_instance = runtime.view_instance`` after dispatch.
+          The WS post-mount consumer attrs (``_view_group`` / ``_tick_task`` /
+          ``use_actors`` / presence + db_notify groups / ``_sticky_preserved``)
+          are written onto the consumer by the ``on_view_mounted`` /
+          ``on_mount_render_ready`` transport hooks during the runtime mount.
+        * **(C) Mount wire version** — the ``next_mount_version`` hook stamps the
+          consumer-owned monotonic ``_next_version()`` WITHOUT arming request_html
+          recovery (mount establishes the baseline; it has no prior frame to
+          recover to).
         """
-        Handle view mounting with proper view resolution.
-
-        Dynamically imports and instantiates a LiveView class, creates a request
-        context, mounts the view, and returns the initial HTML.
-
-        Sticky LiveViews (Phase B): when ``sticky_preserved`` is provided
-        (passed by ``handle_live_redirect_mount``), a ``sticky_hold``
-        frame is emitted immediately BEFORE the ``mount`` frame so the
-        client can reconcile its stickyStash against the authoritative
-        survivor list BEFORE ``reattachStickyAfterMount`` runs inside
-        the mount-frame handler. The survivor set is computed by
-        slot-scanning the just-rendered HTML; survivors whose
-        ``sticky_id`` has no matching ``[dj-sticky-slot]`` get
-        ``_on_sticky_unmount()`` called and are dropped from the dict
-        (which the caller stores on ``self._sticky_preserved``).
-
-        State snapshot (v0.6.0): when ``state_snapshot`` is provided
-        AND the view class opts in via ``enable_state_snapshot = True``
-        AND ``view_slug`` matches the view path AND
-        ``_should_restore_snapshot(request)`` returns True, the view's
-        public state is restored from the snapshot in lieu of calling
-        ``mount()``. Authentication and ``on_mount`` hooks still run
-        before restoration; malformed JSON or restore errors fall back
-        to a fresh ``mount()`` call.
-        """
-        from django.test import RequestFactory
-        from django.conf import settings
-
-        logger = logging.getLogger(__name__)
-
-        # Reset auto-reattach tracker (ADR-014): each mount starts with
-        # an empty set; the tag pushes ids onto it as it claims survivors.
-        self._sticky_auto_reattached = set()
-
-        view_path = data.get("view")
-        params = data.get("params", {})
-        has_prerendered = data.get("has_prerendered", False)
-        client_timezone = data.get("client_timezone")
-
-        if not view_path:
-            await self.send_error("Missing view path in mount request")
-            return
-
-        # Security (F22 — unsafe reflection / arbitrary module import + insecure
-        # default allowlist + boundary-less prefix match): resolve the
-        # client-supplied dotted view path through the single shared resolver.
-        # It validates the path SHAPE, checks the allowlist BEFORE importing
-        # anything (fail-closed to LIVEVIEW_ALLOWED_MODULES, else INSTALLED_APPS
-        # roots + djust), imports via import_module + vars() (PEP 562-safe), and
-        # confirms the LiveView subclass. Shared with the runtime/SSE paths so
-        # they cannot drift (#1646). See djust.security.mount.
-        from .security.mount import available_liveview_names, resolve_view_class
-
-        resolution = resolve_view_class(view_path)
-        if not resolution:
-            logger.warning(
-                "Blocked/failed mount of view: %s (%s)",
-                sanitize_for_log(view_path),
-                resolution.generic,
-            )
-            hint = None
-            # DEBUG-only enumeration hint for the "class not found" case — only
-            # meaningful once the module imported (allowlist passed). Enumerate
-            # via vars()/__dict__ (PEP 562-safe), never getattr.
-            if getattr(settings, "DEBUG", False) and resolution.generic == "View not found":
-                names = available_liveview_names(view_path)
-                if names:
-                    module_path = view_path.rsplit(".", 1)[0]
-                    hint = "Available LiveView classes in %s: %s" % (module_path, ", ".join(names))
-            await self.send_error(_safe_error(resolution.detail, resolution.generic), hint=hint)
-            return
-        view_class = resolution.view_class
-
-        # Instantiate the view
-        try:
-            self.view_instance = view_class()
-
-            # ADR-019 LVN-I PR-3: if the handshake selected a non-HTML
-            # renderer (?platform=swiftui|compose), bind it to the view
-            # so TemplateMixin.render_with_diff dispatches through it.
-            # Reads scope's query_string AT MOUNT TIME (per-mount in
-            # this code path, vs runtime.py's per-connect for the
-            # ViewRuntime path).
-            try:
-                from urllib.parse import parse_qs
-
-                from .renderers import get_renderer_factory
-
-                qs = parse_qs(self.scope.get("query_string", b"").decode("utf-8", errors="ignore"))
-                platform = (qs.get("platform") or [None])[0]
-                factory = get_renderer_factory(platform)
-                if factory is not None:
-                    self.view_instance._djust_renderer = factory(self.view_instance)
-            except Exception:
-                # Never fail mount because of renderer selection — fall
-                # back to HtmlRenderer if anything goes wrong.
-                pass
-
-            # Store reference to WS consumer for streaming support
-            self.view_instance._ws_consumer = self
-
-            # Wire push-event flush callback so @background handlers
-            # (like TutorialMixin.start_tutorial) can send push_commands
-            # to the client mid-execution without waiting for the handler
-            # to return. See PushEventMixin._flush_pending_push_events.
-            if hasattr(self.view_instance, "_push_events_flush_callback"):
-                self.view_instance._push_events_flush_callback = self._flush_push_events
-
-            # Store client timezone for local time rendering
-            self.view_instance.client_timezone = None
-            if client_timezone:
-                try:
-                    from zoneinfo import ZoneInfo
-
-                    ZoneInfo(client_timezone)  # Validate IANA timezone string
-                    self.view_instance.client_timezone = client_timezone
-                except (KeyError, Exception):
-                    logger.warning("Invalid client timezone: %s", client_timezone)
-
-            # Store WebSocket session_id in view for consistent VDOM caching
-            # This ensures mount and all subsequent events use the same VDOM instance
-            self.view_instance._websocket_session_id = self.session_id
-            # Store path and query string for path-aware cache keys
-            # This ensures /emails/ and /emails/?sender=1 get separate VDOM caches
-            self.view_instance._websocket_path = self.scope.get("path", "/")
-            self.view_instance._websocket_query_string = self.scope.get("query_string", b"").decode(
-                "utf-8"
-            )
-
-            # Register this view in the observability session registry so the
-            # djust MCP can introspect live state via its HTTP endpoints.
-            # Registry uses weakrefs — no leak if unregister is missed.
-            try:
-                from djust.observability.registry import register_view
-
-                register_view(self.session_id, self.view_instance)
-            except Exception as e:  # noqa: BLE001
-                # Observability must never break a WS connection.
-                logger.warning("Failed to register view in observability registry: %s", e)
-
-            # Join per-view channel group for server-push
-            from .push import view_group_name
-
-            self._view_path = view_path
-            self._view_group = view_group_name(view_path)
-            await self.channel_layer.group_add(self._view_group, self.channel_name)
-
-            # Join presence group if view supports presence tracking
-            self._presence_group = None
-            if hasattr(self.view_instance, "get_presence_key"):
-                try:
-                    presence_key = self.view_instance.get_presence_key()
-                    self._presence_group = PresenceManager.presence_group_name(presence_key)
-                    await self.channel_layer.group_add(self._presence_group, self.channel_name)
-                except Exception as e:
-                    logger.warning("Error setting up presence group: %s", e)
-
-            # Join db_notify groups for every channel the view subscribed to
-            # via NotificationMixin.listen() during mount(). The groups are
-            # addressed per-channel (djust_db_notify_<channel>) so a NOTIFY
-            # on one channel never fans out to views listening on another.
-            self._db_notify_channels = set()
-            listen_channels = getattr(self.view_instance, "_listen_channels", None)
-            if listen_channels:
-                for ch in listen_channels:
-                    try:
-                        await self.channel_layer.group_add(
-                            f"djust_db_notify_{ch}", self.channel_name
-                        )
-                        self._db_notify_channels.add(ch)
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("Error joining db_notify group for %s: %s", ch, e)
-
-            # Start periodic tick if subclass overrides handle_tick
-            tick_interval = getattr(view_class, "tick_interval", None)
-            if tick_interval:
-                from .live_view import LiveView as _LV
-
-                if view_class.handle_tick is not _LV.handle_tick:
-                    self._tick_task = asyncio.create_task(self._run_tick(tick_interval))
-
-            # Check if view uses actor-based state management
-            self.use_actors = getattr(view_class, "use_actors", False)
-
-            if self.use_actors and create_session_actor:
-                # Create SessionActor for this session
-                logger.info("Creating SessionActor for %s", view_path)
-                self.actor_handle = await create_session_actor(self.session_id)
-                logger.info("SessionActor created: %s", self.actor_handle.session_id)
-
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="mount",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Failed to instantiate {view_path}",
-            )
-            await self.send_json(response)
-            return
-
-        # Create request with session
-        try:
-            from urllib.parse import urlencode
-
-            factory = RequestFactory()
-            # Include URL query params (e.g., ?sender=80) in the request
-            query_string = urlencode(params) if params else ""
-            # Use the actual page URL from the client, not hardcoded "/".
-            # The client-supplied URL is attacker-controlled — validate it
-            # against path traversal / CRLF / absolute-URL injection (#1819).
-            page_url = _validate_mount_url(data.get("url", "/"))
-            path_with_query = f"{page_url}?{query_string}" if query_string else page_url
-
-            # Finding #26: propagate the validated client Host (and TLS scheme)
-            # from the handshake scope into the reconstructed request so
-            # host/subdomain TenantResolvers — and every other
-            # ``request.get_host()`` consumer — resolve identically on the live
-            # path to the HTTP (SSR) path. Without HTTP_HOST the request defaults
-            # to RequestFactory's "testserver", misresolving the tenant to None
-            # (cross-tenant disclosure with STRICT_MODE=False, broken tenancy by
-            # default). ``validated_host_from_scope`` validates the Host against
-            # ALLOWED_HOSTS using the SAME logic as the CSWSH Origin check, and
-            # returns ``(None, ...)`` for absent/invalid Hosts so non-browser
-            # clients (WebsocketCommunicator) keep working.
-            host, is_secure = validated_host_from_scope(self.scope)
-            request_extra = {}
-            if host:
-                request_extra["HTTP_HOST"] = host
-            if is_secure:
-                request_extra["secure"] = True
-                request_extra["HTTP_X_FORWARDED_PROTO"] = "https"
-            request = factory.get(path_with_query, **request_extra)
-
-            # Stash the validated host on the view so runtime-rebuilt requests
-            # (``ViewRuntime._build_request`` for url_change etc.) carry the same
-            # host. Mirrors the ``_websocket_path`` stash above (#1646: one seam,
-            # both reconstructed-request paths). ``None`` when absent/invalid so
-            # the runtime falls back to the same RequestFactory default.
-            if self.view_instance is not None:
-                self.view_instance._websocket_host = host
-                self.view_instance._websocket_secure = is_secure
-
-            # Add session from WebSocket scope.
-            # session_key is an ATTRIBUTE of the session object, not a dict key.
-            # Django Channels' AuthMiddlewareStack wraps scope["session"] in a
-            # LazyObject.  hasattr() catches AttributeError if the attribute is
-            # absent, but will not suppress other exceptions (e.g. OperationalError
-            # from a db-backed session backend).  Use getattr(obj, name, None) for
-            # a more robust single-call alternative on LazyObjects.
-            # Lazy import: avoids pulling in the db backend when the project
-            # uses a different session backend (e.g. cached_db, file, redis).
-            from django.contrib.sessions.backends.db import SessionStore  # noqa: PLC0415
-
-            scope_session = self.scope.get("session")
-            # getattr(obj, name, default) is used instead of a hasattr() +
-            # getattr() pair.  Django Channels' AuthMiddlewareStack wraps
-            # scope["session"] in a LazyObject; a two-step hasattr/getattr
-            # approach resolves the object twice and can disagree if the
-            # LazyObject is in a partially-resolved state.  The single
-            # getattr() call resolves the LazyObject once and returns the
-            # value (or None) atomically.
-            session_key = getattr(scope_session, "session_key", None) if scope_session else None
-            if session_key:
-                request.session = SessionStore(session_key=session_key)
-                self.view_instance._django_session_key = session_key
-            else:
-                request.session = SessionStore()
-
-            # Add user if available.
-            # scope["user"] is a Django Channels LazyObject (set by AuthMiddlewareStack).
-            # Assigning it directly to request.user is safe — Django's auth machinery
-            # and template context both handle lazy user proxies correctly.
-            if "user" in self.scope:
-                request.user = self.scope["user"]
-
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="mount",
-                logger=logger,
-                log_message="Failed to create request context",
-            )
-            await self.send_json(response)
-            return
-
-        # Mount the view (needs sync_to_async for database operations)
-
-        try:
-            # Initialize temporary assigns before mount
-            await sync_to_async(self.view_instance._initialize_temporary_assigns)()
-
-            # Store request on the view so self.request works in handlers
-            # (Django's View.dispatch() does this for HTTP, but WS skips dispatch)
-            self.view_instance.request = request
-
-            # --- Pre-mount security sequence (auth + tenant resolve/bind) ---
-            # Single-sourced through djust.auth.core.run_pre_mount_auth so the
-            # WS, runtime, and SSE mount paths cannot drift in WHICH checks run
-            # or in WHAT ORDER (#1646 / #1853). The helper runs the same leaf
-            # chokepoints this path used inline before: check_view_auth (may
-            # raise PermissionDenied / return a redirect URL), then — only when
-            # auth passes — _ensure_tenant + the tenant ContextVar bind. The
-            # WS-specific verdict→envelope mapping (close 4403 / navigate frame /
-            # clear view) stays HERE; the helper only owns the sequence.
-            from .auth import run_pre_mount_auth
-            from django.core.exceptions import PermissionDenied
-
-            try:
-                redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
-            except PermissionDenied as exc:
-                # Authenticated user lacks permissions → 403 (not a redirect)
-                logger.info(
-                    "Permission denied for %s: %s", self.view_instance.__class__.__name__, exc
-                )
-                await self.send_json({"type": "error", "message": "Permission denied"})
-                await self.close(code=4403)
-                return
-            if redirect_url:
-                # Auth failure (e.g. anonymous user on a login_required view).
-                # Send the redirect frame so a browser navigates to LOGIN_URL,
-                # THEN close the socket — otherwise a raw WS client can ignore
-                # the navigate and keep sending events to handlers with no
-                # authenticated session (the mount left view_instance set but
-                # never ran mount(), and handle_event does not re-check auth).
-                # Mirrors the PermissionDenied/4403 branch above. (Threat model
-                # T1, docs/audits/websocket-auth-2026-06.md.)
-                await self.send_json(
-                    {
-                        "type": "navigate",
-                        "to": redirect_url,
-                    }
-                )
-                # Clear the unmounted view so handle_event can't dispatch against
-                # it, then close — UNLESS we're inside a multiplexed mount_batch
-                # on a shared socket, where the navigate frame is collected into
-                # navigate[] and closing would kill sibling mounts (the batch
-                # reports this view as a redirect, not a bypass). (T1)
-                self.view_instance = None
-                if not getattr(self, "_mounting_in_batch", False):
-                    await self.close(code=4403)
-                return
-            # On auth success, run_pre_mount_auth has already resolved the
-            # tenant via _ensure_tenant and bound it into the ContextVar for the
-            # rest of this consumer task (mount() + initial render run later in
-            # the same task). Finding #6: TenantMiddleware only binds on the HTTP
-            # path; without the bind the tenant-scoped managers see None and
-            # (fail-closed) return empty querysets. Cleared in disconnect(). A
-            # raise from _ensure_tenant (e.g. Http404 for a required-but-missing
-            # tenant) propagates to the outer mount exception handler below —
-            # the same envelope this path produced when the call was inline.
-            # See: https://github.com/djust-org/djust/issues/342
-            # --- End pre-mount security sequence ---
-
-            # --- on_mount hooks (after auth, before mount) ---
-            from .hooks import run_on_mount_hooks
-
-            hook_redirect = await sync_to_async(run_on_mount_hooks)(
-                self.view_instance, request, **params
-            )
-            if hook_redirect:
-                # Same shape as the auth redirect above (T2): the view never
-                # mounted (we return before mount()), so the socket is orphaned
-                # — close it + clear view_instance so a raw client can't dispatch
-                # events against the unmounted view. (docs/audits/websocket-auth-2026-06.md.)
-                await self.send_json({"type": "navigate", "to": hook_redirect})
-                # Same as the auth branch (T2): clear the unmounted view, and
-                # close only when not inside a multiplexed mount_batch.
-                self.view_instance = None
-                if not getattr(self, "_mounting_in_batch", False):
-                    await self.close(code=4403)
-                return
-            # --- End on_mount hooks ---
-
-            # --- State restoration (skip mount when pre-rendered state exists) ---
-            # Loosened from `if has_prerendered:` — also fire on plain WS
-            # reconnect when saved state exists in the session. Pairs with
-            # the WS-event-handler save in handle_event so state survives
-            # reconnects (page refresh, network blip, snapshot/restore).
-            #
-            # #1552 fix: gate the saved_state read on
-            # ``enable_state_snapshot`` to mirror the SAVE-block gate added
-            # in #1475 (commit 066d7f05). PR #1466 widened this read from
-            # ``if has_prerendered:`` to ``if has_prerendered or saved_state:``
-            # AND made the ``aget`` itself unconditional — so views that
-            # DIDN'T opt in were still getting state restored from the
-            # HTTP-path session save onto every WS mount, AFTER mount()
-            # had already initialized the view. The next render_with_diff
-            # then diffed against that clobbered baseline, producing
-            # patches the client's DOM couldn't resolve. Bisect confirmed:
-            # 0.9.7rc1 (pre-#1466) → no bug. 0.9.7rc2 (post-#1466) → bug
-            # reproduces. Gating the LOAD symmetrically with the SAVE
-            # restores 0.9.7rc1 behavior for non-opt-in views while
-            # preserving #1466's reconnect-resume capability for opt-in
-            # views (``enable_state_snapshot = True``).
-            mounted = False
-            view_key = f"liveview_{page_url}"
-            saved_state = (
-                await request.session.aget(view_key, {})
-                if request.session and getattr(self.view_instance, "enable_state_snapshot", False)
-                else {}
-            )
-            if has_prerendered or saved_state:
-                if saved_state:
-                    from .security import safe_setattr
-
-                    for key, value in saved_state.items():
-                        safe_setattr(self.view_instance, key, value, allow_private=False)
-
-                    # Restore user-defined _private attributes (mirrors HTTP POST path)
-                    private_state = await request.session.aget(f"{view_key}__private", {})
-                    if private_state:
-                        await sync_to_async(self.view_instance._restore_private_state)(
-                            private_state
-                        )
-
-                    # Issues #889, #893, #894 — replay process-wide side
-                    # effects that mount() would have re-issued.
-                    # Pattern: session round-trip preserves instance
-                    # attrs but loses registrations with per-process
-                    # singletons (UploadManager, PresenceManager,
-                    # PostgresNotifyListener). Each affected mixin
-                    # exposes a _restore_* method that reconstructs
-                    # its side effects from the restored attrs.
-                    if hasattr(self.view_instance, "_restore_upload_configs"):
-                        await sync_to_async(self.view_instance._restore_upload_configs)()
-                    if hasattr(self.view_instance, "_restore_presence"):
-                        await sync_to_async(self.view_instance._restore_presence)()
-                    if hasattr(self.view_instance, "_restore_listen_channels"):
-                        await sync_to_async(self.view_instance._restore_listen_channels)()
-
-                    await sync_to_async(self.view_instance._initialize_temporary_assigns)()
-                    await sync_to_async(self.view_instance._assign_component_ids)()
-
-                    # Restore component state
-                    from .components.base import Component, LiveComponent
-
-                    component_state = await request.session.aget(f"{view_key}_components", {})
-                    for key, state in component_state.items():
-                        component = getattr(self.view_instance, key, None)
-                        if component and isinstance(component, (Component, LiveComponent)):
-                            await sync_to_async(self.view_instance._restore_component_state)(
-                                component, state
-                            )
-
-                    mounted = True
-
-            if not mounted:
-                # Resolve URL kwargs from the page path (e.g., slug, pk)
-                # Django's URL resolver extracts these during HTTP dispatch, but
-                # the WebSocket consumer doesn't go through URL routing, so we
-                # resolve them here and merge into mount() kwargs.
-                mount_kwargs = dict(params)
-                try:
-                    from django.urls import resolve
-
-                    match = resolve(page_url)
-                    if match.kwargs:
-                        mount_kwargs.update(match.kwargs)
-                except Exception:
-                    pass  # URL may not resolve (e.g., root "/") — that's fine
-
-                # State snapshot restore path (v0.6.0) — when the client
-                # sends a state_snapshot with live_redirect_mount AND the
-                # view opts in, restore the public state dict in lieu of
-                # calling mount(). Auth + on_mount hooks already ran above.
-                mounted_from_snapshot = False
-                # Fix #11 — operator-level master switch. Allows ops to
-                # disable snapshot restoration globally (e.g. during an
-                # incident) without touching each view class.
-                state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-                if (
-                    state_master_on
-                    and state_snapshot
-                    and getattr(self.view_instance, "enable_state_snapshot", False)
-                ):
-                    snapshot_slug = state_snapshot.get("view_slug", "")
-                    if snapshot_slug == view_path:
-                        state_dict = None
-                        # Finding #4 (CWE-345 → CWE-915): the snapshot is
-                        # client-supplied and MUST carry a server HMAC
-                        # signature. ``state_json`` is now the OPAQUE signed
-                        # blob the client echoes back verbatim (see the emit
-                        # path below + 46-state-snapshot.js). Verify the
-                        # signature + TTL + identity (slug + session) BEFORE
-                        # trusting any bytes. An unsigned/forged/tampered/
-                        # expired/cross-context snapshot returns None here and
-                        # falls through to a normal mount() — there is no
-                        # bypass via the legacy plain ``state_json``.
-                        from .security import unsign_snapshot
-
-                        signed_blob = state_snapshot.get("state_json", "")
-                        session_key = getattr(self.view_instance, "_django_session_key", None)
-                        raw_state = unsign_snapshot(signed_blob, view_path, session_key)
-                        if raw_state is None:
-                            # Rejected at the signature/identity/TTL gate.
-                            # unsign_snapshot already logged the reason.
-                            state_dict = None
-                        # Fix #6 — hard server-side size cap on the VERIFIED
-                        # inner snapshot JSON. Matches the 64 KB client clamp
-                        # and guards against oversized payloads.
-                        elif len(raw_state) > 65536:
-                            logger.warning(
-                                "state_snapshot state_json too large "
-                                "(%d bytes > 64KB) for %s; ignoring",
-                                len(raw_state),
-                                sanitize_for_log(view_path),
-                            )
-                            state_dict = None
-                        else:
-                            try:
-                                state_dict = json.loads(raw_state)
-                            except (ValueError, TypeError):
-                                logger.warning(
-                                    "state_snapshot malformed JSON for view %s; "
-                                    "proceeding with fresh mount",
-                                    sanitize_for_log(view_path),
-                                )
-                                state_dict = None
-                            # Fix #8 — enforce dict type after decode.
-                            # JSON allows arrays, numbers, strings — any
-                            # of which would trip over ``state.items()``
-                            # in ``_restore_snapshot``.
-                            if state_dict is not None and not isinstance(state_dict, dict):
-                                logger.warning(
-                                    "state_snapshot state_json is not a dict "
-                                    "(got %s) for %s; ignoring",
-                                    type(state_dict).__name__,
-                                    sanitize_for_log(view_path),
-                                )
-                                state_dict = None
-                            # Fix #7 — keyset DoS cap. Real views have
-                            # <20 public attrs; 256 is an absurd upper
-                            # bound that still fits legitimate bulk
-                            # views while blocking adversarial payloads
-                            # that exhaust CPU via safe_setattr calls.
-                            if state_dict is not None and len(state_dict) > 256:
-                                logger.warning(
-                                    "state_snapshot keyset too large "
-                                    "(%d keys > 256) for %s; ignoring",
-                                    len(state_dict),
-                                    sanitize_for_log(view_path),
-                                )
-                                state_dict = None
-                        if state_dict is not None and await sync_to_async(
-                            self.view_instance._should_restore_snapshot
-                        )(request):
-                            try:
-                                await sync_to_async(self.view_instance._restore_snapshot)(
-                                    state_dict
-                                )
-                                mounted_from_snapshot = True
-                            except Exception:  # noqa: BLE001
-                                logger.exception(
-                                    "state_snapshot _restore_snapshot failed "
-                                    "for %s; falling back to mount()",
-                                    sanitize_for_log(view_path),
-                                )
-                                mounted_from_snapshot = False
-
-                if not mounted_from_snapshot:
-                    # Run synchronous view operations in a thread pool
-                    await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
-                # Stash request + kwargs so observability/reset_view_state/
-                # can replay mount() without page reload. Minor memory cost
-                # (one request ref per live view) in exchange for a cheap
-                # reset primitive.
-                self.view_instance._djust_mount_request = request
-                self.view_instance._djust_mount_kwargs = mount_kwargs
-                self.view_instance._snapshot_user_private_attrs()
-                # Dirty tracking baseline (v0.5.1) — captures the post-mount
-                # state so ``is_dirty`` / ``changed_fields`` reflect changes
-                # made by subsequent event handlers.
-                if hasattr(self.view_instance, "_capture_dirty_baseline"):
-                    self.view_instance._capture_dirty_baseline()
-
-                # --- Object-permission check (ADR-017 §Decision 5, post-mount) ---
-                # check_view_auth handled login + role + custom checks pre-mount
-                # at line ~1947. The fourth (object-level) step is split out
-                # into a separate helper here because get_object() reads
-                # `self.<x>_id` which only exists after mount() has populated it.
-                # See ADR-017 § "Physical call sites" for the full rationale.
-                from .auth.core import check_object_permission
-
-                try:
-                    await sync_to_async(check_object_permission)(self.view_instance, request)
-                except PermissionDenied as exc:
-                    logger.info(
-                        "Object-permission denied for %s: %s",
-                        self.view_instance.__class__.__name__,
-                        exc,
-                    )
-                    await self.send_json({"type": "error", "message": "Permission denied"})
-                    await self.close(code=4403)
-                    return
-                # --- End object-permission check ---
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="mount",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
-            )
-            await self.send_json(response)
-            return
-
-        # Call handle_params() after mount (Phoenix parity: handle_params is
-        # invoked on initial render AND on subsequent URL changes).  Build the
-        # URI from the page URL and query params the client sent.
-        try:
-            uri = path_with_query  # already built above as page_url + query_string
-            await sync_to_async(self.view_instance.handle_params)(params, uri)
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="mount",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
-            )
-            await self.send_json(response)
-            return
-
-        # Get initial HTML (skip if client already has pre-rendered content)
-        html = None
-        version = 1
-
-        try:
-            if has_prerendered:
-                # Client has pre-rendered HTML but we still need to send hydrated HTML
-                # when using ID-based patching (data-dj attributes) for reliable VDOM sync
-                logger.info(
-                    "Client has pre-rendered content - sending hydrated HTML for ID-based patching"
-                )
-
-                if self.use_actors and self.actor_handle:
-                    # Initialize actor with empty render (just establish state)
-                    context_data = await sync_to_async(self.view_instance.get_context_data)()
-                    result = await self.actor_handle.mount(
-                        view_path,
-                        context_data,
-                        self.view_instance,
-                    )
-                    html = result.get("html")
-                    version = result.get("version", 1)
-                else:
-                    # Initialize Rust view and sync state for future patches
-                    await sync_to_async(self.view_instance._initialize_rust_view)(request)
-                    await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-                    # Generate hydrated HTML with data-dj attributes for reliable patch targeting
-                    html, _, version = await sync_to_async(self.view_instance.render_with_diff)()
-
-                    # Strip comments and normalize whitespace
-                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
-                        html
-                    )
-
-                    # Extract innerHTML of [dj-root]
-                    html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
-
-            elif self.use_actors and self.actor_handle:
-                # Phase 5: Use actor system for rendering
-                logger.info("Mounting %s with actor system", view_path)
-
-                # Get initial state from Python view
-                context_data = await sync_to_async(self.view_instance.get_context_data)()
-
-                # Mount with actor system (passes Python view instance)
-                result = await self.actor_handle.mount(
-                    view_path,
-                    context_data,
-                    self.view_instance,  # Pass Python view for event handlers!
-                )
-
-                html = result["html"]
-                logger.info("Actor mount successful, HTML length: %d", len(html))
-
-            else:
-                # Non-actor mode: Use traditional flow
-
-                # Initialize Rust view and sync state
-                await sync_to_async(self.view_instance._initialize_rust_view)(request)
-                await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-                # IMPORTANT: Use render_with_diff() to establish initial VDOM baseline
-                # This ensures the first event will be able to generate patches instead of falling back to html_update
-                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
-
-                # Strip comments and normalize whitespace to match Rust VDOM parser
-                html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
-
-                # Extract innerHTML of [dj-root] for WebSocket client
-                # Client expects just the content to insert into existing container
-                html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
-
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="render",
-                view_class=view_path,
-                logger=logger,
-                log_message=f"Error rendering {sanitize_for_log(view_path)}",
-            )
-            await self.send_json(response)
-            return
-
-        # Send success response (HTML only if generated)
-        logger.info("Successfully mounted view: %s", view_path)
-        # Stamp the consumer-owned wire version (#1788) rather than the Rust
-        # ``version`` (or the actor ``result['version']``). On a fresh
-        # connection this is 1, so the client baseline = 1 and the first event
-        # (version 2) satisfies ``clientVdomVersion === data.version - 1``. The
-        # client sets ``clientVdomVersion = data.version`` directly on mount
-        # (``static/djust/src/03-websocket.js:382``), so the source MUST be the
-        # consumer counter to keep every subsequent frame in sequence.
-        version = self._next_version()
-        response = {
-            "type": "mount",
-            "session_id": self.session_id,
-            "view": view_path,
-            "version": version,  # Include VDOM version for client sync
-        }
-
-        # Fix #1 — end-to-end wiring for state-snapshot capture.
-        # When the view opts in via ``enable_state_snapshot = True`` AND
-        # the master switch is enabled, emit the public state alongside
-        # the mount frame so the client can populate
-        # ``djust._clientState[<view_slug>]`` for the next before-navigate
-        # capture. Non-opt-in views never have their state shipped —
-        # matches the security posture of the opt-in-only model.
-        #
-        # Finding #4 (CWE-345 → CWE-915): the snapshot is now SIGNED with a
-        # ``TimestampSigner`` (keyed on ``SECRET_KEY``) and the OPAQUE signed
-        # blob is what crosses the wire (``state_snapshot_signed``). The
-        # client stores it verbatim and echoes it back unchanged; the restore
-        # path verifies the signature + TTL + identity before applying any
-        # state. This closes the unsigned-snapshot forgery vector — a client
-        # can no longer fabricate ``{"is_admin": true, ...}`` and inject it.
-        # The signature binds the view slug + Django session key so a valid
-        # snapshot cannot be replayed across views or sessions.
-        try:
-            state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-            if state_master_on and getattr(self.view_instance, "enable_state_snapshot", False):
-                snapshot_fn = getattr(self.view_instance, "_capture_snapshot_state", None)
-                if callable(snapshot_fn):
-                    public_state = await sync_to_async(snapshot_fn)()
-                    if isinstance(public_state, dict) and public_state:
-                        from .security import sign_snapshot
-
-                        # Canonical serialization so the signed bytes are
-                        # stable (and match the inner JSON the restore path
-                        # json.loads-es after unsigning).
-                        state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
-                        session_key = getattr(self.view_instance, "_django_session_key", None)
-                        response["state_snapshot_signed"] = sign_snapshot(
-                            state_json, view_path, session_key
-                        )
-        except Exception:  # noqa: BLE001 — snapshot emission must never break mount
-            logger.exception(
-                "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
-                sanitize_for_log(view_path),
-            )
-
-        # Only include HTML if it was generated (not skipped due to pre-rendering).
-        #
-        # Resume optimization: when state was restored from the Django session
-        # (mounted=True, my WS-event-save-companion patch fires) AND the client
-        # carries pre-rendered HTML (has_prerendered=True), the client's DOM
-        # already reflects the saved state. Sending the freshly-rendered HTML
-        # would trigger a redundant DOM swap on the client. Skip the html
-        # field; client.js's `e.html && (n.innerHTML=e.html)` short-circuits
-        # cleanly, leaving the existing DOM in place. The `version` field
-        # below still flows so subsequent patches stay in sync.
-        skip_html_for_resume = mounted and has_prerendered
-        if html is not None and not skip_html_for_resume:
-            response["html"] = html
-            # Flag indicating HTML has dj-id attributes for ID-based patching.
-            # Must match the attribute name emitted by the Rust renderer ("dj-id",
-            # not "data-dj-id"). Mirrors the equivalent check in sse.py.
-            has_ids = "dj-id=" in html
-            response["has_ids"] = has_ids
-
-        # ADR-019 LVN: for native renderers (NativeRenderer), html is
-        # empty and the wire payload is patches. Ship them in the mount
-        # frame so the native client can bootstrap its widget tree on
-        # connect (the browser path needs html only — patches arrive on
-        # subsequent updates). The `patches` variable was captured at
-        # the render call above; include it when present + non-empty.
-        if getattr(self.view_instance, "_djust_renderer", None) is not None and locals().get(
-            "patches"
-        ):
-            response["patches"] = locals()["patches"]
-        elif skip_html_for_resume:
-            logger.info(
-                "Skipping mount HTML for resume of %s — client already has DOM",
-                sanitize_for_log(view_path),
-            )
-
-        # Include cache configuration for handlers with @cache decorator
-        cache_config = self._extract_cache_config()
-        if cache_config:
-            response["cache_config"] = cache_config
-
-        # Include optimistic rules from descriptor components (DEP-002)
-        optimistic_rules = self._extract_optimistic_rules()
-        if optimistic_rules:
-            response["optimistic_rules"] = optimistic_rules
-
-        # Include upload configurations if view uses UploadMixin
-        if hasattr(self.view_instance, "_upload_manager") and self.view_instance._upload_manager:
-            upload_state = self.view_instance._upload_manager.get_upload_state()
-            if upload_state:
-                response["upload_configs"] = {
-                    name: info["config"] for name, info in upload_state.items()
-                }
-
-        # Sticky LiveViews (Phase B): if the caller passed a
-        # ``sticky_preserved`` dict (i.e. we're on the live_redirect
-        # path), compute the authoritative survivor set by scanning the
-        # just-rendered HTML for ``[dj-sticky-slot="<id>"]`` and emit
-        # the ``sticky_hold`` frame BEFORE the ``mount`` frame. Ordering
-        # matters: the client's mount handler calls
-        # reattachStickyAfterMount() which walks stickyStash and
-        # replaces matching slot elements — if sticky_hold arrived
-        # AFTER the mount frame, auth-revoked stickys would already be
-        # reattached and reconcileStickyHold would no-op on them.
-        if sticky_preserved:
-            try:
-                matched_ids = _find_sticky_slot_ids(html or "")
-                survivors_final: Dict[str, Any] = {}
-                for sticky_id, child in sticky_preserved.items():
-                    if sticky_id in self._sticky_auto_reattached:
-                        # ADR-014: tag already re-registered the survivor onto
-                        # the new parent at template-render time. Don't call
-                        # ``_register_child`` again (it would ``ValueError``);
-                        # do still include in survivors_final so the
-                        # ``sticky_hold`` frame's ``views`` list stays
-                        # authoritative for the client's reconcileStickyHold.
-                        survivors_final[sticky_id] = child
-                    elif sticky_id in matched_ids:
-                        # Re-register onto the new parent. _register_child
-                        # updates child._parent_view and child._view_id.
-                        if hasattr(self.view_instance, "_register_child"):
-                            try:
-                                self.view_instance._register_child(sticky_id, child)
-                                survivors_final[sticky_id] = child
-                            except ValueError:
-                                # sticky_id collided with a freshly-embedded
-                                # (non-preserved) child in the new template —
-                                # discard the preserved one.
-                                logger.warning(
-                                    "sticky_id %s collided with new child on reattach",
-                                    sticky_id,
-                                )
-                                hook = getattr(child, "_on_sticky_unmount", None)
-                                if callable(hook):
-                                    try:
-                                        hook()
-                                    except Exception:  # noqa: BLE001
-                                        logger.exception("sticky child _on_sticky_unmount raised")
-                    else:
-                        hook = getattr(child, "_on_sticky_unmount", None)
-                        if callable(hook):
-                            try:
-                                hook()
-                            except Exception:  # noqa: BLE001
-                                logger.exception("sticky child _on_sticky_unmount raised")
-                # Update caller-visible dict so handle_live_redirect_mount
-                # sees the final survivors (it stashes this on
-                # self._sticky_preserved for app-level introspection).
-                self._sticky_preserved = survivors_final
-
-                # Emit sticky_hold BEFORE the mount frame. Even an empty
-                # list is meaningful — tells the client "drop everything
-                # in your stash". Only skip when the caller passed an
-                # empty dict (pure defensive, no stickys staged).
-                await self.send_json(
-                    {
-                        "type": "sticky_hold",
-                        "views": list(survivors_final.keys()),
-                    }
-                )
-            except Exception:  # noqa: BLE001 — defensive: never break mount
-                logger.exception("failed to emit sticky_hold frame before mount")
-
-        await self.send_json(response)
-
-        # Mount-time queues: drain push events queued during mount() (or
-        # on_mount hooks) so the client receives them after the mount frame
-        # establishes the view; then dispatch any start_async()/assign_async()
-        # callbacks scheduled in mount() so they run in the background and
-        # send patches once they complete. The send-then-drain ordering
-        # mirrors the established pattern in handle_event /
-        # _flush_deferred_activity_events. Closes #1280 (silent
-        # mount()-time async failure) and #1283 (mount-time push events
-        # never delivered).
-        await self._flush_push_events()
-        await self._dispatch_async_work()
+        runtime = self._get_runtime()
+        # (A) Null the runtime's view BEFORE dispatch so a reconnect / live_redirect
+        # re-mount is never silently no-op'd by the idempotency early-return.
+        runtime.view_instance = None
+
+        # Thread the WS-only direct-caller kwargs into the shape dispatch_mount +
+        # its hooks read:
+        #   * ``sticky_preserved`` — the ``on_mount_render_ready`` hook reads
+        #     ``consumer._sticky_preserved`` (set by handle_live_redirect_mount
+        #     already; set it here too for any direct caller passing the kwarg).
+        #   * ``state_snapshot`` — ``dispatch_mount`` reads ``data.get("state_snapshot")``
+        #     (handle_live_redirect_mount already puts it in ``data``; thread the
+        #     kwarg in for direct callers without mutating the caller's dict).
+        if sticky_preserved is not None:
+            self._sticky_preserved = sticky_preserved
+        if state_snapshot is not None and data.get("state_snapshot") is None:
+            data = {**data, "state_snapshot": state_snapshot}
+
+        await runtime.dispatch_mount(data)
+
+        # (B) Mount creates the view on the runtime — read it back onto the consumer
+        # so disconnect cleanup, request_html recovery, upload/presence handlers,
+        # and the batch collector all see the freshly-mounted view (or ``None`` on
+        # an auth/hook block, which dispatch_mount cleared on the runtime).
+        self.view_instance = runtime.view_instance
 
     async def _mount_one(self, data_view: Dict[str, Any]):
         """Mount + render a single view and return a payload WITHOUT sending.
@@ -3113,1188 +2348,45 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_json(frame)
 
     async def handle_event(self, data: Dict[str, Any]):
-        """Handle client events.
+        """Handle a client event by routing through :class:`ViewRuntime`.
 
-        Thin wrapper that establishes the tenant context for the duration of
-        the event dispatch (Finding #6). ``TenantMiddleware`` only binds the
-        tenant on the HTTP path; on the WebSocket path the tenant is resolved
-        onto ``view_instance._tenant`` at mount, but the tenant-scoped managers
-        read it from a ContextVar. Bind it here so every handler + render inside
-        the event sees the correct tenant — and so the tenant-aware managers
-        fail CLOSED (empty queryset) rather than disclosing other tenants' rows
-        when the view is NOT tenant-aware. Cleared on exit via try/finally.
+        ADR-022 Iter 2 Phase 2.3b (#1907, THE FLIP). Until this phase, ``event``
+        was handled by the bespoke ``_handle_event_inner`` (a ~1170-line WS-only
+        twin of the runtime's event path). Phase 2.3a grew
+        :meth:`ViewRuntime.dispatch_event` into a functional SUPERSET of that
+        bespoke handler (event spine, component/sticky/embedded routing,
+        time-travel + #1466 state-save, ``event_context`` render-lock + origin +
+        observability, the actor hook, ``dj_activity`` gate + flush, #1777 reauth,
+        async dispatch, wire-version stamping), and Phase 2.3b adds ``"event"`` to
+        :attr:`RUNTIME_OWNED_VERBS` so ``receive()`` now routes events through the
+        single ``dispatch_message`` chokepoint (the #1646 convergence — one event
+        path, not two). This method is therefore a THIN SHIM mirroring
+        :meth:`handle_url_change`: ``receive()`` no longer calls it directly for the
+        ``event`` verb (that goes via :meth:`_dispatch_runtime_owned` →
+        ``dispatch_message``), but it is retained as a stable public entry point /
+        backward-compatible shim for callers that invoke it directly. The runtime
+        owns the tenant context (``dispatch_event`` wraps the turn in
+        ``_tenant_context``), the render lock, time-travel, state-save, and the
+        per-render observability (DJE-053 warning + handler timing + full-HTML-update
+        signal) via the ``on_render_emitted`` / ``on_handler_timing`` transport hooks.
+
+        Calls ``runtime.dispatch_event(data)`` DIRECTLY (mirroring
+        :meth:`handle_url_change`, which calls ``dispatch_url_change`` directly) —
+        NOT ``dispatch_message``. Direct callers of ``handle_event`` pass the EVENT
+        payload (``{"event": ..., "params": ...}``) and may omit the outer
+        ``{"type": "event"}`` wire envelope; ``dispatch_event`` reads ``event`` /
+        ``params`` and does not require ``type``, whereas ``dispatch_message`` keys
+        on ``type`` and would emit "Unknown message type" for a type-less payload.
+        The ``receive()`` wire path still routes through ``dispatch_message`` (the
+        frame there always carries ``type: event``).
         """
-        tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
-        with _tenant_context(tenant):
-            await self._handle_event_inner(data)
-
-    async def _handle_event_inner(self, data: Dict[str, Any]):
-        """Handle client events (see :meth:`handle_event` for the tenant wrapper)."""
-        import time
-        from djust.performance import PerformanceTracker
-
-        # Start comprehensive performance tracking
-        tracker = PerformanceTracker()
-        PerformanceTracker.set_current(tracker)
-
-        # Start timing
-        start_time = time.perf_counter()
-        timing = {}  # Keep for backward compatibility
-
-        event_name = data.get("event")
-        self._current_event_name = event_name  # For _dispatch_async_work
-        params = data.get("params", {})
-
-        # Event ref tracking (#560): client sends a monotonic ref with each
-        # event so it can match responses to requests and distinguish event
-        # responses from tick pushes. Coerce to int to prevent type confusion.
-        raw_ref = data.get("ref")
-        event_ref = int(raw_ref) if isinstance(raw_ref, (int, float)) else None
-        self._current_event_ref = event_ref
-
-        # Extract cache request ID if present (for @cache decorator)
-        cache_request_id = params.get("_cacheRequestId")
-
-        # Extract positional arguments from inline handler syntax
-        # e.g., dj-click="set_period('month')" sends params._args = ['month']
-        positional_args = params.pop("_args", [])
-
-        logger.debug("[WebSocket] handle_event called: %s with params: %s", event_name, params)
-
         if not self.view_instance:
             await self.send_error("View not mounted. Please reload the page.")
             return
 
-        # Per-event auth re-check (#1777, threat model T3, opt-in). Auth runs at
-        # mount; the connect-time scope user is cached, so a user who logs out /
-        # loses a permission mid-session would keep dispatching events until they
-        # reconnect. When LIVEVIEW_CONFIG['reauth_on_event'] is True and the view
-        # declares login_required/permission_required, re-resolve the user from
-        # the session and re-run the view's auth check; on failure, redirect +
-        # close the socket (mirroring the mount-time gate). Costs one session
-        # read per event — hence default-OFF. Fail-safe: any error here (e.g. no
-        # session in scope) skips the re-check rather than breaking the event.
-        if djust_config.get("reauth_on_event") and (
-            getattr(self.view_instance, "login_required", None)
-            or getattr(self.view_instance, "permission_required", None)
-        ):
-            try:
-                from channels.auth import get_user
-
-                from .auth.core import check_view_auth_lightweight
-
-                fresh_user = await get_user(self.scope)
-                # The mount request is stored on the view (see handle_mount:
-                # ``self.view_instance.request = request``), not on the consumer.
-                request = getattr(self.view_instance, "request", None)
-                if request is not None:
-                    request.user = fresh_user  # reflect current auth for the check + handler
-                    authorized = await sync_to_async(check_view_auth_lightweight)(
-                        self.view_instance, request
-                    )
-                    if not authorized:
-                        from django.conf import settings as _dj_settings
-
-                        login_url = getattr(self.view_instance, "login_url", None) or getattr(
-                            _dj_settings, "LOGIN_URL", "/accounts/login/"
-                        )
-                        await self.send_json({"type": "navigate", "to": login_url})
-                        await self.close(code=4403)
-                        self.view_instance = None
-                        return
-            except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
-                logger.debug("reauth_on_event re-check skipped (non-fatal)", exc_info=True)
-
-        # Route to embedded child view if view_id is specified.
-        # The registry is provided by StickyChildRegistry (composed into
-        # LiveView since v0.6.0 / Sticky LiveViews Phase A). The hasattr
-        # guard stays for one release as defense in depth against custom
-        # subclasses that override __init__ without calling super().
-        view_id = params.pop("view_id", None)
-        target_view = self.view_instance
-        if view_id and view_id != getattr(self.view_instance, "_view_id", None):
-            all_children = (
-                self.view_instance._get_all_child_views()
-                if hasattr(self.view_instance, "_get_all_child_views")
-                else {}
-            )
-            target_view = all_children.get(view_id)
-            if target_view is None:
-                # Security: don't echo a client-supplied view_id into the
-                # user-facing error string. The id is already logged via
-                # the structured event in callers that need to trace it.
-                await self.send_error(
-                    "Embedded view not found",
-                    extra={"view_id": sanitize_for_log(view_id)},
-                )
-                return
-
-        # v0.7.0 — Activity gate: if the event was triggered inside a hidden
-        # (non-eager) ``{% dj_activity %}`` region, the client already
-        # dropped it — but defense-in-depth means the server also checks.
-        # The client stamps ``_activity`` on every dispatch so we can both
-        # verify the gate AND deliver per-activity deferral when a
-        # client-side race slips through.
-        _activity_name = params.pop("_activity", None)
-        if (
-            _activity_name
-            and hasattr(target_view, "is_activity_visible")
-            and not target_view.is_activity_visible(_activity_name)
-            and not target_view._is_activity_eager(_activity_name)
-        ):
-            logger.debug(
-                "[djust] Event %r on hidden activity %r — deferring",
-                sanitize_for_log(event_name or ""),
-                sanitize_for_log(_activity_name),
-            )
-            # Queued without permission/rate-limit check (by design:
-            # per-handler auth runs on dispatch via _dispatch_single_event).
-            # Per-activity cap bounds memory.
-            target_view._queue_deferred_activity_event(_activity_name, event_name, params)
-            # Send a no-op so the client's loading state clears; the event
-            # will replay when the activity is next shown.
-            await self._send_noop(ref=event_ref)
-            return
-
-        # Handle the event
-
-        # Determine actor eligibility — embedded children do NOT have their
-        # own actor in Phase A, so an event targeting a child must take the
-        # sync path even when the parent consumer runs in actor mode.
-        is_embedded_child_target = target_view is not self.view_instance
-
-        if self.use_actors and self.actor_handle and not is_embedded_child_target:
-            # Phase 5: Use actor system for event handling
-            # Time-travel debugging (v0.6.1): capture state_before BEFORE
-            # the permission check so permission-denied events are also
-            # recorded (with no state_after change but a visible error).
-            from djust.time_travel import (
-                record_event_end as _tt_end,
-                record_event_start as _tt_start,
-            )
-
-            _tt_snapshot = _tt_start(target_view, event_name, params, event_ref)
-            _tt_error: Optional[str] = None
-            try:
-                logger.info("Handling event '%s' with actor system", event_name)
-
-                # Security checks (shared with non-actor paths) — run on the
-                # RESOLVED target (may be an embedded child) so a child's
-                # handler is what gets validated/called, not the parent's.
-                handler = await _validate_event_security(
-                    self, event_name, target_view, self._rate_limiter
-                )
-                if handler is None:
-                    _tt_error = "permission_denied"
-                    return
-
-                # Validate parameters before sending to actor
-                coerce = get_handler_coerce_setting(handler)
-                validation = validate_handler_params(
-                    handler, params, event_name, coerce=coerce, positional_args=positional_args
-                )
-                if not validation["valid"]:
-                    logger.error("Parameter validation failed: %s", validation["error"])
-                    _tt_error = "validation_failed"
-                    await self.send_error(
-                        validation["error"],
-                        validation_details={
-                            "expected_params": validation["expected"],
-                            "provided_params": validation["provided"],
-                            "type_errors": validation["type_errors"],
-                        },
-                    )
-                    return
-
-                # Call actor event handler (will call Python handler internally)
-                result = await self.actor_handle.event(event_name, params)
-
-                # Send patches if available, otherwise full HTML.
-                # Ignore the actor ``result['version']`` for the wire — the
-                # consumer owns the monotonic wire version (#1788). The actor's
-                # internal version still drives its diff-baselining server-side.
-                patches = result.get("patches")
-                html = result.get("html")
-
-                if patches:
-                    # Parse patches JSON string to list
-                    if isinstance(patches, str):
-                        patches = fast_json_loads(patches)
-                else:
-                    # No patches - send full HTML update
-                    logger.info(
-                        "No patches from actor, sending full HTML update (length: %d). "
-                        "Run with DJUST_VDOM_TRACE=1 for detailed diff output.",
-                        len(html) if html else 0,
-                    )
-
-                await self._send_update(
-                    patches=patches,
-                    html=html,
-                    version=self._next_version(),  # consumer-owned (#1788)
-                    cache_request_id=cache_request_id,
-                    event_name=event_name,
-                )
-
-            except Exception as e:
-                _tt_error = str(e)[:200]
-                view_class_name = (
-                    self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
-                )
-                response = handle_exception(
-                    e,
-                    error_type="event",
-                    event_name=event_name,
-                    view_class=view_class_name,
-                    logger=logger,
-                    log_message=f"Error in actor event handling for {view_class_name}.{sanitize_for_log(event_name)}()",
-                )
-                await self.send_json(response)
-            finally:
-                _tt_end(target_view, _tt_snapshot, error=_tt_error)
-                await self._maybe_push_tt_event(target_view, _tt_snapshot)
-                # v0.7.0 — Drain deferred activity queue in the actor path too.
-                # The flush is async and awaited inline so drained events
-                # complete in the SAME round-trip as this handler.
-                if hasattr(target_view, "_flush_deferred_activity_events"):
-                    try:
-                        await target_view._flush_deferred_activity_events(self)
-                    except Exception:  # noqa: BLE001
-                        logger.exception("dj_activity: deferred-event flush raised (actor path)")
-
-        else:
-            # Non-actor mode: Use traditional flow
-            # Check if this is a component event (Phase 4)
-            component_id = params.get("component_id")
-            is_embedded_child = target_view is not self.view_instance
-            html = None
-            patches = None
-            version = 0
-
-            # Acquire render lock to serialize with tick renders (#560).
-            # This prevents ticks from rendering and incrementing the VDOM
-            # version while an event handler is mid-execution.
-            await self._render_lock.acquire()
-            self._processing_user_event = True
-            # Tag any push_to_view broadcasts this handler emits with the
-            # originating channel, so this same session skips its OWN redundant
-            # self-broadcast (#1677). Reset in the finally below.
-            from djust import push as _djust_push
-
-            _origin_token = _djust_push.origin_channel.set(getattr(self, "channel_name", None))
-            try:
-                if component_id:
-                    # Component event: route to component's event handler method
-                    # Find the component instance
-                    component = self.view_instance._components.get(component_id)
-                    if not component:
-                        error_msg = f"Component not found: {component_id}"
-                        logger.error(error_msg)
-                        await self.send_error(error_msg)
-                        return
-
-                    # Time-travel debugging (v0.6.1): record against the
-                    # PARENT view because components don't have their own
-                    # buffer in Phase 1. State mutations the component
-                    # pushes into the parent (via send_parent) will show
-                    # up in state_before/state_after. See limitations in
-                    # docs/website/guides/time-travel-debugging.md —
-                    # full component-level time travel is v0.6.2.
-                    from djust.time_travel import (
-                        record_event_end as _tt_end_c,
-                        record_event_start as _tt_start_c,
-                    )
-
-                    _tt_c_snapshot = _tt_start_c(self.view_instance, event_name, params, event_ref)
-                    _tt_c_error: Optional[str] = None
-                    try:
-                        # Security checks (shared with actor and view paths)
-                        handler = await _validate_event_security(
-                            self, event_name, component, self._rate_limiter
-                        )
-                        if handler is None:
-                            _tt_c_error = "permission_denied"
-                            return
-
-                        # Extract component_id and remove from params
-                        event_data = params.copy()
-                        event_data.pop("component_id", None)
-
-                        # Validate parameters before calling handler
-                        # Pass positional_args so they can be mapped to named parameters
-                        coerce = get_handler_coerce_setting(handler)
-                        validation = validate_handler_params(
-                            handler,
-                            event_data,
-                            event_name,
-                            coerce=coerce,
-                            positional_args=positional_args,
-                        )
-                        if not validation["valid"]:
-                            logger.error("Parameter validation failed: %s", validation["error"])
-                            _tt_c_error = "validation_failed"
-                            await self.send_error(
-                                validation["error"],
-                                validation_details={
-                                    "expected_params": validation["expected"],
-                                    "provided_params": validation["provided"],
-                                    "type_errors": validation["type_errors"],
-                                },
-                            )
-                            return
-
-                        # Use coerced params (with positional args merged in)
-                        coerced_event_data = validation.get("coerced_params", event_data)
-
-                        # Call component's event handler (supports both sync and async)
-                        # This may call send_parent() which triggers handle_component_event()
-                        handler_start = time.perf_counter()
-                        # Observability: capture SQL queries fired by this handler.
-                        from djust.observability.sql import capture_for_event as _dj_sql_capture
-
-                        _sid = getattr(self, "session_id", None)
-                        with _dj_sql_capture(
-                            session_id=_sid,
-                            event_id=f"{_sid}:{handler_start}" if _sid else None,
-                            handler_name=event_name,
-                        ):
-                            try:
-                                await _call_handler(
-                                    handler,
-                                    coerced_event_data if coerced_event_data else None,
-                                )
-                            except Exception as _tt_c_exc:
-                                _tt_c_error = str(_tt_c_exc)[:200]
-                                raise
-                        timing["handler"] = (
-                            time.perf_counter() - handler_start
-                        ) * 1000  # Convert to ms
-                    finally:
-                        _tt_end_c(self.view_instance, _tt_c_snapshot, error=_tt_c_error)
-                        await self._maybe_push_tt_event(self.view_instance, _tt_c_snapshot)
-
-                    # Observability: record the component-handler duration
-                    # for percentile stats. Best-effort — never disturbs
-                    # handler execution.
-                    try:
-                        from djust.observability.timings import record_handler_timing
-
-                        record_handler_timing(
-                            target_view.__class__.__name__, event_name, timing["handler"]
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
-
-                    # ADR-002 Phase 1b/1c follow-up: propagate component events
-                    # to parent LiveView waiters. Without this, a tutorial step
-                    # that uses `wait_for="component_handler"` on a LiveView
-                    # mixing in TutorialMixin would never advance if the matching
-                    # handler lives on an embedded LiveComponent rather than the
-                    # view itself. The notify pass runs AFTER the component
-                    # handler completes so any waiters the handler itself
-                    # created aren't self-resolved. Apps that need to
-                    # disambiguate between identically-named events on
-                    # different components can use the waiter's `predicate`
-                    # argument to filter by `component_id` (which is always
-                    # present in the kwargs dict below).
-                    notify_kwargs = dict(coerced_event_data or {})
-                    notify_kwargs.setdefault("component_id", component_id)
-                    if hasattr(self.view_instance, "_notify_waiters"):
-                        try:
-                            self.view_instance._notify_waiters(event_name, notify_kwargs)
-                        except Exception as exc:
-                            logger.warning(
-                                "Waiter notification for component event %r on %s failed: %s",
-                                event_name,
-                                component_id,
-                                exc,
-                            )
-                else:
-                    # Time-travel debugging (v0.6.1 — dev-only).
-                    # Capture state_before BEFORE the permission check so
-                    # permission-denied events are also recorded (with
-                    # state_after == state_before but error set). The
-                    # paired record_event_end runs in the finally at
-                    # the end of this branch. No-op when the view didn't
-                    # opt in. See djust.time_travel.
-                    from djust.time_travel import (
-                        record_event_end as _tt_end,
-                        record_event_start as _tt_start,
-                    )
-
-                    _tt_snapshot = _tt_start(target_view, event_name, params, event_ref)
-                    _tt_error: Optional[str] = None
-
-                    # Use target_view for handler lookup (may be an embedded child)
-                    # Security checks (shared with actor and component paths)
-                    handler = await _validate_event_security(
-                        self, event_name, target_view, self._rate_limiter
-                    )
-                    if handler is None:
-                        _tt_error = "permission_denied"
-                        _tt_end(target_view, _tt_snapshot, error=_tt_error)
-                        await self._maybe_push_tt_event(target_view, _tt_snapshot)
-                        return
-
-                    # Validate parameters before calling handler
-                    # Pass positional_args so they can be mapped to named parameters
-                    coerce = get_handler_coerce_setting(handler)
-                    validation = validate_handler_params(
-                        handler, params, event_name, coerce=coerce, positional_args=positional_args
-                    )
-                    if not validation["valid"]:
-                        logger.error("Parameter validation failed: %s", validation["error"])
-                        _tt_error = "validation_failed"
-                        _tt_end(target_view, _tt_snapshot, error=_tt_error)
-                        await self._maybe_push_tt_event(target_view, _tt_snapshot)
-                        await self.send_error(
-                            validation["error"],
-                            validation_details={
-                                "expected_params": validation["expected"],
-                                "provided_params": validation["provided"],
-                                "type_errors": validation["type_errors"],
-                            },
-                        )
-                        return
-
-                    # Use coerced params (with positional args merged in)
-                    coerced_params = validation.get("coerced_params", params)
-
-                    # Wrap everything in a root "Event Processing" tracker
-                    with tracker.track("Event Processing"):
-                        # #1802: the auto-skip-render decision must be made
-                        # against the view the handler actually mutates. For a
-                        # top-level event ``target_view IS self.view_instance``;
-                        # for an embedded ``{% live_render %}`` child (sticky or
-                        # not) ``target_view`` is the CHILD. Snapshotting the
-                        # parent here meant an embedded child's state change was
-                        # invisible — pre/post assigns compared equal → the
-                        # render was skipped → the event returned a bare ``noop``
-                        # and the child's DOM never updated (sticky widgets were
-                        # render-only). Bind a single ``change_target`` and use
-                        # it for every snapshot/flag below.
-                        change_target = target_view
-                        # Snapshot public assigns before the handler to detect
-                        # unchanged state and auto-skip the render cycle.
-                        pre_assigns = _snapshot_assigns(change_target)
-                        # Identity snapshot: {attr: id(value)} for the
-                        # push_commands-only auto-skip (#700). Immune to
-                        # deep-copy sentinel issues on non-copyable objects.
-                        _fw_attrs = getattr(change_target, "_framework_attrs", frozenset())
-                        pre_identity = {
-                            k: id(v)
-                            for k, v in change_target.__dict__.items()
-                            if k not in _fw_attrs
-                        }
-
-                        # Call handler with tracking (supports both sync and async handlers)
-                        handler_start = time.perf_counter()
-                        # Observability: capture SQL queries fired by this handler.
-                        from djust.observability.sql import (
-                            capture_for_event as _dj_sql_capture,
-                        )
-
-                        _sid = getattr(self, "session_id", None)
-                        try:
-                            with tracker.track(
-                                "Event Handler",
-                                event_name=event_name,
-                                params=coerced_params,
-                            ):
-                                with profiler.profile(profiler.OP_EVENT_HANDLE):
-                                    with _dj_sql_capture(
-                                        session_id=_sid,
-                                        event_id=f"{_sid}:{handler_start}" if _sid else None,
-                                        handler_name=event_name,
-                                    ):
-                                        await _call_handler(
-                                            handler,
-                                            coerced_params if coerced_params else None,
-                                        )
-                        except Exception as _tt_exc:
-                            _tt_error = str(_tt_exc)[:200]
-                            raise
-                        finally:
-                            _tt_end(target_view, _tt_snapshot, error=_tt_error)
-                            await self._maybe_push_tt_event(target_view, _tt_snapshot)
-                        timing["handler"] = (
-                            time.perf_counter() - handler_start
-                        ) * 1000  # Convert to ms
-
-                        # Observability: record the view-handler duration
-                        # for percentile stats. Best-effort.
-                        try:
-                            from djust.observability.timings import record_handler_timing
-
-                            record_handler_timing(
-                                target_view.__class__.__name__, event_name, timing["handler"]
-                            )
-                        except Exception:  # noqa: BLE001
-                            pass
-
-                        # ADR-002 Phase 1b: resolve any pending wait_for_event
-                        # waiters on the target view whose event_name matches.
-                        # Runs AFTER the handler completes so new waiters
-                        # created during this call aren't self-notified.
-                        # No-op if the view doesn't have any pending waiters.
-                        if hasattr(target_view, "_notify_waiters"):
-                            try:
-                                target_view._notify_waiters(event_name, coerced_params or {})
-                            except Exception as exc:
-                                logger.warning(
-                                    "Waiter notification for %r failed: %s",
-                                    event_name,
-                                    exc,
-                                )
-
-                        # Persist updated LiveView state to the Django session.
-                        # Mirrors the save in mixins/request.py:603-609 for the
-                        # HTTP path. Without this, WS-driven state changes are
-                        # only kept in the consumer's in-memory view instance —
-                        # if the WS reconnects (page refresh, network blip,
-                        # snapshot/restore in the djustlive proxy), state is
-                        # lost. With it, mount() on reconnect restores from
-                        # the saved snapshot via the existing aget() at
-                        # ~line 1990, and views opting into
-                        # `enable_state_snapshot` actually get true reconnect
-                        # state continuity.
-                        # Gate (Stage 11 PR #1466): only run for top-level
-                        # view identity — child LiveComponent views never
-                        # get ``_djust_mount_request`` stashed (see
-                        # line ~2143), so the save would fall back to
-                        # scope_session with save_path="/" → write to
-                        # "liveview_/" (wrong key, no read-side ever finds
-                        # it). Child-view coverage tracked at #1467 / #1471.
-                        # Gate (#1475 / 0.9.7rc3): only run when the view
-                        # opts in via ``enable_state_snapshot = True``.
-                        # PR #1466 omitted this gate, citing HTTP-path
-                        # symmetry (HTTP also saves on every POST). That
-                        # symmetry argument doesn't survive contact with
-                        # snapshot-on-idle infrastructure: WS events leave
-                        # async session-backend I/O in flight beyond
-                        # ``send_json``; when the host snapshots the VM
-                        # mid-flight, the asyncio state is captured
-                        # unrecoverably. Default views ship 0.9.6 close-
-                        # path semantics (no async session writes per
-                        # event), opt-in views get the feature they asked
-                        # for. Wraps the body in a 150ms timeout so even
-                        # opt-in views can't extend close-time tail
-                        # latency under DB/Redis backpressure — saves
-                        # must never break event handling.
-                        if target_view is self.view_instance and getattr(
-                            self.view_instance, "enable_state_snapshot", False
-                        ):
-
-                            async def _persist_state_after_event() -> None:
-                                """Inner helper so the entire save body can
-                                be bounded by ``asyncio.wait_for``. Closes
-                                over outer locals (target_view, event_name,
-                                etc.) by reference.
-                                """
-                                mount_request = getattr(target_view, "_djust_mount_request", None)
-                                scope_session = (
-                                    self.scope.get("session") if mount_request is None else None
-                                )
-                                save_session = (
-                                    getattr(mount_request, "session", None)
-                                    if mount_request is not None
-                                    else scope_session
-                                )
-                                if save_session is None:
-                                    return
-
-                                from .components.base import LiveComponent as _LC
-                                from .serialization import (
-                                    normalize_django_value as _normalize,
-                                )
-
-                                save_path = mount_request.path if mount_request is not None else "/"
-                                save_view_key = f"liveview_{save_path}"
-
-                                # Save order mirrors HTTP path
-                                # (mixins/request.py:593-609):
-                                # private attrs FIRST, then public via
-                                # get_context_data(). The HTTP-path
-                                # comment explains the ordering: private
-                                # is captured BEFORE get_context_data()
-                                # because get_context_data() sets
-                                # render-cycle internals that we don't
-                                # want to accidentally capture.
-                                if hasattr(target_view, "_get_private_state"):
-                                    _priv = await sync_to_async(target_view._get_private_state)()
-                                    if _priv:
-                                        await save_session.aset(
-                                            f"{save_view_key}__private",
-                                            _normalize(_priv),
-                                        )
-                                    else:
-                                        # Clean up if no private attrs remain
-                                        try:
-                                            await save_session.apop(
-                                                f"{save_view_key}__private", None
-                                            )
-                                        except AttributeError:
-                                            # Older Django: no apop, fall back
-                                            await sync_to_async(save_session.pop)(
-                                                f"{save_view_key}__private", None
-                                            )
-
-                                # Pull a fresh public-state snapshot.
-                                # Mirrors the get_context_data() call
-                                # in HTTP path so the saved keys match
-                                # the LOAD path's reads.
-                                _gcd_save = target_view.get_context_data
-                                if inspect.iscoroutinefunction(_gcd_save):
-                                    save_context = await _gcd_save()
-                                else:
-                                    save_context = await sync_to_async(_gcd_save)()
-
-                                save_state = {
-                                    k: v for k, v in save_context.items() if not isinstance(v, _LC)
-                                }
-                                await save_session.aset(save_view_key, _normalize(save_state))
-
-                                # Components — sync helper, wrap with sync_to_async.
-                                if mount_request is not None and hasattr(
-                                    target_view, "_save_components_to_session"
-                                ):
-                                    await sync_to_async(target_view._save_components_to_session)(
-                                        mount_request, save_context
-                                    )
-
-                                await save_session.asave()
-
-                            try:
-                                # 150ms bound on the entire save body. If a
-                                # session backend stalls (DB pressure,
-                                # Redis hiccup), the WS close path can't
-                                # be extended past this window — which is
-                                # what bricked djustlive snapshots in
-                                # 0.9.7rc2 (#1475). Saves must never
-                                # break event handling, so timeout +
-                                # exception are both caught & logged.
-                                await asyncio.wait_for(_persist_state_after_event(), timeout=0.150)
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "WS-event state save exceeded 150ms for %r — "
-                                    "session backend backpressure; skipping this event's save. "
-                                    "Subsequent events will retry.",
-                                    sanitize_for_log(event_name or ""),
-                                )
-                            except Exception:  # noqa: BLE001 — saves must never break event handling
-                                logger.exception(
-                                    "Failed to save LiveView state after WS event %r",
-                                    sanitize_for_log(event_name or ""),
-                                )
-
-                        # ADR-018 iter 18a — Branch B: sticky-child state save.
-                        # Kept as a SEPARATE ``if`` (NOT merged into Branch A's
-                        # gate) so the #1466 source-grep guard in
-                        # test_ws_reconnect_state_1465.py — which asserts the
-                        # exact Branch-A gate string — stays green.
-                        #
-                        # When a sticky-child event fires, the routing path
-                        # (~line 2696) sets ``target_view`` to the child, so
-                        # Branch A's ``target_view is self.view_instance`` gate
-                        # skips it. This branch generalizes the save (Decision
-                        # 4) to persist the child under its stable sticky key
-                        # (Decision 1), gated on the both-opt-in predicate
-                        # (Decision 5). It is wrapped in the SAME 150ms
-                        # ``asyncio.wait_for`` bound as Branch A — a sticky
-                        # child save must not extend close-time tail latency.
-                        from .mixins.sticky import (
-                            save_sticky_child_state,
-                            sticky_child_should_persist,
-                            warn_sticky_child_optin_skip,
-                            write_sticky_index_and_prune,
-                        )
-
-                        if target_view is not self.view_instance and sticky_child_should_persist(
-                            target_view, self.view_instance
-                        ):
-
-                            async def _persist_sticky_child_after_event() -> None:
-                                """Inner helper bounded by ``asyncio.wait_for``.
-                                Saves the sticky child under its stable key +
-                                writes the GC ledger, then batches one
-                                ``asave()``.
-                                """
-                                parent = self.view_instance
-                                mount_request = getattr(parent, "_djust_mount_request", None)
-                                # Precedence: the mount request's session is
-                                # authoritative (it carries the parent's
-                                # save key namespace); the scope session is
-                                # the fallback when the parent never stashed
-                                # a mount request.
-                                save_session = getattr(
-                                    mount_request, "session", None
-                                ) or self.scope.get("session")
-                                if save_session is None:
-                                    return
-
-                                parent_path = (
-                                    mount_request.path if mount_request is not None else "/"
-                                )
-
-                                await save_sticky_child_state(
-                                    target_view, save_session, parent_path
-                                )
-                                await write_sticky_index_and_prune(
-                                    parent, save_session, parent_path
-                                )
-                                await save_session.asave()
-
-                            try:
-                                await asyncio.wait_for(
-                                    _persist_sticky_child_after_event(), timeout=0.150
-                                )
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "WS-event sticky-child state save exceeded 150ms "
-                                    "for %r — session backend backpressure; skipping "
-                                    "this event's save. Subsequent events will retry.",
-                                    sanitize_for_log(event_name or ""),
-                                )
-                            except Exception:  # noqa: BLE001 — saves must never break event handling
-                                logger.exception(
-                                    "Failed to save sticky-child state after WS event %r",
-                                    sanitize_for_log(event_name or ""),
-                                )
-                        elif target_view is not self.view_instance:
-                            # ADR-018 iter 18c — the gate above was False for a
-                            # CHILD event. ``warn_sticky_child_optin_skip`` is a
-                            # no-op UNLESS this is the Decision-5 opt-in mismatch
-                            # (child opted in, parent did not); when it is, it
-                            # emits a one-shot warning so the silent
-                            # persistence gap is observable. Safe to call for
-                            # every non-parent target_view — the helper
-                            # re-checks the misconfiguration itself.
-                            warn_sticky_child_optin_skip(target_view, self.view_instance)
-
-                        # Auto-detect unchanged state: if no public assigns were
-                        # reassigned, auto-skip the render (eliminates DJE-053).
-                        # In-place mutations (list.append) are NOT detected and
-                        # will still trigger a render — this is the safe default.
-                        # #1802: read flags + snapshot from ``change_target`` (the
-                        # handler's view), not the parent, so an embedded child's
-                        # state change is detected and is NOT skipped.
-                        skip_render = getattr(change_target, "_skip_render", False)
-                        # Never skip if the view explicitly requests full HTML
-                        force_html = getattr(change_target, "_force_full_html", False)
-                        if not skip_render and not force_html:
-                            post_assigns = _snapshot_assigns(change_target)
-                            if pre_assigns == post_assigns:
-                                skip_render = True
-                                logger.debug(
-                                    "[djust] Auto-skipping render for '%s' — no assigns changed",
-                                    event_name,
-                                )
-                            else:
-                                # Phoenix-style: track which keys actually changed
-                                # so _sync_state_to_rust can skip unchanged values
-                                change_target._changed_keys = _compute_changed_keys(
-                                    pre_assigns, post_assigns
-                                )
-
-                        # #700: push_commands-only handlers auto-skip render.
-                        # When a handler only calls push_commands() / push_event()
-                        # without changing real state, a VDOM re-render is wasted
-                        # work (and can cause morphdom recovery during tours).
-                        # The assigns snapshot above may report false positives
-                        # for views with non-copyable public attrs (querysets,
-                        # file handles) because the sentinel objects always differ.
-                        # When push events are pending, check if the *identity*
-                        # of each public attr is unchanged — if so, the handler
-                        # didn't touch any state and we can safely skip.
-                        if not skip_render and not force_html:
-                            pending = getattr(change_target, "_pending_push_events", None)
-                            if pending:
-                                post_identity = {
-                                    k: id(v)
-                                    for k, v in change_target.__dict__.items()
-                                    if k not in _fw_attrs
-                                }
-                                if pre_identity == post_identity:
-                                    skip_render = True
-                                    logger.debug(
-                                        "[djust] Auto-skipping render for '%s' "
-                                        "— push_commands only, no state changed",
-                                        event_name,
-                                    )
-
-                        if skip_render:
-                            change_target._skip_render = False
-                            has_async = getattr(change_target, "_async_pending", None) is not None
-                            await self._flush_all_pending()
-                            await self._send_noop(async_pending=has_async, ref=event_ref)
-                            if has_async:
-                                await self._dispatch_async_work()
-                            return
-
-                        # Get updated HTML and patches with tracking
-                        render_start = time.perf_counter()
-                        with tracker.track("Template Render"):
-                            if is_embedded_child:
-                                # Embedded child: render just the child's template
-                                # and send full HTML scoped to the child's container
-                                with tracker.track("Embedded Child Render"):
-                                    html = await sync_to_async(self._render_embedded_child)(
-                                        target_view
-                                    )
-                                    patches = None  # Send full HTML for the child subtree
-                                    version = 0
-                                    _emit_full_html_update(
-                                        target_view,
-                                        "embedded_child",
-                                        event_name,
-                                        html,
-                                        version,
-                                    )
-                            else:
-                                with tracker.track("Context + Render") as batch_node:
-                                    # Check if we can skip sync_to_async entirely:
-                                    # - async get_context_data → await directly
-                                    # - sync_safe = True → no I/O, safe on event loop
-                                    _gcd = self.view_instance.get_context_data
-                                    _skip_thread = inspect.iscoroutinefunction(_gcd) or getattr(
-                                        self.view_instance, "sync_safe", False
-                                    )
-                                    if _skip_thread:
-                                        # Fast path: run everything on the event loop.
-                                        t0 = time.perf_counter()
-                                        if inspect.iscoroutinefunction(_gcd):
-                                            context = await _gcd()
-                                        else:
-                                            context = _gcd()
-                                        ctx_ms = (time.perf_counter() - t0) * 1000
-                                        # Rust render is pure CPU — safe on event loop.
-                                        t1 = time.perf_counter()
-                                        with profiler.profile(profiler.OP_RENDER):
-                                            html, patches, version = (
-                                                self.view_instance.render_with_diff(
-                                                    preloaded_context=context
-                                                )
-                                            )
-                                        diff_ms = (time.perf_counter() - t1) * 1000
-                                    else:
-                                        # Sync path: batch in a single thread hop.
-                                        def _sync_context_and_render():
-                                            t0 = time.perf_counter()
-                                            ctx = _gcd()
-                                            t1 = time.perf_counter()
-                                            with profiler.profile(profiler.OP_RENDER):
-                                                r_html, r_patches, r_version = (
-                                                    self.view_instance.render_with_diff()
-                                                )
-                                            t2 = time.perf_counter()
-                                            return (
-                                                ctx,
-                                                r_html,
-                                                r_patches,
-                                                r_version,
-                                                (t1 - t0) * 1000,
-                                                (t2 - t1) * 1000,
-                                            )
-
-                                        (
-                                            context,
-                                            html,
-                                            patches,
-                                            version,
-                                            ctx_ms,
-                                            diff_ms,
-                                        ) = await sync_to_async(_sync_context_and_render)()
-                                    # Record sub-phase durations so the profiler can
-                                    # still distinguish slow context prep from slow
-                                    # VDOM diffing, even though they share one thread hop.
-                                    batch_node.metadata["context_prep_ms"] = ctx_ms
-                                    batch_node.metadata["vdom_diff_ms"] = diff_ms
-                                    # Per-phase Rust timing (template render, HTML parse, VDOM diff, serialize)
-                                    rust_timing = getattr(
-                                        self.view_instance, "_rust_render_timing", None
-                                    )
-                                    if rust_timing:
-                                        batch_node.metadata["rust_timing"] = rust_timing
-                                    tracker.track_context_size(context)
-
-                                    patch_list = None  # Initialize for later use
-                                    # patches can be: JSON string with patches, "[]" for empty, or None
-                                    if patches is not None:
-                                        patch_list = fast_json_loads(patches) if patches else []
-                                        tracker.track_patches(len(patch_list), patch_list)
-                                        profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
-                        timing["render"] = (
-                            time.perf_counter() - render_start
-                        ) * 1000  # Convert to ms
-
-                # Check if form reset is requested (FormMixin sets this flag)
-                should_reset_form = getattr(self.view_instance, "_should_reset_form", False)
-                if should_reset_form:
-                    # Clear the flag
-                    self.view_instance._should_reset_form = False
-
-                # Detect async work scheduled by start_async() — tell client
-                # to keep loading state active until the background callback
-                # sends its own update.
-                has_async = getattr(self.view_instance, "_async_pending", None) is not None
-
-                # Embedded child view: send scoped HTML update
-                if is_embedded_child and view_id:
-                    await self.send_json(
-                        {
-                            "type": "embedded_update",
-                            "view_id": view_id,
-                            "html": html,
-                            "event_name": event_name,
-                        }
-                    )
-                    await self._flush_all_pending()
-                else:
-                    # For component events, send full HTML instead of patches
-                    # Component VDOM is separate from parent VDOM, causing path mismatches
-                    # TODO Phase 4.1: Implement per-component VDOM tracking
-                    if component_id:
-                        patches = None
-                        _emit_full_html_update(
-                            self.view_instance,
-                            "component_event",
-                            event_name,
-                            html,
-                            version,
-                        )
-
-                    # Allow views to force full HTML by setting _force_full_html = True
-                    # in their event handler. Useful when the handler changes data that
-                    # affects {% for %} loop lengths, which VDOM can't diff correctly (#559).
-                    # We discard patches and send html instead, but do NOT reset the Rust
-                    # VDOM — the current render already established the new baseline.
-                    if getattr(self.view_instance, "_force_full_html", False):
-                        self.view_instance._force_full_html = False
-                        patches = None
-                        patch_list = None
-                        _emit_full_html_update(
-                            self.view_instance,
-                            "force_full_html",
-                            event_name,
-                            html,
-                            version,
-                        )
-
-                    # For views with dynamic templates (template as property),
-                    # patches may be empty because VDOM state is lost on recreation.
-                    # In that case, send full HTML update.
-
-                    # Patch compression: if patch count exceeds threshold and HTML is smaller,
-                    # send HTML instead of patches for better performance
-                    PATCH_COUNT_THRESHOLD = 100
-                    # Note: patch_list was already parsed earlier for performance tracking
-                    if patches and patch_list:
-                        patch_count = len(patch_list)
-                        if patch_count > PATCH_COUNT_THRESHOLD:
-                            # Compare sizes to decide whether to send patches or HTML
-                            patches_size = len(patches.encode("utf-8"))
-                            html_size = len(html.encode("utf-8"))
-                            # If HTML is at least 30% smaller, send HTML instead
-                            if html_size < patches_size * 0.7:
-                                logger.debug(
-                                    "Patch compression: %d patches (%dB) -> sending HTML (%dB) instead",
-                                    patch_count,
-                                    patches_size,
-                                    html_size,
-                                )
-                                # Reset VDOM and send HTML
-                                if (
-                                    hasattr(self.view_instance, "_rust_view")
-                                    and self.view_instance._rust_view
-                                ):
-                                    self.view_instance._rust_view.reset()
-                                patches = None
-                                patch_list = None
-                                _emit_full_html_update(
-                                    self.view_instance,
-                                    "patch_compression",
-                                    event_name,
-                                    html,
-                                    version,
-                                    patch_count=patch_count,
-                                )
-
-                    # Note: patch_list can be [] (empty list) which is valid - means no changes needed
-                    # Only send full HTML if patches is None (not just falsy)
-                    if patches is not None and patch_list is not None:
-                        if len(patch_list) == 0 and version > 1:
-                            # Empty diff is normal and expected for idempotent handlers
-                            # (e.g. toggle clicked when already in target state, debounced
-                            # input with unchanged results, side-effect-only handlers).
-                            # Phoenix LiveView silently drops these — we do the same.
-                            logger.debug(
-                                "[djust] Event '%s' on %s produced no DOM changes (empty diff). "
-                                "This is normal for idempotent handlers. "
-                                "If state changes are not reflected in the UI, ensure the "
-                                "modified variable is rendered inside <div dj-root> and "
-                                "run 'python manage.py check --tag djust'.",
-                                event_name,
-                                self.view_instance.__class__.__name__,
-                            )
-
-                        # Calculate timing for JSON mode
-                        timing["total"] = (
-                            time.perf_counter() - start_time
-                        ) * 1000  # Total server time
-                        perf_summary = tracker.get_summary()
-
-                        # Store rendered HTML for on-demand recovery.
-                        # Client sends request_html when applyPatches() fails
-                        # (e.g., {% if %} blocks shifting DOM structure).
-                        # Consumer-owned wire version + recovery arm in one step
-                        # (#1788, #1817): _recovery_version == this frame's version
-                        # (recovery sets clientVdomVersion directly).
-                        wire_version = self._next_version_armed(html)
-
-                        await self._send_update(
-                            patches=patch_list,
-                            version=wire_version,
-                            cache_request_id=cache_request_id,
-                            reset_form=should_reset_form,
-                            timing=timing,
-                            performance=perf_summary,
-                            event_name=event_name,
-                            async_pending=has_async,
-                            source="event",
-                            ref=event_ref,
-                        )
-                    else:
-                        # patches=None means VDOM diff failed or was skipped - send full HTML
-                        #
-                        # Arm on-demand recovery with the RAW rendered HTML *before*
-                        # the strip/extract below reassigns ``html`` — mirrors the
-                        # recovery-arming in the patches branch above. Without this,
-                        # a client that requests recovery after
-                        # a version mismatch on THIS html_update frame gets
-                        # "Recovery HTML unavailable" → forced full page reload (#1785).
-                        # ``_recovery_html`` expects the pre-strip HTML (it strips +
-                        # extracts on demand in ``handle_request_html``), matching the
-                        # value the patches branch passes.
-                        # Consumer-owned wire version (#1788) — THIS is the
-                        # #1788 path: a baseline loss makes the Rust ``version``
-                        # non-sequential, but ``wire_version`` stays monotonic so
-                        # the client accepts the html_update without recovery.
-                        # Allocate the wire version AND arm recovery in one step
-                        # (#1788, #1817) so _recovery_version == this frame's
-                        # version, arming with the RAW pre-strip ``html`` before
-                        # the strip/extract below reassigns it. The Rust
-                        # ``version`` is still used below for the DJE-053 warning
-                        # + telemetry reason.
-                        wire_version = self._next_version_armed(html)
-
-                        # Batch strip + extract into a single thread hop
-                        # to avoid two separate sync_to_async crossings.
-                        def _sync_strip_and_extract(raw_html):
-                            stripped = self.view_instance._strip_comments_and_whitespace(raw_html)
-                            content = self.view_instance._extract_liveview_content(stripped)
-                            return stripped, content
-
-                        html, html_content = await sync_to_async(_sync_strip_and_extract)(html)
-
-                        if version > 1:
-                            _template = (
-                                getattr(self.view_instance, "template_name", None)
-                                or "<inline template>"
-                            )
-                            logger.warning(
-                                "[djust] Event '%s' on %s fell back to full HTML update "
-                                "(DJE-053). Template: %s. "
-                                "VDOM diff returned no patches — this may "
-                                "cause event listeners and DOM state to be lost. "
-                                "Debugging steps: "
-                                "(1) Verify your template has <div dj-root> wrapping "
-                                "all dynamic content. "
-                                "(2) If this event only updates client-side state, use "
-                                "push_event + _skip_render = True instead. "
-                                "(3) Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
-                                "(4) Run 'python manage.py check --tag djust' to detect "
-                                "common configuration issues. "
-                                "See: https://djust.org/errors/DJE-053",
-                                event_name,
-                                self.view_instance.__class__.__name__,
-                                _template,
-                            )
-                        else:
-                            logger.debug("[WebSocket] First render, sending full HTML update.")
-                        logger.debug(
-                            "[WebSocket] html_content length: %d, starts with: %s...",
-                            len(html_content),
-                            html_content[:150],
-                        )
-
-                        # Emit signal — distinguish first render from diff failure
-                        if not component_id:
-                            reason = "first_render" if version <= 1 else "no_patches"
-                            _ctx = context if context else {}
-                            _snapshot = (
-                                _build_context_snapshot(_ctx) if reason == "no_patches" else None
-                            )
-                            _prev_html = getattr(self.view_instance, "_previous_html", None)
-                            _emit_full_html_update(
-                                self.view_instance,
-                                reason,
-                                event_name,
-                                html_content,
-                                version,
-                                context_snapshot=_snapshot,
-                                html_snippet=(
-                                    html_content[:500] if reason == "no_patches" else None
-                                ),
-                                previous_html_snippet=(
-                                    _prev_html[:500]
-                                    if reason == "no_patches" and _prev_html
-                                    else None
-                                ),
-                            )
-
-                        await self._send_update(
-                            html=html_content,
-                            version=wire_version,  # consumer-owned (#1788)
-                            cache_request_id=cache_request_id,
-                            reset_form=should_reset_form,
-                            event_name=event_name,
-                            async_pending=has_async,
-                            source="event",
-                            ref=event_ref,
-                        )
-
-                # Check for async work scheduled by start_async()
-                await self._dispatch_async_work()
-
-                # v0.7.0 — If this handler flipped any activity to visible,
-                # drain its deferred-event queue now so in-flight events
-                # for that panel are delivered in-order in the same
-                # round-trip. The flush is async and awaited inline.
-                # Safe to call even when no activities exist.
-                if hasattr(target_view, "_flush_deferred_activity_events"):
-                    try:
-                        await target_view._flush_deferred_activity_events(self)
-                    except Exception:  # noqa: BLE001 — never fail the event for a drain bug
-                        logger.exception("dj_activity: deferred-event flush raised")
-
-            except Exception as e:
-                view_class_name = (
-                    self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
-                )
-                event_type = "component event" if component_id else "event"
-                response = handle_exception(
-                    e,
-                    error_type="event",
-                    event_name=event_name,
-                    view_class=view_class_name,
-                    logger=logger,
-                    log_message=f"Error in {view_class_name}.{sanitize_for_log(event_name)}() ({event_type})",
-                )
-                await self.send_json(response)
-            finally:
-                _djust_push.origin_channel.reset(_origin_token)
-                self._processing_user_event = False
-                self._render_lock.release()
+        runtime = self._get_runtime()
+        runtime.view_instance = self.view_instance
+        await runtime.dispatch_event(data)
 
     # ========================================================================
     # Embedded LiveView Rendering
@@ -4306,43 +2398,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         This re-renders just the child's template using Django's template engine,
         without going through the parent's VDOM at all.
+
+        Thin shim over the module-level :func:`render_embedded_child_html` so the
+        WS consumer and :class:`~djust.runtime.ViewRuntime` (ADR-022 Iter 2
+        Phase 2.1) render embedded children through ONE implementation — the
+        #1646 cure for the embedded-render subsystem. The pure (transport-blind)
+        render core, including the security-hardened error path, lives in that
+        function so there is no parallel copy to drift.
         """
-        try:
-            context = child_view.get_context_data()
-            from django.template import engines
-
-            template_str = child_view.get_template()
-            engine = engines["django"] if "django" in engines else list(engines.all())[0]
-            tmpl = engine.from_string(template_str)
-            html = tmpl.render(context)
-            # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
-            # SOURCE — child update_model events gate against the child's
-            # _dj_model_fields, and this is the child's only render path (it
-            # bypasses render_with_diff). Derived from the Rust template AST
-            # (Text-node literals), immune to rendered-output poisoning
-            # (#3 review #1646).
-            if hasattr(child_view, "_record_dj_model_fields_from_source"):
-                from .utils import get_template_dirs
-
-                child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
-            return html
-        except Exception as e:
-            logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
-            # SECURITY (#1646 parallel-path drift): this site bypassed the
-            # central handle_exception / create_safe_error_response path, which
-            # is DEBUG-gated and generic in production. Returning the raw str(e)
-            # here (a) leaked exception detail into the live page in production
-            # (CWE-209) and (b) was unescaped, so an attacker-influenced message
-            # containing ``-->`` broke out of the HTML comment into live DOM
-            # (CWE-79 DOM XSS). escape() neutralises the comment-breakout and any
-            # tag injection in BOTH modes; production additionally emits no
-            # detail. Mirrors the DEBUG gate in simple_live_view.render_template.
-            from django.conf import settings
-            from django.utils.html import escape
-
-            if getattr(settings, "DEBUG", False):
-                return f"<!-- Error rendering embedded child: {escape(str(e))} -->"
-            return "<!-- Error rendering embedded child -->"
+        return render_embedded_child_html(child_view)
 
     # ========================================================================
     # File Upload Handling
@@ -4497,78 +2561,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         elif frame["type"] == "cancel":
             mgr.cancel_upload(ref)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
-
-    def _extract_cache_config(self) -> Dict[str, Any]:
-        """
-        Extract cache configuration from handlers with @cache decorator.
-
-        Returns a dict mapping handler names to their cache config:
-        {
-            "search": {"ttl": 300, "key_params": ["query"]},
-            "get_stats": {"ttl": 60, "key_params": []}
-        }
-        """
-        if not self.view_instance:
-            return {}
-
-        cache_config = {}
-
-        # Inspect all methods for @cache decorator metadata
-        for name in dir(self.view_instance):
-            if name.startswith("_"):
-                continue
-
-            try:
-                method = getattr(self.view_instance, name)
-                if callable(method) and hasattr(method, "_djust_decorators"):
-                    decorators = method._djust_decorators
-                    if "cache" in decorators:
-                        cache_info = decorators["cache"]
-                        cache_config[name] = {
-                            "ttl": cache_info.get("ttl", 60),
-                            "key_params": cache_info.get("key_params", []),
-                        }
-            except Exception as e:
-                # Skip methods that can't be inspected, but log for debugging
-                logger.debug("Could not inspect method '%s' for cache config: %s", name, e)
-
-        return cache_config
-
-    def _extract_optimistic_rules(self) -> Dict[str, Any]:
-        """Extract optimistic UI rules from descriptor components (DEP-002).
-
-        Returns a dict mapping event names to their optimistic rules:
-        {
-            "accordion_toggle": {
-                "action": "toggle_class",
-                "target": "[data-value='{value}']",
-                "class": "dj-accordion-item--open"
-            }
-        }
-
-        Only includes rules for components with tier="optimistic".
-        Client-tier components are excluded (no server event at all).
-        """
-        if not self.view_instance:
-            return {}
-
-        descriptors = getattr(type(self.view_instance), "_component_descriptors", None)
-        if not descriptors:
-            return {}
-
-        rules = {}
-        for _name, descriptor in descriptors.items():
-            meta = getattr(type(descriptor), "Meta", None)
-            if meta is None:
-                continue
-            tier = getattr(meta, "tier", "server")
-            if tier != "optimistic":
-                continue
-            event = getattr(meta, "event", None)
-            rule = getattr(meta, "optimistic_rule", None)
-            if event and rule and event not in rules:
-                rules[event] = rule
-        return rules
 
     async def send_json(self, data: Dict[str, Any]):
         """Send JSON message to client with Django type support"""
@@ -4846,12 +2838,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     #: :meth:`ViewRuntime.dispatch_message` chokepoint (#1852) rather than a
     #: bespoke consumer handler. Keeping this as an explicit set lets a
     #: regression test pin exactly which verbs go through the chokepoint, so a
-    #: future addition that forgets the routing is caught. ``mount`` and
-    #: ``event`` are runtime-owned verbs too but are deliberately NOT in this
-    #: set yet — see the routing comment in :meth:`receive` (T1-A #1853 for
-    #: ``mount``; the runtime ``dispatch_event`` lacks the WS-only behaviors
-    #: for ``event``).
-    RUNTIME_OWNED_VERBS = frozenset({"url_change"})
+    #: future addition that forgets the routing is caught.
+    #:
+    #: ``event`` was added in ADR-022 Iter 2 Phase 2.3b (#1907, THE FLIP): the
+    #: runtime ``dispatch_event`` is now a functional superset of the deleted
+    #: bespoke ``_handle_event_inner`` (Phase 2.3a grew the event_context render
+    #: lock + origin + observability, the actor hook, the per-render
+    #: ``on_render_emitted`` / ``on_handler_timing`` folds, time-travel, #1466
+    #: state-save, ``dj_activity``, #1777 reauth), so every WS event now flows
+    #: through the single chokepoint — the #1646 convergence.
+    #:
+    #: ``mount`` was added in ADR-022 Iter 3 Phase 3.3b (#1919, THE MOUNT FLIP):
+    #: Phases 3.0-3.3a grew ``dispatch_mount`` into a functional superset of the
+    #: deleted bespoke ``handle_mount`` body (F22 resolver, ``run_pre_mount_auth``
+    #: pre-mount auth+tenant via ``_check_auth``, ``on_mount`` hooks, session +
+    #: signed-snapshot restore, post-mount object-perm, ``handle_params``, actor
+    #: mount, the no-arm mount wire version, the sticky_hold pre-mount frame, the
+    #: auth verdict→close finalize, the WS post-mount channel-layer wiring + tick +
+    #: flags, the 2-queue mount-time drain) via ``WSConsumerTransport`` hooks, so
+    #: every WS mount now flows through the single chokepoint — the #1646 mount
+    #: convergence COMPLETE. See the routing comment in :meth:`receive`.
+    RUNTIME_OWNED_VERBS = frozenset({"url_change", "event", "mount"})
 
     async def _dispatch_runtime_owned(self, data: Dict[str, Any]) -> None:
         """Route a runtime-owned frame through :meth:`ViewRuntime.dispatch_message`.
@@ -4861,11 +2868,32 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         chokepoint so a future security/policy control added there auto-applies
         to the WebSocket transport. The consumer's ``view_instance`` is mirrored
         onto the shared runtime before dispatch (the runtime is the source of
-        truth for ``view_instance`` once mount migrates in T1-A).
+        truth for ``view_instance`` once mount migrated in #1919).
+
+        ``view_instance`` ownership INVERTS for ``mount`` (#1919, Finding B):
+        ``url_change`` / ``event`` mirror consumer→runtime, but ``mount`` CREATES
+        the view, and ``dispatch_mount`` early-returns when ``runtime.view_instance
+        is not None`` (the legacy GET-mount double-fire guard, runtime.py). So for
+        a ``mount`` frame we NULL the runtime's view first — otherwise a
+        reconnect / re-mount on a runtime that already mounted once would silently
+        no-op (the #560-class idempotency landmine, Finding A). The shim path
+        (``handle_mount`` / ``handle_live_redirect_mount`` / ``_mount_one``) does
+        the same null+readback; this is the wire-frame twin.
         """
         runtime = self._get_runtime()
-        runtime.view_instance = self.view_instance
+        if data.get("type") == "mount":
+            runtime.view_instance = None
+        else:
+            runtime.view_instance = self.view_instance
         await runtime.dispatch_message(data)
+        # Mount CREATES the view on the runtime (runtime→consumer read-back,
+        # Finding B): mirror it back so the consumer's ``view_instance`` (read by
+        # disconnect cleanup, request_html recovery, upload/presence handlers, the
+        # batch collector, etc.) reflects the freshly-mounted view. On an
+        # auth/hook block ``dispatch_mount`` cleared ``runtime.view_instance`` so
+        # this reads back ``None`` — matching the bespoke "clear on auth fail".
+        if data.get("type") == "mount":
+            self.view_instance = runtime.view_instance
 
     async def handle_url_change(self, data: Dict[str, Any]):
         """
@@ -4996,6 +3024,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     logger.warning("Failed to clean up uploads for old view", exc_info=True)
 
         self.view_instance = None
+        # (#1919, Finding A) Null the shared runtime's view too BEFORE the
+        # re-mount below. ``handle_mount`` (the shim) also nulls it, but doing it
+        # here keeps the teardown self-consistent: a re-mount on this connection
+        # must never be no-op'd by ``dispatch_mount``'s idempotency early-return —
+        # this is the live_redirect re-mount landmine the Finding-A net guards.
+        runtime = getattr(self, "_runtime", None)
+        if runtime is not None:
+            runtime.view_instance = None
 
         # Parse state_snapshot if the client sent one (v0.6.0) so it can
         # be forwarded to handle_mount for back-nav state restoration.

@@ -72,30 +72,42 @@ class TestHasIdsFlag:
     # ------------------------------------------------------------------ #
 
     def test_sse_has_ids_matches_websocket_check(self):
-        """SSE and WebSocket paths must use the same attribute name check."""
-        import inspect
-        from djust import sse
+        """SSE and WebSocket mount paths must use the same has_ids check.
 
-        source = inspect.getsource(sse)
-        # SSE path should check for "dj-id=" (not "data-dj-id=")
+        Post-#1887 (ADR-022 Iter 1) the SSE mount converged onto
+        ``runtime.py`` ``dispatch_mount`` (the legacy ``_sse_mount_view`` in
+        sse.py was deleted), so SSE's ``has_ids`` flag is now computed in the
+        runtime — the SAME place this asserts uses the correct ``dj-id=`` check.
+        This is the #1646 cure: SSE can no longer drift from the check because it
+        shares the runtime's code path."""
+        import inspect
+
+        from djust import runtime
+
+        source = inspect.getsource(runtime)
+        # Converged SSE mount path should check for "dj-id=" (not "data-dj-id=").
         assert (
-            '"dj-id=" in html' in source or "'dj-id=' in html" in source
-        ), "sse.py has_ids check should use 'dj-id=' to match Rust renderer output"
-        assert (
-            '"data-dj-id=" in html' not in source
-        ), "sse.py should not use the incorrect 'data-dj-id=' check"
+            '"dj-id=" in (html or "")' in source
+            or '"dj-id=" in html' in source
+            or "'dj-id=' in html" in source
+        ), "runtime.py dispatch_mount has_ids check should use 'dj-id=' to match Rust output"
+        assert "data-dj-id=" not in source, (
+            "runtime.py should not use the incorrect 'data-dj-id=' check"
+        )
 
     def test_websocket_has_ids_check_now_correct(self):
-        """websocket.py has_ids check must use 'dj-id=' after the fix."""
+        """The mount has_ids check uses 'dj-id=' (Rust renderer output), NOT the
+        broken 'data-dj-id='. Post-#1919 (THE MOUNT FLIP) the WS mount routes
+        through ``ViewRuntime.dispatch_mount`` (the bespoke ``handle_mount`` body
+        that held the inline check was deleted), so the mount has_ids check now
+        lives in the runtime — pinned by the companion runtime test above. Here we
+        pin that websocket.py never reintroduces the BROKEN 'data-dj-id=' form
+        (BUG-14 regression guard) on any of its remaining render-send paths."""
         import inspect
         from djust import websocket
 
         source = inspect.getsource(websocket)
-        # After fix: must contain the correct check
-        assert (
-            '"dj-id=" in html' in source or "'dj-id=' in html" in source
-        ), "websocket.py has_ids check should use 'dj-id=' to match Rust renderer output"
-        # After fix: must NOT contain the old broken check
-        assert (
-            '"data-dj-id=" in html' not in source
-        ), "websocket.py must not use the incorrect 'data-dj-id=' check (BUG-14 regression)"
+        # The broken check must NEVER reappear anywhere in websocket.py.
+        assert '"data-dj-id=" in html' not in source, (
+            "websocket.py must not use the incorrect 'data-dj-id=' check (BUG-14 regression)"
+        )

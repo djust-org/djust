@@ -279,23 +279,28 @@ def test_unsigned_plain_json_is_rejected():
 
 
 def test_restore_path_calls_unsign_and_does_not_trust_raw_state_json():
-    """Pin that ``handle_mount`` runs the inbound snapshot through
-    ``unsign_snapshot`` before restoring. The gate-off self-test reverts this
-    call; test (a) then fails (forged role injected)."""
-    import djust.websocket as ws_mod
+    """Pin that the mount restore path runs the inbound snapshot through
+    ``unsign_snapshot`` before restoring. Post-#1919 (THE MOUNT FLIP) the WS mount
+    routes through ``ViewRuntime.dispatch_mount`` (the bespoke ``handle_mount`` body
+    was deleted), so the pin follows the snapshot-restore logic to its converged
+    home. The gate-off self-test reverts this call; test (a) then fails (forged
+    role injected)."""
+    import djust.runtime as rt_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
     assert "unsign_snapshot" in source, (
-        "handle_mount restore path must verify the signed snapshot via "
+        "dispatch_mount restore path must verify the signed snapshot via "
         "unsign_snapshot before applying any state."
     )
 
 
 def test_emit_path_signs_snapshot():
-    """Pin that the mount-frame emit signs the public state."""
-    import djust.websocket as ws_mod
+    """Pin that the mount-frame emit signs the public state. Post-#1919 (THE MOUNT
+    FLIP) the WS mount routes through ``ViewRuntime.dispatch_mount`` — the emit
+    moved into the runtime (#1913, Phase 3.1)."""
+    import djust.runtime as rt_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
     assert "sign_snapshot" in source, (
         "Emit path must sign the public_state snapshot before sending to client."
     )

@@ -309,9 +309,9 @@ class TestWSMountSkip:
     def test_session_key_format_uses_path(self):
         """GET saves state under liveview_{path} (the HTTP format, shared with WS consumer)."""
         _, get_request = self._get_and_save_state()
-        assert (
-            "liveview_/counter/" in get_request.session
-        ), "Session key must use liveview_{path} format so WS consumer can find it"
+        assert "liveview_/counter/" in get_request.session, (
+            "Session key must use liveview_{path} format so WS consumer can find it"
+        )
 
     def test_ws_restore_sets_attributes_from_session(self):
         """State saved during GET is restored onto a fresh view via safe_setattr."""
@@ -365,26 +365,37 @@ class TestWSMountSkip:
         assert mount_called, "mount() must be called when no saved state exists"
 
     def test_ensure_tenant_called_regardless_of_saved_state(self):
-        """_ensure_tenant must be called unconditionally (not only in the not-mounted path).
+        """The pre-mount auth+tenant sequence must run unconditionally (not only in
+        the not-restored path), so multi-tenant views have self.tenant set even when
+        state is restored from session.
 
-        Regression test: previously _ensure_tenant was inside the `if not mounted:`
-        block, so multi-tenant views had self.tenant=None after session restore.
+        Post-#1919 (THE MOUNT FLIP) the WS mount routes through
+        ``ViewRuntime.dispatch_mount`` (the bespoke ``handle_mount`` body was
+        deleted). The runtime runs the pre-mount sequence via ``_check_auth`` →
+        ``run_pre_mount_auth`` (which calls ``_ensure_tenant`` + the tenant bind)
+        BEFORE the ``if not mounted_from_restore:`` block — i.e. unconditionally
+        relative to state restore. Pin that structural invariant at its converged
+        home. Regression of #342 fix.
         """
         import inspect
 
-        from djust.websocket import LiveViewConsumer
+        from djust.runtime import ViewRuntime
 
-        # Verify that in the current source, _ensure_tenant check appears BEFORE
-        # the `if not mounted:` block — this is the structural invariant we rely on.
-        source = inspect.getsource(LiveViewConsumer.handle_mount)
-        ensure_tenant_pos = source.find("_ensure_tenant")
-        not_mounted_pos = source.find("if not mounted:")
-        assert ensure_tenant_pos != -1, "_ensure_tenant hook must exist in handle_mount"
-        assert not_mounted_pos != -1, "if not mounted: block must exist in handle_mount"
-        assert ensure_tenant_pos < not_mounted_pos, (
-            "_ensure_tenant must be called BEFORE `if not mounted:` "
-            "so it runs even when state is restored from session. "
-            "Regression of #342 fix."
+        source = inspect.getsource(ViewRuntime.dispatch_mount)
+        # The runtime runs auth+tenant via _check_auth (→ run_pre_mount_auth →
+        # _ensure_tenant) before the state-restore / mount() decision.
+        check_auth_pos = source.find("_check_auth(")
+        not_restored_pos = source.find("if not mounted_from_restore:")
+        assert check_auth_pos != -1, (
+            "_check_auth (the pre-mount auth+tenant sequence) must exist in dispatch_mount"
+        )
+        assert not_restored_pos != -1, (
+            "if not mounted_from_restore: block must exist in dispatch_mount"
+        )
+        assert check_auth_pos < not_restored_pos, (
+            "_check_auth (→ run_pre_mount_auth → _ensure_tenant) must run BEFORE the "
+            "`if not mounted_from_restore:` block so the tenant binds even when state "
+            "is restored from session. Regression of #342 fix."
         )
 
 
