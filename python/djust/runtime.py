@@ -222,8 +222,17 @@ class Transport(Protocol):
         event_name: Optional[str],
         html: Optional[str] = None,
         patch_count: Optional[int] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Emit the per-render observability the WS bespoke render branch owned.
+
+        ``context`` (#1908 item 2): the rendered ``get_context_data()`` dict, when
+        the caller has it in hand on the ``no_patches`` branch, so the WS impl can
+        build the ``context_snapshot`` the bespoke ``_emit_full_html_update`` carried
+        for the ``no_patches`` reason. DEBUG-tooling-only metadata — ``None`` on
+        every other reason and on transports/callers that do not surface it (the
+        signal's load-bearing fields are ``reason`` / ``version`` / ``event_name`` /
+        ``html_size``, all unaffected).
 
         ADR-022 Iter 2 Phase 2.3b (#1907, THE FLIP). Called by ``_render_and_send``
         whenever a SINGLE-VIEW event render falls into the full-HTML (no-patch)
@@ -260,6 +269,43 @@ class Transport(Protocol):
         Best-effort by contract: implementations MUST swallow their own errors.
         Not called on the patch branch (patches emitted → no full-HTML fallback) nor
         the noop / skip-render branch (no render at all).
+        """
+
+    def on_event_frame(
+        self,
+        view: Any,
+        frame: Dict[str, Any],
+        *,
+        event_name: Optional[str],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """Decorate an outbound EVENT render frame with the DEBUG residuals (#1908).
+
+        Called by ``_render_and_send`` for EVERY ``patch`` / ``html_update`` frame it
+        emits on a user-event turn — IN-PLACE, just before ``transport.send(frame)``.
+        Folds the three DEBUG-only / cosmetic residuals the bespoke WS ``_send_update``
+        owned that the runtime render path (which sends via ``transport.send``
+        directly) dropped after THE FLIP (#1907):
+
+          1. the per-event ``_debug`` panel payload (DEBUG + ``_debug_panel_active``
+             gated) + the top-level ``timing`` / ``performance`` fields (gated on
+             ``_should_expose_timing()`` = DEBUG or ``DJUST_EXPOSE_TIMING``); and
+          3. the ``_current_event_name`` / ``_current_event_ref`` consumer attrs the
+             bespoke handler set for its no-arg ``_dispatch_async_work()`` (cosmetic
+             parity for any out-of-band consumer reader).
+
+        PRODUCTION is byte-identical: all attached fields are DEBUG/timing-gated, so a
+        prod-mode frame is unchanged (matching the bespoke path, where both were also
+        absent in prod).
+
+        - WS: attaches the gated ``_debug`` + ``timing`` / ``performance`` (verbatim
+          ``_attach_debug_payload`` + ``_should_expose_timing`` shape from the deleted
+          bespoke ``_send_update``) and stamps the consumer event attrs.
+        - SSE / partial test transports: not implemented → the runtime's defensive
+          ``getattr`` makes the call a no-op (SSE has no debug panel; zero change).
+
+        Best-effort by contract: implementations MUST swallow their own errors — a
+        debug-decoration failure must never break the event turn.
         """
 
     def event_context(self, view: Any) -> "contextlib.AbstractAsyncContextManager[None]":
@@ -764,6 +810,7 @@ class WSConsumerTransport:
         event_name: Optional[str],
         html: Optional[str] = None,
         patch_count: Optional[int] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Emit the DJE-053 warning + ``_emit_full_html_update`` signal (#1907).
 
@@ -819,24 +866,32 @@ class WSConsumerTransport:
         # is dev tooling; a failure here must never disturb the event turn. The
         # ``html`` passed in is the rendered (pre-strip) full HTML so ``html_size`` +
         # ``html_snippet`` match the WS bespoke emit (websocket.py:4254-4269). The
-        # ``no_patches`` context snapshot is intentionally None here: the WS bespoke
-        # path captured the ``get_context_data()`` dict it had in hand for free, but
-        # the runtime render path (``render_with_diff``) does not surface that dict
-        # to ``_render_and_send``, and re-deriving it would add a render-cost call on
-        # the no-patch path. The snapshot is DEBUG-tooling-only metadata (the signal's
-        # load-bearing fields are ``reason`` / ``version`` / ``event_name`` /
-        # ``html_size``), so dropping it costs no production behavior — tracked as a
-        # deferred follow-up. ``_previous_html`` is read-only (never assigned in
-        # production), so ``previous_html_snippet`` is inert on both paths.
+        # ``no_patches`` context snapshot (#1908 item 2): the WS bespoke path captured
+        # the ``get_context_data()`` dict it had in hand and passed it as
+        # ``context_snapshot`` for the ``no_patches`` reason. ``_render_and_send`` now
+        # threads that same dict in via ``context`` (only on the no-patch branch, only
+        # when it had to call ``get_context_data()`` anyway — no extra render-cost),
+        # so the runtime path carries the snapshot the bespoke path did. It is
+        # DEBUG-tooling-only metadata (the signal's load-bearing fields are ``reason``
+        # / ``version`` / ``event_name`` / ``html_size``); ``None`` everywhere else.
+        # ``_previous_html`` is read-only (never assigned in production), so
+        # ``previous_html_snippet`` is inert on both paths.
         try:
+            from .websocket import _build_context_snapshot
+
             html_for_snapshot = getattr(view, "_previous_html", None)
+            context_snapshot = (
+                _build_context_snapshot(context)
+                if reason == "no_patches" and context is not None
+                else None
+            )
             _emit_full_html_update(
                 view,
                 reason,
                 event_name,
                 html,
                 version,
-                context_snapshot=None,
+                context_snapshot=context_snapshot,
                 patch_count=patch_count,
                 html_snippet=(html[:500] if reason == "no_patches" and html else None),
                 previous_html_snippet=(
@@ -847,6 +902,80 @@ class WSConsumerTransport:
             )
         except Exception:  # noqa: BLE001 — observability signal must never break the turn
             logger.debug("full-HTML-update signal emit failed", exc_info=True)
+
+    def on_event_frame(
+        self,
+        view: Any,
+        frame: Dict[str, Any],
+        *,
+        event_name: Optional[str],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """Fold the DEBUG event-render residuals onto a runtime-emitted WS frame (#1908).
+
+        Verbatim fold of the three residuals the bespoke ``_send_update`` owned (now
+        deleted for the event path) that the runtime ``_render_and_send`` dropped:
+
+          1. top-level ``timing`` / ``performance`` — gated on ``_should_expose_timing()``
+             (DEBUG or ``DJUST_EXPOSE_TIMING``), exactly the bespoke gate
+             (websocket.py:1407-1411); ``performance`` is the borrowed
+             ``PerformanceTracker`` summary established by ``event_context``; and
+          1b. the per-event ``_debug`` panel payload, via the consumer's existing
+             ``_attach_debug_payload`` (its own DEBUG + ``_debug_panel_active`` gate,
+             websocket.py:1627); plus
+          3. the cosmetic ``_current_event_name`` / ``_current_event_ref`` consumer
+             attrs the bespoke handler set for its no-arg ``_dispatch_async_work()``.
+
+        PRODUCTION byte-identical: ``_should_expose_timing()`` is False and
+        ``_attach_debug_payload`` early-returns when ``DEBUG`` is False, so a prod
+        frame is unchanged (both were absent in prod on the bespoke path too). The
+        consumer event attrs are internal-only (never serialized).
+
+        Best-effort: any failure here is swallowed — a debug decoration must never
+        break the event turn.
+        """
+        consumer = self._consumer
+        # (3) cosmetic parity: stamp the consumer event attrs the bespoke handler set.
+        # Internal-only — never serialized onto the frame; read by the consumer's
+        # ``_dispatch_async_work`` (not on the runtime event path, but kept for any
+        # out-of-band consumer reader).
+        try:
+            consumer._current_event_name = event_name
+            consumer._current_event_ref = event_ref
+        except Exception:  # noqa: BLE001 — cosmetic attr stamp must never break the turn
+            pass
+
+        try:
+            from .websocket import _should_expose_timing
+
+            # (1) Performance summary from the borrowed tracker (event_context set it
+            # current); mirrors the bespoke ``tracker.get_summary()`` feed.
+            from .performance import PerformanceTracker
+
+            tracker = PerformanceTracker.get_current()
+            performance = tracker.get_summary() if tracker is not None else None
+
+            # Top-level timing/performance — production-gated identically to the
+            # bespoke ``_send_update`` (websocket.py:1402-1411). ``timing`` carries the
+            # render duration the runtime stamped on the frame under ``_timing_render_ms``
+            # (popped here so it never leaks onto the wire when the gate is closed).
+            render_ms = frame.pop("_timing_render_ms", None)
+            if _should_expose_timing():
+                if render_ms is not None:
+                    frame["timing"] = {"render": render_ms}
+                if performance:
+                    frame["performance"] = performance
+
+            # (1b) The per-event ``_debug`` panel payload (DEBUG + panel-active gated
+            # inside the helper). Reuse the consumer's existing implementation so the
+            # runtime path and the still-bespoke tick/broadcast/async/actor paths share
+            # ONE ``_debug`` shape (#1646). ``performance`` rides into ``_debug`` too,
+            # matching the bespoke ``_attach_debug_payload(response, event_name, performance)``.
+            attach = getattr(consumer, "_attach_debug_payload", None)
+            if attach is not None:
+                attach(frame, event_name, performance)
+        except Exception:  # noqa: BLE001 — debug decoration must never break the event turn
+            logger.debug("on_event_frame debug decoration failed", exc_info=True)
 
     @contextlib.asynccontextmanager
     async def event_context(self, view: Any) -> AsyncIterator[None]:
@@ -1418,6 +1547,7 @@ class SSESessionTransport:
         event_name: Optional[str],
         html: Optional[str] = None,
         patch_count: Optional[int] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """No-op for SSE (#1907).
 
@@ -1425,7 +1555,24 @@ class SSESessionTransport:
         SSE render path emitted neither the DJE-053 warning nor the signal, so this
         WS-scoped fold is a no-op on SSE — zero SSE behavior change. (The DJE-053
         warning is a developer diagnostic for the WS VDOM-baseline-loss case; SSE's
-        own render path retains its existing logging.)"""
+        own render path retains its existing logging.) ``context`` (#1908) is ignored
+        — the SSE path never built a context snapshot."""
+        return None
+
+    def on_event_frame(
+        self,
+        view: Any,
+        frame: Dict[str, Any],
+        *,
+        event_name: Optional[str],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """No-op for SSE (#1908).
+
+        The DEBUG event-render residuals (``_debug`` panel payload, top-level
+        ``timing`` / ``performance``, the ``_current_event_*`` consumer attrs) are a
+        WS debug-panel surface; the legacy SSE event path never carried them, so this
+        fold is a no-op on SSE — zero SSE behavior change."""
         return None
 
     @contextlib.asynccontextmanager
@@ -3766,7 +3913,11 @@ class ViewRuntime:
             return {}
 
     def _extract_cache_config(self, view_instance) -> Optional[Dict[str, Any]]:
-        """Mirror of ``LiveViewConsumer._extract_cache_config``."""
+        """Extract @cache decorator metadata from the view's handlers.
+
+        Sole live copy after the mount flip (#1919/#1920): the bespoke
+        ``LiveViewConsumer`` twin was removed as dead code in #1921.
+        """
         try:
             cache_config: Dict[str, Any] = {}
             for attr_name in dir(type(view_instance)):
@@ -3784,11 +3935,12 @@ class ViewRuntime:
     def _extract_optimistic_rules(self, view_instance) -> Dict[str, Any]:
         """Extract optimistic UI rules from descriptor components (DEP-002).
 
-        Mirror of ``LiveViewConsumer._extract_optimistic_rules``
-        (websocket.py:3385) ported to the runtime for ADR-022 Iter 3 Phase 3.0
-        so the converged mount frame carries the same optimistic-UI rules. Only
-        components with ``Meta.tier == "optimistic"`` contribute a rule; the
-        first event wins (matches WS's ``event not in rules`` guard).
+        Ported to the runtime for ADR-022 Iter 3 Phase 3.0 so the converged
+        mount frame carries the optimistic-UI rules. Sole live copy after the
+        mount flip (#1919/#1920): the bespoke ``LiveViewConsumer`` twin was
+        removed as dead code in #1921. Only components with
+        ``Meta.tier == "optimistic"`` contribute a rule; the first event wins
+        (the ``event not in rules`` guard).
         """
         if not view_instance:
             return {}
@@ -3841,6 +3993,12 @@ class ViewRuntime:
         # (websocket.py:4039-4040 / _dispatch_single_event websocket.py:1489).
         if force_html and getattr(self.view_instance, "_force_full_html", False):
             self.view_instance._force_full_html = False
+        # Measure render duration for the DEBUG-only top-level ``timing`` field the
+        # bespoke ``_send_update`` carried (#1908 item 1). Inert in production: the
+        # value is stamped onto the frame as ``_timing_render_ms`` and ``on_event_frame``
+        # pops it, only re-attaching a top-level ``timing`` when ``_should_expose_timing()``
+        # is true. Cheap (one ``perf_counter`` pair) so it stays unconditional.
+        _render_start = time.perf_counter()
         try:
             html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
         except Exception as exc:
@@ -3853,6 +4011,28 @@ class ViewRuntime:
             )
             await self.transport.send(response)
             return
+        _render_ms = (time.perf_counter() - _render_start) * 1000
+
+        def _send_event_frame(frame: Dict[str, Any]) -> Dict[str, Any]:
+            """Stamp the render duration + invoke the DEBUG ``on_event_frame`` fold
+            (#1908) in-place, then return the frame for ``transport.send``. The
+            internal ``_timing_render_ms`` marker is ALWAYS popped before the frame
+            leaves this helper (the WS hook consumes it; SSE / partial test transports
+            have a no-op or no hook), so it can never leak onto the wire."""
+            frame["_timing_render_ms"] = _render_ms
+            _hook = getattr(self.transport, "on_event_frame", None)
+            if _hook is not None:
+                _hook(
+                    self.view_instance,
+                    frame,
+                    event_name=event_name,
+                    event_ref=event_ref,
+                )
+            # Unconditional cleanup: the marker is internal to this fold; whether the
+            # transport hook popped it (WS, when the timing gate is open) or ignored
+            # it (SSE no-op, prod-gated WS, no hook), it must NOT reach the client.
+            frame.pop("_timing_render_ms", None)
+            return frame
 
         should_reset_form = getattr(self.view_instance, "_should_reset_form", False)
         if should_reset_form:
@@ -3907,7 +4087,7 @@ class ViewRuntime:
                     msg["async_pending"] = True
                 if event_ref is not None:
                     msg["ref"] = event_ref
-                await self.transport.send(msg)
+                await self.transport.send(_send_event_frame(msg))
             else:
                 # Compression fallback — send full HTML.
                 html_stripped = self.view_instance._strip_comments_and_whitespace(html)
@@ -3942,7 +4122,7 @@ class ViewRuntime:
                     msg["async_pending"] = True
                 if event_ref is not None:
                     msg["ref"] = event_ref
-                await self.transport.send(msg)
+                await self.transport.send(_send_event_frame(msg))
         else:
             # No VDOM diff available — send HTML directly.
             if html and hasattr(self.view_instance, "_strip_comments_and_whitespace"):
@@ -3962,6 +4142,30 @@ class ViewRuntime:
                 if force_html
                 else ("first_render" if version <= 1 else "no_patches")
             )
+            # #1908 item 2: the bespoke ``no_patches`` ``_emit_full_html_update`` carried
+            # a ``context_snapshot`` built from the ``get_context_data()`` dict it had in
+            # hand (it called ``get_context_data()`` once and reused the result for both
+            # render + snapshot). The runtime render path computes context INSIDE
+            # ``render_with_diff`` and does not surface it, so the snapshot was None.
+            #
+            # Re-capture it ONLY when DEBUG (the only consumer of the signal's snapshot is
+            # dev tooling) AND only on the ``no_patches`` reason (the one the bespoke path
+            # snapshotted). The DEBUG gate is load-bearing for the PRODUCTION
+            # byte-identical guarantee: it confines the extra ``get_context_data()`` call
+            # to dev, so production never double-calls it (no behavior change, no cost).
+            # Thread it to ``on_render_emitted`` via ``context``.
+            from django.conf import settings as _dj_settings
+
+            _ctx_snapshot: Optional[Dict[str, Any]] = None
+            if (
+                _reason == "no_patches"
+                and getattr(_dj_settings, "DEBUG", False)
+                and hasattr(self.view_instance, "get_context_data")
+            ):
+                try:
+                    _ctx_snapshot = await sync_to_async(self.view_instance.get_context_data)()
+                except Exception:  # noqa: BLE001 — snapshot is best-effort DEBUG metadata
+                    _ctx_snapshot = None
             _on_render = getattr(self.transport, "on_render_emitted", None)
             if _on_render is not None:
                 _on_render(
@@ -3970,6 +4174,7 @@ class ViewRuntime:
                     version=version,
                     event_name=event_name,
                     html=html,
+                    context=_ctx_snapshot,
                 )
             msg = {
                 "type": "html_update",
@@ -3986,7 +4191,7 @@ class ViewRuntime:
                 msg["async_pending"] = True
             if event_ref is not None:
                 msg["ref"] = event_ref
-            await self.transport.send(msg)
+            await self.transport.send(_send_event_frame(msg))
 
         # Full flush-queue parity with WS (#1885 / #1646): drain ALL 8 queues
         # in canonical order, not just push_events/navigation/deferred.

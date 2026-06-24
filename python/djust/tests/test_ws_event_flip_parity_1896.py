@@ -306,6 +306,26 @@ class ForceView(LiveView):
         return {"n": self.n}
 
 
+class _DebugProbeView(LiveView):
+    """A view with a public assign so ``get_debug_update()`` yields a non-empty
+    variables dump for the #1908 ``_debug``-payload unit tests."""
+
+    template = (
+        '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896._DebugProbeView" '
+        'dj-id="0"><p>n={{ n }}</p></div>'
+    )
+
+    def mount(self, request, **kwargs):
+        self.n = 0
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+    def get_context_data(self, **kwargs):
+        return {"n": self.n}
+
+
 _ALLOWED = "djust.tests.test_ws_event_flip_parity_1896"
 
 
@@ -874,6 +894,239 @@ class TestResidualFoldObservability:
             # Must not raise.
             t.on_handler_timing(self._V(), "bump", 1.0)
 
+    # -- #1908 item 2: no_patches context_snapshot threaded through the signal -----
+
+    def test_no_patches_context_snapshot_threaded_to_signal(self):
+        """#1908 item 2: on the ``no_patches`` reason, a ``context`` dict passed to
+        ``on_render_emitted`` is built into the ``_emit_full_html_update`` signal's
+        ``context_snapshot`` — restoring the DEBUG-tooling metadata the bespoke path
+        carried (the runtime previously hard-coded ``context_snapshot=None``)."""
+        from unittest.mock import patch as _patch
+
+        t = self._make_transport()
+        with _patch("djust.websocket._emit_full_html_update") as mock_emit:
+            t.on_render_emitted(
+                self._V(),
+                reason="no_patches",
+                version=3,
+                event_name="bump",
+                html="<p>x</p>",
+                context={"count": 5, "name": "x"},
+            )
+        assert mock_emit.called, "the full-HTML-update signal must be emitted"
+        snap = mock_emit.call_args.kwargs.get("context_snapshot")
+        assert snap == {"count": 5, "name": "x"}, (
+            "the no_patches signal must carry the context snapshot built from the "
+            f"threaded context dict (#1908 item 2); got {snap!r}"
+        )
+
+    def test_no_patches_context_snapshot_none_when_no_context(self):
+        """GATE-OFF (#1468): with NO ``context`` threaded (the old behavior), the
+        ``no_patches`` snapshot stays ``None`` — proving the snapshot comes from the
+        threaded dict, not some incidental source."""
+        from unittest.mock import patch as _patch
+
+        t = self._make_transport()
+        with _patch("djust.websocket._emit_full_html_update") as mock_emit:
+            t.on_render_emitted(
+                self._V(), reason="no_patches", version=3, event_name="bump", html="<p>x</p>"
+            )
+        assert mock_emit.call_args.kwargs.get("context_snapshot") is None, (
+            "without a threaded context, the no_patches snapshot must be None (#1908)."
+        )
+
+    def test_context_snapshot_only_on_no_patches_reason(self):
+        """The context snapshot is scoped to the ``no_patches`` reason (matching the
+        bespoke path, which only snapshotted there) — a ``first_render`` with a
+        context dict must NOT carry a snapshot."""
+        from unittest.mock import patch as _patch
+
+        t = self._make_transport()
+        with _patch("djust.websocket._emit_full_html_update") as mock_emit:
+            t.on_render_emitted(
+                self._V(),
+                reason="first_render",
+                version=1,
+                event_name="bump",
+                html="<p>x</p>",
+                context={"count": 5},
+            )
+        assert mock_emit.call_args.kwargs.get("context_snapshot") is None, (
+            "context_snapshot must be None for first_render even when a context is "
+            "threaded — it is a no_patches-only diagnostic (#1908)."
+        )
+
+    # -- #1908 item 1 + 3: on_event_frame DEBUG residual fold (unit) --------------
+
+    def _make_attaching_transport(self, *, debug_panel_active=True, populate_tracker=False):
+        """A transport whose fake consumer carries the REAL ``_attach_debug_payload``
+        + a view with ``get_debug_update`` so ``on_event_frame`` exercises the true
+        attach path. Returns ``(transport, consumer)``."""
+        from djust.runtime import WSConsumerTransport
+        from djust.websocket import LiveViewConsumer
+
+        view = _DebugProbeView()
+        view.mount(None)
+
+        class _FakeConsumer:
+            view_instance = view
+            _debug_panel_active = debug_panel_active
+            # Borrow the real consumer method (unbound) so the production attach logic
+            # is what runs, not a stub (#1037 greenwashing-catcher).
+            _attach_debug_payload = LiveViewConsumer._attach_debug_payload
+
+        consumer = _FakeConsumer()
+        t = WSConsumerTransport(consumer)
+        if populate_tracker:
+            from djust.performance import PerformanceTracker
+
+            tracker = PerformanceTracker()
+            with tracker.track("Event Processing"):
+                pass
+            PerformanceTracker.set_current(tracker)
+        else:
+            from djust.performance import PerformanceTracker
+
+            PerformanceTracker.set_current(None)
+        return t, consumer
+
+    def test_on_event_frame_attaches_debug_in_debug_mode(self):
+        """#1908 item 1b: in DEBUG with the panel active, ``on_event_frame`` attaches
+        the per-event ``_debug`` panel payload to a runtime-emitted event frame —
+        the residual the bespoke ``_send_update`` carried and the runtime dropped."""
+        from django.test import override_settings
+
+        t, _ = self._make_attaching_transport()
+        frame = {"type": "patch", "patches": [], "version": 8, "event_name": "bump"}
+        with override_settings(DEBUG=True):
+            t.on_event_frame(t._consumer.view_instance, frame, event_name="bump", event_ref=1)
+        assert "_debug" in frame, (
+            "in DEBUG, a runtime event frame must carry the _debug panel payload (#1908 item 1)."
+        )
+        assert frame["_debug"].get("_eventName") == "bump"
+
+    def test_on_event_frame_no_debug_in_production(self):
+        """PARITY/GATE-OFF (#1468): in PRODUCTION (DEBUG=False) the same frame must
+        NOT carry ``_debug`` / ``timing`` / ``performance`` — the production frame is
+        byte-identical to the pre-fix runtime frame (no behavior change)."""
+        from django.test import override_settings
+
+        t, _ = self._make_attaching_transport()
+        frame = {"type": "patch", "patches": [], "version": 8, "event_name": "bump"}
+        with override_settings(DEBUG=False, DJUST_EXPOSE_TIMING=False):
+            t.on_event_frame(t._consumer.view_instance, frame, event_name="bump", event_ref=1)
+        assert "_debug" not in frame, "DEBUG payload must be absent in production (#1908)."
+        assert "timing" not in frame, "top-level timing must be absent in production (#654/#1908)."
+        assert "performance" not in frame, "top-level performance must be absent in production."
+        assert "_timing_render_ms" not in frame, (
+            "the internal render-timing marker must never leak onto the wire frame."
+        )
+
+    def test_on_event_frame_no_debug_when_panel_closed(self):
+        """GATE-OFF (#1468): even in DEBUG, a CLOSED debug panel
+        (``_debug_panel_active = False``) must suppress the _debug payload — matching
+        the bespoke ``_attach_debug_payload`` panel gate (websocket.py:1649)."""
+        from django.test import override_settings
+
+        t, _ = self._make_attaching_transport(debug_panel_active=False)
+        frame = {"type": "patch", "patches": [], "version": 8, "event_name": "bump"}
+        with override_settings(DEBUG=True):
+            t.on_event_frame(t._consumer.view_instance, frame, event_name="bump", event_ref=1)
+        assert "_debug" not in frame, (
+            "a closed debug panel must suppress the _debug payload even in DEBUG (#1908)."
+        )
+
+    def test_on_event_frame_timing_under_expose_timing(self):
+        """#1908 item 1: with ``_should_expose_timing()`` true (DEBUG or
+        DJUST_EXPOSE_TIMING) the top-level ``timing`` carries the render duration the
+        runtime stamped as ``_timing_render_ms``; the internal marker is consumed."""
+        from django.test import override_settings
+
+        t, _ = self._make_attaching_transport()
+        frame = {"type": "patch", "patches": [], "version": 8, "_timing_render_ms": 4.2}
+        with override_settings(DEBUG=False, DJUST_EXPOSE_TIMING=True):
+            t.on_event_frame(t._consumer.view_instance, frame, event_name="bump")
+        assert frame.get("timing") == {"render": 4.2}, (
+            f"timing must carry the render ms under expose_timing; got {frame.get('timing')!r}"
+        )
+        assert "_timing_render_ms" not in frame, "the internal marker must be popped."
+
+    def test_on_event_frame_performance_attached_when_tracker_populated(self):
+        """#1908 item 1: when the borrowed PerformanceTracker is populated,
+        ``on_event_frame`` attaches the top-level ``performance`` summary under
+        expose-timing (the bespoke ``tracker.get_summary()`` feed)."""
+        from django.test import override_settings
+
+        t, _ = self._make_attaching_transport(populate_tracker=True)
+        frame = {"type": "patch", "patches": [], "version": 8, "_timing_render_ms": 1.0}
+        with override_settings(DEBUG=False, DJUST_EXPOSE_TIMING=True):
+            t.on_event_frame(t._consumer.view_instance, frame, event_name="bump")
+        from djust.performance import PerformanceTracker
+
+        PerformanceTracker.set_current(None)  # cleanup contextvar
+        assert "performance" in frame and frame["performance"], (
+            "a populated tracker summary must ride the frame as top-level performance "
+            f"under expose-timing (#1908); got {frame.get('performance')!r}"
+        )
+
+    def test_on_event_frame_stamps_consumer_event_attrs(self):
+        """#1908 item 3: ``on_event_frame`` stamps ``_current_event_name`` /
+        ``_current_event_ref`` on the consumer (cosmetic parity for out-of-band
+        readers; the bespoke handler set them for its no-arg _dispatch_async_work)."""
+        from django.test import override_settings
+
+        t, consumer = self._make_attaching_transport()
+        frame = {"type": "patch", "patches": [], "version": 8}
+        with override_settings(DEBUG=False):
+            t.on_event_frame(consumer.view_instance, frame, event_name="bump", event_ref=42)
+        assert consumer._current_event_name == "bump"
+        assert consumer._current_event_ref == 42
+
+    def test_on_event_frame_swallows_attach_errors(self):
+        """Best-effort: an attach failure must never propagate out of on_event_frame
+        (a debug-decoration bug can't break the event turn)."""
+        from django.test import override_settings
+
+        from djust.runtime import WSConsumerTransport
+
+        class _BoomConsumer:
+            view_instance = object()
+
+            def _attach_debug_payload(self, *a, **k):
+                raise RuntimeError("boom")
+
+        t = WSConsumerTransport(_BoomConsumer())
+        frame = {"type": "patch", "version": 8}
+        with override_settings(DEBUG=True):
+            # Must not raise; the consumer attrs are still stamped before the attach.
+            t.on_event_frame(_BoomConsumer.view_instance, frame, event_name="bump")
+
+    # -- #1921: dead _extract_* removal from LiveViewConsumer ----------------------
+
+    def test_dead_extract_methods_removed_from_consumer(self):
+        """#1921: the bespoke ``LiveViewConsumer._extract_cache_config`` /
+        ``_extract_optimistic_rules`` were dead post-mount-flip (#1920 deleted the
+        handle_mount body that called them; runtime.py owns the live copies). Pin
+        that they are GONE from the consumer so they cannot silently return."""
+        from djust.websocket import LiveViewConsumer
+
+        assert not hasattr(LiveViewConsumer, "_extract_cache_config"), (
+            "LiveViewConsumer._extract_cache_config was dead code removed in #1921 — "
+            "the runtime owns the live copy (runtime.py)."
+        )
+        assert not hasattr(LiveViewConsumer, "_extract_optimistic_rules"), (
+            "LiveViewConsumer._extract_optimistic_rules was dead code removed in #1921 "
+            "— the runtime owns the live copy (runtime.py)."
+        )
+
+    def test_runtime_extract_methods_still_live(self):
+        """The runtime ``ViewRuntime`` copies of the extract helpers — the live ones
+        the mount frame uses — MUST remain (the #1921 deletion was consumer-only)."""
+        from djust.runtime import ViewRuntime
+
+        assert hasattr(ViewRuntime, "_extract_cache_config")
+        assert hasattr(ViewRuntime, "_extract_optimistic_rules")
+
 
 # ===========================================================================
 # 8. start_async / @background on a WS event (post-flip path, #1907)
@@ -949,4 +1202,87 @@ class TestBackgroundWorkOverRuntime:
                 f"(val=99); got {async_frames!r}"
             )
 
+            await communicator.disconnect()
+
+
+# ===========================================================================
+# 9. DEBUG event-render residuals over a real WebsocketCommunicator (#1908)
+#
+# THE FLIP (#1907) routed WS events through ViewRuntime, whose render path sends
+# frames via ``transport.send`` directly — dropping the DEBUG ``_debug`` panel
+# payload + ``timing`` / ``performance`` fields the bespoke ``_send_update``
+# attached. #1908 threads them back through ``WSConsumerTransport.on_event_frame``.
+# These tests drive a REAL ``WebsocketCommunicator`` (#1468 reproduction fidelity:
+# the actual receive() → runtime dispatch → _render_and_send → on_event_frame
+# path, not a hand-built frame) and assert the DEBUG-vs-PRODUCTION parity.
+# ===========================================================================
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+class TestDebugResidualOnEventFrame:
+    async def test_event_frame_carries_debug_payload_in_debug(self):
+        """In DEBUG (panel active by default), a runtime-routed WS event's render
+        frame carries the per-event ``_debug`` panel payload (#1908 item 1)."""
+        from django.test import override_settings
+
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED], DEBUG=True):
+            communicator, _ = await _connect_and_mount(f"{_ALLOWED}._DebugProbeView")
+            await communicator.send_json_to(
+                {"type": "event", "event": "bump", "params": {}, "ref": 1}
+            )
+            frames = await _drain_available(communicator, max_frames=6, timeout=3)
+            render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
+            assert render_frames, f"expected a render frame; got {frames!r}"
+            assert any("_debug" in f for f in render_frames), (
+                "a DEBUG runtime-routed WS event frame must carry the _debug panel "
+                f"payload (#1908); got {[list(f.keys()) for f in render_frames]}"
+            )
+            await communicator.disconnect()
+
+    async def test_event_frame_carries_timing_under_expose_timing(self):
+        """With ``DJUST_EXPOSE_TIMING`` (and DEBUG), the event render frame carries
+        the top-level ``timing`` field (the render duration) — #1908 item 1."""
+        from django.test import override_settings
+
+        with override_settings(
+            LIVEVIEW_ALLOWED_MODULES=[_ALLOWED], DEBUG=True, DJUST_EXPOSE_TIMING=True
+        ):
+            communicator, _ = await _connect_and_mount(f"{_ALLOWED}._DebugProbeView")
+            await communicator.send_json_to(
+                {"type": "event", "event": "bump", "params": {}, "ref": 1}
+            )
+            frames = await _drain_available(communicator, max_frames=6, timeout=3)
+            render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
+            assert render_frames, f"expected a render frame; got {frames!r}"
+            assert any("timing" in f and "render" in f["timing"] for f in render_frames), (
+                "under DJUST_EXPOSE_TIMING the event frame must carry timing.render "
+                f"(#1908); got {render_frames!r}"
+            )
+            await communicator.disconnect()
+
+    async def test_event_frame_no_residuals_in_production(self):
+        """PARITY/GATE-OFF (#1468): in PRODUCTION (DEBUG=False, no expose-timing) the
+        runtime event frame carries NEITHER ``_debug`` NOR ``timing`` / ``performance``
+        NOR the internal ``_timing_render_ms`` marker — byte-identical to the pre-fix
+        production frame (the residuals are DEBUG/timing-gated, no behavior change)."""
+        from django.test import override_settings
+
+        with override_settings(
+            LIVEVIEW_ALLOWED_MODULES=[_ALLOWED], DEBUG=False, DJUST_EXPOSE_TIMING=False
+        ):
+            communicator, _ = await _connect_and_mount(f"{_ALLOWED}._DebugProbeView")
+            await communicator.send_json_to(
+                {"type": "event", "event": "bump", "params": {}, "ref": 1}
+            )
+            frames = await _drain_available(communicator, max_frames=6, timeout=3)
+            render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
+            assert render_frames, f"expected a render frame; got {frames!r}"
+            for f in render_frames:
+                assert "_debug" not in f, f"prod frame must not carry _debug; got {f.keys()}"
+                assert "timing" not in f, f"prod frame must not carry timing; got {f.keys()}"
+                assert "performance" not in f, "prod frame must not carry performance"
+                assert "_timing_render_ms" not in f, (
+                    "the internal render-timing marker must never leak onto the wire"
+                )
             await communicator.disconnect()
