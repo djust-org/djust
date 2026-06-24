@@ -52,7 +52,7 @@ function createEnv(bodyHtml = '') {
  * This allows us to inject a mock liveViewWS before the script runs, so click
  * handler tests can exercise the actual URL-update branch without a real WS.
  */
-function createNavSourceEnv(bodyHtml = '', liveViewWSMock = null) {
+function createNavSourceEnv(bodyHtml = '', liveViewWSMock = null, opts = {}) {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><body>
             <div dj-root>
@@ -79,6 +79,59 @@ function createNavSourceEnv(bodyHtml = '', liveViewWSMock = null) {
     // Provide djust namespace and liveViewWS before loading nav code so
     // the IIFE's free variable references resolve to these values.
     window.eval('window.djust = { _routeMap: {} };');
+
+    // Seed the route map if the caller supplied one.
+    if (opts.routeMap) {
+        window.djust._routeMap = opts.routeMap;
+    }
+
+    // 18-navigation.js calls the free function isWSConnected() (defined in
+    // 02-response-handler.js in the full bundle) and window.djust.safeNavigationTarget
+    // (02b-safe-nav.js). When loading ONLY the nav source we must stub them, or
+    // handleLiveRedirect throws a ReferenceError. Defaults model the bug scenario:
+    // WS connected, a faithful-enough safeNavigationTarget.
+    const wsConnected = opts.wsConnected !== undefined ? opts.wsConnected : true;
+    window.__wsConnected = wsConnected;
+    window.eval('function isWSConnected() { return !!window.__wsConnected; }');
+
+    // safeNavigationTarget spy: faithful-enough — accepts same-origin string
+    // paths (returns them unchanged), rejects non-strings/cross-origin like the
+    // real guard (02b-safe-nav.js).
+    const safeNav = vi.fn((value) => {
+        if (typeof value !== 'string' || value.length === 0) return null;
+        try {
+            const u = new URL(value, window.location.origin);
+            if (u.origin !== window.location.origin) return null;
+            return u.pathname + u.search + u.hash;
+        } catch (_e) {
+            return null;
+        }
+    });
+    window.djust.safeNavigationTarget = safeNav;
+
+    // page-loading bar mock — mirror the real shape (start/finish/enabled).
+    // The cross-origin branch (and the #1934 fallback) call `.stop?.()` which
+    // does not exist; that is intentional (optional-chaining → no-op).
+    window.djust.pageLoading = { start: () => {}, finish: () => {}, enabled: true };
+
+    // Capture window.location.href assignments. JSDOM throws
+    // "Not implemented: navigation to another Document" on a real href set, so
+    // the production code's assignment is wrapped where needed; here we also
+    // record what the full-page-nav branch *tried* to navigate to.
+    const locationAssignments = [];
+    try {
+        const realHrefDesc = Object.getOwnPropertyDescriptor(window.location, 'href');
+        // Some JSDOM builds forbid redefining location.href; fall back to spying
+        // via safeNavigationTarget's return + the throw-catch in the test.
+        if (realHrefDesc && realHrefDesc.configurable) {
+            Object.defineProperty(window.location, 'href', {
+                configurable: true,
+                get() { return realHrefDesc.get.call(window.location); },
+                set(v) { locationAssignments.push(v); },
+            });
+        }
+    } catch (_e) { /* fall back to the safeNav spy as the full-nav signal */ }
+
     if (liveViewWSMock !== null) {
         window.eval('var liveViewWS = ' + JSON.stringify(null) + ';');
         window.liveViewWS_mock = liveViewWSMock;
@@ -90,7 +143,7 @@ function createNavSourceEnv(bodyHtml = '', liveViewWSMock = null) {
         window.eval(navSourceCode);
     } catch (e) {}
 
-    return { window, dom, document: dom.window.document, historyCalls };
+    return { window, dom, document: dom.window.document, historyCalls, safeNav, locationAssignments };
 }
 
 describe('navigation', () => {
@@ -280,18 +333,28 @@ describe('navigation', () => {
         });
 
         it('BUG 1: handleNavigation dispatches to handleLiveRedirect when action=live_redirect', () => {
-            const { window, historyCalls } = createEnv('<div dj-view="myapp.views.DashboardView"></div>');
-            window.djust._routeMap = { '/dashboard/': 'myapp.views.DashboardView' };
+            // A LiveView target with a CONNECTED WS does the SPA mount: pushState
+            // for the new path (#1934 defers pushState into this branch, so the
+            // env must have a connected WS — see createNavSourceEnv default).
+            const sent = [];
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: (m) => sent.push(m) };
+            const { document, historyCalls } = createNavSourceEnv(
+                '<div dj-view="myapp.views.DashboardView"></div>',
+                wsMock,
+                { routeMap: { '/dashboard/': 'myapp.views.DashboardView' }, wsConnected: true },
+            );
 
-            window.djust.navigation.handleNavigation({
+            document.defaultView.djust.navigation.handleNavigation({
                 type: 'navigation',
                 action: 'live_redirect',
                 path: '/dashboard/',
             });
 
-            // replaceState or pushState should have been called for the new path
+            // pushState should have been called for the new path (SPA mount).
             expect(historyCalls.length).toBe(1);
             expect(historyCalls[0].url).toContain('/dashboard/');
+            // …and the live_redirect_mount frame should have gone out over the WS.
+            expect(sent.some((m) => m.type === 'live_redirect_mount' && m.view === 'myapp.views.DashboardView')).toBe(true);
         });
 
         it('BUG 1 (dj-patch): clicking dj-patch="/" updates pathname to /', () => {
@@ -447,14 +510,19 @@ describe('navigation', () => {
 
         it('same-origin paths still use pushState (regression backstop for guard breadth)', () => {
             // If the cross-origin guard accidentally widens to reject same-origin
-            // navigations, this test catches it. Same-origin live_redirect must
-            // continue to use pushState as before.
-            const { window, historyCalls } = createEnv(
+            // navigations, this test catches it. Same-origin live_redirect to a
+            // resolvable LiveView with a connected WS must continue to use
+            // pushState (SPA mount). #1934 defers the pushState into that branch,
+            // so the env needs a connected WS + populated route map.
+            const sent = [];
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: (m) => sent.push(m) };
+            const { document, historyCalls } = createNavSourceEnv(
                 '<div dj-view="myapp.views.DashboardView"></div>',
+                wsMock,
+                { routeMap: { '/dashboard/': 'myapp.views.DashboardView' }, wsConnected: true },
             );
-            window.djust._routeMap = { '/dashboard/': 'myapp.views.DashboardView' };
 
-            window.djust.navigation.handleNavigation({
+            document.defaultView.djust.navigation.handleNavigation({
                 type: 'live_redirect',
                 path: '/dashboard/',
             });
@@ -464,6 +532,99 @@ describe('navigation', () => {
                 (c) => c.url && c.url.includes('/dashboard/'),
             );
             expect(sameOriginCall).toBeDefined();
+        });
+    });
+
+    describe('issue #1934 — live_redirect to a non-LiveView path falls back to full-page nav', () => {
+        // Bug: with auto_navigate default-on (v1.1), a live_redirect to a path
+        // that is NOT a LiveView (e.g. a plain Django TemplateView) stranded the
+        // page — the OLD code pushState'd the URL BEFORE the resolveViewPath
+        // check, and the SPA-mount block had no full-nav fallback for a falsy
+        // resolution. URL bar moved; DOM stayed on the previous LiveView.
+        //
+        // Fix: resolve the view FIRST; pushState is deferred into the
+        // LiveView-resolved + WS-connected branch. A non-LiveView target (falsy
+        // resolveViewPath) — or a disconnected WS — does a full-page navigation
+        // via safeNavigationTarget, so the URL never leads the DOM.
+
+        it('non-LiveView target: full-page nav, NO pushState, NO WS mount (strand-free)', () => {
+            // /onboarding/ is NOT in the route map → resolveViewPath is falsy
+            // (mirrors _walk_liveview_routes excluding non-LiveViews).
+            const sent = [];
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: (m) => sent.push(m) };
+            const { document, historyCalls, safeNav } = createNavSourceEnv(
+                '<div dj-view="jira_manager.views.TicketListView"></div>',
+                wsMock,
+                { routeMap: { '/jira/': 'jira_manager.views.TicketListView' }, wsConnected: true },
+            );
+
+            try {
+                // handleLiveRedirect is internal; drive it via the public
+                // handleNavigation entry (type:'live_redirect' → handleLiveRedirect).
+                document.defaultView.djust.navigation.handleNavigation({ type: 'live_redirect', path: '/onboarding/' });
+            } catch (_e) {
+                // JSDOM throws "Not implemented: navigation to another Document"
+                // on window.location.href assignment — that throw IS the full nav.
+            }
+
+            // 1) Full-page navigation was chosen: safeNavigationTarget was asked
+            //    to validate the non-LiveView target.
+            expect(safeNav).toHaveBeenCalledWith('http://localhost:8000/onboarding/');
+            // 2) NO history change for the non-LiveView target (the URL must NOT
+            //    lead the DOM — this is the strand the bug produced).
+            const stranded = historyCalls.find((c) => c.url && c.url.includes('/onboarding/'));
+            expect(stranded).toBeUndefined();
+            // 3) NO SPA mount frame went out (the old view is not "re-mounted"
+            //    under a changed URL).
+            expect(sent.some((m) => m.type === 'live_redirect_mount')).toBe(false);
+        });
+
+        it('positive case: a LiveView target still SPA-mounts (pushState + WS mount, no full nav)', () => {
+            const sent = [];
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: (m) => sent.push(m) };
+            const { document, historyCalls, safeNav } = createNavSourceEnv(
+                '<div dj-view="myapp.views.HomeView"></div>',
+                wsMock,
+                {
+                    routeMap: {
+                        '/home/': 'myapp.views.HomeView',
+                        '/dashboard/': 'myapp.views.DashboardView',
+                    },
+                    wsConnected: true,
+                },
+            );
+
+            document.defaultView.djust.navigation.handleNavigation({ type: 'live_redirect', path: '/dashboard/' });
+
+            // pushState for the new LiveView path + the live_redirect_mount frame.
+            expect(historyCalls.length).toBe(1);
+            expect(historyCalls[0].method).toBe('pushState');
+            expect(historyCalls[0].url).toContain('/dashboard/');
+            expect(sent.some((m) => m.type === 'live_redirect_mount' && m.view === 'myapp.views.DashboardView')).toBe(true);
+            // The SPA branch must NOT validate a full-nav target.
+            expect(safeNav).not.toHaveBeenCalled();
+        });
+
+        it('LiveView target but WS not connected: full-page nav (no strand), NO pushState', () => {
+            const sent = [];
+            // ws not OPEN — isWSConnected() stubbed false.
+            const wsMock = { viewMounted: false, ws: { readyState: 3 }, sendMessage: (m) => sent.push(m) };
+            const { document, historyCalls, safeNav } = createNavSourceEnv(
+                '<div dj-view="myapp.views.HomeView"></div>',
+                wsMock,
+                { routeMap: { '/dashboard/': 'myapp.views.DashboardView' }, wsConnected: false },
+            );
+
+            try {
+                document.defaultView.djust.navigation.handleNavigation({ type: 'live_redirect', path: '/dashboard/' });
+            } catch (_e) { /* href set throws in JSDOM */ }
+
+            // Even though /dashboard/ IS a LiveView, with no WS we must do a real
+            // navigation rather than pushState-then-nothing (strand).
+            expect(safeNav).toHaveBeenCalledWith('http://localhost:8000/dashboard/');
+            const stranded = historyCalls.find((c) => c.url && c.url.includes('/dashboard/'));
+            expect(stranded).toBeUndefined();
+            expect(sent.some((m) => m.type === 'live_redirect_mount')).toBe(false);
         });
     });
 });
