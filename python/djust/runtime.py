@@ -164,6 +164,25 @@ class Transport(Protocol):
         hook — the runtime stays wire-blind (#1887, ADR-022 Iter 1).
         """
 
+    async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
+        """Push a freshly-captured time-travel :class:`EventSnapshot` to the client.
+
+        Called by ``_dispatch_event_inner`` (and the component / sticky-child
+        branches) immediately after ``record_event_end`` finalizes the snapshot,
+        so the debug panel's Time Travel tab can incrementally populate its
+        history without re-sending the entire buffer on every event (ADR-022 Iter
+        2 Phase 2.2 — replaces the WS ``_maybe_push_tt_event`` direct send with a
+        transport hook so the runtime stays wire-blind).
+
+        - WS: serializes + DEBUG-gates the entry and emits a ``time_travel_event``
+          frame (the verbatim ``_maybe_push_tt_event`` logic, websocket.py:5267).
+        - SSE: a no-op — SSE has no time-travel debug panel surface today.
+
+        Always no-ops when ``snapshot`` is ``None`` (time-travel disabled on the
+        view or a guard returned early). Best-effort: a failure here must never
+        break the event turn.
+        """
+
 
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
@@ -221,6 +240,19 @@ class WSConsumerTransport:
         WS-specific view attrs; the runtime path is only used for ``url_change``
         on WS today, never mount (RUNTIME_OWNED_VERBS = {"url_change"})."""
         return None
+
+    async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
+        """Emit the DEBUG-gated ``time_travel_event`` frame for WS.
+
+        Delegates to the consumer's existing ``_maybe_push_tt_event`` (the
+        verbatim DEBUG-gate + size-cap + ``__components__`` mirror logic at
+        websocket.py:5267), so the runtime port and the legacy WS
+        ``_handle_event_inner`` path share ONE implementation of the frame shape
+        (the #1646 cure — Phase 2.3 deletes the WS-side call sites but keeps this
+        single source). No-op when the consumer lacks the helper."""
+        push = getattr(self._consumer, "_maybe_push_tt_event", None)
+        if push is not None:
+            await push(view, snapshot)
 
 
 class SSESessionTransport:
@@ -300,6 +332,14 @@ class SSESessionTransport:
         request = getattr(session, "_request", None)
         if request is not None:
             view_instance._websocket_query_string = request.META.get("QUERY_STRING", "")
+
+    async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
+        """No-op for SSE — there is no time-travel debug-panel surface on the SSE
+        transport today (the debug panel is a WS-only client feature). The
+        runtime still RECORDS the snapshot into the view's buffer (server-side
+        time-travel state is transport-agnostic); only the incremental client
+        push is WS-specific."""
+        return None
 
 
 # ------------------------------------------------------------------ #
@@ -746,20 +786,42 @@ class ViewRuntime:
             k: id(v) for k, v in self.view_instance.__dict__.items() if k not in _fw_attrs
         }
 
-        # Call handler
+        # Time-travel record (v0.6.1 dev-only, ADR-022 Iter 2 Phase 2.2). Capture
+        # ``state_before`` BEFORE the handler so the snapshot pairs with
+        # ``record_event_end`` in the finally below — mirrors WS
+        # ``_handle_event_inner`` (websocket.py:3536-3635). ``record_event_start``
+        # is a no-op unless the view opted into time-travel, so default views pay
+        # nothing. The error string is captured so a raising handler still records
+        # a snapshot (with ``state_after``) for the debug panel.
+        from .time_travel import record_event_end, record_event_start
+
+        _tt_snapshot = record_event_start(self.view_instance, event_name, params, event_ref)
+        _tt_error: Optional[str] = None
+
+        # Call handler. The time-travel record is finalized + pushed in the
+        # ``finally`` for BOTH the success and the raising path (mirrors WS
+        # ``_handle_event_inner`` websocket.py:3625-3635, which records in a
+        # finally so permission-denied / raising handlers still appear in the
+        # debug panel). On a raise we set ``_tt_error`` and return early after
+        # sending the error frame.
         try:
-            await _call_handler(handler, coerced_params if coerced_params else None)
-        except Exception as exc:
-            response = handle_exception(
-                exc,
-                error_type="event",
-                event_name=event_name,
-                view_class=self.view_instance.__class__.__name__,
-                logger=logger,
-                log_message=f"Error in handler {self.view_instance.__class__.__name__}.{sanitize_for_log(event_name)}()",
-            )
-            await self.transport.send(response)
-            return
+            try:
+                await _call_handler(handler, coerced_params if coerced_params else None)
+            except Exception as exc:
+                _tt_error = str(exc)[:200]
+                response = handle_exception(
+                    exc,
+                    error_type="event",
+                    event_name=event_name,
+                    view_class=self.view_instance.__class__.__name__,
+                    logger=logger,
+                    log_message=f"Error in handler {self.view_instance.__class__.__name__}.{sanitize_for_log(event_name)}()",
+                )
+                await self.transport.send(response)
+                return
+        finally:
+            record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(self.view_instance, _tt_snapshot)
 
         # Waiter notification (ADR-002 Phase 1b): resolve any pending
         # wait_for_event waiters on the view whose event_name matches. Runs AFTER
@@ -777,6 +839,22 @@ class ViewRuntime:
                     sanitize_for_log(event_name),
                     exc,
                 )
+
+        # Persist updated LiveView state to the Django session (#1466, ADR-022
+        # Iter 2 Phase 2.2). Verbatim gate from the WS save block
+        # (websocket.py:3700-3702): top-level view IDENTITY + ``enable_state_snapshot``
+        # opt-in. The single-view path here only runs for the top-level view
+        # (``component_id`` / ``view_id`` routing already returned earlier), so
+        # ``target_view`` IS ``self.view_instance``; the identity clause is kept
+        # in the condition so the runtime-side #1466 source-grep pin
+        # (test_runtime_state_save_tt_1894) asserts the SAME gate string the WS
+        # pin asserts — drift between the two save gates goes red. Default views
+        # (no opt-in) MUST NOT persist (#1552). Bounded by 150ms (#1475).
+        target_view = self.view_instance
+        if target_view is self.view_instance and getattr(
+            self.view_instance, "enable_state_snapshot", False
+        ):
+            await self._persist_state_after_event(target_view, event_name)
 
         # Auto-detect unchanged state. Never auto-skip when the view explicitly
         # requested a full-HTML render (``_force_full_html``) — mirrors the WS
@@ -862,6 +940,174 @@ class ViewRuntime:
         )
 
     # ------------------------------------------------------------------ #
+    # Time-travel push hook (ADR-022 Iter 2 Phase 2.2)
+    # ------------------------------------------------------------------ #
+
+    async def _push_tt_event(self, view: Any, snapshot: Any) -> None:
+        """Invoke the transport's ``on_event_recorded`` hook after a record.
+
+        Replaces the WS ``_maybe_push_tt_event`` direct send (websocket.py:5267)
+        with a transport-blind dispatch: WS emits the DEBUG-gated
+        ``time_travel_event`` frame, SSE no-ops. Forward-compat: transports
+        predating the hook (the ``on_view_mounted`` getattr precedent) are
+        tolerated. Best-effort — a debug-frame failure must never break the
+        event turn."""
+        if snapshot is None:
+            return
+        hook = getattr(self.transport, "on_event_recorded", None)
+        if hook is None:
+            return
+        try:
+            await hook(view, snapshot)
+        except Exception:  # noqa: BLE001 — dev-only time-travel push; degrade silently
+            logger.exception("Runtime: time_travel on_event_recorded hook failed")
+
+    # ------------------------------------------------------------------ #
+    # Per-event state persistence (ADR-022 Iter 2 Phase 2.2)
+    #
+    # Ported VERBATIM from the WS ``_handle_event_inner`` save block
+    # (websocket.py:3666-3804) so WS events routed through the runtime in the
+    # Phase 2.3 final flip persist identically. The WS copy stays UNTOUCHED until
+    # 2.3 (the #1466/#1552 grep-pins in test_ws_reconnect_state_1465.py assert the
+    # exact strings there). Both gates are preserved:
+    #
+    #   * ``target_view is self.view_instance`` — only top-level view identity
+    #     saves to ``liveview_{path}`` (#1466; child LiveComponents never get
+    #     ``_djust_mount_request`` stashed, so they'd write the wrong key);
+    #   * ``enable_state_snapshot`` — default views MUST NOT persist (#1552; an
+    #     unconditional save leaves async session I/O in flight that a host
+    #     snapshot captures unrecoverably — the djustlive 0.9.7rc2 production
+    #     block).
+    #
+    # The save body is bounded by a 150ms ``asyncio.wait_for`` (#1475) so even
+    # opt-in views can't extend close-time tail latency under backend
+    # backpressure. Saves must never break event handling — timeout + exception
+    # are both caught and logged.
+    # ------------------------------------------------------------------ #
+
+    async def _persist_state_after_event(self, target_view: Any, event_name: Optional[str]) -> None:
+        """Persist the top-level view's post-event state to the Django session.
+
+        Caller MUST have already verified the gate
+        (``target_view is self.view_instance and enable_state_snapshot``); this
+        method assumes it runs only for an opted-in top-level view. Bounded by a
+        150ms timeout, mirroring the WS save block (websocket.py:3704-3804)."""
+
+        async def _save() -> None:
+            # Discover the session the same way the WS save block does
+            # (websocket.py:3710-3720): prefer the stashed mount request's
+            # session (carries the save-key namespace + path); fall back to the
+            # ASGI scope's session when no mount request was stashed.
+            mount_request = getattr(target_view, "_djust_mount_request", None)
+            scope_session = (
+                (self.scope.get("session") if self.scope else None)
+                if mount_request is None
+                else None
+            )
+            save_session = (
+                getattr(mount_request, "session", None)
+                if mount_request is not None
+                else scope_session
+            )
+            if save_session is None:
+                return
+
+            from .components.base import LiveComponent as _LC
+            from .serialization import normalize_django_value as _normalize
+
+            save_path = mount_request.path if mount_request is not None else "/"
+            save_view_key = f"liveview_{save_path}"
+
+            # Save order mirrors HTTP path (mixins/request.py:593-609): private
+            # attrs FIRST, then public via get_context_data().
+            if hasattr(target_view, "_get_private_state"):
+                _priv = await sync_to_async(target_view._get_private_state)()
+                if _priv:
+                    await save_session.aset(f"{save_view_key}__private", _normalize(_priv))
+                else:
+                    try:
+                        await save_session.apop(f"{save_view_key}__private", None)
+                    except AttributeError:
+                        await sync_to_async(save_session.pop)(f"{save_view_key}__private", None)
+
+            _gcd_save = target_view.get_context_data
+            if inspect.iscoroutinefunction(_gcd_save):
+                save_context = await _gcd_save()
+            else:
+                save_context = await sync_to_async(_gcd_save)()
+
+            save_state = {k: v for k, v in save_context.items() if not isinstance(v, _LC)}
+            await save_session.aset(save_view_key, _normalize(save_state))
+
+            # Components — sync helper, wrap with sync_to_async.
+            if mount_request is not None and hasattr(target_view, "_save_components_to_session"):
+                await sync_to_async(target_view._save_components_to_session)(
+                    mount_request, save_context
+                )
+
+            await save_session.asave()
+
+        try:
+            await asyncio.wait_for(_save(), timeout=0.150)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Runtime event state save exceeded 150ms for %r — session backend "
+                "backpressure; skipping this event's save. Subsequent events will retry.",
+                sanitize_for_log(event_name or ""),
+            )
+        except Exception:  # noqa: BLE001 — saves must never break event handling
+            logger.exception(
+                "Failed to save LiveView state after runtime event %r",
+                sanitize_for_log(event_name or ""),
+            )
+
+    async def _persist_sticky_child_after_event(
+        self, target_view: Any, event_name: Optional[str]
+    ) -> None:
+        """Persist a sticky CHILD view's post-event state (ADR-018 Branch B).
+
+        Ported from the WS sticky-child save (websocket.py:3806-3888). Kept as a
+        SEPARATE method from :meth:`_persist_state_after_event` — exactly as WS
+        keeps it a separate ``if`` — so the child saves under its stable sticky
+        key (Decision 1) gated on the both-opt-in predicate
+        (:func:`sticky_child_should_persist`, Decision 5). Bounded by the same
+        150ms timeout. Caller MUST have verified the gate."""
+
+        async def _save() -> None:
+            from .mixins.sticky import save_sticky_child_state, write_sticky_index_and_prune
+
+            parent = self.view_instance
+            mount_request = getattr(parent, "_djust_mount_request", None)
+            # Precedence mirrors WS (websocket.py:3845-3847): the mount request's
+            # session is authoritative; the scope session is the fallback.
+            save_session = getattr(mount_request, "session", None) or (
+                self.scope.get("session") if self.scope else None
+            )
+            if save_session is None:
+                return
+
+            parent_path = mount_request.path if mount_request is not None else "/"
+
+            await save_sticky_child_state(target_view, save_session, parent_path)
+            await write_sticky_index_and_prune(parent, save_session, parent_path)
+            await save_session.asave()
+
+        try:
+            await asyncio.wait_for(_save(), timeout=0.150)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Runtime event sticky-child state save exceeded 150ms for %r — "
+                "session backend backpressure; skipping this event's save. "
+                "Subsequent events will retry.",
+                sanitize_for_log(event_name or ""),
+            )
+        except Exception:  # noqa: BLE001 — saves must never break event handling
+            logger.exception(
+                "Failed to save sticky-child state after runtime event %r",
+                sanitize_for_log(event_name or ""),
+            )
+
+    # ------------------------------------------------------------------ #
     # Embedded-child routing (ADR-022 Iter 2 Phase 2.1)
     #
     # Two transport-agnostic child-routing subsystems, ported from the WS
@@ -945,22 +1191,38 @@ class ViewRuntime:
 
         coerced_params = validation.get("coerced_params", params)
 
+        # Time-travel record (ADR-022 Iter 2 Phase 2.2). For a sticky-child event
+        # the snapshot records against the CHILD (``target_view``) — the child is
+        # a full LiveView with its own ``_time_travel_buffer`` (#1467). Mirrors
+        # the WS path's per-target ``_tt_start(target_view, ...)`` /
+        # ``_tt_end(target_view, ...)`` (websocket.py:3541/3634). No-op unless the
+        # child opted into time-travel.
+        from .time_travel import record_event_end, record_event_start
+
+        _tt_snapshot = record_event_start(target_view, event_name, params, event_ref)
+        _tt_error: Optional[str] = None
+
         try:
-            await _call_handler(handler, coerced_params if coerced_params else None)
-        except Exception as exc:
-            response = handle_exception(
-                exc,
-                error_type="event",
-                event_name=event_name,
-                view_class=target_view.__class__.__name__,
-                logger=logger,
-                log_message=(
-                    f"Error in embedded child {target_view.__class__.__name__}."
-                    f"{sanitize_for_log(event_name)}()"
-                ),
-            )
-            await self.transport.send(response)
-            return True
+            try:
+                await _call_handler(handler, coerced_params if coerced_params else None)
+            except Exception as exc:
+                _tt_error = str(exc)[:200]
+                response = handle_exception(
+                    exc,
+                    error_type="event",
+                    event_name=event_name,
+                    view_class=target_view.__class__.__name__,
+                    logger=logger,
+                    log_message=(
+                        f"Error in embedded child {target_view.__class__.__name__}."
+                        f"{sanitize_for_log(event_name)}()"
+                    ),
+                )
+                await self.transport.send(response)
+                return True
+        finally:
+            record_event_end(target_view, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(target_view, _tt_snapshot)
 
         # Waiter notification (ADR-002 Phase 1b) — resolve waiters on the CHILD
         # view. Best-effort: a waiter bug must never break the event.
@@ -973,6 +1235,22 @@ class ViewRuntime:
                     sanitize_for_log(event_name),
                     exc,
                 )
+
+        # Sticky-child state save (ADR-018 Branch B, ADR-022 Iter 2 Phase 2.2).
+        # Verbatim from the WS sticky save (websocket.py:3806-3888): persist the
+        # CHILD under its stable sticky key gated on the both-opt-in predicate
+        # (Decision 5). The else-branch fires the one-shot opt-in-mismatch warning
+        # so the silent persistence gap (child opted in, parent did not) is
+        # observable. ``target_view`` is the child here (it is never the top-level
+        # view — that case fell through to the single-view path), so the
+        # WS ``target_view is not self.view_instance`` guard is structurally
+        # satisfied; the predicate carries the opt-in gate.
+        from .mixins.sticky import sticky_child_should_persist, warn_sticky_child_optin_skip
+
+        if sticky_child_should_persist(target_view, self.view_instance):
+            await self._persist_sticky_child_after_event(target_view, event_name)
+        else:
+            warn_sticky_child_optin_skip(target_view, self.view_instance)
 
         # Render just the child's subtree (single-sourced render core) and emit
         # the scoped full-HTML ``embedded_update`` frame. Mirrors the WS
@@ -1074,22 +1352,40 @@ class ViewRuntime:
 
         coerced_event_data = validation.get("coerced_params", event_data)
 
+        # Time-travel record (ADR-022 Iter 2 Phase 2.2). Per #1467 canon a
+        # LiveComponent has NO separate time-travel buffer in Phase 1, so the
+        # snapshot records against the PARENT ``view`` (not the component) —
+        # state the component pushes into the parent via ``send_parent`` shows up
+        # in state_before/state_after. Mirrors WS ``_tt_start_c(self.view_instance,
+        # ...)`` / ``_tt_end_c(self.view_instance, ...)`` (websocket.py:3424/3489).
+        # Recorded against the pre-strip ``params`` to match WS. No-op unless the
+        # parent opted into time-travel.
+        from .time_travel import record_event_end, record_event_start
+
+        _tt_snapshot = record_event_start(view, event_name, params, event_ref)
+        _tt_error: Optional[str] = None
+
         try:
-            await _call_handler(handler, coerced_event_data if coerced_event_data else None)
-        except Exception as exc:
-            response = handle_exception(
-                exc,
-                error_type="event",
-                event_name=event_name,
-                view_class=view.__class__.__name__,
-                logger=logger,
-                log_message=(
-                    f"Error in {view.__class__.__name__}."
-                    f"{sanitize_for_log(event_name)}() (component event)"
-                ),
-            )
-            await self.transport.send(response)
-            return True
+            try:
+                await _call_handler(handler, coerced_event_data if coerced_event_data else None)
+            except Exception as exc:
+                _tt_error = str(exc)[:200]
+                response = handle_exception(
+                    exc,
+                    error_type="event",
+                    event_name=event_name,
+                    view_class=view.__class__.__name__,
+                    logger=logger,
+                    log_message=(
+                        f"Error in {view.__class__.__name__}."
+                        f"{sanitize_for_log(event_name)}() (component event)"
+                    ),
+                )
+                await self.transport.send(response)
+                return True
+        finally:
+            record_event_end(view, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(view, _tt_snapshot)
 
         # Propagate the component event to the PARENT view's waiters with the
         # component_id injected (ADR-002 Phase 1b/1c, websocket.py:3456-3479).
