@@ -216,6 +216,54 @@ class Transport(Protocol):
         """
         return contextlib.nullcontext()
 
+    def uses_actors(self, view: Any) -> bool:
+        """Return whether this event turn must be handled by the actor system.
+
+        ADR-022 Iter 2 Phase 2.3a (#1901). The WS bespoke event handler routes a
+        top-level event through the per-session Rust actor whenever the consumer
+        mounted in actor mode (``use_actors=True`` + a created ``actor_handle``).
+        ``dispatch_event`` historically had NO actor branch — so once Phase 2.3b
+        flips WS events onto the runtime, a ``use_actors`` view's events would
+        silently run the handler IN-PROCESS via the normal render path, desyncing
+        the actor's server-side diff baseline. This hook closes that gap.
+
+        - WS: ``consumer.use_actors and consumer.actor_handle is not None`` — the
+          exact precondition of the bespoke actor block (websocket.py:3282).
+        - SSE: ``False`` — SSE has no bidirectional actor channel and refuses
+          ``use_actors`` mounts outright (``dispatch_mount`` guard,
+          runtime.py:602), so the actor branch is never reachable on SSE.
+
+        DORMANT until Phase 2.3b: WS events still run on the bespoke handler and
+        SSE refuses actors, so no live event turn reaches this hook yet.
+        """
+        return False
+
+    async def dispatch_actor_event(
+        self,
+        view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        *,
+        event_ref: Optional[int] = None,
+        cache_request_id: Optional[str] = None,
+    ) -> None:
+        """Run one event turn through the actor system + send the framed result.
+
+        Called by ``_dispatch_event_inner`` (OUTSIDE ``event_context`` — the actor
+        block holds NO render lock, matching the WS bespoke block which runs the
+        actor path before acquiring the lock) when :meth:`uses_actors` is true and
+        the event is NOT routed to a sticky child (the WS
+        ``not is_embedded_child_target`` mutual exclusion, websocket.py:3280-3282).
+
+        - WS: runs the bespoke actor block VERBATIM against the consumer —
+          time-travel record, shared security + param validation,
+          ``actor_handle.event()``, patch/HTML framing with the consumer-owned
+          wire version (#1788), error handling, and the deferred-activity flush.
+        - SSE: never called (``uses_actors`` is ``False``); raises
+          :class:`NotImplementedError` if invoked directly.
+        """
+        raise NotImplementedError("Actor events are WS-only; SSE refuses use_actors mounts.")
+
 
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
@@ -357,6 +405,146 @@ class WSConsumerTransport:
             consumer._processing_user_event = False
             consumer._render_lock.release()
 
+    def uses_actors(self, view: Any) -> bool:
+        """WS actor precondition — verbatim from the bespoke block (websocket.py:3282).
+
+        ``consumer.use_actors`` is set from the view class at mount
+        (websocket.py:2208) and ``consumer.actor_handle`` is the per-session Rust
+        actor created at mount (websocket.py:2213). Both must be truthy for the
+        actor path; a WS consumer in non-actor mode (or one where actor creation
+        was skipped) returns ``False`` and falls through to the normal render path.
+        """
+        consumer = self._consumer
+        return getattr(consumer, "use_actors", False) and consumer.actor_handle is not None
+
+    async def dispatch_actor_event(
+        self,
+        view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        *,
+        event_ref: Optional[int] = None,
+        cache_request_id: Optional[str] = None,
+    ) -> None:
+        """Run the WS bespoke actor block VERBATIM against the consumer (#1901).
+
+        This is a line-for-line port of the WS actor branch
+        (websocket.py:3282-3379) operating on ``self._consumer`` instead of
+        ``self`` (the consumer). The actor branch runs OUTSIDE any render lock
+        (the bespoke block acquires no lock before ``actor_handle.event()``), so
+        this method is invoked from ``_dispatch_event_inner`` BEFORE
+        ``event_context``.
+
+        Framing / version-stamping notes (what Phase 2.3b must watch):
+        - The consumer OWNS the monotonic wire version (#1788); the actor's
+          ``result['version']`` is IGNORED for the wire — ``_send_update`` is
+          stamped with ``consumer._next_version()`` (the same source
+          ``handle_event`` uses). The actor's internal version still drives its
+          server-side diff baseline.
+        - ``cache_request_id`` is read (not popped) from ``params`` by the WS
+          bespoke caller; it is forwarded here so the ``@cache`` decorator's
+          client round-trip id rides the update frame.
+        - ``patches`` may arrive as a JSON STRING from Rust and is parsed via
+          ``fast_json_loads`` before send.
+        """
+        consumer = self._consumer
+
+        # Time-travel debugging (v0.6.1): capture state_before BEFORE the
+        # permission check so permission-denied events are also recorded
+        # (websocket.py:3284-3292).
+        from .time_travel import (
+            record_event_end as _tt_end,
+            record_event_start as _tt_start,
+        )
+
+        _tt_snapshot = _tt_start(view, event_name, params, event_ref)
+        _tt_error: Optional[str] = None
+        try:
+            logger.info("Handling event '%s' with actor system", event_name)
+
+            # Security checks (shared with non-actor paths) — run on the RESOLVED
+            # target. The actor branch only fires for the top-level view (the
+            # caller excludes sticky-child events), so ``view`` IS the top-level
+            # view here (websocket.py:3300-3305).
+            handler = await _validate_event_security(
+                consumer, event_name, view, consumer._rate_limiter
+            )
+            if handler is None:
+                _tt_error = "permission_denied"
+                return
+
+            # Validate parameters before sending to actor (websocket.py:3308-3323).
+            coerce = get_handler_coerce_setting(handler)
+            positional_args = params.pop("_args", []) if isinstance(params, dict) else []
+            validation = validate_handler_params(
+                handler, params, event_name, coerce=coerce, positional_args=positional_args
+            )
+            if not validation["valid"]:
+                logger.error("Parameter validation failed: %s", validation["error"])
+                _tt_error = "validation_failed"
+                await consumer.send_error(
+                    validation["error"],
+                    validation_details={
+                        "expected_params": validation["expected"],
+                        "provided_params": validation["provided"],
+                        "type_errors": validation["type_errors"],
+                    },
+                )
+                return
+
+            # Call actor event handler (will call Python handler internally)
+            # (websocket.py:3326).
+            result = await consumer.actor_handle.event(event_name, params)
+
+            # Send patches if available, otherwise full HTML. Ignore the actor
+            # ``result['version']`` for the wire — the consumer owns the monotonic
+            # wire version (#1788). The actor's internal version still drives its
+            # diff-baselining server-side (websocket.py:3328-3353).
+            patches = result.get("patches")
+            html = result.get("html")
+
+            if patches:
+                if isinstance(patches, str):
+                    patches = fast_json_loads(patches)
+            else:
+                logger.info(
+                    "No patches from actor, sending full HTML update (length: %d). "
+                    "Run with DJUST_VDOM_TRACE=1 for detailed diff output.",
+                    len(html) if html else 0,
+                )
+
+            await consumer._send_update(
+                patches=patches,
+                html=html,
+                version=consumer._next_version(),  # consumer-owned (#1788)
+                cache_request_id=cache_request_id,
+                event_name=event_name,
+            )
+
+        except Exception as e:
+            _tt_error = str(e)[:200]
+            view_class_name = view.__class__.__name__ if view else "Unknown"
+            response = handle_exception(
+                e,
+                error_type="event",
+                event_name=event_name,
+                view_class=view_class_name,
+                logger=logger,
+                log_message=f"Error in actor event handling for {view_class_name}.{sanitize_for_log(event_name)}()",
+            )
+            await consumer.send_json(response)
+        finally:
+            _tt_end(view, _tt_snapshot, error=_tt_error)
+            await consumer._maybe_push_tt_event(view, _tt_snapshot)
+            # v0.7.0 — Drain deferred activity queue in the actor path too. The
+            # flush is async and awaited inline so drained events complete in the
+            # SAME round-trip as this handler (websocket.py:3372-3379).
+            if hasattr(view, "_flush_deferred_activity_events"):
+                try:
+                    await view._flush_deferred_activity_events(consumer)
+                except Exception:  # noqa: BLE001
+                    logger.exception("dj_activity: deferred-event flush raised (actor path)")
+
 
 class SSESessionTransport:
     """Transport adapter wrapping ``SSESession``.
@@ -454,6 +642,29 @@ class SSESessionTransport:
         WS-specific observability/origin scope. Yields immediately, mirroring the
         legacy ``_sse_handle_event`` (which never acquired a lock)."""
         yield
+
+    def uses_actors(self, view: Any) -> bool:
+        """SSE never uses actors (#1901).
+
+        SSE has no bidirectional channel for actor messages and the actor
+        channel-layer code lives in ``websocket.py``, which the runtime SSE path
+        doesn't traverse. ``dispatch_mount`` refuses a ``use_actors`` view over
+        SSE outright (runtime.py:602), so the actor branch is unreachable here.
+        Returning ``False`` keeps every SSE event on the normal render path.
+        """
+        return False
+
+    async def dispatch_actor_event(
+        self,
+        view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        *,
+        event_ref: Optional[int] = None,
+        cache_request_id: Optional[str] = None,
+    ) -> None:
+        """Never called on SSE (``uses_actors`` is ``False``) — guard with a raise."""
+        raise NotImplementedError("Actor events are WS-only; SSE refuses use_actors mounts.")
 
 
 # ------------------------------------------------------------------ #
@@ -817,15 +1028,69 @@ class ViewRuntime:
         view-mounted check runs OUTSIDE the context (we need a non-None view to
         borrow its lock — matching WS, which acquires only after the view exists).
 
-        The actor-event branch (added later in Phase 2.3a) runs OUTSIDE this
-        context, matching WS where the actor block holds no render lock.
+        The actor-event branch (Phase 2.3a, #1901) runs OUTSIDE this context,
+        matching WS where the actor block holds no render lock — so the actor
+        check is made here, BEFORE entering ``event_context``. The actor path
+        applies ONLY when the transport mounted in actor mode AND the event is
+        NOT routed to a sticky child (the WS ``not is_embedded_child_target``
+        mutual exclusion, websocket.py:3280-3282). Per #1467, ``component_id``
+        events do NOT reassign the target view, so — like the WS bespoke block,
+        which has no component handling in the actor branch — a ``component_id``
+        event on a ``use_actors`` view goes through the actor, not component
+        routing; only a ``view_id`` resolving to a different child excludes it.
+
+        DORMANT until Phase 2.3b: ``uses_actors`` is ``False`` for both live
+        transports today (WS events still run on the bespoke handler; SSE refuses
+        actor mounts), so this branch changes NO live behavior.
         """
         if not self.view_instance:
             await self.transport.send_error("View not mounted. Please reload the page.")
             return
 
+        uses_actors = getattr(self.transport, "uses_actors", None)
+        if (
+            uses_actors is not None
+            and uses_actors(self.view_instance)
+            and not self._event_routes_to_sticky_child(data)
+        ):
+            # Actor path: runs OUTSIDE event_context (no render lock), mirroring
+            # the WS bespoke block. Parse ref / cache id the same way the WS event
+            # handler does (websocket.py:3168-3172) so the framed actor result
+            # carries the same wire metadata.
+            params: Dict[str, Any] = dict(data.get("params") or {})
+            event_name = data.get("event")
+            raw_ref = data.get("ref")
+            event_ref: Optional[int] = int(raw_ref) if isinstance(raw_ref, (int, float)) else None
+            cache_request_id = params.get("_cacheRequestId")
+            await self.transport.dispatch_actor_event(
+                self.view_instance,
+                event_name,
+                params,
+                event_ref=event_ref,
+                cache_request_id=cache_request_id,
+            )
+            return
+
         async with self.transport.event_context(self.view_instance):
             await self._dispatch_event_render(data)
+
+    def _event_routes_to_sticky_child(self, data: Dict[str, Any]) -> bool:
+        """Return whether the event targets a sticky-child LiveView (not the top view).
+
+        Mirrors the WS ``is_embedded_child_target`` computation
+        (websocket.py:3229-3280) WITHOUT consuming ``view_id`` from ``params`` —
+        the downstream :meth:`_dispatch_sticky_child_event` (run inside
+        ``event_context`` on the non-actor path) still pops it. A ``view_id`` that
+        is absent, or equal to the top-level view's ``_view_id``, is NOT a child
+        target (the event is for the top view). Per #1467, ``component_id`` does
+        NOT route away from the top view, so it is intentionally NOT consulted
+        here — matching the WS actor block, which fires for ``component_id`` events.
+        """
+        params = data.get("params") or {}
+        view_id = params.get("view_id")
+        if not view_id:
+            return False
+        return view_id != getattr(self.view_instance, "_view_id", None)
 
     async def _dispatch_event_render(self, data: Dict[str, Any]) -> None:
         """Parse, validate, run the handler, and render one event turn.
