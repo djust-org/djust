@@ -184,6 +184,79 @@ class Transport(Protocol):
         break the event turn.
         """
 
+    def on_handler_timing(self, view: Any, event_name: str, duration_ms: float) -> None:
+        """Record per-handler execution time for percentile telemetry.
+
+        ADR-022 Iter 2 Phase 2.3b (#1907, THE FLIP). The WS bespoke event handler
+        recorded the handler duration via ``observability.timings.record_handler_timing``
+        in TWO spots — the component path (websocket.py:3498) and the view path
+        (websocket.py:3645) — right after the handler call. Once Phase 2.3b routes
+        WS events through ``dispatch_event``, that telemetry must keep flowing, so
+        the runtime calls this hook after the handler completes on the single-view
+        render path (the component path's own port keeps its inline recording).
+
+        - WS: forwards to ``record_handler_timing`` (the same global percentile
+          registry the bespoke path populated), so a runtime-routed WS event keeps
+          feeding ``djust_audit`` / debug-panel handler-timing stats.
+        - SSE: a no-op — the legacy SSE event path never recorded handler timing,
+          so adding it here would be a behavior change for SSE; kept WS-scoped.
+
+        Best-effort by contract: implementations MUST swallow their own errors
+        (telemetry must never disturb the event turn). Called only on the
+        non-actor render path (the actor path goes through ``dispatch_actor_event``
+        which does not record per-handler timing on either the bespoke or the
+        runtime side).
+        """
+
+    def on_render_emitted(
+        self,
+        view: Any,
+        *,
+        reason: str,
+        version: int,
+        event_name: Optional[str],
+        html: Optional[str] = None,
+        patch_count: Optional[int] = None,
+    ) -> None:
+        """Emit the per-render observability the WS bespoke render branch owned.
+
+        ADR-022 Iter 2 Phase 2.3b (#1907, THE FLIP). Called by ``_render_and_send``
+        whenever a SINGLE-VIEW event render falls into the full-HTML (no-patch)
+        branch — i.e. the runtime is about to emit an ``html_update`` instead of a
+        ``patch`` because there were no VDOM patches, the view forced full HTML, or
+        patch-compression discarded the patches. The WS bespoke handler emitted two
+        things here that the runtime ``_render_and_send`` did not:
+
+          1. The **DJE-053 ``logger.warning``** (websocket.py:4215-4237): a
+             user-facing diagnostic warning when an event with an established VDOM
+             baseline (``version > 1``) falls back to full HTML — it tells the
+             developer their event listeners + DOM state may be lost and points at
+             the dj-root / push_event / system-check remedies. This is the ONE
+             residual that is production-visible (not DEBUG-gated) and MUST SURVIVE
+             the flip (#1079). ``reason == "first_render"`` (``version <= 1``) emits
+             a DEBUG log instead, matching the WS ``else`` branch (websocket.py:4239).
+          2. The **``_emit_full_html_update`` signal** (websocket.py:4254 +
+             3962/4074/4091/4129): a transport-agnostic observability signal the
+             debug tooling subscribes to, carrying the reason
+             (``first_render`` / ``no_patches`` / ``force_full_html`` /
+             ``patch_compression``) + a context snapshot (for ``no_patches``).
+
+        ``reason`` is one of ``first_render`` / ``no_patches`` / ``force_full_html``
+        / ``patch_compression``. ``version`` is the RAW Rust render counter (NOT the
+        wire version) — the DJE-053 gate keys on ``version > 1`` to distinguish a
+        true first render from a diff failure, mirroring websocket.py:4215.
+
+        - WS: emits the DJE-053 warning + the ``_emit_full_html_update`` signal
+          verbatim (single source — the bespoke call sites are deleted by the flip).
+        - SSE: a no-op — SSE has no debug-panel signal subscriber and the legacy SSE
+          render path emitted neither, so this is WS-scoped (zero SSE behavior
+          change).
+
+        Best-effort by contract: implementations MUST swallow their own errors.
+        Not called on the patch branch (patches emitted → no full-HTML fallback) nor
+        the noop / skip-render branch (no render at all).
+        """
+
     def event_context(self, view: Any) -> "contextlib.AbstractAsyncContextManager[None]":
         """Async context manager wrapping a single event handler+render turn.
 
@@ -358,8 +431,9 @@ class WSConsumerTransport:
 
     def on_view_mounted(self, view_instance: Any) -> None:
         """No-op for WS: the consumer's own ``handle_mount`` already stamps the
-        WS-specific view attrs; the runtime path is only used for ``url_change``
-        on WS today, never mount (RUNTIME_OWNED_VERBS = {"url_change"})."""
+        WS-specific view attrs; the runtime path is used for ``url_change`` and
+        ``event`` on WS (RUNTIME_OWNED_VERBS = {"url_change", "event"} since #1907),
+        but NOT ``mount`` — so this hook never fires on the WS path today."""
         return None
 
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
@@ -374,6 +448,113 @@ class WSConsumerTransport:
         push = getattr(self._consumer, "_maybe_push_tt_event", None)
         if push is not None:
             await push(view, snapshot)
+
+    def on_handler_timing(self, view: Any, event_name: str, duration_ms: float) -> None:
+        """Forward handler timing to the global percentile registry (#1907).
+
+        Verbatim port of the WS bespoke view-path recording (websocket.py:3645):
+        ``record_handler_timing(view_class, event_name, handler_ms)``. Best-effort —
+        a telemetry failure must never disturb the event turn, so the import +
+        record is wrapped (mirroring the bespoke ``try/except Exception: pass``)."""
+        try:
+            from djust.observability.timings import record_handler_timing
+
+            record_handler_timing(view.__class__.__name__, event_name, duration_ms)
+        except Exception:  # noqa: BLE001 — telemetry must never break the event turn
+            pass
+
+    def on_render_emitted(
+        self,
+        view: Any,
+        *,
+        reason: str,
+        version: int,
+        event_name: Optional[str],
+        html: Optional[str] = None,
+        patch_count: Optional[int] = None,
+    ) -> None:
+        """Emit the DJE-053 warning + ``_emit_full_html_update`` signal (#1907).
+
+        Verbatim fold of the WS bespoke render-branch observability the flip moves
+        off ``_handle_event_inner``:
+
+          * DJE-053 ``logger.warning`` for the ``version > 1`` no-patch fallback
+            (websocket.py:4215-4237) — the production-visible developer diagnostic
+            that MUST SURVIVE the flip (#1079). ``version <= 1`` (a genuine first
+            render) logs at DEBUG instead, matching websocket.py:4239.
+          * The ``_emit_full_html_update`` signal carrying ``reason`` +
+            (for ``no_patches``) a context snapshot — the single source now that
+            the bespoke call sites (websocket.py:4074/4091/4129/4254) are deleted.
+
+        Best-effort: a telemetry/signal failure must never break the event turn."""
+        from .websocket import _emit_full_html_update
+
+        # The WS bespoke DJE-053 warning fires for EVERY no-patch html_update frame
+        # whose Rust version is > 1 — including a deliberate ``_force_full_html``
+        # (the bespoke ``force_full_html`` branch sets ``patches = None`` then falls
+        # into the SAME no-patches ``else`` arm that logs DJE-053, websocket.py:4087
+        # → 4215). Reproduce that exactly: the warning gate is "this frame carried no
+        # patches AND the view had an established VDOM baseline", i.e. NOT a
+        # first_render and NOT a patch-compression fallback (which had patches).
+        _emits_dje053 = reason in ("no_patches", "force_full_html") and version > 1
+        try:
+            if _emits_dje053:
+                template = getattr(view, "template_name", None) or "<inline template>"
+                logger.warning(
+                    "[djust] Event '%s' on %s fell back to full HTML update "
+                    "(DJE-053). Template: %s. "
+                    "VDOM diff returned no patches — this may "
+                    "cause event listeners and DOM state to be lost. "
+                    "Debugging steps: "
+                    "(1) Verify your template has <div dj-root> wrapping "
+                    "all dynamic content. "
+                    "(2) If this event only updates client-side state, use "
+                    "push_event + _skip_render = True instead. "
+                    "(3) Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                    "(4) Run 'python manage.py check --tag djust' to detect "
+                    "common configuration issues. "
+                    "See: https://djust.org/errors/DJE-053",
+                    sanitize_for_log(event_name or ""),
+                    view.__class__.__name__,
+                    sanitize_for_log(str(template)),
+                )
+            elif reason == "first_render":
+                logger.debug("[WebSocket] First render, sending full HTML update.")
+        except Exception:  # noqa: BLE001 — diagnostic logging must never break the turn
+            logger.debug("DJE-053 diagnostic emit failed", exc_info=True)
+
+        # Emit the transport-agnostic full-HTML-update signal. The signal subscriber
+        # is dev tooling; a failure here must never disturb the event turn. The
+        # ``html`` passed in is the rendered (pre-strip) full HTML so ``html_size`` +
+        # ``html_snippet`` match the WS bespoke emit (websocket.py:4254-4269). The
+        # ``no_patches`` context snapshot is intentionally None here: the WS bespoke
+        # path captured the ``get_context_data()`` dict it had in hand for free, but
+        # the runtime render path (``render_with_diff``) does not surface that dict
+        # to ``_render_and_send``, and re-deriving it would add a render-cost call on
+        # the no-patch path. The snapshot is DEBUG-tooling-only metadata (the signal's
+        # load-bearing fields are ``reason`` / ``version`` / ``event_name`` /
+        # ``html_size``), so dropping it costs no production behavior — tracked as a
+        # deferred follow-up. ``_previous_html`` is read-only (never assigned in
+        # production), so ``previous_html_snippet`` is inert on both paths.
+        try:
+            html_for_snapshot = getattr(view, "_previous_html", None)
+            _emit_full_html_update(
+                view,
+                reason,
+                event_name,
+                html,
+                version,
+                context_snapshot=None,
+                patch_count=patch_count,
+                html_snippet=(html[:500] if reason == "no_patches" and html else None),
+                previous_html_snippet=(
+                    html_for_snapshot[:500]
+                    if reason == "no_patches" and html_for_snapshot
+                    else None
+                ),
+            )
+        except Exception:  # noqa: BLE001 — observability signal must never break the turn
+            logger.debug("full-HTML-update signal emit failed", exc_info=True)
 
     @contextlib.asynccontextmanager
     async def event_context(self, view: Any) -> AsyncIterator[None]:
@@ -724,6 +905,34 @@ class SSESessionTransport:
         runtime still RECORDS the snapshot into the view's buffer (server-side
         time-travel state is transport-agnostic); only the incremental client
         push is WS-specific."""
+        return None
+
+    def on_handler_timing(self, view: Any, event_name: str, duration_ms: float) -> None:
+        """No-op for SSE (#1907).
+
+        The legacy SSE event path never recorded per-handler percentile timing —
+        ``record_handler_timing`` was a WS-only telemetry call. Forwarding it here
+        would be a behavior change for SSE (new telemetry rows), so it stays
+        WS-scoped: SSE drops the timing exactly as it always has."""
+        return None
+
+    def on_render_emitted(
+        self,
+        view: Any,
+        *,
+        reason: str,
+        version: int,
+        event_name: Optional[str],
+        html: Optional[str] = None,
+        patch_count: Optional[int] = None,
+    ) -> None:
+        """No-op for SSE (#1907).
+
+        SSE has no debug-panel ``full_html_update`` signal subscriber and the legacy
+        SSE render path emitted neither the DJE-053 warning nor the signal, so this
+        WS-scoped fold is a no-op on SSE — zero SSE behavior change. (The DJE-053
+        warning is a developer diagnostic for the WS VDOM-baseline-loss case; SSE's
+        own render path retains its existing logging.)"""
         return None
 
     @contextlib.asynccontextmanager
@@ -1360,11 +1569,34 @@ class ViewRuntime:
             await self.transport.send(noop_msg)
             return
 
+        # Time-travel record (v0.6.1 dev-only, ADR-022 Iter 2 Phase 2.2). Capture
+        # ``state_before`` BEFORE the security check so a PERMISSION-DENIED or
+        # VALIDATION-FAILED event STILL records a snapshot (with the error set +
+        # state_after == state_before) for the debug panel — mirrors WS
+        # ``_handle_event_inner`` (websocket.py:3541-3565), which did
+        # ``_tt_start`` → validate → on ``handler is None`` set
+        # ``_tt_error = "permission_denied"`` + ``_tt_end`` BEFORE returning.
+        # #1907 THE FLIP regression fix: the first flip ran ``record_event_start``
+        # AFTER the security check, so a denied handler on a time-travel view
+        # recorded ZERO entries (the bespoke recorded one with
+        # error="permission_denied"). ``record_event_start`` is a no-op unless the
+        # view opted into time-travel, so default views pay nothing.
+        from .time_travel import record_event_end, record_event_start
+
+        _tt_snapshot = record_event_start(self.view_instance, event_name, params, event_ref)
+        _tt_error: Optional[str] = None
+
         # Security
         handler = await _validate_event_security(
             self.transport, event_name, self.view_instance, self._rate_limiter
         )
         if handler is None:
+            # Permission denied / rate-limited / unsafe name — record the denial
+            # in the time-travel buffer (with error) before returning, matching the
+            # WS bespoke path (websocket.py:3550-3553).
+            _tt_error = "permission_denied"
+            record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(self.view_instance, _tt_snapshot)
             return
 
         # Parameter validation
@@ -1377,6 +1609,12 @@ class ViewRuntime:
                 "Runtime: parameter validation failed: %s",
                 sanitize_for_log(validation["error"]),
             )
+            # Record the validation failure in the time-travel buffer too (the WS
+            # bespoke path set ``_tt_error = "validation_failed"`` + ``_tt_end``
+            # before the error send, websocket.py:3563-3565).
+            _tt_error = "validation_failed"
+            record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
+            await self._push_tt_event(self.view_instance, _tt_snapshot)
             await self.transport.send_error(
                 validation["error"],
                 validation_details={
@@ -1404,24 +1642,13 @@ class ViewRuntime:
             k: id(v) for k, v in self.view_instance.__dict__.items() if k not in _fw_attrs
         }
 
-        # Time-travel record (v0.6.1 dev-only, ADR-022 Iter 2 Phase 2.2). Capture
-        # ``state_before`` BEFORE the handler so the snapshot pairs with
-        # ``record_event_end`` in the finally below — mirrors WS
-        # ``_handle_event_inner`` (websocket.py:3536-3635). ``record_event_start``
-        # is a no-op unless the view opted into time-travel, so default views pay
-        # nothing. The error string is captured so a raising handler still records
-        # a snapshot (with ``state_after``) for the debug panel.
-        from .time_travel import record_event_end, record_event_start
-
-        _tt_snapshot = record_event_start(self.view_instance, event_name, params, event_ref)
-        _tt_error: Optional[str] = None
-
         # Call handler. The time-travel record is finalized + pushed in the
         # ``finally`` for BOTH the success and the raising path (mirrors WS
         # ``_handle_event_inner`` websocket.py:3625-3635, which records in a
         # finally so permission-denied / raising handlers still appear in the
         # debug panel). On a raise we set ``_tt_error`` and return early after
         # sending the error frame.
+        _handler_start = time.perf_counter()
         try:
             try:
                 await _call_handler(handler, coerced_params if coerced_params else None)
@@ -1440,6 +1667,22 @@ class ViewRuntime:
         finally:
             record_event_end(self.view_instance, _tt_snapshot, error=_tt_error)
             await self._push_tt_event(self.view_instance, _tt_snapshot)
+
+        # Per-handler percentile telemetry (#1907, THE FLIP). The WS bespoke
+        # view-path recorded ``record_handler_timing`` right after a SUCCESSFUL
+        # handler call (websocket.py:3645) — a raising handler returns early above
+        # before this point, matching the WS path where the record line is
+        # unreachable on a raise. Folded behind ``on_handler_timing`` so it stays
+        # WS-scoped (SSE no-op). Called defensively (mirroring the existing
+        # ``on_view_mounted`` / ``on_event_recorded`` hook calls) so a partial test
+        # transport without the hook is a no-op. Best-effort by hook contract.
+        on_handler_timing = getattr(self.transport, "on_handler_timing", None)
+        if on_handler_timing is not None:
+            on_handler_timing(
+                self.view_instance,
+                event_name,
+                (time.perf_counter() - _handler_start) * 1000.0,
+            )
 
         # Waiter notification (ADR-002 Phase 1b): resolve any pending
         # wait_for_event waiters on the view whose event_name matches. Runs AFTER
@@ -1508,7 +1751,17 @@ class ViewRuntime:
 
         if skip_render:
             self.view_instance._skip_render = False
-            self._flush_push_events()
+            # Drain ALL queued side-effects BEFORE the noop, matching the WS
+            # bespoke skip-render path (websocket.py:3941 — ``await
+            # self._flush_all_pending()`` then ``_send_noop``). #1907 THE FLIP:
+            # the runtime skip-render branch previously only flushed push_events,
+            # so a state-unchanging handler that queued navigation (e.g.
+            # ``live_redirect()``) dropped its ``navigation`` frame on the WS path
+            # once events routed here (caught by
+            # ``test_live_redirect_from_state_unchanging_handler_emits_navigation_frame``).
+            # ``_flush_all_pending`` is the single 8-queue drain (#1646) and
+            # includes ``_flush_push_events``, so this also covers the push drain.
+            await self._flush_all_pending()
             # ref echo (#560) + source/event_name (#560 sequencing) on the noop
             # frame so the client can match the ack to its pending event (clear
             # _pendingEventRefs / stop the right loading state) and distinguish it
@@ -2582,12 +2835,14 @@ class ViewRuntime:
 
             # Patch compression (mirror sse.py legacy)
             PATCH_THRESHOLD = 100
+            _compressed_patch_count: Optional[int] = None
             if patch_list and len(patch_list) > PATCH_THRESHOLD:
                 patches_size = len(patches.encode("utf-8")) if isinstance(patches, str) else 0
                 html_size = len(html.encode("utf-8")) if html else 0
                 if patches_size and html_size < patches_size * 0.7:
                     if hasattr(self.view_instance, "_rust_view") and self.view_instance._rust_view:
                         self.view_instance._rust_view.reset()
+                    _compressed_patch_count = len(patch_list)
                     patch_list = None
 
             if patch_list is not None:
@@ -2611,6 +2866,21 @@ class ViewRuntime:
                 # Compression fallback — send full HTML.
                 html_stripped = self.view_instance._strip_comments_and_whitespace(html)
                 html_content = self.view_instance._extract_liveview_content(html_stripped)
+                # Observability fold (#1907): the WS bespoke path emitted a
+                # ``patch_compression`` ``_emit_full_html_update`` signal here
+                # (websocket.py:4129). DJE-053 does NOT fire on this branch (it had
+                # patches; compression chose HTML), matching the WS bespoke gate.
+                # Called defensively (partial test transports are a no-op).
+                _on_render = getattr(self.transport, "on_render_emitted", None)
+                if _on_render is not None:
+                    _on_render(
+                        self.view_instance,
+                        reason="patch_compression",
+                        version=version,
+                        event_name=event_name,
+                        html=html,
+                        patch_count=_compressed_patch_count,
+                    )
                 msg = {
                     "type": "html_update",
                     "html": html_content,
@@ -2633,6 +2903,28 @@ class ViewRuntime:
                 html = self.view_instance._strip_comments_and_whitespace(html)
             if html and hasattr(self.view_instance, "_extract_liveview_content"):
                 html = self.view_instance._extract_liveview_content(html)
+            # Observability fold (#1907): the WS bespoke path emitted the DJE-053
+            # warning + an ``_emit_full_html_update`` signal on this no-patch branch
+            # (websocket.py:4215-4269 / 4091 for force). ``force_full_html`` is the
+            # reason when the handler explicitly forced HTML (``patches`` was nulled
+            # by the ``force_html`` guard above); otherwise it is ``first_render``
+            # (version <= 1, a benign first render → DEBUG log) or ``no_patches``
+            # (version > 1, a real VDOM diff failure → the DJE-053 WARNING). The hook
+            # keys DJE-053 on ``reason == "no_patches" and version > 1``.
+            _reason = (
+                "force_full_html"
+                if force_html
+                else ("first_render" if version <= 1 else "no_patches")
+            )
+            _on_render = getattr(self.transport, "on_render_emitted", None)
+            if _on_render is not None:
+                _on_render(
+                    self.view_instance,
+                    reason=_reason,
+                    version=version,
+                    event_name=event_name,
+                    html=html,
+                )
             msg = {
                 "type": "html_update",
                 "html": html,
@@ -2666,17 +2958,27 @@ class ViewRuntime:
                 self.transport.send({"type": "push_event", "event": event_name, "payload": payload})
             )
 
-    def _flush_navigation(self) -> None:
-        """Drain navigation commands and send via the transport."""
+    async def _flush_navigation(self) -> None:
+        """Drain navigation commands and AWAIT the send via the transport.
+
+        Awaited (not fire-and-forget) to match the WS bespoke turn-end drain
+        (websocket.py ``_flush_navigation`` is ``async`` + awaited at
+        ``_flush_all_pending``). Before #1907 THE FLIP, WS events ran on the
+        bespoke path which awaited this flush WITHIN the event turn, so a
+        ``live_redirect()`` from a handler emitted its ``navigation`` frame before
+        ``handle_event`` returned. The runtime previously fired-and-forgot the send
+        (``asyncio.ensure_future``) — fine for SSE's async stream, but once WS
+        events route here that dropped the navigation frame from the event turn's
+        observable output (a real regression caught by
+        ``test_state_changing_handler_with_live_redirect_still_navigates``).
+        Awaiting restores WS parity (#1646: converge on the WS turn-end semantics)."""
         view = self.view_instance
         if not view or not hasattr(view, "_drain_navigation"):
             return
         for cmd in view._drain_navigation():
             action = cmd.get("type")
             payload = {k: v for k, v in cmd.items() if k != "type"}
-            asyncio.ensure_future(
-                self.transport.send({"type": "navigation", "action": action, **payload})
-            )
+            await self.transport.send({"type": "navigation", "action": action, **payload})
 
     async def _flush_deferred(self) -> None:
         """Run ``self.defer(...)`` callbacks. Errors are logged and
@@ -2829,7 +3131,7 @@ class ViewRuntime:
         await self._flush_page_metadata()
         await self._flush_pending_layout()
         await self._flush_deferred()
-        self._flush_navigation()
+        await self._flush_navigation()
         await self._flush_accessibility()
         await self._flush_i18n()
 
@@ -2846,10 +3148,15 @@ class ViewRuntime:
     # and the WS ``_dispatch_async_work`` / ``_run_async_work`` shape, but
     # push through ``self.transport.send`` so they are wire-blind.
     #
-    # Reached ONLY via ``dispatch_event`` (SSE today; WS uses its own
-    # consumer ``_dispatch_async_work`` and never routes ``event`` through
-    # the runtime — RUNTIME_OWNED_VERBS = {"url_change"}), so this is
-    # behavior-preserving for WS.
+    # Reached via ``dispatch_event`` for BOTH transports now: SSE since Iter 1,
+    # and WS since #1907 THE FLIP (RUNTIME_OWNED_VERBS = {"url_change", "event"}).
+    # A WS event's ``start_async`` / ``@background`` work therefore dispatches
+    # through THIS runtime helper (which pushes via ``self.transport.send`` →
+    # ``consumer.send_json``, wire-blind) rather than the consumer's own
+    # ``_dispatch_async_work``. The consumer helper is still reached by the
+    # WS-only non-event paths (ticks / server_push / db_notify / the bespoke
+    # deferred-activity re-dispatcher). The two are behaviorally equivalent for
+    # the event turn (both flush start_async + @background callbacks off-thread).
     # ------------------------------------------------------------------ #
 
     def _dispatch_async_work(self, event_name: Optional[str]) -> None:

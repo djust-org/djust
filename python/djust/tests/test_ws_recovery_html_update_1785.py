@@ -134,25 +134,38 @@ async def test_html_update_fallback_arms_recovery_so_request_html_succeeds():
 
 
 def test_html_update_branch_arms_recovery_source():
-    """Belt-and-suspenders source pin: ``handle_event`` must arm recovery on BOTH the
-    patches branch and the ``html_update`` (patches=None) fallback branch.
+    """Belt-and-suspenders source pin: the WS event render path must arm recovery on
+    BOTH the patches branch and the ``html_update`` (patches=None) fallback branch.
 
     If a future refactor drops the recovery arming from the html_update branch, this
     fails fast even if the integration test is skipped under some CI config.
 
-    #1817: both branches now arm via the shared ``_next_version_armed(html)`` helper
-    (which advances the wire version AND arms recovery in one step) rather than a bare
-    ``_arm_recovery(html)`` line. Count either form so the pin survives the refactor
-    while still enforcing that BOTH branches arm.
+    #1907 THE FLIP: WS events now route through ``ViewRuntime.dispatch_event``; the
+    recovery arming moved off the deleted ``_handle_event_inner``. The runtime's
+    ``_render_and_send`` computes the client-checked wire version ONCE — via
+    ``self.transport.next_client_version(html, version)`` (runtime.py) — and stamps it
+    on EVERY render branch (patch / compression-fallback html_update / no-diff
+    html_update). On WS that hook is ``WSConsumerTransport.next_client_version``, which
+    delegates to ``consumer._next_version_armed(html)`` (the #1817 helper that advances
+    the wire version AND arms recovery in one step). So a single shared call arms
+    recovery for both the patch and html_update branches — strictly better than the
+    old two-branch arming. Pin that shared structure here.
     """
-    import djust.websocket as ws_mod
+    import djust.runtime as rt_mod
 
-    # Finding #6: handle_event is a thin tenant-context wrapper; the arming
-    # branches live in _handle_event_inner now.
-    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
-    arms = source.count("self._arm_recovery(") + source.count("self._next_version_armed(")
-    assert arms >= 2, (
-        "handle_event must arm recovery in BOTH the patches branch and the html_update "
-        "fallback branch (#1785) — via self._next_version_armed(html) (#1817) or a bare "
-        f"self._arm_recovery(html). Found {arms} arming calls (need >= 2)."
+    # The runtime render path computes the wire version once via the transport hook,
+    # shared across all render branches.
+    render_src = inspect.getsource(rt_mod.ViewRuntime._render_and_send)
+    assert "self.transport.next_client_version(" in render_src, (
+        "ViewRuntime._render_and_send must stamp the client-checked wire version via "
+        "self.transport.next_client_version(html, version) so EVERY render branch "
+        "(patch + html_update) shares the same wire version + recovery arming (#1907 / #1788)."
+    )
+
+    # On WS that hook arms recovery via the #1817 helper (advance version + arm in one).
+    hook_src = inspect.getsource(rt_mod.WSConsumerTransport.next_client_version)
+    assert "_next_version_armed(" in hook_src, (
+        "WSConsumerTransport.next_client_version must delegate to "
+        "consumer._next_version_armed(html) so the WS event render path arms recovery "
+        "on BOTH the patches and html_update branches (#1785 / #1817 / #1907)."
     )

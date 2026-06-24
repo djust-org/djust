@@ -158,13 +158,21 @@ def test_turn_end_paths_use_single_flush_helper():
     the single ``_flush_all_pending`` helper rather than a hand-copied subset, so
     no path can silently drop queued navigation/accessibility/i18n. The original
     bug was that ~9 sites copied the 5-flush prelude and several omitted the
-    navigation/accessibility/i18n suffix."""
+    navigation/accessibility/i18n suffix.
+
+    #1907 THE FLIP: WS events now route through ``ViewRuntime.dispatch_event``
+    (the bespoke ``_handle_event_inner`` is deleted), so the EVENT turn-end flush
+    moved to the runtime. The WS-only turn-end paths that remain (tick / push /
+    notify / async / the deferred-activity re-dispatcher) are pinned here; the
+    runtime's event + skip-render turn-end paths are pinned in the runtime block
+    below — together they cover every turn-end drain (#1646)."""
+    import djust.runtime as rt_mod
     import djust.websocket as ws_mod
 
+    # WS-only turn-end paths (no runtime equivalent — server_push / db_notify are
+    # the WS tick/broadcast loops; _run_async_work + _dispatch_single_event run on
+    # the consumer).
     for name in (
-        # Finding #6: handle_event is a thin tenant-context wrapper; the flush
-        # logic lives in _handle_event_inner now.
-        "_handle_event_inner",
         "_dispatch_single_event",
         "server_push",
         "db_notify",
@@ -172,8 +180,20 @@ def test_turn_end_paths_use_single_flush_helper():
     ):
         src = inspect.getsource(getattr(ws_mod.LiveViewConsumer, name))
         assert "_flush_all_pending" in src, (
-            f"{name} must flush via _flush_all_pending so queued navigation/"
+            f"{name} (WS) must flush via _flush_all_pending so queued navigation/"
             f"i18n/accessibility commands aren't dropped (#1643)."
+        )
+
+    # Runtime turn-end paths (THE FLIP, #1907): the event RENDER drain lives in
+    # _render_and_send; the SKIP-RENDER (noop) drain lives in _dispatch_event_render
+    # — both must call _flush_all_pending so a state-unchanging handler that queues
+    # navigation (live_redirect) still emits its navigation frame (#1646 / #1643).
+    for name in ("_render_and_send", "_dispatch_event_render"):
+        src = inspect.getsource(getattr(rt_mod.ViewRuntime, name))
+        assert "_flush_all_pending" in src, (
+            f"{name} (runtime) must flush via _flush_all_pending so the WS event "
+            f"path (now routed through the runtime) doesn't drop queued "
+            f"navigation/i18n/accessibility commands (#1907 / #1643)."
         )
 
 

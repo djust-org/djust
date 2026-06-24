@@ -273,10 +273,13 @@ async def test_handle_event_save_block_persists_state_to_session():
 
 
 def test_save_block_present_in_handle_event_source():
-    """Pin the save block's presence in handle_event. If a future refactor
-    deletes or moves this block, this test fails fast.
+    """Pin the #1466 session-save block. #1907 THE FLIP moved WS events onto
+    ``ViewRuntime.dispatch_event``; the save block moved off the deleted
+    ``_handle_event_inner`` into the runtime's ``_persist_state_after_event``
+    (the body) gated by ``_dispatch_event_render`` (the opt-in + identity gate).
+    If a future refactor deletes or moves the block, this fails fast.
 
-    The block must:
+    The block (``_persist_state_after_event``) must:
     - Read ``target_view._djust_mount_request`` (preferred session source)
     - Fall back to ``self.scope.get("session")`` when no mount_request
     - Build ``save_view_key = f"liveview_{save_path}"``
@@ -284,15 +287,10 @@ def test_save_block_present_in_handle_event_source():
     - Call ``save_session.aset(...)`` then ``save_session.asave()``
     - Wrap everything in try/except so saves never break event handling
     """
-    import djust.websocket as ws_mod
+    import djust.runtime as rt_mod
 
-    # Finding #6: handle_event is a thin tenant-context wrapper; the save block
-    # lives in _handle_event_inner now.
-    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
-
-    # Critical markers from the inserted block. Use a whitespace-tolerant
-    # check so re-indentation (e.g. the Stage 11 fix that nested the block
-    # under `if target_view is self.view_instance:`) doesn't break the grep.
+    # The save BODY lives in the runtime's _persist_state_after_event (#1907).
+    source = inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event)
     source_collapsed = " ".join(source.split())
 
     assert '"_djust_mount_request"' in source
@@ -306,29 +304,28 @@ def test_save_block_present_in_handle_event_source():
     assert 'f"{save_view_key}__private"' in source
     # Components path:
     assert "_save_components_to_session" in source
-    # Save MUST be wrapped so failures don't break event handling.
-    assert "Failed to save LiveView state after WS event" in source
-    # Stage 11 (PR #1466): save block MUST be gated on top-level view
-    # identity so child LiveComponent events don't write to "liveview_/".
-    assert "target_view is self.view_instance" in source
-    # #1475 / 0.9.7rc3: save block MUST be gated on
-    # ``enable_state_snapshot`` so default views (which don't opt in)
-    # don't pay the per-event async-DB-write overhead. djustlive
-    # 0.9.7rc2 was bricked by unconditional saves leaving async work
-    # in flight across a host snapshot. The two gates are AND'd in the
-    # `if (...)` condition immediately above the save block.
-    assert '"enable_state_snapshot"' in source, (
-        "Save block must read enable_state_snapshot. PR #1466 omitted the "
-        "gate; #1475 added it because unconditional WS saves left async "
-        "session-backend I/O in flight, which a host snapshot captured "
-        "unrecoverably (djustlive 0.9.7rc2 production block)."
-    )
+    # Save MUST be wrapped so failures don't break event handling (runtime msg).
+    assert "Failed to save LiveView state after runtime event" in source
     # #1475: 150ms timeout MUST wrap the save body. Even opt-in views
     # need close-time tail latency bounded so a stalled session backend
     # can't recreate the snapshot-poisoning failure mode.
     assert "asyncio.wait_for" in source
     assert "timeout=0.150" in source
     assert "asyncio.TimeoutError" in source
+
+    # The GATE (top-level identity + enable_state_snapshot opt-in) lives at the
+    # call site in _dispatch_event_render. Stage 11 (PR #1466): gated on top-level
+    # view identity so child LiveComponent events don't write to "liveview_/".
+    # #1475 / 0.9.7rc3: gated on enable_state_snapshot so default views don't pay
+    # the per-event async-DB-write overhead (djustlive 0.9.7rc2 production block).
+    gate_src = inspect.getsource(rt_mod.ViewRuntime._dispatch_event_render)
+    assert "target_view is self.view_instance" in gate_src, (
+        "the runtime save call must be gated on top-level view identity (#1466)."
+    )
+    assert '"enable_state_snapshot"' in gate_src, (
+        "the runtime save call must be gated on enable_state_snapshot (#1475) so "
+        "default views don't pay per-event async-DB-write overhead."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -626,12 +623,16 @@ def test_save_block_gates_on_enable_state_snapshot_source():
     WebsocketCommunicator level. This test pins the gate's lexical
     presence so a future refactor that drops the keyword would fail
     fast even if the runtime test were skipped under some CI config.
-    """
-    import djust.websocket as ws_mod
 
-    # Finding #6: handle_event is a thin tenant-context wrapper; the gated save
-    # block lives in _handle_event_inner now.
-    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
+    #1907 THE FLIP: WS events route through ``ViewRuntime.dispatch_event``; the
+    gated save call lives at the ``_dispatch_event_render`` call site now (the body
+    is ``_persist_state_after_event``). The runtime docstring (runtime.py) notes the
+    identity clause is kept in the condition specifically so this AND-form gate
+    string matches the WS pin verbatim — drift between the two save gates goes red.
+    """
+    import djust.runtime as rt_mod
+
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_event_render)
     source_collapsed = " ".join(source.split())
 
     # The exact form of the gate: AND'd with the existing top-level
