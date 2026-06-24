@@ -44,6 +44,7 @@ This file is the ENFORCEMENT net for those two fixes plus the wire-version pin:
 """
 
 import ast
+import contextlib
 import pathlib
 import uuid
 from typing import Any, Dict, List, Optional
@@ -102,6 +103,13 @@ class MockTransport:
     def next_client_version(self, html: Optional[str], rust_version: int) -> int:
         self.version_calls.append((html, rust_version))
         return rust_version
+
+    @contextlib.asynccontextmanager
+    async def event_context(self, view: Any):
+        """No-op event context (#1899): the SSE-shape mock has no consumer lock to
+        borrow — the runtime wraps the event handler+render in
+        ``transport.event_context``, so the mock must provide one."""
+        yield
 
 
 # --------------------------------------------------------------------------- #
@@ -858,11 +866,16 @@ import inspect  # noqa: E402
 
 class TestEventSpineEnumeration:
     def test_dispatch_event_inner_has_all_five_grows(self):
-        """Enumerate the 5 Phase-2.0 grows present in
-        ``_dispatch_event_inner`` (the spine). A dropped grow trips this pin."""
+        """Enumerate the 5 Phase-2.0 grows present in the event spine. A dropped
+        grow trips this pin.
+
+        (#1899, ADR-022 Phase 2.3a: the spine body was extracted from
+        ``_dispatch_event_inner`` into ``_dispatch_event_render`` so the
+        handler+render runs inside ``transport.event_context``; the 5 grows moved
+        with the body, so this pin reads ``_dispatch_event_render``.)"""
         from djust.runtime import ViewRuntime
 
-        src = inspect.getsource(ViewRuntime._dispatch_event_inner)
+        src = inspect.getsource(ViewRuntime._dispatch_event_render)
 
         # 1. ref extraction (#560).
         assert 'data.get("ref")' in src, "event ref (#560) extraction missing from spine"

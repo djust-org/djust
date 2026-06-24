@@ -37,10 +37,11 @@ for all three verbs (mount / event / url_change).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import time
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, runtime_checkable
 
 from asgiref.sync import sync_to_async
 
@@ -183,6 +184,38 @@ class Transport(Protocol):
         break the event turn.
         """
 
+    def event_context(self, view: Any) -> "contextlib.AbstractAsyncContextManager[None]":
+        """Async context manager wrapping a single event handler+render turn.
+
+        Establishes (on enter) and tears down (in ``finally``) the per-event
+        serialization + observability scope that the WS bespoke event handler
+        owns today, so a WS event routed through the runtime in the Phase 2.3
+        final flip serializes against the WS-only tick / server-push / db-notify
+        render loops IDENTICALLY (the #560 version-interleave guard).
+
+        The runtime CANNOT own this lock: the render serialization is
+        consumer-owned (``LiveViewConsumer._render_lock`` websocket.py:619 +
+        ``_processing_user_event`` :622) and SHARED with the ``_run_tick`` /
+        ``server_push`` / ``db_notify`` loops. A runtime-local lock would be a
+        DIFFERENT object and could not serialize against ticks. So the WS
+        transport BORROWS the consumer's existing lock via this hook (it does
+        NOT create a new one); the dead runtime-local ``_render_lock`` is gone.
+
+        - WS: ``await consumer._render_lock.acquire()``; set
+          ``consumer._processing_user_event = True``; set the #1677 origin-channel
+          contextvar; start a ``PerformanceTracker`` + the SQL ``capture_for_event``
+          observability scope. On exit (``finally``): reset the origin token, clear
+          ``_processing_user_event``, RELEASE the borrowed lock, stop the SQL
+          capture + clear the tracker. Mirrors websocket.py:3393-3400 / 3150-3154
+          (enter) and websocket.py:4311-4313 (exit).
+        - SSE: a no-op async CM — SSE events run single-threaded off the HTTP
+          request, with no concurrent tick/push loop to serialize against.
+
+        The actor-event branch (added later in Phase 2.3a) runs OUTSIDE this
+        context, matching WS where the actor block holds no render lock.
+        """
+        return contextlib.nullcontext()
+
 
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
@@ -253,6 +286,76 @@ class WSConsumerTransport:
         push = getattr(self._consumer, "_maybe_push_tt_event", None)
         if push is not None:
             await push(view, snapshot)
+
+    @contextlib.asynccontextmanager
+    async def event_context(self, view: Any) -> AsyncIterator[None]:
+        """Borrow the consumer's render-lock + origin + observability for one event.
+
+        ENTER mirrors the WS bespoke ``_handle_event_inner`` setup VERBATIM:
+
+          * ``await consumer._render_lock.acquire()`` — the EXISTING consumer lock
+            (websocket.py:3393), NOT a new one, so the runtime serializes against
+            the WS-only ``_run_tick`` / ``server_push`` / ``db_notify`` render
+            loops (the #560 version-interleave guard);
+          * ``consumer._processing_user_event = True`` (websocket.py:3394) so ticks
+            yield priority to user interactions;
+          * set the #1677 origin-channel contextvar to the consumer's
+            ``channel_name`` (websocket.py:3398-3400) so push_to_view broadcasts
+            this handler emits skip this session's own redundant self-broadcast;
+          * start a ``PerformanceTracker`` + the SQL ``capture_for_event`` scope
+            (websocket.py:3150-3154 + 3469-3475) for observability.
+
+        EXIT (``finally``) mirrors websocket.py:4311-4313: reset the origin token,
+        clear ``_processing_user_event``, RELEASE the borrowed lock, then close the
+        SQL-capture scope + clear the tracker (the tracker is thread-local and the
+        WS path overwrites it on the next event, so clearing here avoids leaking it
+        across turns on the same worker thread).
+        """
+        consumer = self._consumer
+
+        # Acquire render lock to serialize with tick renders (#560). The lock is
+        # the consumer's EXISTING object (websocket.py:3393) — borrowed, never
+        # re-created — so it serializes against the WS tick/push/notify loops.
+        await consumer._render_lock.acquire()
+        consumer._processing_user_event = True
+
+        # Tag any push_to_view broadcasts this handler emits with the originating
+        # channel, so this same session skips its OWN redundant self-broadcast
+        # (#1677). Reset in the finally below (websocket.py:3398-3400 / 4311).
+        from djust import push as _djust_push
+
+        _origin_token = _djust_push.origin_channel.set(getattr(consumer, "channel_name", None))
+
+        # Observability: comprehensive performance tracking (websocket.py:3150-3154)
+        # + per-handler SQL-query capture (websocket.py:3469-3475). Both are
+        # transport-owned scopes the runtime borrows so a runtime-routed WS event
+        # populates the same debug/perf surfaces the bespoke path did.
+        from djust.observability.sql import capture_for_event as _dj_sql_capture
+        from djust.performance import PerformanceTracker
+
+        tracker = PerformanceTracker()
+        PerformanceTracker.set_current(tracker)
+
+        _sid = getattr(consumer, "session_id", None)
+        # ``capture_for_event`` reads ``handler_name`` at enter, but the runtime
+        # parses ``event_name`` INSIDE the wrapped body (after this CM has
+        # entered), so it isn't available here. The session_id + event_id tags
+        # are the load-bearing ones for query attribution; the per-event handler
+        # name is omitted (the WS bespoke path tags it because its SQL scope wraps
+        # only the handler call, where event_name is already known). See #1899.
+        sql_scope = _dj_sql_capture(
+            session_id=_sid,
+            event_id=f"{_sid}:{time.perf_counter()}" if _sid else None,
+        )
+        sql_scope.__enter__()
+        try:
+            yield
+        finally:
+            sql_scope.__exit__(None, None, None)
+            PerformanceTracker.set_current(None)
+            _djust_push.origin_channel.reset(_origin_token)
+            consumer._processing_user_event = False
+            consumer._render_lock.release()
 
 
 class SSESessionTransport:
@@ -341,6 +444,17 @@ class SSESessionTransport:
         push is WS-specific."""
         return None
 
+    @contextlib.asynccontextmanager
+    async def event_context(self, view: Any) -> AsyncIterator[None]:
+        """No-op event context for SSE.
+
+        SSE events run single-threaded off the HTTP ``/event/`` request — there
+        is no concurrent tick / server-push / db-notify render loop to serialize
+        against (those are WS-only), so SSE needs neither the render lock nor the
+        WS-specific observability/origin scope. Yields immediately, mirroring the
+        legacy ``_sse_handle_event`` (which never acquired a lock)."""
+        yield
+
 
 # ------------------------------------------------------------------ #
 # ViewRuntime
@@ -374,7 +488,12 @@ class ViewRuntime:
         self.view_instance: Optional[Any] = None
         self.scope = scope
         self._rate_limiter = rate_limiter or ConnectionRateLimiter()
-        self._render_lock = asyncio.Lock()
+        # NOTE: the runtime does NOT own a render lock. Render serialization is
+        # consumer-owned (``LiveViewConsumer._render_lock``, websocket.py:619) and
+        # SHARED with the WS-only tick / server-push / db-notify loops; a
+        # runtime-local lock would be a different object and could not serialize
+        # against those (#560). The transport borrows the consumer's existing lock
+        # via ``transport.event_context(view)`` (ADR-022 Iter 2 Phase 2.3a, #1899).
 
     # ------------------------------------------------------------------ #
     # Public properties
@@ -687,11 +806,33 @@ class ViewRuntime:
             await self._dispatch_event_inner(data)
 
     async def _dispatch_event_inner(self, data: Dict[str, Any]) -> None:
-        """Event dispatch body (see :meth:`dispatch_event` for the tenant wrapper)."""
+        """Event dispatch body (see :meth:`dispatch_event` for the tenant wrapper).
+
+        The handler + render runs inside ``transport.event_context(view)`` (ADR-022
+        Iter 2 Phase 2.3a, #1899): on WS this BORROWS the consumer's existing
+        ``_render_lock`` + sets ``_processing_user_event`` + the #1677 origin
+        channel + observability scopes, so a WS event routed here in the Phase
+        2.3b flip serializes against the WS-only tick / server-push / db-notify
+        render loops identically (the #560 guard). On SSE it is a no-op. The
+        view-mounted check runs OUTSIDE the context (we need a non-None view to
+        borrow its lock — matching WS, which acquires only after the view exists).
+
+        The actor-event branch (added later in Phase 2.3a) runs OUTSIDE this
+        context, matching WS where the actor block holds no render lock.
+        """
         if not self.view_instance:
             await self.transport.send_error("View not mounted. Please reload the page.")
             return
 
+        async with self.transport.event_context(self.view_instance):
+            await self._dispatch_event_render(data)
+
+    async def _dispatch_event_render(self, data: Dict[str, Any]) -> None:
+        """Parse, validate, run the handler, and render one event turn.
+
+        Always invoked inside ``transport.event_context`` (see
+        :meth:`_dispatch_event_inner`) so the render serialization + observability
+        scope is established for the whole handler+render turn."""
         event_name = data.get("event")
         params: Dict[str, Any] = dict(data.get("params") or {})
 

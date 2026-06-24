@@ -26,6 +26,7 @@ log-sanitization, embedded-error escape) is load-bearing.
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -112,6 +113,13 @@ class MockTransport:
 
     def on_view_mounted(self, view_instance: Any) -> None:
         pass
+
+    @contextlib.asynccontextmanager
+    async def event_context(self, view: Any):
+        """No-op event context (#1899): the mock has no consumer lock to borrow —
+        the runtime wraps the event handler+render in ``transport.event_context``,
+        so the mock must provide one."""
+        yield
 
 
 def _frame_types(transport: MockTransport) -> List[str]:
