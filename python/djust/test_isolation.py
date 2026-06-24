@@ -54,6 +54,24 @@ Globals reset (and why):
   — module-level ``itertools.count`` singletons. Resetting to a fresh
   ``count(1)`` makes auto-generated ``child_N`` / tooltip ids deterministic
   per test (no cross-test drift).
+- **Rust tag-handler registry** (theme + component ``ready()``-time handlers)
+  — the #1928 class. The process-global Rust tag-handler registry
+  (``crates/djust_templates/src/registry.rs``) is shared across an xdist
+  worker. ``DjustThemingConfig.ready()`` / ``DjustComponentsConfig.ready()``
+  register the ``{% theme_X %}`` / ``{% component %}`` etc. handlers — but
+  ``ready()`` runs only ONCE per process. Any test that calls
+  ``clear_tag_handlers()`` (the benchmark / unit tag-registry suites) and
+  restores only the ``djust.template_tags`` built-ins — or any test that
+  ``django.setup()``s without ``djust.theming`` — leaves those app-registered
+  handlers gone for the rest of the worker, so the 17 ``#1721`` theme-tag
+  tests 500 with "Unsupported template tag" under ``-n auto``. Re-asserting
+  both registrars BEFORE each test restores them regardless of which polluter
+  ran. Both registrars are idempotent (the theming one guards on
+  ``has_tag_handler``; the component one overwrites) and no-op without the
+  Rust extension, so the reset is cheap. This is the systemic cure for the
+  same class #1771 patched only in ``tests/unit/test_tag_registry.py`` — the
+  twin polluter in ``tests/benchmarks/test_tag_registry.py`` (parallel-path
+  drift, #1646) is covered here for the whole worker.
 
 Explicitly NOT reset (would be too aggressive / not a leak):
 
@@ -146,6 +164,45 @@ def _reset_id_counters() -> None:
         pass
 
 
+def _reset_rust_tag_handlers() -> None:
+    """Re-assert the theme + component ``ready()``-time Rust tag handlers (#1928).
+
+    The process-global Rust tag-handler registry is shared across an xdist
+    worker. ``DjustThemingConfig.ready()`` / ``DjustComponentsConfig.ready()``
+    register the ``{% theme_X %}`` / component tag handlers, but ``ready()``
+    runs only once per process. A test that calls ``clear_tag_handlers()`` and
+    restores only the ``djust.template_tags`` built-ins (the benchmark /
+    unit tag-registry suites), or that ``django.setup()``s without
+    ``djust.theming``, leaves those handlers gone for the rest of the worker —
+    so the #1721 theme-tag tests then 500 with "Unsupported template tag".
+
+    Re-running both registrars BEFORE each test restores the handlers no matter
+    which polluter ran. Both are idempotent (the theming one guards on
+    ``has_tag_handler``; the component one overwrites) and no-op when the Rust
+    extension is unavailable, so this is cheap. Same class #1771 patched only
+    in ``tests/unit/test_tag_registry.py``; this is the worker-wide cure.
+    """
+    try:
+        from djust.theming.rust_handlers import register_with_rust_engine as _theme
+    except Exception:  # noqa: BLE001 — theming is optional; never break the fixture.
+        _theme = None
+    if _theme is not None:
+        try:
+            _theme()
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        from djust.components.rust_handlers import register_with_rust_engine as _components
+    except Exception:  # noqa: BLE001 — components are optional; stay defensive.
+        _components = None
+    if _components is not None:
+        try:
+            _components()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def reset_djust_globals() -> None:
     """Reset every leak-prone djust process-global. Call BEFORE each test.
 
@@ -158,6 +215,7 @@ def reset_djust_globals() -> None:
     _reset_urlconf_caches()
     _reset_route_map_cache()
     _reset_id_counters()
+    _reset_rust_tag_handlers()
 
 
 __all__ = ["reset_djust_globals"]
