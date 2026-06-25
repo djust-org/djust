@@ -19,6 +19,31 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-4 — post-rc2 bug + tech-debt drain (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-06-25) of the follow-ups surfaced during the ADR-022
+convergence + ADR-023 type-enforcement arcs. The two priority:low bug-capture
+feature tracks (#1561 iter-B replay viewer, #1562 iter-C Redis/CLI/PII) are
+deliberately NOT in this bucket — they are deferred feature work, not backlog.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | ComponentMixin.update_component AttributeError (#1947) | calls `.update()` on a `LiveComponent` (no such method) → AttributeError on that path; route to the right method or guard | v1.1.0 |
+| **P1** | TutorialMixin setter mis-init (#1952) | `tutorial_total_steps` setter initializes `_tutorial_active_*`/`_skip_signal`/`_cancel_signal` that belong in `__init__` → AttributeError if read before the setter runs | v1.1.0 |
+| **P1** | `_run_async_work` stale captured view (#1940) | a detached `ensure_future` task captures `view = self.view_instance` then awaits; disconnect/re-mount can reassign it mid-await → stale-view write (#245/#1198 class); cancel-on-teardown or re-validate after await | v1.1.0 |
+| **P2** | browser-smoke cold-cache flake (#1943) | the blocking browser-smoke gate's fixed 30s `page.goto` times out when the Rust `djust_components` crate compiles cold → demo server not ready; replace with a server-readiness poll | v1.1.0 |
+| **P2** | worktree pre-push core.bare leak (#1938) | the worktree pre-push hook (full suite) leaks `core.bare=true` into the SHARED `.git/config`, corrupting the main checkout; find the leaking test/build + scope or guard it | v1.1.0 |
+
+**#1947 — ComponentMixin.update_component AttributeError.** Surfaced by the ADR-023 M4c mixins typing (mypy `[attr-defined]`). `update_component` does `component.update(**props)` after `isinstance(component, LiveComponent)`, but `LiveComponent` has no `update()` at runtime.
+
+**#1952 — TutorialMixin setter mis-init.** Surfaced by ADR-023 M4d. Four `_tutorial_active_*` attrs are initialized in the `tutorial_total_steps` setter rather than `__init__`, so a view that never invokes the setter (or reads them first) hits AttributeError / stale state.
+
+**#1940 — `_run_async_work` capture race.** Surfaced by the ADR-022 M3 review. Same TOCTOU class as #245/#1198, but pre-existing (both the old live-read and the new capture are buggy under the untested disconnect-mid-async-work race).
+
+**#1943 — browser-smoke cold-cache flake.** A `--no-verify`-class CI reliability bug: the blocking gate (#1869) intermittently red-bars unrelated PRs on a cold Rust cache.
+
+**#1938 — worktree pre-push core.bare leak.** Recurred during the type-ratchet (recovered ~6×); mitigated by `--no-verify` worktree pushes, but the leak source (a test/build setting `git config core.bare` from a worktree) is unpinned and dangerous (corrupts the primary working tree).
+
 ## v1.0.0 — Release Readiness (rc1 cut 2026-05-17)
 
 > Scoped 2026-05-17 by a `/pipeline-strategy` deep session — see `docs/strategy-sessions/2026-05-17-v1.0.0-readiness.md`.
