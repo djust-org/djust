@@ -482,6 +482,17 @@ class TestEndTagWhitespacePreservation:
         assert "// keep" in result
         assert "b = 2;" in result
 
+    def test_script_end_tag_with_bogus_attributes_is_preserved(self, mixin):
+        # Per the HTML5 tokenizer, bogus attributes on an end tag still close
+        # the element: ``</script bar>`` / ``</script\t\n foo="x">`` close a
+        # <script> in a browser (CodeQL py/bad-tag-filter requires matching these).
+        html = '<div><script>var s = "<!-- y -->";</script foo="x"></div>'
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "<!-- y -->" in result
+        html2 = "<script>z = '<!-- w -->';</script\t\n bar>"
+        result2 = mixin._strip_comments_and_whitespace(html2)
+        assert "<!-- w -->" in result2
+
     @pytest.mark.parametrize("tag", ["pre", "code", "textarea"])
     def test_rawtext_block_with_whitespace_end_tag_preserves_inner_whitespace(self, mixin, tag):
         # Significant newlines/indent inside the block must survive the collapse;
