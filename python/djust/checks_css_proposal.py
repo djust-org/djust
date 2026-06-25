@@ -9,12 +9,12 @@ These checks help developers avoid common CSS pitfalls:
 - C012: Manual client.js in base templates (double-loading)
 """
 
-from django.core.checks import Warning, Info
+from django.core.checks import CheckMessage, Warning, Info
 from django.conf import settings
 import os
 
 
-def check_css_framework_config(errors):
+def check_css_framework_config(errors: list[CheckMessage]) -> None:
     """Check CSS framework configuration and warn about common issues."""
 
     # C010 -- Tailwind CDN in production (scan base templates)
@@ -127,7 +127,7 @@ def check_css_framework_config(errors):
 
 
 # Development mode: Allow Tailwind CDN with a helpful info message
-def check_tailwind_cdn_in_dev(errors):
+def check_tailwind_cdn_in_dev(errors: list[CheckMessage]) -> None:
     """In development, inform about Tailwind CDN but don't warn."""
     if settings.DEBUG:
         template_dirs = _get_template_dirs()
@@ -168,9 +168,9 @@ def check_tailwind_cdn_in_dev(errors):
             )
 
 
-def _get_template_dirs():
+def _get_template_dirs() -> list[str]:
     """Helper to get all template directories."""
-    dirs = []
+    dirs: list[str] = []
     for backend in settings.TEMPLATES:
         for d in backend.get("DIRS", []):
             if os.path.isdir(d):
