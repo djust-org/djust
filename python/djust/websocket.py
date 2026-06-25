@@ -1150,6 +1150,32 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if inspect.iscoroutine(result):
                     result = await result
 
+            # Teardown identity-guard (#1940, #245/#1198 commit-or-rollback /
+            # identity-guard class). The callback above is the FIRST await in
+            # this detached ``ensure_future`` task; during that await window
+            # ``disconnect`` (-> ``view_instance = None``) and
+            # ``handle_live_redirect_mount`` / a re-mount (-> ``view_instance``
+            # reassigned to a NEW view) can run. ``view`` was captured BEFORE the
+            # await (line ~1122), so once control returns here the mount this
+            # task was rendering for may be gone or replaced. Re-validate that the
+            # consumer's LIVE view is still the captured one before any state
+            # mutation (``handle_async_result``) or render-send. If it changed,
+            # drop the completed work's re-render — every alternative is wrong:
+            # origin/main re-read ``self.view_instance`` LIVE (AttributeError on
+            # disconnect, or NEW-view contamination on re-mount); capturing and
+            # blindly writing the OLD view contaminates a torn-down/replaced view
+            # (#1939). The only correct action post-teardown is to stop. Cheap
+            # identity check; no new consumer state. NOTE: cancellation mid-thread
+            # cannot stop the worker (``sync_to_async`` runs in a thread pool), so
+            # an identity-guard here — not task cancellation — is the right cure.
+            if self.view_instance is not view:
+                logger.debug(
+                    "Async task %s completed after view teardown/re-mount; "
+                    "dropping stale re-render",
+                    task_name,
+                )
+                return
+
             # Check if task was cancelled during execution
             if hasattr(view, "_async_cancelled"):
                 if task_name in view._async_cancelled:
@@ -1214,6 +1240,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 task_name,
                 view.__class__.__name__ if view else "?",
             )
+
+            # Teardown identity-guard on the ERROR path too (#1940). A callback
+            # that RAISES jumps straight here, skipping the success-path guard
+            # above — but the same await-window teardown applies: the callback's
+            # own await(s) (or the ``sync_to_async`` dispatch) can interleave a
+            # disconnect / re-mount. The error-state ``handle_async_result`` +
+            # re-render below must not write against a torn-down / replaced view.
+            if self.view_instance is not view:
+                logger.debug(
+                    "Async task %s errored after view teardown/re-mount; "
+                    "dropping stale error re-render",
+                    task_name,
+                )
+                return
 
             # Call handle_async_result if defined (error path)
             if hasattr(view, "handle_async_result"):
