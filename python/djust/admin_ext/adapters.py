@@ -57,7 +57,7 @@ class AdminTailwindAdapter(TailwindAdapter):
     CHECKBOX_LABEL_CLASS = "ml-2 block text-sm text-gray-900"
 
     def render_field(
-        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs
+        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs: Any
     ) -> str:
         """
         Render field with admin-specific handling.
@@ -148,7 +148,7 @@ class AdminTailwindAdapter(TailwindAdapter):
         html += "</div>"
         return html
 
-    def render_errors(self, errors: List[str], **kwargs) -> str:
+    def render_errors(self, errors: List[str], **kwargs: Any) -> str:
         """Render errors with admin Tailwind styling."""
         html = ""
         for error in errors:
@@ -176,7 +176,7 @@ class AdminTailwindAdapter(TailwindAdapter):
         value: Any,
         errors: List[str],
         options: List[Dict[str, str]],
-        **kwargs,
+        **kwargs: Any,
     ) -> str:
         """Render ForeignKey as select dropdown."""
         has_errors = len(errors) > 0
@@ -202,7 +202,7 @@ class AdminTailwindAdapter(TailwindAdapter):
         value: Any,
         errors: List[str],
         options: List[Dict[str, str]],
-        **kwargs,
+        **kwargs: Any,
     ) -> str:
         """Render ManyToMany as multi-select."""
         has_errors = len(errors) > 0
@@ -236,7 +236,7 @@ class AdminTailwindAdapter(TailwindAdapter):
         value: Any,
         has_errors: bool,
         input_type: str,
-        **kwargs,
+        **kwargs: Any,
     ) -> str:
         """Render date/datetime/time input."""
         field_class = self.FIELD_CLASS_INVALID if has_errors else self.FIELD_CLASS
@@ -268,7 +268,7 @@ class AdminTailwindAdapter(TailwindAdapter):
         field_name: str,
         value: Any,
         has_errors: bool,
-        **kwargs,
+        **kwargs: Any,
     ) -> str:
         """Render standard input/textarea/select field."""
         field_class = self.get_field_class(field, has_errors)
@@ -319,7 +319,7 @@ class AdminTailwindAdapter(TailwindAdapter):
             return html
 
 
-def register_admin_adapters():
+def register_admin_adapters() -> None:
     """
     Register admin-specific framework adapters.
 

@@ -7,7 +7,7 @@ class DjustAdminConfig(AppConfig):
     verbose_name = "Djust Admin"
     default_auto_field = "django.db.models.BigAutoField"
 
-    def ready(self):
+    def ready(self) -> None:
         from . import autodiscover
 
         autodiscover()

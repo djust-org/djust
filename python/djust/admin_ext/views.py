@@ -7,13 +7,14 @@ Includes plugin-aware context (plugin_nav, widgets) for the admin shell.
 
 import logging
 from functools import wraps
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 from django.contrib.auth import authenticate, logout
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
-from django.http import HttpResponseRedirect
+from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.urls import reverse
 from djust import LiveView
 from djust.decorators import debounce, event_handler, state
@@ -24,10 +25,15 @@ logger = logging.getLogger(__name__)
 
 # Global registry for admin view configurations
 # This avoids storing non-serializable objects on view instances
-_VIEW_REGISTRY = {}
+_VIEW_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
 
-def register_admin_view(view_id, admin_site, model=None, model_admin=None):
+def register_admin_view(
+    view_id: str,
+    admin_site: Any,
+    model: Optional[Any] = None,
+    model_admin: Optional[Any] = None,
+) -> None:
     """Register admin config for a view."""
     _VIEW_REGISTRY[view_id] = {
         "admin_site": admin_site,
@@ -36,18 +42,20 @@ def register_admin_view(view_id, admin_site, model=None, model_admin=None):
     }
 
 
-def get_admin_config(view_id):
+def get_admin_config(view_id: Optional[str]) -> Dict[str, Any]:
     """Get admin config for a view."""
-    return _VIEW_REGISTRY.get(view_id, {})
+    return _VIEW_REGISTRY.get(view_id, {}) if view_id is not None else {}
 
 
-def _serialize_widget_slots(widget_classes, *, object_id=None):
+def _serialize_widget_slots(
+    widget_classes: List[Any], *, object_id: Optional[Any] = None
+) -> List[Dict[str, Any]]:
     """Convert a list of LiveView widget classes into the dict shape
     that ``_change_form_widgets.html`` / ``_change_list_widgets.html``
     expect. Each entry carries the dotted ``view_path`` so
     ``{% live_render %}`` can resolve it.
     """
-    out = []
+    out: List[Dict[str, Any]] = []
     for widget_cls in widget_classes:
         entry = {
             "view_path": f"{widget_cls.__module__}.{widget_cls.__name__}",
@@ -60,14 +68,14 @@ def _serialize_widget_slots(widget_classes, *, object_id=None):
     return out
 
 
-def admin_login_required(view_func):
+def admin_login_required(view_func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorator that checks if the user is authenticated and is staff.
     Redirects to admin login if not.
     """
 
     @wraps(view_func)
-    def wrapped_view(request, *args, **kwargs):
+    def wrapped_view(request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
         if (
             not request.user.is_authenticated
             or not request.user.is_active
@@ -87,11 +95,20 @@ def admin_login_required(view_func):
 
 
 class AdminBaseMixin:
-    """Base mixin for all admin views. Provides admin chrome context."""
+    """Base mixin for all admin views. Provides admin chrome context.
+
+    Always combined with ``LiveView`` (e.g. ``AdminIndexView(AdminBaseMixin,
+    LiveView)``); the ``request`` attribute is provided by that collaborator
+    and declared here only so the strict type-checker sees the contract.
+    """
+
+    # Provided by the co-mixed ``LiveView`` at mount time. Annotation-only
+    # (no runtime assignment) so it doesn't shadow LiveView's instance attr.
+    request: Any
 
     # View ID for registry lookup - set via as_view()
     # Prefixed with underscore so LiveView's get_context_data() skips it
-    _view_registry_id = None
+    _view_registry_id: Optional[str] = None
 
     # Declare djust-honored auth so the WebSocket/SSE mount path gates admin
     # views too. The ``admin_login_required`` wrapper below only protects the
@@ -101,37 +118,39 @@ class AdminBaseMixin:
     # staff-gated on the initial HTTP GET but open over WebSocket (finding #13).
     login_required = True
 
-    def check_permissions(self, request):
+    def check_permissions(self, request: HttpRequest) -> None:
         """Staff gate honored on every transport (HTTP, WebSocket, SSE)."""
         user = getattr(request, "user", None)
         if not (user is not None and user.is_authenticated and user.is_active and user.is_staff):
             raise PermissionDenied("Admin access requires an active staff account.")
 
     @classmethod
-    def as_view(cls, **initkwargs):
+    def as_view(cls, **initkwargs: Any) -> Callable[..., Any]:
         """Wrap the view with login required check."""
-        view = super().as_view(**initkwargs)
+        # ``super()`` resolves to the co-mixed ``LiveView`` at runtime, which
+        # provides ``as_view`` (the bare mixin's MRO doesn't declare it).
+        view = super().as_view(**initkwargs)  # type: ignore[misc]
         return admin_login_required(view)
 
     @property
-    def _admin_site(self):
+    def _admin_site(self) -> Any:
         """Admin site from registry."""
         config = get_admin_config(self._view_registry_id)
         return config.get("admin_site")
 
     @property
-    def _model(self):
+    def _model(self) -> Any:
         """Model class from registry."""
         config = get_admin_config(self._view_registry_id)
         return config.get("model")
 
     @property
-    def _model_admin(self):
+    def _model_admin(self) -> Any:
         """ModelAdmin from registry."""
         config = get_admin_config(self._view_registry_id)
         return config.get("model_admin")
 
-    def get_admin_context(self):
+    def get_admin_context(self) -> Dict[str, Any]:
         """Add common admin context (JSON serializable).
 
         All string values are forced through str() to resolve Django's
@@ -139,9 +158,13 @@ class AdminBaseMixin:
         serializable.
         """
         # Build a serializable app list
-        app_list = []
+        app_list: List[Dict[str, Any]] = []
         for app in self._admin_site.get_app_list(self.request):
-            app_data = {"name": str(app["name"]), "app_label": str(app["app_label"]), "models": []}
+            app_data: Dict[str, Any] = {
+                "name": str(app["name"]),
+                "app_label": str(app["app_label"]),
+                "models": [],
+            }
             for model in app["models"]:
                 app_data["models"].append(
                     {
@@ -187,10 +210,10 @@ class AdminIndexView(AdminBaseMixin, LiveView):
 
     template_name = "djust_admin/index.html"
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         # Collect widgets from all plugins (pre-rendered HTML)
         widgets = self._admin_site.get_widgets(self.request)
 
@@ -217,13 +240,13 @@ class ModelListView(AdminBaseMixin, LiveView):
     select_all = state(default=False)
     active_filters = state(default={})
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
         self.selected_ids = []
         self.select_all = False
         self.active_filters = {}
 
-    def get_queryset(self):
+    def get_queryset(self) -> Any:
         """Get filtered and sorted queryset."""
         qs = self._model_admin.get_queryset(self.request)
 
@@ -252,18 +275,18 @@ class ModelListView(AdminBaseMixin, LiveView):
 
         return qs
 
-    def get_page(self):
+    def get_page(self) -> Any:
         """Get the current page of results."""
         qs = self.get_queryset()
         paginator = Paginator(qs, self._model_admin.list_per_page)
         return paginator.get_page(self.current_page)
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         page = self.get_page()
         list_display = self._model_admin.get_list_display(self.request)
 
         # Build column headers
-        columns = []
+        columns: List[Dict[str, Any]] = []
         for field_name in list_display:
             columns.append(
                 {
@@ -274,9 +297,9 @@ class ModelListView(AdminBaseMixin, LiveView):
             )
 
         # Build rows
-        rows = []
+        rows: List[Dict[str, Any]] = []
         for obj in page:
-            row = {
+            row: Dict[str, Any] = {
                 "pk": obj.pk,
                 "selected": obj.pk in self.selected_ids,
                 "edit_url": reverse(
@@ -308,12 +331,12 @@ class ModelListView(AdminBaseMixin, LiveView):
         ]
 
         # Build filter options
-        filters = []
+        filters: List[Dict[str, Any]] = []
         list_filter = getattr(self._model_admin, "list_filter", [])
         for filter_field in list_filter:
             try:
                 field = self._model._meta.get_field(filter_field)
-                filter_data = {
+                filter_data: Dict[str, Any] = {
                     "name": filter_field,
                     "label": field.verbose_name.title()
                     if hasattr(field, "verbose_name")
@@ -380,7 +403,7 @@ class ModelListView(AdminBaseMixin, LiveView):
 
     @event_handler
     @debounce(300)
-    def search(self, query: str):
+    def search(self, query: str) -> None:
         """Handle search input with debounce."""
         self.search_query = query
         self.current_page = 1
@@ -388,7 +411,7 @@ class ModelListView(AdminBaseMixin, LiveView):
         self.select_all = False
 
     @event_handler
-    def sort_by(self, field: str):
+    def sort_by(self, field: str) -> None:
         """Handle column sorting."""
         if self.ordering == field:
             self.ordering = f"-{field}"
@@ -399,14 +422,14 @@ class ModelListView(AdminBaseMixin, LiveView):
         self.current_page = 1
 
     @event_handler
-    def go_to_page(self, page: int):
+    def go_to_page(self, page: int) -> None:
         """Handle pagination."""
         self.current_page = page
         self.selected_ids = []
         self.select_all = False
 
     @event_handler
-    def toggle_select(self, pk: int):
+    def toggle_select(self, pk: int) -> None:
         """Toggle selection of a single row."""
         if pk in self.selected_ids:
             self.selected_ids = [x for x in self.selected_ids if x != pk]
@@ -415,7 +438,7 @@ class ModelListView(AdminBaseMixin, LiveView):
         self.select_all = False
 
     @event_handler
-    def toggle_select_all(self):
+    def toggle_select_all(self) -> None:
         """Toggle selection of all visible rows."""
         if self.select_all:
             self.selected_ids = []
@@ -426,7 +449,7 @@ class ModelListView(AdminBaseMixin, LiveView):
             self.select_all = True
 
     @event_handler
-    def run_action(self, action_name: str):
+    def run_action(self, action_name: str) -> Any:
         """Execute a bulk action on selected items.
 
         Enforces ``allowed_permissions`` metadata stamped by decorators
@@ -482,7 +505,7 @@ class ModelListView(AdminBaseMixin, LiveView):
         return result
 
     @event_handler
-    def apply_filter(self, field: str, value: str):
+    def apply_filter(self, field: str, value: str) -> None:
         """Apply a filter to the list."""
         if value:
             self.active_filters = {**self.active_filters, field: value}
@@ -497,7 +520,7 @@ class ModelListView(AdminBaseMixin, LiveView):
         self.select_all = False
 
     @event_handler
-    def clear_filters(self):
+    def clear_filters(self) -> None:
         """Clear all active filters."""
         self.active_filters = {}
         self.current_page = 1
@@ -516,17 +539,17 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
     save_success = state(default=False)
     redirect_url = state(default=None)
 
-    def mount(self, request, object_id=None, **kwargs):
+    def mount(self, request: HttpRequest, object_id: Optional[Any] = None, **kwargs: Any) -> None:
         super().mount(request, object_id=object_id, **kwargs)
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         readonly_fields = self._model_admin.get_readonly_fields(self.request, self.object)
 
-        fieldsets_data = []
+        fieldsets_data: List[Dict[str, Any]] = []
         for fieldset_name, fieldset_options in self._model_admin.get_fieldsets(
             self.request, self.object
         ):
-            fields_data = []
+            fields_data: List[Dict[str, Any]] = []
             for field_name in fieldset_options.get("fields", []):
                 if self.form_instance and field_name in self.form_instance.fields:
                     field_info = self.get_field_info(field_name)
@@ -592,20 +615,20 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
         }
 
     @event_handler
-    def update_field(self, field: str, value):
+    def update_field(self, field: str, value: Any) -> None:
         """Handle field value change."""
         self.save_success = False
         self.validate_field(field_name=field, value=value)
 
-    def form_valid(self, form):
+    def form_valid(self, form: Any) -> None:
         self.object = form.save()
         self.save_success = True
 
-    def form_invalid(self, form):
+    def form_invalid(self, form: Any) -> None:
         self.save_success = False
 
     @event_handler
-    def save(self, redirect=True):
+    def save(self, redirect: bool = True) -> None:
         """Save the form."""
         self.is_saving = True
         self.save_success = False
@@ -621,12 +644,12 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
         self.is_saving = False
 
     @event_handler
-    def save_and_continue(self):
+    def save_and_continue(self) -> None:
         """Save and stay on the same page."""
         self.save(redirect=False)
 
     @event_handler
-    def save_and_add_another(self):
+    def save_and_add_another(self) -> None:
         """Save and redirect to add another."""
         self.save(redirect=False)
         if self.save_success:
@@ -638,7 +661,9 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 class ModelCreateView(ModelDetailView):
     """Model create view - reuses detail view with no object."""
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: HttpRequest, object_id: Optional[Any] = None, **kwargs: Any) -> None:
+        # Create view always starts with no object regardless of any
+        # incoming object_id (LSP-compatible with ModelDetailView.mount).
         super().mount(request, object_id=None, **kwargs)
 
 
@@ -651,13 +676,13 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
     is_deleting = state(default=False)
     redirect_url = state(default=None)
 
-    def mount(self, request, object_id=None, **kwargs):
+    def mount(self, request: HttpRequest, object_id: Optional[Any] = None, **kwargs: Any) -> None:
         self.request = request
         self.object_id = object_id
         self.object = self._model.objects.get(pk=object_id)
         self.object_str = str(self.object)
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         return {
             **self.get_admin_context(),
             "title": f"Delete {self.object_str}",
@@ -670,7 +695,7 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
         }
 
     @event_handler
-    def confirm_delete(self):
+    def confirm_delete(self) -> None:
         """Confirm and execute deletion."""
         self.is_deleting = True
         self.object.delete()
@@ -685,22 +710,22 @@ class LoginView(LiveView):
 
     template_name = "djust_admin/login.html"
 
-    _view_registry_id = None
+    _view_registry_id: Optional[str] = None
 
     username = state(default="")
     password = state(default="")
     error = state(default="")
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
         self.next_url = request.GET.get("next", "")
 
     @property
-    def _admin_site(self):
+    def _admin_site(self) -> Any:
         config = get_admin_config(self._view_registry_id)
         return config.get("admin_site")
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         return {
             "site_header": self._admin_site.site_header
             if self._admin_site
@@ -711,17 +736,17 @@ class LoginView(LiveView):
         }
 
     @event_handler
-    def update_username(self, value: str, field: str = None):
+    def update_username(self, value: str, field: Optional[str] = None) -> None:
         self.username = value
         self.error = ""
 
     @event_handler
-    def update_password(self, value: str, field: str = None):
+    def update_password(self, value: str, field: Optional[str] = None) -> None:
         self.password = value
         self.error = ""
 
     @event_handler
-    def do_login(self, **kwargs):
+    def do_login(self, **kwargs: Any) -> None:
         """Attempt to log in the user."""
         from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY
 
@@ -759,18 +784,18 @@ class LogoutView(LiveView):
 
     template_name = "djust_admin/logout.html"
 
-    _view_registry_id = None
+    _view_registry_id: Optional[str] = None
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
         logout(request)
 
     @property
-    def _admin_site(self):
+    def _admin_site(self) -> Any:
         config = get_admin_config(self._view_registry_id)
         return config.get("admin_site")
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         return {
             "site_header": self._admin_site.site_header
             if self._admin_site

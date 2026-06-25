@@ -3,9 +3,12 @@ Decorators for djust admin_ext.
 """
 
 from functools import wraps
+from typing import Any, Callable, Optional, Sequence, Type
 
 
-def register(*models, site=None):
+def register(
+    *models: Type[Any], site: Optional[Any] = None
+) -> Callable[[Type[Any]], Type[Any]]:
     """
     Register a model or models with the admin site.
 
@@ -35,7 +38,7 @@ def register(*models, site=None):
     """
     from . import site as default_site
 
-    def decorator(admin_class):
+    def decorator(admin_class: Type[Any]) -> Type[Any]:
         admin_site = site or default_site
 
         if not models:
@@ -49,7 +52,9 @@ def register(*models, site=None):
     return decorator
 
 
-def action(description=None, permissions=None):
+def action(
+    description: Optional[str] = None, permissions: Optional[Sequence[str]] = None
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator for admin actions.
 
@@ -63,19 +68,24 @@ def action(description=None, permissions=None):
             queryset.update(archived=True)
     """
 
-    def decorator(func):
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             return func(*args, **kwargs)
 
-        wrapper.short_description = description or func.__name__.replace("_", " ").title()
-        wrapper.allowed_permissions = permissions or []
+        wrapper.short_description = description or func.__name__.replace("_", " ").title()  # type: ignore[attr-defined]
+        wrapper.allowed_permissions = permissions or []  # type: ignore[attr-defined]
         return wrapper
 
     return decorator
 
 
-def display(description=None, ordering=None, boolean=False, empty_value="-"):
+def display(
+    description: Optional[str] = None,
+    ordering: Optional[str] = None,
+    boolean: bool = False,
+    empty_value: str = "-",
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator for custom display methods in list_display.
 
@@ -89,18 +99,18 @@ def display(description=None, ordering=None, boolean=False, empty_value="-"):
             return obj.status == 'active'
     """
 
-    def decorator(func):
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             result = func(*args, **kwargs)
             if result is None:
                 return empty_value
             return result
 
-        wrapper.short_description = description or func.__name__.replace("_", " ").title()
-        wrapper.admin_order_field = ordering
-        wrapper.boolean = boolean
-        wrapper.empty_value_display = empty_value
+        wrapper.short_description = description or func.__name__.replace("_", " ").title()  # type: ignore[attr-defined]
+        wrapper.admin_order_field = ordering  # type: ignore[attr-defined]
+        wrapper.boolean = boolean  # type: ignore[attr-defined]
+        wrapper.empty_value_display = empty_value  # type: ignore[attr-defined]
         return wrapper
 
     return decorator

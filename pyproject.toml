@@ -658,6 +658,38 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# admin_ext/ subpackage (ADR-023 M4c, part 2) — the Django-admin integration:
+# the DjustAdminSite + DjustModelAdmin config, the plugin system (AdminPlugin /
+# AdminPage / AdminWidget / NavItem), the LiveView-based admin views (list /
+# detail / create / delete / login / logout), the AdminFormMixin (FK/M2M/date
+# field handling), the bulk-action progress widget + decorator, the admin
+# CSS-framework adapter, the register/action/display decorators, the AppConfig,
+# the autodiscover __init__, and the admin template-tag helpers. Excludes
+# admin_ext/tests/, which stays on the lenient global default. Real type bugs
+# fixed to clean this island: implicit-Optional defaults in LoginView field
+# handlers, an LSP-incompatible ModelCreateView.mount override, and several
+# Any-leak returns narrowed at the Django-untyped boundary (str()/bool()).
+[[tool.mypy.overrides]]
+module = [
+    "djust.admin_ext.__init__",
+    "djust.admin_ext.adapters",
+    "djust.admin_ext.apps",
+    "djust.admin_ext.components.__init__",
+    "djust.admin_ext.decorators",
+    "djust.admin_ext.forms",
+    "djust.admin_ext.options",
+    "djust.admin_ext.plugins",
+    "djust.admin_ext.progress",
+    "djust.admin_ext.sites",
+    "djust.admin_ext.templatetags.__init__",
+    "djust.admin_ext.templatetags.djust_admin_tags",
+    "djust.admin_ext.views",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework

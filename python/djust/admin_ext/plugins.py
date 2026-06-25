@@ -30,19 +30,23 @@ Example usage (in your_package/djust_admin.py):
     site.register_plugin(MyPlugin)
 """
 
+from typing import Any, Dict, List, Optional, Type
+
+from django.http import HttpRequest
+
 
 class NavItem:
     """Sidebar navigation entry."""
 
     def __init__(
         self,
-        label,
-        url_name,
-        icon=None,
-        order=0,
-        section=None,
-        permission=None,
-    ):
+        label: str,
+        url_name: str,
+        icon: Optional[str] = None,
+        order: int = 0,
+        section: Optional[str] = None,
+        permission: Optional[str] = None,
+    ) -> None:
         self.label = label
         self.url_name = url_name
         self.icon = icon
@@ -50,13 +54,13 @@ class NavItem:
         self.section = section
         self.permission = permission
 
-    def has_permission(self, request):
+    def has_permission(self, request: HttpRequest) -> bool:
         """Check if the user has permission to see this nav item."""
         if self.permission is None:
             return True
-        return request.user.has_perm(self.permission)
+        return bool(request.user.has_perm(self.permission))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"NavItem(label={self.label!r}, url_name={self.url_name!r})"
 
 
@@ -69,16 +73,16 @@ class AdminPage:
 
     def __init__(
         self,
-        url_path,
-        url_name,
-        view_class,
-        label=None,
-        icon=None,
-        nav_section=None,
-        nav_order=0,
-        permission=None,
-        show_in_nav=True,
-    ):
+        url_path: str,
+        url_name: str,
+        view_class: Type[Any],
+        label: Optional[str] = None,
+        icon: Optional[str] = None,
+        nav_section: Optional[str] = None,
+        nav_order: int = 0,
+        permission: Optional[str] = None,
+        show_in_nav: bool = True,
+    ) -> None:
         self.url_path = url_path.strip("/")
         self.url_name = url_name
         self.view_class = view_class
@@ -89,7 +93,7 @@ class AdminPage:
         self.permission = permission
         self.show_in_nav = show_in_nav
 
-    def get_nav_item(self):
+    def get_nav_item(self) -> Optional[NavItem]:
         """Generate a NavItem for this page."""
         if not self.show_in_nav:
             return None
@@ -102,7 +106,7 @@ class AdminPage:
             permission=self.permission,
         )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"AdminPage(url_path={self.url_path!r}, url_name={self.url_name!r})"
 
 
@@ -113,24 +117,24 @@ class AdminWidget:
     Subclass and override get_context() to provide data for your template.
     """
 
-    widget_id = None
+    widget_id: Optional[str] = None
     label = ""
-    template_name = None
+    template_name: Optional[str] = None
     order = 0
     size = "md"  # "sm", "md", or "lg"
-    permission = None
+    permission: Optional[str] = None
 
-    def get_context(self, request):
+    def get_context(self, request: HttpRequest) -> Dict[str, Any]:
         """Return context dict for the widget template. Override in subclasses."""
         return {}
 
-    def has_permission(self, request):
+    def has_permission(self, request: HttpRequest) -> bool:
         """Check if the user has permission to see this widget."""
         if self.permission is None:
             return True
-        return request.user.has_perm(self.permission)
+        return bool(request.user.has_perm(self.permission))
 
-    def render(self, request):
+    def render(self, request: HttpRequest) -> str:
         """Render the widget to HTML using Django's template engine."""
         from django.template.loader import render_to_string
 
@@ -138,9 +142,9 @@ class AdminWidget:
             return ""
         context = self.get_context(request)
         context["widget"] = self
-        return render_to_string(self.template_name, context, request=request)
+        return str(render_to_string(self.template_name, context, request=request))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"AdminWidget(widget_id={self.widget_id!r}, label={self.label!r})"
 
 
@@ -152,34 +156,34 @@ class AdminPlugin:
     Register via site.register_plugin(MyPlugin).
     """
 
-    name = None  # Unique identifier (required)
-    verbose_name = None  # Human-readable name
+    name: Optional[str] = None  # Unique identifier (required)
+    verbose_name: Optional[str] = None  # Human-readable name
 
-    def get_pages(self):
+    def get_pages(self) -> List[AdminPage]:
         """Return list of AdminPage instances. Override in subclasses."""
         return []
 
-    def get_widgets(self):
+    def get_widgets(self) -> List[AdminWidget]:
         """Return list of AdminWidget instances. Override in subclasses."""
         return []
 
-    def get_nav_items(self):
+    def get_nav_items(self) -> List[NavItem]:
         """
         Return list of NavItem instances for the sidebar.
 
         By default, auto-generates NavItems from pages that have show_in_nav=True.
         Override for custom nav items.
         """
-        items = []
+        items: List[NavItem] = []
         for page in self.get_pages():
             nav_item = page.get_nav_item()
             if nav_item is not None:
                 items.append(nav_item)
         return items
 
-    def ready(self):
+    def ready(self) -> None:
         """Called when the plugin is registered. Override for setup logic."""
         pass
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"AdminPlugin(name={self.name!r})"
