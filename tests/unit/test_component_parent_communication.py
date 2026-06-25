@@ -342,6 +342,109 @@ class TestComponentPropUpdates:
         assert view.config.count == 10
 
 
+class TestUpdateComponentNoUpdateOverride:
+    """Regression tests for #1947.
+
+    ``ComponentMixin.update_component`` calls ``component.update(**props)`` on a
+    ``LiveComponent``. ``LiveComponent`` (subclass of ``ContextProviderMixin``,
+    NOT ``Component``) historically had no ``update()`` method, so a LiveComponent
+    that did not define its own ``update()`` raised ``AttributeError`` when the
+    parent called ``update_component()``. The fix gives ``LiveComponent`` a base
+    ``update()`` that sets each prop as an attribute (mirroring ``Component.update``).
+    """
+
+    def test_update_component_bare_livecomponent_no_attribute_error(self, rf):
+        """A LiveComponent WITHOUT its own update() must update via the base update().
+
+        Pre-fix: raises AttributeError ('... object has no attribute update').
+        Post-fix: props are set as attributes.
+        """
+
+        class BareComponent(LiveComponent):
+            """A LiveComponent that does NOT override update()."""
+
+            template = "<div>{{ label }}</div>"
+
+            def mount(self, label="initial"):
+                self.label = label
+
+            def get_context_data(self):
+                return {"label": self.label}
+
+        class BareView(LiveView):
+            template = "{{ widget.render }}"
+
+            def mount(self, request, **kwargs):
+                self.widget = BareComponent(label="initial")
+
+        view = BareView()
+        request = rf.get("/")
+        view.mount(request)
+
+        # Register the component (populates view._components).
+        view.get_context_data()
+
+        assert view.widget.label == "initial"
+
+        # This is the bug path: bare LiveComponent through update_component().
+        view.update_component(view.widget.component_id, label="updated")
+
+        assert view.widget.label == "updated"
+
+    def test_base_update_returns_self_for_chaining(self, rf):
+        """The base LiveComponent.update() returns self (parity with Component.update)."""
+
+        class ChainComponent(LiveComponent):
+            template = "<div>{{ count }}</div>"
+
+            def mount(self, count=0):
+                self.count = count
+
+            def get_context_data(self):
+                return {"count": self.count}
+
+        comp = ChainComponent(count=1)
+        result = comp.update(count=5)
+        assert result is comp
+        assert comp.count == 5
+
+    def test_subclass_update_override_still_wins(self, rf):
+        """A subclass that overrides update() keeps its custom behavior (no regression)."""
+
+        class CustomUpdateComponent(LiveComponent):
+            template = "<div>{{ value }}</div>"
+
+            def mount(self, value=0):
+                self.value = value
+                self.update_calls = 0
+
+            def update(self, value=None, **props):
+                # Custom: double the supplied value, track calls.
+                self.update_calls += 1
+                if value is not None:
+                    self.value = value * 2
+
+            def get_context_data(self):
+                return {"value": self.value}
+
+        class CustomView(LiveView):
+            template = "{{ widget.render }}"
+
+            def mount(self, request, **kwargs):
+                self.widget = CustomUpdateComponent(value=3)
+
+        view = CustomView()
+        request = rf.get("/")
+        view.mount(request)
+        view.get_context_data()
+
+        view.update_component(view.widget.component_id, value=10)
+
+        # Custom override ran (doubled), not the base attribute-set.
+        assert view.widget.value == 20
+        assert view.widget.update_calls == 1
+
+
 class TestDefaultHandleComponentEvent:
     """Test default handle_component_event behavior."""
 
