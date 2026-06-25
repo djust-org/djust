@@ -355,6 +355,59 @@ issue or be explicitly closed with a reason.
 | 313 | Per-model `djust_serializable_fields` allowlist can re-expose the sensitive-field floor (`password`/`is_superuser`/`is_staff`) — allowlist wins over `_ALWAYS_EXCLUDED_FIELDS` | PR #1867 / v1.0.8-1 retro | #1868 | Open | Surfaced by writing SECURE_DEFAULTS.md (`serialization.py:362`). Doc now states accurate precedence + WARNING; code-hardening question (make floor unconditional?) tracked here. |
 | 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Closed | **Resolved (PR for #1869):** `playwright-tests` was `success` on the last 3 runner runs (precondition met per #1534), so `test_browser_smoke.py` was carved into its own BLOCKING `browser-smoke` CI job (no `continue-on-error`, mirrors the `demo-checks` pattern #1708/#1713) and wired into the `test-summary` AND-condition; the rest of the playwright suite stays non-blocking (the full suite can be flaky). #1848 was code-fixed by PR #1871 (re-execute classic `<script>` on the #1610 mount morph), so the inline-script known-xfail was flipped to a HARD regression assertion. |
 | 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Closed | **Resolved in v1.1.0-1 (PR #1881):** channel-layer isolation (`backends.clear()`) + deterministic ping/pong openness probe (replaced the wall-clock `receive_nothing`); the systemic test-isolation fixture (#1884) retired the shared-process-global flaky class. |
+| 316 | Propagate the "cap concurrent worktree implementer agents at ~3" rule into the pipeline-run / pipeline-drain skill prompts | v1.1.0-4 retro | — | OUT-OF-REPO | Skill prompts live in `~/.claude/skills/{pipeline-run,pipeline-drain}/SKILL.md` (gitignored, not in this repo). In-repo half DONE: CLAUDE.md "Process canonicalizations from v1.1.0-4 retro arc" rule 2. Trigger: 5 concurrent worktree fixers tripped a transient server-side throttle; ≤3 concurrent prevents it, serial resumption recovers cleanly. |
+
+## v1.1.0-4 — post-convergence open-issue drain (PRs #1961–#1965)
+
+**Date**: 2026-06-25
+**Scope**: Drained the 5 open follow-up issues surfaced by the ADR-022 ViewRuntime convergence + ADR-023 type-enforcement arcs — 4 real bugs (#1947 `LiveComponent.update`, #1952 `TutorialMixin` setter-init, #1940 `_run_async_work` race, #1943 browser-smoke flake) + 1 external-cause investigation (#1938 `core.bare` leak). The 2 priority:low bug-capture feature tracks (#1561/#1562) were deliberately excluded as deferred feature work.
+**Tests at close**: 8608 (mypy: 823 source files strict, 0 lenient exceptions — the ADR-023 gate held through every fix)
+
+### What We Learned
+
+**1. Test the bare base class; init attrs in `__init__`, not a setter — the type-ratchet dividend.**
+#1947 (`LiveComponent` *documented* `update()` but never implemented it) and #1952 (`TutorialMixin` initialized four `_tutorial_*` signal attrs only in the `tutorial_total_steps` setter) were both AttributeError-on-real-paths crashes that shipped green for releases — the 8600-test suite never caught them because every test exercised a subclass that overrode `update()` / set the property first. Both were surfaced by the ADR-023 strict-typing ratchet (mypy `[attr-defined]`), the same way the ratchet found ~8 bugs across M1–M4g.
+
+**Action taken**: Added CLAUDE.md canon "Process canonicalizations from v1.1.0-4 retro arc" rule 1 — test the BARE base class when it declares/documents a method, and init instance attrs in `__init__` not a property setter (generalizes #1104 to the base-vs-subclass axis). Bugs fixed in #1964 / #1962.
+
+**2. For an external/unpinnable root cause, ship a detector — not a phantom fix (#1938).**
+The `core.bare` worktree-config leak was assumed to be a djust pre-push/test bug. A by-inspection + targeted-single-test investigation (never running the full suite — that *is* the trigger) proved no djust code writes `core.bare`; the shared config's `gk-last-accessed`/`vscode-merge-base` keys point at an external IDE/GitKraken git integration (the #1804/#300 class).
+
+**Action taken**: Closed — PR #1965 (`scripts/check-shared-git-config.sh` detect/`--fix` recover + CONTRIBUTING docs + 5 guard tests; root cause external/unpinnable in-repo).
+
+**3. Cap concurrent worktree implementer agents at ~3.**
+Launching all 5 drain fixers as concurrent worktree-isolated agents tripped a transient server-side API throttle ("temporarily limiting requests — not your usage limit") that stalled 3 mid-task. Recovery was clean — worktrees persist across a rate-limit rest, so each agent resumed mid-task via a follow-up message with no work lost — but the prevention is a concurrency cap.
+
+**Action taken**: Added CLAUDE.md canon "Process canonicalizations from v1.1.0-4 retro arc" rule 2 (cap at ~3; serial resumption is safe). Skill-prompt propagation tracked in Action Tracker #316 (OUT-OF-REPO — the pipeline skills are gitignored).
+
+### Insights
+
+- **Every drain issue was a convergence/ratchet dividend.** All 5 were follow-ups the two big v1.1 arcs *surfaced but deferred* — 2 latent crash bugs the type-checker found, 1 race the convergence review found (#1940), 1 CI flake, 1 external-tooling diagnosis. Big refactors pay down latent bugs; budget a drain after each.
+- **#1961's real fix was subtler than "bump the timeout":** the readiness poll hit `/` (a different LiveView), so it never warmed the canary route's lazy compile. Poll the REAL target, not a proxy (reproduction-fidelity, #1650/#1638 family).
+- **#1940 cure = identity-guard, not cancel:** `sync_to_async` thread-pool work can't be `.cancel()`-ed, so the post-await `is`-check is the only correct fix — a detached-task instance of the #245/#1198 TOCTOU class.
+- **Serial-resumption recovery worked perfectly** under the throttle — no work lost across 3 stalled agents. The worktree-isolation pattern is robust to interruption.
+
+### Review Stats
+
+| Metric | #1961 | #1962 | #1963 | #1964 | #1965 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Tests added | CI | 5 | 4 | 3 | 5 | 17+ |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 0 | 0 | 0 | 0 | 0 | 0 |
+| Gate-off verified | CI | ✓ | ✓ | ✓ | ✓ | 4 |
+| CI failures | 0 | 0 | 0 | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Added "Process canonicalizations from v1.1.0-4 retro arc" — 2 rules (bare-base-class testing + init-in-`__init__`; worktree-agent concurrency cap).
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: concurrency-cap propagation to pipeline-run/pipeline-drain prompts tracked OUT-OF-REPO (Action Tracker #316).
+
+### Open Items
+
+- [ ] #316 — propagate the worktree-agent concurrency cap into the pipeline-run/pipeline-drain skill prompts (OUT-OF-REPO; in-repo CLAUDE.md half done)
+- [ ] #1561 / #1562 — priority:low bug-capture features, deferred (not in this bucket)
 
 ## v1.1.0-3 — ViewRuntime dispatch convergence (ADR-022 headline) (PRs #1886/#1888/#1890/#1893/#1895/#1897/#1909/#1912/#1914/#1916/#1918/#1920 + followups #1910/#1923/#1924 + resync #1925)
 
