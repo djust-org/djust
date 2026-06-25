@@ -22,7 +22,7 @@ Each theme defines a complete design system including:
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 from ..._deprecation import warn_deprecated
 
@@ -47,38 +47,45 @@ def _warn_legacy(name: str, stacklevel: int = 4) -> None:
     )
 
 
-class _DeprecatedThemesDict(dict):
+class _DeprecatedThemesDict(Dict[str, "Theme"]):
     """Dict wrapper that emits DeprecationWarning on access."""
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> "Theme":
         _warn_legacy("THEMES")
         return super().__getitem__(key)
 
-    def __contains__(self, key):
+    def __contains__(self, key: object) -> bool:
         _warn_legacy("THEMES")
         return super().__contains__(key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
         _warn_legacy("THEMES")
         return super().get(key, default)
 
-    def items(self):
+    # The three view methods return ``dict``'s concrete view types
+    # (``dict_items`` / ``dict_keys`` / ``dict_values``), which typeshed does
+    # not export as importable names. Annotating the abstract ``ItemsView`` /
+    # ``KeysView`` / ``ValuesView`` is rejected as LSP-incompatible with the
+    # concrete supertype, so these declare ``-> Any`` (the established codebase
+    # pattern, e.g. components/gallery/examples.py:items) — honest about the
+    # un-nameable concrete return without weakening the rest of the island.
+    def items(self) -> Any:
         _warn_legacy("THEMES")
         return super().items()
 
-    def keys(self):
+    def keys(self) -> Any:
         _warn_legacy("THEMES")
         return super().keys()
 
-    def values(self):
+    def values(self) -> Any:
         _warn_legacy("THEMES")
         return super().values()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         _warn_legacy("THEMES")
         return super().__iter__()
 
-    def __len__(self):
+    def __len__(self) -> int:
         _warn_legacy("THEMES")
         return super().__len__()
 
