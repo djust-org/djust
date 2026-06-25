@@ -156,7 +156,8 @@ class GCSMultipartWriter(UploadWriter):
         except Exception as exc:  # noqa: BLE001
             raise self._translate_sdk_exc(exc) from exc
 
-    def write_chunk(self, chunk: bytes) -> None:
+    def write_chunk(self, chunk: bytes) -> None:  # type: ignore[override]
+        # Legacy writer signature (no chunk_index); see UploadWriter.write_chunk.
         if self._finalized:
             raise RuntimeError("write_chunk() called on a finalized GCSMultipartWriter")
         if not self._session_url:
