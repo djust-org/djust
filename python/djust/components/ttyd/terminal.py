@@ -29,7 +29,7 @@ access; vendor xterm.js to static/ for offline/air-gapped environments.
 """
 
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from djust import LiveView
 from djust.decorators import event_handler
@@ -61,7 +61,7 @@ class TtydTerminalView(LiveView):
     cols: int = 80
     theme: Optional[dict] = None
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: Any, **kwargs: Any) -> None:
         params = request.GET
         self.ttyd_url = params.get("url", self.__class__.ttyd_url)
         self.rows = int(params.get("rows", self.__class__.rows))
@@ -81,20 +81,22 @@ class TtydTerminalView(LiveView):
         self.session_start: Optional[str] = None
         self.session_end: Optional[str] = None
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         ctx = super().get_context_data(**kwargs)
         ctx["theme_json"] = json.dumps(self.theme or {})
         return ctx
 
     @event_handler
-    def on_ttyd_connect(self, timestamp: str = "", user_agent: str = "", **kwargs):
+    def on_ttyd_connect(self, timestamp: str = "", user_agent: str = "", **kwargs: Any) -> None:
         """Called when the ttyd WebSocket connection opens in the browser."""
         self.terminal_connected = True
         self.session_start = timestamp
         self.session_end = None
 
     @event_handler
-    def on_ttyd_disconnect(self, timestamp: str = "", code: int = 0, reason: str = "", **kwargs):
+    def on_ttyd_disconnect(
+        self, timestamp: str = "", code: int = 0, reason: str = "", **kwargs: Any
+    ) -> None:
         """Called when the ttyd WebSocket connection closes in the browser."""
         self.terminal_connected = False
         self.session_end = timestamp

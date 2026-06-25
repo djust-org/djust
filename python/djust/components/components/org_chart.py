@@ -1,7 +1,7 @@
 """Org Chart component — hierarchical tree visualization."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -39,8 +39,8 @@ class OrgChart(Component):
         event: str = "",
         direction: str = "vertical",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             nodes=nodes,
             root=root,
@@ -55,12 +55,12 @@ class OrgChart(Component):
         self.direction = direction if direction in ("vertical", "horizontal") else "vertical"
         self.custom_class = custom_class
 
-    def _build_tree(self):
+    def _build_tree(self) -> tuple[dict[str, Any], dict[str, list[str]], str]:
         """Build node lookup and children map."""
-        node_map = {}
-        children = {}
-        parent_ids = set()
-        child_ids = set()
+        node_map: dict[str, Any] = {}
+        children: dict[str, list[str]] = {}
+        parent_ids: set[str] = set()
+        child_ids: set[str] = set()
 
         for n in self.nodes:
             if not isinstance(n, dict):
@@ -85,7 +85,14 @@ class OrgChart(Component):
 
         return node_map, children, root_id
 
-    def _render_node(self, nid, node_map, children, e_event, depth=0):
+    def _render_node(
+        self,
+        nid: str,
+        node_map: dict[str, Any],
+        children: dict[str, list[str]],
+        e_event: str,
+        depth: int = 0,
+    ) -> str:
         """Recursively render a node and its children."""
         node = node_map.get(nid)
         if not node:

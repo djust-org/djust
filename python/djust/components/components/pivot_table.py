@@ -1,7 +1,7 @@
 """Pivot Table component — configurable pivot/cross-tab table."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -57,8 +57,8 @@ class PivotTable(Component):
         title: Optional[str] = None,
         show_totals: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             data=data,
             rows=rows,
@@ -79,11 +79,11 @@ class PivotTable(Component):
         self.show_totals = show_totals
         self.custom_class = custom_class
 
-    def _pivot(self):
+    def _pivot(self) -> tuple[list[str], list[str], dict[tuple[str, str], Any]]:
         """Build pivot structure: row_keys, col_keys, cells dict."""
-        row_keys_set = []
-        col_keys_set = []
-        cells = {}  # (row_key, col_key) -> list of values
+        row_keys_set: list[str] = []
+        col_keys_set: list[str] = []
+        cells: dict[tuple[str, str], list[float]] = {}  # (row_key, col_key) -> list of values
 
         for record in self.data:
             if not isinstance(record, dict):
@@ -103,13 +103,13 @@ class PivotTable(Component):
             cells.setdefault((rk, ck), []).append(val)
 
         agg_fn = self.AGG_FUNCS[self.agg]
-        agg_cells = {}
+        agg_cells: dict[tuple[str, str], Any] = {}
         for key, vals in cells.items():
             agg_cells[key] = agg_fn(vals)
 
         return row_keys_set, col_keys_set, agg_cells
 
-    def _format_val(self, v):
+    def _format_val(self, v: float) -> str:
         if v == int(v):
             return str(int(v))
         return f"{v:.2f}"

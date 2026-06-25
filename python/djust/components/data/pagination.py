@@ -4,7 +4,8 @@ Pagination component for djust.
 Provides pagination controls for navigating through data sets.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
+from django.utils.safestring import SafeString
 from ..base import LiveComponent
 
 
@@ -36,7 +37,7 @@ class PaginationComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize pagination state"""
         self.current_page = kwargs.get("current_page", 1)
         self.total_pages = kwargs.get("total_pages", 1)
@@ -64,37 +65,37 @@ class PaginationComponent(LiveComponent):
             "max_visible_pages": self.max_visible_pages,
         }
 
-    def go_to_page(self, page: int):
+    def go_to_page(self, page: int) -> None:
         """Navigate to a specific page"""
         if 1 <= page <= self.total_pages:
             self.current_page = page
             self.trigger_update()
 
-    def next_page(self):
+    def next_page(self) -> None:
         """Go to next page"""
         if self.current_page < self.total_pages:
             self.current_page += 1
             self.trigger_update()
 
-    def previous_page(self):
+    def previous_page(self) -> None:
         """Go to previous page"""
         if self.current_page > 1:
             self.current_page -= 1
             self.trigger_update()
 
-    def first_page(self):
+    def first_page(self) -> None:
         """Go to first page"""
         if self.current_page != 1:
             self.current_page = 1
             self.trigger_update()
 
-    def last_page(self):
+    def last_page(self) -> None:
         """Go to last page"""
         if self.current_page != self.total_pages:
             self.current_page = self.total_pages
             self.trigger_update()
 
-    def _get_visible_pages(self):
+    def _get_visible_pages(self) -> List[int]:
         """Calculate which page numbers to display"""
         if self.total_pages <= self.max_visible_pages:
             return list(range(1, self.total_pages + 1))
@@ -119,7 +120,7 @@ class PaginationComponent(LiveComponent):
         end = min(self.current_page * self.items_per_page, self.total_items)
         return f"Showing {start}-{end} of {self.total_items} items"
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render pagination with inline HTML"""
         from django.utils.safestring import mark_safe
         from ...config import config

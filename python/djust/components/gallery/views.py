@@ -7,8 +7,9 @@ Provides three views:
 """
 
 import logging
+from typing import Any, Dict, List, Optional, Tuple
 
-from django.http import HttpResponse, Http404
+from django.http import HttpRequest, HttpResponse, Http404
 from django.template import Template, Context
 from django.templatetags.static import static
 from django.utils.html import escape
@@ -21,7 +22,9 @@ logger = logging.getLogger(__name__)
 # ── Theme helpers ──
 
 
-def _get_theme_css(preset="default", design_system="material", mode="light"):
+def _get_theme_css(
+    preset: str = "default", design_system: str = "material", mode: str = "light"
+) -> str:
     """Generate theme CSS from djust-theming, or return empty string if unavailable."""
     try:
         from djust_theming.manager import ThemeState, generate_css_for_state
@@ -32,12 +35,13 @@ def _get_theme_css(preset="default", design_system="material", mode="light"):
             mode=mode,
             resolved_mode=mode,
         )
-        return generate_css_for_state(state)
+        css: str = generate_css_for_state(state)
+        return css
     except Exception:
         return ""
 
 
-def _get_theme_options():
+def _get_theme_options() -> Tuple[List[str], List[str]]:
     """Get available presets and design systems from djust-theming."""
     try:
         from djust_theming.presets import THEME_PRESETS
@@ -50,7 +54,7 @@ def _get_theme_options():
         return ["default"], ["material"]
 
 
-def _resolve_theme(request):
+def _resolve_theme(request: HttpRequest) -> Tuple[str, str, str, str]:
     """Read theme cookies, validate against allowlists, generate CSS.
 
     Returns (mode, theme_css, ds_options, preset_options).
@@ -89,7 +93,7 @@ def _resolve_theme(request):
 # ── Shared rendering functions ──
 
 
-def _render_head(mode, theme_css, title="djust-components Gallery"):
+def _render_head(mode: str, theme_css: str, title: str = "djust-components Gallery") -> str:
     """Return the <head> block with theme CSS, component CSS, and gallery styles."""
     theming_base_link = ""
     try:
@@ -426,7 +430,7 @@ def _render_head(mode, theme_css, title="djust-components Gallery"):
 </head>"""
 
 
-def _render_header(ds_options, preset_options):
+def _render_header(ds_options: str, preset_options: str) -> str:
     """Return the sticky header HTML with theme/preview toolbar."""
     return f"""\
     <header class="gallery-header">
@@ -448,7 +452,7 @@ def _render_header(ds_options, preset_options):
     </header>"""
 
 
-def _render_scripts():
+def _render_scripts() -> str:
     """Return the JS block for theme toggle, responsive preview, and dj-click shim."""
     return """\
     <script>
@@ -557,7 +561,9 @@ def _render_scripts():
     </script>"""
 
 
-def _render_component_cards(components, extra_context=None):
+def _render_component_cards(
+    components: List[Dict[str, Any]], extra_context: Optional[Dict[str, Any]] = None
+) -> str:
     """Render component cards with variant previews. Returns HTML string.
 
     Args:
@@ -614,7 +620,7 @@ def _render_component_cards(components, extra_context=None):
     return "\n".join(parts)
 
 
-def _render_sidebar(categories, current_slug=None):
+def _render_sidebar(categories: Dict[str, Any], current_slug: Optional[str] = None) -> str:
     """Build sidebar HTML. Shows all categories; expands component links for current."""
     from .examples import CATEGORIES, CATEGORY_ORDER
 
@@ -637,7 +643,9 @@ def _render_sidebar(categories, current_slug=None):
     return "\n".join(parts)
 
 
-def _assemble_page(mode, head, header, sidebar, content, scripts):
+def _assemble_page(
+    mode: str, head: str, header: str, sidebar: str, content: str, scripts: str
+) -> str:
     """Wrap sections into a full HTML document."""
     return f"""\
 <!DOCTYPE html>
@@ -661,7 +669,7 @@ def _assemble_page(mode, head, header, sidebar, content, scripts):
 # ── Views ──
 
 
-def gallery_index_view(request):
+def gallery_index_view(request: HttpRequest) -> HttpResponse:
     """Render the gallery landing page with category cards."""
     mode, theme_css, ds_options, preset_options = _resolve_theme(request)
     data = get_gallery_data()
@@ -692,7 +700,7 @@ def gallery_index_view(request):
     return HttpResponse(html)
 
 
-def gallery_category_view(request, category_slug):
+def gallery_category_view(request: HttpRequest, category_slug: str) -> HttpResponse:
     """Render a single category's components."""
     from .examples import CATEGORIES, CATEGORY_ORDER
 
@@ -741,7 +749,7 @@ def gallery_category_view(request, category_slug):
     return HttpResponse(html)
 
 
-def gallery_view(request):
+def gallery_view(request: HttpRequest) -> HttpResponse:
     """Render all components on a single page (legacy monolithic view).
 
     Kept for backward compatibility — use ``gallery_index_view`` and

@@ -1,7 +1,7 @@
 """Masonry Grid component — Pinterest-style layout."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -37,8 +37,8 @@ class MasonryGrid(Component):
         columns: int = 3,
         gap: int = 16,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             columns=columns,
@@ -68,7 +68,7 @@ class MasonryGrid(Component):
 
         # Distribute items across columns (shortest-column-first)
         col_heights = [0] * self.columns
-        col_items = [[] for _ in range(self.columns)]
+        col_items: list[list[Any]] = [[] for _ in range(self.columns)]
 
         for item in self.items:
             if not isinstance(item, dict):

@@ -1,5 +1,7 @@
 """ServerEventToast mixin for pushing toast notifications via WebSocket."""
 
+from typing import TYPE_CHECKING, Any
+
 
 class ServerEventToastMixin:
     """Mixin for LiveViews that adds push_toast() capability.
@@ -30,12 +32,18 @@ class ServerEventToastMixin:
         duration: Auto-dismiss duration in ms (0 = no auto-dismiss)
     """
 
+    if TYPE_CHECKING:
+        # Provided by the host LiveView (PushEventsMixin) this mixin is
+        # composed with — declared here so the strict-typed call below
+        # resolves without importing LiveView (avoids a circular import).
+        def push_event(self, event: str, payload: dict[str, Any] = ...) -> None: ...
+
     def push_toast(
         self,
         message: str,
         type: str = "info",
         duration: int = 3000,
-    ):
+    ) -> None:
         """Push a toast notification to the client via WebSocket.
 
         Emits a ``__toast__`` event with the toast payload.

@@ -1,7 +1,7 @@
 """Dependent Select component for cascading dropdowns."""
 
 import html as html_mod
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -54,8 +54,8 @@ class DependentSelect(Component):
         required: bool = False,
         error: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             parent=parent,
@@ -84,7 +84,7 @@ class DependentSelect(Component):
         self.error = error
         self.custom_class = custom_class
 
-    def set_options(self, options, value=""):
+    def set_options(self, options: list[Any] | None, value: object = "") -> None:
         """Update options (typically after parent changes)."""
         self.options = options or []
         self.value = str(value) if value else ""

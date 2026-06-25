@@ -5,18 +5,18 @@ Provides icon rendering with popular icon libraries (Bootstrap Icons, Font Aweso
 This is a stateless Component optimized for performance.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 
 # Try to import Rust implementation
 try:
-    from djust._rust import RustIcon
+    from djust._rust import RustIcon  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustIcon = None
+    RustIcon = None  # type: ignore[assignment, misc]
 
 
 class Icon(Component):
@@ -103,7 +103,7 @@ class Icon(Component):
         self.color = color
         self.label = label
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if Rust not available)"""
         return {
             "name": self.name,

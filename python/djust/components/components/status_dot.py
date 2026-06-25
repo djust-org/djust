@@ -2,13 +2,15 @@
 
 import html
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from djust import Component
 
 
-# Sentinel value to distinguish "not provided" from "explicitly None"
-_NOT_PROVIDED = object()
+# Sentinel value to distinguish "not provided" from "explicitly None".
+# Typed Any so it can serve as the default for `Optional[str]` params while
+# remaining identity-comparable via `is _NOT_PROVIDED`.
+_NOT_PROVIDED: Any = object()
 
 
 class StatusDot(Component):
@@ -109,8 +111,8 @@ class StatusDot(Component):
         custom_class: str = "",
         custom_status_map: Optional[Dict[str, str]] = None,
         custom_animation_map: Optional[Dict[str, Optional[str]]] = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             status=status,
             variant=variant,

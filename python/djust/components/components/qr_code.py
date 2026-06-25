@@ -2,6 +2,7 @@
 
 import html
 
+from typing import Any
 from djust import Component
 
 
@@ -41,8 +42,8 @@ class QRCode(Component):
         fg_color: str = "#000",
         bg_color: str = "#fff",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             data=data,
             size=size,
@@ -58,7 +59,7 @@ class QRCode(Component):
         self.custom_class = custom_class
 
     @staticmethod
-    def _generate_matrix(data_str):
+    def _generate_matrix(data_str: str) -> list[list[bool]]:
         """Generate a simple QR-like matrix from data.
 
         This is a deterministic visual hash — not a scannable QR code
@@ -70,7 +71,7 @@ class QRCode(Component):
         matrix = [[False] * size for _ in range(size)]
 
         # Add finder patterns (3 corners)
-        def add_finder(row, col):
+        def add_finder(row: int, col: int) -> None:
             for r in range(7):
                 for c in range(7):
                     if r < size and col + c < size:

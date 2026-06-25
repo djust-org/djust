@@ -4,11 +4,11 @@ Select component for djust.
 Simple stateless select dropdown with automatic Rust optimization.
 """
 
-from typing import List, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
 try:
-    from djust._rust import RustSelect
+    from djust._rust import RustSelect  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
@@ -115,7 +115,7 @@ class Select(Component):
         self.validation_state = validation_state
         self.validation_message = validation_message
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "name": self.name,

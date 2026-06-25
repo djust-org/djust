@@ -29,15 +29,16 @@ Performance:
 """
 
 from ..base import Component
+from typing import Any
 
 # Try to import Rust implementation
 try:
-    from djust._rust import RustSpinner
+    from djust._rust import RustSpinner  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
     _RUST_AVAILABLE = False
-    RustSpinner = None
+    RustSpinner = None  # type: ignore[assignment, misc]
 
 
 class Spinner(Component):
@@ -82,7 +83,7 @@ class Spinner(Component):
         self.animation = animation
         self.sr_text = sr_text
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         return {
             "variant": self.variant,
             "size": self.size,

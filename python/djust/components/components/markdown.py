@@ -2,9 +2,9 @@
 
 import html
 
-from typing import Optional
+from typing import Any, Optional
 
-import markdown as md_lib
+import markdown as md_lib  # type: ignore[import-untyped]  # PyPI markdown ships no py.typed
 import nh3
 
 from djust import Component
@@ -117,8 +117,8 @@ class Markdown(Component):
         text: str = "",
         custom_class: str = "",
         extensions: Optional[list] = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(text=text, custom_class=custom_class, **kwargs)
         self.text = text
         self.custom_class = custom_class

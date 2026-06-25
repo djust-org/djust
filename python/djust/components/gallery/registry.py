@@ -1,11 +1,12 @@
 """Auto-discovery of template tags and component classes for the gallery."""
 
 import logging
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
 
-def discover_template_tags():
+def discover_template_tags() -> Dict[str, Any]:
     """Discover all registered template tags from the djust_components library.
 
     Returns a dict of {tag_name: tag_function_or_node} for all tags registered
@@ -18,7 +19,7 @@ def discover_template_tags():
     return dict(lib.tags)
 
 
-def discover_component_classes():
+def discover_component_classes() -> Dict[str, Any]:
     """Discover all component classes exported from djust.components.components.
 
     Returns a dict of {class_name: class_object}.
@@ -29,7 +30,7 @@ def discover_component_classes():
     return {name: getattr(comp_module, name) for name in class_names}
 
 
-def get_gallery_data():
+def get_gallery_data() -> Dict[str, Any]:
     """Build the full gallery data structure grouped by category.
 
     Returns:
@@ -77,9 +78,9 @@ def get_gallery_data():
         logger.debug("gallery: discover_component_classes() failed: %s", exc)
 
     # Group template tag examples by category
-    categories = {}
+    categories: Dict[str, list] = {}
     for tag_name, info in EXAMPLES.items():
-        cat = info.get("category", "misc")
+        cat = str(info.get("category", "misc"))
         cat_label = CATEGORIES.get(cat, cat.title())
         if cat_label not in categories:
             categories[cat_label] = []
@@ -94,7 +95,7 @@ def get_gallery_data():
 
     # Group class examples by category
     for class_name, info in CLASS_EXAMPLES.items():
-        cat = info.get("category", "misc")
+        cat = str(info.get("category", "misc"))
         cat_label = CATEGORIES.get(cat, cat.title())
         if cat_label not in categories:
             categories[cat_label] = []

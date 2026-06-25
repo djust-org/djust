@@ -1,7 +1,7 @@
 """Treemap component — nested rectangles for hierarchical data."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -50,16 +50,16 @@ class Treemap(Component):
 
     def __init__(
         self,
-        data: list = None,
+        data: Optional[list] = None,
         value_key: str = "size",
         label_key: str = "name",
         title: Optional[str] = None,
         width: int = 400,
         height: int = 250,
-        colors: list = None,
+        colors: Optional[list] = None,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             data=data,
             value_key=value_key,
@@ -81,9 +81,15 @@ class Treemap(Component):
         self.custom_class = custom_class
 
     @staticmethod
-    def _squarify(items, x, y, w, h):
+    def _squarify(
+        items: list[tuple[str, float, int]],
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+    ) -> list[tuple[float, float, float, float, str, float, int]]:
         """Simple slice-and-dice treemap layout."""
-        rects = []
+        rects: list[tuple[float, float, float, float, str, float, int]] = []
         if not items or w <= 0 or h <= 0:
             return rects
 

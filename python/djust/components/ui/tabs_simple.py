@@ -4,7 +4,7 @@ Tabs component for djust.
 Simple stateless tabs with automatic Rust optimization.
 """
 
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional
 from ..base import Component
 
 
@@ -56,7 +56,7 @@ class Tabs(Component):
         self.active_index = active_index
         self.style = style
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "tabs": self.tabs,

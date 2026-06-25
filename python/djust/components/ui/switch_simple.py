@@ -5,7 +5,7 @@ Simple stateless toggle switch with automatic Rust optimization.
 This is a specialized checkbox styled as a Bootstrap form-switch.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 try:
@@ -115,7 +115,7 @@ class Switch(Component):
         self.value = value
         self.inline = inline
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "name": self.name,

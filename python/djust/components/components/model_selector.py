@@ -1,7 +1,7 @@
 """Model Selector component for choosing AI models."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -77,8 +77,8 @@ class ModelSelector(Component):
         disabled: bool = False,
         label: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             options=options,
@@ -157,7 +157,7 @@ class ModelSelector(Component):
         )
 
     @staticmethod
-    def _option_inner(opt):
+    def _option_inner(opt: dict[str, Any]) -> str:
         """Render inner HTML for a model option."""
         label = html.escape(str(opt.get("label", "")))
         desc = html.escape(str(opt.get("description", ""))) if opt.get("description") else ""

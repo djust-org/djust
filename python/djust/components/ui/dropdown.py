@@ -7,7 +7,7 @@ Provides dropdown menus with items and actions.
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from ..base import LiveComponent
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 
 @dataclass
@@ -36,7 +36,7 @@ class DropdownItem:
         if self.divider:
             return {"divider": True}
 
-        result = {
+        result: Dict[str, Any] = {
             "text": self.text,
             "action": self.action,
         }
@@ -77,7 +77,7 @@ class DropdownComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize dropdown state"""
         self.label = kwargs.get("label", "Dropdown")
         self.variant = kwargs.get("variant", "secondary")
@@ -105,7 +105,7 @@ class DropdownComponent(LiveComponent):
             "direction": self.direction,
         }
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render dropdown with inline HTML"""
         from ...config import config
 

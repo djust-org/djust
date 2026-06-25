@@ -5,18 +5,18 @@ Provides list of items with optional actions, active highlighting, and variants.
 This is a stateless Component optimized for performance.
 """
 
-from typing import List, Dict
+from typing import Any, Dict, List
 from ..base import Component
 
 
 # Try to import Rust implementation (will be added later)
 try:
-    from djust._rust import RustListGroup
+    from djust._rust import RustListGroup  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustListGroup = None
+    RustListGroup = None  # type: ignore[assignment, misc]
 
 
 class ListGroup(Component):
@@ -111,7 +111,9 @@ class ListGroup(Component):
     # Note: Not using template because list rendering with loops
     # is more reliable in Python, especially with complex item attributes
 
-    def __init__(self, items: List[Dict[str, any]], flush: bool = False, numbered: bool = False):
+    def __init__(
+        self, items: List[Dict[str, Any]], flush: bool = False, numbered: bool = False
+    ) -> None:
         """
         Initialize list group component.
 
@@ -127,7 +129,7 @@ class ListGroup(Component):
         self.flush = flush
         self.numbered = numbered
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if needed later)"""
         return {
             "items": self.items,

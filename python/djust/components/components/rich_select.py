@@ -2,7 +2,7 @@
 
 import html
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from djust import Component
 
@@ -113,8 +113,8 @@ class RichSelect(Component):
         searchable: bool = False,
         label: str = "",
         variant_map: Optional[Dict[str, str]] = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             options=options,
@@ -243,7 +243,7 @@ class RichSelect(Component):
         )
 
     @staticmethod
-    def _option_html(opt):
+    def _option_html(opt: Dict[str, Any]) -> str:
         """Render inner HTML for an option."""
         parts = []
         icon = opt.get("icon", "")

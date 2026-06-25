@@ -4,11 +4,11 @@ Checkbox component for djust.
 Simple stateless checkbox with automatic Rust optimization.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 try:
-    from djust._rust import RustCheckbox
+    from djust._rust import RustCheckbox  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
@@ -102,7 +102,7 @@ class Checkbox(Component):
         self.switch = switch
         self.inline = inline
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "name": self.name,

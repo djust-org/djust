@@ -26,17 +26,17 @@ Performance:
     - Python: ~0.3 μs (f-string fallback)
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 # Try to import Rust implementation
 try:
-    from djust._rust import RustCard
+    from djust._rust import RustCard  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
     _RUST_AVAILABLE = False
-    RustCard = None
+    RustCard = None  # type: ignore[assignment, misc]
 
 
 class Card(Component):
@@ -78,7 +78,7 @@ class Card(Component):
         self.footer = footer
         self.variant = variant
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         return {
             "body": self.body,
             "header": self.header,

@@ -4,7 +4,7 @@ TextArea component for djust.
 Simple stateless textarea field with automatic Rust optimization.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 try:
@@ -113,7 +113,7 @@ class TextArea(Component):
         self.validation_state = validation_state
         self.validation_message = validation_message
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "name": self.name,

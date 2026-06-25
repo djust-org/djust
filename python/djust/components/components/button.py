@@ -1,7 +1,7 @@
 """Button component for actions and navigation."""
 
 import html
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from djust import Component
 
@@ -86,7 +86,7 @@ class Button(Component):
         label: str,
         variant: str = "primary",
         action: Optional[str] = None,
-        data: Optional[Dict[str, any]] = None,
+        data: Optional[Dict[str, Any]] = None,
         onclick: Optional[str] = None,
         icon: Optional[str] = None,
         icon_position: str = "left",
@@ -95,8 +95,8 @@ class Button(Component):
         loading: bool = False,
         type: str = "button",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             label=label,
             variant=variant,

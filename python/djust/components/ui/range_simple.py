@@ -4,7 +4,7 @@ Range (Slider) component for djust.
 Simple stateless range/slider input field with automatic Rust optimization.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 try:
@@ -110,7 +110,7 @@ class Range(Component):
         self.help_text = help_text
         self.disabled = disabled
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "name": self.name,

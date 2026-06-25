@@ -1,6 +1,7 @@
 """Animated Number component — counting animation for numeric values."""
 
 import html
+from typing import Any
 
 from djust import Component
 
@@ -48,8 +49,8 @@ class AnimatedNumber(Component):
         decimals: int = 0,
         separator: str = ",",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             value=value,
             prefix=prefix,
@@ -68,7 +69,7 @@ class AnimatedNumber(Component):
         self.separator = separator
         self.custom_class = custom_class
 
-    def _format_number(self, val):
+    def _format_number(self, val: Any) -> str:
         """Format a number with thousands separator and decimals."""
         try:
             val = float(val)

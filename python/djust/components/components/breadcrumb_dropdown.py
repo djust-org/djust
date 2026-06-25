@@ -1,7 +1,7 @@
 """Breadcrumb Dropdown component — breadcrumb with overflow collapse."""
 
 import html
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from djust import Component
 
@@ -47,8 +47,8 @@ class BreadcrumbDropdown(Component):
         max_visible: int = 4,
         separator: str = "/",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             items=items,
             max_visible=max_visible,
@@ -125,7 +125,7 @@ class BreadcrumbDropdown(Component):
         )
 
     @staticmethod
-    def _render_item(item, is_last, separator):
+    def _render_item(item: object, is_last: bool, separator: str) -> str:
         if not isinstance(item, dict):
             return ""
         label = html.escape(str(item.get("label", "")))

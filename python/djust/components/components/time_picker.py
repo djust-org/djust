@@ -2,6 +2,7 @@
 
 import html
 
+from typing import Any
 from djust import Component
 
 
@@ -54,8 +55,8 @@ class TimePicker(Component):
         disabled: bool = False,
         label: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             value=value,
@@ -80,7 +81,7 @@ class TimePicker(Component):
         self.label = label
         self.custom_class = custom_class
 
-    def _parse_time(self, time_str):
+    def _parse_time(self, time_str: str) -> tuple[int, int]:
         """Parse HH:MM string into (hour, minute)."""
         if not time_str:
             return 0, 0

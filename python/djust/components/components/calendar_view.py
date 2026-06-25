@@ -2,7 +2,7 @@
 
 import html
 import calendar
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -47,8 +47,8 @@ class CalendarView(Component):
         start_day: int = 0,
         event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             events=events,
             month=month,
@@ -73,9 +73,9 @@ class CalendarView(Component):
         self.event = event
         self.custom_class = custom_class
 
-    def _build_event_map(self):
+    def _build_event_map(self) -> dict[str, list[Any]]:
         """Group events by date string."""
-        emap = {}
+        emap: dict[str, list[Any]] = {}
         for ev in self.events:
             if not isinstance(ev, dict):
                 continue

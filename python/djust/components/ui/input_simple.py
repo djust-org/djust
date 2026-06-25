@@ -4,11 +4,11 @@ Input component for djust.
 Simple stateless input field with automatic Rust optimization.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 try:
-    from djust._rust import RustInput
+    from djust._rust import RustInput  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
@@ -116,7 +116,7 @@ class Input(Component):
         self.validation_state = validation_state
         self.validation_message = validation_message
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "name": self.name,

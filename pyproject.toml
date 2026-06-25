@@ -571,6 +571,93 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# components/ FINAL batch (ADR-023 M4b, part 3) — the LAST remaining
+# components/ modules: the component template-tag layer
+# (djust_components/_advanced/_forms/_charts), the per-widget data_table mixin,
+# the gallery LiveView/view/registry/examples surface + its management command,
+# the ~24 remaining components/components/ widgets, the layout/data/ttyd leaves,
+# and the union-typed `ui/*_simple` + ui/dropdown stateless widgets. The large
+# Rust-bridge handler registry (rust_handlers) is intentionally left LENIENT — it
+# is a genuinely-dynamic registry whose handlers parse untyped Rust-engine arg
+# lists into object-valued dicts (kw.get()->object cascades), so strict typing
+# would require >200 narrowing changes / type: ignores with real rendering-behavior
+# risk; the global lenient default is the correct home for it (documented exception).
+[[tool.mypy.overrides]]
+module = [
+    "djust.components.components.animated_number",
+    "djust.components.components.breadcrumb_dropdown",
+    "djust.components.components.button",
+    "djust.components.components.calendar_view",
+    "djust.components.components.comparison_table",
+    "djust.components.components.currency_input",
+    "djust.components.components.dependent_select",
+    "djust.components.components.diff_viewer",
+    "djust.components.components.form_validation",
+    "djust.components.components.heatmap",
+    "djust.components.components.json_viewer",
+    "djust.components.components.markdown",
+    "djust.components.components.masonry_grid",
+    "djust.components.components.model_selector",
+    "djust.components.components.org_chart",
+    "djust.components.components.pivot_table",
+    "djust.components.components.prompt_editor",
+    "djust.components.components.qr_code",
+    "djust.components.components.rich_select",
+    "djust.components.components.server_event_toast",
+    "djust.components.components.status_dot",
+    "djust.components.components.time_picker",
+    "djust.components.components.tree_view",
+    "djust.components.components.treemap",
+    "djust.components.data.pagination",
+    "djust.components.gallery.context_processors",
+    "djust.components.gallery.examples",
+    "djust.components.gallery.live_views",
+    "djust.components.gallery.registry",
+    "djust.components.gallery.views",
+    "djust.components.layout.tabs",
+    "djust.components.management.commands.component_gallery",
+    "djust.components.mixins.data_table",
+    "djust.components.templatetags._advanced",
+    "djust.components.templatetags._charts",
+    "djust.components.templatetags._forms",
+    "djust.components.templatetags.djust_components",
+    "djust.components.ttyd.terminal",
+    "djust.components.ui.accordion_simple",
+    "djust.components.ui.alert_simple",
+    "djust.components.ui.avatar_simple",
+    "djust.components.ui.badge_simple",
+    "djust.components.ui.breadcrumb_simple",
+    "djust.components.ui.button_group_simple",
+    "djust.components.ui.button_simple",
+    "djust.components.ui.card_simple",
+    "djust.components.ui.checkbox_simple",
+    "djust.components.ui.divider_simple",
+    "djust.components.ui.dropdown",
+    "djust.components.ui.dropdown_simple",
+    "djust.components.ui.icon_simple",
+    "djust.components.ui.input_simple",
+    "djust.components.ui.list_group_simple",
+    "djust.components.ui.modal_simple",
+    "djust.components.ui.navbar_simple",
+    "djust.components.ui.offcanvas_simple",
+    "djust.components.ui.pagination_simple",
+    "djust.components.ui.progress_simple",
+    "djust.components.ui.radio_simple",
+    "djust.components.ui.range_simple",
+    "djust.components.ui.select_simple",
+    "djust.components.ui.spinner_simple",
+    "djust.components.ui.switch_simple",
+    "djust.components.ui.table_simple",
+    "djust.components.ui.tabs_simple",
+    "djust.components.ui.textarea_simple",
+    "djust.components.ui.toast_simple",
+    "djust.components.ui.tooltip_simple",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework

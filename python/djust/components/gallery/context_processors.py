@@ -1,9 +1,13 @@
 """Gallery context processors — provide theme and gallery data on every request."""
 
+from typing import Any, Dict
+
+from django.http import HttpRequest
+
 from .views import _get_theme_css, _get_theme_options
 
 
-def gallery_theme(request):
+def gallery_theme(request: HttpRequest) -> Dict[str, Any]:
     """Inject theme state into every template context.
 
     Reads design system, preset, and mode from cookies. Validates against

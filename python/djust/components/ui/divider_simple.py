@@ -5,18 +5,18 @@ Provides horizontal rule (hr) dividers with optional text labels.
 This is a stateless Component optimized for performance.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 
 # Try to import Rust implementation
 try:
-    from djust._rust import RustDivider
+    from djust._rust import RustDivider  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustDivider = None
+    RustDivider = None  # type: ignore[assignment, misc]
 
 
 class Divider(Component):
@@ -87,7 +87,7 @@ class Divider(Component):
         self.style = style
         self.margin = margin
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if Rust not available)"""
         # Map margin to Bootstrap spacing classes
         margin_map = {

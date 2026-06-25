@@ -7,16 +7,17 @@ For interactive toasts with state, use ToastComponent (LiveComponent).
 """
 
 from ..base import Component
+from typing import Any
 
 
 # Try to import Rust implementation
 try:
-    from djust._rust import RustToast
+    from djust._rust import RustToast  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustToast = None
+    RustToast = None  # type: ignore[assignment, misc]
 
 
 class Toast(Component):
@@ -126,7 +127,7 @@ class Toast(Component):
         self.show_icon = show_icon
         self.auto_hide = auto_hide
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if Rust not available)"""
         return {
             "title": self.title,

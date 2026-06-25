@@ -7,8 +7,10 @@ All tags register on the shared ``register`` from ``_registry``.
 """
 
 import math as _math
+from typing import Any
 
 from django import template
+from django.utils.safestring import SafeString
 
 from ._registry import (
     register,
@@ -25,10 +27,10 @@ from ._registry import (
 
 
 class BarChartNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         data = kw.get("data", [])
         labels = kw.get("labels", [])
@@ -133,7 +135,7 @@ class BarChartNode(template.Node):
 
 
 @register.tag("bar_chart")
-def do_bar_chart(parser, token):
+def do_bar_chart(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return BarChartNode(kwargs)
@@ -147,10 +149,10 @@ def do_bar_chart(parser, token):
 class LineChartNode(template.Node):
     COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#06b6d4"]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         series = kw.get("series", [])
         labels = kw.get("labels", [])
@@ -298,7 +300,7 @@ class LineChartNode(template.Node):
 
 
 @register.tag("line_chart")
-def do_line_chart(parser, token):
+def do_line_chart(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return LineChartNode(kwargs)
@@ -321,10 +323,10 @@ class PieChartNode(template.Node):
         "#f97316",
     ]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         segments = kw.get("segments", [])
         title = kw.get("title", "")
@@ -369,7 +371,7 @@ class PieChartNode(template.Node):
         r = min(cx, (h - title_offset - legend_offset) / 2) - 10
         ir = r * inner_radius if donut else 0
 
-        total = 0
+        total = 0.0
         for seg in segments:
             if isinstance(seg, dict):
                 try:
@@ -469,7 +471,7 @@ class PieChartNode(template.Node):
 
 
 @register.tag("pie_chart")
-def do_pie_chart(parser, token):
+def do_pie_chart(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return PieChartNode(kwargs)
@@ -481,10 +483,10 @@ def do_pie_chart(parser, token):
 
 
 class SparklineNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         data = kw.get("data", [])
         variant = kw.get("variant", "line")
@@ -590,7 +592,7 @@ class SparklineNode(template.Node):
 
 
 @register.tag("sparkline")
-def do_sparkline(parser, token):
+def do_sparkline(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return SparklineNode(kwargs)
@@ -602,12 +604,12 @@ def do_sparkline(parser, token):
 
 
 class HeatmapNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     _interpolate_color = staticmethod(interpolate_color)
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         data = kw.get("data", [])
         x_labels = kw.get("x_labels", [])
@@ -682,7 +684,7 @@ class HeatmapNode(template.Node):
 
         for ci, lbl in enumerate(x_labels[:cols]):
             x = label_left + ci * cs + cs / 2
-            y = title_h + label_top - 4
+            y: float = title_h + label_top - 4
             parts.append(
                 f'<text class="dj-heatmap__xlabel" x="{x:.1f}" y="{y:.1f}" '
                 f'text-anchor="middle" font-size="10">'
@@ -731,7 +733,7 @@ class HeatmapNode(template.Node):
 
 
 @register.tag("heatmap")
-def do_heatmap(parser, token):
+def do_heatmap(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return HeatmapNode(kwargs)
@@ -756,12 +758,12 @@ class TreemapNode(template.Node):
         "#a855f7",
     ]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     @staticmethod
-    def _squarify(items, x, y, w, h):
-        rects = []
+    def _squarify(items: Any, x: Any, y: Any, w: Any, h: Any) -> Any:
+        rects: list = []
         if not items or w <= 0 or h <= 0:
             return rects
         total = sum(v for _, v, _ in items)
@@ -783,7 +785,7 @@ class TreemapNode(template.Node):
                 cy += rh
         return rects
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         data = kw.get("data", [])
         value_key = kw.get("value_key", "size")
@@ -870,7 +872,7 @@ class TreemapNode(template.Node):
 
 
 @register.tag("treemap")
-def do_treemap(parser, token):
+def do_treemap(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return TreemapNode(kwargs)
@@ -886,10 +888,10 @@ from datetime import date as _date, timedelta as _timedelta
 class CalendarHeatmapNode(template.Node):
     LEVELS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def _get_color(self, value, max_val):
+    def _get_color(self, value: Any, max_val: Any) -> Any:
         if value <= 0:
             return self.LEVELS[0]
         if max_val <= 0:
@@ -904,7 +906,7 @@ class CalendarHeatmapNode(template.Node):
         else:
             return self.LEVELS[4]
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         data = kw.get("data", {})
         year = kw.get("year", _date.today().year)
@@ -1045,7 +1047,7 @@ class CalendarHeatmapNode(template.Node):
 
 
 @register.tag("calendar_heatmap")
-def do_calendar_heatmap(parser, token):
+def do_calendar_heatmap(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return CalendarHeatmapNode(kwargs)

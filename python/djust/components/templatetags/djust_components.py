@@ -16,9 +16,11 @@ import itertools
 import json as _json
 import re as _re
 import uuid
+from typing import Any
 
 from django import template
 from django.utils.html import conditional_escape
+from django.utils.safestring import SafeString
 
 from ._registry import safe_url
 from django.utils.safestring import mark_safe
@@ -60,7 +62,7 @@ __all__ = ("_get_field_type", "_infer_columns", "_queryset_to_rows", "register")
 # ---------------------------------------------------------------------------
 
 
-def _resolve(value, context):
+def _resolve(value: Any, context: Any) -> Any:
     """Resolve a template variable or return the literal value."""
     if isinstance(value, template.Variable):
         try:
@@ -70,7 +72,7 @@ def _resolve(value, context):
     return value
 
 
-def _parse_kv_args(bits, parser):
+def _parse_kv_args(bits: Any, parser: Any) -> Any:
     """Parse key=value arguments from template tag tokens."""
     kwargs = {}
     for bit in bits:
@@ -96,11 +98,11 @@ def _parse_kv_args(bits, parser):
 
 
 class ModalNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         title = kw.get("title", "")
         is_open = kw.get("open", False)
@@ -142,7 +144,7 @@ class ModalNode(template.Node):
 
 
 @register.tag("modal")
-def do_modal(parser, token):
+def do_modal(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endmodal",))
@@ -158,22 +160,22 @@ def do_modal(parser, token):
 class TabNode(template.Node):
     """A single tab pane."""
 
-    def __init__(self, tab_id, label, icon, nodelist):
+    def __init__(self, tab_id: Any, label: Any, icon: Any, nodelist: Any) -> None:
         self.tab_id = tab_id
         self.label = label
         self.icon = icon
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return self.nodelist.render(context)
 
 
 class TabsNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         tabs_id = kw.get("id", "tabs")
         active = kw.get("active", "")
@@ -239,7 +241,7 @@ class TabsNode(template.Node):
 
 
 @register.tag("tabs")
-def do_tabs(parser, token):
+def do_tabs(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endtabs",))
@@ -248,7 +250,7 @@ def do_tabs(parser, token):
 
 
 @register.tag("tab")
-def do_tab(parser, token):
+def do_tab(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     tab_id = kwargs.get("id", "")
@@ -265,21 +267,21 @@ def do_tab(parser, token):
 
 
 class AccordionItemNode(template.Node):
-    def __init__(self, item_id, title, nodelist):
+    def __init__(self, item_id: Any, title: Any, nodelist: Any) -> None:
         self.item_id = item_id
         self.title = title
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return self.nodelist.render(context)
 
 
 class AccordionNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         accordion_id = kw.get("id", "accordion")
         active = kw.get("active", "")
@@ -329,7 +331,7 @@ class AccordionNode(template.Node):
 
 
 @register.tag("accordion")
-def do_accordion(parser, token):
+def do_accordion(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endaccordion",))
@@ -338,7 +340,7 @@ def do_accordion(parser, token):
 
 
 @register.tag("accordion_item")
-def do_accordion_item(parser, token):
+def do_accordion_item(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     item_id = kwargs.get("id", "")
@@ -354,11 +356,11 @@ def do_accordion_item(parser, token):
 
 
 class DropdownNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         dropdown_id = kw.get("id", "dropdown")
         label = kw.get("label", "Menu")
@@ -395,7 +397,7 @@ class DropdownNode(template.Node):
 
 
 @register.tag("dropdown")
-def do_dropdown(parser, token):
+def do_dropdown(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("enddropdown",))
@@ -409,7 +411,7 @@ def do_dropdown(parser, token):
 
 
 @register.inclusion_tag("djust_components/toast.html")
-def toast_container(toasts, dismiss_event="dismiss_toast"):
+def toast_container(toasts: Any, dismiss_event: Any = "dismiss_toast") -> "dict[str, Any]":
     """Render a stack of toast notifications.
 
     Args:
@@ -431,11 +433,11 @@ _tooltip_id_counter = itertools.count(1)
 
 
 class TooltipNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         text = kw.get("text", "")
         position = kw.get("position", "top")  # top, bottom, left, right
@@ -465,7 +467,7 @@ class TooltipNode(template.Node):
 
 
 @register.tag("tooltip")
-def do_tooltip(parser, token):
+def do_tooltip(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endtooltip",))
@@ -479,7 +481,13 @@ def do_tooltip(parser, token):
 
 
 @register.inclusion_tag("djust_components/progress.html")
-def progress(value=0, label="", size="md", color="primary", show_label=True):
+def progress(
+    value: Any = 0,
+    label: Any = "",
+    size: Any = "md",
+    color: Any = "primary",
+    show_label: Any = True,
+) -> "dict[str, Any]":
     """Render a progress bar.
 
     Args:
@@ -505,7 +513,7 @@ def progress(value=0, label="", size="md", color="primary", show_label=True):
 
 
 @register.inclusion_tag("djust_components/badge.html")
-def badge(label="", status="default", pulse=False):
+def badge(label: Any = "", status: Any = "default", pulse: Any = False) -> "dict[str, Any]":
     """Render a status badge.
 
     Args:
@@ -522,11 +530,11 @@ def badge(label="", status="default", pulse=False):
 
 
 class CardNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         title = kw.get("title", "")
         subtitle = kw.get("subtitle", "")
@@ -553,7 +561,7 @@ class CardNode(template.Node):
 
 
 @register.tag("card")
-def do_card(parser, token):
+def do_card(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endcard",))
@@ -568,104 +576,99 @@ def do_card(parser, token):
 
 @register.inclusion_tag("djust_components/table.html")
 def data_table(
-    rows,
-    columns,
-    sort_by="",
-    sort_desc=False,
-    sort_event="on_table_sort",
-    page=1,
-    total_pages=1,
-    prev_event="on_table_prev",
-    next_event="on_table_next",
-    selectable=False,
-    selected_rows=None,
-    select_event="on_table_select",
-    row_key="id",
-    search=False,
-    search_query="",
-    search_event="on_table_search",
-    search_debounce=300,
-    filters=None,
-    filter_event="on_table_filter",
-    loading=False,
-    empty_title="No data",
-    empty_description="",
-    empty_icon="",
-    paginate=False,
-    page_event="on_table_page",
-    striped=False,
-    compact=False,
-    # Phase 2 params
-    editable_columns=None,
-    edit_event="on_table_cell_edit",
-    resizable=False,
-    reorderable=False,
-    reorder_event="on_table_reorder",
-    frozen_left=0,
-    frozen_right=0,
-    column_visibility=False,
-    visibility_event="on_table_visibility",
-    density="comfortable",
-    density_toggle=False,
-    density_event="on_table_density",
-    responsive_cards=False,
-    editable_rows=False,
-    edit_row_event="on_table_row_edit",
-    save_row_event="on_table_row_save",
-    cancel_row_event="on_table_row_cancel",
-    editing_rows=None,
-    # Phase 3 params
-    expandable=False,
-    expand_event="on_table_expand",
-    expanded_rows=None,
-    bulk_actions=None,
-    bulk_action_event="on_table_bulk_action",
-    exportable=False,
-    export_event="on_table_export",
-    export_formats=None,
-    group_by="",
-    group_event="on_table_group",
-    group_toggle_event="on_table_group_toggle",
-    collapsible_groups=True,
-    collapsed_groups=None,
-    keyboard_nav=False,
-    virtual_scroll=False,
-    virtual_row_height=40,
-    virtual_buffer=5,
-    server_mode=False,
-    facets=False,
-    facet_counts=None,
-    persist_key="",
-    printable=False,
-    column_stats=None,
-    # Phase 4 params
-    footer_aggregations=None,
-    row_class_map=None,
-    column_groups=None,
-    row_drag=False,
-    row_drag_event="on_table_row_drag",
-    copyable=False,
-    copy_event="on_table_copy",
-    copy_format="csv",
-    # Phase 5 params
-    importable=False,
-    import_event="on_table_import",
-    import_formats=None,
-    import_preview=True,
-    import_preview_data=None,
-    import_errors=None,
-    import_pending=False,
-    computed_columns=None,
-    cell_merge_key="_merge",
-    column_expressions=None,
-    expression_event="on_table_expression",
-    active_expressions=None,
-    conditional_formatting=None,
-    # Phase 6 params (#1111: row-level navigation)
-    row_click_event="",
-    row_click_value_key="id",
-    row_url="",
-):
+    rows: Any,
+    columns: Any,
+    sort_by: Any = "",
+    sort_desc: Any = False,
+    sort_event: Any = "on_table_sort",
+    page: Any = 1,
+    total_pages: Any = 1,
+    prev_event: Any = "on_table_prev",
+    next_event: Any = "on_table_next",
+    selectable: Any = False,
+    selected_rows: Any = None,
+    select_event: Any = "on_table_select",
+    row_key: Any = "id",
+    search: Any = False,
+    search_query: Any = "",
+    search_event: Any = "on_table_search",
+    search_debounce: Any = 300,
+    filters: Any = None,
+    filter_event: Any = "on_table_filter",
+    loading: Any = False,
+    empty_title: Any = "No data",
+    empty_description: Any = "",
+    empty_icon: Any = "",
+    paginate: Any = False,
+    page_event: Any = "on_table_page",
+    striped: Any = False,
+    compact: Any = False,
+    editable_columns: Any = None,
+    edit_event: Any = "on_table_cell_edit",
+    resizable: Any = False,
+    reorderable: Any = False,
+    reorder_event: Any = "on_table_reorder",
+    frozen_left: Any = 0,
+    frozen_right: Any = 0,
+    column_visibility: Any = False,
+    visibility_event: Any = "on_table_visibility",
+    density: Any = "comfortable",
+    density_toggle: Any = False,
+    density_event: Any = "on_table_density",
+    responsive_cards: Any = False,
+    editable_rows: Any = False,
+    edit_row_event: Any = "on_table_row_edit",
+    save_row_event: Any = "on_table_row_save",
+    cancel_row_event: Any = "on_table_row_cancel",
+    editing_rows: Any = None,
+    expandable: Any = False,
+    expand_event: Any = "on_table_expand",
+    expanded_rows: Any = None,
+    bulk_actions: Any = None,
+    bulk_action_event: Any = "on_table_bulk_action",
+    exportable: Any = False,
+    export_event: Any = "on_table_export",
+    export_formats: Any = None,
+    group_by: Any = "",
+    group_event: Any = "on_table_group",
+    group_toggle_event: Any = "on_table_group_toggle",
+    collapsible_groups: Any = True,
+    collapsed_groups: Any = None,
+    keyboard_nav: Any = False,
+    virtual_scroll: Any = False,
+    virtual_row_height: Any = 40,
+    virtual_buffer: Any = 5,
+    server_mode: Any = False,
+    facets: Any = False,
+    facet_counts: Any = None,
+    persist_key: Any = "",
+    printable: Any = False,
+    column_stats: Any = None,
+    footer_aggregations: Any = None,
+    row_class_map: Any = None,
+    column_groups: Any = None,
+    row_drag: Any = False,
+    row_drag_event: Any = "on_table_row_drag",
+    copyable: Any = False,
+    copy_event: Any = "on_table_copy",
+    copy_format: Any = "csv",
+    importable: Any = False,
+    import_event: Any = "on_table_import",
+    import_formats: Any = None,
+    import_preview: Any = True,
+    import_preview_data: Any = None,
+    import_errors: Any = None,
+    import_pending: Any = False,
+    computed_columns: Any = None,
+    cell_merge_key: Any = "_merge",
+    column_expressions: Any = None,
+    expression_event: Any = "on_table_expression",
+    active_expressions: Any = None,
+    conditional_formatting: Any = None,
+    row_click_event: Any = "",
+    row_click_value_key: Any = "id",
+    row_url: Any = "",
+) -> "dict[str, Any]":
     """Render a sortable data table with search, filters, selection, pagination, and editing.
 
     Phase 1 args:
@@ -899,9 +902,14 @@ def data_table(
 
 
 @register.inclusion_tag("djust_components/pagination.html")
-def pagination(page=1, total_pages=1, prev_event="page_prev", next_event="page_next"):
+def pagination(
+    page: Any = 1,
+    total_pages: Any = 1,
+    prev_event: Any = "page_prev",
+    next_event: Any = "page_next",
+) -> "dict[str, Any]":
     """Render pagination controls."""
-    pages = []
+    pages: list = []
     for p in range(1, total_pages + 1):
         if p == 1 or p == total_pages or abs(p - page) <= 2:
             pages.append(p)
@@ -922,7 +930,9 @@ def pagination(page=1, total_pages=1, prev_event="page_prev", next_event="page_n
 
 
 @register.inclusion_tag("djust_components/avatar.html")
-def avatar(src="", alt="", initials="", size="md", status=""):
+def avatar(
+    src: Any = "", alt: Any = "", initials: Any = "", size: Any = "md", status: Any = ""
+) -> "dict[str, Any]":
     """Render an avatar with optional status indicator.
 
     Args:
@@ -955,11 +965,11 @@ _ALERT_ICONS = {
 
 
 class AlertNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         alert_type = kw.get("variant", kw.get("type", "info"))
         title = kw.get("title", "")
@@ -1000,7 +1010,7 @@ class AlertNode(template.Node):
 
 
 @register.tag("alert")
-def do_alert(parser, token):
+def do_alert(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endalert",))
@@ -1032,16 +1042,16 @@ _DJ_BUTTON_VARIANT_CLASS_MAP = {
 
 @register.simple_tag
 def dj_button(
-    label="",
-    variant="primary",
-    event="",
-    confirm="",
-    icon="",
-    disabled=False,
-    loading=False,
-    size="md",
-    preset="",
-):
+    label: Any = "",
+    variant: Any = "primary",
+    event: Any = "",
+    confirm: Any = "",
+    icon: Any = "",
+    disabled: Any = False,
+    loading: Any = False,
+    size: Any = "md",
+    preset: Any = "",
+) -> SafeString:
     """Render a button element.
 
     Args:
@@ -1141,17 +1151,17 @@ def dj_button(
 
 @register.simple_tag
 def dj_input(
-    name="",
-    label="",
-    value="",
-    placeholder="",
-    input_type="text",
-    error="",
-    helper="",
-    required=False,
-    disabled=False,
-    event="",
-):
+    name: Any = "",
+    label: Any = "",
+    value: Any = "",
+    placeholder: Any = "",
+    input_type: Any = "text",
+    error: Any = "",
+    helper: Any = "",
+    required: Any = False,
+    disabled: Any = False,
+    event: Any = "",
+) -> SafeString:
     """Render a labelled text input inside a form-group wrapper."""
     if isinstance(required, str):
         required = required.lower() not in ("false", "0", "")
@@ -1200,16 +1210,16 @@ def dj_input(
 
 @register.simple_tag
 def dj_select(
-    name="",
-    label="",
-    value="",
-    options=None,
-    error="",
-    helper="",
-    required=False,
-    disabled=False,
-    event="",
-):
+    name: Any = "",
+    label: Any = "",
+    value: Any = "",
+    options: Any = None,
+    error: Any = "",
+    helper: Any = "",
+    required: Any = False,
+    disabled: Any = False,
+    event: Any = "",
+) -> SafeString:
     """Render a labelled <select> inside a form-group wrapper.
 
     Args:
@@ -1233,7 +1243,7 @@ def dj_select(
     error_cls = " form-select-error" if error else ""
 
     # Normalise options to list of (val, lbl)
-    def _opt_pair(opt):
+    def _opt_pair(opt: Any) -> Any:
         if isinstance(opt, dict):
             return str(opt.get("value", "")), str(opt.get("label", ""))
         if isinstance(opt, (list, tuple)) and len(opt) >= 2:
@@ -1277,7 +1287,14 @@ def dj_select(
 
 
 @register.simple_tag
-def dj_checkbox(name="", label="", checked=False, value="on", event="", disabled=False):
+def dj_checkbox(
+    name: Any = "",
+    label: Any = "",
+    checked: Any = False,
+    value: Any = "on",
+    event: Any = "",
+    disabled: Any = False,
+) -> SafeString:
     """Render a single checkbox input."""
     if isinstance(checked, str):
         checked = checked.lower() not in ("false", "0", "")
@@ -1308,7 +1325,14 @@ def dj_checkbox(name="", label="", checked=False, value="on", event="", disabled
 
 
 @register.simple_tag
-def dj_radio(name="", label="", value="", current_value="", event="", disabled=False):
+def dj_radio(
+    name: Any = "",
+    label: Any = "",
+    value: Any = "",
+    current_value: Any = "",
+    event: Any = "",
+    disabled: Any = False,
+) -> SafeString:
     """Render a single radio button."""
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
@@ -1339,17 +1363,17 @@ def dj_radio(name="", label="", value="", current_value="", event="", disabled=F
 
 @register.simple_tag
 def dj_textarea(
-    name="",
-    label="",
-    value="",
-    placeholder="",
-    rows=4,
-    error="",
-    helper="",
-    required=False,
-    disabled=False,
-    event="",
-):
+    name: Any = "",
+    label: Any = "",
+    value: Any = "",
+    placeholder: Any = "",
+    rows: Any = 4,
+    error: Any = "",
+    helper: Any = "",
+    required: Any = False,
+    disabled: Any = False,
+    event: Any = "",
+) -> SafeString:
     """Render a labelled <textarea> inside a form-group wrapper."""
     if isinstance(required, str):
         required = required.lower() not in ("false", "0", "")
@@ -1400,11 +1424,11 @@ def dj_textarea(
 
 
 class FormGroupNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         label = kw.get("label", "")
         error = kw.get("error", "")
@@ -1436,7 +1460,7 @@ class FormGroupNode(template.Node):
 
 
 @register.tag("form_group")
-def do_form_group(parser, token):
+def do_form_group(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endform_group",))
@@ -1450,7 +1474,7 @@ def do_form_group(parser, token):
 
 
 @register.simple_tag
-def spinner(size="md", color="primary"):
+def spinner(size: Any = "md", color: Any = "primary") -> SafeString:
     """Render an animated spinner."""
     e_size = conditional_escape(size)
     e_color = conditional_escape(color)
@@ -1466,7 +1490,7 @@ def spinner(size="md", color="primary"):
 
 
 @register.simple_tag
-def skeleton(skeleton_type="text", lines=3):
+def skeleton(skeleton_type: Any = "text", lines: Any = 3) -> SafeString:
     """Render skeleton loading placeholder.
 
     Args:
@@ -1510,7 +1534,7 @@ def skeleton(skeleton_type="text", lines=3):
 
 
 @register.simple_tag
-def breadcrumb(items=None):
+def breadcrumb(items: Any = None) -> SafeString:
     """Render breadcrumb navigation.
 
     Args:
@@ -1549,7 +1573,13 @@ def breadcrumb(items=None):
 
 
 @register.simple_tag
-def empty_state(title="", description="", icon="", action_label="", action_event=""):
+def empty_state(
+    title: Any = "",
+    description: Any = "",
+    icon: Any = "",
+    action_label: Any = "",
+    action_event: Any = "",
+) -> SafeString:
     """Render an empty-state placeholder with optional CTA."""
     e_title = conditional_escape(title)
     e_description = conditional_escape(description)
@@ -1578,7 +1608,7 @@ def empty_state(title="", description="", icon="", action_label="", action_event
 
 
 @register.simple_tag
-def dj_divider(label="", vertical=False):
+def dj_divider(label: Any = "", vertical: Any = False) -> SafeString:
     """Render a horizontal or vertical divider, optionally with a label."""
     if isinstance(vertical, str):
         vertical = vertical.lower() not in ("false", "0", "")
@@ -1598,7 +1628,14 @@ def dj_divider(label="", vertical=False):
 
 
 @register.simple_tag
-def switch(name="", checked=False, label="", event="toggle", size="md", disabled=False):
+def switch(
+    name: Any = "",
+    checked: Any = False,
+    label: Any = "",
+    event: Any = "toggle",
+    size: Any = "md",
+    disabled: Any = False,
+) -> SafeString:
     """Render an accessible switch/toggle."""
     if isinstance(checked, str):
         checked = checked.lower() not in ("false", "0", "")
@@ -1635,7 +1672,13 @@ def switch(name="", checked=False, label="", event="toggle", size="md", disabled
 
 
 @register.simple_tag
-def stat_card(label="", value="", trend="", description="", trend_direction=""):
+def stat_card(
+    label: Any = "",
+    value: Any = "",
+    trend: Any = "",
+    description: Any = "",
+    trend_direction: Any = "",
+) -> SafeString:
     """Render a metric/stat card."""
     e_label = conditional_escape(label)
     e_value = conditional_escape(value)
@@ -1667,7 +1710,13 @@ def stat_card(label="", value="", trend="", description="", trend_direction=""):
 
 
 @register.simple_tag
-def dj_tag(label="", variant="default", dismissible=False, event="dismiss_tag", size=""):
+def dj_tag(
+    label: Any = "",
+    variant: Any = "default",
+    dismissible: Any = False,
+    event: Any = "dismiss_tag",
+    size: Any = "",
+) -> SafeString:
     """Render a tag/chip element."""
     if isinstance(dismissible, str):
         dismissible = dismissible.lower() not in ("false", "0", "")
@@ -1690,16 +1739,16 @@ def dj_tag(label="", variant="default", dismissible=False, event="dismiss_tag", 
 
 
 class TimelineNode(template.Node):
-    def __init__(self, nodelist):
+    def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         content = self.nodelist.render(context)
         return mark_safe(f'<div class="timeline">{content}</div>')
 
 
 @register.tag("timeline")
-def do_timeline(parser, token):
+def do_timeline(parser: Any, token: Any) -> template.Node:
     nodelist = parser.parse(("endtimeline",))
     parser.delete_first_token()
     return TimelineNode(nodelist)
@@ -1711,11 +1760,11 @@ def do_timeline(parser, token):
 
 
 class TimelineItemNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         title = kw.get("title", "")
         time = kw.get("time", "")
@@ -1740,7 +1789,7 @@ class TimelineItemNode(template.Node):
 
 
 @register.tag("timeline_item")
-def do_timeline_item(parser, token):
+def do_timeline_item(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endtimeline_item",))
@@ -1754,7 +1803,7 @@ def do_timeline_item(parser, token):
 
 
 @register.simple_tag
-def stepper(steps=None, active=0, event="set_step"):
+def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> SafeString:
     """Render a step indicator.
 
     Args:
@@ -1807,8 +1856,13 @@ def stepper(steps=None, active=0, event="set_step"):
 
 @register.simple_tag
 def code_block(
-    code="", language="", filename="", copy_event="copy_code", highlight=True, theme="github-dark"
-):
+    code: Any = "",
+    language: Any = "",
+    filename: Any = "",
+    copy_event: Any = "copy_code",
+    highlight: Any = True,
+    theme: Any = "github-dark",
+) -> SafeString:
     """Render a syntax-highlighted code block with optional copy button.
 
     Args:
@@ -1904,19 +1958,19 @@ def code_block(
 
 @register.simple_tag
 def combobox(
-    name="",
-    label="",
-    value="",
-    placeholder="Search…",
-    options=None,
-    event="",
-    search_event="",
-    required=False,
-    error="",
-    helper="",
-    multiple=False,
-    selected=None,
-):
+    name: Any = "",
+    label: Any = "",
+    value: Any = "",
+    placeholder: Any = "Search…",
+    options: Any = None,
+    event: Any = "",
+    search_event: Any = "",
+    required: Any = False,
+    error: Any = "",
+    helper: Any = "",
+    multiple: Any = False,
+    selected: Any = None,
+) -> SafeString:
     """Render a combobox (searchable select).
 
     Args:
@@ -2051,7 +2105,7 @@ def combobox(
 
 
 @register.tag("popover")
-def do_popover(parser, token):
+def do_popover(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endpopover",))
@@ -2060,11 +2114,11 @@ def do_popover(parser, token):
 
 
 class PopoverNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         trigger = kw.get("trigger", "Click me")
         placement = kw.get("placement", "bottom")
@@ -2106,7 +2160,13 @@ class PopoverNode(template.Node):
 
 
 @register.simple_tag
-def rating(value=0, max_stars=5, readonly=False, event="set_rating", size="md"):
+def rating(
+    value: Any = 0,
+    max_stars: Any = 5,
+    readonly: Any = False,
+    event: Any = "set_rating",
+    size: Any = "md",
+) -> SafeString:
     """Render a star rating component."""
     try:
         value = float(value)
@@ -2146,7 +2206,13 @@ def rating(value=0, max_stars=5, readonly=False, event="set_rating", size="md"):
 
 
 @register.simple_tag
-def copy_button(text="", label="Copy", copied_label="Copied!", variant="outline", size="sm"):
+def copy_button(
+    text: Any = "",
+    label: Any = "Copy",
+    copied_label: Any = "Copied!",
+    variant: Any = "outline",
+    size: Any = "sm",
+) -> SafeString:
     """Render a copy-to-clipboard button."""
     e_text = conditional_escape(text)
     e_label = conditional_escape(label)
@@ -2172,7 +2238,7 @@ def copy_button(text="", label="Copy", copied_label="Copied!", variant="outline"
 
 
 @register.simple_tag
-def kbd(*keys):
+def kbd(*keys: Any) -> SafeString:
     """Render keyboard shortcut keys.
 
     Usage: {% kbd "Ctrl" "K" %} → <kbd>Ctrl</kbd>+<kbd>K</kbd>
@@ -2191,7 +2257,7 @@ def kbd(*keys):
 
 
 @register.tag("collapsible")
-def do_collapsible(parser, token):
+def do_collapsible(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endcollapsible",))
@@ -2200,11 +2266,11 @@ def do_collapsible(parser, token):
 
 
 class CollapsibleNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         trigger = kw.get("trigger", "Toggle")
         open_ = kw.get("open", False)
@@ -2242,7 +2308,7 @@ class CollapsibleNode(template.Node):
 
 
 @register.tag("sheet")
-def do_sheet(parser, token):
+def do_sheet(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endsheet",))
@@ -2251,11 +2317,11 @@ def do_sheet(parser, token):
 
 
 class SheetNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         open_ = kw.get("is_open", kw.get("open", False))
         if isinstance(open_, str):
@@ -2301,12 +2367,12 @@ class SheetNode(template.Node):
 
 @register.simple_tag
 def notification_center(
-    notifications=None,
-    unread_count=0,
-    open_event="toggle_notifications",
-    mark_read_event="mark_notification_read",
-    clear_event="clear_notifications",
-):
+    notifications: Any = None,
+    unread_count: Any = 0,
+    open_event: Any = "toggle_notifications",
+    mark_read_event: Any = "mark_notification_read",
+    clear_event: Any = "clear_notifications",
+) -> SafeString:
     """Render a notification bell with dropdown list."""
     if notifications is None:
         notifications = []
@@ -2371,7 +2437,14 @@ def notification_center(
 
 
 @register.simple_tag
-def gauge(value=0, max_value=100, label="", color="primary", size="md", show_value=True):
+def gauge(
+    value: Any = 0,
+    max_value: Any = 100,
+    label: Any = "",
+    color: Any = "primary",
+    size: Any = "md",
+    show_value: Any = True,
+) -> SafeString:
     """Render an SVG donut/gauge chart."""
     try:
         value = float(value)
@@ -2425,13 +2498,13 @@ def gauge(value=0, max_value=100, label="", color="primary", size="md", show_val
 
 @register.simple_tag
 def carousel(
-    images=None,
-    active=0,
-    prev_event="carousel_prev",
-    next_event="carousel_next",
-    go_event="carousel_go",
-    component_id="",
-):
+    images: Any = None,
+    active: Any = 0,
+    prev_event: Any = "carousel_prev",
+    next_event: Any = "carousel_next",
+    go_event: Any = "carousel_go",
+    component_id: Any = "",
+) -> SafeString:
     """Render an image carousel / slideshow."""
     if images is None:
         images = []
@@ -2498,7 +2571,12 @@ def carousel(
 
 
 @register.simple_tag
-def tree_view(nodes=None, expand_event="tree_expand", select_event="tree_select", selected=""):
+def tree_view(
+    nodes: Any = None,
+    expand_event: Any = "tree_expand",
+    select_event: Any = "tree_select",
+    selected: Any = "",
+) -> SafeString:
     """Render an expandable tree view.
 
     Args:
@@ -2515,7 +2593,7 @@ def tree_view(nodes=None, expand_event="tree_expand", select_event="tree_select"
     e_expand = conditional_escape(expand_event)
     e_select = conditional_escape(select_event)
 
-    def render_node(node, depth=0):
+    def render_node(node: Any, depth: Any = 0) -> Any:
         if not isinstance(node, dict):
             return ""
         nid = conditional_escape(str(node.get("id", "")))
@@ -2567,7 +2645,9 @@ def tree_view(nodes=None, expand_event="tree_expand", select_event="tree_select"
 
 
 @register.simple_tag
-def color_picker(name="", value="#3B82F6", event="", label="", swatches=None):
+def color_picker(
+    name: Any = "", value: Any = "#3B82F6", event: Any = "", label: Any = "", swatches: Any = None
+) -> SafeString:
     """Render a color picker with preset swatches and a hex input."""
     if swatches is None:
         swatches = [
@@ -2617,7 +2697,7 @@ def color_picker(name="", value="#3B82F6", event="", label="", swatches=None):
 
 
 @register.tag("command_palette")
-def do_command_palette(parser, token):
+def do_command_palette(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endcommand_palette",))
@@ -2626,11 +2706,11 @@ def do_command_palette(parser, token):
 
 
 class CommandPaletteNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         open_ = kw.get("is_open", kw.get("open", False))
         if isinstance(open_, str):
@@ -2660,7 +2740,9 @@ class CommandPaletteNode(template.Node):
 
 
 @register.simple_tag
-def palette_item(label="", shortcut="", description="", event="", icon=""):
+def palette_item(
+    label: Any = "", shortcut: Any = "", description: Any = "", event: Any = "", icon: Any = ""
+) -> SafeString:
     """Render a single command palette result item."""
     e_label = conditional_escape(label)
     e_event = conditional_escape(event)
@@ -2689,7 +2771,7 @@ def palette_item(label="", shortcut="", description="", event="", icon=""):
 
 
 @register.tag("context_menu")
-def do_context_menu(parser, token):
+def do_context_menu(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endcontext_menu",))
@@ -2698,11 +2780,11 @@ def do_context_menu(parser, token):
 
 
 class ContextMenuNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         label = kw.get("label", "Right-click area")
         uid = f"ctx-{uuid.uuid4().hex[:6]}"
@@ -2727,7 +2809,9 @@ class ContextMenuNode(template.Node):
 
 
 @register.simple_tag
-def context_menu_item(label="", event="", icon="", danger=False, divider=False):
+def context_menu_item(
+    label: Any = "", event: Any = "", icon: Any = "", danger: Any = False, divider: Any = False
+) -> SafeString:
     """Render a context menu item."""
     if divider:
         return mark_safe('<div class="ctx-divider"></div>')
@@ -2756,22 +2840,22 @@ def context_menu_item(label="", event="", icon="", danger=False, divider=False):
 
 @register.simple_tag
 def date_picker(
-    year=None,
-    month=None,
-    selected="",
-    prev_event="date_prev_month",
-    next_event="date_next_month",
-    select_event="date_select",
-    name="date",
-    label="",
-    required=False,
-    error="",
-    helper="",
-    is_range=False,
-    range_start="",
-    range_end="",
-    **kwargs,
-):
+    year: Any = None,
+    month: Any = None,
+    selected: Any = "",
+    prev_event: Any = "date_prev_month",
+    next_event: Any = "date_next_month",
+    select_event: Any = "date_select",
+    name: Any = "date",
+    label: Any = "",
+    required: Any = False,
+    error: Any = "",
+    helper: Any = "",
+    is_range: Any = False,
+    range_start: Any = "",
+    range_end: Any = "",
+    **kwargs: Any,
+) -> SafeString:
     """Render a server-driven calendar date picker.
 
     The server owns year/month navigation state. On each prev/next click,
@@ -2898,14 +2982,14 @@ def date_picker(
 
 @register.simple_tag
 def file_dropzone(
-    name="file",
-    label="",
-    accept="",
-    multiple=False,
-    max_size_mb=10,
-    event="file_selected",
-    helper="",
-):
+    name: Any = "file",
+    label: Any = "",
+    accept: Any = "",
+    multiple: Any = False,
+    max_size_mb: Any = 10,
+    event: Any = "file_selected",
+    helper: Any = "",
+) -> SafeString:
     """Render a drag-and-drop file upload zone."""
     if isinstance(multiple, str):
         multiple = multiple.lower() not in ("false", "0", "")
@@ -2954,7 +3038,7 @@ def file_dropzone(
 
 
 @register.tag("split_pane")
-def do_split_pane(parser, token):
+def do_split_pane(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     # parse two children: {% pane %}...{% endpane %}{% pane %}...{% endpane %}
@@ -2966,12 +3050,12 @@ def do_split_pane(parser, token):
 
 
 class SplitPaneNode(template.Node):
-    def __init__(self, pane1, pane2, kwargs):
+    def __init__(self, pane1: Any, pane2: Any, kwargs: Any) -> None:
         self.pane1 = pane1
         self.pane2 = pane2
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         direction = kw.get("direction", "horizontal")
         initial = kw.get("initial", "50")
@@ -3019,7 +3103,9 @@ class SplitPaneNode(template.Node):
 
 
 @register.simple_tag
-def table_of_contents(items=None, title="Contents", active="", event=""):
+def table_of_contents(
+    items: Any = None, title: Any = "Contents", active: Any = "", event: Any = ""
+) -> SafeString:
     """Render a table of contents from a list of items.
 
     Args:
@@ -3034,7 +3120,7 @@ def table_of_contents(items=None, title="Contents", active="", event=""):
     e_title = conditional_escape(title)
     e_event = conditional_escape(event) if event else ""
 
-    def render_item(item):
+    def render_item(item: Any) -> Any:
         if not isinstance(item, dict):
             return ""
         iid = conditional_escape(str(item.get("id", "")))
@@ -3061,8 +3147,13 @@ def table_of_contents(items=None, title="Contents", active="", event=""):
 
 @register.simple_tag
 def virtual_list(
-    items=None, total=0, page=1, page_size=20, load_more_event="load_more", item_height=48
-):
+    items: Any = None,
+    total: Any = 0,
+    page: Any = 1,
+    page_size: Any = 20,
+    load_more_event: Any = "load_more",
+    item_height: Any = 48,
+) -> SafeString:
     """Render a paginated list optimised for large datasets.
 
     Renders one page of items in a scrollable container. A 'Load more'
@@ -3132,11 +3223,11 @@ def virtual_list(
 
 @register.simple_tag
 def kanban_board(
-    columns=None,
-    move_event="kanban_move",
-    add_card_event="kanban_add_card",
-    add_col_event="kanban_add_column",
-):
+    columns: Any = None,
+    move_event: Any = "kanban_move",
+    add_card_event: Any = "kanban_add_card",
+    add_col_event: Any = "kanban_add_column",
+) -> SafeString:
     """Render a Kanban board.
 
     Args:
@@ -3238,14 +3329,14 @@ def kanban_board(
 
 @register.simple_tag
 def rich_text_editor(
-    name="content",
-    value="",
-    event="update_content",
-    placeholder="Start typing…",
-    height="200px",
-    label="",
-    required=False,
-):
+    name: Any = "content",
+    value: Any = "",
+    event: Any = "update_content",
+    placeholder: Any = "Start typing…",
+    height: Any = "200px",
+    label: Any = "",
+    required: Any = False,
+) -> SafeString:
     """Render a basic rich text editor (contenteditable + toolbar).
 
     Toolbar: Bold, Italic, Underline, Strikethrough, | H2, H3, | UL, OL, | Link, Quote, Code
@@ -3324,14 +3415,14 @@ def rich_text_editor(
 
 @register.simple_tag
 def multi_select(
-    name="",
-    label="",
-    options=None,
-    selected=None,
-    event="",
-    placeholder="Search...",
-    disabled=False,
-):
+    name: Any = "",
+    label: Any = "",
+    options: Any = None,
+    selected: Any = None,
+    event: Any = "",
+    placeholder: Any = "Search...",
+    disabled: Any = False,
+) -> SafeString:
     """Render a multi-select checkbox list with search filtering and tag output.
 
     Args:
@@ -3360,7 +3451,7 @@ def multi_select(
 
     uid = f"ms-{uuid.uuid4().hex[:6]}"
 
-    def _opt_pair(opt):
+    def _opt_pair(opt: Any) -> Any:
         if isinstance(opt, dict):
             return str(opt.get("value", "")), str(opt.get("label", ""))
         if isinstance(opt, (list, tuple)) and len(opt) >= 2:
@@ -3418,7 +3509,9 @@ def multi_select(
 
 
 @register.simple_tag
-def otp_input(name="", digits=6, event="", label="", disabled=False):
+def otp_input(
+    name: Any = "", digits: Any = 6, event: Any = "", label: Any = "", disabled: Any = False
+) -> SafeString:
     """Render a one-time-code input with individual digit boxes.
 
     Args:
@@ -3470,8 +3563,15 @@ def otp_input(name="", digits=6, event="", label="", disabled=False):
 
 @register.simple_tag
 def number_stepper(
-    name="", value=0, min_val=None, max_val=None, step=1, event="", label="", disabled=False
-):
+    name: Any = "",
+    value: Any = 0,
+    min_val: Any = None,
+    max_val: Any = None,
+    step: Any = 1,
+    event: Any = "",
+    label: Any = "",
+    disabled: Any = False,
+) -> SafeString:
     """Render a +/- numeric stepper input.
 
     Args:
@@ -3528,14 +3628,14 @@ def number_stepper(
 
 @register.simple_tag
 def tag_input(
-    name="",
-    tags=None,
-    suggestions=None,
-    event="",
-    placeholder="Add tag...",
-    disabled=False,
-    label="",
-):
+    name: Any = "",
+    tags: Any = None,
+    suggestions: Any = None,
+    event: Any = "",
+    placeholder: Any = "Add tag...",
+    disabled: Any = False,
+    label: Any = "",
+) -> SafeString:
     """Render an input that creates dismissible tags.
 
     Args:
@@ -3604,11 +3704,11 @@ def tag_input(
 class InputGroupNode(template.Node):
     """Wraps child content (addons + input) in an input-group container."""
 
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         size = kw.get("size", "md")
         error = kw.get("error", "")
@@ -3626,11 +3726,11 @@ class InputGroupNode(template.Node):
 class InputAddonNode(template.Node):
     """Renders a prefix/suffix addon inside an input group."""
 
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         position = kw.get("position", "prefix")
         content = self.nodelist.render(context)
@@ -3640,7 +3740,7 @@ class InputAddonNode(template.Node):
 
 
 @register.tag("input_group")
-def do_input_group(parser, token):
+def do_input_group(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endinput_group",))
@@ -3649,7 +3749,7 @@ def do_input_group(parser, token):
 
 
 @register.tag("input_addon")
-def do_input_addon(parser, token):
+def do_input_addon(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endinput_addon",))
@@ -3665,11 +3765,11 @@ def do_input_addon(parser, token):
 class DjLabelNode(template.Node):
     """Renders an accessible form label element."""
 
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         for_input = kw.get("for", "")
         required = kw.get("required", False)
@@ -3686,7 +3786,7 @@ class DjLabelNode(template.Node):
 
 
 @register.tag("dj_label")
-def do_dj_label(parser, token):
+def do_dj_label(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("enddj_label",))
@@ -3702,11 +3802,11 @@ def do_dj_label(parser, token):
 class FieldsetNode(template.Node):
     """Renders a styled fieldset with legend."""
 
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         legend = kw.get("legend", "")
         disabled = kw.get("disabled", False)
@@ -3732,7 +3832,7 @@ class FieldsetNode(template.Node):
 
 
 @register.tag("fieldset")
-def do_fieldset(parser, token):
+def do_fieldset(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endfieldset",))
@@ -3747,8 +3847,14 @@ def do_fieldset(parser, token):
 
 @register.simple_tag
 def toggle_group(
-    name="", options=None, value="", event="toggle_select", mode="single", disabled=False, size="md"
-):
+    name: Any = "",
+    options: Any = None,
+    value: Any = "",
+    event: Any = "toggle_select",
+    mode: Any = "single",
+    disabled: Any = False,
+    size: Any = "md",
+) -> SafeString:
     """Render a segmented toggle button group (radio-style or multi-select).
 
     Args:
@@ -3822,15 +3928,15 @@ def toggle_group(
 
 @register.simple_tag
 def fab(
-    icon="+",
-    event="",
-    position="bottom-right",
-    label="",
-    size="md",
-    variant="primary",
-    disabled=False,
-    actions=None,
-):
+    icon: Any = "+",
+    event: Any = "",
+    position: Any = "bottom-right",
+    label: Any = "",
+    size: Any = "md",
+    variant: Any = "primary",
+    disabled: Any = False,
+    actions: Any = None,
+) -> SafeString:
     """Render a floating action button with optional speed-dial actions.
 
     Args:
@@ -3900,17 +4006,17 @@ def fab(
 
 @register.simple_tag
 def split_button(
-    label="",
-    event="",
-    options=None,
-    variant="primary",
-    size="md",
-    disabled=False,
-    loading=False,
-    is_open=False,
-    toggle_event="toggle_split_menu",
-    **kwargs,
-):
+    label: Any = "",
+    event: Any = "",
+    options: Any = None,
+    variant: Any = "primary",
+    size: Any = "md",
+    disabled: Any = False,
+    loading: Any = False,
+    is_open: Any = False,
+    toggle_event: Any = "toggle_split_menu",
+    **kwargs: Any,
+) -> SafeString:
     """Render a split button with primary action and dropdown secondary actions.
 
     Args:
@@ -4000,11 +4106,11 @@ def split_button(
 
 
 class ScrollAreaNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         max_height = kw.get("max_height", "400px")
         custom_class = kw.get("custom_class", "")
@@ -4029,7 +4135,7 @@ class ScrollAreaNode(template.Node):
 
 
 @register.tag("scroll_area")
-def do_scroll_area(parser, token):
+def do_scroll_area(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endscroll_area",))
@@ -4050,11 +4156,11 @@ class CalloutNode(template.Node):
         "success": "&#10004;",  # check mark
     }
 
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         callout_type = kw.get("variant", kw.get("type", "default"))
         title = kw.get("title", "")
@@ -4096,7 +4202,7 @@ class CalloutNode(template.Node):
 
 
 @register.tag("callout")
-def do_callout(parser, token):
+def do_callout(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endcallout",))
@@ -4110,11 +4216,11 @@ def do_callout(parser, token):
 
 
 class AspectRatioNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         ratio = kw.get("ratio", "16/9")
         custom_class = kw.get("custom_class", "")
@@ -4132,7 +4238,7 @@ class AspectRatioNode(template.Node):
 
 
 @register.tag("aspect_ratio")
-def do_aspect_ratio(parser, token):
+def do_aspect_ratio(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endaspect_ratio",))
@@ -4146,10 +4252,10 @@ def do_aspect_ratio(parser, token):
 
 
 class DescriptionListNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         items = kw.get("items", [])
         layout = kw.get("layout", "vertical")
@@ -4180,7 +4286,7 @@ class DescriptionListNode(template.Node):
 
 
 @register.tag("description_list")
-def do_description_list(parser, token):
+def do_description_list(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return DescriptionListNode(kwargs)
@@ -4192,11 +4298,11 @@ def do_description_list(parser, token):
 
 
 class StickyHeaderNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         offset = kw.get("offset", "0")
         z_index = kw.get("z_index", "10")
@@ -4220,7 +4326,7 @@ class StickyHeaderNode(template.Node):
 
 
 @register.tag("sticky_header")
-def do_sticky_header(parser, token):
+def do_sticky_header(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endsticky_header",))
@@ -4234,10 +4340,10 @@ def do_sticky_header(parser, token):
 
 
 class NotificationBadgeNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         try:
             count = int(kw.get("count", 0))
@@ -4272,7 +4378,7 @@ class NotificationBadgeNode(template.Node):
 
 
 @register.tag("notification_badge")
-def do_notification_badge(parser, token):
+def do_notification_badge(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return NotificationBadgeNode(kwargs)
@@ -4284,10 +4390,10 @@ def do_notification_badge(parser, token):
 
 
 class SegmentedProgressNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         steps = kw.get("steps", [])
         if not isinstance(steps, (list, tuple)):
@@ -4344,7 +4450,7 @@ class SegmentedProgressNode(template.Node):
 
 
 @register.tag("segmented_progress")
-def do_segmented_progress(parser, token):
+def do_segmented_progress(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return SegmentedProgressNode(kwargs)
@@ -4356,10 +4462,10 @@ def do_segmented_progress(parser, token):
 
 
 class ProgressCircleNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         try:
             value = max(0, min(100, int(kw.get("value", 0))))
@@ -4419,7 +4525,7 @@ class ProgressCircleNode(template.Node):
 
 
 @register.tag("progress_circle")
-def do_progress_circle(parser, token):
+def do_progress_circle(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ProgressCircleNode(kwargs)
@@ -4431,10 +4537,10 @@ def do_progress_circle(parser, token):
 
 
 class StatusIndicatorNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         status = kw.get("status", "offline")
         label = kw.get("label", "")
@@ -4468,7 +4574,7 @@ class StatusIndicatorNode(template.Node):
 
 
 @register.tag("status_indicator")
-def do_status_indicator(parser, token):
+def do_status_indicator(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return StatusIndicatorNode(kwargs)
@@ -4480,11 +4586,11 @@ def do_status_indicator(parser, token):
 
 
 class LoadingOverlayNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         active = kw.get("active", False)
         text = kw.get("text", "")
@@ -4515,7 +4621,7 @@ class LoadingOverlayNode(template.Node):
 
 
 @register.tag("loading_overlay")
-def do_loading_overlay(parser, token):
+def do_loading_overlay(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endloading_overlay",))
@@ -4529,11 +4635,11 @@ def do_loading_overlay(parser, token):
 
 
 class AnnouncementBarNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         bar_type = kw.get("variant", kw.get("type", "info"))
         dismissible = kw.get("dismissible", False)
@@ -4566,7 +4672,7 @@ class AnnouncementBarNode(template.Node):
 
 
 @register.tag("announcement_bar")
-def do_announcement_bar(parser, token):
+def do_announcement_bar(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endannouncement_bar",))
@@ -4587,7 +4693,7 @@ from djust.components.components.rich_select import (
 )
 
 
-def _rich_select_resolve_variant(opt, variant_map):
+def _rich_select_resolve_variant(opt: Any, variant_map: Any) -> Any:
     """Mirror of RichSelect._resolve_variant for the template-tag entry point."""
     explicit = opt.get("variant", "")
     if explicit:
@@ -4601,16 +4707,16 @@ def _rich_select_resolve_variant(opt, variant_map):
 
 @register.simple_tag
 def rich_select(
-    name="",
-    options=None,
-    value="",
-    event="",
-    placeholder="Select...",
-    disabled=False,
-    searchable=False,
-    label="",
-    variant_map=None,
-):
+    name: Any = "",
+    options: Any = None,
+    value: Any = "",
+    event: Any = "",
+    placeholder: Any = "Select...",
+    disabled: Any = False,
+    searchable: Any = False,
+    label: Any = "",
+    variant_map: Any = None,
+) -> SafeString:
     """Render a rich select dropdown where each option can include icons, images,
     descriptions, badges, or variant coloring alongside the label.
 
@@ -4734,7 +4840,7 @@ def rich_select(
     )
 
 
-def _rich_select_option_html(opt, is_display=False):
+def _rich_select_option_html(opt: Any, is_display: Any = False) -> Any:
     """Render the inner HTML for a rich select option."""
     parts = []
     icon = opt.get("icon", "")
@@ -4775,20 +4881,20 @@ def _rich_select_option_html(opt, is_display=False):
 
 @register.simple_tag
 def data_grid(
-    columns=None,
-    rows=None,
-    row_key="id",
-    edit_event="grid_cell_edit",
-    resizable=True,
-    frozen_left=0,
-    frozen_right=0,
-    striped=False,
-    compact=False,
-    keyboard_nav=True,
-    new_row_event="",
-    delete_row_event="",
-    custom_class="",
-):
+    columns: Any = None,
+    rows: Any = None,
+    row_key: Any = "id",
+    edit_event: Any = "grid_cell_edit",
+    resizable: Any = True,
+    frozen_left: Any = 0,
+    frozen_right: Any = 0,
+    striped: Any = False,
+    compact: Any = False,
+    keyboard_nav: Any = True,
+    new_row_event: Any = "",
+    delete_row_event: Any = "",
+    custom_class: Any = "",
+) -> SafeString:
     """Render an editable data grid — spreadsheet-like component.
 
     Distinct from data_table: the grid is optimised for cell-level editing with
@@ -4954,10 +5060,10 @@ def data_grid(
 
 
 class StreamingTextNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         stream_event = kw.get("stream_event", "stream_chunk")
         text = kw.get("text", "")
@@ -4992,7 +5098,7 @@ class StreamingTextNode(template.Node):
 
 
 @register.tag("streaming_text")
-def do_streaming_text(parser, token):
+def do_streaming_text(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return StreamingTextNode(kwargs)
@@ -5004,10 +5110,10 @@ def do_streaming_text(parser, token):
 
 
 class ConnectionStatusNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         custom_class = kw.get("custom_class", "")
         reconnecting_text = kw.get("reconnecting_text", "Reconnecting...")
@@ -5032,7 +5138,7 @@ class ConnectionStatusNode(template.Node):
 
 
 @register.tag("connection_status")
-def do_connection_status(parser, token):
+def do_connection_status(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ConnectionStatusNode(kwargs)
@@ -5044,10 +5150,10 @@ def do_connection_status(parser, token):
 
 
 class LiveCounterNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         try:
             value = int(kw.get("value", 0))
@@ -5080,7 +5186,7 @@ class LiveCounterNode(template.Node):
 
 
 @register.tag("live_counter")
-def do_live_counter(parser, token):
+def do_live_counter(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return LiveCounterNode(kwargs)
@@ -5101,10 +5207,10 @@ class ToastContainerNode(template.Node):
         "bottom-center",
     }
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         position = str(kw.get("position", "top-right"))
         if position not in self.ALLOWED_POSITIONS:
@@ -5132,7 +5238,7 @@ class ToastContainerNode(template.Node):
 
 
 @register.tag("server_toast_container")
-def do_server_toast_container(parser, token):
+def do_server_toast_container(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ToastContainerNode(kwargs)
@@ -5144,7 +5250,9 @@ def do_server_toast_container(parser, token):
 
 
 @register.simple_tag
-def scroll_to_top(threshold="300px", label="Back to top", custom_class=""):
+def scroll_to_top(
+    threshold: Any = "300px", label: Any = "Back to top", custom_class: Any = ""
+) -> SafeString:
     """Floating button that appears after scrolling past a threshold.
 
     Args:
@@ -5181,7 +5289,7 @@ def scroll_to_top(threshold="300px", label="Back to top", custom_class=""):
 
 
 @register.simple_tag
-def code_snippet(code="", language="", custom_class=""):
+def code_snippet(code: Any = "", language: Any = "", custom_class: Any = "") -> SafeString:
     """Code block with copy button and language badge.
 
     Args:
@@ -5222,8 +5330,15 @@ def code_snippet(code="", language="", custom_class=""):
 
 @register.simple_tag
 def responsive_image(
-    src="", alt="", aspect_ratio="", lazy=True, srcset="", sizes="", placeholder="", custom_class=""
-):
+    src: Any = "",
+    alt: Any = "",
+    aspect_ratio: Any = "",
+    lazy: Any = True,
+    srcset: Any = "",
+    sizes: Any = "",
+    placeholder: Any = "",
+    custom_class: Any = "",
+) -> SafeString:
     """Picture element with srcset, lazy loading, and blur-up placeholder.
 
     Args:
@@ -5280,7 +5395,9 @@ def responsive_image(
 
 
 @register.simple_tag
-def relative_time(datetime="", auto_update=True, interval=60, custom_class=""):
+def relative_time(
+    datetime: Any = "", auto_update: Any = True, interval: Any = 60, custom_class: Any = ""
+) -> SafeString:
     """Display a datetime as relative text ("3 hours ago") with auto-update.
 
     Args:
@@ -5328,11 +5445,11 @@ def relative_time(datetime="", auto_update=True, interval=60, custom_class=""):
 
 
 class CopyableTextNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         copied_label = kw.get("copied_label", "Copied!")
         custom_class = kw.get("custom_class", "")
@@ -5360,7 +5477,7 @@ class CopyableTextNode(template.Node):
 
 
 @register.tag("copyable_text")
-def do_copyable_text(parser, token):
+def do_copyable_text(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endcopyable_text",))
@@ -5374,7 +5491,7 @@ def do_copyable_text(parser, token):
 
 
 @register.simple_tag
-def icon(name="", size="md", set="heroicons", **kwargs):
+def icon(name: Any = "", size: Any = "md", set: Any = "heroicons", **kwargs: Any) -> SafeString:
     """Render an SVG icon from a bundled icon set.
 
     Args:
@@ -5405,10 +5522,10 @@ def icon(name="", size="md", set="heroicons", **kwargs):
 
 
 class ThemeToggleNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         current = kw.get("current", "system")
         event = kw.get("event", "")
@@ -5454,7 +5571,7 @@ class ThemeToggleNode(template.Node):
 
 
 @register.tag("theme_toggle")
-def do_theme_toggle(parser, token):
+def do_theme_toggle(parser: Any, token: Any) -> template.Node:
     """{% theme_toggle current="system" event="set_theme" %}"""
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
@@ -5471,10 +5588,10 @@ _page_header_actions_key = "__page_header_actions__"
 class PageHeaderActionsNode(template.Node):
     """Renders the actions slot inside a page header."""
 
-    def __init__(self, nodelist):
+    def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         content = self.nodelist.render(context)
         # Stash the rendered actions content on the context for the parent
         context[_page_header_actions_key] = content
@@ -5485,11 +5602,11 @@ class PageHeaderNode(template.Node):
     """Structured page-level header with title, optional subtitle/description,
     optional breadcrumb slot, and right-aligned action buttons area."""
 
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         title = kw.get("title", "")
         subtitle = kw.get("subtitle", "")
@@ -5550,7 +5667,7 @@ class PageHeaderNode(template.Node):
 
 
 @register.tag("page_header")
-def do_page_header(parser, token):
+def do_page_header(parser: Any, token: Any) -> template.Node:
     """{% page_header title="Products" subtitle="Manage inventory" %}...{% endpage_header %}"""
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
@@ -5560,7 +5677,7 @@ def do_page_header(parser, token):
 
 
 @register.tag("page_header_actions")
-def do_page_header_actions(parser, token):
+def do_page_header_actions(parser: Any, token: Any) -> template.Node:
     """{% page_header_actions %}...{% endpage_header_actions %}"""
     nodelist = parser.parse(("endpage_header_actions",))
     parser.delete_first_token()
@@ -5579,30 +5696,30 @@ def do_page_header_actions(parser, token):
 class SidebarItemNode(template.Node):
     """A single sidebar menu item."""
 
-    def __init__(self, kwargs, nodelist):
+    def __init__(self, kwargs: Any, nodelist: Any) -> None:
         self.kwargs = kwargs
         self.nodelist = nodelist  # sub-items if nested
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by parent SidebarNode
 
 
 class SidebarSectionNode(template.Node):
     """A section header within a sidebar."""
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by parent SidebarNode
 
 
 class SidebarNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def _render_item(self, item, context, active_path, level=0):
+    def _render_item(self, item: Any, context: Any, active_path: Any, level: Any = 0) -> Any:
         kw = {k: _resolve(v, context) for k, v in item.kwargs.items()}
         label = kw.get("label", "")
         href = kw.get("href", "#")
@@ -5648,7 +5765,7 @@ class SidebarNode(template.Node):
 
         return f'<li class="dj-sidebar__item">{trigger}</li>'
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         sidebar_id = kw.get("id", "sidebar")
         active = kw.get("active", "")
@@ -5697,7 +5814,7 @@ class SidebarNode(template.Node):
 
 
 @register.tag("sidebar")
-def do_sidebar(parser, token):
+def do_sidebar(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endsidebar",))
@@ -5706,7 +5823,7 @@ def do_sidebar(parser, token):
 
 
 @register.tag("sidebar_item")
-def do_sidebar_item(parser, token):
+def do_sidebar_item(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endsidebar_item",))
@@ -5715,7 +5832,7 @@ def do_sidebar_item(parser, token):
 
 
 @register.tag("sidebar_section")
-def do_sidebar_section(parser, token):
+def do_sidebar_section(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return SidebarSectionNode(kwargs)
@@ -5729,20 +5846,20 @@ def do_sidebar_section(parser, token):
 class NavItemNode(template.Node):
     """A single nav menu item, optionally containing dropdown children."""
 
-    def __init__(self, kwargs, nodelist):
+    def __init__(self, kwargs: Any, nodelist: Any) -> None:
         self.kwargs = kwargs
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by parent NavMenuNode
 
 
 class NavMenuNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def _render_nav_item(self, item, context, active_path):
+    def _render_nav_item(self, item: Any, context: Any, active_path: Any) -> Any:
         kw = {k: _resolve(v, context) for k, v in item.kwargs.items()}
         label = kw.get("label", "")
         href = kw.get("href", "#")
@@ -5782,7 +5899,7 @@ class NavMenuNode(template.Node):
             f"{conditional_escape(label)}</a></li>"
         )
 
-    def _render_dropdown_item(self, item, context, active_path):
+    def _render_dropdown_item(self, item: Any, context: Any, active_path: Any) -> Any:
         kw = {k: _resolve(v, context) for k, v in item.kwargs.items()}
         label = kw.get("label", "")
         href = kw.get("href", "#")
@@ -5810,7 +5927,7 @@ class NavMenuNode(template.Node):
             f"{conditional_escape(label)}{desc_html}</a></li>"
         )
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         nav_id = kw.get("id", "nav-menu")
         active = kw.get("active", "")
@@ -5851,7 +5968,7 @@ class NavMenuNode(template.Node):
 
 
 @register.tag("nav_menu")
-def do_nav_menu(parser, token):
+def do_nav_menu(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endnav_menu",))
@@ -5860,7 +5977,7 @@ def do_nav_menu(parser, token):
 
 
 @register.tag("nav_item")
-def do_nav_item(parser, token):
+def do_nav_item(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endnav_item",))
@@ -5874,35 +5991,35 @@ def do_nav_item(parser, token):
 
 
 class AppSidebarNode(template.Node):
-    def __init__(self, nodelist):
+    def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by AppShellNode
 
 
 class AppHeaderNode(template.Node):
-    def __init__(self, nodelist):
+    def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by AppShellNode
 
 
 class AppContentNode(template.Node):
-    def __init__(self, nodelist):
+    def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by AppShellNode
 
 
 class AppShellNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         shell_id = kw.get("id", "app-shell")
         sidebar_collapsed = kw.get("sidebar_collapsed", False)
@@ -5944,7 +6061,7 @@ class AppShellNode(template.Node):
 
 
 @register.tag("app_shell")
-def do_app_shell(parser, token):
+def do_app_shell(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endapp_shell",))
@@ -5953,21 +6070,21 @@ def do_app_shell(parser, token):
 
 
 @register.tag("app_sidebar")
-def do_app_sidebar(parser, token):
+def do_app_sidebar(parser: Any, token: Any) -> template.Node:
     nodelist = parser.parse(("endapp_sidebar",))
     parser.delete_first_token()
     return AppSidebarNode(nodelist)
 
 
 @register.tag("app_header")
-def do_app_header(parser, token):
+def do_app_header(parser: Any, token: Any) -> template.Node:
     nodelist = parser.parse(("endapp_header",))
     parser.delete_first_token()
     return AppHeaderNode(nodelist)
 
 
 @register.tag("app_content")
-def do_app_content(parser, token):
+def do_app_content(parser: Any, token: Any) -> template.Node:
     nodelist = parser.parse(("endapp_content",))
     parser.delete_first_token()
     return AppContentNode(nodelist)
@@ -5979,24 +6096,24 @@ def do_app_content(parser, token):
 
 
 class ToolbarSeparatorNode(template.Node):
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by ToolbarNode
 
 
 class ToolbarOverflowNode(template.Node):
-    def __init__(self, nodelist):
+    def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by ToolbarNode
 
 
 class ToolbarNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         toolbar_id = kw.get("id", f"toolbar-{uuid.uuid4().hex[:8]}")
         custom_class = kw.get("class", "")
@@ -6032,7 +6149,7 @@ class ToolbarNode(template.Node):
 
 
 @register.tag("toolbar")
-def do_toolbar(parser, token):
+def do_toolbar(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endtoolbar",))
@@ -6041,12 +6158,12 @@ def do_toolbar(parser, token):
 
 
 @register.tag("toolbar_separator")
-def do_toolbar_separator(parser, token):
+def do_toolbar_separator(parser: Any, token: Any) -> template.Node:
     return ToolbarSeparatorNode()
 
 
 @register.tag("toolbar_overflow")
-def do_toolbar_overflow(parser, token):
+def do_toolbar_overflow(parser: Any, token: Any) -> template.Node:
     nodelist = parser.parse(("endtoolbar_overflow",))
     parser.delete_first_token()
     return ToolbarOverflowNode(nodelist)
@@ -6058,10 +6175,10 @@ def do_toolbar_overflow(parser, token):
 
 
 class InlineEditNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         value = kw.get("value", "")
         event = kw.get("event", "inline_edit")
@@ -6104,7 +6221,7 @@ class InlineEditNode(template.Node):
 
 
 @register.tag("inline_edit")
-def do_inline_edit(parser, token):
+def do_inline_edit(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return InlineEditNode(kwargs)
@@ -6116,35 +6233,35 @@ def do_inline_edit(parser, token):
 
 
 class FilterSelectNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by FilterBarNode
 
 
 class FilterDateRangeNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by FilterBarNode
 
 
 class FilterSearchNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return ""  # rendered by FilterBarNode
 
 
 class FilterBarNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         bar_id = kw.get("id", f"filter-bar-{uuid.uuid4().hex[:8]}")
         event = kw.get("event", "filter_change")
@@ -6241,7 +6358,7 @@ class FilterBarNode(template.Node):
 
 
 @register.tag("filter_bar")
-def do_filter_bar(parser, token):
+def do_filter_bar(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endfilter_bar",))
@@ -6250,21 +6367,21 @@ def do_filter_bar(parser, token):
 
 
 @register.tag("filter_select")
-def do_filter_select(parser, token):
+def do_filter_select(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return FilterSelectNode(kwargs)
 
 
 @register.tag("filter_date_range")
-def do_filter_date_range(parser, token):
+def do_filter_date_range(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return FilterDateRangeNode(kwargs)
 
 
 @register.tag("filter_search")
-def do_filter_search(parser, token):
+def do_filter_search(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return FilterSearchNode(kwargs)
@@ -6276,10 +6393,10 @@ def do_filter_search(parser, token):
 
 
 class AvatarGroupNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         users = kw.get("users", [])
         max_display = int(kw.get("max", 5))
@@ -6334,7 +6451,7 @@ class AvatarGroupNode(template.Node):
 
 
 @register.tag("avatar_group")
-def do_avatar_group(parser, token):
+def do_avatar_group(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return AvatarGroupNode(kwargs)
@@ -6346,11 +6463,11 @@ def do_avatar_group(parser, token):
 
 
 class HoverCardNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         trigger = kw.get("trigger", "")
         position = kw.get("position", "bottom")
@@ -6377,7 +6494,7 @@ class HoverCardNode(template.Node):
 
 
 @register.tag("hover_card")
-def do_hover_card(parser, token):
+def do_hover_card(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endhover_card",))
@@ -6391,10 +6508,10 @@ def do_hover_card(parser, token):
 
 
 class NotificationPopoverNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         notifications = kw.get("notifications", [])
         unread_count = int(kw.get("unread_count", 0))
@@ -6478,7 +6595,7 @@ class NotificationPopoverNode(template.Node):
 
 
 @register.tag("notification_popover")
-def do_notification_popover(parser, token):
+def do_notification_popover(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return NotificationPopoverNode(kwargs)
@@ -6490,10 +6607,10 @@ def do_notification_popover(parser, token):
 
 
 class ConversationThreadNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         messages = kw.get("messages", [])
         stream_event = kw.get("stream_event", "new_message")
@@ -6575,7 +6692,7 @@ class ConversationThreadNode(template.Node):
 
 
 @register.tag("conversation_thread")
-def do_conversation_thread(parser, token):
+def do_conversation_thread(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ConversationThreadNode(kwargs)
@@ -6589,10 +6706,10 @@ def do_conversation_thread(parser, token):
 class ThinkingIndicatorNode(template.Node):
     VALID_STATUSES = {"thinking", "searching", "generating", "tool_use", "idle"}
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         status = kw.get("status", "thinking")
         label = kw.get("label", "")
@@ -6635,7 +6752,7 @@ class ThinkingIndicatorNode(template.Node):
 
 
 @register.tag("thinking_indicator")
-def do_thinking_indicator(parser, token):
+def do_thinking_indicator(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ThinkingIndicatorNode(kwargs)
@@ -6647,10 +6764,10 @@ def do_thinking_indicator(parser, token):
 
 
 class MultimodalInputNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "message")
         event = kw.get("event", "send")
@@ -6718,7 +6835,7 @@ class MultimodalInputNode(template.Node):
 
 
 @register.tag("multimodal_input")
-def do_multimodal_input(parser, token):
+def do_multimodal_input(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return MultimodalInputNode(kwargs)
@@ -6732,10 +6849,10 @@ def do_multimodal_input(parser, token):
 class FeedbackWidgetNode(template.Node):
     VALID_MODES = {"thumbs", "stars", "emoji"}
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         event = kw.get("event", "rate_response")
         mode = kw.get("mode", "thumbs")
@@ -6761,7 +6878,7 @@ class FeedbackWidgetNode(template.Node):
 
         return mark_safe(f'<div class="{cls}" role="group" aria-label="Feedback">{buttons}</div>')
 
-    def _render_thumbs(self, e_event, value):
+    def _render_thumbs(self, e_event: Any, value: Any) -> Any:
         up_cls = "dj-feedback__btn--active" if value == "up" else ""
         down_cls = "dj-feedback__btn--active" if value == "down" else ""
         return (
@@ -6781,7 +6898,7 @@ class FeedbackWidgetNode(template.Node):
             f"</svg></button>"
         )
 
-    def _render_stars(self, e_event, value):
+    def _render_stars(self, e_event: Any, value: Any) -> Any:
         parts = []
         current = int(value) if value and str(value).isdigit() else 0
         for i in range(1, 6):
@@ -6797,7 +6914,7 @@ class FeedbackWidgetNode(template.Node):
             )
         return "".join(parts)
 
-    def _render_emoji(self, e_event, value):
+    def _render_emoji(self, e_event: Any, value: Any) -> Any:
         emojis = [
             ("\U0001f44d", "thumbs_up"),
             ("\u2764\ufe0f", "heart"),
@@ -6818,7 +6935,7 @@ class FeedbackWidgetNode(template.Node):
 
 
 @register.tag("feedback")
-def do_feedback(parser, token):
+def do_feedback(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return FeedbackWidgetNode(kwargs)
@@ -6832,10 +6949,10 @@ def do_feedback(parser, token):
 class ApprovalGateNode(template.Node):
     VALID_RISKS = {"low", "medium", "high", "critical"}
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         message = kw.get("message", "")
         risk = kw.get("risk", "medium")
@@ -6894,7 +7011,7 @@ class ApprovalGateNode(template.Node):
 
 
 @register.tag("approval_gate")
-def do_approval_gate(parser, token):
+def do_approval_gate(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ApprovalGateNode(kwargs)
@@ -6906,10 +7023,10 @@ def do_approval_gate(parser, token):
 
 
 class SourceCitationNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         index = kw.get("index", 1)
         title = kw.get("title", "")
@@ -6959,7 +7076,7 @@ class SourceCitationNode(template.Node):
 
 
 @register.tag("source_citation")
-def do_source_citation(parser, token):
+def do_source_citation(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return SourceCitationNode(kwargs)
@@ -6978,10 +7095,10 @@ class ModelSelectorNode(template.Node):
         "enterprise": "Enterprise",
     }
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "model")
         options = kw.get("options", [])
@@ -7052,7 +7169,7 @@ class ModelSelectorNode(template.Node):
             f"</div></div>"
         )
 
-    def _option_inner(self, opt):
+    def _option_inner(self, opt: Any) -> Any:
         label = conditional_escape(str(opt.get("label", "")))
         desc = conditional_escape(str(opt.get("description", ""))) if opt.get("description") else ""
         ctx_win = (
@@ -7085,7 +7202,7 @@ class ModelSelectorNode(template.Node):
 
 
 @register.tag("model_selector")
-def do_model_selector(parser, token):
+def do_model_selector(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ModelSelectorNode(kwargs)
@@ -7097,10 +7214,10 @@ def do_model_selector(parser, token):
 
 
 class TokenCounterNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         try:
             current = int(kw.get("current", 0))
@@ -7154,7 +7271,7 @@ class TokenCounterNode(template.Node):
 
 
 @register.tag("token_counter")
-def do_token_counter(parser, token):
+def do_token_counter(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return TokenCounterNode(kwargs)
@@ -7168,10 +7285,10 @@ def do_token_counter(parser, token):
 class ChatBubbleNode(template.Node):
     VALID_STATUSES = {"sending", "sent", "delivered", "read", "error"}
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         message = kw.get("message", {})
         custom_class = kw.get("class", "")
@@ -7254,7 +7371,7 @@ class ChatBubbleNode(template.Node):
 
 
 @register.tag("chat_bubble")
-def do_chat_bubble(parser, token):
+def do_chat_bubble(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ChatBubbleNode(kwargs)
@@ -7268,10 +7385,10 @@ def do_chat_bubble(parser, token):
 class PresenceAvatarsNode(template.Node):
     VALID_STATUSES = {"online", "away", "busy", "offline"}
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         users = kw.get("users", [])
         max_display = int(kw.get("max", 5))
@@ -7336,7 +7453,7 @@ class PresenceAvatarsNode(template.Node):
 
 
 @register.tag("presence_avatars")
-def do_presence_avatars(parser, token):
+def do_presence_avatars(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return PresenceAvatarsNode(kwargs)
@@ -7348,10 +7465,10 @@ def do_presence_avatars(parser, token):
 
 
 class MentionsInputNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "message")
         users = kw.get("users", [])
@@ -7422,7 +7539,7 @@ class MentionsInputNode(template.Node):
 
 
 @register.tag("mentions_input")
-def do_mentions_input(parser, token):
+def do_mentions_input(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return MentionsInputNode(kwargs)
@@ -7434,11 +7551,11 @@ def do_mentions_input(parser, token):
 
 
 class ExpandableTextNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         max_lines = int(kw.get("max_lines", 3))
         expanded = kw.get("expanded", False)
@@ -7479,7 +7596,7 @@ class ExpandableTextNode(template.Node):
 
 
 @register.tag("expandable_text")
-def do_expandable_text(parser, token):
+def do_expandable_text(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endexpandable_text",))
@@ -7493,10 +7610,10 @@ def do_expandable_text(parser, token):
 
 
 class TruncatedListNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         items = kw.get("items", [])
         max_count = int(kw.get("max", 3))
@@ -7547,7 +7664,7 @@ class TruncatedListNode(template.Node):
 
 
 @register.tag("truncated_list")
-def do_truncated_list(parser, token):
+def do_truncated_list(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return TruncatedListNode(kwargs)
@@ -7559,10 +7676,10 @@ def do_truncated_list(parser, token):
 
 
 class MarkdownTextareaNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "content")
         value = kw.get("value", "")
@@ -7615,7 +7732,7 @@ class MarkdownTextareaNode(template.Node):
 
 
 @register.tag("markdown_textarea")
-def do_markdown_textarea(parser, token):
+def do_markdown_textarea(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return MarkdownTextareaNode(kwargs)
@@ -7627,10 +7744,10 @@ def do_markdown_textarea(parser, token):
 
 
 class SkeletonForNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         component = kw.get("component", "text")
         columns = int(kw.get("columns", 4))
@@ -7655,7 +7772,7 @@ class SkeletonForNode(template.Node):
         else:
             return mark_safe(self._render_text(cls, rows))
 
-    def _render_table(self, cls, cols, rows):
+    def _render_table(self, cls: Any, cols: Any, rows: Any) -> Any:
         header_cells = "".join(
             '<th><span class="dj-skeleton__line dj-skeleton__pulse" '
             'style="width:70%">&nbsp;</span></th>'
@@ -7677,7 +7794,7 @@ class SkeletonForNode(template.Node):
             f"</div>"
         )
 
-    def _render_card(self, cls):
+    def _render_card(self, cls: Any) -> Any:
         return (
             f'<div class="{cls} dj-skeleton--card" '
             f'role="status" aria-label="Loading">'
@@ -7692,7 +7809,7 @@ class SkeletonForNode(template.Node):
             f"</div></div>"
         )
 
-    def _render_list(self, cls, rows):
+    def _render_list(self, cls: Any, rows: Any) -> Any:
         items = []
         for _ in range(rows):
             items.append(
@@ -7708,7 +7825,7 @@ class SkeletonForNode(template.Node):
             f"{''.join(items)}</div>"
         )
 
-    def _render_text(self, cls, rows):
+    def _render_text(self, cls: Any, rows: Any) -> Any:
         widths = [95, 85, 90, 70, 80, 60, 75, 88, 65, 92]
         lines = []
         for i in range(rows):
@@ -7725,7 +7842,7 @@ class SkeletonForNode(template.Node):
 
 
 @register.tag("skeleton_for")
-def do_skeleton_for(parser, token):
+def do_skeleton_for(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return SkeletonForNode(kwargs)
@@ -7737,11 +7854,11 @@ def do_skeleton_for(parser, token):
 
 
 class AwaitNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         loading_event = kw.get("loading_event", "data_loaded")
         loaded = kw.get("loaded", False)
@@ -7795,7 +7912,7 @@ class AwaitNode(template.Node):
 
 
 @register.tag("await")
-def do_await(parser, token):
+def do_await(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endawait",))
@@ -7809,10 +7926,10 @@ def do_await(parser, token):
 
 
 class TimePickerNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "time")
         value = kw.get("value", "")
@@ -7908,7 +8025,7 @@ class TimePickerNode(template.Node):
 
 
 @register.tag("time_picker")
-def do_time_picker(parser, token):
+def do_time_picker(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return TimePickerNode(kwargs)
@@ -7920,11 +8037,11 @@ def do_time_picker(parser, token):
 
 
 class WizardNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         steps = kw.get("steps", [])
         active = kw.get("active", "")
@@ -7993,7 +8110,7 @@ class WizardNode(template.Node):
 
 
 @register.tag("wizard")
-def do_wizard(parser, token):
+def do_wizard(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endwizard",))
@@ -8007,11 +8124,11 @@ def do_wizard(parser, token):
 
 
 class BottomSheetNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         title = kw.get("title", "")
         is_open = kw.get("open", False)
@@ -8050,7 +8167,7 @@ class BottomSheetNode(template.Node):
 
 
 @register.tag("bottom_sheet")
-def do_bottom_sheet(parser, token):
+def do_bottom_sheet(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endbottom_sheet",))
@@ -8064,11 +8181,11 @@ def do_bottom_sheet(parser, token):
 
 
 class InfiniteScrollNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         load_event = kw.get("load_event", "load_more")
         threshold = kw.get("threshold", "200px")
@@ -8108,7 +8225,7 @@ class InfiniteScrollNode(template.Node):
 
 
 @register.tag("infinite_scroll")
-def do_infinite_scroll(parser, token):
+def do_infinite_scroll(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endinfinite_scroll",))
@@ -8122,10 +8239,10 @@ def do_infinite_scroll(parser, token):
 
 
 class CountdownNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         target = kw.get("target", "")
         event = kw.get("event", "")
@@ -8194,7 +8311,7 @@ class CountdownNode(template.Node):
 
 
 @register.tag("countdown")
-def do_countdown(parser, token):
+def do_countdown(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return CountdownNode(kwargs)
@@ -8206,11 +8323,11 @@ def do_countdown(parser, token):
 
 
 class CookieConsentNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         message = kw.get("message", "We use cookies to improve your experience.")
         accept_event = kw.get("accept_event", "accept_cookies")
@@ -8263,7 +8380,7 @@ class CookieConsentNode(template.Node):
 
 
 @register.tag("cookie_consent")
-def do_cookie_consent(parser, token):
+def do_cookie_consent(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endcookie_consent",))
@@ -8277,11 +8394,11 @@ def do_cookie_consent(parser, token):
 
 
 class FormArrayNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "items")
         rows = kw.get("rows", [{"value": ""}])
@@ -8390,7 +8507,7 @@ class FormArrayNode(template.Node):
 
 
 @register.tag("form_array")
-def do_form_array(parser, token):
+def do_form_array(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endform_array",))
@@ -8404,10 +8521,10 @@ def do_form_array(parser, token):
 
 
 class ScrollSpyNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         sections = kw.get("sections", [])
         active = kw.get("active", "")
@@ -8456,7 +8573,7 @@ class ScrollSpyNode(template.Node):
 
 
 @register.tag("scroll_spy")
-def do_scroll_spy(parser, token):
+def do_scroll_spy(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ScrollSpyNode(kwargs)
@@ -8468,11 +8585,11 @@ def do_scroll_spy(parser, token):
 
 
 class PageAlertNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         alert_type = kw.get("variant", kw.get("type", "info"))
         dismissible = kw.get("dismissible", False)
@@ -8513,7 +8630,7 @@ class PageAlertNode(template.Node):
 
 
 @register.tag("page_alert")
-def do_page_alert(parser, token):
+def do_page_alert(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endpage_alert",))
@@ -8527,11 +8644,11 @@ def do_page_alert(parser, token):
 
 
 class DropdownMenuNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         label = kw.get("label", "Menu")
         items = kw.get("items", [])
@@ -8611,10 +8728,10 @@ class DropdownMenuNode(template.Node):
 
 
 class MenuItemNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         label = kw.get("label", "")
         event = kw.get("event", "")
@@ -8647,12 +8764,12 @@ class MenuItemNode(template.Node):
 
 
 class MenuDividerNode(template.Node):
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         return '<hr class="dj-dropdown-menu__divider" role="separator">'
 
 
 @register.tag("dropdown_menu")
-def do_dropdown_menu(parser, token):
+def do_dropdown_menu(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("enddropdown_menu",))
@@ -8661,14 +8778,14 @@ def do_dropdown_menu(parser, token):
 
 
 @register.tag("menu_item")
-def do_menu_item(parser, token):
+def do_menu_item(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return MenuItemNode(kwargs)
 
 
 @register.tag("menu_divider")
-def do_menu_divider(parser, token):
+def do_menu_divider(parser: Any, token: Any) -> template.Node:
     return MenuDividerNode()
 
 
@@ -8678,10 +8795,10 @@ def do_menu_divider(parser, token):
 
 
 class MeterNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         segments = kw.get("segments", [])
         total = kw.get("total", 100)
@@ -8757,7 +8874,7 @@ class MeterNode(template.Node):
 
 
 @register.tag("meter")
-def do_meter(parser, token):
+def do_meter(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return MeterNode(kwargs)
@@ -8769,10 +8886,10 @@ def do_meter(parser, token):
 
 
 class ExportDialogNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         formats = kw.get("formats", [])
         columns = kw.get("columns", [])
@@ -8852,7 +8969,7 @@ class ExportDialogNode(template.Node):
 
 
 @register.tag("export_dialog")
-def do_export_dialog(parser, token):
+def do_export_dialog(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ExportDialogNode(kwargs)
@@ -8864,10 +8981,10 @@ def do_export_dialog(parser, token):
 
 
 class ImportWizardNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         accepted_formats = kw.get("accepted_formats", ".csv")
         model_fields = kw.get("model_fields", [])
@@ -8944,7 +9061,7 @@ class ImportWizardNode(template.Node):
 
 
 @register.tag("import_wizard")
-def do_import_wizard(parser, token):
+def do_import_wizard(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ImportWizardNode(kwargs)
@@ -8956,10 +9073,10 @@ def do_import_wizard(parser, token):
 
 
 class AuditLogNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         entries = kw.get("entries", [])
         stream_event = kw.get("stream_event", "")
@@ -9028,7 +9145,7 @@ class AuditLogNode(template.Node):
 
 
 @register.tag("audit_log")
-def do_audit_log(parser, token):
+def do_audit_log(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return AuditLogNode(kwargs)
@@ -9040,11 +9157,11 @@ def do_audit_log(parser, token):
 
 
 class ErrorBoundaryNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         fallback = kw.get("fallback", "Something went wrong")
         retry_event = kw.get("retry_event", "")
@@ -9080,7 +9197,7 @@ class ErrorBoundaryNode(template.Node):
 
 
 @register.tag("error_boundary")
-def do_error_boundary(parser, token):
+def do_error_boundary(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("enderror_boundary",))
@@ -9094,10 +9211,10 @@ def do_error_boundary(parser, token):
 
 
 class SortableListNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         items = kw.get("items", [])
         move_event = kw.get("move_event", "reorder")
@@ -9147,7 +9264,7 @@ class SortableListNode(template.Node):
 
 
 @register.tag("sortable_list")
-def do_sortable_list(parser, token):
+def do_sortable_list(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return SortableListNode(kwargs)
@@ -9159,10 +9276,10 @@ def do_sortable_list(parser, token):
 
 
 class SortableGridNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
@@ -9222,7 +9339,7 @@ class SortableGridNode(template.Node):
 
 
 @register.tag("sortable_grid")
-def do_sortable_grid(parser, token):
+def do_sortable_grid(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return SortableGridNode(kwargs)
@@ -9234,10 +9351,10 @@ def do_sortable_grid(parser, token):
 
 
 class ImageCropperNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         src = kw.get("src", "")
         crop_event = kw.get("crop_event", "save_crop")
@@ -9291,7 +9408,7 @@ class ImageCropperNode(template.Node):
 
 
 @register.tag("image_cropper")
-def do_image_cropper(parser, token):
+def do_image_cropper(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ImageCropperNode(kwargs)
@@ -9303,10 +9420,10 @@ def do_image_cropper(parser, token):
 
 
 class SignaturePadNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "signature")
         save_event = kw.get("save_event", "save_signature")
@@ -9363,7 +9480,7 @@ class SignaturePadNode(template.Node):
 
 
 @register.tag("signature_pad")
-def do_signature_pad(parser, token):
+def do_signature_pad(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return SignaturePadNode(kwargs)
@@ -9375,11 +9492,11 @@ def do_signature_pad(parser, token):
 
 
 class ResizablePanelNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         direction = kw.get("direction", "horizontal")
         min_size = kw.get("min_size", "100px")
@@ -9429,7 +9546,7 @@ class ResizablePanelNode(template.Node):
 
 
 @register.tag("resizable_panel")
-def do_resizable_panel(parser, token):
+def do_resizable_panel(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endresizable_panel",))
@@ -9443,10 +9560,10 @@ def do_resizable_panel(parser, token):
 
 
 class LightboxNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         images = kw.get("images", [])
         active = kw.get("active", 0)
@@ -9534,7 +9651,7 @@ class LightboxNode(template.Node):
 
 
 @register.tag("lightbox")
-def do_lightbox(parser, token):
+def do_lightbox(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return LightboxNode(kwargs)
@@ -9546,11 +9663,11 @@ def do_lightbox(parser, token):
 
 
 class DashboardGridNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         panels = kw.get("panels", [])
         columns = kw.get("columns", 4)
@@ -9635,7 +9752,7 @@ class DashboardGridNode(template.Node):
 
 
 @register.tag("dashboard_grid")
-def do_dashboard_grid(parser, token):
+def do_dashboard_grid(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("enddashboard_grid",))

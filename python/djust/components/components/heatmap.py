@@ -1,7 +1,7 @@
 """Heatmap component — color-coded grid visualization."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -37,17 +37,17 @@ class Heatmap(Component):
 
     def __init__(
         self,
-        data: list = None,
-        x_labels: list = None,
-        y_labels: list = None,
+        data: Optional[list] = None,
+        x_labels: Optional[list] = None,
+        y_labels: Optional[list] = None,
         title: Optional[str] = None,
         color_min: str = "#f0f9ff",
         color_max: str = "#1e40af",
         cell_size: int = 36,
         show_values: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             data=data,
             x_labels=x_labels,
@@ -124,7 +124,7 @@ class Heatmap(Component):
         # X labels
         for ci, lbl in enumerate(self.x_labels[:cols]):
             x = label_left + ci * cs + cs / 2
-            y = title_h + label_top - 4
+            y: float = title_h + label_top - 4
             parts.append(
                 f'<text class="dj-heatmap__xlabel" x="{x:.1f}" y="{y:.1f}" '
                 f'text-anchor="middle" font-size="10">'

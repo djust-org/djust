@@ -4,7 +4,7 @@ Progress component for djust.
 Simple stateless progress bar with automatic Rust optimization.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 try:
@@ -103,7 +103,7 @@ class Progress(Component):
         else:
             self.label_text = ""
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "value": self.value,

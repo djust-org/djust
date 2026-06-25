@@ -3,6 +3,7 @@
 import html
 import json
 
+from typing import Any
 from djust import Component
 
 
@@ -42,13 +43,13 @@ class JsonViewer(Component):
 
     def __init__(
         self,
-        data=None,
+        data: object = None,
         collapsed_depth: int = 2,
         root_label: str = "root",
         copy_button: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             data=data,
             collapsed_depth=collapsed_depth,
@@ -63,7 +64,7 @@ class JsonViewer(Component):
         self.copy_button = copy_button
         self.custom_class = custom_class
 
-    def _render_node(self, value, depth: int = 0) -> str:
+    def _render_node(self, value: object, depth: int = 0) -> str:
         """Recursively render a JSON value as HTML tree nodes."""
         collapsed = depth >= self.collapsed_depth
 

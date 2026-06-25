@@ -6,13 +6,15 @@ Usage:
     python manage.py component_gallery --dry-run    # List components and exit
 """
 
-from django.core.management.base import BaseCommand
+from typing import Any, Dict
+
+from django.core.management.base import BaseCommand, CommandParser
 
 
 class Command(BaseCommand):
     help = "Launch a local server showing a visual gallery of all djust-components."
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--port",
             type=int,
@@ -25,7 +27,7 @@ class Command(BaseCommand):
             help="Print discovered components and exit without starting the server.",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         if options["dry_run"]:
             self._print_discovery(options)
             return
@@ -38,7 +40,7 @@ class Command(BaseCommand):
 
         self._serve(port)
 
-    def _print_discovery(self, options):
+    def _print_discovery(self, options: Dict[str, Any]) -> None:
         """Print discovered components grouped by category."""
         from djust.components.gallery.registry import get_gallery_data
 
@@ -61,7 +63,7 @@ class Command(BaseCommand):
             self.style.SUCCESS(f"\nTotal: {total} components across {len(categories)} categories")
         )
 
-    def _serve(self, port):
+    def _serve(self, port: int) -> None:
         """Start a lightweight Django dev server with gallery URL routing."""
         from django.conf import settings
         from django.core.handlers.wsgi import WSGIHandler
@@ -74,9 +76,13 @@ class Command(BaseCommand):
         import types
 
         urlpatterns_module = types.ModuleType("_gallery_urls")
-        urlpatterns_module.urlpatterns = [
-            path("", include("djust.components.gallery.urls")),
-        ]
+        # Dynamically-built URLConf module: ModuleType has no static `urlpatterns`
+        # attribute, so set it via setattr to satisfy strict attribute checking.
+        setattr(
+            urlpatterns_module,
+            "urlpatterns",
+            [path("", include("djust.components.gallery.urls"))],
+        )
 
         import sys
 
