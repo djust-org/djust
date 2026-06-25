@@ -69,7 +69,9 @@ def _render_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
 
     tpl_str = _build_django_tag(tag_name, kwargs)
     try:
-        return Template(tpl_str).render(DjangoContext({}))
+        # Django is untyped under the lenient global config; Template.render
+        # returns ``Any`` to mypy but a real ``SafeString`` (str) at runtime.
+        return str(Template(tpl_str).render(DjangoContext({})))
     except Exception:
         logger.exception("Error rendering {%% %s %%}", tag_name)
         return "<!-- djust: %s render failed (check server logs) -->" % tag_name

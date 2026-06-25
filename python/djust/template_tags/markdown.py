@@ -90,7 +90,9 @@ class MarkdownTagHandler(TagHandler):
             from django.utils.html import escape
 
             src_fallback = self._resolve_arg(args[0], context)
-            return escape("" if src_fallback is None else str(src_fallback))
+            # escape() returns a SafeString (str subclass); Django is untyped
+            # under the lenient global config so it is seen as ``Any`` — coerce.
+            return str(escape("" if src_fallback is None else str(src_fallback)))
 
         src_raw = self._resolve_arg(args[0], context)
         src = "" if src_raw is None else str(src_raw)

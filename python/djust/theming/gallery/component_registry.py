@@ -517,7 +517,9 @@ def render_python_component_example(component_name: str, kwargs_dict: dict) -> s
         module = importlib.import_module(f"djust.components.components.{component_name}")
         cls = getattr(module, class_name)
         instance = cls(**kwargs_dict)
-        return instance.render()
+        # cls comes from a dynamic getattr (Any), so .render() is Any; coerce
+        # to ``str`` at the boundary (render() returns the rendered HTML str).
+        return str(instance.render())
     except ImportError:
         logger.debug(
             "djust_components not available for component: %s", sanitize_for_log(component_name)

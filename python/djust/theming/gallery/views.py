@@ -9,6 +9,7 @@ import re
 
 from django.conf import settings
 from django.http import (
+    HttpRequest,
     HttpResponse,
     HttpResponseForbidden,
     HttpResponseNotAllowed,
@@ -31,7 +32,7 @@ _VALID_TOKEN_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
 @xframe_options_sameorigin
-def gallery_view(request):
+def gallery_view(request: HttpRequest) -> HttpResponse:
     """Render the theme component gallery page.
 
     Access control:
@@ -77,7 +78,7 @@ def gallery_view(request):
     return HttpResponse(html)
 
 
-def editor_view(request):
+def editor_view(request: HttpRequest) -> HttpResponse:
     """Render the live theme editor page.
 
     Two-panel layout: left panel with token controls, right panel with
@@ -109,7 +110,7 @@ def editor_view(request):
     return HttpResponse(html)
 
 
-def editor_export_view(request):
+def editor_export_view(request: HttpRequest) -> HttpResponse:
     """Export edited theme tokens as tokens.css + theme.toml.
 
     POST only. Expects JSON body with structure::
@@ -206,7 +207,7 @@ def editor_export_view(request):
     )
 
 
-def diff_view(request):
+def diff_view(request: HttpRequest) -> HttpResponse:
     """Render the side-by-side theme comparison page.
 
     Uses two iframes loading the gallery with different presets.
@@ -239,7 +240,7 @@ def diff_view(request):
 # ---------------------------------------------------------------------------
 
 
-def storybook_index_view(request):
+def storybook_index_view(request: HttpRequest) -> HttpResponse:
     """Render the component storybook index -- lists all components.
 
     Access control: same as gallery (DEBUG=True or is_staff).
@@ -261,7 +262,7 @@ def storybook_index_view(request):
     return HttpResponse(html)
 
 
-def storybook_detail_view(request, component_name):
+def storybook_detail_view(request: HttpRequest, component_name: str) -> HttpResponse:
     """Render the storybook detail page for a single component.
 
     Handles both template-based (24 contracted) and Python (169 total) components.
@@ -295,7 +296,7 @@ def storybook_detail_view(request, component_name):
     return HttpResponse(html)
 
 
-def storybook_category_view(request, category):
+def storybook_category_view(request: HttpRequest, category: str) -> HttpResponse:
     """Render a storybook category page showing all components in the category."""
     denied = _check_access(request)
     if denied:
@@ -399,7 +400,7 @@ def _generate_theme_toml(name: str, radius: float) -> str:
     return "\n".join(lines)
 
 
-def _check_access(request):
+def _check_access(request: HttpRequest) -> HttpResponseForbidden | None:
     """Return an HttpResponseForbidden if access should be denied, else None."""
     gallery_public = getattr(settings, "DJUST_THEMING_GALLERY_PUBLIC", settings.DEBUG)
     if not gallery_public:

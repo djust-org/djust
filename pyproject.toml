@@ -1003,6 +1003,78 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# scaffolding/ + template_tags/ + theming/gallery/ subpackages (ADR-023 M4e,
+# group 2) — flipped from the lenient default to strict islands. Spans: the
+# CRUD scaffolding generator (scaffolding/ — the JSON/interactive schema-to-
+# LiveView+admin code generator, its template strings, and the gen_live wiring);
+# the Rust-engine custom template-tag handlers (template_tags/ — the {% url %},
+# {% static %}, {% djust_pwa %}, {% templatetag %}, {% dj_flash %},
+# {% djust_markdown %}, {% djust_client_config %}, and {% live_render %} handlers
+# registered with the Rust renderer, distinct from the Django-engine
+# templatetags/ package already flipped in M4d); and the theme-gallery /
+# component-storybook surface (theming/gallery/ — the gallery/editor/diff +
+# storybook DEBUG/staff-gated views, the example-context + serialization
+# builders, the component registry, and the URL wiring). No */tests/ dirs exist
+# in these subpackages (nothing to exclude). Annotations only — render output is
+# byte-identical. The SafeString/HTML boundaries (format_html / escape /
+# Template.render / reverse / static / _client_config_html / component .render())
+# return ``Any`` under the lenient global config (Django untyped); each is
+# coerced with ``str(...)`` at the boundary to satisfy warn_return_any without
+# changing the returned (already-safe) HTML. Real type fix: scaffolding/
+# generator.py list_display_fields annotated ``list[str]`` (var-annotated).
+[[tool.mypy.overrides]]
+module = [
+    "djust.scaffolding.__init__",
+    "djust.scaffolding.gen_live",
+    "djust.scaffolding.gen_live_templates",
+    "djust.scaffolding.generator",
+    "djust.scaffolding.templates",
+    "djust.template_tags.__init__",
+    "djust.template_tags.client_config",
+    "djust.template_tags.flash",
+    "djust.template_tags.live_render",
+    "djust.template_tags.markdown",
+    "djust.template_tags.pwa",
+    "djust.template_tags.static",
+    "djust.template_tags.templatetag",
+    "djust.template_tags.url",
+    "djust.theming.gallery.__init__",
+    "djust.theming.gallery.component_registry",
+    "djust.theming.gallery.context",
+    "djust.theming.gallery.storybook",
+    "djust.theming.gallery.urls",
+    "djust.theming.gallery.views",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# theming/themes/ theme-definition subpackage (ADR-023 M4f) — flipped from the
+# lenient default to a strict island via a single glob (`djust.theming.themes.*`,
+# mirroring the `djust.security.*` pattern), so a new built-in theme file added
+# to this directory is strict-by-default with no pyproject edit. The subpackage
+# is ~63 per-theme data modules (default / nord / dracula / catppuccin / ... —
+# each a flat set of module-level ColorScale/ThemeTokens/ThemePreset/
+# DesignSystem/ThemePack literals, no functions), the dependency-free re-export
+# hub `_base`, the package `__init__` (pure re-exports), and the deprecated
+# `_legacy` module (the Theme/THEMES dataclass API kept for backward compat).
+# The theme-data modules and `_base`/`__init__` were already strict-clean (data
+# + re-exports); the only annotation work was on `_legacy._DeprecatedThemesDict`
+# — its nine `dict` overrides (`__getitem__`/`__contains__`/`get`/`items`/
+# `keys`/`values`/`__iter__`/`__len__`) were untyped, annotated to match the
+# `dict` superclass signatures (logic byte-identical; deprecation-warning
+# behavior unchanged). No theming/themes/tests/ dir exists (nothing to exclude).
+# (The top-level theming/ modules are already a strict island — M4c part 3 —
+# but mypy's `djust.theming.*` glob matches only direct children, not the deeper
+# `djust.theming.themes.X` submodules, so this subpackage needs its own entry.)
+[[tool.mypy.overrides]]
+module = ["djust.theming.themes.*"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 # Loose top-level modules + backends/ + db/ (ADR-023 M4e, group 1) — flipped
 # from the lenient default to strict islands. Spans the independent loose
 # top-level modules (the AppConfig, the AST security-audit walker, the live

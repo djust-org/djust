@@ -6,14 +6,15 @@ example dicts containing the kwargs that will be passed to its template tag.
 """
 
 from dataclasses import fields as dataclass_fields
+from typing import Any
 
 from djust.theming.contracts import COMPONENT_CONTRACTS
 from djust.theming.presets import ColorScale, ThemePreset, ThemeTokens, list_presets
 from djust.theming.theme_packs import DESIGN_SYSTEMS, DesignSystem
 
 
-def _button_examples():
-    examples = []
+def _button_examples() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
     # Variant examples (all at default size)
     for variant in ("primary", "secondary", "destructive", "ghost", "link"):
         examples.append(
@@ -35,7 +36,7 @@ def _button_examples():
     return examples
 
 
-def _card_examples():
+def _card_examples() -> list[dict[str, Any]]:
     return [
         {"title": "Card Title", "content": "Card body content goes here.", "footer": "Card footer"},
         {"title": "No Footer", "content": "A card without a footer."},
@@ -43,8 +44,8 @@ def _card_examples():
     ]
 
 
-def _alert_examples():
-    examples = []
+def _alert_examples() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
     for variant in ("default", "success", "warning", "destructive"):
         examples.append(
             {
@@ -64,8 +65,8 @@ def _alert_examples():
     return examples
 
 
-def _badge_examples():
-    examples = []
+def _badge_examples() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
     for variant in ("default", "secondary", "success", "warning", "destructive"):
         examples.append(
             {
@@ -76,7 +77,7 @@ def _badge_examples():
     return examples
 
 
-def _input_examples():
+def _input_examples() -> list[dict[str, Any]]:
     return [
         {
             "name": "gallery_text",
@@ -99,8 +100,8 @@ def _input_examples():
     ]
 
 
-def _modal_examples():
-    examples = []
+def _modal_examples() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
     for size in ("sm", "md", "lg"):
         examples.append(
             {
@@ -112,14 +113,14 @@ def _modal_examples():
     return examples
 
 
-def _dropdown_examples():
+def _dropdown_examples() -> list[dict[str, Any]]:
     return [
         {"id": "gallery-dropdown-left", "label": "Dropdown (left)", "align": "left"},
         {"id": "gallery-dropdown-right", "label": "Dropdown (right)", "align": "right"},
     ]
 
 
-def _tabs_examples():
+def _tabs_examples() -> list[dict[str, Any]]:
     return [
         {
             "id": "gallery-tabs",
@@ -133,14 +134,14 @@ def _tabs_examples():
     ]
 
 
-def _table_examples():
+def _table_examples() -> list[dict[str, Any]]:
     headers = ["Name", "Email", "Role"]
     rows = [
         ["Alice", "alice@example.com", "Admin"],
         ["Bob", "bob@example.com", "Editor"],
         ["Charlie", "charlie@example.com", "Viewer"],
     ]
-    examples = []
+    examples: list[dict[str, Any]] = []
     for variant in ("default", "striped", "hover"):
         examples.append(
             {
@@ -153,13 +154,13 @@ def _table_examples():
     return examples
 
 
-def _pagination_examples():
+def _pagination_examples() -> list[dict[str, Any]]:
     return [
         {"current_page": 3, "total_pages": 10, "url_pattern": "?page={}"},
     ]
 
 
-def _select_examples():
+def _select_examples() -> list[dict[str, Any]]:
     options = [
         {"value": "opt1", "label": "Option 1"},
         {"value": "opt2", "label": "Option 2"},
@@ -175,7 +176,7 @@ def _select_examples():
     ]
 
 
-def _textarea_examples():
+def _textarea_examples() -> list[dict[str, Any]]:
     return [
         {
             "name": "gallery_textarea",
@@ -186,7 +187,7 @@ def _textarea_examples():
     ]
 
 
-def _checkbox_examples():
+def _checkbox_examples() -> list[dict[str, Any]]:
     return [
         {
             "name": "gallery_checkbox",
@@ -197,7 +198,7 @@ def _checkbox_examples():
     ]
 
 
-def _radio_examples():
+def _radio_examples() -> list[dict[str, Any]]:
     options = [
         {"value": "sm", "label": "Small"},
         {"value": "md", "label": "Medium"},
@@ -208,7 +209,7 @@ def _radio_examples():
     ]
 
 
-def _breadcrumb_examples():
+def _breadcrumb_examples() -> list[dict[str, Any]]:
     items = [
         {"label": "Home", "url": "/"},
         {"label": "Products", "url": "/products/"},
@@ -220,8 +221,8 @@ def _breadcrumb_examples():
     ]
 
 
-def _avatar_examples():
-    examples = []
+def _avatar_examples() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
     for size in ("sm", "md", "lg"):
         examples.append(
             {
@@ -241,8 +242,8 @@ def _avatar_examples():
     return examples
 
 
-def _toast_examples():
-    examples = []
+def _toast_examples() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
     for variant in ("success", "warning", "error", "info"):
         examples.append(
             {
@@ -253,8 +254,8 @@ def _toast_examples():
     return examples
 
 
-def _progress_examples():
-    examples = []
+def _progress_examples() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
     for value in (25, 50, 75, 100):
         examples.append(
             {
@@ -274,7 +275,7 @@ def _progress_examples():
     return examples
 
 
-def _skeleton_examples():
+def _skeleton_examples() -> list[dict[str, Any]]:
     return [
         {"variant": "text", "width": "200px", "height": "1rem"},
         {"variant": "circle", "width": "3rem", "height": "3rem"},
@@ -282,8 +283,8 @@ def _skeleton_examples():
     ]
 
 
-def _tooltip_examples():
-    examples = []
+def _tooltip_examples() -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
     for position in ("top", "bottom", "left", "right"):
         examples.append(
             {
@@ -295,7 +296,7 @@ def _tooltip_examples():
     return examples
 
 
-def _nav_item_examples():
+def _nav_item_examples() -> list[dict[str, Any]]:
     return [
         {"label": "Home", "url": "/", "active": True},
         {"label": "About", "url": "/about/", "active": False},
@@ -303,7 +304,7 @@ def _nav_item_examples():
     ]
 
 
-def _nav_group_examples():
+def _nav_group_examples() -> list[dict[str, Any]]:
     items = [
         {"label": "Users", "url": "/admin/users/"},
         {"label": "Settings", "url": "/admin/settings/"},
@@ -314,7 +315,7 @@ def _nav_group_examples():
     ]
 
 
-def _nav_examples():
+def _nav_examples() -> list[dict[str, Any]]:
     items = [
         {"label": "Home", "url": "/"},
         {"label": "Docs", "url": "/docs/"},
@@ -325,7 +326,7 @@ def _nav_examples():
     ]
 
 
-def _sidebar_nav_examples():
+def _sidebar_nav_examples() -> list[dict[str, Any]]:
     sections = [
         {
             "title": "Main",

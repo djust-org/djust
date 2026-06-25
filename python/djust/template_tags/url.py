@@ -101,14 +101,16 @@ class UrlTagHandler(TagHandler):
                 # Positional argument
                 url_args.append(resolved)
 
-        # Call Django's reverse()
+        # Call Django's reverse() (Django is untyped under the lenient global
+        # config, so reverse() is seen as ``Any``; coerce to ``str`` at the
+        # boundary — reverse always returns a real ``str`` at runtime).
         try:
             if url_kwargs:
-                return reverse(url_name, kwargs=url_kwargs)
+                return str(reverse(url_name, kwargs=url_kwargs))
             elif url_args:
-                return reverse(url_name, args=url_args)
+                return str(reverse(url_name, args=url_args))
             else:
-                return reverse(url_name)
+                return str(reverse(url_name))
         except NoReverseMatch as e:
             logger.warning(
                 "NoReverseMatch for URL '%s' with args=%s, kwargs=%s: %s",
