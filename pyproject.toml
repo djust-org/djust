@@ -1003,6 +1003,49 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# Loose top-level modules + backends/ + db/ (ADR-023 M4e, group 1) — flipped
+# from the lenient default to strict islands. Spans the independent loose
+# top-level modules (the AppConfig, the AST security-audit walker, the live
+# runtime auditor, the bug-capture harness, the proposed CSS system-checks, the
+# lifecycle hooks registry, the hot-view-replacement engine, the
+# state/template backend back-compat shims, the template-filter helpers, the
+# time-travel recorder, the shared utils + BackendRegistry, and the package
+# __main__ entry point) plus the two leaf subpackages: the presence backends
+# (base / memory / redis / registry) and the PostgreSQL LISTEN/NOTIFY bridge
+# (decorators / exceptions / notifications). `db/decorators` carries narrow
+# coded `# type: ignore[attr-defined]`s for the dynamic `_djust_notify_*`
+# introspection attributes stashed on / deleted from the decorated model class.
+# The */tests/ dirs stay lenient.
+[[tool.mypy.overrides]]
+module = [
+    "djust.apps",
+    "djust.audit_ast",
+    "djust.audit_live",
+    "djust.bug_capture",
+    "djust.checks_css_proposal",
+    "djust.hooks",
+    "djust.hot_view_replacement",
+    "djust.state_backend",
+    "djust.template_backend",
+    "djust.template_filters",
+    "djust.time_travel",
+    "djust.utils",
+    "djust.__main__",
+    "djust.backends.__init__",
+    "djust.backends.base",
+    "djust.backends.memory",
+    "djust.backends.redis",
+    "djust.backends.registry",
+    "djust.db.__init__",
+    "djust.db.decorators",
+    "djust.db.exceptions",
+    "djust.db.notifications",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework
 # where mark_safe is expected and safe (content comes from trusted templates)

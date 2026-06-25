@@ -6,6 +6,8 @@ Reads DJUST_CONFIG['PRESENCE_BACKEND'] from Django settings:
     'redis'            — RedisPresenceBackend
 """
 
+from typing import cast
+
 from .base import PresenceBackend
 from ..utils import BackendRegistry
 
@@ -46,7 +48,7 @@ def get_presence_backend() -> PresenceBackend:
             'PRESENCE_REDIS_URL': 'redis://localhost:6379/2',
         }
     """
-    return _registry.get()
+    return cast(PresenceBackend, _registry.get())
 
 
 def set_presence_backend(backend: PresenceBackend) -> None:

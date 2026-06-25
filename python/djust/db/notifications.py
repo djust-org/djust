@@ -54,7 +54,7 @@ _psycopg = None
 _psycopg_sql = None
 
 
-def _import_psycopg():
+def _import_psycopg() -> tuple[Any, Any]:
     global _psycopg, _psycopg_sql
     if _psycopg is not None:
         return _psycopg, _psycopg_sql
@@ -148,15 +148,16 @@ def _dsn_from_url(url: str) -> str:
     # ``path`` is ``/dbname`` — strip the leading slash. userinfo and host
     # are percent-decoded so passwords containing ``@`` / ``:`` round-trip.
     parts = []
-    for dsn_key, val in (
+    url_fields: tuple[tuple[str, object], ...] = (
         ("host", host_val),
         ("port", parsed.port),
         ("dbname", parsed.path.lstrip("/")),
         ("user", unquote(parsed.username) if parsed.username else None),
         ("password", unquote(parsed.password) if parsed.password else None),
-    ):
-        if val:
-            parts.append(f"{dsn_key}={val}")
+    )
+    for dsn_key, dsn_val in url_fields:
+        if dsn_val:
+            parts.append(f"{dsn_key}={dsn_val}")
     # Append the remaining allowlisted query params after the core fields,
     # in a stable (sorted) order so the DSN is deterministic. libpq DSN values
     # containing whitespace or a quote must be single-quoted with backslash
