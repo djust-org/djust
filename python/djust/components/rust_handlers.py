@@ -4377,7 +4377,7 @@ class FormErrorsHandler:
         if form is None or not hasattr(form, "non_field_errors"):
             return ""
 
-        errors = cast("Any", form).non_field_errors()
+        errors = cast(Any, form).non_field_errors()
         if not errors:
             return ""
 

@@ -402,11 +402,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # comment-strip pass see only real markup comments. (pre/code/textarea
         # are NOT raw-text — a real `<!-- -->` inside them is a genuine comment
         # and is stripped as before, so they stay extracted AFTER the strip.)
+        # End-tag patterns use ``</tag\s*>`` (not ``</tag>``): per the HTML spec
+        # browsers accept trailing whitespace in an end tag (``</script >``,
+        # ``</style\n>``). A bare ``</script>`` regex would miss those forms and
+        # fail to preserve the block, letting the comment-strip below corrupt the
+        # JS/CSS body — and CodeQL flags it as ``py/bad-tag-filter`` (#2482).
         html = re.sub(
-            r"<script[^>]*>.*?</script>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+            r"<script[^>]*>.*?</script\s*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
         html = re.sub(
-            r"<style[^>]*>.*?</style>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+            r"<style[^>]*>.*?</style\s*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
 
         # Remove HTML comments — but NOT dj-if boundary markers (#1678). The
@@ -415,12 +420,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         html = re.sub(r"<!--(?!\s*/?dj-if\b).*?-->", "", html, flags=re.DOTALL)
 
         # Preserve whitespace inside <pre>, <code>, and <textarea> tags
-        html = re.sub(r"<pre[^>]*>.*?</pre>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(
-            r"<code[^>]*>.*?</code>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+            r"<pre[^>]*>.*?</pre\s*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
         html = re.sub(
-            r"<textarea[^>]*>.*?</textarea>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+            r"<code[^>]*>.*?</code\s*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+        )
+        html = re.sub(
+            r"<textarea[^>]*>.*?</textarea\s*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
 
         # Normalize whitespace
