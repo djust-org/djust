@@ -751,6 +751,36 @@ class LiveComponent(ContextProviderMixin):
         # provider. See :meth:`LiveView.provide_context`.
         self._djust_context_parent = parent
 
+    def update(self, **kwargs: Any) -> "LiveComponent":
+        """
+        Update component properties after initialization.
+
+        Sets each supplied prop as an instance attribute. This is the base
+        behavior the parent's
+        :meth:`djust.mixins.components.ComponentMixin.update_component`
+        relies on (#1947); subclasses may override ``update`` to add coercion,
+        validation, or selective-prop logic and that override takes precedence.
+
+        Mirrors the Python/hybrid path of :meth:`Component.update` so the two
+        component hierarchies expose a consistent prop-update API.
+
+        Args:
+            **kwargs: Properties to update.
+
+        Returns:
+            self (for method chaining).
+
+        Example::
+
+            # In a LiveView event handler
+            def toggle_switch(self):
+                self.switch_enabled = not self.switch_enabled
+                self.switch_component.update(checked=self.switch_enabled)
+        """
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        return self
+
     def trigger_update(self) -> None:
         """
         Trigger a re-render of the parent LiveView.

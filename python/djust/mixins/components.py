@@ -52,12 +52,10 @@ class ComponentMixin:
 
         component = self._components.get(component_id)
         if component and isinstance(component, LiveComponent):
-            # NOTE: ``update`` is defined on ``Component`` (base.py), not on
-            # ``LiveComponent`` (which subclasses ``ContextProviderMixin``, not
-            # ``Component``). This call path is pre-existing; the ignore keeps
-            # the strict-island green without changing runtime behaviour. See
-            # the PR description for the latent-bug finding.
-            component.update(**props)  # type: ignore[attr-defined]
+            # ``LiveComponent.update`` (base.py) sets each prop as an instance
+            # attribute; subclasses may override it for coercion or
+            # selective-prop logic. See #1947.
+            component.update(**props)
 
     def _register_component(self, component: Any) -> None:
         """
