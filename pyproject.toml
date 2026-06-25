@@ -1003,6 +1003,31 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# theming/themes/ theme-definition subpackage (ADR-023 M4f) — flipped from the
+# lenient default to a strict island via a single glob (`djust.theming.themes.*`,
+# mirroring the `djust.security.*` pattern), so a new built-in theme file added
+# to this directory is strict-by-default with no pyproject edit. The subpackage
+# is ~63 per-theme data modules (default / nord / dracula / catppuccin / ... —
+# each a flat set of module-level ColorScale/ThemeTokens/ThemePreset/
+# DesignSystem/ThemePack literals, no functions), the dependency-free re-export
+# hub `_base`, the package `__init__` (pure re-exports), and the deprecated
+# `_legacy` module (the Theme/THEMES dataclass API kept for backward compat).
+# The theme-data modules and `_base`/`__init__` were already strict-clean (data
+# + re-exports); the only annotation work was on `_legacy._DeprecatedThemesDict`
+# — its nine `dict` overrides (`__getitem__`/`__contains__`/`get`/`items`/
+# `keys`/`values`/`__iter__`/`__len__`) were untyped, annotated to match the
+# `dict` superclass signatures (logic byte-identical; deprecation-warning
+# behavior unchanged). No theming/themes/tests/ dir exists (nothing to exclude).
+# (The top-level theming/ modules are already a strict island — M4c part 3 —
+# but mypy's `djust.theming.*` glob matches only direct children, not the deeper
+# `djust.theming.themes.X` submodules, so this subpackage needs its own entry.)
+[[tool.mypy.overrides]]
+module = ["djust.theming.themes.*"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 # Loose top-level modules + backends/ + db/ (ADR-023 M4e, group 1) — flipped
 # from the lenient default to strict islands. Spans the independent loose
 # top-level modules (the AppConfig, the AST security-audit walker, the live
