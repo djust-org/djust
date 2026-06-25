@@ -9,7 +9,7 @@ import logging
 import time
 import uuid
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field, asdict
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,11 @@ class OfflineAction:
     retries: int = 0
     status: str = "pending"
     error: Optional[str] = None
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    # ``id`` is a str by default (a uuid4) but ``OfflineMixin.update_offline`` /
+    # ``delete_offline`` forward a caller-supplied ``obj_id`` typed
+    # ``Union[str, int]`` — so the field accepts both. Used only as an opaque
+    # identifier / dict key, so the union is safe.
+    id: Union[str, int] = field(default_factory=lambda: str(uuid.uuid4()))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
@@ -58,12 +62,12 @@ class OfflineStorage(ABC):
     using various browser storage APIs.
     """
 
-    def __init__(self, storage_name: str, **kwargs):
+    def __init__(self, storage_name: str, **kwargs: Any) -> None:
         self.storage_name = storage_name
         self._namespace = f"djust:offline:{storage_name}"
 
     @abstractmethod
-    def get(self, key: str, default=None) -> Any:
+    def get(self, key: str, default: Any = None) -> Any:
         """Get value by key."""
         pass
 
@@ -124,13 +128,13 @@ class IndexedDBStorage(OfflineStorage):
     Requires JavaScript bridge for browser API access.
     """
 
-    def __init__(self, storage_name: str, version: int = 1, **kwargs):
+    def __init__(self, storage_name: str, version: int = 1, **kwargs: Any) -> None:
         super().__init__(storage_name, **kwargs)
         self.version = version
         self.db_name = f"djust_offline_{storage_name}"
-        self._js_bridge = None
+        self._js_bridge: Optional[Dict[str, Any]] = None
 
-    def _get_js_bridge(self):
+    def _get_js_bridge(self) -> Dict[str, Any]:
         """
         Get JavaScript bridge for IndexedDB operations.
 
@@ -142,7 +146,7 @@ class IndexedDBStorage(OfflineStorage):
             self._js_bridge = {}
         return self._js_bridge
 
-    def get(self, key: str, default=None) -> Any:
+    def get(self, key: str, default: Any = None) -> Any:
         """Get value from IndexedDB."""
         try:
             bridge = self._get_js_bridge()
@@ -285,11 +289,11 @@ class LocalStorage(OfflineStorage):
     Limited to ~5-10MB depending on browser.
     """
 
-    def __init__(self, storage_name: str, **kwargs):
+    def __init__(self, storage_name: str, **kwargs: Any) -> None:
         super().__init__(storage_name, **kwargs)
-        self._storage = {}  # In-memory fallback for server-side usage
+        self._storage: Dict[str, str] = {}  # In-memory fallback for server-side usage
 
-    def get(self, key: str, default=None) -> Any:
+    def get(self, key: str, default: Any = None) -> Any:
         """Get value from localStorage."""
         try:
             namespaced_key = self._make_key(key)
@@ -423,19 +427,19 @@ class SyncQueue:
             logger.error("Failed to get pending actions: %s", e, exc_info=True)
             return []
 
-    def mark_completed(self, action_id: str) -> bool:
+    def mark_completed(self, action_id: Union[str, int]) -> bool:
         """Mark action as completed."""
         return self._update_action_status(action_id, "completed")
 
-    def mark_failed(self, action_id: str, error: str) -> bool:
+    def mark_failed(self, action_id: Union[str, int], error: str) -> bool:
         """Mark action as failed with error message."""
         return self._update_action_status(action_id, "failed", error=error)
 
-    def mark_syncing(self, action_id: str) -> bool:
+    def mark_syncing(self, action_id: Union[str, int]) -> bool:
         """Mark action as currently syncing."""
         return self._update_action_status(action_id, "syncing")
 
-    def retry_action(self, action_id: str) -> bool:
+    def retry_action(self, action_id: Union[str, int]) -> bool:
         """Retry a failed action."""
         try:
             queue = self._get_queue()
@@ -492,7 +496,7 @@ class SyncQueue:
         return queue_data if isinstance(queue_data, list) else []
 
     def _update_action_status(
-        self, action_id: str, status: str, error: Optional[str] = None
+        self, action_id: Union[str, int], status: str, error: Optional[str] = None
     ) -> bool:
         """Update action status in queue."""
         try:

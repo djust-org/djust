@@ -7,9 +7,10 @@ endpoint so the foundation PR is independently verifiable.
 from __future__ import annotations
 
 import logging
+from typing import Any, Dict
 
 from django.conf import settings
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
@@ -27,7 +28,7 @@ from djust.observability.tracebacks import get_recent_tracebacks
 logger = logging.getLogger(__name__)
 
 
-def _is_jsonable(value):
+def _is_jsonable(value: Any) -> bool:
     """Last-resort serializability check when the view doesn't expose
     `_is_serializable`. Cheap for small values; we tolerate the cost
     because observability endpoints aren't hot paths."""
@@ -40,7 +41,7 @@ def _is_jsonable(value):
         return False
 
 
-def _lenient_assigns(view):
+def _lenient_assigns(view: Any) -> Dict[str, Any]:
     """Serialize public attrs one-by-one with per-attr fallback.
 
     Why not just call `view.get_state()`? In DEBUG mode that raises on
@@ -58,7 +59,7 @@ def _lenient_assigns(view):
     """
     checker = getattr(view, "_is_serializable", None)
 
-    def _safe_check(val):
+    def _safe_check(val: Any) -> bool:
         if checker is not None:
             try:
                 return bool(checker(val))
@@ -66,7 +67,7 @@ def _lenient_assigns(view):
                 return False
         return _is_jsonable(val)
 
-    assigns = {}
+    assigns: Dict[str, Any] = {}
     for key, value in view.__dict__.items():
         if key.startswith("_") or callable(value):
             continue
@@ -80,7 +81,7 @@ def _lenient_assigns(view):
     return assigns
 
 
-def _debug_gate():
+def _debug_gate() -> HttpResponse:
     """Return a 404-style response if DEBUG is off — mirrors how Django
     hides debug URLs in production. We return 404 rather than 403 so
     the endpoint's existence isn't disclosed.
@@ -88,7 +89,7 @@ def _debug_gate():
     return HttpResponse(status=404)
 
 
-def _gate(request):
+def _gate(request: HttpRequest) -> HttpResponse | None:
     """Per-view access gate for every observability endpoint — returns a 404
     response when the request must be refused, else ``None``.
 
@@ -117,7 +118,7 @@ def _gate(request):
 
 @csrf_exempt
 @require_GET
-def health(request):
+def health(request: HttpRequest) -> HttpResponse:
     """Liveness probe. Returns the registry size + DEBUG flag.
 
     `curl http://127.0.0.1:8000/_djust/observability/health/` during
@@ -139,7 +140,7 @@ def health(request):
 
 @csrf_exempt
 @require_GET
-def view_assigns(request):
+def view_assigns(request: HttpRequest) -> HttpResponse:
     """Return the mounted LiveView's public state for a session.
 
     Query params:
@@ -183,7 +184,7 @@ def view_assigns(request):
 
 @csrf_exempt
 @require_GET
-def last_traceback(request):
+def last_traceback(request: HttpRequest) -> HttpResponse:
     """Return the most-recent N captured exceptions (newest first).
 
     Query params:
@@ -212,7 +213,7 @@ def last_traceback(request):
 
 @csrf_exempt
 @require_GET
-def log_tail(request):
+def log_tail(request: HttpRequest) -> HttpResponse:
     """Return buffered log records.
 
     Query params:
@@ -254,7 +255,7 @@ def log_tail(request):
 
 @csrf_exempt
 @require_GET
-def handler_timings(request):
+def handler_timings(request: HttpRequest) -> HttpResponse:
     """Return per-handler percentile stats over the rolling sample window.
 
     Query params:
@@ -284,7 +285,7 @@ def handler_timings(request):
 
 
 @csrf_exempt
-def reset_view_state(request):
+def reset_view_state(request: HttpRequest) -> HttpResponse:
     """Replay `view.mount()` on the registered instance — resets all public
     attrs back to their post-mount values.
 
@@ -366,7 +367,7 @@ def reset_view_state(request):
 
 
 @csrf_exempt
-def eval_handler(request):
+def eval_handler(request: HttpRequest) -> HttpResponse:
     """Dry-run a handler against the live view's current state.
 
     POST body (JSON):
@@ -553,7 +554,7 @@ def eval_handler(request):
     after_keys = set(after.keys())
     added = {k: after[k] for k in after_keys - before_keys}
     removed = {k: before[k] for k in before_keys - after_keys}
-    modified = {}
+    modified: Dict[str, Any] = {}
     for k in before_keys & after_keys:
         if _json.dumps(before[k], default=repr) != _json.dumps(after[k], default=repr):
             modified[k] = {"before": before[k], "after": after[k]}
@@ -592,7 +593,7 @@ def eval_handler(request):
 
 @csrf_exempt
 @require_GET
-def sql_queries(request):
+def sql_queries(request: HttpRequest) -> HttpResponse:
     """Return captured SQL queries, filtered by session/handler/since_ms.
 
     Query params:

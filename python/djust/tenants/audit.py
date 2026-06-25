@@ -74,11 +74,14 @@ class DatabaseAuditBackend(AuditBackend):
 
 class CallbackAuditBackend(AuditBackend):
     def __init__(self, callback: Callable | str) -> None:
+        resolved: Callable
         if isinstance(callback, str):
             module_path, _, attr = callback.rpartition(".")
             module = import_module(module_path)
-            callback = getattr(module, attr)
-        self._callback: Callable = callback
+            resolved = getattr(module, attr)
+        else:
+            resolved = callback
+        self._callback: Callable = resolved
 
     def emit(self, event: AuditEvent) -> None:
         self._callback(event)
@@ -88,7 +91,8 @@ def _import_backend(dotted_path: str) -> AuditBackend:
     module_path, _, attr = dotted_path.rpartition(".")
     module = import_module(module_path)
     cls = getattr(module, attr)
-    return cls()
+    instance: AuditBackend = cls()
+    return instance
 
 
 def get_audit_backend() -> AuditBackend:

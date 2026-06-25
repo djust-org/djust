@@ -132,7 +132,7 @@ def decompress_state(compressed_data: bytes) -> Any:
         return None
 
 
-def calculate_storage_quota(storage_type: str = "indexeddb") -> Dict[str, int]:
+def calculate_storage_quota(storage_type: str = "indexeddb") -> Dict[str, Any]:
     """
     Calculate available storage quota.
 
@@ -185,7 +185,7 @@ def format_bytes(bytes_count: int) -> str:
     return f"{size:.1f} {units[unit_index]}"
 
 
-def cleanup_old_data(storage_backend, max_age_hours: int = 168) -> Dict[str, int]:
+def cleanup_old_data(storage_backend: Any, max_age_hours: int = 168) -> Dict[str, int]:
     """
     Clean up old data from storage backend.
 
@@ -242,7 +242,7 @@ def validate_offline_data(data: Any, schema: Optional[Dict] = None) -> Dict[str,
     Returns:
         Validation result with errors if any
     """
-    result = {
+    result: Dict[str, Any] = {
         "valid": True,
         "errors": [],
         "warnings": [],
@@ -294,7 +294,7 @@ def merge_offline_changes(
     Returns:
         Merged data and conflict information
     """
-    result = {
+    result: Dict[str, Any] = {
         "data": server_data.copy(),
         "conflicts": [],
         "strategy_used": strategy,
@@ -352,19 +352,19 @@ class PWAHealthMonitor:
     Monitor PWA health and performance metrics.
     """
 
-    def __init__(self):
-        self.metrics = {
+    def __init__(self) -> None:
+        self.metrics: Dict[str, Any] = {
             "sync_success_rate": 0.0,
             "average_sync_time": 0.0,
             "storage_usage": 0,
             "cache_hit_rate": 0.0,
             "offline_duration": 0.0,
         }
-        self._sync_times = []
+        self._sync_times: List[float] = []
         self._cache_requests = 0
         self._cache_hits = 0
 
-    def record_sync_success(self, duration: float):
+    def record_sync_success(self, duration: float) -> None:
         """Record successful sync."""
         self._sync_times.append(duration)
 
@@ -374,7 +374,7 @@ class PWAHealthMonitor:
 
         self.metrics["average_sync_time"] = sum(self._sync_times) / len(self._sync_times)
 
-    def record_sync_failure(self):
+    def record_sync_failure(self) -> None:
         """Record sync failure for health monitoring."""
         self.metrics["sync_failures"] = self.metrics.get("sync_failures", 0) + 1
         total = self.metrics.get("total_syncs", 0)
@@ -382,7 +382,7 @@ class PWAHealthMonitor:
             failures = self.metrics["sync_failures"]
             self.metrics["sync_success_rate"] = (total - failures) / total
 
-    def record_cache_request(self, hit: bool):
+    def record_cache_request(self, hit: bool) -> None:
         """Record cache request."""
         self._cache_requests += 1
         if hit:

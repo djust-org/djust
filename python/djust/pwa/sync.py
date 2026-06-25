@@ -34,7 +34,7 @@ class SyncResult:
     errors: List[str]
     duration_seconds: float
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.success is None:
             self.success = self.failed_count == 0
 
@@ -51,7 +51,7 @@ class ConflictResolver:
         self.default_strategy = default_strategy
         self._custom_resolvers: Dict[str, Callable] = {}
 
-    def register_resolver(self, model_name: str, resolver_func: Callable):
+    def register_resolver(self, model_name: str, resolver_func: Callable) -> None:
         """
         Register custom conflict resolver for a specific model.
 
@@ -86,7 +86,10 @@ class ConflictResolver:
         # Check for custom resolver first
         if model_name in self._custom_resolvers:
             try:
-                return self._custom_resolvers[model_name](local_data, server_data)
+                resolved: Dict[str, Any] = self._custom_resolvers[model_name](
+                    local_data, server_data
+                )
+                return resolved
             except Exception as e:
                 logger.error("Custom resolver failed for %s: %s", model_name, e, exc_info=True)
                 # Fall back to default strategy
@@ -119,7 +122,7 @@ class ConflictResolver:
         self, local_data: Dict[str, Any], server_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Merge based on field-level timestamps."""
-        result = {}
+        result: Dict[str, Any] = {}
 
         # Get all fields from both datasets
         all_fields = set(local_data.keys()) | set(server_data.keys())
@@ -177,7 +180,7 @@ class SyncManager:
         batch_size: int = 10,
         timeout: int = 30,
         max_retries: int = 3,
-    ):
+    ) -> None:
         self.batch_size = batch_size
         self.timeout = timeout
         self.max_retries = max_retries
@@ -196,7 +199,7 @@ class SyncManager:
         self._sync_handlers: Dict[str, Callable] = {}
         self._sync_in_progress = False
 
-    def register_sync_handler(self, model_name: str, handler_func: Callable):
+    def register_sync_handler(self, model_name: str, handler_func: Callable) -> None:
         """
         Register sync handler for a specific model.
 
@@ -283,7 +286,7 @@ class SyncManager:
 
     def _group_actions(self, actions: List[OfflineAction]) -> Dict[tuple, List[OfflineAction]]:
         """Group actions by type and model."""
-        groups = {}
+        groups: Dict[tuple, List[OfflineAction]] = {}
 
         for action in actions:
             key = (action.type, action.model)
@@ -310,7 +313,8 @@ class SyncManager:
         # Check for custom sync handler
         handler_key = f"{action_type}_{model_name}"
         if handler_key in self._sync_handlers:
-            return self._sync_handlers[handler_key](batch)
+            handler_result: Dict[str, Any] = self._sync_handlers[handler_key](batch)
+            return handler_result
 
         # Use default sync logic
         if action_type == "create":
@@ -468,7 +472,7 @@ class SyncManager:
 _sync_handlers: Dict[str, Callable] = {}
 
 
-def register_sync_handler(model_name: str, action_type: str):
+def register_sync_handler(model_name: str, action_type: str) -> Callable[[Callable], Callable]:
     """
     Decorator to register sync handlers.
 
@@ -479,7 +483,7 @@ def register_sync_handler(model_name: str, action_type: str):
             pass
     """
 
-    def decorator(func: Callable):
+    def decorator(func: Callable) -> Callable:
         handler_key = f"{action_type}_{model_name}"
         _sync_handlers[handler_key] = func
         logger.info("Registered sync handler: %s", handler_key)
@@ -488,7 +492,7 @@ def register_sync_handler(model_name: str, action_type: str):
     return decorator
 
 
-def sync_endpoint_view(request):
+def sync_endpoint_view(request: Any) -> Any:
     """
     Django view to handle sync requests from service worker.
 

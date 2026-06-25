@@ -61,7 +61,7 @@ def _short_stack_top() -> str:
     return ""
 
 
-def _execute_wrapper(execute, sql, params, many, context):
+def _execute_wrapper(execute: Any, sql: Any, params: Any, many: Any, context: Any) -> Any:
     """Django execute_wrapper — called for every query while installed."""
     scope = _get_active()
     if scope is None:

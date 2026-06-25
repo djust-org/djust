@@ -27,7 +27,7 @@ class TenantAwareBackendMixin:
     All keys are prefixed with tenant ID to ensure isolation.
     """
 
-    def __init__(self, tenant_id: str, *args, **kwargs):
+    def __init__(self, tenant_id: str, *args: Any, **kwargs: Any) -> None:
         self._tenant_id = tenant_id
         super().__init__(*args, **kwargs)
 
@@ -75,7 +75,7 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
         redis_url: str = "redis://localhost:6379/0",
         key_prefix: str = "djust",
         timeout: int = PRESENCE_TIMEOUT,
-    ):
+    ) -> None:
         super().__init__(tenant_id=tenant_id)
         try:
             import redis as redis_lib
@@ -172,7 +172,8 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
     def count(self, presence_key: str) -> int:
         """Count active users in the group."""
         cutoff = time.time() - self._timeout
-        return self._client.zcount(self._zset_key(presence_key), cutoff, "+inf")
+        active_count: int = self._client.zcount(self._zset_key(presence_key), cutoff, "+inf")
+        return active_count
 
     def heartbeat(self, presence_key: str, user_id: str) -> None:
         """Update heartbeat timestamp."""
@@ -247,7 +248,7 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
     _presences: Dict[str, Dict[str, Dict[str, Any]]] = {}
     _heartbeats: Dict[str, Dict[str, float]] = {}
 
-    def __init__(self, tenant_id: str, timeout: int = PRESENCE_TIMEOUT):
+    def __init__(self, tenant_id: str, timeout: int = PRESENCE_TIMEOUT) -> None:
         super().__init__(tenant_id=tenant_id)
         self._tenant_id = tenant_id
         self._timeout = timeout
@@ -262,7 +263,7 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
         tenant_data = self._presences.get(self._tenant_id, {})
         return tenant_data.get(presence_key, {})
 
-    def _set_tenant_presences(self, presence_key: str, data: Dict[str, Dict[str, Any]]):
+    def _set_tenant_presences(self, presence_key: str, data: Dict[str, Dict[str, Any]]) -> None:
         """Set presences dict for current tenant and key."""
         if self._tenant_id not in self._presences:
             self._presences[self._tenant_id] = {}
@@ -423,6 +424,7 @@ class TenantPresenceManager:
 
         backend_type = config.get("PRESENCE_BACKEND", "memory")
 
+        backend: PresenceBackend
         if backend_type in ("redis", "tenant_redis"):
             redis_url = config.get(
                 "PRESENCE_REDIS_URL", config.get("REDIS_URL", "redis://localhost:6379/0")

@@ -58,7 +58,7 @@ Template usage::
     {{ tenant.id }}
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .resolvers import (
     TenantInfo,
@@ -155,7 +155,7 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     if name in _LAZY_IMPORTS:
         import importlib
 

@@ -73,7 +73,7 @@ class DryRunContext:
             If False, log each attempt in `violations` and call through.
     """
 
-    def __init__(self, block: bool = True):
+    def __init__(self, block: bool = True) -> None:
         self.block = block
         self.violations: List[Dict[str, Any]] = []
         self._patches: List[tuple] = []  # (obj, attr, original)
@@ -94,7 +94,7 @@ class DryRunContext:
             raise
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         try:
             self._uninstall()
         finally:
@@ -104,14 +104,20 @@ class DryRunContext:
 
     # -- patch table management -------------------------------------------
 
-    def _patch(self, obj: Any, attr: str, wrapper) -> None:
+    def _patch(self, obj: Any, attr: str, wrapper: Any) -> None:
         original = getattr(obj, attr)
         self._patches.append((obj, attr, original))
         setattr(obj, attr, wrapper)
 
     def _record_or_raise(
-        self, kind: str, target: str, details: Optional[Dict[str, Any]], original, args, kwargs
-    ):
+        self,
+        kind: str,
+        target: str,
+        details: Optional[Dict[str, Any]],
+        original: Any,
+        args: Any,
+        kwargs: Any,
+    ) -> Any:
         entry = {"kind": kind, "target": target, "details": details or {}}
         if self.block:
             raise DryRunViolation(kind, target, details)
@@ -174,12 +180,12 @@ class DryRunContext:
         orig_save = Model.save
         orig_delete = Model.delete
 
-        def wrapped_save(self_, *a, **kw):
+        def wrapped_save(self_: Any, *a: Any, **kw: Any) -> Any:
             target = f"{type(self_).__name__}.save"
             details = {"pk": getattr(self_, "pk", None)}
             return _self._record_or_raise("orm_save", target, details, orig_save, (self_, *a), kw)
 
-        def wrapped_delete(self_, *a, **kw):
+        def wrapped_delete(self_: Any, *a: Any, **kw: Any) -> Any:
             target = f"{type(self_).__name__}.delete"
             details = {"pk": getattr(self_, "pk", None)}
             return _self._record_or_raise(
@@ -203,8 +209,8 @@ class DryRunContext:
                 continue
             original = getattr(QuerySet, qs_method)
 
-            def _make_qs_wrapper(method_name, orig, kind_tag):
-                def wrapper(self_, *a, **kw):
+            def _make_qs_wrapper(method_name: str, orig: Any, kind_tag: str) -> Any:
+                def wrapper(self_: Any, *a: Any, **kw: Any) -> Any:
                     model_name = getattr(self_, "model", None)
                     model_name = getattr(model_name, "__name__", "?") if model_name else "?"
                     target = f"{model_name}.objects.{method_name}"
@@ -234,8 +240,8 @@ class DryRunContext:
             original = getattr(mail, fname)
             _self = self
 
-            def _make_wrapper(name, orig):
-                def wrapper(*a, **kw):
+            def _make_wrapper(name: str, orig: Any) -> Any:
+                def wrapper(*a: Any, **kw: Any) -> Any:
                     # Subject is the first positional arg in send_mail /
                     # send_mass_mail. Slice regardless of whether it
                     # came via args or kwargs to keep the recorded
@@ -253,7 +259,7 @@ class DryRunContext:
 
     def _install_http_requests(self) -> None:
         try:
-            import requests
+            import requests  # type: ignore[import-untyped]
         except Exception:  # noqa: BLE001
             return
 
@@ -263,8 +269,8 @@ class DryRunContext:
                 continue
             original = getattr(requests, method)
 
-            def _make_wrapper(m, orig):
-                def wrapper(*a, **kw):
+            def _make_wrapper(m: str, orig: Any) -> Any:
+                def wrapper(*a: Any, **kw: Any) -> Any:
                     url = (
                         a[1]
                         if (m == "request" and len(a) >= 2)
@@ -287,7 +293,7 @@ class DryRunContext:
         original = urllib_request.urlopen
         _self = self
 
-        def wrapper(*a, **kw):
+        def wrapper(*a: Any, **kw: Any) -> Any:
             arg = a[0] if a else kw.get("url", "")
             url = getattr(arg, "full_url", None) or str(arg)
             details = {"url": str(url)[:200]}

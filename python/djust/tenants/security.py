@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING, Callable
 
 from django.conf import settings
+
+if TYPE_CHECKING:
+    from django.http import HttpRequest, HttpResponse
 
 # Only allow domain-like values in CSP (no semicolons, quotes, or directives)
 _CSP_DOMAIN_RE = re.compile(r"^[\w.*:/-]+$")
@@ -11,10 +15,10 @@ _CSP_DOMAIN_RE = re.compile(r"^[\w.*:/-]+$")
 class SecurityHeadersMiddleware:
     """OWASP security headers middleware with tenant-aware CSP."""
 
-    def __init__(self, get_response):
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
         self.get_response = get_response
 
-    def __call__(self, request):
+    def __call__(self, request: HttpRequest) -> HttpResponse:
         response = self.get_response(request)
 
         config = getattr(settings, "DJUST_TENANTS", {})

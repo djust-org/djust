@@ -66,7 +66,7 @@ class TenantInfo:
     def __repr__(self) -> str:
         return f"TenantInfo(id={self.id!r}, name={self.name!r})"
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, TenantInfo):
             return self.id == other.id
         if isinstance(other, str):
@@ -295,7 +295,7 @@ class CustomResolver(TenantResolver):
             logger.warning("No custom tenant resolver configured")
             return None
 
-        result = resolver(request)
+        result: Optional[TenantInfo] | str = resolver(request)
 
         # Handle case where resolver returns string instead of TenantInfo
         if isinstance(result, str):
@@ -332,7 +332,7 @@ class ChainedResolver(TenantResolver):
         }
     """
 
-    def __init__(self, resolvers: list):
+    def __init__(self, resolvers: list[TenantResolver]):
         self.resolvers = resolvers
 
     def resolve(self, request: "HttpRequest") -> Optional[TenantInfo]:
@@ -344,7 +344,7 @@ class ChainedResolver(TenantResolver):
 
 
 # Registry of built-in resolvers
-RESOLVER_REGISTRY: Dict[str, type] = {
+RESOLVER_REGISTRY: Dict[str, type[TenantResolver]] = {
     "subdomain": SubdomainResolver,
     "path": PathResolver,
     "header": HeaderResolver,
@@ -394,7 +394,7 @@ class _CallableResolver(TenantResolver):
         self.func = func
 
     def resolve(self, request: "HttpRequest") -> Optional[TenantInfo]:
-        result = self.func(request)
+        result: Optional[TenantInfo] | str = self.func(request)
         if isinstance(result, str):
             return TenantInfo(tenant_id=result)
         return result
