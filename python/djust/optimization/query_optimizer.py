@@ -17,7 +17,7 @@ from django.db.models.fields.related import (
 class QueryOptimization:
     """Result of query analysis."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.select_related: Set[str] = set()
         self.prefetch_related: Set[str] = set()
         self.annotations: Dict[str, Any] = {}
@@ -62,7 +62,7 @@ def _analyze_path(
     path: str,
     optimization: QueryOptimization,
     prefix: str = "",
-):
+) -> None:
     """
     Recursively analyze a single path and update optimization.
 
@@ -123,7 +123,7 @@ def _analyze_path(
             _analyze_path(related_model, remaining_path, optimization, django_path)
 
 
-def optimize_queryset(queryset, optimization: QueryOptimization):
+def optimize_queryset(queryset: Any, optimization: QueryOptimization) -> Any:
     """
     Apply select_related/prefetch_related to a QuerySet.
 

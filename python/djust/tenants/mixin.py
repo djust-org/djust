@@ -72,7 +72,7 @@ class TenantMixin:
     tenant_required: bool = True  # Override per-view if needed
     tenant_context_name: str = "tenant"  # Name in template context
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._tenant: Optional[TenantInfo] = None
         self._tenant_resolved: bool = False
@@ -88,7 +88,7 @@ class TenantMixin:
         return self._tenant
 
     @tenant.setter
-    def tenant(self, value: TenantInfo):
+    def tenant(self, value: TenantInfo) -> None:
         """Set the tenant (usually done automatically)."""
         self._tenant = value
         self._tenant_resolved = True
@@ -135,11 +135,18 @@ class TenantMixin:
         # Fall back to global config
         from ..config import get_djust_config
 
-        return get_djust_config().get("TENANT_REQUIRED", True)
+        required: bool = get_djust_config().get("TENANT_REQUIRED", True)
+        return required
 
-    def get_context_data(self, **kwargs) -> Dict[str, Any]:
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Add tenant to template context."""
-        context = super().get_context_data(**kwargs) if hasattr(super(), "get_context_data") else {}
+        # TenantMixin is mixed into a LiveView subclass at runtime; the MRO
+        # supplies get_context_data(). mypy only sees object here.
+        context: Dict[str, Any] = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
 
         # Get context name from config or class attribute
         from ..config import get_djust_config
@@ -156,7 +163,7 @@ class TenantMixin:
         If using PresenceMixin, this ensures presence is isolated per tenant.
         """
         base_key = (
-            super().get_presence_key()
+            super().get_presence_key()  # type: ignore[misc]
             if hasattr(super(), "get_presence_key")
             else self.__class__.__name__
         )
@@ -176,20 +183,20 @@ class TenantMixin:
         return ""
 
     # Hook into LiveView lifecycle
-    def dispatch(self, request, *args, **kwargs):
+    def dispatch(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> Any:
         """Resolve tenant before dispatching."""
         self._ensure_tenant(request)
-        return super().dispatch(request, *args, **kwargs)
+        return super().dispatch(request, *args, **kwargs)  # type: ignore[misc]
 
-    def get(self, request, *args, **kwargs):
+    def get(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> Any:
         """Resolve tenant before GET handling."""
         self._ensure_tenant(request)
-        return super().get(request, *args, **kwargs)
+        return super().get(request, *args, **kwargs)  # type: ignore[misc]
 
-    def post(self, request, *args, **kwargs):
+    def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> Any:
         """Resolve tenant before POST handling."""
         self._ensure_tenant(request)
-        return super().post(request, *args, **kwargs)
+        return super().post(request, *args, **kwargs)  # type: ignore[misc]
 
 
 class TenantScopedMixin(TenantMixin):
@@ -208,10 +215,10 @@ class TenantScopedMixin(TenantMixin):
                 self.items = self.get_tenant_queryset()
     """
 
-    model = None  # Set this to your model class
+    model: Any = None  # Set this to your model class
     tenant_field: str = "tenant_id"  # Field name for tenant FK
 
-    def get_tenant_queryset(self, model=None):
+    def get_tenant_queryset(self, model: Any = None) -> Any:
         """
         Get queryset filtered by current tenant.
 
@@ -232,7 +239,7 @@ class TenantScopedMixin(TenantMixin):
         filter_kwargs = {self.tenant_field: self._tenant.id}
         return model.objects.filter(**filter_kwargs)
 
-    def create_for_tenant(self, model=None, **kwargs):
+    def create_for_tenant(self, model: Any = None, **kwargs: Any) -> Any:
         """
         Create a model instance with tenant automatically set.
 
@@ -253,7 +260,7 @@ class TenantScopedMixin(TenantMixin):
         kwargs[self.tenant_field] = self._tenant.id
         return model.objects.create(**kwargs)
 
-    def get_tenant_object(self, pk, model=None):
+    def get_tenant_object(self, pk: Any, model: Any = None) -> Any:
         """
         Get a specific object scoped to current tenant.
 
@@ -296,7 +303,7 @@ class TenantContextProcessor:
         {{ tenant.settings.theme }}
     """
 
-    def __call__(self, request):
+    def __call__(self, request: "HttpRequest") -> Dict[str, Any]:
         """Process request and return tenant context."""
         tenant = resolve_tenant(request)
 
@@ -308,6 +315,6 @@ class TenantContextProcessor:
 
 
 # Convenience function for use as context processor
-def context_processor(request):
+def context_processor(request: "HttpRequest") -> Dict[str, Any]:
     """Context processor function that adds tenant to template context."""
     return TenantContextProcessor()(request)

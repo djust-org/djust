@@ -72,7 +72,7 @@ class StateFingerprint:
         # changed = {'items'}  (user fingerprint unchanged)
     """
 
-    def __init__(self, hash_fn: Optional[Callable[[Any], str]] = None):
+    def __init__(self, hash_fn: Optional[Callable[[Any], str]] = None) -> None:
         """
         Initialize fingerprint tracker.
 
@@ -132,7 +132,7 @@ class StateFingerprint:
         current_hash = self._hash_fn(value)
         return self._fingerprints.get(key) != current_hash
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all fingerprints."""
         self._fingerprints.clear()
         self._version = 0
@@ -171,7 +171,7 @@ class SectionCache:
                 pass
     """
 
-    def __init__(self, max_size: int = 100):
+    def __init__(self, max_size: int = 100) -> None:
         """
         Initialize section cache.
 
@@ -201,7 +201,7 @@ class SectionCache:
         self._misses += 1
         return None
 
-    def set(self, section: str, fingerprint: str, html: str):
+    def set(self, section: str, fingerprint: str, html: str) -> None:
         """
         Cache HTML for a section with its fingerprint.
 
@@ -218,11 +218,11 @@ class SectionCache:
 
         self._cache[section] = (fingerprint, html)
 
-    def invalidate(self, section: str):
+    def invalidate(self, section: str) -> None:
         """Invalidate a specific section."""
         self._cache.pop(section, None)
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all cached sections."""
         self._cache.clear()
 
@@ -261,7 +261,7 @@ class IncrementalStateSync:
         # delta = {'count': 101}  (items unchanged)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._fingerprint = StateFingerprint()
         self._last_state: Dict[str, Any] = {}
 
@@ -289,7 +289,7 @@ class IncrementalStateSync:
 
         return delta, changed_keys
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset sync state, forcing full sync on next call."""
         self._fingerprint.clear()
         self._last_state.clear()
@@ -302,7 +302,9 @@ class IncrementalStateSync:
         }
 
 
-def fingerprint(*keys: str, hash_fn: Optional[Callable[[Any], str]] = None):
+def fingerprint(
+    *keys: str, hash_fn: Optional[Callable[[Any], str]] = None
+) -> Callable[[Callable], Callable]:
     """
     Decorator to mark a method's return value as fingerprinted.
 
@@ -325,7 +327,7 @@ def fingerprint(*keys: str, hash_fn: Optional[Callable[[Any], str]] = None):
         hash_attr = f"_fp_hash_{method.__name__}"
 
         @wraps(method)
-        def wrapper(self):
+        def wrapper(self: Any) -> Any:
             # Compute hash of relevant state keys
             state_values = {k: getattr(self, k, None) for k in keys}
             current_hash = (hash_fn or _compute_hash)(state_values)
@@ -369,7 +371,7 @@ class FingerprintMixin:
     # Override in subclass to specify which assigns to fingerprint
     fingerprinted_assigns: List[str] = []
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._state_fingerprint = StateFingerprint()
         self._section_cache = SectionCache()
@@ -407,7 +409,7 @@ class FingerprintMixin:
             return self._section_cache.get(section, fingerprint)
         return None
 
-    def cache_section(self, section: str, html: str):
+    def cache_section(self, section: str, html: str) -> None:
         """
         Cache rendered HTML for a section.
 

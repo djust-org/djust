@@ -2,10 +2,16 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
 from django.http import Http404
 
 from .resolvers import get_tenant_resolver
+
+if TYPE_CHECKING:
+    from django.http import HttpRequest, HttpResponse
+
+    from .resolvers import TenantInfo, TenantResolver
 
 # Per-(async-task / thread) storage for the current tenant.
 #
@@ -19,10 +25,12 @@ from .resolvers import get_tenant_resolver
 # async task / context: ``sync_to_async`` copies the caller's ``contextvars``
 # context into the executor call (and back), so each connection's tenant stays
 # isolated. ``ContextVar`` also behaves correctly on the plain-sync HTTP path.
-_current_tenant: "ContextVar" = ContextVar("djust_current_tenant", default=None)
+_current_tenant: "ContextVar[Optional[TenantInfo]]" = ContextVar(
+    "djust_current_tenant", default=None
+)
 
 
-def get_current_tenant():
+def get_current_tenant() -> "Optional[TenantInfo]":
     """Get the current tenant from the context-local storage.
 
     Returns:
@@ -31,7 +39,7 @@ def get_current_tenant():
     return _current_tenant.get()
 
 
-def set_current_tenant(tenant):
+def set_current_tenant(tenant: "Optional[TenantInfo]") -> None:
     """Set the current tenant in the context-local storage.
 
     Args:
@@ -41,7 +49,7 @@ def set_current_tenant(tenant):
 
 
 @contextmanager
-def tenant_context(tenant):
+def tenant_context(tenant: "Optional[TenantInfo]") -> Iterator[None]:
     """Bind *tenant* as the current tenant for the duration of the ``with`` block.
 
     Sets the :data:`_current_tenant` ContextVar on entry and restores the
@@ -86,7 +94,7 @@ class TenantMiddleware:
     4. Optionally raise 404 if REQUIRED=True and no tenant found
     """
 
-    def __init__(self, get_response):
+    def __init__(self, get_response: Callable[["HttpRequest"], "HttpResponse"]) -> None:
         self.get_response = get_response
 
         # Short-circuit: when neither DJUST_CONFIG['TENANT_RESOLVER'] nor
@@ -104,13 +112,14 @@ class TenantMiddleware:
         djust_tenants = getattr(settings, "DJUST_TENANTS", {}) or {}
         self._enabled = "TENANT_RESOLVER" in djust_config or bool(djust_tenants)
 
+        self.resolver: Optional["TenantResolver"]
         if self._enabled:
             self.resolver = get_tenant_resolver()
         else:
             # Skip resolver instantiation too — it reads settings.
             self.resolver = None
 
-    def __call__(self, request):
+    def __call__(self, request: "HttpRequest") -> "HttpResponse":
         if not self._enabled:
             # Preserve `request.tenant` attribute existence so consumer
             # code doing `getattr(request, "tenant", None)` keeps working
@@ -119,7 +128,10 @@ class TenantMiddleware:
             request.tenant = None
             return self.get_response(request)
 
-        # Resolve tenant
+        # Resolve tenant. self.resolver is non-None whenever self._enabled is
+        # True (set together in __init__); the early return above covers the
+        # disabled case, so this access is safe.
+        assert self.resolver is not None
         tenant = self.resolver.resolve(request)
 
         # Set on request

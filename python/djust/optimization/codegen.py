@@ -7,13 +7,13 @@ Generates optimized Python serializer functions for specific variable access pat
 import hashlib
 import inspect
 import logging
-from typing import List, Dict, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 def generate_serializer_code(
-    model_name: str, variable_paths: List[str], func_name: str = None
+    model_name: str, variable_paths: List[str], func_name: Optional[str] = None
 ) -> str:
     """
     Generate Python code for a custom serializer function.
@@ -99,7 +99,7 @@ def _build_path_tree(paths: List[str]) -> Dict:
     # whole, rather than storing a builtin_function_or_method reference.
     _DICT_METHODS = {"items", "keys", "values"}
 
-    tree = {}
+    tree: Dict[str, Any] = {}
 
     for path in paths:
         parts = path.split(".")
@@ -151,9 +151,9 @@ def _generate_nested_access(
     tree: Dict,
     obj_var: str,
     result_var: str,
-    root_attr: str = None,
+    root_attr: Optional[str] = None,
     indent: int = 1,
-):
+) -> None:
     """
     Recursively generate safe nested attribute access code.
 
@@ -361,7 +361,7 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         >>> print(serialized)
         {"property": {"name": "123 Main St"}}
     """
-    namespace = {"_logger": logging.getLogger("djust.codegen.generated")}
+    namespace: Dict[str, Any] = {"_logger": logging.getLogger("djust.codegen.generated")}
 
     try:
         # Compile to bytecode
@@ -371,7 +371,8 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         exec(code_obj, namespace)
 
         # Return the function
-        return namespace[func_name]
+        compiled_func: Callable = namespace[func_name]
+        return compiled_func
 
     except SyntaxError as e:
         # Include generated code in error for debugging

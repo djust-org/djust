@@ -14,8 +14,12 @@ of ALLOWED_HOSTS.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, Callable
 
 from django.http import HttpResponseForbidden
+
+if TYPE_CHECKING:
+    from django.http import HttpRequest, HttpResponse
 
 logger = logging.getLogger("djust.observability")
 
@@ -24,12 +28,13 @@ OBSERVABILITY_URL_PREFIX = "/_djust/observability/"
 _LOCALHOST_ADDRS = {"127.0.0.1", "::1", "localhost"}
 
 
-def _client_ip(request) -> str:
+def _client_ip(request: "HttpRequest") -> str:
     """Extract the client IP. In dev this is reliable (no proxy chain)."""
-    return request.META.get("REMOTE_ADDR", "")
+    ip: str = request.META.get("REMOTE_ADDR", "")
+    return ip
 
 
-def is_localhost(request) -> bool:
+def is_localhost(request: "HttpRequest") -> bool:
     """True iff the request came from loopback."""
     return _client_ip(request) in _LOCALHOST_ADDRS
 
@@ -42,10 +47,10 @@ class LocalhostOnlyObservabilityMiddleware:
     boundary here; network location is).
     """
 
-    def __init__(self, get_response):
+    def __init__(self, get_response: Callable[["HttpRequest"], "HttpResponse"]) -> None:
         self.get_response = get_response
 
-    def __call__(self, request):
+    def __call__(self, request: "HttpRequest") -> "HttpResponse":
         if request.path.startswith(OBSERVABILITY_URL_PREFIX) and not is_localhost(request):
             logger.warning(
                 "Rejected observability request from non-localhost: path=%s ip=%s",

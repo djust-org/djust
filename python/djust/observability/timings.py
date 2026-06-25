@@ -63,7 +63,7 @@ def get_timing_stats(
     with _lock:
         snapshot = {k: list(v) for k, v in _samples.items()}
 
-    rows = []
+    rows: List[Dict[str, Any]] = []
     for (view_class, h_name), sample_list in snapshot.items():
         if handler_name and h_name != handler_name:
             continue

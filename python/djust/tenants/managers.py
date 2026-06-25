@@ -1,11 +1,13 @@
 """Tenant-aware model managers that auto-filter by current tenant."""
 
+from typing import Any
+
 from django.db import models
 
 from .middleware import get_current_tenant
 
 
-def _strict_mode_enabled():
+def _strict_mode_enabled() -> bool:
     """Return whether STRICT_MODE (fail-closed) is enabled (default: True).
 
     SECURITY (Finding #6): the default is fail-CLOSED. When no tenant is bound
@@ -20,10 +22,11 @@ def _strict_mode_enabled():
     from django.conf import settings
 
     config = getattr(settings, "DJUST_TENANTS", {}) or {}
-    return config.get("STRICT_MODE", True)
+    enabled: bool = config.get("STRICT_MODE", True)
+    return enabled
 
 
-def _scope_to_tenant(queryset, tenant_field):
+def _scope_to_tenant(queryset: Any, tenant_field: str) -> Any:
     """Filter *queryset* to the tenant bound on the current context.
 
     The single source of truth for tenant scoping, shared by both
@@ -65,7 +68,7 @@ class TenantManager(models.Manager):
         all_projects = Project.objects.unscoped()
     """
 
-    def __init__(self, *args, tenant_field="tenant", **kwargs):
+    def __init__(self, *args: Any, tenant_field: str = "tenant", **kwargs: Any) -> None:
         """Initialize manager with tenant field name.
 
         Args:
@@ -74,11 +77,11 @@ class TenantManager(models.Manager):
         super().__init__(*args, **kwargs)
         self.tenant_field = tenant_field
 
-    def get_queryset(self):
+    def get_queryset(self) -> Any:
         """Return queryset filtered by current tenant (fail-closed under strict mode)."""
         return _scope_to_tenant(super().get_queryset(), self.tenant_field)
 
-    def _get_strict_mode(self):
+    def _get_strict_mode(self) -> bool:
         """Check if strict mode is enabled (default: True).
 
         When True, queries without a tenant return empty results.
@@ -86,7 +89,7 @@ class TenantManager(models.Manager):
         """
         return _strict_mode_enabled()
 
-    def unscoped(self, reason=""):
+    def unscoped(self, reason: str = "") -> Any:
         """Return unfiltered queryset (bypass tenant filtering).
 
         Args:
@@ -128,12 +131,12 @@ class TenantQuerySet(models.QuerySet):
       never consulted STRICT_MODE — the core of the live-path disclosure bug.
     """
 
-    def __init__(self, *args, tenant_field="tenant", **kwargs):
+    def __init__(self, *args: Any, tenant_field: str = "tenant", **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._tenant_field = tenant_field
 
     @classmethod
-    def as_manager(cls, tenant_field="tenant"):
+    def as_manager(cls, tenant_field: str = "tenant") -> Any:
         """Create a tenant-scoping manager from this queryset.
 
         The returned manager applies the tenant filter (fail-closed under
@@ -147,19 +150,19 @@ class TenantQuerySet(models.QuerySet):
             Manager: Manager instance
         """
 
-        class _TenantQuerySetManager(models.Manager.from_queryset(cls)):
+        class _TenantQuerySetManager(models.Manager.from_queryset(cls)):  # type: ignore[misc]
             # Carried so the queryset clones (which copy _tenant_field via
             # ``_clone``) and the manager agree on the FK field name.
             _tenant_field = tenant_field
 
-            def get_queryset(self):
+            def get_queryset(self) -> Any:
                 qs = super().get_queryset()
                 # Keep the field name on the queryset so chained clones built
                 # from this queryset retain it.
                 qs._tenant_field = self._tenant_field
                 return _scope_to_tenant(qs, self._tenant_field)
 
-            def unscoped(self, reason=""):
+            def unscoped(self, reason: str = "") -> Any:
                 """Return an unfiltered queryset (bypass tenant scoping).
 
                 The documented escape hatch for deliberate cross-tenant reads —

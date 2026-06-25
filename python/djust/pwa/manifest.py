@@ -230,7 +230,8 @@ def generate_manifest_link_tag(manifest_url: str = "/manifest.json") -> str:
     Returns:
         HTML link tag string
     """
-    return format_html('<link rel="manifest" href="{}">', manifest_url)
+    tag: str = format_html('<link rel="manifest" href="{}">', manifest_url)
+    return tag
 
 
 def generate_theme_color_meta(theme_color: Optional[str] = None) -> str:
@@ -248,7 +249,8 @@ def generate_theme_color_meta(theme_color: Optional[str] = None) -> str:
 
         theme_color = get_djust_config().get("PWA_THEME_COLOR", "#000000")
 
-    return format_html('<meta name="theme-color" content="{}">', theme_color)
+    meta_tag: str = format_html('<meta name="theme-color" content="{}">', theme_color)
+    return meta_tag
 
 
 def generate_apple_touch_icon_tags(icons: Optional[List[Dict[str, Any]]] = None) -> List[str]:

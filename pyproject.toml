@@ -215,6 +215,9 @@ ignore_errors = true
 # an installed-but-unstubbed dependency (e.g. PyYAML, consumed by
 # djust.permissions). Mark those libraries untyped explicitly so the strict
 # islands stay green without weakening the island's own def/return strictness.
+# (`requests`, consumed lazily by djust.observability.dry_run, is a known-stub
+# package mypy refuses to silence via this mechanism, so that single import
+# carries a narrow inline `# type: ignore[import-untyped]` instead.)
 [[tool.mypy.overrides]]
 module = ["yaml"]
 ignore_missing_imports = true
@@ -782,6 +785,58 @@ module = [
     "djust.theming.theme_packs",
     "djust.theming.urls",
     "djust.theming.views",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# pwa / optimization / tenants / observability subpackages (ADR-023 M4d, part 2)
+# — every non-test module of these four optional-extra subpackages flipped from
+# the lenient default to strict islands. Spans the PWA mixins / offline storage /
+# sync engine / manifest / service-worker / utils, the fingerprint + section-cache
+# + serializer-codegen + query-optimizer + serializer-cache optimization layer,
+# the multi-tenant resolvers / managers / backends / middleware / mixin / audit /
+# security (tenant-isolation-sensitive — annotations only, logic byte-identical),
+# and the observability endpoint views / middleware (localhost-gate preserved) /
+# SQL+timing+log+traceback capture / dry-run side-effect blocker / registry / urls.
+# Real bugs fixed to clean the islands: pwa.storage.OfflineAction.id widened to
+# Union[str, int] (callers forward an int obj_id) and pwa.mixins.delete_offline
+# now passes the required OfflineAction(data={}) (omission raised TypeError at
+# runtime). No */tests/ dirs exist in these subpackages (nothing to exclude).
+[[tool.mypy.overrides]]
+module = [
+    "djust.pwa.__init__",
+    "djust.pwa.manifest",
+    "djust.pwa.mixins",
+    "djust.pwa.service_worker",
+    "djust.pwa.storage",
+    "djust.pwa.sync",
+    "djust.pwa.utils",
+    "djust.optimization.__init__",
+    "djust.optimization.cache",
+    "djust.optimization.codegen",
+    "djust.optimization.fingerprint",
+    "djust.optimization.query_optimizer",
+    "djust.tenants.__init__",
+    "djust.tenants.audit",
+    "djust.tenants.backends",
+    "djust.tenants.managers",
+    "djust.tenants.middleware",
+    "djust.tenants.mixin",
+    "djust.tenants.models",
+    "djust.tenants.resolvers",
+    "djust.tenants.security",
+    "djust.observability.__init__",
+    "djust.observability.dry_run",
+    "djust.observability.log_handler",
+    "djust.observability.middleware",
+    "djust.observability.registry",
+    "djust.observability.sql",
+    "djust.observability.timings",
+    "djust.observability.tracebacks",
+    "djust.observability.urls",
+    "djust.observability.views",
 ]
 ignore_errors = false
 disallow_untyped_defs = true

@@ -30,7 +30,7 @@ class SerializerCache:
         backend: str = "filesystem",
         cache_dir: str = "__pycache__/djust_serializers",
         redis_url: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Initialize cache with specified backend.
 
@@ -118,7 +118,7 @@ class SerializerCache:
 
         return None
 
-    def set(self, cache_key: str, serializer_func: Callable):
+    def set(self, cache_key: str, serializer_func: Callable) -> None:
         """
         Cache serializer function.
 
@@ -143,7 +143,7 @@ class SerializerCache:
         elif self.backend == "redis":
             self._set_to_redis(cache_key, serializer_func)
 
-    def invalidate(self, cache_key: str):
+    def invalidate(self, cache_key: str) -> None:
         """
         Invalidate cached serializer.
 
@@ -166,7 +166,7 @@ class SerializerCache:
         elif self.backend == "redis":
             self._invalidate_redis(cache_key)
 
-    def clear(self):
+    def clear(self) -> None:
         """
         Clear all cached serializers.
 
@@ -193,7 +193,7 @@ class SerializerCache:
         if cache_file.exists():
             try:
                 with open(cache_file, "rb") as f:
-                    func = pickle.load(f)
+                    func: Callable = pickle.load(f)
                     # Store in memory cache for faster access
                     self._memory_cache[cache_key] = func
                     return func
@@ -203,7 +203,7 @@ class SerializerCache:
                 return None
         return None
 
-    def _set_to_filesystem(self, cache_key: str, serializer_func: Callable):
+    def _set_to_filesystem(self, cache_key: str, serializer_func: Callable) -> None:
         """Store serializer to filesystem cache."""
         cache_file = self.cache_dir / f"{cache_key}.pkl"
         try:
@@ -215,12 +215,12 @@ class SerializerCache:
 
             warnings.warn(f"Failed to cache serializer to filesystem: {e}")
 
-    def _invalidate_filesystem(self, cache_key: str):
+    def _invalidate_filesystem(self, cache_key: str) -> None:
         """Remove serializer from filesystem cache."""
         cache_file = self.cache_dir / f"{cache_key}.pkl"
         cache_file.unlink(missing_ok=True)
 
-    def _clear_filesystem(self):
+    def _clear_filesystem(self) -> None:
         """Remove all cached serializers from filesystem."""
         if self.cache_dir.exists():
             for cache_file in self.cache_dir.glob("*.pkl"):
@@ -236,7 +236,7 @@ class SerializerCache:
         try:
             data = self._redis_client.get(f"djust:serializer:{cache_key}")
             if data:
-                func = pickle.loads(data)
+                func: Callable = pickle.loads(data)
                 # Store in memory cache for faster access
                 self._memory_cache[cache_key] = func
                 return func
@@ -246,7 +246,7 @@ class SerializerCache:
 
         return None
 
-    def _set_to_redis(self, cache_key: str, serializer_func: Callable):
+    def _set_to_redis(self, cache_key: str, serializer_func: Callable) -> None:
         """Store serializer to Redis cache."""
         if self._redis_client is None:
             return
@@ -265,7 +265,7 @@ class SerializerCache:
 
             warnings.warn(f"Failed to cache serializer to Redis: {e}")
 
-    def _invalidate_redis(self, cache_key: str):
+    def _invalidate_redis(self, cache_key: str) -> None:
         """Remove serializer from Redis cache."""
         if self._redis_client is None:
             return
@@ -275,7 +275,7 @@ class SerializerCache:
         except Exception:
             pass  # Best-effort cache eviction; Redis may be unavailable
 
-    def _clear_redis(self):
+    def _clear_redis(self) -> None:
         """Remove all cached serializers from Redis."""
         if self._redis_client is None:
             return

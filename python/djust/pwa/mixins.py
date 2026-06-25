@@ -7,9 +7,9 @@ automatic state synchronization.
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
-from .storage import get_storage_backend, OfflineAction, SyncQueue
+from .storage import get_storage_backend, OfflineAction, OfflineStorage, SyncQueue
 from .sync import SyncManager
 from .utils import is_online, get_connection_info
 
@@ -48,10 +48,16 @@ class PWAMixin:
     pwa_start_url: str = "/"
     pwa_scope: str = "/"
 
-    def __init__(self, **kwargs):
+    if TYPE_CHECKING:
+        # Provided by LiveView at runtime when this mixin is combined with it.
+        # Declared here (TYPE_CHECKING only) so the strict-typed mixin can call
+        # it without an attr-defined error; no runtime effect.
+        def push_event(self, event: str, payload: Dict[str, Any]) -> None: ...
+
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._pwa_registered = False
-        self._install_prompt_deferred = None
+        self._install_prompt_deferred: Any = None
 
     def get_pwa_config(self) -> Dict[str, Any]:
         """
@@ -59,7 +65,7 @@ class PWAMixin:
 
         Merges view-level settings with global DJUST_CONFIG.
         """
-        config = {}
+        config: Dict[str, Any] = {}
 
         # Get global config
         from ..config import get_djust_config
@@ -100,7 +106,7 @@ class PWAMixin:
 
         return config
 
-    def register_pwa_handlers(self):
+    def register_pwa_handlers(self) -> None:
         """Register PWA-related event handlers."""
         if self._pwa_registered:
             return
@@ -109,7 +115,7 @@ class PWAMixin:
         self.push_event("pwa:register", self.get_pwa_config())
         self._pwa_registered = True
 
-    def handle_install_prompt(self):
+    def handle_install_prompt(self) -> None:
         """Handle PWA install prompt."""
         if not is_online():
             self.push_event("pwa:install_offline", {"message": "Install available when online"})
@@ -117,7 +123,7 @@ class PWAMixin:
 
         self.push_event("pwa:show_install_prompt", {"config": self.get_pwa_config()})
 
-    def handle_app_update(self, version: str):
+    def handle_app_update(self, version: str) -> None:
         """Handle app update notification."""
         self.push_event(
             "pwa:app_update",
@@ -127,9 +133,14 @@ class PWAMixin:
             },
         )
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Add PWA config to template context."""
-        context = super().get_context_data(**kwargs) if hasattr(super(), "get_context_data") else {}
+        # super().get_context_data() is provided by LiveView at runtime.
+        context: Dict[str, Any] = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
         context["pwa_config"] = self.get_pwa_config()
         return context
 
@@ -165,14 +176,18 @@ class OfflineMixin:
     offline_max_items: int = 1000
     offline_compress: bool = True
 
-    def __init__(self, **kwargs):
+    if TYPE_CHECKING:
+        # Provided by LiveView at runtime when this mixin is combined with it.
+        def push_event(self, event: str, payload: Dict[str, Any]) -> None: ...
+
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._storage = None
-        self._sync_queue = None
-        self._offline_state = {}
+        self._storage: Optional[OfflineStorage] = None
+        self._sync_queue: Optional[SyncQueue] = None
+        self._offline_state: Dict[str, Any] = {}
 
     @property
-    def storage(self):
+    def storage(self) -> OfflineStorage:
         """Get storage backend instance."""
         if not self._storage:
             self._storage = get_storage_backend(
@@ -181,7 +196,7 @@ class OfflineMixin:
         return self._storage
 
     @property
-    def sync_queue(self):
+    def sync_queue(self) -> SyncQueue:
         """Get sync queue for offline actions."""
         if not self._sync_queue:
             self._sync_queue = SyncQueue(
@@ -193,7 +208,7 @@ class OfflineMixin:
         """Check if the client is online."""
         return is_online()
 
-    def get_cached_or_fetch(self, key: str, queryset, **kwargs) -> List[Dict]:
+    def get_cached_or_fetch(self, key: str, queryset: Any, **kwargs: Any) -> List[Dict]:
         """
         Get data from cache if offline, otherwise fetch from database.
 
@@ -206,11 +221,11 @@ class OfflineMixin:
             List of data (dicts or objects)
         """
         if not self.is_online():
-            # Try to get from cache
+            # Try to get from cache (storage returns untyped JSON data).
             cached = self.storage.get(key)
             if cached:
                 logger.info("Using cached data for key: %s", key)
-                return cached
+                return cast(List[Dict], cached)
 
             logger.warning("No cached data for key: %s, returning empty", key)
             return []
@@ -230,10 +245,12 @@ class OfflineMixin:
         except Exception as e:
             logger.error("Failed to fetch data for key %s: %s", key, e, exc_info=True)
             # Fall back to cache if available
-            cached = self.storage.get(key)
-            return cached if cached else []
+            fallback = self.storage.get(key)
+            return cast(List[Dict], fallback) if fallback else []
 
-    def create_offline(self, model_name: str, data: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+    def create_offline(
+        self, model_name: str, data: Dict[str, Any], **kwargs: Any
+    ) -> Dict[str, Any]:
         """
         Create an object optimistically for offline use.
 
@@ -269,7 +286,7 @@ class OfflineMixin:
         return obj_data
 
     def update_offline(
-        self, model_name: str, obj_id: Union[str, int], data: Dict[str, Any], **kwargs
+        self, model_name: str, obj_id: Union[str, int], data: Dict[str, Any], **kwargs: Any
     ) -> Dict[str, Any]:
         """
         Update an object optimistically for offline use.
@@ -298,7 +315,7 @@ class OfflineMixin:
         logger.info("Updated offline object: %s id: %s", model_name, obj_id)
         return obj_data
 
-    def delete_offline(self, model_name: str, obj_id: Union[str, int], **kwargs) -> bool:
+    def delete_offline(self, model_name: str, obj_id: Union[str, int], **kwargs: Any) -> bool:
         """
         Delete an object optimistically for offline use.
 
@@ -310,11 +327,15 @@ class OfflineMixin:
         Returns:
             True if queued for deletion
         """
-        # Queue for sync when online
+        # Queue for sync when online. ``data`` is a required field on
+        # ``OfflineAction`` — omitting it raised ``TypeError`` at runtime
+        # (latent bug surfaced by strict typing); a delete carries no payload
+        # so an empty dict is the correct value.
         action = OfflineAction(
             type="delete",
             model=model_name,
             id=obj_id,
+            data={},
             timestamp=time.time(),
         )
         self.sync_queue.add(action)
@@ -322,7 +343,7 @@ class OfflineMixin:
         logger.info("Deleted offline object: %s id: %s", model_name, obj_id)
         return True
 
-    def sync_when_online(self):
+    def sync_when_online(self) -> None:
         """Trigger sync when connection is restored."""
         if not self.is_online():
             logger.info("Still offline, skipping sync")
@@ -341,7 +362,7 @@ class OfflineMixin:
         # Process sync in background (implementation in SyncMixin)
         self._process_sync_queue()
 
-    def _process_sync_queue(self):
+    def _process_sync_queue(self) -> None:
         """Process pending sync actions."""
         # This will be implemented by SyncMixin
         pass
@@ -355,7 +376,7 @@ class OfflineMixin:
             "connection_info": get_connection_info(),
         }
 
-    def handle_connection_change(self, online: bool):
+    def handle_connection_change(self, online: bool) -> None:
         """Handle connection state changes."""
         self._offline_state["is_online"] = online
 
@@ -367,9 +388,14 @@ class OfflineMixin:
             logger.info("Connection lost, entering offline mode")
             self.push_event("offline:offline", self.get_offline_state())
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Add offline state to template context."""
-        context = super().get_context_data(**kwargs) if hasattr(super(), "get_context_data") else {}
+        # super().get_context_data() is provided by LiveView at runtime.
+        context: Dict[str, Any] = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
         context["offline_state"] = self.get_offline_state()
         return context
 
@@ -392,18 +418,27 @@ class SyncMixin:
     """
 
     # Sync configuration
-    sync_model = None
+    sync_model: Any = None
     sync_conflict_strategy: str = "server_wins"  # 'client_wins', 'merge', 'manual'
     sync_batch_size: int = 10
     sync_timeout: int = 30  # seconds
 
-    def __init__(self, **kwargs):
+    if TYPE_CHECKING:
+        # push_event is provided by LiveView; sync_queue by OfflineMixin — both
+        # supplied at runtime when SyncMixin is combined with them. Declared
+        # TYPE_CHECKING-only so the strict-typed mixin type-checks standalone.
+        def push_event(self, event: str, payload: Dict[str, Any]) -> None: ...
+
+        @property
+        def sync_queue(self) -> SyncQueue: ...
+
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._sync_manager = None
+        self._sync_manager: Optional[SyncManager] = None
         self._sync_in_progress = False
 
     @property
-    def sync_manager(self):
+    def sync_manager(self) -> SyncManager:
         """Get sync manager instance."""
         if not self._sync_manager:
             self._sync_manager = SyncManager(
@@ -413,7 +448,7 @@ class SyncMixin:
             )
         return self._sync_manager
 
-    def _process_sync_queue(self):
+    def _process_sync_queue(self) -> None:
         """Process pending sync actions (implements OfflineMixin method)."""
         if self._sync_in_progress:
             logger.info("Sync already in progress, skipping")
