@@ -58,7 +58,7 @@ import logging
 import re
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from djust.contrib.uploads.errors import (
     UploadCredentialError,
@@ -199,7 +199,7 @@ class PresignedS3Upload:
             )
         except Exception as exc:  # noqa: BLE001 — translate every SDK error
             raise self._translate_sdk_exc(exc) from exc
-        return url
+        return cast(str, url)
 
     def build_upload_spec(
         self,

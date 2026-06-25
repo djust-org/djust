@@ -35,9 +35,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
+from typing import Any, List, Optional, cast
 
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.urls import path
 from django.views import View
 
@@ -85,16 +85,16 @@ class UploadStatusView(View):
     def _get_store(self) -> UploadStateStore:
         return self.state_store or get_default_store()
 
-    def _get_session_key(self, request) -> Optional[str]:
+    def _get_session_key(self, request: HttpRequest) -> Optional[str]:
         """Return the requester's session key, or None if anonymous."""
         session = getattr(request, "session", None)
         if session is None:
             return None
         # ``session_key`` is None on a fresh session that hasn't been
         # saved yet. Treat that as anonymous.
-        return session.session_key
+        return cast(Optional[str], session.session_key)
 
-    def get(self, request, upload_id: str, *args, **kwargs):
+    def get(self, request: HttpRequest, upload_id: str, *args: Any, **kwargs: Any) -> JsonResponse:
         if not _UUID_RE.match(upload_id):
             # Malformed IDs can't be in the store — 404 without even
             # hitting the backend.
