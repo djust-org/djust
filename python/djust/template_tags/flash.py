@@ -53,9 +53,15 @@ class DjFlashTagHandler(TagHandler):
             safe_position = re.sub(r"[^a-zA-Z0-9-]", "", position)
             css_class = f"{css_class} dj-flash-{safe_position}"
 
-        return format_html(
-            '<div id="dj-flash-container" class="{}" dj-update="ignore"'
-            ' data-dj-auto-dismiss="{}" aria-live="polite" role="status"></div>',
-            css_class,
-            auto_dismiss,
+        # format_html returns a SafeString (str subclass); Django is untyped
+        # under the lenient global config so it is seen as ``Any`` — coerce to
+        # ``str`` at the boundary (the SafeString-ness is preserved through the
+        # Rust CustomTag path, which trusts the returned HTML string).
+        return str(
+            format_html(
+                '<div id="dj-flash-container" class="{}" dj-update="ignore"'
+                ' data-dj-auto-dismiss="{}" aria-live="polite" role="status"></div>',
+                css_class,
+                auto_dismiss,
+            )
         )

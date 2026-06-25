@@ -61,8 +61,10 @@ class ClientConfigTagHandler(TagHandler):
         from djust.templatetags.live_tags import _client_config_html
 
         request = context.get("request") if context else None
-        # _client_config_html returns a SafeString (mark_safe). The Rust
-        # CustomTag output path does NOT re-escape the returned string
-        # (matches the djust_markdown pattern), so the individually-escaped
-        # meta + route-map markup is emitted safely and not double-escaped.
-        return _client_config_html(request)
+        # _client_config_html returns a SafeString (mark_safe) — declared
+        # ``-> Any`` on the live_tags side, so coerce to ``str`` at this
+        # boundary. The Rust CustomTag output path does NOT re-escape the
+        # returned string (matches the djust_markdown pattern), so the
+        # individually-escaped meta + route-map markup is emitted safely and
+        # not double-escaped.
+        return str(_client_config_html(request))

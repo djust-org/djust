@@ -40,7 +40,7 @@ compatibility with Django's URL resolution and static file handling.
 """
 
 import logging
-from typing import Any, Dict, List, Type
+from typing import Any, Callable, Dict, List, Type
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ class TagHandler:
         return result if result is not None else arg
 
 
-def register(name: str):
+def register(name: str) -> Callable[[Type[TagHandler]], Type[TagHandler]]:
     """
     Decorator to register a tag handler class.
 
@@ -220,7 +220,7 @@ def is_registered(name: str) -> bool:
 
 
 # Auto-register built-in handlers on import
-def _register_builtins():
+def _register_builtins() -> None:
     """Register built-in tag handlers."""
     # Import handlers to trigger their @register decorators
     try:
