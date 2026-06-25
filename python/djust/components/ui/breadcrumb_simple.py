@@ -5,18 +5,18 @@ Provides navigation breadcrumbs showing current page location in site hierarchy.
 This is a stateless Component optimized for performance.
 """
 
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional
 from ..base import Component
 
 
 # Try to import Rust implementation (will be added later)
 try:
-    from djust._rust import RustBreadcrumb
+    from djust._rust import RustBreadcrumb  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustBreadcrumb = None
+    RustBreadcrumb = None  # type: ignore[assignment, misc]
 
 
 class Breadcrumb(Component):
@@ -105,7 +105,7 @@ class Breadcrumb(Component):
         self.separator = separator
         self.show_home = show_home
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if needed later)"""
         return {
             "items": self.items,

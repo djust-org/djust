@@ -1,7 +1,7 @@
 """Comparison Table component — SaaS pricing/feature comparison."""
 
 import html
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -43,8 +43,8 @@ class ComparisonTable(Component):
         features: Optional[list] = None,
         event: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             plans=plans,
             features=features,
@@ -58,7 +58,7 @@ class ComparisonTable(Component):
         self.custom_class = custom_class
 
     @staticmethod
-    def _render_value(val):
+    def _render_value(val: object) -> str:
         """Render a cell value — booleans as check/cross, strings as text."""
         if val is True:
             return '<span class="dj-compare__check" aria-label="Yes">&#10003;</span>'

@@ -1,7 +1,7 @@
 """Currency Input component with symbol prefix and formatting."""
 
 import html as html_mod
-from typing import Optional
+from typing import Any, Optional
 
 from djust import Component
 
@@ -55,8 +55,8 @@ class CurrencyInput(Component):
         required: bool = False,
         error: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             name=name,
             currency=currency,
@@ -88,7 +88,7 @@ class CurrencyInput(Component):
         self.custom_class = custom_class
 
     @property
-    def symbol(self):
+    def symbol(self) -> str:
         return CURRENCY_SYMBOLS.get(self.currency, self.currency)
 
     def _render_custom(self) -> str:

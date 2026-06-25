@@ -4,7 +4,7 @@ Modal component for djust.
 Simple stateless modal dialog with automatic Rust optimization.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 try:
@@ -73,7 +73,7 @@ class Modal(Component):
         centered: bool = False,
         dismissable: bool = True,
         show: bool = False,
-    ):
+    ) -> None:
         # Pass kwargs to parent to create Rust instance
         super().__init__(
             body=body,
@@ -93,8 +93,9 @@ class Modal(Component):
         self.size = size
         self.centered = centered
         self.dismissable = dismissable
+        self.show = show
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "body": self.body,

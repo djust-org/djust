@@ -8,8 +8,10 @@ All tags register on the shared ``register`` from ``_registry``.
 """
 
 import calendar as _calendar
+from typing import Any
 
 from django import template
+from django.utils.safestring import SafeString
 
 from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe, safe_url
 
@@ -19,10 +21,10 @@ from ._registry import register, _resolve, _parse_kv_args, conditional_escape, m
 
 
 class TourNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         steps = kw.get("steps", [])
         active = kw.get("active", 0)
@@ -110,7 +112,7 @@ class TourNode(template.Node):
 
 
 @register.tag("tour")
-def do_tour(parser, token):
+def do_tour(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return TourNode(kwargs)
@@ -129,10 +131,10 @@ def do_tour(parser, token):
 class CalendarViewNode(template.Node):
     COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6"]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         events = kw.get("events", [])
         month = kw.get("month", 1)
@@ -163,7 +165,7 @@ class CalendarViewNode(template.Node):
             start_day = 0
 
         # Build event map
-        emap = {}
+        emap: dict[str, list[Any]] = {}
         for ev in events:
             if not isinstance(ev, dict):
                 continue
@@ -241,7 +243,7 @@ class CalendarViewNode(template.Node):
 
 
 @register.tag("calendar")
-def do_calendar(parser, token):
+def do_calendar(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return CalendarViewNode(kwargs)
@@ -264,10 +266,10 @@ class GanttChartNode(template.Node):
         "#f97316",
     ]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         tasks = kw.get("tasks", [])
         title = kw.get("title", "")
@@ -403,7 +405,7 @@ class GanttChartNode(template.Node):
 
 
 @register.tag("gantt_chart")
-def do_gantt_chart(parser, token):
+def do_gantt_chart(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return GanttChartNode(kwargs)
@@ -415,11 +417,11 @@ def do_gantt_chart(parser, token):
 
 
 class DiffViewerNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     @staticmethod
-    def _compute_diff(old_lines, new_lines):
+    def _compute_diff(old_lines: Any, new_lines: Any) -> Any:
         m, n = len(old_lines), len(new_lines)
         dp = [[0] * (n + 1) for _ in range(m + 1)]
         for i in range(1, m + 1):
@@ -444,7 +446,7 @@ class DiffViewerNode(template.Node):
         result.reverse()
         return result
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         old = str(kw.get("old", ""))
         new = str(kw.get("new", ""))
@@ -474,7 +476,9 @@ class DiffViewerNode(template.Node):
             self._render_split(class_str, ops, title_old, title_new, show_line_numbers)
         )
 
-    def _render_split(self, class_str, ops, title_old, title_new, show_ln):
+    def _render_split(
+        self, class_str: Any, ops: Any, title_old: Any, title_new: Any, show_ln: Any
+    ) -> Any:
         e_title_old = conditional_escape(str(title_old))
         e_title_new = conditional_escape(str(title_new))
 
@@ -524,7 +528,7 @@ class DiffViewerNode(template.Node):
             f"{''.join(new_rows)}</div></div>"
         )
 
-    def _render_unified(self, class_str, ops, show_ln):
+    def _render_unified(self, class_str: Any, ops: Any, show_ln: Any) -> Any:
         rows = []
         old_num = 0
         new_num = 0
@@ -575,7 +579,7 @@ class DiffViewerNode(template.Node):
 
 
 @register.tag("diff_viewer")
-def do_diff_viewer(parser, token):
+def do_diff_viewer(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return DiffViewerNode(kwargs)
@@ -595,16 +599,16 @@ class PivotTableNode(template.Node):
         "max": lambda vals: max(vals) if vals else 0,
     }
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     @staticmethod
-    def _format_val(v):
+    def _format_val(v: Any) -> Any:
         if v == int(v):
             return str(int(v))
         return f"{v:.2f}"
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         data = kw.get("data", [])
         rows_field = str(kw.get("rows", ""))
@@ -635,7 +639,7 @@ class PivotTableNode(template.Node):
         # Build pivot
         row_keys = []
         col_keys = []
-        cells = {}
+        cells: dict[tuple[str, str], list[float]] = {}
         for record in data:
             if not isinstance(record, dict):
                 continue
@@ -667,12 +671,12 @@ class PivotTableNode(template.Node):
         parts.append(f"<thead><tr>{''.join(header_cells)}</tr></thead>")
 
         body_rows = []
-        col_totals = {ck: 0 for ck in col_keys}
-        grand_total = 0
+        col_totals: dict[str, float] = {ck: 0 for ck in col_keys}
+        grand_total: float = 0
 
         for rk in row_keys:
             row_cells = [f'<th class="dj-pivot__rowheader">{conditional_escape(rk)}</th>']
-            row_total = 0
+            row_total: float = 0
             for ck in col_keys:
                 val = agg_cells.get((rk, ck), 0)
                 row_total += val
@@ -705,7 +709,7 @@ class PivotTableNode(template.Node):
 
 
 @register.tag("pivot_table")
-def do_pivot_table(parser, token):
+def do_pivot_table(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return PivotTableNode(kwargs)
@@ -717,10 +721,10 @@ def do_pivot_table(parser, token):
 
 
 class OrgChartNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def _render_node(self, nid, node_map, children, e_event):
+    def _render_node(self, nid: Any, node_map: Any, children: Any, e_event: Any) -> Any:
         node = node_map.get(nid)
         if not node:
             return ""
@@ -762,7 +766,7 @@ class OrgChartNode(template.Node):
             f'<ul class="dj-org__children">{child_items}</ul></li>'
         )
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         nodes = kw.get("nodes", [])
         root = kw.get("root", "")
@@ -782,7 +786,7 @@ class OrgChartNode(template.Node):
             nodes = []
 
         node_map = {}
-        children = {}
+        children: dict[str, list[str]] = {}
         child_ids = set()
 
         for n in nodes:
@@ -815,7 +819,7 @@ class OrgChartNode(template.Node):
 
 
 @register.tag("org_chart")
-def do_org_chart(parser, token):
+def do_org_chart(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return OrgChartNode(kwargs)
@@ -827,18 +831,18 @@ def do_org_chart(parser, token):
 
 
 class ComparisonTableNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     @staticmethod
-    def _render_value(val):
+    def _render_value(val: Any) -> Any:
         if val is True:
             return '<span class="dj-compare__check" aria-label="Yes">&#10003;</span>'
         if val is False:
             return '<span class="dj-compare__cross" aria-label="No">&#10007;</span>'
         return conditional_escape(str(val))
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         plans = kw.get("plans", [])
         features = kw.get("features", [])
@@ -914,7 +918,7 @@ class ComparisonTableNode(template.Node):
 
 
 @register.tag("comparison_table")
-def do_comparison_table(parser, token):
+def do_comparison_table(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ComparisonTableNode(kwargs)
@@ -926,10 +930,10 @@ def do_comparison_table(parser, token):
 
 
 class MasonryGridNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
@@ -957,7 +961,7 @@ class MasonryGridNode(template.Node):
             return mark_safe(f'<div class="{class_str}"></div>')
 
         col_heights = [0] * columns
-        col_items = [[] for _ in range(columns)]
+        col_items: list[list[Any]] = [[] for _ in range(columns)]
 
         for item in items:
             if not isinstance(item, dict):
@@ -988,7 +992,7 @@ class MasonryGridNode(template.Node):
 
 
 @register.tag("masonry_grid")
-def do_masonry_grid(parser, token):
+def do_masonry_grid(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return MasonryGridNode(kwargs)
@@ -1011,10 +1015,10 @@ class CursorsOverlayNode(template.Node):
         "#f97316",
     ]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         users = kw.get("users", [])
         custom_class = kw.get("class", "")
@@ -1082,7 +1086,7 @@ class CursorsOverlayNode(template.Node):
 
 
 @register.tag("cursors")
-def do_cursors(parser, token):
+def do_cursors(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return CursorsOverlayNode(kwargs)
@@ -1094,10 +1098,10 @@ def do_cursors(parser, token):
 
 
 class LiveIndicatorNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         user = kw.get("user", None)
         field = kw.get("field", "")
@@ -1153,7 +1157,7 @@ class LiveIndicatorNode(template.Node):
 
 
 @register.tag("live_indicator")
-def do_live_indicator(parser, token):
+def do_live_indicator(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return LiveIndicatorNode(kwargs)
@@ -1176,10 +1180,10 @@ class CollabSelectionNode(template.Node):
         "#f97316",
     ]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         users = kw.get("users", [])
         custom_class = kw.get("class", "")
@@ -1243,7 +1247,7 @@ class CollabSelectionNode(template.Node):
 
 
 @register.tag("collab_selection")
-def do_collab_selection(parser, token):
+def do_collab_selection(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return CollabSelectionNode(kwargs)
@@ -1255,10 +1259,10 @@ def do_collab_selection(parser, token):
 
 
 class ActivityFeedNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         events = kw.get("events", [])
         stream_event = kw.get("stream", "")
@@ -1337,7 +1341,7 @@ class ActivityFeedNode(template.Node):
 
 
 @register.tag("activity_feed")
-def do_activity_feed(parser, token):
+def do_activity_feed(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ActivityFeedNode(kwargs)
@@ -1349,10 +1353,10 @@ def do_activity_feed(parser, token):
 
 
 class ReactionsNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         options = kw.get("options", [])
         counts = kw.get("counts", {})
@@ -1411,7 +1415,7 @@ class ReactionsNode(template.Node):
 
 
 @register.tag("reactions")
-def do_reactions(parser, token):
+def do_reactions(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ReactionsNode(kwargs)
@@ -1423,10 +1427,10 @@ def do_reactions(parser, token):
 
 
 class MapPickerNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         lat = kw.get("lat", 0)
         lng = kw.get("lng", 0)
@@ -1468,7 +1472,7 @@ class MapPickerNode(template.Node):
 
 
 @register.tag("map_picker")
-def do_map_picker(parser, token):
+def do_map_picker(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return MapPickerNode(kwargs)
@@ -1480,10 +1484,10 @@ def do_map_picker(parser, token):
 
 
 class PromptEditorNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         import re as _re
 
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
@@ -1558,7 +1562,7 @@ class PromptEditorNode(template.Node):
 
 
 @register.tag("prompt_editor")
-def do_prompt_editor(parser, token):
+def do_prompt_editor(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return PromptEditorNode(kwargs)
@@ -1570,10 +1574,10 @@ def do_prompt_editor(parser, token):
 
 
 class VoiceInputNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         event = kw.get("event", "transcribe")
         lang = kw.get("lang", "en-US")
@@ -1614,7 +1618,7 @@ class VoiceInputNode(template.Node):
 
 
 @register.tag("voice_input")
-def do_voice_input(parser, token):
+def do_voice_input(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return VoiceInputNode(kwargs)
@@ -1628,10 +1632,10 @@ def do_voice_input(parser, token):
 class CronInputNode(template.Node):
     FIELD_LABELS = ["Minute", "Hour", "Day", "Month", "Weekday"]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "cron")
         value = kw.get("value", "* * * * *")
@@ -1680,7 +1684,7 @@ class CronInputNode(template.Node):
 
 
 @register.tag("cron_input")
-def do_cron_input(parser, token):
+def do_cron_input(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return CronInputNode(kwargs)
@@ -1692,10 +1696,10 @@ def do_cron_input(parser, token):
 
 
 class ErrorPageNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         code = kw.get("code", 500)
         title = kw.get("title", "Something went wrong")
@@ -1738,7 +1742,7 @@ class ErrorPageNode(template.Node):
 
 
 @register.tag("error_page")
-def do_error_page(parser, token):
+def do_error_page(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ErrorPageNode(kwargs)
@@ -1750,10 +1754,10 @@ def do_error_page(parser, token):
 
 
 class ImageUploadPreviewNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "images")
         max_count = kw.get("max", 5)
@@ -1818,7 +1822,7 @@ class ImageUploadPreviewNode(template.Node):
 
 
 @register.tag("image_upload_preview")
-def do_image_upload_preview(parser, token):
+def do_image_upload_preview(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ImageUploadPreviewNode(kwargs)
@@ -1830,10 +1834,10 @@ def do_image_upload_preview(parser, token):
 
 
 class AnimatedNumberNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         value = kw.get("value", 0)
         prefix = kw.get("prefix", "")
@@ -1893,7 +1897,7 @@ class AnimatedNumberNode(template.Node):
 
 
 @register.tag("animated_number")
-def do_animated_number(parser, token):
+def do_animated_number(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return AnimatedNumberNode(kwargs)
@@ -1912,10 +1916,10 @@ class RibbonNode(template.Node):
         "danger": "dj-ribbon--danger",
     }
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         text = kw.get("text", "")
         variant = kw.get("variant", "primary")
@@ -1949,7 +1953,7 @@ class RibbonNode(template.Node):
 
 
 @register.tag("ribbon")
-def do_ribbon(parser, token):
+def do_ribbon(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return RibbonNode(kwargs)
@@ -1961,10 +1965,10 @@ def do_ribbon(parser, token):
 
 
 class BreadcrumbDropdownNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         items = kw.get("items", [])
         max_visible = kw.get("max_visible", 4)
@@ -1988,7 +1992,7 @@ class BreadcrumbDropdownNode(template.Node):
 
         need_collapse = len(items) > max_vis and max_vis >= 2
 
-        def render_item(item, is_last):
+        def render_item(item: Any, is_last: Any) -> Any:
             if not isinstance(item, dict):
                 return ""
             label = conditional_escape(str(item.get("label", "")))
@@ -2047,7 +2051,7 @@ class BreadcrumbDropdownNode(template.Node):
 
 
 @register.tag("breadcrumb_dropdown")
-def do_breadcrumb_dropdown(parser, token):
+def do_breadcrumb_dropdown(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return BreadcrumbDropdownNode(kwargs)
@@ -2059,10 +2063,10 @@ def do_breadcrumb_dropdown(parser, token):
 
 
 class DataCardGridNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
@@ -2147,7 +2151,7 @@ class DataCardGridNode(template.Node):
 
 
 @register.tag("data_card_grid")
-def do_data_card_grid(parser, token):
+def do_data_card_grid(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return DataCardGridNode(kwargs)
@@ -2166,11 +2170,11 @@ class AgentStepNode(template.Node):
         "error": "&#10007;",
     }
 
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         tool = kw.get("tool", "")
         status = kw.get("status", "pending")
@@ -2215,7 +2219,7 @@ class AgentStepNode(template.Node):
 
 
 @register.tag("agent_step")
-def do_agent_step(parser, token):
+def do_agent_step(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endagent_step",))
@@ -2231,15 +2235,15 @@ def do_agent_step(parser, token):
 class QRCodeNode(template.Node):
     SIZE_MAP = {"sm": 128, "md": 200, "lg": 300}
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     @staticmethod
-    def _generate_matrix(data_str):
+    def _generate_matrix(data_str: Any) -> Any:
         size = 21
         matrix = [[False] * size for _ in range(size)]
 
-        def add_finder(row, col):
+        def add_finder(row: Any, col: Any) -> Any:
             for r in range(7):
                 for c in range(7):
                     if row + r < size and col + c < size:
@@ -2275,7 +2279,7 @@ class QRCodeNode(template.Node):
 
         return matrix
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         data = kw.get("data", "")
         size = kw.get("size", "md")
@@ -2328,7 +2332,7 @@ class QRCodeNode(template.Node):
 
 
 @register.tag("qr_code")
-def do_qr_code(parser, token):
+def do_qr_code(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return QRCodeNode(kwargs)

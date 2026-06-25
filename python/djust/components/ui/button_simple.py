@@ -7,16 +7,17 @@ For interactive buttons with event handlers, use them in LiveView event handlers
 """
 
 from ..base import Component
+from typing import Any
 
 
 # Try to import Rust implementation (will be added later)
 try:
-    from djust._rust import RustButton
+    from djust._rust import RustButton  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustButton = None
+    RustButton = None  # type: ignore[assignment, misc]
 
 
 class Button(Component):
@@ -111,7 +112,7 @@ class Button(Component):
         self.disabled = disabled
         self.outline = outline
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering"""
         return {
             "text": self.text,

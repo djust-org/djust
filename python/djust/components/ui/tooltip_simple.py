@@ -6,16 +6,17 @@ This is a stateless Component optimized for performance.
 """
 
 from ..base import Component
+from typing import Any
 
 
 # Try to import Rust implementation
 try:
-    from djust._rust import RustTooltip
+    from djust._rust import RustTooltip  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustTooltip = None
+    RustTooltip = None  # type: ignore[assignment, misc]
 
 
 class Tooltip(Component):
@@ -106,7 +107,7 @@ class Tooltip(Component):
         self.trigger = trigger
         self.arrow = arrow
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering"""
         return {
             "content": self.content,

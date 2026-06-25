@@ -7,7 +7,10 @@ Extracted from the monolithic djust_components.py for maintainability.
 All tags register on the shared ``register`` from ``_registry``.
 """
 
+from typing import Any
+
 from django import template
+from django.utils.safestring import SafeString
 
 from ._registry import (
     register,
@@ -27,20 +30,20 @@ from ._registry import (
 
 @register.simple_tag
 def slider(
-    name="",
-    label="",
-    min_val=0,
-    max_val=100,
-    step=1,
-    value=None,
-    value_end=None,
-    event="",
-    disabled=False,
-    show_ticks=False,
-    show_value=True,
-    custom_class="",
-    **kwargs,
-):
+    name: Any = "",
+    label: Any = "",
+    min_val: Any = 0,
+    max_val: Any = 100,
+    step: Any = 1,
+    value: Any = None,
+    value_end: Any = None,
+    event: Any = "",
+    disabled: Any = False,
+    show_ticks: Any = False,
+    show_value: Any = True,
+    custom_class: Any = "",
+    **kwargs: Any,
+) -> SafeString:
     """Render a horizontal slider with optional range mode.
 
     Args:
@@ -143,16 +146,16 @@ def slider(
 
 @register.simple_tag
 def search_input(
-    name="",
-    label="",
-    value="",
-    placeholder="Search...",
-    event="",
-    debounce=300,
-    loading=False,
-    disabled=False,
-    custom_class="",
-):
+    name: Any = "",
+    label: Any = "",
+    value: Any = "",
+    placeholder: Any = "Search...",
+    event: Any = "",
+    debounce: Any = 300,
+    loading: Any = False,
+    disabled: Any = False,
+    custom_class: Any = "",
+) -> SafeString:
     """Render a search input with icon, clear button, and loading spinner.
 
     Args:
@@ -226,18 +229,18 @@ def search_input(
 
 @register.simple_tag
 def password_input(
-    name="",
-    label="",
-    value="",
-    placeholder="",
-    event="",
-    error="",
-    required=False,
-    disabled=False,
-    show_strength=False,
-    strength=0,
-    custom_class="",
-):
+    name: Any = "",
+    label: Any = "",
+    value: Any = "",
+    placeholder: Any = "",
+    event: Any = "",
+    error: Any = "",
+    required: Any = False,
+    disabled: Any = False,
+    show_strength: Any = False,
+    strength: Any = 0,
+    custom_class: Any = "",
+) -> SafeString:
     """Render a password input with show/hide toggle and optional strength meter.
 
     Args:
@@ -331,22 +334,22 @@ def password_input(
 
 @register.simple_tag
 def autocomplete(
-    name="",
-    label="",
-    value="",
-    display_value="",
-    placeholder="",
-    source_event="",
-    event="",
-    debounce=300,
-    min_chars=1,
-    suggestions=None,
-    loading=False,
-    disabled=False,
-    error="",
-    required=False,
-    custom_class="",
-):
+    name: Any = "",
+    label: Any = "",
+    value: Any = "",
+    display_value: Any = "",
+    placeholder: Any = "",
+    source_event: Any = "",
+    event: Any = "",
+    debounce: Any = 300,
+    min_chars: Any = 1,
+    suggestions: Any = None,
+    loading: Any = False,
+    disabled: Any = False,
+    error: Any = "",
+    required: Any = False,
+    custom_class: Any = "",
+) -> SafeString:
     """Render an autocomplete input with server-driven suggestions.
 
     Args:
@@ -459,10 +462,10 @@ def autocomplete(
 
 
 class ConfirmDialogNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         message = kw.get("message", "Are you sure?")
         confirm_event = kw.get("confirm_event", "confirm")
@@ -518,7 +521,7 @@ class ConfirmDialogNode(template.Node):
 
 
 @register.tag("confirm_dialog")
-def do_confirm_dialog(parser, token):
+def do_confirm_dialog(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ConfirmDialogNode(kwargs)
@@ -530,11 +533,11 @@ def do_confirm_dialog(parser, token):
 
 
 class PopconfirmNode(template.Node):
-    def __init__(self, nodelist, kwargs):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         message = kw.get("message", "Are you sure?")
         confirm_event = kw.get("confirm_event", "confirm")
@@ -599,7 +602,7 @@ class PopconfirmNode(template.Node):
 
 
 @register.tag("popconfirm")
-def do_popconfirm(parser, token):
+def do_popconfirm(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     nodelist = parser.parse(("endpopconfirm",))
@@ -616,19 +619,19 @@ def do_popconfirm(parser, token):
 
 @register.simple_tag
 def dependent_select(
-    name="",
-    parent="",
-    source_event="",
-    label="",
-    placeholder="Select...",
-    value="",
-    options=None,
-    loading=False,
-    disabled=False,
-    required=False,
-    error="",
-    custom_class="",
-):
+    name: Any = "",
+    parent: Any = "",
+    source_event: Any = "",
+    label: Any = "",
+    placeholder: Any = "Select...",
+    value: Any = "",
+    options: Any = None,
+    loading: Any = False,
+    disabled: Any = False,
+    required: Any = False,
+    error: Any = "",
+    custom_class: Any = "",
+) -> SafeString:
     """Cascading dropdown that reloads options when parent field changes.
 
     Args:
@@ -723,21 +726,21 @@ def dependent_select(
 
 @register.simple_tag
 def currency_input(
-    name="",
-    currency="USD",
-    value="",
-    label="",
-    min_val=None,
-    max_val=None,
-    step="0.01",
-    placeholder="0.00",
-    event="",
-    disabled=False,
-    required=False,
-    error="",
-    custom_class="",
-    **kwargs,
-):
+    name: Any = "",
+    currency: Any = "USD",
+    value: Any = "",
+    label: Any = "",
+    min_val: Any = None,
+    max_val: Any = None,
+    step: Any = "0.01",
+    placeholder: Any = "0.00",
+    event: Any = "",
+    disabled: Any = False,
+    required: Any = False,
+    error: Any = "",
+    custom_class: Any = "",
+    **kwargs: Any,
+) -> SafeString:
     """Numeric input with currency symbol prefix and formatting hints.
 
     Args:
@@ -822,7 +825,7 @@ def currency_input(
 
 
 @register.simple_tag
-def form_errors(form=None, custom_class=""):
+def form_errors(form: Any = None, custom_class: Any = "") -> SafeString:
     """Render all form-level (non-field) validation errors.
 
     Args:
@@ -853,7 +856,7 @@ def form_errors(form=None, custom_class=""):
 
 
 @register.simple_tag
-def field_error(field=None, custom_class=""):
+def field_error(field: Any = None, custom_class: Any = "") -> SafeString:
     """Render inline validation error for a single form field.
 
     Args:
@@ -918,7 +921,7 @@ _FIELD_TYPE_MAP = {
 }
 
 
-def _get_field_type(bound_field):
+def _get_field_type(bound_field: Any) -> Any:
     """Determine the djust component type for a Django BoundField."""
     field = bound_field.field
     cls_name = type(field).__name__
@@ -948,7 +951,7 @@ def _get_field_type(bound_field):
     return _FIELD_TYPE_MAP.get(cls_name, "text")
 
 
-def _get_choices(bound_field):
+def _get_choices(bound_field: Any) -> Any:
     """Extract choices from a Django BoundField as list of (value, label) tuples."""
     field = bound_field.field
     if hasattr(field, "choices"):
@@ -960,7 +963,7 @@ def _get_choices(bound_field):
     return []
 
 
-def _render_field(bound_field, event_prefix=""):
+def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
     """Render a single Django BoundField as the appropriate djust component HTML."""
     field_type = _get_field_type(bound_field)
     name = bound_field.html_name if hasattr(bound_field, "html_name") else bound_field.name
@@ -1158,15 +1161,15 @@ def _render_field(bound_field, event_prefix=""):
 
 @register.simple_tag
 def dj_form(
-    form=None,
-    event_prefix="",
-    action="",
-    method="post",
-    submit_label="Submit",
-    submit_event="",
-    custom_class="",
-    show_errors=True,
-):
+    form: Any = None,
+    event_prefix: Any = "",
+    action: Any = "",
+    method: Any = "post",
+    submit_label: Any = "Submit",
+    submit_event: Any = "",
+    custom_class: Any = "",
+    show_errors: Any = True,
+) -> SafeString:
     """Auto-render a Django Form or ModelForm using djust-components.
 
     Maps Django field types to djust input components:
@@ -1269,14 +1272,14 @@ def dj_form(
 # --- Django ModelForm Table (#74) ---
 
 
-def _get_verbose_name(field):
+def _get_verbose_name(field: Any) -> Any:
     """Get verbose name from a Django model field."""
     if hasattr(field, "verbose_name"):
         return str(field.verbose_name).title()
     return str(field.name).replace("_", " ").title()
 
 
-def _is_sortable_field(field):
+def _is_sortable_field(field: Any) -> Any:
     """Determine if a model field should be sortable."""
     cls_name = type(field).__name__
     # Most concrete fields are sortable; relations and file fields are not
@@ -1291,7 +1294,7 @@ def _is_sortable_field(field):
     return cls_name not in non_sortable
 
 
-def _is_filterable_field(field):
+def _is_filterable_field(field: Any) -> Any:
     """Determine if a model field should be filterable."""
     cls_name = type(field).__name__
     filterable = {
@@ -1311,7 +1314,7 @@ def _is_filterable_field(field):
     return cls_name in filterable
 
 
-def _get_filter_type(field):
+def _get_filter_type(field: Any) -> Any:
     """Get appropriate filter type for a model field."""
     cls_name = type(field).__name__
     if cls_name in ("BooleanField", "NullBooleanField"):
@@ -1325,7 +1328,7 @@ def _get_filter_type(field):
     return "text"
 
 
-def _get_filter_options(field):
+def _get_filter_options(field: Any) -> Any:
     """Get filter options for fields with choices."""
     if hasattr(field, "choices") and field.choices:
         return [{"value": str(v), "label": str(l)} for v, l in field.choices]
@@ -1341,7 +1344,7 @@ def _get_filter_options(field):
     return []
 
 
-def _infer_columns(model_meta, exclude=None, include=None):
+def _infer_columns(model_meta: Any, exclude: Any = None, include: Any = None) -> Any:
     """Infer data_table columns from a Django model's _meta."""
     exclude = set(exclude or [])
     fields = model_meta.get_fields() if hasattr(model_meta, "get_fields") else []
@@ -1374,7 +1377,7 @@ def _infer_columns(model_meta, exclude=None, include=None):
     return columns
 
 
-def _queryset_to_rows(queryset, columns, row_key="id"):
+def _queryset_to_rows(queryset: Any, columns: Any, row_key: Any = "id") -> Any:
     """Convert a Django QuerySet to a list of row dicts for data_table."""
     rows = []
     col_keys = [c["key"] for c in columns]
@@ -1401,34 +1404,34 @@ def _queryset_to_rows(queryset, columns, row_key="id"):
 
 @register.simple_tag
 def model_table(
-    queryset=None,
-    exclude=None,
-    include=None,
-    sort_by="",
-    sort_desc=False,
-    sort_event="on_table_sort",
-    page=1,
-    total_pages=1,
-    paginate=False,
-    page_event="on_table_page",
-    prev_event="on_table_prev",
-    next_event="on_table_next",
-    search=False,
-    search_query="",
-    search_event="on_table_search",
-    filters=None,
-    filter_event="on_table_filter",
-    selectable=False,
-    selected_rows=None,
-    select_event="on_table_select",
-    row_key="id",
-    loading=False,
-    empty_title="No data",
-    empty_description="",
-    striped=True,
-    compact=False,
-    custom_class="",
-):
+    queryset: Any = None,
+    exclude: Any = None,
+    include: Any = None,
+    sort_by: Any = "",
+    sort_desc: Any = False,
+    sort_event: Any = "on_table_sort",
+    page: Any = 1,
+    total_pages: Any = 1,
+    paginate: Any = False,
+    page_event: Any = "on_table_page",
+    prev_event: Any = "on_table_prev",
+    next_event: Any = "on_table_next",
+    search: Any = False,
+    search_query: Any = "",
+    search_event: Any = "on_table_search",
+    filters: Any = None,
+    filter_event: Any = "on_table_filter",
+    selectable: Any = False,
+    selected_rows: Any = None,
+    select_event: Any = "on_table_select",
+    row_key: Any = "id",
+    loading: Any = False,
+    empty_title: Any = "No data",
+    empty_description: Any = "",
+    striped: Any = True,
+    compact: Any = False,
+    custom_class: Any = "",
+) -> SafeString:
     """Auto-generate a Data Table Pro from a Django QuerySet.
 
     Introspects model fields to infer columns. Supports sorting, filtering,

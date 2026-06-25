@@ -6,6 +6,7 @@ Provides tabbed navigation with multiple panels.
 
 from typing import Dict, Any
 from dataclasses import dataclass
+from django.utils.safestring import SafeString
 from ..base import LiveComponent
 
 
@@ -30,7 +31,7 @@ class TabItem:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format for backward compatibility"""
-        result = {
+        result: Dict[str, Any] = {
             "id": self.id,
             "label": self.label,
             "content": self.content,
@@ -72,7 +73,7 @@ class TabsComponent(LiveComponent):
 
     template_name = None  # Uses inline rendering
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """Initialize tabs state"""
         self.active = kwargs.get("active", None)
         self.variant = kwargs.get("variant", "tabs")  # tabs, pills
@@ -101,12 +102,12 @@ class TabsComponent(LiveComponent):
             "vertical": self.vertical,
         }
 
-    def activate_tab(self, tab_id: str):
+    def activate_tab(self, tab_id: str) -> None:
         """Switch to a different tab"""
         self.active = tab_id
         self.trigger_update()
 
-    def render(self) -> str:
+    def render(self) -> SafeString:
         """Render tabs with inline HTML"""
         from django.utils.safestring import mark_safe
         from ...config import config

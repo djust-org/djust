@@ -1,6 +1,7 @@
 """Form Validation Display components for rendering Django form errors."""
 
 import html as html_mod
+from typing import Any
 
 from djust import Component
 
@@ -21,7 +22,7 @@ class FormErrors(Component):
         custom_class: Additional CSS classes.
     """
 
-    def __init__(self, form=None, custom_class: str = "", **kwargs):
+    def __init__(self, form: Any = None, custom_class: str = "", **kwargs: Any) -> None:
         super().__init__(form=form, custom_class=custom_class, **kwargs)
         self.form = form
         self.custom_class = custom_class
@@ -65,7 +66,7 @@ class FieldError(Component):
         custom_class: Additional CSS classes.
     """
 
-    def __init__(self, field=None, custom_class: str = "", **kwargs):
+    def __init__(self, field: Any = None, custom_class: str = "", **kwargs: Any) -> None:
         super().__init__(field=field, custom_class=custom_class, **kwargs)
         self.field = field
         self.custom_class = custom_class

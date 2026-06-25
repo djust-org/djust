@@ -32,11 +32,16 @@ import io
 import json
 import math
 import re
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from djust.components.utils import format_cell, interpolate_color_gradient
 from djust.decorators import event_handler
 
 __all__ = ["DataTableMixin"]
+
+# A parser token: (kind, value). value is a float for NUMBER, str for IDENT/OP,
+# and None for EOF.
+_Token = Tuple[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +65,7 @@ _TOKEN_RE = re.compile(
 )
 
 
-def _tokenize(expression):
+def _tokenize(expression: str) -> Iterator[_Token]:
     """Yield (type, value) tokens from *expression*.
 
     Raises ValueError on illegal characters.
@@ -97,26 +102,26 @@ class _Parser:
         atom   → NUMBER | IDENT | '(' expr ')'
     """
 
-    def __init__(self, tokens, namespace):
+    def __init__(self, tokens: Iterator[_Token], namespace: Dict[str, Any]) -> None:
         self.tokens = list(tokens)
         self.namespace = namespace
         self.pos = 0
 
-    def _peek(self):
+    def _peek(self) -> _Token:
         return self.tokens[self.pos]
 
-    def _advance(self):
+    def _advance(self) -> _Token:
         tok = self.tokens[self.pos]
         self.pos += 1
         return tok
 
-    def parse(self):
+    def parse(self) -> float:
         result = self._expr()
         if self._peek()[0] != "EOF":
             raise ValueError("Unexpected token after expression")
         return result
 
-    def _expr(self):
+    def _expr(self) -> float:
         left = self._term()
         while self._peek() == ("OP", "+") or self._peek() == ("OP", "-"):
             op = self._advance()[1]
@@ -127,7 +132,7 @@ class _Parser:
                 left = left - right
         return left
 
-    def _term(self):
+    def _term(self) -> float:
         left = self._unary()
         while (
             self._peek() == ("OP", "*")
@@ -148,22 +153,22 @@ class _Parser:
                 left = left % right
         return left
 
-    def _unary(self):
+    def _unary(self) -> float:
         if self._peek() == ("OP", "-"):
             self._advance()
             return -self._unary()
         return self._atom()
 
-    def _atom(self):
+    def _atom(self) -> float:
         tok_type, tok_val = self._peek()
         if tok_type == "NUMBER":
             self._advance()
-            return tok_val
+            return float(tok_val)
         if tok_type == "IDENT":
             self._advance()
             if tok_val not in self.namespace:
                 raise ValueError(f"Unknown column: {tok_val!r}")
-            return self.namespace[tok_val]
+            return float(self.namespace[tok_val])
         if tok_type == "OP" and tok_val == "(":
             self._advance()  # consume '('
             result = self._expr()
@@ -174,7 +179,7 @@ class _Parser:
         raise ValueError(f"Unexpected token: {tok_type}={tok_val!r}")
 
 
-def _safe_eval_arithmetic(expression, namespace):
+def _safe_eval_arithmetic(expression: str, namespace: Dict[str, Any]) -> float:
     """Evaluate *expression* using only arithmetic ops and *namespace* lookups.
 
     This replaces ``eval()`` with a safe recursive-descent parser.
@@ -326,13 +331,13 @@ class DataTableMixin:
     # Note: mutable defaults (lists/dicts) are set to None here to avoid
     # the shared-mutable-default pitfall.  ``init_table_state()`` resolves
     # None → empty list/dict on the *instance*.
-    table_model = None
-    table_queryset = None
-    table_columns = None
+    table_model: Any = None
+    table_queryset: Any = None
+    table_columns: Optional[List[Any]] = None
     table_page_size = 25
     table_default_sort = ""
     table_default_sort_desc = False
-    table_searchable_fields = None
+    table_searchable_fields: Optional[List[Any]] = None
     table_row_key = "id"
     table_selectable = False
 
@@ -344,7 +349,7 @@ class DataTableMixin:
     table_page_event = "on_table_page"
 
     # Phase 2 class-level configuration
-    table_editable_columns = None
+    table_editable_columns: Optional[List[Any]] = None
     table_edit_event = "on_table_cell_edit"
     table_resizable = False
     table_reorderable = False
@@ -365,11 +370,11 @@ class DataTableMixin:
     # Phase 3 class-level configuration
     table_expandable = False
     table_expand_event = "on_table_expand"
-    table_bulk_actions = None
+    table_bulk_actions: Optional[List[Any]] = None
     table_bulk_action_event = "on_table_bulk_action"
     table_exportable = False
     table_export_event = "on_table_export"
-    table_export_formats = None  # defaults to ["csv", "json"]
+    table_export_formats: Optional[List[str]] = None  # defaults to ["csv", "json"]
     table_group_by = ""
     table_group_event = "on_table_group"
     table_group_toggle_event = "on_table_group_toggle"
@@ -385,9 +390,13 @@ class DataTableMixin:
     table_show_stats = False
 
     # Phase 4 class-level configuration
-    table_footer_aggregations = None  # {col_key: "sum"|"avg"|"count"|"min"|"max"}
-    table_row_class_map = None  # {col_key: {value: css_class}} or callable(row) -> css_class
-    table_column_groups = None  # list of {"label": "Q1", "columns": ["jan","feb","mar"]}
+    table_footer_aggregations: Optional[Dict[str, Any]] = (
+        None  # {col_key: "sum"|"avg"|"count"|"min"|"max"}
+    )
+    table_row_class_map: Any = None  # {col_key: {value: css_class}} or callable(row) -> css_class
+    table_column_groups: Optional[List[Any]] = (
+        None  # list of {"label": "Q1", "columns": ["jan","feb","mar"]}
+    )
     table_row_drag = False
     table_row_drag_event = "on_table_row_drag"
     table_copyable = False
@@ -397,13 +406,17 @@ class DataTableMixin:
     # Phase 5 class-level configuration
     table_importable = False
     table_import_event = "on_table_import"
-    table_import_formats = None  # defaults to ["csv", "json"]
+    table_import_formats: Optional[List[str]] = None  # defaults to ["csv", "json"]
     table_import_preview = True  # preview before confirming
-    table_computed_columns = None  # list of {"key": ..., "label": ..., "expression": ...}
+    table_computed_columns: Optional[List[Any]] = (
+        None  # list of {"key": ..., "label": ..., "expression": ...}
+    )
     table_cell_merge_key = "_merge"  # row data key for colspan info
-    table_column_expressions = None  # {col_key: expression_string} for advanced filtering
+    table_column_expressions: Optional[Dict[str, Any]] = (
+        None  # {col_key: expression_string} for advanced filtering
+    )
     table_expression_event = "on_table_expression"
-    table_conditional_formatting = None  # list of formatting preset dicts
+    table_conditional_formatting: Optional[List[Any]] = None  # list of formatting preset dicts
 
     # Phase 6 class-level configuration (#1111: row-level navigation)
     table_row_click_event = (
@@ -412,7 +425,7 @@ class DataTableMixin:
     table_row_click_value_key = "id"  # which row key to send as data-value
     table_row_url = ""  # if set, row becomes a static link (Option A in #1111)
 
-    def init_table_state(self):
+    def init_table_state(self) -> None:
         """Initialize instance state. Call from mount()."""
         # Resolve None class-level defaults to fresh instances
         if self.table_columns is None:
@@ -443,37 +456,37 @@ class DataTableMixin:
         self.table_sort_by = self.table_default_sort
         self.table_sort_desc = self.table_default_sort_desc
         self.table_search_query = ""
-        self.table_filters = {}
-        self.table_selected_rows = []
+        self.table_filters: Dict[str, Any] = {}
+        self.table_selected_rows: List[str] = []
         self.table_page = 1
         self.table_total_pages = 1
-        self.table_rows = []
+        self.table_rows: List[Dict[str, Any]] = []
         self.table_loading = False
         # Phase 2 state
-        self.table_editing_rows = []
+        self.table_editing_rows: List[str] = []
         self.table_column_order = [
             col.get("key", col) if isinstance(col, dict) else col for col in self.table_columns
         ]
         self.table_visible_columns = list(self.table_column_order)
         self.table_current_density = self.table_density
         # Phase 3 state
-        self.table_expanded_rows = []
-        self.table_collapsed_groups = []
+        self.table_expanded_rows: List[str] = []
+        self.table_collapsed_groups: List[str] = []
         self.table_current_group_by = self.table_group_by
-        self.table_facet_counts = {}
-        self.table_column_stats = {}
+        self.table_facet_counts: Dict[str, Any] = {}
+        self.table_column_stats: Dict[str, Any] = {}
         # Phase 4 state
-        self.table_row_order = []  # for drag reorder tracking
+        self.table_row_order: List[Any] = []  # for drag reorder tracking
         # Phase 5 state
-        self.table_import_preview_data = []  # staged rows before confirm
-        self.table_import_errors = []  # validation errors from last import
+        self.table_import_preview_data: List[Dict[str, Any]] = []  # staged rows before confirm
+        self.table_import_errors: List[str] = []  # validation errors from last import
         self.table_import_pending = False  # True when preview is shown, awaiting confirm
-        self.table_active_expressions = {}  # {col_key: expression_string}
+        self.table_active_expressions: Dict[str, str] = {}  # {col_key: expression_string}
 
     # ── Event Handlers ──
 
     @event_handler()
-    def on_table_sort(self, value, **kwargs):
+    def on_table_sort(self, value: Any, **kwargs: Any) -> None:
         """Handle sort event: toggle direction or switch column, then refresh rows."""
         column = str(value)
         if self.table_sort_by == column:
@@ -484,14 +497,14 @@ class DataTableMixin:
         self.refresh_table()
 
     @event_handler()
-    def on_table_search(self, value, **kwargs):
+    def on_table_search(self, value: Any, **kwargs: Any) -> None:
         """Handle search event: update query, reset to page 1, refresh rows."""
         self.table_search_query = str(value)
         self.table_page = 1
         self.refresh_table()
 
     @event_handler()
-    def on_table_filter(self, value, column=None, **kwargs):
+    def on_table_filter(self, value: Any, column: Optional[str] = None, **kwargs: Any) -> None:
         """Handle filter event: set or clear filter, reset to page 1, refresh rows."""
         if column is None:
             column = kwargs.get("data-column", kwargs.get("data_column", ""))
@@ -505,7 +518,7 @@ class DataTableMixin:
         self.refresh_table()
 
     @event_handler()
-    def on_table_select(self, value, **kwargs):
+    def on_table_select(self, value: Any, **kwargs: Any) -> None:
         """Handle selection event: toggle row or select/deselect all.
 
         Selection state is UI-local — does NOT call ``refresh_table()``
@@ -527,7 +540,7 @@ class DataTableMixin:
                 self.table_selected_rows.append(value)
 
     @event_handler()
-    def on_table_page(self, value, **kwargs):
+    def on_table_page(self, value: Any, **kwargs: Any) -> None:
         """Handle page event: navigate to page number, refresh rows."""
         try:
             self.table_page = int(value)
@@ -537,7 +550,7 @@ class DataTableMixin:
         self.refresh_table()
 
     @event_handler()
-    def on_table_prev(self, **kwargs):
+    def on_table_prev(self, **kwargs: Any) -> None:
         """Handle prev-page event from {% data_table %} legacy pagination block.
 
         Decrements ``table_page`` (clamped at 1) and refreshes rows.
@@ -548,7 +561,7 @@ class DataTableMixin:
             self.refresh_table()
 
     @event_handler()
-    def on_table_next(self, **kwargs):
+    def on_table_next(self, **kwargs: Any) -> None:
         """Handle next-page event from {% data_table %} legacy pagination block.
 
         Increments ``table_page`` (clamped at ``table_total_pages``) and
@@ -562,7 +575,7 @@ class DataTableMixin:
     # ── Phase 2 Event Handlers ──
 
     @event_handler()
-    def on_table_cell_edit(self, value, **kwargs):
+    def on_table_cell_edit(self, value: Any, **kwargs: Any) -> None:
         """Handle inline cell edit. value is JSON: {row_key, column, value}."""
         try:
             data = json.loads(str(value)) if isinstance(value, str) else value
@@ -575,39 +588,39 @@ class DataTableMixin:
                 value=data.get("value", ""),
             )
 
-    def handle_cell_edit(self, row_key, column, value):
+    def handle_cell_edit(self, row_key: str, column: str, value: Any) -> None:
         """Override this to persist inline cell edits. Called by on_table_cell_edit."""
         pass
 
     @event_handler()
-    def on_table_reorder(self, value, **kwargs):
+    def on_table_reorder(self, value: Any, **kwargs: Any) -> None:
         """Handle column reorder. value is comma-separated column keys."""
         new_order = [k.strip() for k in str(value).split(",") if k.strip()]
         if new_order:
             self.table_column_order = new_order
 
     @event_handler()
-    def on_table_visibility(self, value, **kwargs):
+    def on_table_visibility(self, value: Any, **kwargs: Any) -> None:
         """Handle column visibility toggle. value is comma-separated visible keys."""
         visible = [k.strip() for k in str(value).split(",") if k.strip()]
         self.table_visible_columns = visible
 
     @event_handler()
-    def on_table_density(self, value, **kwargs):
+    def on_table_density(self, value: Any, **kwargs: Any) -> None:
         """Handle density toggle. value is 'compact', 'comfortable', or 'spacious'."""
         val = str(value)
         if val in ("compact", "comfortable", "spacious"):
             self.table_current_density = val
 
     @event_handler()
-    def on_table_row_edit(self, value, **kwargs):
+    def on_table_row_edit(self, value: Any, **kwargs: Any) -> None:
         """Handle entering row edit mode."""
         row_id = str(value)
         if row_id not in self.table_editing_rows:
             self.table_editing_rows.append(row_id)
 
     @event_handler()
-    def on_table_row_save(self, value, **kwargs):
+    def on_table_row_save(self, value: Any, **kwargs: Any) -> None:
         """Handle saving an edited row. Override handle_row_save to persist."""
         row_id = str(value)
         self.handle_row_save(row_id, kwargs)
@@ -615,20 +628,20 @@ class DataTableMixin:
             self.table_editing_rows.remove(row_id)
 
     @event_handler()
-    def on_table_row_cancel(self, value, **kwargs):
+    def on_table_row_cancel(self, value: Any, **kwargs: Any) -> None:
         """Handle cancelling row edit."""
         row_id = str(value)
         if row_id in self.table_editing_rows:
             self.table_editing_rows.remove(row_id)
 
-    def handle_row_save(self, row_key, data):
+    def handle_row_save(self, row_key: str, data: Dict[str, Any]) -> None:
         """Override this to persist row edits. Called by on_table_row_save."""
         pass
 
     # ── Phase 3 Event Handlers ──
 
     @event_handler()
-    def on_table_expand(self, value, **kwargs):
+    def on_table_expand(self, value: Any, **kwargs: Any) -> None:
         """Handle row expansion toggle."""
         row_id = str(value)
         if row_id in self.table_expanded_rows:
@@ -637,28 +650,28 @@ class DataTableMixin:
             self.table_expanded_rows.append(row_id)
 
     @event_handler()
-    def on_table_bulk_action(self, value, **kwargs):
+    def on_table_bulk_action(self, value: Any, **kwargs: Any) -> None:
         """Handle bulk action on selected rows."""
         action = str(value)
         self.handle_bulk_action(action, list(self.table_selected_rows))
 
-    def handle_bulk_action(self, action, selected_rows):
+    def handle_bulk_action(self, action: str, selected_rows: List[str]) -> None:
         """Override this to handle bulk actions. Called with action key and selected row IDs."""
         pass
 
     @event_handler()
-    def on_table_export(self, value, **kwargs):
+    def on_table_export(self, value: Any, **kwargs: Any) -> None:
         """Handle export request. value is the format (csv/json)."""
         fmt = str(value)
         self.handle_export(fmt)
 
-    def handle_export(self, fmt):
+    def handle_export(self, fmt: str) -> None:
         """Override this to handle exports. Called with 'csv' or 'json'.
 
         Default implementation generates data and stores in table_export_data.
         """
         rows = self.table_rows
-        columns = self.table_columns
+        columns = self.table_columns or []
         col_keys = [col.get("key", col) if isinstance(col, dict) else str(col) for col in columns]
         col_labels = [
             col.get("label", col.get("key", "")) if isinstance(col, dict) else str(col)
@@ -679,12 +692,12 @@ class DataTableMixin:
             self.table_export_format = "json"
 
     @event_handler()
-    def on_table_group(self, value, **kwargs):
+    def on_table_group(self, value: Any, **kwargs: Any) -> None:
         """Handle grouping by column."""
         self.table_current_group_by = str(value)
 
     @event_handler()
-    def on_table_group_toggle(self, value, **kwargs):
+    def on_table_group_toggle(self, value: Any, **kwargs: Any) -> None:
         """Handle group collapse/expand toggle."""
         group_key = str(value)
         if group_key in self.table_collapsed_groups:
@@ -695,7 +708,7 @@ class DataTableMixin:
     # ── Phase 4 Event Handlers ──
 
     @event_handler()
-    def on_table_row_drag(self, value, **kwargs):
+    def on_table_row_drag(self, value: Any, **kwargs: Any) -> None:
         """Handle row drag-and-drop reorder. value is JSON: {old_index, new_index}."""
         try:
             data = json.loads(str(value)) if isinstance(value, str) else value
@@ -712,12 +725,12 @@ class DataTableMixin:
                 self.table_rows.insert(new_idx, row)
                 self.handle_row_drag(old_idx, new_idx)
 
-    def handle_row_drag(self, old_index, new_index):
+    def handle_row_drag(self, old_index: int, new_index: int) -> None:
         """Override this to persist row reorder. Called by on_table_row_drag."""
         pass
 
     @event_handler()
-    def on_table_copy(self, value, **kwargs):
+    def on_table_copy(self, value: Any, **kwargs: Any) -> None:
         """Handle copy event. value is JSON list of row keys to copy."""
         try:
             data = json.loads(str(value)) if isinstance(value, str) else value
@@ -729,22 +742,21 @@ class DataTableMixin:
             row_keys = list(str(v) for v in self.table_selected_rows)
         self.handle_copy(row_keys)
 
-    def handle_copy(self, row_keys):
+    def handle_copy(self, row_keys: List[str]) -> None:
         """Override this to handle copy. Default generates CSV/TSV in table_copy_data."""
         rows_to_copy = (
             [row for row in self.table_rows if str(row.get(self.table_row_key, "")) in row_keys]
             if row_keys
             else self.table_rows
         )
-        col_keys = [
-            col.get("key", col) if isinstance(col, dict) else str(col) for col in self.table_columns
-        ]
+        cols = self.table_columns or []
+        col_keys = [col.get("key", col) if isinstance(col, dict) else str(col) for col in cols]
         col_labels = [
             col.get("label", col.get("key", "")) if isinstance(col, dict) else str(col)
-            for col in self.table_columns
+            for col in cols
         ]
         sep = "\t" if self.table_copy_format == "tsv" else ","
-        lines = [sep.join(col_labels)]
+        lines = [sep.join(str(c) for c in col_labels)]
         for row in rows_to_copy:
             lines.append(sep.join(str(row.get(k, "")) for k in col_keys))
         self.table_copy_data = "\n".join(lines)
@@ -752,7 +764,7 @@ class DataTableMixin:
     # ── Phase 5 Event Handlers ──
 
     @event_handler()
-    def on_table_import(self, value, **kwargs):
+    def on_table_import(self, value: Any, **kwargs: Any) -> None:
         """Handle import event. value is JSON: {format, data, confirm}.
 
         When confirm=False (or absent), parses and stages preview.
@@ -774,14 +786,15 @@ class DataTableMixin:
         raw = data.get("data", "")
         self._parse_import(fmt, raw)
 
-    def _parse_import(self, fmt, raw):
+    def _parse_import(self, fmt: str, raw: Any) -> None:
         """Parse imported data and stage for preview."""
         self.table_import_errors = []
         self.table_import_preview_data = []
         self.table_import_pending = False
 
         col_keys = [
-            col.get("key", col) if isinstance(col, dict) else str(col) for col in self.table_columns
+            col.get("key", col) if isinstance(col, dict) else str(col)
+            for col in (self.table_columns or [])
         ]
 
         try:
@@ -820,19 +833,19 @@ class DataTableMixin:
             if not self.table_import_preview:
                 self._confirm_import()
 
-    def _confirm_import(self):
+    def _confirm_import(self) -> None:
         """Commit previewed import rows."""
         imported = list(self.table_import_preview_data)
         self.table_import_preview_data = []
         self.table_import_pending = False
         self.handle_import(imported)
 
-    def handle_import(self, rows):
+    def handle_import(self, rows: List[Dict[str, Any]]) -> None:
         """Override this to persist imported rows. Default appends to table_rows."""
         self.table_rows.extend(rows)
 
     @event_handler()
-    def on_table_expression(self, value, **kwargs):
+    def on_table_expression(self, value: Any, **kwargs: Any) -> None:
         """Handle column expression filter. value is JSON: {column, expression}."""
         try:
             data = json.loads(str(value)) if isinstance(value, str) else value
@@ -851,7 +864,7 @@ class DataTableMixin:
 
     # ── Phase 5 Computed Helpers ──
 
-    def evaluate_computed_columns(self, rows):
+    def evaluate_computed_columns(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Evaluate computed columns and inject values into rows.
 
         Each computed column has:
@@ -875,7 +888,7 @@ class DataTableMixin:
             result.append(row_copy)
         return result
 
-    def _eval_expression(self, expression, row):
+    def _eval_expression(self, expression: str, row: Dict[str, Any]) -> Any:
         """Safely evaluate a computed column expression against a row.
 
         Uses an AST-based parser that only permits arithmetic operations
@@ -899,7 +912,7 @@ class DataTableMixin:
         except Exception:
             return ""
 
-    def evaluate_expression_filter(self, value, expression):
+    def evaluate_expression_filter(self, value: Any, expression: str) -> bool:
         """Evaluate a column expression filter against a cell value.
 
         Supported expression syntax:
@@ -975,7 +988,7 @@ class DataTableMixin:
 
         return True
 
-    def apply_expression_filters(self, rows):
+    def apply_expression_filters(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filter rows using active column expressions."""
         if not self.table_active_expressions:
             return rows
@@ -991,7 +1004,7 @@ class DataTableMixin:
                 result.append(row)
         return result
 
-    def get_conditional_formatting(self, value, col_key):
+    def get_conditional_formatting(self, value: Any, col_key: str) -> Dict[str, Any]:
         """Evaluate conditional formatting presets for a cell value.
 
         Each preset in table_conditional_formatting is a dict:
@@ -1006,7 +1019,7 @@ class DataTableMixin:
 
         Returns dict with formatting info or empty dict.
         """
-        for preset in self.table_conditional_formatting:
+        for preset in self.table_conditional_formatting or []:
             if not isinstance(preset, dict):
                 continue
             if preset.get("column") != col_key:
@@ -1039,11 +1052,11 @@ class DataTableMixin:
                 return {"type": "icon_set", "icon": icon}
         return {}
 
-    def _interpolate_color(self, colors, ratio):
+    def _interpolate_color(self, colors: List[str], ratio: float) -> str:
         """Interpolate between hex colors based on ratio (0.0-1.0)."""
         return interpolate_color_gradient(colors, ratio)
 
-    def get_cell_merge(self, row, col_key):
+    def get_cell_merge(self, row: Dict[str, Any], col_key: str) -> Any:
         """Get colspan for a cell from row's _merge data.
 
         Row merge data format: {_merge: {col_key: colspan_int, ...}}
@@ -1056,14 +1069,14 @@ class DataTableMixin:
 
     # ── Phase 4 Computed Helpers ──
 
-    def get_footer_aggregations(self):
+    def get_footer_aggregations(self) -> Dict[str, Any]:
         """Compute footer aggregation values based on table_footer_aggregations config.
 
         Returns dict of {col_key: formatted_value}.
         """
-        result = {}
-        for col_key, agg_type in self.table_footer_aggregations.items():
-            values = []
+        result: Dict[str, Any] = {}
+        for col_key, agg_type in (self.table_footer_aggregations or {}).items():
+            values: List[float] = []
             for row in self.table_rows:
                 val = row.get(col_key)
                 if val is not None:
@@ -1089,7 +1102,7 @@ class DataTableMixin:
                 result[col_key] = ""
         return result
 
-    def get_row_class(self, row):
+    def get_row_class(self, row: Dict[str, Any]) -> str:
         """Compute CSS class for a row based on row_class_map.
 
         table_row_class_map can be:
@@ -1097,7 +1110,7 @@ class DataTableMixin:
           - a callable: fn(row) -> css_class_string
         """
         if callable(self.table_row_class_map):
-            return self.table_row_class_map(row)
+            return str(self.table_row_class_map(row))
         classes = []
         for col_key, value_map in self.table_row_class_map.items():
             val = str(row.get(col_key, ""))
@@ -1105,7 +1118,7 @@ class DataTableMixin:
                 classes.append(value_map[val])
         return " ".join(classes)
 
-    def _format_cell_value(self, value, col):
+    def _format_cell_value(self, value: Any, col: Any) -> Any:
         """Format a cell value based on column type declaration.
 
         Supported types: number, currency, date, percentage, boolean.
@@ -1114,16 +1127,16 @@ class DataTableMixin:
 
     # ── Phase 3 Computed Helpers ──
 
-    def get_facet_counts(self):
+    def get_facet_counts(self) -> Dict[str, Any]:
         """Compute facet counts for filterable columns from current rows."""
-        counts = {}
-        for col in self.table_columns:
+        counts: Dict[str, Any] = {}
+        for col in self.table_columns or []:
             if not isinstance(col, dict):
                 continue
             if not col.get("filterable", False):
                 continue
             key = col.get("key", "")
-            col_counts = {}
+            col_counts: Dict[str, int] = {}
             for row in self.table_rows:
                 val = str(row.get(key, ""))
                 if val:
@@ -1132,16 +1145,16 @@ class DataTableMixin:
         self.table_facet_counts = counts
         return counts
 
-    def get_column_stats(self):
+    def get_column_stats(self) -> Dict[str, Any]:
         """Compute column statistics (min, max, avg, sum, count) for numeric columns."""
-        stats = {}
-        for col in self.table_columns:
+        stats: Dict[str, Dict[str, Any]] = {}
+        for col in self.table_columns or []:
             if not isinstance(col, dict):
                 continue
             if not col.get("stats", False):
                 continue
             key = col.get("key", "")
-            values = []
+            values: List[float] = []
             for row in self.table_rows:
                 val = row.get(key)
                 if val is not None:
@@ -1169,12 +1182,12 @@ class DataTableMixin:
         self.table_column_stats = stats
         return stats
 
-    def _group_rows(self, rows):
+    def _group_rows(self, rows: List[Dict[str, Any]]) -> List[Tuple[str, List[Dict[str, Any]]]]:
         """Group rows by the current group_by column. Returns list of (group_value, rows) tuples."""
         if not self.table_current_group_by:
             return [("", rows)]
-        groups = {}
-        group_order = []
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        group_order: List[str] = []
         for row in rows:
             val = str(row.get(self.table_current_group_by, ""))
             if val not in groups:
@@ -1185,7 +1198,7 @@ class DataTableMixin:
 
     # ── Context Generation ──
 
-    def get_table_context(self):
+    def get_table_context(self) -> Dict[str, Any]:
         """Return a dict suitable for the ``{% data_table %}`` template tag.
 
         **Pre-mount safety (closes #1114)**: djust's WebSocket consumer calls
@@ -1311,7 +1324,7 @@ class DataTableMixin:
 
     # ── Queryset Pipeline ──
 
-    def get_table_queryset(self):
+    def get_table_queryset(self) -> Any:
         """Return the base queryset."""
         if self.table_queryset is not None:
             return self.table_queryset
@@ -1319,7 +1332,7 @@ class DataTableMixin:
             return self.table_model.objects.all()
         return []
 
-    def _apply_table_search(self, qs):
+    def _apply_table_search(self, qs: Any) -> Any:
         """Apply global search across searchable fields."""
         if not self.table_search_query or not self.table_searchable_fields:
             return qs
@@ -1330,21 +1343,21 @@ class DataTableMixin:
             q |= Q(**{f"{field}__icontains": self.table_search_query})
         return qs.filter(q)
 
-    def _apply_table_filters(self, qs):
+    def _apply_table_filters(self, qs: Any) -> Any:
         """Apply per-column filters."""
         for col_key, value in self.table_filters.items():
             if value:
                 qs = qs.filter(**{f"{col_key}__icontains": value})
         return qs
 
-    def _apply_table_sort(self, qs):
+    def _apply_table_sort(self, qs: Any) -> Any:
         """Apply sort ordering."""
         if not self.table_sort_by:
             return qs
         order = f"-{self.table_sort_by}" if self.table_sort_desc else self.table_sort_by
         return qs.order_by(order)
 
-    def _apply_table_pagination(self, qs):
+    def _apply_table_pagination(self, qs: Any) -> Any:
         """Slice queryset for current page and set total_pages."""
         if self.table_page_size <= 0:
             return qs
@@ -1354,7 +1367,7 @@ class DataTableMixin:
         end = start + self.table_page_size
         return qs[start:end]
 
-    def refresh_table(self):
+    def refresh_table(self) -> None:
         """Run the full pipeline: queryset -> search -> filter -> sort -> paginate -> serialize.
 
         When table_server_mode is True, calls refresh_table_server() instead.
@@ -1375,7 +1388,7 @@ class DataTableMixin:
         if self.table_show_stats:
             self.get_column_stats()
 
-    def refresh_table_server(self):
+    def refresh_table_server(self) -> None:
         """Override this in server_mode to populate table_rows, table_total_pages, etc.
 
         Called by refresh_table() when table_server_mode is True.

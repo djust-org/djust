@@ -7,6 +7,8 @@ To add a new component to the gallery:
 4. Run tests to verify: .venv/bin/python -m pytest tests/test_gallery.py -v
 """
 
+from typing import Any, Dict, Iterator
+
 # Category slug -> display label mapping
 CATEGORIES = {
     "layout": "Layout",
@@ -2631,7 +2633,7 @@ EXAMPLES = {
 # Each variant has a 'render' callable that returns HTML.
 
 
-def _make_class_examples():
+def _make_class_examples() -> Dict[str, Any]:
     """Build CLASS_EXAMPLES lazily to avoid import-time issues with djust stubs."""
     from djust.components.components import Badge, Button, Card, Markdown, StatusDot
 
@@ -2712,10 +2714,10 @@ def _make_class_examples():
 
 
 # Lazy singleton
-_class_examples_cache = None
+_class_examples_cache: Dict[str, Any] | None = None
 
 
-def _get_class_examples():
+def _get_class_examples() -> Dict[str, Any]:
     """Return the CLASS_EXAMPLES dict, building it on first call.
 
     Deferred so that ``djust_components.components`` (which imports ``djust``)
@@ -2736,28 +2738,28 @@ class _ClassExamplesProxy:
     so it can be used anywhere a regular dict is expected.
     """
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Any:
         return _get_class_examples()[key]
 
-    def __contains__(self, key):
+    def __contains__(self, key: object) -> bool:
         return key in _get_class_examples()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(_get_class_examples())
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(_get_class_examples())
 
-    def keys(self):
+    def keys(self) -> Any:
         return _get_class_examples().keys()
 
-    def values(self):
+    def values(self) -> Any:
         return _get_class_examples().values()
 
-    def items(self):
+    def items(self) -> Any:
         return _get_class_examples().items()
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
         return _get_class_examples().get(key, default)
 
 

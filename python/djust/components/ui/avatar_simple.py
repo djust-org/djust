@@ -28,17 +28,17 @@ Performance:
     - Python: ~0.2 μs (f-string fallback)
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 # Try to import Rust implementation
 try:
-    from djust._rust import RustAvatar
+    from djust._rust import RustAvatar  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
     _RUST_AVAILABLE = False
-    RustAvatar = None
+    RustAvatar = None  # type: ignore[assignment, misc]
 
 
 class Avatar(Component):
@@ -93,7 +93,7 @@ class Avatar(Component):
         self.shape = shape
         self.status = status
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         return {
             "src": self.src,
             "alt": self.alt,

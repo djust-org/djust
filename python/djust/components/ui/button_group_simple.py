@@ -5,18 +5,18 @@ Groups multiple buttons together with Bootstrap 5 button group styling.
 This is a stateless Component optimized for performance.
 """
 
-from typing import List, Dict
+from typing import Any, Dict, List
 from ..base import Component
 
 
 # Try to import Rust implementation (will be added later)
 try:
-    from djust._rust import RustButtonGroup
+    from djust._rust import RustButtonGroup  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustButtonGroup = None
+    RustButtonGroup = None  # type: ignore[assignment, misc]
 
 
 class ButtonGroup(Component):
@@ -118,7 +118,7 @@ class ButtonGroup(Component):
         self.vertical = vertical
         self.role = role
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering"""
         return {
             "buttons": self.buttons,

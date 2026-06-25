@@ -2,7 +2,7 @@
 
 import html
 import re
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from djust import Component
 
@@ -50,8 +50,8 @@ class PromptEditor(Component):
         placeholder: str = "Enter your prompt template...",
         rows: int = 6,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             template=template,
             variables=variables,
@@ -75,7 +75,8 @@ class PromptEditor(Component):
 
         e_event = html.escape(self.event)
         e_placeholder = html.escape(self.placeholder)
-        e_template = html.escape(self.template)
+        template = self.template or ""
+        e_template = html.escape(template)
 
         try:
             rows = int(self.rows)
@@ -83,7 +84,7 @@ class PromptEditor(Component):
             rows = 6
 
         # Extract variable names from template
-        var_names = re.findall(r"\{\{(\w+)\}\}", self.template)
+        var_names = re.findall(r"\{\{(\w+)\}\}", template)
         unique_vars = list(dict.fromkeys(var_names))  # preserve order, dedupe
 
         var_chips = []
@@ -103,7 +104,7 @@ class PromptEditor(Component):
             vars_html = f'<div class="dj-prompt-editor__vars">{"".join(var_chips)}</div>'
 
         # Build highlighted preview — escape first, then substitute
-        preview_text = html.escape(self.template)
+        preview_text = html.escape(template)
         for v in unique_vars:
             val = self.variables.get(v, f"{{{{{v}}}}}")
             preview_text = preview_text.replace(

@@ -6,18 +6,18 @@ This is a stateless Component optimized for performance.
 For interactive navbars with event handlers, use them in LiveView event handlers.
 """
 
-from typing import List, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
 
 # Try to import Rust implementation (will be added later)
 try:
-    from djust._rust import RustNavBar
+    from djust._rust import RustNavBar  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustNavBar = None
+    RustNavBar = None  # type: ignore[assignment, misc]
 
 
 class NavBar(Component):
@@ -119,14 +119,18 @@ class NavBar(Component):
 
     def __init__(
         self,
-        items: List[Dict[str, Union[str, bool, List[Dict[str, Union[str, bool]]]]]],
+        # Nav items are heterogeneous dicts (label/url/active/dropdown, where
+        # `dropdown` is itself a list of dicts) accessed dynamically via .get();
+        # the value contract is `Any`, not a narrow union (which mis-types the
+        # nested-dropdown access — see #1108 Iterable/contract rule).
+        items: List[Dict[str, Any]],
         brand: Optional[Dict[str, str]] = None,
         variant: str = "light",
         sticky: Union[str, bool] = False,
         container: str = "fluid",
         expand: str = "lg",
         id: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Initialize navbar component.
 
@@ -157,7 +161,7 @@ class NavBar(Component):
         self.container = container
         self.expand = expand
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if Rust template engine supports loops in future)"""
         return {
             "items": self.items,

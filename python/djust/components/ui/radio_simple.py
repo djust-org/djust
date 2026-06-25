@@ -103,7 +103,7 @@ class Radio(Component):
         self.inline = inline
         self.help_text = help_text
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "name": self.name,

@@ -6,18 +6,18 @@ This is a stateless Component optimized for performance.
 For interactive dropdowns with event handlers, use them in LiveView event handlers.
 """
 
-from typing import List, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
 
 # Try to import Rust implementation (will be added later)
 try:
-    from djust._rust import RustDropdown
+    from djust._rust import RustDropdown  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustDropdown = None
+    RustDropdown = None  # type: ignore[assignment, misc]
 
 
 class Dropdown(Component):
@@ -132,7 +132,7 @@ class Dropdown(Component):
         self.split = split
         self.direction = direction
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if Rust template engine supports loops in future)"""
         return {
             "label": self.label,

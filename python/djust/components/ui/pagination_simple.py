@@ -5,9 +5,10 @@ Simple stateless pagination component with automatic Rust optimization.
 """
 
 from ..base import Component
+from typing import Any
 
 try:
-    from djust._rust import RustPagination
+    from djust._rust import RustPagination  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
@@ -83,7 +84,7 @@ class Pagination(Component):
         self.show_first_last = show_first_last
         self.max_visible_pages = max_visible_pages
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "current_page": self.current_page,
@@ -93,7 +94,7 @@ class Pagination(Component):
             "max_visible_pages": self.max_visible_pages,
         }
 
-    def _calculate_page_range(self):
+    def _calculate_page_range(self) -> list[int | str]:
         """Calculate which page numbers to display with ellipsis logic."""
         current = self.current_page
         total = self.total_pages
@@ -117,7 +118,7 @@ class Pagination(Component):
         page_range = list(range(start, end + 1))
 
         # Add ellipsis markers
-        pages_with_ellipsis = []
+        pages_with_ellipsis: list[int | str] = []
 
         # Add first page and ellipsis if needed
         if start > 1:

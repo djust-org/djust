@@ -1,8 +1,12 @@
 """Diff Viewer component — side-by-side or unified text diff."""
 
 import html
+from typing import Any, List, Optional, Tuple
 
 from djust import Component
+
+# A diff op: (tag, old_line, new_line) where lines may be None.
+DiffOp = Tuple[str, Optional[str], Optional[str]]
 
 
 class DiffViewer(Component):
@@ -38,8 +42,8 @@ class DiffViewer(Component):
         title_new: str = "Modified",
         show_line_numbers: bool = True,
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             old=old,
             new=new,
@@ -59,7 +63,7 @@ class DiffViewer(Component):
         self.custom_class = custom_class
 
     @staticmethod
-    def _compute_diff(old_lines, new_lines):
+    def _compute_diff(old_lines: List[str], new_lines: List[str]) -> List[DiffOp]:
         """Simple LCS-based diff producing (tag, old_line, new_line) tuples."""
         m, n = len(old_lines), len(new_lines)
         dp = [[0] * (n + 1) for _ in range(m + 1)]
@@ -70,7 +74,7 @@ class DiffViewer(Component):
                 else:
                     dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
 
-        result = []
+        result: List[DiffOp] = []
         i, j = m, n
         while i > 0 or j > 0:
             if i > 0 and j > 0 and old_lines[i - 1] == new_lines[j - 1]:
@@ -104,7 +108,7 @@ class DiffViewer(Component):
             return self._render_unified(class_str, ops)
         return self._render_split(class_str, ops)
 
-    def _render_split(self, class_str, ops):
+    def _render_split(self, class_str: str, ops: List[DiffOp]) -> str:
         e_title_old = html.escape(str(self.title_old))
         e_title_new = html.escape(str(self.title_new))
 
@@ -125,11 +129,11 @@ class DiffViewer(Component):
                 )
                 old_rows.append(
                     f'<div class="dj-diff__line">{num_o}'
-                    f'<span class="dj-diff__text">{html.escape(old_line)}</span></div>'
+                    f'<span class="dj-diff__text">{html.escape(old_line or "")}</span></div>'
                 )
                 new_rows.append(
                     f'<div class="dj-diff__line">{num_n}'
-                    f'<span class="dj-diff__text">{html.escape(new_line)}</span></div>'
+                    f'<span class="dj-diff__text">{html.escape(new_line or "")}</span></div>'
                 )
             elif tag == "delete":
                 old_num += 1
@@ -138,7 +142,7 @@ class DiffViewer(Component):
                 )
                 old_rows.append(
                     f'<div class="dj-diff__line dj-diff__line--del">{num_html}'
-                    f'<span class="dj-diff__text">{html.escape(old_line)}</span></div>'
+                    f'<span class="dj-diff__text">{html.escape(old_line or "")}</span></div>'
                 )
                 new_rows.append('<div class="dj-diff__line dj-diff__line--empty"></div>')
             elif tag == "insert":
@@ -149,7 +153,7 @@ class DiffViewer(Component):
                 old_rows.append('<div class="dj-diff__line dj-diff__line--empty"></div>')
                 new_rows.append(
                     f'<div class="dj-diff__line dj-diff__line--add">{num_html}'
-                    f'<span class="dj-diff__text">{html.escape(new_line)}</span></div>'
+                    f'<span class="dj-diff__text">{html.escape(new_line or "")}</span></div>'
                 )
 
         return (
@@ -162,7 +166,7 @@ class DiffViewer(Component):
             f"{''.join(new_rows)}</div></div>"
         )
 
-    def _render_unified(self, class_str, ops):
+    def _render_unified(self, class_str: str, ops: List[DiffOp]) -> str:
         rows = []
         old_num = 0
         new_num = 0
@@ -180,7 +184,7 @@ class DiffViewer(Component):
                 rows.append(
                     f'<div class="dj-diff__line">{num_html}'
                     f'<span class="dj-diff__marker"> </span>'
-                    f'<span class="dj-diff__text">{html.escape(old_line)}</span></div>'
+                    f'<span class="dj-diff__text">{html.escape(old_line or "")}</span></div>'
                 )
             elif tag == "delete":
                 old_num += 1
@@ -193,7 +197,7 @@ class DiffViewer(Component):
                 rows.append(
                     f'<div class="dj-diff__line dj-diff__line--del">{num_html}'
                     f'<span class="dj-diff__marker">-</span>'
-                    f'<span class="dj-diff__text">{html.escape(old_line)}</span></div>'
+                    f'<span class="dj-diff__text">{html.escape(old_line or "")}</span></div>'
                 )
             elif tag == "insert":
                 new_num += 1
@@ -206,7 +210,7 @@ class DiffViewer(Component):
                 rows.append(
                     f'<div class="dj-diff__line dj-diff__line--add">{num_html}'
                     f'<span class="dj-diff__marker">+</span>'
-                    f'<span class="dj-diff__text">{html.escape(new_line)}</span></div>'
+                    f'<span class="dj-diff__text">{html.escape(new_line or "")}</span></div>'
                 )
 
         return f'<div class="{class_str}"><div class="dj-diff__unified">{"".join(rows)}</div></div>'

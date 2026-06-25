@@ -12,12 +12,12 @@ from ..base import Component
 
 # Try to import Rust implementation (will be added later)
 try:
-    from djust._rust import RustTable
+    from djust._rust import RustTable  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustTable = None
+    RustTable = None  # type: ignore[assignment, misc]
 
 
 class Table(Component):
@@ -142,7 +142,7 @@ class Table(Component):
         self.size = size
         self.responsive = responsive
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if Rust template engine supports loops in future)"""
         return {
             "columns": self.columns,

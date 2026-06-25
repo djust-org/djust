@@ -4,11 +4,11 @@ Offcanvas (sidebar drawer) component for djust.
 Simple stateless offcanvas drawer with automatic Rust optimization.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from ..base import Component
 
 try:
-    from djust._rust import RustOffcanvas
+    from djust._rust import RustOffcanvas  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
@@ -105,7 +105,7 @@ class Offcanvas(Component):
         self.dismissable = dismissable
         self.show = show
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "body": self.body,

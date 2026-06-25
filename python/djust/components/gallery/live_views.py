@@ -5,6 +5,8 @@ Theme is handled at the site level via the gallery_theme context processor —
 views don't need to know about theming.
 """
 
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
 from django.http import Http404
 
 from djust import LiveView
@@ -20,13 +22,23 @@ from djust.components.descriptors import (
 
 from .views import _render_component_cards
 
+# This mixin is only ever combined with LiveView (see the class declarations
+# below). Declaring LiveView as the type-time base lets the strict checker
+# resolve the inherited LiveView surface (`super().get_context_data()`,
+# attribute access) without changing the runtime MRO — at runtime the base is
+# the bare ``object``, exactly as before.
+if TYPE_CHECKING:
+    _GalleryMixinBase = LiveView
+else:
+    _GalleryMixinBase = object
+
 
 # ---------------------------------------------------------------------------
 # Base
 # ---------------------------------------------------------------------------
 
 
-class GalleryCategoryMixin:
+class GalleryCategoryMixin(_GalleryMixinBase):
     """Base for per-category gallery views.
 
     Handles category validation, sidebar data, navigation, and component
@@ -41,11 +53,11 @@ class GalleryCategoryMixin:
             tabs = Tabs()
     """
 
-    template_name = "djust_components/gallery/category.html"
+    template_name: Optional[str] = "djust_components/gallery/category.html"
     login_required = False
     category_slug = ""
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: Any, **kwargs: Any) -> None:
         from .examples import CATEGORIES, CATEGORY_ORDER
         from .registry import get_gallery_data
 
@@ -85,7 +97,7 @@ class GalleryCategoryMixin:
             else None
         )
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Re-render component examples with current descriptor state."""
         self.rendered_components = []
         for comp in self.raw_components:
@@ -101,7 +113,7 @@ class GalleryCategoryMixin:
             )
         return super().get_context_data(**kwargs)
 
-    def _build_extra_context(self, comp_name):
+    def _build_extra_context(self, comp_name: str) -> Dict[str, Any]:
         """Pass descriptor state into template rendering automatically."""
         descriptors = getattr(type(self), "_component_descriptors", {})
         if comp_name not in descriptors:
@@ -123,13 +135,13 @@ class GalleryIndexView(LiveView):
     template_name = "djust_components/gallery/index.html"
     login_required = False
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: Any, **kwargs: Any) -> None:
         from .examples import CATEGORIES, CATEGORY_ORDER
         from .registry import get_gallery_data
 
         data = get_gallery_data()
         categories = data["categories"]
-        self._category_cards = [
+        self._category_cards: list[dict[str, Any]] = [
             {
                 "slug": s,
                 "label": CATEGORIES.get(s, s.title()),
@@ -140,7 +152,7 @@ class GalleryIndexView(LiveView):
         self.category_cards = list(self._category_cards)
         self.total_count = sum(c["count"] for c in self._category_cards)
         self.search_query = ""
-        self.filtered_cards = []
+        self.filtered_cards: list[dict[str, Any]] = []
         self.filtered_count = 0
 
         # Flat list of all components for search
@@ -158,7 +170,7 @@ class GalleryIndexView(LiveView):
                 )
 
     @event_handler
-    def search(self, value="", **kwargs):
+    def search(self, value: str = "", **kwargs: Any) -> None:
         self.search_query = value.strip()
         if not self.search_query:
             self.filtered_cards = []

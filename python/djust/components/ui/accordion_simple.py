@@ -4,7 +4,7 @@ Accordion component for djust.
 Simple stateless accordion with automatic Rust optimization.
 """
 
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional
 from ..base import Component
 
 
@@ -64,7 +64,7 @@ class Accordion(Component):
         self.flush = flush
         self.always_open = always_open
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Return context for template rendering."""
         return {
             "items": self.items,

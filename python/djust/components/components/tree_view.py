@@ -1,6 +1,7 @@
 """TreeView component."""
 
 import html
+from typing import Any, Optional
 
 from djust import Component
 
@@ -16,13 +17,13 @@ class TreeView(Component):
 
     def __init__(
         self,
-        nodes: list = None,
+        nodes: Optional[list] = None,
         expand_event: str = "tree_expand",
         select_event: str = "tree_select",
         selected: str = "",
         custom_class: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             nodes=nodes,
             expand_event=expand_event,
@@ -37,7 +38,7 @@ class TreeView(Component):
         self.selected = selected
         self.custom_class = custom_class
 
-    def _render_node(self, node, depth):
+    def _render_node(self, node: object, depth: int) -> str:
         """Render a single tree node recursively."""
         if not isinstance(node, dict):
             return ""

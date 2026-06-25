@@ -7,16 +7,17 @@ Use BadgeComponent for interactive badges with state.
 """
 
 from ..base import Component
+from typing import Any
 
 
 # Try to import Rust implementation (will be added later)
 try:
-    from djust._rust import RustBadge
+    from djust._rust import RustBadge  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
-    RustBadge = None
+    RustBadge = None  # type: ignore[assignment, misc]
 
 
 class Badge(Component):
@@ -96,7 +97,7 @@ class Badge(Component):
         self.size = size
         self.pill = pill
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if Rust not available)"""
         return {
             "text": self.text,

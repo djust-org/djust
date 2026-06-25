@@ -29,15 +29,16 @@ Performance:
 """
 
 from ..base import Component
+from typing import Any
 
 # Try to import Rust implementation
 try:
-    from djust._rust import RustAlert
+    from djust._rust import RustAlert  # type: ignore[attr-defined]
 
     _RUST_AVAILABLE = True
 except ImportError:
     _RUST_AVAILABLE = False
-    RustAlert = None
+    RustAlert = None  # type: ignore[assignment, misc]
 
 
 class Alert(Component):
@@ -76,7 +77,7 @@ class Alert(Component):
         self.variant = variant
         self.dismissable = dismissable
 
-    def get_context_data(self):
+    def get_context_data(self) -> dict[str, Any]:
         return {
             "text": self.text,
             "variant": self.variant,
