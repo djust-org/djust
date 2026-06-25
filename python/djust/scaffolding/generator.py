@@ -388,7 +388,7 @@ def _create_schema_files(
         # Build field definitions
         field_lines = []
         search_fields = []
-        list_display_fields = []
+        list_display_fields: list[str] = []
         str_field = None
         first_char_field = None
 

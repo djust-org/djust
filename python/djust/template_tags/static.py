@@ -72,7 +72,9 @@ class StaticTagHandler(TagHandler):
         try:
             from django.templatetags.static import static
 
-            return static(path)
+            # Django is untyped under the lenient global config; static()
+            # returns ``Any`` to mypy but a real ``str`` at runtime.
+            return str(static(path))
         except ImportError:
             # Fallback: try to use STATIC_URL from settings
             try:
