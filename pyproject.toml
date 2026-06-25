@@ -190,6 +190,12 @@ target-version = "py310"
 # --------------------------------------------------------------------------- #
 python_version = "3.10"
 warn_unused_configs = true
+# `import-untyped` is raised in the IMPORTING (strict-island) module for a 3rd-party
+# lib that is INSTALLED but ships no stubs (yaml/requests in a full dev env). It is a
+# different code than the `import-not-found` that `ignore_missing_imports` covers, and
+# it is reported against the importer (not the lib), so a per-module override on the
+# lib cannot reach it. Disable globally so `mypy python/djust` is clean in every env.
+disable_error_code = ["import-untyped"]
 
 # Kill third-party + Django + PyYAML "missing library stubs" noise (and any
 # stale _rust import noise). The `_rust.pyi` stub still types the PyO3 surface
