@@ -67,7 +67,14 @@ async def test_browser_smoke():
         failures = []
 
         print(f"📄 Loading browser-smoke canary: {PAGE}")
-        await page.goto(PAGE)
+        # The CI harness (.github/actions/djust-playwright-server) now polls
+        # /demos/browser-smoke/ until it answers 200 BEFORE this test runs
+        # (#1943), so the route is already warm here. The explicit 60s timeout
+        # (up from the 30s default) is belt-and-suspenders for a cold-cache
+        # first paint: it removes the fixed-30s `page.goto` deadline that
+        # intermittently red-barred the BLOCKING browser-smoke gate (#1869) on
+        # cold Rust-compile runs, while still failing on a truly-down server.
+        await page.goto(PAGE, timeout=60000)
 
         # --- A. MOUNT canary (#1849 class 1) ---
         # Wait for the LiveView to connect over the WebSocket. djust exposes the

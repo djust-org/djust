@@ -582,3 +582,60 @@ class TestNarrateEvent:
         events = view._drain_push_events()
         dispatch_op = events[0][1]["ops"][1]
         assert dispatch_op[1]["event"] == "my:custom-narrate"
+
+
+# ---------------------------------------------------------------------------
+# Instance-init of tutorial-signal attrs (#1952)
+# ---------------------------------------------------------------------------
+
+
+class TestSignalAttrsInitializedInInit:
+    """Regression for #1952.
+
+    The four internal signal attrs (``_tutorial_active_target``,
+    ``_tutorial_active_class``, ``_tutorial_skip_signal``,
+    ``_tutorial_cancel_signal``) used to be initialized inside the
+    ``tutorial_total_steps`` SETTER. A view that read them before (or
+    without) ever invoking the setter hit ``AttributeError``. They now
+    live in ``__init__``, so a freshly-constructed view exposes them.
+    """
+
+    def test_signal_attrs_readable_without_setter(self):
+        # A bare view — the tutorial_total_steps setter is NEVER invoked.
+        view = _View()
+        assert view._tutorial_active_target is None
+        assert view._tutorial_active_class is None
+        assert view._tutorial_skip_signal is None
+        assert view._tutorial_cancel_signal is None
+
+    def test_cleanup_active_step_no_setter_does_not_raise(self):
+        # _cleanup_active_step (called from start_tutorial's finally block)
+        # reads _tutorial_active_target / _tutorial_active_class. Pre-fix
+        # this raised AttributeError on a view that never set
+        # tutorial_total_steps.
+        view = _View()
+        view._cleanup_active_step()  # must not raise
+        assert view._tutorial_active_target is None
+        assert view._tutorial_active_class is None
+
+    def test_skip_tutorial_no_setter_does_not_raise(self):
+        # skip_tutorial reads _tutorial_skip_signal once running.
+        view = _View()
+        view._tutorial_running = True  # bypass the not-running early return
+        view.skip_tutorial()  # must not raise (signal is None → no-op)
+
+    def test_cancel_tutorial_no_setter_does_not_raise(self):
+        # cancel_tutorial reads _tutorial_cancel_signal / _tutorial_skip_signal
+        # once running.
+        view = _View()
+        view._tutorial_running = True  # bypass the not-running early return
+        view.cancel_tutorial()  # must not raise (signals are None → no-op)
+
+    def test_setter_still_updates_total_steps(self):
+        # The setter keeps doing its actual job: updating the step count.
+        view = _View()
+        view.tutorial_total_steps = 7
+        assert view.tutorial_total_steps == 7
+        # And it does NOT clobber the signal attrs back to a partial state.
+        assert view._tutorial_skip_signal is None
+        assert view._tutorial_cancel_signal is None

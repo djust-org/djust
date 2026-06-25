@@ -128,6 +128,17 @@ class TutorialMixin:
         self._tutorial_running: bool = False
         self._tutorial_current_step: int = -1
         self._tutorial_total_steps: int = len(self._tutorial_steps)
+        # Internal: track the active step's target selector + class so
+        # cancel/skip paths know what to clean up. Initialized here (#1952)
+        # — NOT in the tutorial_total_steps setter — so views that read
+        # these (e.g. _cleanup_active_step, skip/cancel handlers) before
+        # ever setting tutorial_total_steps don't hit AttributeError.
+        self._tutorial_active_target: Optional[str] = None
+        self._tutorial_active_class: Optional[str] = None
+        # Signalled when the user skips or cancels, to unblock the
+        # current step's wait_for_event / sleep.
+        self._tutorial_skip_signal: Optional[asyncio.Event] = None
+        self._tutorial_cancel_signal: Optional[asyncio.Event] = None
 
     @property
     def tutorial_running(self) -> bool:
@@ -152,14 +163,6 @@ class TutorialMixin:
     @tutorial_total_steps.setter
     def tutorial_total_steps(self, value: int) -> None:
         self._tutorial_total_steps = value
-        # Internal: track the active step's target selector + class so
-        # cancel/skip paths know what to clean up.
-        self._tutorial_active_target: Optional[str] = None
-        self._tutorial_active_class: Optional[str] = None
-        # Signalled when the user skips or cancels, to unblock the
-        # current step's wait_for_event / sleep.
-        self._tutorial_skip_signal: Optional[asyncio.Event] = None
-        self._tutorial_cancel_signal: Optional[asyncio.Event] = None
 
     # ------------------------------------------------------------------
     # Event handlers

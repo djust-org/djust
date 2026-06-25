@@ -70,16 +70,48 @@ runs:
 
     - name: Wait for server to be ready
       shell: bash
+      # Readiness poll (#1943). The fixed 30s `page.goto` deadline in the
+      # playwright tests intermittently red-barred the BLOCKING browser-smoke
+      # gate (#1869) on cold-cache CI runs: when the `djust_components` Rust
+      # crate compiles from scratch the first request to the demo route is
+      # slow, so the server wasn't ready when playwright connected.
+      #
+      # Two changes remove that cold-start race while keeping the gate's signal
+      # intact (a genuinely-broken server still fails LOUD — see below):
+      #
+      #   1. Bound bumped 30s -> 120s (60 attempts x 2s). Cold-cache cannot
+      #      exceed this; a real break still fails (exit 1 + server.log dump)
+      #      once the bound is hit, so the gate still red-bars a true failure.
+      #   2. Poll the ACTUAL canary target route (/demos/browser-smoke/), not
+      #      just `/`. A 200 on `/` does NOT prove `/demos/browser-smoke/` (a
+      #      different LiveView under djust_demos.urls) is ready — its FIRST
+      #      request is what triggers any first-hit lazy import / compilation.
+      #      Polling it here warms that route DURING the bounded loop, so
+      #      playwright's `page.goto` lands on an already-warm route instead of
+      #      racing its own fixed deadline.
+      #
+      # `curl -fsS` returns non-zero on any HTTP status >= 400, so a 500 from a
+      # half-initialized app does NOT count as ready — we keep polling until a
+      # real success or the bound. A broken route is never marked ready.
       run: |
-        echo "Waiting for server to start..."
-        for i in {1..30}; do
-          if curl -s http://localhost:8002/ > /dev/null; then
-            echo "Server is ready!"
-            exit 0
+        echo "Waiting for demo server + /demos/browser-smoke/ route (bound: 120s = 60 x 2s)..."
+        ready=0
+        for i in $(seq 1 60); do
+          # Require BOTH the root and the canary target route to answer with a
+          # successful (2xx/3xx) HTTP response. -f => fail on >= 400; -sS =>
+          # silent but show errors; -o /dev/null => discard body.
+          if curl -fsS -o /dev/null http://localhost:8002/ \
+             && curl -fsS -o /dev/null http://localhost:8002/demos/browser-smoke/; then
+            echo "Server + /demos/browser-smoke/ route are ready (attempt $i)!"
+            ready=1
+            break
           fi
-          echo "Attempt $i/30: Server not ready yet..."
-          sleep 1
+          echo "Attempt $i/60: server or /demos/browser-smoke/ not ready yet..."
+          sleep 2
         done
-        echo "Server failed to start"
-        cat examples/demo_project/server.log
-        exit 1
+        if [ "$ready" -ne 1 ]; then
+          echo "Server failed to become ready within 120s (60 attempts x 2s)."
+          echo "===== examples/demo_project/server.log ====="
+          cat examples/demo_project/server.log || true
+          exit 1
+        fi
