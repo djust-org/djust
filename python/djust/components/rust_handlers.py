@@ -11,9 +11,24 @@ Block handlers implement:  render(self, args, content, context) -> str
 
 import json as _json
 import uuid as _uuid
+from typing import Any, cast
 
 from django.utils.html import conditional_escape
 from django.utils.safestring import mark_safe
+
+
+def _safe(html: str) -> str:
+    """Typed wrapper over Django's ``mark_safe``.
+
+    ``mark_safe`` is decorated with ``@keep_lazy`` (untyped), so mypy infers
+    its return as ``Any`` when Django ships without type stubs — which would
+    leak ``Any`` out of every handler's ``-> str`` return (``no-any-return``).
+    This wrapper pins the return to the concrete built-in ``str`` (``mark_safe`` returns a ``SafeString``,
+    a ``str`` subclass — the runtime value is unchanged) so the strict island stays clean. Behaviorally identical to
+    calling ``mark_safe`` directly — the HTML bytes are unchanged.
+    """
+    return cast(str, mark_safe(html))
+
 
 from djust.components.utils import (
     CURRENCY_SYMBOLS,
@@ -36,7 +51,7 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
     variable resolution) are deserialized automatically.
     """
 
-    result = {}
+    result: dict[str, object] = {}
     for arg in args:
         if "=" not in arg:
             continue
@@ -85,7 +100,7 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
 
 
 class ModalHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         is_open = kw.get("open", False)
         if not is_open:
@@ -99,7 +114,7 @@ class ModalHandler:
             "lg": "modal-lg",
             "xl": "modal-xl",
         }.get(str(size), "modal-md")
-        return mark_safe(
+        return _safe(
             f'<div class="modal-overlay {size_class}" dj-click="{close_event}">'
             f'<div class="modal-content" onclick="event.stopPropagation()">'
             f'<div class="modal-header">'
@@ -113,7 +128,7 @@ class ModalHandler:
 
 
 class CardHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         title = kw.get("title", "")
         subtitle = kw.get("subtitle", "")
@@ -127,7 +142,7 @@ class CardHandler:
                 f'<h3 class="card-title">{conditional_escape(title)}</h3>{sub}'
                 f"</div>"
             )
-        return mark_safe(
+        return _safe(
             f'<div class="card card-{variant} {extra_class}">'
             f"{header}"
             f'<div class="card-body">{content}</div>'
@@ -136,24 +151,24 @@ class CardHandler:
 
 
 class TabsHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         # Tabs need active state from args to render nav — content already rendered
         kw = _parse_args(args, context)
         tabs_id = conditional_escape(kw.get("id", "tabs"))
         # For block-handler mode, the nav is built from child content rendered as panes.
         # We wrap in the tabs container; view logic controls active tab.
-        return mark_safe(f'<div class="tabs-container" id="{tabs_id}">{content}</div>')
+        return _safe(f'<div class="tabs-container" id="{tabs_id}">{content}</div>')
 
 
 class AccordionHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         accordion_id = conditional_escape(kw.get("id", "accordion"))
-        return mark_safe(f'<div class="accordion" id="{accordion_id}">{content}</div>')
+        return _safe(f'<div class="accordion" id="{accordion_id}">{content}</div>')
 
 
 class AccordionItemHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         title = conditional_escape(kw.get("title", ""))
         item_id = conditional_escape(kw.get("id", ""))
@@ -162,7 +177,7 @@ class AccordionItemHandler:
         open_cls = "accordion-item--open" if is_open else ""
         expanded = "true" if is_open else "false"
         panel_hidden = "" if is_open else " hidden"
-        return mark_safe(
+        return _safe(
             f'<div class="accordion-item {open_cls}">'
             f'<button class="accordion-trigger" aria-expanded="{expanded}" '
             f'dj-click="{event}" data-value="{item_id}">'
@@ -176,14 +191,14 @@ class AccordionItemHandler:
 
 
 class DropdownHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         dropdown_id = conditional_escape(kw.get("id", "dropdown"))
         label = conditional_escape(kw.get("label", "Menu"))
         is_open = kw.get("open", False)
         toggle_event = conditional_escape(kw.get("toggle_event", "toggle_dropdown"))
         open_data = "true" if is_open else "false"
-        return mark_safe(
+        return _safe(
             f'<div class="dropdown" id="{dropdown_id}">'
             f'<button class="dropdown-trigger" dj-click="{toggle_event}">{label}</button>'
             f'<div class="dropdown-menu" data-open="{open_data}">{content}</div>'
@@ -200,7 +215,7 @@ class AlertHandler:
         "danger": "✕",
     }
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         alert_type = kw.get("variant", kw.get("type", "info"))
         if alert_type == "danger":
@@ -215,7 +230,7 @@ class AlertHandler:
             if dismissible
             else ""
         )
-        return mark_safe(
+        return _safe(
             f'<div class="alert alert-{conditional_escape(alert_type)}'
             f'{"  alert-dismissible" if dismissible else ""}">'
             f'<span class="alert-icon">{icon_char}</span>'
@@ -228,7 +243,7 @@ class AlertHandler:
 
 
 class FormGroupHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
         error = conditional_escape(kw.get("error", ""))
@@ -243,23 +258,23 @@ class FormGroupHandler:
         )
         error_html = f'<div class="form-error-message">{error}</div>' if error else ""
         helper_html = f'<div class="form-helper">{helper}</div>' if helper else ""
-        return mark_safe(
+        return _safe(
             f'<div class="form-group">{label_html}{content}{error_html}{helper_html}</div>'
         )
 
 
 class TimelineHandler:
-    def render(self, args, content, context):
-        return mark_safe(f'<div class="timeline">{content}</div>')
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        return _safe(f'<div class="timeline">{content}</div>')
 
 
 class TimelineItemHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         title = conditional_escape(kw.get("title", ""))
         time = conditional_escape(kw.get("time", ""))
         time_html = f'<span class="timeline-time">{time}</span>' if time else ""
-        return mark_safe(
+        return _safe(
             f'<div class="timeline-item">'
             f'<div class="timeline-marker"></div>'
             f'<div class="timeline-content">'
@@ -278,13 +293,13 @@ class TimelineItemHandler:
 class ToastContainerHandler:
     ALLOWED_TYPES = {"info", "success", "warning", "error"}
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         toasts = context.get("toasts", [])
         dismiss_event = "dismiss_toast"
         if not toasts:
             return '<div class="toast-container"></div>'
         items = []
-        for t in toasts:
+        for t in cast("list[object]", toasts):
             if not isinstance(t, dict):
                 continue
             t_type = t.get("type", "info")
@@ -299,16 +314,16 @@ class ToastContainerHandler:
                 f'data-value="{t_id}">&times;</button>'
                 f"</div>"
             )
-        return mark_safe(f'<div class="toast-container">{"".join(items)}</div>')
+        return _safe(f'<div class="toast-container">{"".join(items)}</div>')
 
 
 class TooltipHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         # Tooltip is actually a block tag - but here used inline fallback
         kw = _parse_args(args, context)
         text = conditional_escape(kw.get("text", ""))
         position = conditional_escape(kw.get("position", "top"))
-        return mark_safe(
+        return _safe(
             f'<span class="tooltip-wrapper">'
             f"{content}"
             f'<span class="tooltip tooltip-{position}">{text}</span>'
@@ -317,10 +332,10 @@ class TooltipHandler:
 
 
 class ProgressHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         try:
-            value = max(0, min(100, int(kw.get("value", 0))))
+            value = max(0, min(100, int(cast("str | int | float", kw.get("value", 0)))))
         except (ValueError, TypeError):
             value = 0
         label = conditional_escape(kw.get("label", ""))
@@ -334,7 +349,7 @@ class ProgressHandler:
             label_row = f'<div class="progress-label-row">{label_part}{pct_part}</div>'
         track_size = {"sm": "progress-track-sm", "lg": "progress-track-lg"}.get(str(size), "")
         color_class = "" if color == "primary" else color
-        return mark_safe(
+        return _safe(
             f'<div class="progress-wrapper">'
             f"{label_row}"
             f'<div class="progress-track {track_size}">'
@@ -345,13 +360,13 @@ class ProgressHandler:
 
 
 class BadgeHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
         status = conditional_escape(kw.get("status", "default"))
         pulse = kw.get("pulse", False)
         pulse_cls = " badge-pulse" if pulse else ""
-        return mark_safe(
+        return _safe(
             f'<span class="badge badge-{status}{pulse_cls}">'
             f'<span class="badge-dot"></span>{label}'
             f"</span>"
@@ -359,18 +374,18 @@ class BadgeHandler:
 
 
 class PaginationHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         try:
-            page = int(kw.get("page", 1))
-            total_pages = int(kw.get("total_pages", 1))
+            page = int(cast("str | int | float", kw.get("page", 1)))
+            total_pages = int(cast("str | int | float", kw.get("total_pages", 1)))
         except (ValueError, TypeError):
             page, total_pages = 1, 1
         prev_event = conditional_escape(kw.get("prev_event", "page_prev"))
         next_event = conditional_escape(kw.get("next_event", "page_next"))
         prev_disabled = " disabled" if page <= 1 else ""
         next_disabled = " disabled" if page >= total_pages else ""
-        return mark_safe(
+        return _safe(
             f'<div class="pagination">'
             f'<button class="pagination-btn"{prev_disabled} dj-click="{prev_event}">&#8592;</button>'
             f'<span class="pagination-info">Page {page} of {total_pages}</span>'
@@ -380,7 +395,7 @@ class PaginationHandler:
 
 
 class AvatarHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         src = kw.get("src", "")
         alt = conditional_escape(kw.get("alt", ""))
@@ -395,15 +410,15 @@ class AvatarHandler:
         status_html = (
             f'<span class="avatar-status avatar-status-{status}"></span>' if status else ""
         )
-        return mark_safe(f'<div class="avatar avatar-{size}">{img_html}{status_html}</div>')
+        return _safe(f'<div class="avatar avatar-{size}">{img_html}{status_html}</div>')
 
 
 class SpinnerHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         size = conditional_escape(kw.get("size", "md"))
         color = conditional_escape(kw.get("color", "primary"))
-        return mark_safe(
+        return _safe(
             f'<div class="spinner spinner-{size} spinner-{color}" role="status">'
             f'<span class="sr-only">Loading...</span>'
             f"</div>"
@@ -411,21 +426,21 @@ class SpinnerHandler:
 
 
 class SkeletonHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         skel_type = kw.get("type", "text")
         try:
-            lines = int(kw.get("lines", 3))
+            lines = int(cast("str | int | float", kw.get("lines", 3)))
         except (ValueError, TypeError):
             lines = 3
         if skel_type == "avatar":
-            return mark_safe('<div class="skeleton skeleton-avatar"></div>')
+            return _safe('<div class="skeleton skeleton-avatar"></div>')
         if skel_type == "card":
             inner = "".join(
                 f'<div class="skeleton skeleton-line" style="width:{w}%"></div>'
                 for w in [80, 60, 90, 70][:lines]
             )
-            return mark_safe(
+            return _safe(
                 f'<div class="skeleton skeleton-card">'
                 f'<div class="skeleton skeleton-text" style="width:50%;margin-bottom:1rem"></div>'
                 f"{inner}"
@@ -436,18 +451,18 @@ class SkeletonHandler:
                 '<div class="skeleton skeleton-line" style="width:100%"></div>'
                 for _ in range(lines)
             )
-            return mark_safe(f'<div class="skeleton-table">{rows}</div>')
+            return _safe(f'<div class="skeleton-table">{rows}</div>')
         # default: text lines
         widths = [90, 75, 85, 60, 80, 70, 95]
         line_html = "".join(
             f'<div class="skeleton skeleton-line" style="width:{widths[i % len(widths)]}%"></div>'
             for i in range(lines)
         )
-        return mark_safe(f'<div class="skeleton-text">{line_html}</div>')
+        return _safe(f'<div class="skeleton-text">{line_html}</div>')
 
 
 class BreadcrumbHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         items = kw.get("items") or context.get("breadcrumb_items", [])
         if not isinstance(items, (list, tuple)):
@@ -470,11 +485,11 @@ class BreadcrumbHandler:
                     f'<span class="breadcrumb-item">{link}</span>'
                     f'<span class="breadcrumb-separator">›</span>'
                 )
-        return mark_safe(f'<nav class="breadcrumb">{"".join(parts)}</nav>')
+        return _safe(f'<nav class="breadcrumb">{"".join(parts)}</nav>')
 
 
 class EmptyStateHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         title = conditional_escape(kw.get("title", "No items found"))
         description = conditional_escape(kw.get("description", ""))
@@ -488,7 +503,7 @@ class EmptyStateHandler:
             if action_label and action_event
             else ""
         )
-        return mark_safe(
+        return _safe(
             f'<div class="empty-state">'
             f'<div class="empty-state-icon">{icon}</div>'
             f'<h3 class="empty-state-title">{title}</h3>'
@@ -499,21 +514,21 @@ class EmptyStateHandler:
 
 
 class DividerHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = kw.get("label", "")
         vertical = kw.get("vertical", False)
         if vertical:
-            return mark_safe('<div class="divider divider-vertical"></div>')
+            return _safe('<div class="divider divider-vertical"></div>')
         if label:
-            return mark_safe(
+            return _safe(
                 f'<div class="divider-label"><span>{conditional_escape(label)}</span></div>'
             )
-        return mark_safe('<hr class="divider divider-horizontal">')
+        return _safe('<hr class="divider divider-horizontal">')
 
 
 class SwitchHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", "switch"))
         checked = kw.get("checked", False)
@@ -525,7 +540,7 @@ class SwitchHandler:
         disabled_attr = " disabled" if disabled else ""
         label_html = f'<span class="switch-label">{label}</span>' if label else ""
         size_cls = f" switch-{size}" if size != "md" else ""
-        return mark_safe(
+        return _safe(
             f'<label class="switch-wrapper{size_cls}">'
             f'<span class="switch">'
             f'<input type="checkbox" class="switch-input" name="{name}"'
@@ -541,7 +556,7 @@ class SwitchHandler:
 class StatCardHandler:
     _trend_icons = {"up": "↑", "down": "↓", "flat": "—", "": ""}
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
         value = conditional_escape(str(kw.get("value", "")))
@@ -554,7 +569,7 @@ class StatCardHandler:
             td_cls = f" stat-trend-{conditional_escape(trend_direction)}" if trend_direction else ""
             trend_html = f'<span class="stat-card-trend{td_cls}">{icon} {trend}</span>'
         desc_html = f'<p class="stat-card-description">{description}</p>' if description else ""
-        return mark_safe(
+        return _safe(
             f'<div class="stat-card">'
             f'<div class="stat-card-label">{label}</div>'
             f'<div class="stat-card-value stat-value-primary">{value}</div>'
@@ -565,7 +580,7 @@ class StatCardHandler:
 
 
 class TagChipHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
         variant = conditional_escape(kw.get("variant", "default"))
@@ -576,17 +591,17 @@ class TagChipHandler:
         close_html = (
             f'<button class="tag-close" dj-click="{event}">&times;</button>' if dismissible else ""
         )
-        return mark_safe(f'<span class="tag tag-{variant}{size_cls}">{label}{close_html}</span>')
+        return _safe(f'<span class="tag tag-{variant}{size_cls}">{label}{close_html}</span>')
 
 
 class StepperHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         steps = kw.get("steps") or context.get("steps", [])
         if not isinstance(steps, (list, tuple)):
             steps = []
         try:
-            active = int(kw.get("active", 0))
+            active = int(cast("str | int | float", kw.get("active", 0)))
         except (ValueError, TypeError):
             active = 0
         event = conditional_escape(kw.get("event", "set_step"))
@@ -609,11 +624,11 @@ class StepperHandler:
                 f'<div class="stepper-step-label">{label}</div>'
                 f"</div>"
             )
-        return mark_safe(f'<div class="stepper">{"".join(parts)}</div>')
+        return _safe(f'<div class="stepper">{"".join(parts)}</div>')
 
 
 class DjButtonHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
         variant = conditional_escape(kw.get("variant", "primary"))
@@ -634,7 +649,7 @@ class DjButtonHandler:
             attrs.append("disabled")
         spinner = '<span class="btn-spinner"></span>' if loading else ""
         icon_html = f'<span class="btn-icon">{conditional_escape(icon)}</span>' if icon else ""
-        return mark_safe(
+        return _safe(
             f"<button {' '.join(attrs)}>"
             f"{spinner}{icon_html}"
             f'<span class="btn-label">{label}</span>'
@@ -643,7 +658,7 @@ class DjButtonHandler:
 
 
 class DjInputHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
@@ -666,7 +681,7 @@ class DjInputHandler:
         )
         error_html = f'<div class="form-error-message">{error}</div>' if error else ""
         helper_html = f'<div class="form-helper">{helper}</div>' if helper else ""
-        return mark_safe(
+        return _safe(
             f'<div class="form-group">'
             f"{label_html}"
             f'<input type="{input_type}" id="{name}" name="{name}" class="{input_cls}" '
@@ -678,12 +693,12 @@ class DjInputHandler:
 
 
 class DjSelectHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
         current = str(kw.get("value", ""))
-        options = kw.get("options") or context.get(kw.get("options_var", ""), [])
+        options = kw.get("options") or context.get(cast("str", kw.get("options_var", "")), [])
         error = conditional_escape(kw.get("error", ""))
         required = kw.get("required", False)
         disabled = kw.get("disabled", False)
@@ -711,7 +726,7 @@ class DjSelectHandler:
             else ""
         )
         error_html = f'<div class="form-error-message">{error}</div>' if error else ""
-        return mark_safe(
+        return _safe(
             f'<div class="form-group">'
             f"{label_html}"
             f'<select id="{name}" name="{name}" class="{select_cls}"'
@@ -724,7 +739,7 @@ class DjSelectHandler:
 
 
 class DjTextareaHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
@@ -736,7 +751,7 @@ class DjTextareaHandler:
         disabled = kw.get("disabled", False)
         event = conditional_escape(kw.get("event", name))
         try:
-            rows = int(kw.get("rows", 4))
+            rows = int(cast("str | int | float", kw.get("rows", 4)))
         except (ValueError, TypeError):
             rows = 4
         ta_cls = "form-textarea" + (" form-textarea-error" if error else "")
@@ -750,7 +765,7 @@ class DjTextareaHandler:
         )
         error_html = f'<div class="form-error-message">{error}</div>' if error else ""
         helper_html = f'<div class="form-helper">{helper}</div>' if helper else ""
-        return mark_safe(
+        return _safe(
             f'<div class="form-group">'
             f"{label_html}"
             f'<textarea id="{name}" name="{name}" class="{ta_cls}" rows="{rows}" '
@@ -762,7 +777,7 @@ class DjTextareaHandler:
 
 
 class DjCheckboxHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
@@ -772,7 +787,7 @@ class DjCheckboxHandler:
         disabled = kw.get("disabled", False)
         checked_attr = " checked" if checked else ""
         disabled_attr = " disabled" if disabled else ""
-        return mark_safe(
+        return _safe(
             f'<div class="form-checkbox-wrapper">'
             f'<label class="form-checkbox-label">'
             f'<input type="checkbox" class="form-checkbox" name="{name}" value="{value}"'
@@ -784,7 +799,7 @@ class DjCheckboxHandler:
 
 
 class DjRadioHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
@@ -796,7 +811,7 @@ class DjRadioHandler:
         disabled = kw.get("disabled", False)
         checked_attr = " checked" if str(value) == str(current) else ""
         disabled_attr = " disabled" if disabled else ""
-        return mark_safe(
+        return _safe(
             f'<div class="form-radio-wrapper">'
             f'<label class="form-radio-label">'
             f'<input type="radio" class="form-radio" name="{name}" value="{value}"'
@@ -813,7 +828,7 @@ _interpolate_color_simple = interpolate_color_gradient
 
 
 class DataTableHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         rows = kw.get("rows") or context.get("rows", [])
         columns = kw.get("columns") or context.get("columns", [])
@@ -830,7 +845,7 @@ class DataTableHandler:
         search_query = conditional_escape(str(kw.get("search_query", "")))
         search_event = conditional_escape(kw.get("search_event", "on_table_search"))
         try:
-            search_debounce = int(kw.get("search_debounce", 300))
+            search_debounce = int(cast("str | int | float", kw.get("search_debounce", 300)))
         except (ValueError, TypeError):
             search_debounce = 300
         filters = kw.get("filters") or {}
@@ -841,8 +856,8 @@ class DataTableHandler:
         empty_icon = conditional_escape(str(kw.get("empty_icon", "")))
         paginate = kw.get("paginate", False)
         try:
-            page = int(kw.get("page", 1))
-            total_pages = int(kw.get("total_pages", 1))
+            page = int(cast("str | int | float", kw.get("page", 1)))
+            total_pages = int(cast("str | int | float", kw.get("total_pages", 1)))
         except (ValueError, TypeError):
             page, total_pages = 1, 1
         page_event = conditional_escape(kw.get("page_event", "on_table_page"))
@@ -856,11 +871,11 @@ class DataTableHandler:
         reorderable = kw.get("reorderable", False)
         reorder_event = conditional_escape(kw.get("reorder_event", "on_table_reorder"))
         try:
-            frozen_left = int(kw.get("frozen_left", 0))
+            frozen_left = int(cast("str | int | float", kw.get("frozen_left", 0)))
         except (ValueError, TypeError):
             frozen_left = 0
         try:
-            frozen_right = int(kw.get("frozen_right", 0))
+            frozen_right = int(cast("str | int | float", kw.get("frozen_right", 0)))
         except (ValueError, TypeError):
             frozen_right = 0
         column_visibility = kw.get("column_visibility", False)
@@ -893,11 +908,11 @@ class DataTableHandler:
         keyboard_nav = kw.get("keyboard_nav", False)
         virtual_scroll = kw.get("virtual_scroll", False)
         try:
-            virtual_row_height = int(kw.get("virtual_row_height", 40))
+            virtual_row_height = int(cast("str | int | float", kw.get("virtual_row_height", 40)))
         except (ValueError, TypeError):
             virtual_row_height = 40
         try:
-            virtual_buffer = int(kw.get("virtual_buffer", 5))
+            virtual_buffer = int(cast("str | int | float", kw.get("virtual_buffer", 5)))
         except (ValueError, TypeError):
             virtual_buffer = 5
         server_mode = kw.get("server_mode", False)
@@ -1062,7 +1077,7 @@ class DataTableHandler:
 
         if density_toggle:
 
-            def _dbtn(val, label):
+            def _dbtn(val: str, label: str) -> str:
                 active = " active" if val == density else ""
                 return (
                     f'<button type="button" class="data-table-density-btn{active}"'
@@ -1160,7 +1175,7 @@ class DataTableHandler:
             skeleton_rows = "".join(
                 '<div class="skeleton skeleton-line" style="width:100%"></div>' for _ in range(5)
             )
-            return mark_safe(
+            return _safe(
                 f'<div class="{" ".join(wrapper_classes)}" role="grid"'
                 f' aria-label="Data table" aria-busy="true"{wrapper_attrs_str}>'
                 f"{toolbar_html}"
@@ -1423,7 +1438,7 @@ class DataTableHandler:
         )
 
         # --- Helper: render a single row ---
-        def _render_row(row):
+        def _render_row(row: object) -> str:
             if not isinstance(row, dict):
                 return ""
             row_id = str(row.get(row_key, ""))
@@ -1695,7 +1710,7 @@ class DataTableHandler:
         if rows:
             if group_by:
                 # Group rows by column value
-                groups = {}
+                groups: dict[object, list[object]] = {}
                 group_order = []
                 for row in rows:
                     if not isinstance(row, dict):
@@ -1809,7 +1824,7 @@ class DataTableHandler:
                                 except (ValueError, TypeError):
                                     # Skip non-numeric cells during aggregation.
                                     continue
-                    agg_val = ""
+                    agg_val: object = ""
                     if vals:
                         if agg_type == "sum":
                             agg_val = sum(vals)
@@ -1931,7 +1946,7 @@ class DataTableHandler:
         if facets and facet_counts:
             facet_attr = f" data-facet-counts='{conditional_escape(_json.dumps(facet_counts))}'"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{" ".join(wrapper_classes)}" role="grid"'
             f' aria-label="Data table"{wrapper_attrs_str}{facet_attr}>'
             f"{toolbar_html}"
@@ -1996,7 +2011,7 @@ BLOCK_HANDLERS = [
 ]
 
 
-def register_with_rust_engine():
+def register_with_rust_engine() -> None:
     """Register all component tag handlers with the Rust template engine.
 
     Called from DjustComponentsConfig.ready(). Safe to call multiple times
@@ -2049,7 +2064,7 @@ def register_with_rust_engine():
 class CodeBlockHandler:
     """Inline handler for {% code_block code=... language=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import code_block as _cb
 
         kwargs = _parse_args(args, context)
@@ -2064,7 +2079,7 @@ class CodeBlockHandler:
 
 
 class ComboboxHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import combobox as _cb
 
         kwargs = _parse_args(args, context)
@@ -2072,7 +2087,7 @@ class ComboboxHandler:
         if isinstance(options_val, list):
             options = options_val
         else:
-            options = context.get(options_val, [])
+            options = cast("list[object]", context.get(cast("str", options_val), []))
         selected_val = kwargs.get("selected", None)
         if isinstance(selected_val, str) and selected_val:
             selected_val = context.get(selected_val, [])
@@ -2092,7 +2107,7 @@ class ComboboxHandler:
 
 
 class RatingHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import rating as _r
 
         kwargs = _parse_args(args, context)
@@ -2108,7 +2123,7 @@ class RatingHandler:
 
 
 class CopyButtonHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import copy_button as _c
 
         kwargs = _parse_args(args, context)
@@ -2123,7 +2138,7 @@ class CopyButtonHandler:
 
 
 class KbdHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import kbd as _k
 
         # args is a list of strings; filter out empty ones
@@ -2132,7 +2147,7 @@ class KbdHandler:
 
 
 class GaugeHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import gauge as _g
 
         kwargs = _parse_args(args, context)
@@ -2148,13 +2163,15 @@ class GaugeHandler:
 
 
 class NotificationCenterHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import notification_center as _nc
 
         kwargs = _parse_args(args, context)
         notifs_key = kwargs.get("notifications", "notifications")
         notifs = context.get(notifs_key, []) if isinstance(notifs_key, str) else notifs_key
-        unread = sum(1 for n in notifs if isinstance(n, dict) and n.get("unread"))
+        unread = sum(
+            1 for n in cast("list[object]", notifs) if isinstance(n, dict) and n.get("unread")
+        )
         return str(
             _nc(
                 notifications=notifs,
@@ -2165,7 +2182,7 @@ class NotificationCenterHandler:
 
 
 class TreeViewHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import tree_view as _tv
 
         kwargs = _parse_args(args, context)
@@ -2182,7 +2199,7 @@ class TreeViewHandler:
 
 
 class ColorPickerHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import color_picker as _cp
 
         kwargs = _parse_args(args, context)
@@ -2197,7 +2214,7 @@ class ColorPickerHandler:
 
 
 class CarouselHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import carousel as _car
 
         kwargs = _parse_args(args, context)
@@ -2214,7 +2231,7 @@ class CarouselHandler:
 
 
 class PaletteItemHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import palette_item as _pi
 
         kwargs = _parse_args(args, context)
@@ -2230,7 +2247,7 @@ class PaletteItemHandler:
 
 
 class ContextMenuItemHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import context_menu_item as _ci
 
         kwargs = _parse_args(args, context)
@@ -2248,7 +2265,7 @@ class ContextMenuItemHandler:
 class PopoverHandler:
     """Block handler for {% popover trigger="..." %}...{% endpopover %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kwargs = _parse_args(args, context)
         trigger = kwargs.get("trigger", "Click me")
         placement = kwargs.get("placement", "bottom")
@@ -2260,7 +2277,7 @@ class PopoverHandler:
         title_html = (
             f'<div class="popover-title">{conditional_escape(title)}</div>' if title else ""
         )
-        return mark_safe(
+        return _safe(
             f'<div class="popover-wrapper">'
             f'<button class="popover-trigger btn btn-outline btn-sm" '
             f"onclick=\"(function(el){{var p=el.parentElement;p.classList.toggle('popover-open');"
@@ -2278,7 +2295,7 @@ class PopoverHandler:
 class CollapsibleHandler:
     """Block handler for {% collapsible trigger="..." %}...{% endcollapsible %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kwargs = _parse_args(args, context)
         trigger = kwargs.get("trigger", "Toggle")
         event = kwargs.get("event", "toggle_collapsible")
@@ -2290,7 +2307,7 @@ class CollapsibleHandler:
         e_trigger = conditional_escape(trigger)
         e_event = conditional_escape(event)
         open_cls = " collapsible-open" if open_ else ""
-        return mark_safe(
+        return _safe(
             f'<div class="collapsible{open_cls}">'
             f'<button class="collapsible-trigger" '
             f"onclick=\"(function(el){{el.closest('.collapsible').classList.toggle('collapsible-open');}})(this)\""
@@ -2306,7 +2323,7 @@ class CollapsibleHandler:
 class SheetHandler:
     """Block handler for {% sheet side="right" open=show_sheet %}...{% endsheet %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kwargs = _parse_args(args, context)
         open_ = kwargs.get("is_open", kwargs.get("open", False))
         if isinstance(open_, str):
@@ -2330,7 +2347,7 @@ class SheetHandler:
             f'<button class="sheet-close" dj-click="{e_close}">&times;</button>'
             f"</div>"
         )
-        return mark_safe(
+        return _safe(
             f'<div class="sheet-overlay" dj-click="{e_close}"{open_attr}></div>'
             f'<div class="sheet sheet-{e_side}"{open_attr}>'
             f"{title_html}"
@@ -2342,7 +2359,7 @@ class SheetHandler:
 class CommandPaletteHandler:
     """Block handler for {% command_palette open=show_palette %}...{% endcommand_palette %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kwargs = _parse_args(args, context)
         open_ = kwargs.get("is_open", kwargs.get("open", False))
         if isinstance(open_, str):
@@ -2356,7 +2373,7 @@ class CommandPaletteHandler:
         e_close = conditional_escape(close_event)
         e_placeholder = conditional_escape(placeholder)
         open_attr = ' data-open="true"' if open_ else ""
-        return mark_safe(
+        return _safe(
             f'<div class="palette-overlay" dj-click="{e_close}"{open_attr}></div>'
             f'<div class="palette"{open_attr}>'
             f'<div class="palette-search">'
@@ -2373,13 +2390,13 @@ class CommandPaletteHandler:
 class ContextMenuHandler:
     """Block handler for {% context_menu label="..." %}...{% endcontext_menu %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kwargs = _parse_args(args, context)
         label = kwargs.get("label", "Right-click here")
         from django.utils.html import conditional_escape
 
         e_label = conditional_escape(label)
-        return mark_safe(
+        return _safe(
             f'<div class="ctx-wrapper" '
             f'oncontextmenu="(function(e,el){{e.preventDefault();'
             f"document.querySelectorAll('.ctx-menu[data-open]').forEach(function(m){{delete m.dataset.open;}});"
@@ -2429,7 +2446,7 @@ BLOCK_HANDLERS.extend(
 
 
 class DatePickerHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import date_picker as _dp
 
         kwargs = _parse_args(args, context)
@@ -2451,7 +2468,7 @@ class DatePickerHandler:
 
 
 class FileDropzoneHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import file_dropzone as _fd
 
         kwargs = _parse_args(args, context)
@@ -2468,7 +2485,7 @@ class FileDropzoneHandler:
 
 
 class VirtualListHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import virtual_list as _vl
 
         kwargs = _parse_args(args, context)
@@ -2478,9 +2495,9 @@ class VirtualListHandler:
         elif isinstance(items_val, str):
             # Could be a context variable name or an already-resolved JSON string
             if items_val in context:
-                items = context[items_val]
+                items = cast("list[object]", context[items_val])
             else:
-                items = items_val
+                items = cast("list[object]", items_val)
             # If still a string, try JSON deserialization
             if isinstance(items, str):
                 try:
@@ -2501,7 +2518,7 @@ class VirtualListHandler:
 
 
 class KanbanBoardHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import kanban_board as _kb
 
         kwargs = _parse_args(args, context)
@@ -2510,9 +2527,9 @@ class KanbanBoardHandler:
             columns = cols_val
         elif isinstance(cols_val, str):
             if cols_val in context:
-                columns = context[cols_val]
+                columns = cast("list[object]", context[cols_val])
             else:
-                columns = cols_val
+                columns = cast("list[object]", cols_val)
             if isinstance(columns, str):
                 try:
                     columns = _json.loads(columns)
@@ -2530,7 +2547,7 @@ class KanbanBoardHandler:
 
 
 class TableOfContentsHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import table_of_contents as _toc
 
         kwargs = _parse_args(args, context)
@@ -2547,7 +2564,7 @@ class TableOfContentsHandler:
 
 
 class RichTextEditorHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import rich_text_editor as _rte
 
         kwargs = _parse_args(args, context)
@@ -2578,7 +2595,7 @@ INLINE_HANDLERS.extend(
 class SplitPaneHandler:
     """Block handler for {% split_pane %}...{% pane %}...{% endsplit_pane %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         # For Rust engine, content is pre-rendered; we just wrap it
         kwargs = _parse_args(args, context)
         direction = kwargs.get("direction", "horizontal")
@@ -2586,7 +2603,7 @@ class SplitPaneHandler:
         import uuid as _uuid
 
         uid = f"sp-{_uuid.uuid4().hex[:6]}"
-        return mark_safe(
+        return _safe(
             f'<div class="split-pane split-pane-{ce(direction)}" id="{uid}">{content}</div>'
         )
 
@@ -2606,7 +2623,7 @@ BLOCK_HANDLERS.extend(
 class MultiSelectHandler:
     """Inline handler for {% multi_select name="tags" options=opts %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import multi_select as _ms
 
         kwargs = _parse_args(args, context)
@@ -2626,7 +2643,7 @@ class MultiSelectHandler:
 class OtpInputHandler:
     """Inline handler for {% otp_input name="code" digits=6 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import otp_input as _oi
 
         kwargs = _parse_args(args, context)
@@ -2644,7 +2661,7 @@ class OtpInputHandler:
 class NumberStepperHandler:
     """Inline handler for {% number_stepper name="qty" min=1 max=99 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import number_stepper as _ns
 
         kwargs = _parse_args(args, context)
@@ -2665,7 +2682,7 @@ class NumberStepperHandler:
 class TagInputHandler:
     """Inline handler for {% tag_input name="tags" suggestions=tags %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import tag_input as _ti
 
         kwargs = _parse_args(args, context)
@@ -2685,7 +2702,7 @@ class TagInputHandler:
 class InputGroupHandler:
     """Block handler for {% input_group %}...{% endinput_group %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         size = kw.get("size", "md")
         error = kw.get("error", "")
@@ -2694,18 +2711,16 @@ class InputGroupHandler:
         error_html = (
             f'<span class="form-error-message">{conditional_escape(error)}</span>' if error else ""
         )
-        return mark_safe(
-            f'<div class="input-group{size_cls}{error_cls}">{content}</div>{error_html}'
-        )
+        return _safe(f'<div class="input-group{size_cls}{error_cls}">{content}</div>{error_html}')
 
 
 class InputAddonHandler:
     """Block handler for {% input_addon %}...{% endinput_addon %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         position = kw.get("position", "prefix")
-        return mark_safe(
+        return _safe(
             f'<span class="input-addon input-addon-{conditional_escape(position)}">{content}</span>'
         )
 
@@ -2713,7 +2728,7 @@ class InputAddonHandler:
 class DjLabelHandler:
     """Block handler for {% dj_label for="email" %}Email{% enddj_label %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         for_input = kw.get("for", "")
         required = kw.get("required", False)
@@ -2721,13 +2736,13 @@ class DjLabelHandler:
         for_attr = f' for="{conditional_escape(for_input)}"' if for_input else ""
         required_span = ' <span class="form-required">*</span>' if required else ""
         cls = f"form-label {conditional_escape(extra_class)}".strip()
-        return mark_safe(f'<label class="{cls}"{for_attr}>{content}{required_span}</label>')
+        return _safe(f'<label class="{cls}"{for_attr}>{content}{required_span}</label>')
 
 
 class FieldsetHandler:
     """Block handler for {% fieldset legend="Account" %}...{% endfieldset %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         legend = kw.get("legend", "")
         disabled = kw.get("disabled", False)
@@ -2739,7 +2754,7 @@ class FieldsetHandler:
             else ""
         )
         cls = f"fieldset {conditional_escape(extra_class)}".strip()
-        return mark_safe(
+        return _safe(
             f'<fieldset class="{cls}"{disabled_attr}>'
             f"{legend_html}"
             f'<div class="fieldset-content">{content}</div>'
@@ -2776,7 +2791,7 @@ BLOCK_HANDLERS.extend(
 class ToggleGroupHandler:
     """Inline handler for {% toggle_group name=... options=... value=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         options = kw.get("options", [])
@@ -2828,7 +2843,7 @@ class ToggleGroupHandler:
                 f"</button>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="toggle-group{size_cls}{disabled_cls}" '
             f'role="group" data-mode="{conditional_escape(mode)}">'
             f"{''.join(buttons)}"
@@ -2839,7 +2854,7 @@ class ToggleGroupHandler:
 class FabHandler:
     """Inline handler for {% fab icon=... event=... position=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         icon = conditional_escape(kw.get("icon", "+"))
         event = conditional_escape(kw.get("event", ""))
@@ -2884,7 +2899,7 @@ class FabHandler:
             if action_items:
                 actions_html = f'<div class="fab-actions">{"".join(action_items)}</div>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="fab-container fab-{pos_cls}">'
             f"{actions_html}"
             f'<button class="fab{size_cls}{variant_cls}"{click_attr}{aria_label}{disabled_attr}>'
@@ -2897,7 +2912,7 @@ class FabHandler:
 class SplitButtonHandler:
     """Inline handler for {% split_button label=... event=... options=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
         event = conditional_escape(kw.get("event", ""))
@@ -2947,7 +2962,7 @@ class SplitButtonHandler:
                 f"</div>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="split-btn{variant_cls}{size_cls}{loading_cls}">'
             f'<button class="split-btn-primary"{click_attr}{disabled_attr}>'
             f"{spinner_html}"
@@ -2980,14 +2995,14 @@ INLINE_HANDLERS.extend(
 class NotificationBadgeHandler:
     """Inline handler for {% notification_badge count=5 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         try:
-            count = int(kw.get("count", 0))
+            count = int(cast("str | int | float", kw.get("count", 0)))
         except (ValueError, TypeError):
             count = 0
         try:
-            max_count = int(kw.get("max", 99))
+            max_count = int(cast("str | int | float", kw.get("max", 99)))
         except (ValueError, TypeError):
             max_count = 99
         dot = kw.get("dot", False)
@@ -2999,25 +3014,25 @@ class NotificationBadgeHandler:
             cls += " dj-notification-badge--pulse"
 
         if dot:
-            return mark_safe(f'<span class="{cls} dj-notification-badge--dot"></span>')
+            return _safe(f'<span class="{cls} dj-notification-badge--dot"></span>')
 
         if count <= 0:
             return ""
 
         display = f"{max_count}+" if count > max_count else str(count)
-        return mark_safe(f'<span class="{cls}">{display}</span>')
+        return _safe(f'<span class="{cls}">{display}</span>')
 
 
 class SegmentedProgressHandler:
     """Inline handler for {% segmented_progress steps=steps current=2 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         steps = kw.get("steps", [])
         if not isinstance(steps, (list, tuple)):
             steps = []
         try:
-            current = int(kw.get("current", 0))
+            current = int(cast("str | int | float", kw.get("current", 0)))
         except (ValueError, TypeError):
             current = 0
         size = conditional_escape(kw.get("size", "md"))
@@ -3055,16 +3070,16 @@ class SegmentedProgressHandler:
                     f'dj-segmented-progress__connector--{line_state}"></div>'
                 )
 
-        return mark_safe(f'<div class="{cls}">{"".join(parts)}</div>')
+        return _safe(f'<div class="{cls}">{"".join(parts)}</div>')
 
 
 class ProgressCircleHandler:
     """Inline handler for {% progress_circle value=65 size="md" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         try:
-            value = max(0, min(100, int(kw.get("value", 0))))
+            value = max(0, min(100, int(cast("str | int | float", kw.get("value", 0)))))
         except (ValueError, TypeError):
             value = 0
         size = str(kw.get("size", "md"))
@@ -3095,7 +3110,7 @@ class ProgressCircleHandler:
                 f"{value}%</text>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="progressbar" '
             f'aria-valuenow="{value}" aria-valuemin="0" aria-valuemax="100">'
             f'<svg width="{dim}" height="{dim}" viewBox="0 0 {dim} {dim}">'
@@ -3117,7 +3132,7 @@ class ProgressCircleHandler:
 class StatusIndicatorHandler:
     """Inline handler for {% status_indicator status="online" label="API" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         status = str(kw.get("status", "offline"))
         label = kw.get("label", "")
@@ -3141,7 +3156,7 @@ class StatusIndicatorHandler:
         dot_html = '<span class="dj-status-indicator__dot"></span>'
         label_html = f'<span class="dj-status-indicator__label">{e_label}</span>' if label else ""
 
-        return mark_safe(f'<span class="{cls}" role="status">{dot_html}{label_html}</span>')
+        return _safe(f'<span class="{cls}" role="status">{dot_html}{label_html}</span>')
 
 
 # Register status/progress indicator inline handlers
@@ -3163,7 +3178,7 @@ INLINE_HANDLERS.extend(
 class LoadingOverlayHandler:
     """Block handler for {% loading_overlay active=... %}...{% endloading_overlay %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         active = kw.get("active", False)
         text = kw.get("text", "")
@@ -3188,13 +3203,13 @@ class LoadingOverlayHandler:
                 f"</div>"
             )
 
-        return mark_safe(f'<div class="{cls}">{content}{overlay_html}</div>')
+        return _safe(f'<div class="{cls}">{content}{overlay_html}</div>')
 
 
 class AnnouncementBarHandler:
     """Block handler for {% announcement_bar type=... %}...{% endannouncement_bar %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         bar_type = kw.get("variant", kw.get("type", "info"))
         dismissible = kw.get("dismissible", False)
@@ -3216,7 +3231,7 @@ class AnnouncementBarHandler:
                 f'dj-click="{e_dismiss_event}">&times;</button>'
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="banner" aria-live="polite">'
             f'<div class="dj-announcement-bar__content">{content}</div>'
             f"{close_html}"
@@ -3241,7 +3256,7 @@ BLOCK_HANDLERS.extend(
 class RichSelectHandler:
     """Inline handler for {% rich_select name=... options=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import rich_select as _rs
 
         kwargs = _parse_args(args, context)
@@ -3262,7 +3277,7 @@ class RichSelectHandler:
 class DataGridHandler:
     """Inline handler for {% data_grid columns=cols rows=rows %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import data_grid as _dg
 
         kwargs = _parse_args(args, context)
@@ -3301,7 +3316,7 @@ INLINE_HANDLERS.extend(
 class StreamingTextHandler:
     """Inline handler for {% streaming_text stream_event="stream_chunk" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         stream_event = conditional_escape(str(kw.get("stream_event", "stream_chunk")))
         text = conditional_escape(str(kw.get("text", "")))
@@ -3326,15 +3341,13 @@ class StreamingTextHandler:
             attrs.append('data-markdown="true"')
 
         attrs_str = " ".join(attrs)
-        return mark_safe(
-            f'<div {attrs_str}><div class="dj-streaming-text__content">{text}</div></div>'
-        )
+        return _safe(f'<div {attrs_str}><div class="dj-streaming-text__content">{text}</div></div>')
 
 
 class ConnectionStatusHandler:
     """Inline handler for {% connection_status %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         custom_class = conditional_escape(str(kw.get("custom_class", "")))
         reconnecting_text = conditional_escape(str(kw.get("reconnecting_text", "Reconnecting...")))
@@ -3344,7 +3357,7 @@ class ConnectionStatusHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" '
             f'data-reconnecting-text="{reconnecting_text}" '
             f'data-connected-text="{connected_text}" '
@@ -3357,10 +3370,10 @@ class ConnectionStatusHandler:
 class LiveCounterHandler:
     """Inline handler for {% live_counter value=42 label="online" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         try:
-            value = int(kw.get("value", 0))
+            value = int(cast("str | int | float", kw.get("value", 0)))
         except (ValueError, TypeError):
             value = 0
         label = conditional_escape(str(kw.get("label", "")))
@@ -3376,7 +3389,7 @@ class LiveCounterHandler:
         if label:
             label_html = f'<span class="dj-live-counter__label">{label}</span>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" data-stream-event="{stream_event}">'
             f'<span class="dj-live-counter__value" data-value="{value}">{value}</span>'
             f"{label_html}"
@@ -3396,14 +3409,14 @@ class ServerToastContainerHandler:
         "bottom-center",
     }
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         position = str(kw.get("position", "top-right"))
         if position not in self.ALLOWED_POSITIONS:
             position = "top-right"
         custom_class = conditional_escape(str(kw.get("custom_class", "")))
         try:
-            max_toasts = int(kw.get("max_toasts", 5))
+            max_toasts = int(cast("str | int | float", kw.get("max_toasts", 5)))
         except (ValueError, TypeError):
             max_toasts = 5
 
@@ -3411,7 +3424,7 @@ class ServerToastContainerHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" '
             f'data-max-toasts="{max_toasts}" '
             f'role="region" aria-live="polite" aria-label="Notifications">'
@@ -3422,7 +3435,7 @@ class ServerToastContainerHandler:
 class ScrollToTopHandler:
     """Inline handler for {% scroll_to_top threshold="300px" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         threshold = conditional_escape(str(kw.get("threshold", "300px")))
         label = conditional_escape(str(kw.get("label", "Back to top")))
@@ -3432,7 +3445,7 @@ class ScrollToTopHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        return mark_safe(
+        return _safe(
             f'<button class="{cls}" '
             f'data-threshold="{threshold}" '
             f'aria-label="{label}" '
@@ -3450,7 +3463,7 @@ class ScrollToTopHandler:
 class CodeSnippetHandler:
     """Inline handler for {% code_snippet language="bash" code="pip install djust" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         code = conditional_escape(str(kw.get("code", "")))
         language = conditional_escape(str(kw.get("language", "")))
@@ -3464,7 +3477,7 @@ class CodeSnippetHandler:
         if language:
             lang_badge = f'<span class="dj-code-snippet__lang">{language}</span>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f'<div class="dj-code-snippet__header">'
             f"{lang_badge}"
@@ -3481,7 +3494,7 @@ class CodeSnippetHandler:
 class ResponsiveImageHandler:
     """Inline handler for {% responsive_image src=url alt="..." %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         src = conditional_escape(str(kw.get("src", "")))
         alt = conditional_escape(str(kw.get("alt", "")))
@@ -3522,13 +3535,13 @@ class ResponsiveImageHandler:
                 f'class="dj-responsive-image__placeholder" aria-hidden="true">'
             )
 
-        return mark_safe(f'<div class="{cls}"{style}>{placeholder_html}{img_tag}</div>')
+        return _safe(f'<div class="{cls}"{style}>{placeholder_html}{img_tag}</div>')
 
 
 class RelativeTimeHandler:
     """Inline handler for {% relative_time datetime=created_at %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         dt = kw.get("datetime", "")
         auto_update = kw.get("auto_update", True)
@@ -3553,11 +3566,11 @@ class RelativeTimeHandler:
         auto_str = "true" if auto_update else "false"
 
         try:
-            interval_val = int(interval)
+            interval_val = int(cast("str | int | float", interval))
         except (ValueError, TypeError):
             interval_val = 60
 
-        return mark_safe(
+        return _safe(
             f'<time class="{cls}" '
             f'datetime="{e_iso}" '
             f'data-auto-update="{auto_str}" '
@@ -3570,7 +3583,7 @@ class RelativeTimeHandler:
 class CopyableTextHandler:
     """Block handler for {% copyable_text %}...{% endcopyable_text %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         copied_label = conditional_escape(str(kw.get("copied_label", "Copied!")))
         custom_class = conditional_escape(str(kw.get("custom_class", "")))
@@ -3581,7 +3594,7 @@ class CopyableTextHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        return mark_safe(
+        return _safe(
             f'<span class="{cls}" '
             f'data-copy-text="{e_content}" '
             f'data-copied-label="{copied_label}" '
@@ -3621,7 +3634,7 @@ BLOCK_HANDLERS.extend(
 class IconHandler:
     """Inline handler for {% icon name="check" size="md" set="heroicons" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.icons import render_icon
 
         kw = _parse_args(args, context)
@@ -3633,10 +3646,10 @@ class IconHandler:
         extra = {k: v for k, v in kw.items() if k not in ("name", "size", "set", "custom_class")}
         return str(
             render_icon(
-                name=name,
-                size=size,
-                icon_set=icon_set,
-                custom_class=custom_class,
+                name=str(name),
+                size=cast("str | int", size),
+                icon_set=str(icon_set),
+                custom_class=str(custom_class),
                 **extra,
             )
         )
@@ -3645,7 +3658,7 @@ class IconHandler:
 class ThemeToggleHandler:
     """Inline handler for {% theme_toggle current="system" event="set_theme" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         import uuid
         from djust.components.icons import render_icon
 
@@ -3667,7 +3680,7 @@ class ThemeToggleHandler:
         monitor_svg = render_icon("computer-desktop", size="sm")
         toggle_id = f"dj-theme-toggle-{uuid.uuid4().hex[:8]}"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" id="{toggle_id}" '
             f'data-current="{current}"{click_attr} '
             f'role="radiogroup" aria-label="Color theme">'
@@ -3700,15 +3713,15 @@ INLINE_HANDLERS.extend(
 class PageHeaderActionsHandler:
     """Block handler for {% page_header_actions %}...{% endpage_header_actions %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         # Just wrap actions content in its container div
-        return mark_safe(f'<div class="dj-page-header__actions">{content}</div>')
+        return _safe(f'<div class="dj-page-header__actions">{content}</div>')
 
 
 class PageHeaderHandler:
     """Block handler for {% page_header title=... %}...{% endpage_header %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         title = kw.get("title", "")
         subtitle = kw.get("subtitle", "")
@@ -3753,7 +3766,7 @@ class PageHeaderHandler:
         if e_description:
             description_html = f'<p class="dj-page-header__description">{e_description}</p>'
 
-        return mark_safe(
+        return _safe(
             f'<header class="{cls}">'
             f"{breadcrumb_html}"
             f'<div class="dj-page-header__row">'
@@ -3784,13 +3797,13 @@ BLOCK_HANDLERS.extend(
 class SliderHandler:
     """Inline handler for {% slider name="price" min=0 max=100 value=50 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
-        min_val = int(kw.get("min_val", kw.get("min", 0)))
-        max_val = int(kw.get("max_val", kw.get("max", 100)))
-        step = int(kw.get("step", 1))
+        min_val = int(cast("str | int | float", kw.get("min_val", kw.get("min", 0))))
+        max_val = int(cast("str | int | float", kw.get("max_val", kw.get("max", 100))))
+        step = int(cast("str | int | float", kw.get("step", 1)))
         value = kw.get("value", min_val)
         value_end = kw.get("value_end", None)
         event = conditional_escape(kw.get("event", name))
@@ -3850,7 +3863,7 @@ class SliderHandler:
                 f'dj-input="{event}"{disabled_attr}>'
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f"{label_html}"
             f'<div class="dj-slider__track">{input_html}</div>'
@@ -3863,14 +3876,14 @@ class SliderHandler:
 class SearchInputHandler:
     """Inline handler for {% search_input name="q" placeholder="Search..." %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
         value = conditional_escape(str(kw.get("value", "")))
         placeholder = conditional_escape(kw.get("placeholder", "Search..."))
         event = conditional_escape(kw.get("event", name))
-        debounce = int(kw.get("debounce", 300))
+        debounce = int(cast("str | int | float", kw.get("debounce", 300)))
         loading = kw.get("loading", False)
         disabled = kw.get("disabled", False)
         custom_class = conditional_escape(kw.get("custom_class", ""))
@@ -3903,7 +3916,7 @@ class SearchInputHandler:
             'aria-label="Clear search" tabindex="-1">&times;</button>'
         )
 
-        return mark_safe(
+        return _safe(
             f"{label_html}"
             f'<div class="{cls}">'
             f"{icon_html}"
@@ -3920,7 +3933,7 @@ class SearchInputHandler:
 class PasswordInputHandler:
     """Inline handler for {% password_input name="pwd" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
@@ -3931,7 +3944,7 @@ class PasswordInputHandler:
         required = kw.get("required", False)
         disabled = kw.get("disabled", False)
         show_strength = kw.get("show_strength", False)
-        strength = int(kw.get("strength", 0))
+        strength = int(cast("str | int | float", kw.get("strength", 0)))
         custom_class = conditional_escape(kw.get("custom_class", ""))
 
         required_attr = " required" if required else ""
@@ -3974,7 +3987,7 @@ class PasswordInputHandler:
                 f"</div>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="form-group">'
             f"{label_html}"
             f'<div class="{cls}">'
@@ -3993,7 +4006,7 @@ class PasswordInputHandler:
 class AutocompleteHandler:
     """Inline handler for {% autocomplete name="city" source_event="search_cities" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
@@ -4002,8 +4015,8 @@ class AutocompleteHandler:
         placeholder = conditional_escape(kw.get("placeholder", ""))
         source_event = conditional_escape(kw.get("source_event", ""))
         event = conditional_escape(kw.get("event", name))
-        debounce = int(kw.get("debounce", 300))
-        min_chars = int(kw.get("min_chars", 1))
+        debounce = int(cast("str | int | float", kw.get("debounce", 300)))
+        min_chars = int(cast("str | int | float", kw.get("min_chars", 1)))
         suggestions = kw.get("suggestions") or context.get("suggestions", [])
         loading = kw.get("loading", False)
         disabled = kw.get("disabled", False)
@@ -4058,7 +4071,7 @@ class AutocompleteHandler:
             '<span class="dj-autocomplete__spinner" aria-hidden="true"></span>' if loading else ""
         )
 
-        return mark_safe(
+        return _safe(
             f'<div class="form-group">'
             f"{label_html}"
             f'<div class="{cls}" data-source-event="{source_event}" '
@@ -4097,7 +4110,7 @@ INLINE_HANDLERS.extend(
 class ConfirmDialogHandler:
     """Inline handler for {% confirm_dialog message="Delete?" confirm_event="delete" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         is_open = kw.get("is_open", kw.get("open", False))
         if not is_open:
@@ -4119,7 +4132,7 @@ class ConfirmDialogHandler:
         variant_cls = f" dj-confirm-dialog--{variant}" if variant != "default" else ""
         extra_cls = f" {custom_class}" if custom_class else ""
 
-        return mark_safe(
+        return _safe(
             f'<div class="dj-confirm-dialog-backdrop" dj-click="{cancel_event}">'
             f'<div class="dj-confirm-dialog{variant_cls}{extra_cls}" '
             f'role="alertdialog" aria-modal="true" aria-labelledby="{title_id}" '
@@ -4146,7 +4159,7 @@ class ConfirmDialogHandler:
 class PopconfirmHandler:
     """Block handler for {% popconfirm message="Delete?" %}...{% endpopconfirm %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         message = conditional_escape(kw.get("message", "Are you sure?"))
         confirm_event = conditional_escape(kw.get("confirm_event", "confirm"))
@@ -4178,7 +4191,7 @@ class PopconfirmHandler:
             "})(this)"
         )
 
-        return mark_safe(
+        return _safe(
             f'<div class="dj-popconfirm-wrapper{variant_cls}{extra_cls}">'
             f'<div class="dj-popconfirm-trigger" onclick="{js_toggle}" '
             f'aria-expanded="false" aria-haspopup="true">'
@@ -4214,7 +4227,7 @@ INLINE_HANDLERS.extend(
 class DependentSelectHandler:
     """Inline handler for {% dependent_select name="city" parent="country" source_event="load_cities" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         parent = conditional_escape(kw.get("parent", ""))
@@ -4271,7 +4284,7 @@ class DependentSelectHandler:
             f'<span class="form-error-message" role="alert">{error}</span>' if error else ""
         )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f"{label_html}"
             f'<div class="dj-dependent-select__control">'
@@ -4292,7 +4305,7 @@ class DependentSelectHandler:
 class CurrencyInputHandler:
     """Inline handler for {% currency_input name="price" currency="USD" min=0 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         currency = str(kw.get("currency", "USD")).upper()
@@ -4332,7 +4345,7 @@ class CurrencyInputHandler:
             f'<span class="form-error-message" role="alert">{error}</span>' if error else ""
         )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f"{label_html}"
             f'<div class="dj-currency-input__control">'
@@ -4354,7 +4367,7 @@ class CurrencyInputHandler:
 class FormErrorsHandler:
     """Inline handler for {% form_errors form=form %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         form = kw.get("form", None)
         if form is None:
@@ -4364,7 +4377,7 @@ class FormErrorsHandler:
         if form is None or not hasattr(form, "non_field_errors"):
             return ""
 
-        errors = form.non_field_errors()
+        errors = cast("Any", form).non_field_errors()
         if not errors:
             return ""
 
@@ -4376,7 +4389,7 @@ class FormErrorsHandler:
         for err in errors:
             items.append(f'<li class="dj-form-errors__item">{conditional_escape(str(err))}</li>')
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="alert">'
             f'<ul class="dj-form-errors__list">{"".join(items)}</ul>'
             f"</div>"
@@ -4386,7 +4399,7 @@ class FormErrorsHandler:
 class FieldErrorHandler:
     """Inline handler for {% field_error field=form.email %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         field = kw.get("field", None)
         custom_class = conditional_escape(kw.get("custom_class", ""))
@@ -4412,7 +4425,7 @@ class FieldErrorHandler:
                 f'<span class="dj-field-error__message">{conditional_escape(str(err))}</span>'
             )
 
-        return mark_safe(f'<div class="{cls}" role="alert">{"".join(items)}</div>')
+        return _safe(f'<div class="{cls}" role="alert">{"".join(items)}</div>')
 
 
 INLINE_HANDLERS.extend(
@@ -4443,7 +4456,7 @@ class SidebarHandler:
     and mobile drawer support.
     """
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         sidebar_id = conditional_escape(kw.get("id", "sidebar"))
         collapsed = kw.get("collapsed", False)
@@ -4467,7 +4480,7 @@ class SidebarHandler:
 
         backdrop = f'<div class="dj-sidebar__backdrop" dj-click="{toggle_event}"></div>'
 
-        return mark_safe(
+        return _safe(
             f'<nav class="{cls}" id="{sidebar_id}" role="navigation">'
             f"{header_html}"
             f'<ul class="dj-sidebar__menu">{content}</ul>'
@@ -4478,7 +4491,7 @@ class SidebarHandler:
 class SidebarItemHandler:
     """Block handler for {% sidebar_item %}...{% endsidebar_item %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
         href = conditional_escape(kw.get("href", "#"))
@@ -4509,22 +4522,22 @@ class SidebarItemHandler:
             )
 
         if has_children:
-            return mark_safe(
+            return _safe(
                 f'<li class="dj-sidebar__item dj-sidebar__item--parent">'
                 f"{trigger}"
                 f'<ul class="dj-sidebar__submenu">{content}</ul></li>'
             )
 
-        return mark_safe(f'<li class="dj-sidebar__item">{trigger}</li>')
+        return _safe(f'<li class="dj-sidebar__item">{trigger}</li>')
 
 
 class SidebarSectionHandler:
     """Inline handler for {% sidebar_section label="..." %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
-        return mark_safe(
+        return _safe(
             f'<li class="dj-sidebar__section">'
             f'<span class="dj-sidebar__section-label">{label}</span></li>'
         )
@@ -4537,7 +4550,7 @@ class NavMenuHandler:
     and responsive mobile collapse.
     """
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         nav_id = conditional_escape(kw.get("id", "nav-menu"))
         brand = kw.get("brand", "")
@@ -4563,7 +4576,7 @@ class NavMenuHandler:
             f'aria-label="Toggle navigation">&#9776;</button>'
         )
 
-        return mark_safe(
+        return _safe(
             f'<nav class="{cls}" id="{nav_id}" role="navigation">'
             f'<div class="dj-nav__container">'
             f"{brand_html}{hamburger}"
@@ -4578,7 +4591,7 @@ class NavItemHandler:
     Renders a navigation item. If content is present, it becomes a dropdown parent.
     """
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
         href = conditional_escape(kw.get("href", "#"))
@@ -4595,7 +4608,7 @@ class NavItemHandler:
 
         if has_children:
             mega_cls = " dj-nav__dropdown--mega" if mega else ""
-            return mark_safe(
+            return _safe(
                 f'<li class="dj-nav__item dj-nav__item--has-dropdown{active_cls}">'
                 f'<button class="dj-nav__link">{label}'
                 f'<span class="dj-nav__caret">&#9662;</span></button>'
@@ -4610,13 +4623,13 @@ class NavItemHandler:
             )
 
         if event:
-            return mark_safe(
+            return _safe(
                 f'<li class="dj-nav__item{active_cls}">'
                 f'<button class="dj-nav__link" dj-click="{conditional_escape(event)}">'
                 f"{label}{desc_html}</button></li>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<li class="dj-nav__item{active_cls}">'
             f'<a class="dj-nav__link" href="{href}">'
             f"{label}{desc_html}</a></li>"
@@ -4629,7 +4642,7 @@ class AppShellHandler:
     Wraps sidebar, header, and content regions in a responsive layout.
     """
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         shell_id = conditional_escape(kw.get("id", "app-shell"))
         sidebar_collapsed = kw.get("sidebar_collapsed", False)
@@ -4642,28 +4655,28 @@ class AppShellHandler:
             cls += f" {custom_class}"
 
         # In Rust block mode, content is pre-rendered; wrap in shell layout
-        return mark_safe(f'<div class="{cls}" id="{shell_id}">{content}</div>')
+        return _safe(f'<div class="{cls}" id="{shell_id}">{content}</div>')
 
 
 class AppSidebarHandler:
     """Block handler for {% app_sidebar %}...{% endapp_sidebar %}"""
 
-    def render(self, args, content, context):
-        return mark_safe(f'<aside class="dj-app-shell__sidebar">{content}</aside>')
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        return _safe(f'<aside class="dj-app-shell__sidebar">{content}</aside>')
 
 
 class AppHeaderHandler:
     """Block handler for {% app_header %}...{% endapp_header %}"""
 
-    def render(self, args, content, context):
-        return mark_safe(f'<header class="dj-app-shell__header">{content}</header>')
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        return _safe(f'<header class="dj-app-shell__header">{content}</header>')
 
 
 class AppContentHandler:
     """Block handler for {% app_content %}...{% endapp_content %}"""
 
-    def render(self, args, content, context):
-        return mark_safe(f'<main class="dj-app-shell__content">{content}</main>')
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        return _safe(f'<main class="dj-app-shell__content">{content}</main>')
 
 
 INLINE_HANDLERS.extend(
@@ -4697,7 +4710,7 @@ class ToolbarHandler:
     Horizontal action bar with grouped buttons, separators, overflow menu.
     """
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         toolbar_id = conditional_escape(kw.get("id", "toolbar"))
         custom_class = conditional_escape(kw.get("class", ""))
@@ -4708,21 +4721,21 @@ class ToolbarHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        return mark_safe(f'<div class="{cls}" id="{toolbar_id}" role="toolbar">{content}</div>')
+        return _safe(f'<div class="{cls}" id="{toolbar_id}" role="toolbar">{content}</div>')
 
 
 class ToolbarSeparatorHandler:
     """Inline handler for {% toolbar_separator %}"""
 
-    def render(self, args, context):
-        return mark_safe('<div class="dj-toolbar__separator" role="separator"></div>')
+    def render(self, args: list[str], context: dict[str, object]) -> str:
+        return _safe('<div class="dj-toolbar__separator" role="separator"></div>')
 
 
 class ToolbarOverflowHandler:
     """Block handler for {% toolbar_overflow %}...{% endtoolbar_overflow %}"""
 
-    def render(self, args, content, context):
-        return mark_safe(
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        return _safe(
             f'<div class="dj-toolbar__overflow">'
             f'<button class="dj-toolbar__overflow-trigger" aria-label="More actions" '
             f'aria-expanded="false" aria-haspopup="true">'
@@ -4743,7 +4756,7 @@ class InlineEditHandler:
     cancels on Escape.
     """
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         value = conditional_escape(str(kw.get("value", "")))
         event = conditional_escape(kw.get("event", "inline_edit"))
@@ -4760,7 +4773,7 @@ class InlineEditHandler:
             cls += f" {custom_class}"
 
         if editing:
-            return mark_safe(
+            return _safe(
                 f'<span class="{cls}">'
                 f'<input class="dj-inline-edit__input" type="{input_type}" '
                 f'value="{value}" placeholder="{placeholder}" '
@@ -4771,7 +4784,7 @@ class InlineEditHandler:
                 f"autofocus></span>"
             )
         else:
-            return mark_safe(
+            return _safe(
                 f'<span class="{cls}" dj-click="inline_edit_start" '
                 f'data-field="{field}" title="Click to edit">'
                 f'<span class="dj-inline-edit__display">{value}</span>'
@@ -4790,7 +4803,7 @@ class FilterBarHandler:
     Horizontal bar composing filter controls with responsive collapse.
     """
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         bar_id = conditional_escape(kw.get("id", "filter-bar"))
         custom_class = conditional_escape(kw.get("class", ""))
@@ -4799,7 +4812,7 @@ class FilterBarHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" id="{bar_id}" role="search">'
             f'<div class="dj-filter-bar__controls">{content}</div></div>'
         )
@@ -4808,7 +4821,7 @@ class FilterBarHandler:
 class FilterSelectHandler:
     """Inline handler for {% filter_select name="status" options=statuses %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", kw.get("name", "")))
@@ -4830,7 +4843,7 @@ class FilterSelectHandler:
                 selected = " selected" if raw_v == str(value) else ""
                 opt_html += f'<option value="{ov}"{selected}>{ol}</option>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
             f'<select class="dj-filter-bar__select" name="{name}" '
             f'dj-change="{event}">{opt_html}</select></div>'
@@ -4840,7 +4853,7 @@ class FilterSelectHandler:
 class FilterDateRangeHandler:
     """Inline handler for {% filter_date_range name="dates" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", kw.get("name", "")))
@@ -4848,7 +4861,7 @@ class FilterDateRangeHandler:
         end = conditional_escape(str(kw.get("end", "")))
         event = conditional_escape(kw.get("event", "filter_change"))
 
-        return mark_safe(
+        return _safe(
             f'<div class="dj-filter-bar__control dj-filter-bar__date-range">'
             f'<label class="dj-filter-bar__label">{label}</label>'
             f'<input class="dj-filter-bar__date" type="date" name="{name}_start" '
@@ -4862,7 +4875,7 @@ class FilterDateRangeHandler:
 class FilterSearchHandler:
     """Inline handler for {% filter_search name="q" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         placeholder = conditional_escape(kw.get("placeholder", "Search\u2026"))
@@ -4870,11 +4883,11 @@ class FilterSearchHandler:
         debounce = kw.get("debounce", 300)
         event = conditional_escape(kw.get("event", "filter_change"))
 
-        return mark_safe(
+        return _safe(
             f'<div class="dj-filter-bar__control dj-filter-bar__search-wrap">'
             f'<input class="dj-filter-bar__search" type="search" name="{name}" '
             f'placeholder="{placeholder}" value="{value}" '
-            f'dj-input="{event}" dj-debounce="{int(debounce)}"></div>'
+            f'dj-input="{event}" dj-debounce="{int(cast("str | int | float", debounce))}"></div>'
         )
 
 
@@ -4905,17 +4918,18 @@ BLOCK_HANDLERS.extend(
 class AvatarGroupHandler:
     """Inline handler for {% avatar_group users=users max=5 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         users = kw.get("users", [])
         if isinstance(users, str):
             users = []
-        max_display = int(kw.get("max", 5))
+        max_display = int(cast("str | int | float", kw.get("max", 5)))
         size = conditional_escape(str(kw.get("size", "md")))
         custom_class = conditional_escape(str(kw.get("class", "")))
 
-        visible = users[:max_display]
-        overflow = len(users) - max_display
+        users_list = cast("list[object]", users)
+        visible = users_list[:max_display]
+        overflow = len(users_list) - max_display
 
         parts = []
         for i, user in enumerate(visible):
@@ -4957,24 +4971,24 @@ class AvatarGroupHandler:
         cls = f"dj-avatar-group dj-avatar-group--{size}"
         if custom_class:
             cls += f" {custom_class}"
-        return mark_safe(f'<div class="{cls}">{"".join(parts)}{overflow_html}</div>')
+        return _safe(f'<div class="{cls}">{"".join(parts)}{overflow_html}</div>')
 
 
 class HoverCardHandler:
     """Block handler for {% hover_card trigger="@user" %}...{% endhover_card %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         trigger = conditional_escape(str(kw.get("trigger", "")))
         position = conditional_escape(str(kw.get("position", "bottom")))
-        delay_in = int(kw.get("delay_in", 200))
-        delay_out = int(kw.get("delay_out", 300))
+        delay_in = int(cast("str | int | float", kw.get("delay_in", 200)))
+        delay_out = int(cast("str | int | float", kw.get("delay_out", 300)))
         custom_class = conditional_escape(str(kw.get("class", "")))
 
         cls = f"dj-hover-card dj-hover-card--{position}"
         if custom_class:
             cls += f" {custom_class}"
-        return mark_safe(
+        return _safe(
             f'<span class="{cls}" data-delay-in="{delay_in}" '
             f'data-delay-out="{delay_out}">'
             f'<span class="dj-hover-card__trigger" tabindex="0">{trigger}</span>'
@@ -4986,12 +5000,12 @@ class HoverCardHandler:
 class NotificationPopoverHandler:
     """Inline handler for {% notification_popover notifications=notifs %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         notifications = kw.get("notifications", [])
         if isinstance(notifications, str):
             notifications = []
-        unread_count = int(kw.get("unread_count", 0))
+        unread_count = int(cast("str | int | float", kw.get("unread_count", 0)))
         mark_read_event = conditional_escape(str(kw.get("mark_read_event", "mark_read")))
         toggle_event = conditional_escape(str(kw.get("toggle_event", "toggle_notifications")))
         is_open = kw.get("open", False)
@@ -5022,7 +5036,7 @@ class NotificationPopoverHandler:
         )
 
         items_html = []
-        for notif in notifications:
+        for notif in cast("list[object]", notifications):
             if isinstance(notif, dict):
                 n_id = notif.get("id", "")
                 n_title = notif.get("title", "")
@@ -5063,7 +5077,7 @@ class NotificationPopoverHandler:
                 f"</div>"
             )
 
-        return mark_safe(f'<div class="{cls}">{bell_html}{panel_html}</div>')
+        return _safe(f'<div class="{cls}">{bell_html}{panel_html}</div>')
 
 
 INLINE_HANDLERS.extend(
@@ -5088,7 +5102,7 @@ BLOCK_HANDLERS.extend(
 class ConversationThreadHandler:
     """Inline handler for {% conversation_thread messages=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         messages = kw.get("messages", [])
         stream_event = kw.get("stream_event", "new_message")
@@ -5164,7 +5178,7 @@ class ConversationThreadHandler:
                 "</div></div></div>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" data-stream-event="{e_stream}">'
             f"{''.join(msgs_html)}{streaming_html}"
             f"</div>"
@@ -5176,7 +5190,7 @@ class ThinkingIndicatorHandler:
 
     VALID_STATUSES = {"thinking", "searching", "generating", "tool_use", "idle"}
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         status = kw.get("status", "thinking")
         label = kw.get("label", "")
@@ -5210,7 +5224,7 @@ class ThinkingIndicatorHandler:
 
         label_html = f'<span class="dj-thinking__label">{e_label}</span>' if e_label else ""
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="status" aria-label="{e_label or safe_status}">'
             f"{anim}{label_html}"
             f"</div>"
@@ -5220,7 +5234,7 @@ class ThinkingIndicatorHandler:
 class MultimodalInputHandler:
     """Inline handler for {% multimodal_input name=... event=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "message")
         event = kw.get("event", "send")
@@ -5284,7 +5298,7 @@ class MultimodalInputHandler:
             f"</svg></button>"
         )
 
-        return mark_safe(f'<div class="{cls}">{file_btn}{voice_btn}{textarea}{send_btn}</div>')
+        return _safe(f'<div class="{cls}">{file_btn}{voice_btn}{textarea}{send_btn}</div>')
 
 
 class FeedbackWidgetHandler:
@@ -5292,7 +5306,7 @@ class FeedbackWidgetHandler:
 
     VALID_MODES = {"thumbs", "stars", "emoji"}
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         event = kw.get("event", "rate_response")
         mode = kw.get("mode", "thumbs")
@@ -5316,9 +5330,9 @@ class FeedbackWidgetHandler:
         else:
             buttons = self._render_emoji(e_event, value)
 
-        return mark_safe(f'<div class="{cls}" role="group" aria-label="Feedback">{buttons}</div>')
+        return _safe(f'<div class="{cls}" role="group" aria-label="Feedback">{buttons}</div>')
 
-    def _render_thumbs(self, e_event, value):
+    def _render_thumbs(self, e_event: str, value: object) -> str:
         up_cls = "dj-feedback__btn--active" if value == "up" else ""
         down_cls = "dj-feedback__btn--active" if value == "down" else ""
         return (
@@ -5338,9 +5352,9 @@ class FeedbackWidgetHandler:
             f"</svg></button>"
         )
 
-    def _render_stars(self, e_event, value):
+    def _render_stars(self, e_event: str, value: object) -> str:
         parts = []
-        current = int(value) if value and str(value).isdigit() else 0
+        current = int(cast("str | int | float", value)) if value and str(value).isdigit() else 0
         for i in range(1, 6):
             active = "dj-feedback__star--active" if i <= current else ""
             fill = "currentColor" if i <= current else "none"
@@ -5354,7 +5368,7 @@ class FeedbackWidgetHandler:
             )
         return "".join(parts)
 
-    def _render_emoji(self, e_event, value):
+    def _render_emoji(self, e_event: str, value: object) -> str:
         emojis = [
             ("\U0001f44d", "thumbs_up"),
             ("\u2764\ufe0f", "heart"),
@@ -5394,7 +5408,7 @@ class ApprovalGateHandler:
 
     VALID_RISKS = {"low", "medium", "high", "critical"}
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         message = kw.get("message", "")
         risk = kw.get("risk", "medium")
@@ -5418,7 +5432,7 @@ class ApprovalGateHandler:
         if e_class:
             cls += f" {e_class}"
 
-        risk_label = risk.capitalize()
+        risk_label = str(risk).capitalize()
 
         if risk in ("high", "critical"):
             icon = (
@@ -5435,7 +5449,7 @@ class ApprovalGateHandler:
                 '<path d="M12 16v-4M12 8h.01"/></svg>'
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="alert">'
             f'<div class="dj-approval__header">'
             f"{icon}"
@@ -5455,7 +5469,7 @@ class ApprovalGateHandler:
 class SourceCitationHandler:
     """Inline handler for {% source_citation index=1 title=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         index = kw.get("index", 1)
         title = kw.get("title", "")
@@ -5464,7 +5478,7 @@ class SourceCitationHandler:
         custom_class = kw.get("class", "")
 
         try:
-            idx = int(index)
+            idx = int(cast("str | int | float", index))
         except (ValueError, TypeError):
             idx = 1
 
@@ -5486,7 +5500,7 @@ class SourceCitationHandler:
             )
         if relevance is not None:
             try:
-                pct = min(100, max(0, float(relevance) * 100))
+                pct = min(100, max(0, float(cast("str | int | float", relevance)) * 100))
                 popover_parts.append(
                     f'<span class="dj-citation__relevance">Relevance: {pct:.0f}%</span>'
                 )
@@ -5496,7 +5510,7 @@ class SourceCitationHandler:
 
         popover_html = "".join(popover_parts)
 
-        return mark_safe(
+        return _safe(
             f'<span class="{cls}" tabindex="0">'
             f'<sup class="dj-citation__marker">[{idx}]</sup>'
             f'<span class="dj-citation__popover">{popover_html}</span>'
@@ -5514,7 +5528,7 @@ class ModelSelectorHandler:
         "enterprise": "Enterprise",
     }
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "model")
         options = kw.get("options", [])
@@ -5571,7 +5585,7 @@ class ModelSelectorHandler:
                 f'<label class="dj-model-sel__label">{conditional_escape(str(label))}</label>'
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f"{label_html}"
             f'<input type="hidden" name="{e_name}" value="{conditional_escape(value)}">'
@@ -5585,7 +5599,7 @@ class ModelSelectorHandler:
             f"</div></div>"
         )
 
-    def _option_inner(self, opt):
+    def _option_inner(self, opt: dict[str, object]) -> str:
         label = conditional_escape(str(opt.get("label", "")))
         desc = conditional_escape(str(opt.get("description", ""))) if opt.get("description") else ""
         ctx_win = (
@@ -5620,14 +5634,14 @@ class ModelSelectorHandler:
 class TokenCounterHandler:
     """Inline handler for {% token_counter current=... max=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         try:
-            current = int(kw.get("current", 0))
+            current = int(cast("str | int | float", kw.get("current", 0)))
         except (ValueError, TypeError):
             current = 0
         try:
-            max_tokens = int(kw.get("max", 4096))
+            max_tokens = int(cast("str | int | float", kw.get("max", 4096)))
         except (ValueError, TypeError):
             max_tokens = 4096
 
@@ -5661,7 +5675,7 @@ class TokenCounterHandler:
                 display_label = f"{current:,} / {max_tokens:,}"
             label_html = f'<span class="dj-token__label">{display_label}</span>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="meter" '
             f'aria-valuenow="{current}" aria-valuemin="0" aria-valuemax="{max_tokens}" '
             f'aria-label="Token usage">'
@@ -5693,7 +5707,7 @@ class ChatBubbleHandler:
 
     VALID_STATUSES = {"sending", "sent", "delivered", "read", "error"}
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         message = kw.get("message", {})
         custom_class = kw.get("class", "")
@@ -5759,7 +5773,7 @@ class ChatBubbleHandler:
         if status_html:
             footer_html = f'<div class="dj-bubble__footer">{status_html}</div>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f"{avatar_html}"
             f'<div class="dj-bubble__content">'
@@ -5776,10 +5790,10 @@ class PresenceAvatarsHandler:
 
     VALID_STATUSES = {"online", "away", "busy", "offline"}
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         users = kw.get("users", [])
-        max_display = int(kw.get("max", 5))
+        max_display = int(cast("str | int | float", kw.get("max", 5)))
         custom_class = kw.get("class", "")
 
         if not isinstance(users, list):
@@ -5835,15 +5849,13 @@ class PresenceAvatarsHandler:
         total = len(users)
         label = f"{total} user{'s' if total != 1 else ''} present"
 
-        return mark_safe(
-            f'<div class="{cls}" role="group" aria-label="{label}">{"".join(parts)}</div>'
-        )
+        return _safe(f'<div class="{cls}" role="group" aria-label="{label}">{"".join(parts)}</div>')
 
 
 class MentionsInputHandler:
     """Inline handler for {% mentions_input name=... users=... %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "message")
         users = kw.get("users", [])
@@ -5899,7 +5911,7 @@ class MentionsInputHandler:
 
         users_json = conditional_escape(_json.dumps(users, default=str))
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" dj-hook="MentionsInput" '
             f'data-users="{users_json}">'
             f'<input type="text" class="dj-mentions__input" name="{e_name}" '
@@ -5929,9 +5941,9 @@ INLINE_HANDLERS.extend(
 class ExpandableTextHandler:
     """Block handler for {% expandable_text max_lines=3 %}...{% endexpandable_text %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        max_lines = int(kw.get("max_lines", 3))
+        max_lines = int(cast("str | int | float", kw.get("max_lines", 3)))
         expanded = kw.get("expanded", False)
         toggle_event = kw.get("toggle_event", "toggle_expand")
         more_label = kw.get("more_label", "Read more")
@@ -5959,7 +5971,7 @@ class ExpandableTextHandler:
             )
             label = e_more
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f'<div class="dj-expandable-text__content"{style}>{content}</div>'
             f'<button class="dj-expandable-text__toggle" dj-click="{e_event}">'
@@ -5971,10 +5983,10 @@ class ExpandableTextHandler:
 class TruncatedListHandler:
     """Inline handler for {% truncated_list items=items max=3 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         items = kw.get("items", [])
-        max_count = int(kw.get("max", 3))
+        max_count = int(cast("str | int | float", kw.get("max", 3)))
         expanded = kw.get("expanded", False)
         toggle_event = kw.get("toggle_event", "toggle_list")
         overflow_label = kw.get("overflow_label", "+{count} more")
@@ -6016,22 +6028,20 @@ class TruncatedListHandler:
                 f"{overflow_text}</button>"
             )
 
-        return mark_safe(
-            f'<div class="{cls}" role="list">{"".join(items_html)}{overflow_html}</div>'
-        )
+        return _safe(f'<div class="{cls}" role="list">{"".join(items_html)}{overflow_html}</div>')
 
 
 class MarkdownTextareaHandler:
     """Inline handler for {% markdown_textarea name="content" preview=True %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "content")
         value = kw.get("value", "")
         preview = kw.get("preview", False)
         toggle_event = kw.get("toggle_event", "toggle_preview")
         placeholder = kw.get("placeholder", "Write markdown here...")
-        rows = int(kw.get("rows", 6))
+        rows = int(cast("str | int | float", kw.get("rows", 6)))
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
@@ -6073,17 +6083,17 @@ class MarkdownTextareaHandler:
                 f"{e_value}</textarea>"
             )
 
-        return mark_safe(f'<div class="{cls}" dj-hook="MarkdownTextarea">{toolbar}{body}</div>')
+        return _safe(f'<div class="{cls}" dj-hook="MarkdownTextarea">{toolbar}{body}</div>')
 
 
 class SkeletonForHandler:
     """Inline handler for {% skeleton_for component="data_table" columns=5 rows=10 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         component = kw.get("component", "text")
-        columns = int(kw.get("columns", 4))
-        rows = int(kw.get("rows", 5))
+        columns = int(cast("str | int | float", kw.get("columns", 4)))
+        rows = int(cast("str | int | float", kw.get("rows", 5)))
         custom_class = kw.get("class", "")
 
         e_class = conditional_escape(str(custom_class))
@@ -6096,15 +6106,15 @@ class SkeletonForHandler:
             component = "text"
 
         if component == "data_table":
-            return mark_safe(self._render_table(cls, columns, rows))
+            return _safe(self._render_table(cls, columns, rows))
         elif component == "card":
-            return mark_safe(self._render_card(cls))
+            return _safe(self._render_card(cls))
         elif component == "list":
-            return mark_safe(self._render_list(cls, rows))
+            return _safe(self._render_list(cls, rows))
         else:
-            return mark_safe(self._render_text(cls, rows))
+            return _safe(self._render_text(cls, rows))
 
-    def _render_table(self, cls, cols, rows):
+    def _render_table(self, cls: str, cols: int, rows: int) -> str:
         header_cells = "".join(
             '<th><span class="dj-skeleton__line dj-skeleton__pulse" '
             'style="width:70%">&nbsp;</span></th>'
@@ -6126,7 +6136,7 @@ class SkeletonForHandler:
             f"</div>"
         )
 
-    def _render_card(self, cls):
+    def _render_card(self, cls: str) -> str:
         return (
             f'<div class="{cls} dj-skeleton--card" '
             f'role="status" aria-label="Loading">'
@@ -6141,7 +6151,7 @@ class SkeletonForHandler:
             f"</div></div>"
         )
 
-    def _render_list(self, cls, rows):
+    def _render_list(self, cls: str, rows: int) -> str:
         items = []
         for _ in range(rows):
             items.append(
@@ -6157,7 +6167,7 @@ class SkeletonForHandler:
             f"{''.join(items)}</div>"
         )
 
-    def _render_text(self, cls, rows):
+    def _render_text(self, cls: str, rows: int) -> str:
         widths = [95, 85, 90, 70, 80, 60, 75, 88, 65, 92]
         lines = []
         for i in range(rows):
@@ -6176,7 +6186,7 @@ class SkeletonForHandler:
 class AwaitHandler:
     """Block handler for {% await loading_event="data_loaded" %}...{% endawait %}"""
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         loading_event = kw.get("loading_event", "data_loaded")
         loaded = kw.get("loaded", False)
@@ -6203,7 +6213,7 @@ class AwaitHandler:
                 retry_html = (
                     f'<button class="dj-content-loader__retry" dj-click="{e_retry}">Retry</button>'
                 )
-            return mark_safe(
+            return _safe(
                 f'<div class="{cls}" data-loading-event="{e_event}">'
                 f'<div class="dj-content-loader__error" role="alert">'
                 f'<span class="dj-content-loader__error-msg">{e_error}</span>'
@@ -6211,13 +6221,13 @@ class AwaitHandler:
             )
 
         if loaded:
-            return mark_safe(
+            return _safe(
                 f'<div class="{cls}" data-loading-event="{e_event}">'
                 f'<div class="dj-content-loader__content">{content}</div>'
                 f"</div>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" data-loading-event="{e_event}" '
             f'role="status" aria-label="Loading">'
             f'<div class="dj-content-loader__placeholder">{content}</div>'
@@ -6247,7 +6257,7 @@ BLOCK_HANDLERS.extend(
 
 
 class TimePickerHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "time")
         value = kw.get("value", "")
@@ -6311,7 +6321,7 @@ class TimePickerHandler:
         parts_html.append('<span class="dj-time-picker__separator">:</span>')
 
         try:
-            step_val = max(1, int(step))
+            step_val = max(1, int(cast("str | int | float", step)))
         except (ValueError, TypeError):
             step_val = 1
         minute_options = []
@@ -6333,11 +6343,11 @@ class TimePickerHandler:
             )
 
         parts_html.append("</div>")
-        return mark_safe(f'<div class="{class_str}">{"".join(parts_html)}</div>')
+        return _safe(f'<div class="{class_str}">{"".join(parts_html)}</div>')
 
 
 class WizardHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         steps = kw.get("steps", [])
         active = kw.get("active", "")
@@ -6389,13 +6399,13 @@ class WizardHandler:
                 nav_items.append(f'<div class="{conn_cls}"></div>')
 
         nav = f'<nav class="dj-wizard__nav" role="tablist">{"".join(nav_items)}</nav>'
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}">{nav}<div class="dj-wizard__body">{content}</div></div>'
         )
 
 
 class BottomSheetHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         title = kw.get("title", "")
         is_open = kw.get("open", False)
@@ -6416,7 +6426,7 @@ class BottomSheetHandler:
 
         title_html = f'<h3 class="dj-bottom-sheet__title">{e_title}</h3>' if title else ""
 
-        return mark_safe(
+        return _safe(
             f'<div class="dj-bottom-sheet__backdrop" dj-click="{e_close}">'
             f'<div class="{class_str}" onclick="event.stopPropagation()">'
             f'<div class="dj-bottom-sheet__handle"><div class="dj-bottom-sheet__handle-bar"></div></div>'
@@ -6427,7 +6437,7 @@ class BottomSheetHandler:
 
 
 class InfiniteScrollHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         load_event = kw.get("load_event", "load_more")
         threshold = kw.get("threshold", "200px")
@@ -6456,7 +6466,7 @@ class InfiniteScrollHandler:
         elif finished:
             sentinel = '<div class="dj-infinite-scroll__done">No more items</div>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="InfiniteScroll" '
             f'data-event="{e_event}" data-threshold="{e_threshold}">'
             f'<div class="dj-infinite-scroll__content">{content}</div>{sentinel}</div>'
@@ -6464,7 +6474,7 @@ class InfiniteScrollHandler:
 
 
 class CountdownHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         target = kw.get("target", "")
         event = kw.get("event", "")
@@ -6512,7 +6522,7 @@ class CountdownHandler:
             if i < len(segments) - 1:
                 separators.append('<span class="dj-countdown__separator">:</span>')
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="Countdown" '
             f'data-target="{e_target}"{event_attr} '
             f'role="timer">{"".join(separators)}</div>'
@@ -6520,7 +6530,7 @@ class CountdownHandler:
 
 
 class CookieConsentHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         message = kw.get("message", "We use cookies to improve your experience.")
         accept_event = kw.get("accept_event", "accept_cookies")
@@ -6559,7 +6569,7 @@ class CookieConsentHandler:
                 f'<button class="dj-cookie-consent__reject" dj-click="{e_reject}">{e_reject_label}</button>'
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" role="banner" aria-label="Cookie consent">'
             f'<p class="dj-cookie-consent__message">{msg_text}{privacy_html}</p>'
             f'<div class="dj-cookie-consent__actions">{"".join(buttons)}</div></div>'
@@ -6567,7 +6577,7 @@ class CookieConsentHandler:
 
 
 class FormArrayHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "items")
         rows = kw.get("rows", [{"value": ""}])
@@ -6585,11 +6595,11 @@ class FormArrayHandler:
         e_class = conditional_escape(str(custom_class))
 
         try:
-            min_rows = int(min_rows)
+            min_rows = int(cast("str | int | float", min_rows))
         except (ValueError, TypeError):
             min_rows = 1
         try:
-            max_rows = int(max_rows)
+            max_rows = int(cast("str | int | float", max_rows))
         except (ValueError, TypeError):
             max_rows = 10
 
@@ -6627,14 +6637,14 @@ class FormArrayHandler:
             f'dj-click="{e_add_event}"{add_disabled}>{e_add_label}</button>'
         )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" data-min="{min_rows}" data-max="{max_rows}">'
             f'<div class="dj-form-array__rows">{"".join(rows_html)}</div>{add_html}</div>'
         )
 
 
 class ScrollSpyHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         sections = kw.get("sections", [])
         active = kw.get("active", "")
@@ -6672,7 +6682,7 @@ class ScrollSpyHandler:
                 f'data-section="{e_id}">{e_label}</a>'
             )
 
-        return mark_safe(
+        return _safe(
             f'<nav class="{class_str}" dj-hook="ScrollSpy" '
             f'data-sections="{sections_json}" data-event="{e_event}" '
             f'data-offset="{e_offset}" role="navigation" aria-label="Section navigation">'
@@ -6681,7 +6691,7 @@ class ScrollSpyHandler:
 
 
 class PageAlertHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         alert_type = kw.get("variant", kw.get("type", "info"))
         dismissible = kw.get("dismissible", False)
@@ -6713,14 +6723,14 @@ class PageAlertHandler:
                 f'aria-label="Dismiss">&times;</button>'
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" role="alert">{icon_html}'
             f'<span class="dj-page-alert__message">{content}</span>{dismiss_html}</div>'
         )
 
 
 class DropdownMenuHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = kw.get("label", "Menu")
         items = kw.get("items", [])
@@ -6746,7 +6756,7 @@ class DropdownMenuHandler:
         )
 
         if not is_open:
-            return mark_safe(f'<div class="{class_str}">{trigger}</div>')
+            return _safe(f'<div class="{class_str}">{trigger}</div>')
 
         if not isinstance(items, list):
             items = []
@@ -6781,11 +6791,11 @@ class DropdownMenuHandler:
             f'role="menu">{"".join(menu_items)}</div>'
         )
 
-        return mark_safe(f'<div class="{class_str}">{trigger}{menu_html}</div>')
+        return _safe(f'<div class="{class_str}">{trigger}{menu_html}</div>')
 
 
 class MeterHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         segments = kw.get("segments", [])
         total = kw.get("total", 100)
@@ -6801,7 +6811,7 @@ class MeterHandler:
         class_str = " ".join(classes)
 
         try:
-            total = int(total)
+            total = int(cast("str | int | float", total))
         except (ValueError, TypeError):
             total = 100
 
@@ -6853,11 +6863,11 @@ class MeterHandler:
                 )
             legend_html = f'<div class="dj-meter__legend">{"".join(items)}</div>'
 
-        return mark_safe(f'<div class="{class_str}">{label_html}{bar}{legend_html}</div>')
+        return _safe(f'<div class="{class_str}">{label_html}{bar}{legend_html}</div>')
 
 
 class ExportDialogHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         formats = kw.get("formats", [])
         columns = kw.get("columns", [])
@@ -6911,7 +6921,7 @@ class ExportDialogHandler:
                 f"<span>{e_label}</span></label>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="dj-export-dialog__backdrop" dj-click="{e_close}">'
             f'<div class="{class_str}" onclick="event.stopPropagation()">'
             f'<div class="dj-export-dialog__header"><h3>{e_title}</h3>'
@@ -6929,7 +6939,7 @@ class ExportDialogHandler:
 
 
 class ImportWizardHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         accepted_formats = kw.get("accepted_formats", ".csv")
         model_fields = kw.get("model_fields", [])
@@ -6952,7 +6962,7 @@ class ImportWizardHandler:
 
         steps = ["upload", "map", "preview"]
         step_labels = {"upload": "Upload", "map": "Map Fields", "preview": "Preview"}
-        active_idx = steps.index(step) if step in steps else 0
+        active_idx = steps.index(cast("str", step)) if step in steps else 0
 
         step_items = []
         for i, s in enumerate(steps):
@@ -6999,11 +7009,11 @@ class ImportWizardHandler:
                 f'<button class="dj-import-wizard__import-btn" dj-click="{e_event}">Import</button></div>'
             )
 
-        return mark_safe(f'<div class="{class_str}">{nav}{body}</div>')
+        return _safe(f'<div class="{class_str}">{nav}{body}</div>')
 
 
 class AuditLogHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         entries = kw.get("entries", [])
         stream_event = kw.get("stream_event", "")
@@ -7062,14 +7072,14 @@ class AuditLogHandler:
             )
         )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}"{stream_attr}>'
             f'<table class="dj-audit-log__table">{thead}{tbody}</table></div>'
         )
 
 
 class ErrorBoundaryHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         fallback = kw.get("fallback", "Something went wrong")
         retry_event = kw.get("retry_event", "")
@@ -7093,18 +7103,18 @@ class ErrorBoundaryHandler:
                 retry_html = (
                     f'<button class="dj-error-boundary__retry" dj-click="{e_retry}">Retry</button>'
                 )
-            return mark_safe(
+            return _safe(
                 f'<div class="{class_str}" role="alert">'
                 f'<div class="dj-error-boundary__fallback">'
                 f'<p class="dj-error-boundary__message">{e_fallback}</p>'
                 f"{retry_html}</div></div>"
             )
 
-        return mark_safe(f'<div class="{class_str}">{content}</div>')
+        return _safe(f'<div class="{class_str}">{content}</div>')
 
 
 class SortableListHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         items = kw.get("items", [])
         move_event = kw.get("move_event", "reorder")
@@ -7146,7 +7156,7 @@ class SortableListHandler:
 
         disabled_attr = ' data-disabled="true"' if disabled else ""
 
-        return mark_safe(
+        return _safe(
             f'<ul class="{class_str}" dj-hook="SortableList" '
             f'data-move-event="{e_event}" '
             f'role="list"{disabled_attr}>{"".join(items_html)}</ul>'
@@ -7154,7 +7164,7 @@ class SortableListHandler:
 
 
 class SortableGridHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
@@ -7178,7 +7188,7 @@ class SortableGridHandler:
             items = []
 
         try:
-            cols = int(columns)
+            cols = int(cast("str | int | float", columns))
         except (ValueError, TypeError):
             cols = 3
 
@@ -7206,7 +7216,7 @@ class SortableGridHandler:
         disabled_attr = ' data-disabled="true"' if disabled else ""
         style = f'style="grid-template-columns:repeat({cols},1fr);gap:{e_gap}"'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="SortableGrid" '
             f'data-move-event="{e_event}" data-columns="{cols}" '
             f'{style} role="grid"{disabled_attr}>{"".join(items_html)}</div>'
@@ -7214,7 +7224,7 @@ class SortableGridHandler:
 
 
 class ImageCropperHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         src = kw.get("src", "")
         crop_event = kw.get("crop_event", "save_crop")
@@ -7241,15 +7251,15 @@ class ImageCropperHandler:
             ratio_attr = f' data-aspect-ratio="{e_ratio}"'
 
         try:
-            min_w = int(min_width)
+            min_w = int(cast("str | int | float", min_width))
         except (ValueError, TypeError):
             min_w = 50
         try:
-            min_h = int(min_height)
+            min_h = int(cast("str | int | float", min_height))
         except (ValueError, TypeError):
             min_h = 50
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="ImageCropper" '
             f'data-crop-event="{e_event}" '
             f'data-min-width="{min_w}" '
@@ -7268,7 +7278,7 @@ class ImageCropperHandler:
 
 
 class SignaturePadHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "signature")
         save_event = kw.get("save_event", "save_signature")
@@ -7292,21 +7302,21 @@ class SignaturePadHandler:
         class_str = " ".join(classes)
 
         try:
-            w = int(width)
+            w = int(cast("str | int | float", width))
         except (ValueError, TypeError):
             w = 400
         try:
-            h = int(height)
+            h = int(cast("str | int | float", height))
         except (ValueError, TypeError):
             h = 200
         try:
-            pw = int(pen_width)
+            pw = int(cast("str | int | float", pen_width))
         except (ValueError, TypeError):
             pw = 2
 
         disabled_attr = " disabled" if disabled else ""
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="SignaturePad" '
             f'data-save-event="{e_event}" '
             f'data-pen-color="{e_color}" '
@@ -7325,7 +7335,7 @@ class SignaturePadHandler:
 
 
 class ResizablePanelHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         direction = kw.get("direction", "horizontal")
         min_size = kw.get("min_size", "100px")
@@ -7358,7 +7368,7 @@ class ResizablePanelHandler:
 
         disabled_attr = ' data-disabled="true"' if disabled else ""
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="ResizablePanel" '
             f'data-direction="{direction}" '
             f'data-min-size="{e_min}" data-max-size="{e_max}" '
@@ -7373,7 +7383,7 @@ class ResizablePanelHandler:
 
 
 class LightboxHandler:
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         images = kw.get("images", [])
         active = kw.get("active", 0)
@@ -7400,7 +7410,7 @@ class LightboxHandler:
 
         total = len(images)
         try:
-            idx = int(active)
+            idx = int(cast("str | int | float", active))
         except (ValueError, TypeError):
             idx = 0
         idx = max(0, min(idx, total - 1)) if total else 0
@@ -7441,7 +7451,7 @@ class LightboxHandler:
         if show_counter and total > 1:
             counter = f'<span class="dj-lightbox__counter">{idx + 1} of {total}</span>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="ImageLightbox" '
             f'data-close-event="{e_close}" data-navigate-event="{e_nav}" '
             f'role="dialog" aria-modal="true">'
@@ -7457,7 +7467,7 @@ class LightboxHandler:
 
 
 class DashboardGridHandler:
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         panels = kw.get("panels", [])
         columns = kw.get("columns", 4)
@@ -7479,7 +7489,7 @@ class DashboardGridHandler:
         class_str = " ".join(classes)
 
         try:
-            cols = int(columns)
+            cols = int(cast("str | int | float", columns))
         except (ValueError, TypeError):
             cols = 4
 
@@ -7531,7 +7541,7 @@ class DashboardGridHandler:
 
         inner = "".join(panels_html) + (content or "")
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="DashboardGrid" '
             f'data-move-event="{e_move}" data-resize-event="{e_resize}" '
             f'data-columns="{cols}" {grid_style}>{inner}</div>'
@@ -7582,7 +7592,7 @@ from datetime import date as _date, timedelta as _timedelta
 class BarChartHandler:
     """Inline handler for {% bar_chart data=data labels=labels %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         data = kw.get("data", [])
         labels = kw.get("labels", [])
@@ -7604,16 +7614,16 @@ class BarChartHandler:
         if not isinstance(labels, list):
             labels = []
         try:
-            width = int(width)
+            width = int(cast("str | int | float", width))
         except (ValueError, TypeError):
             width = 400
         try:
-            height = int(height)
+            height = int(cast("str | int | float", height))
         except (ValueError, TypeError):
             height = 250
 
         if not data:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         w, h = width, height
         pad_top = 30 if title else 10
@@ -7678,7 +7688,7 @@ class BarChartHandler:
                 )
 
         parts.append("</svg>")
-        return mark_safe(f'<div class="{class_str}">{"".join(parts)}</div>')
+        return _safe(f'<div class="{class_str}">{"".join(parts)}</div>')
 
 
 class LineChartHandler:
@@ -7686,7 +7696,7 @@ class LineChartHandler:
 
     COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#06b6d4"]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         series = kw.get("series", [])
         labels = kw.get("labels", [])
@@ -7709,16 +7719,16 @@ class LineChartHandler:
         if not isinstance(labels, list):
             labels = []
         try:
-            width = int(width)
+            width = int(cast("str | int | float", width))
         except (ValueError, TypeError):
             width = 400
         try:
-            height = int(height)
+            height = int(cast("str | int | float", height))
         except (ValueError, TypeError):
             height = 250
 
         if not series:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         w, h = width, height
         pad_top = 30 if title else 10
@@ -7827,7 +7837,7 @@ class LineChartHandler:
                 lx += len(name) * 7 + 24
 
         parts.append("</svg>")
-        return mark_safe(f'<div class="{class_str}">{"".join(parts)}</div>')
+        return _safe(f'<div class="{class_str}">{"".join(parts)}</div>')
 
 
 class PieChartHandler:
@@ -7844,7 +7854,7 @@ class PieChartHandler:
         "#f97316",
     ]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         segments = kw.get("segments", [])
         title = kw.get("title", "")
@@ -7865,20 +7875,20 @@ class PieChartHandler:
         if not isinstance(segments, list):
             segments = []
         try:
-            width = int(width)
+            width = int(cast("str | int | float", width))
         except (ValueError, TypeError):
             width = 300
         try:
-            height = int(height)
+            height = int(cast("str | int | float", height))
         except (ValueError, TypeError):
             height = 300
         try:
-            inner_radius = float(inner_radius)
+            inner_radius = float(cast("str | int | float", inner_radius))
         except (ValueError, TypeError):
             inner_radius = 0.6
 
         if not segments:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         w, h = width, height
         title_offset = 24 if title else 0
@@ -7888,7 +7898,7 @@ class PieChartHandler:
         r = min(cx, (h - title_offset - legend_offset) / 2) - 10
         ir = r * inner_radius if donut else 0
 
-        total = 0
+        total: float = 0
         for seg in segments:
             if isinstance(seg, dict):
                 try:
@@ -7897,7 +7907,7 @@ class PieChartHandler:
                     # Skip segments whose value isn't numeric.
                     continue
         if total <= 0:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         e_title = conditional_escape(str(title)) if title else "Pie chart"
         parts = [
@@ -7982,13 +7992,13 @@ class PieChartHandler:
                 lx += len(label) * 7 + 24
 
         parts.append("</svg>")
-        return mark_safe(f'<div class="{class_str}">{"".join(parts)}</div>')
+        return _safe(f'<div class="{class_str}">{"".join(parts)}</div>')
 
 
 class SparklineHandler:
     """Inline handler for {% sparkline data=values %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         data = kw.get("data", [])
         variant = kw.get("variant", "line")
@@ -8007,20 +8017,20 @@ class SparklineHandler:
         if not isinstance(data, list):
             data = []
         try:
-            width = int(width)
+            width = int(cast("str | int | float", width))
         except (ValueError, TypeError):
             width = 100
         try:
-            height = int(height)
+            height = int(cast("str | int | float", height))
         except (ValueError, TypeError):
             height = 24
         try:
-            stroke_width = float(stroke_width)
+            stroke_width = float(cast("str | int | float", stroke_width))
         except (ValueError, TypeError):
             stroke_width = 1.5
 
         if not data:
-            return mark_safe(f'<span class="{class_str}"><svg></svg></span>')
+            return _safe(f'<span class="{class_str}"><svg></svg></span>')
 
         w, h = width, height
         pad = 2
@@ -8089,7 +8099,7 @@ class SparklineHandler:
             )
 
         parts.append("</svg>")
-        return mark_safe(f'<span class="{class_str}">{"".join(parts)}</span>')
+        return _safe(f'<span class="{class_str}">{"".join(parts)}</span>')
 
 
 class HeatmapHandler:
@@ -8097,7 +8107,7 @@ class HeatmapHandler:
 
     _interpolate_color = staticmethod(interpolate_color)
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         data = kw.get("data", [])
         x_labels = kw.get("x_labels", [])
@@ -8122,18 +8132,18 @@ class HeatmapHandler:
         if not isinstance(y_labels, list):
             y_labels = []
         try:
-            cell_size = int(cell_size)
+            cell_size = int(cast("str | int | float", cell_size))
         except (ValueError, TypeError):
             cell_size = 36
 
         if not data:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         cs = cell_size
         rows = len(data)
         cols = max((len(row) for row in data if isinstance(row, list)), default=0)
         if cols == 0:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         label_left = 60 if y_labels else 0
         label_top = 20 if x_labels else 0
@@ -8171,7 +8181,7 @@ class HeatmapHandler:
 
         for ci, lbl in enumerate(x_labels[:cols]):
             x = label_left + ci * cs + cs / 2
-            y = title_h + label_top - 4
+            y: float = title_h + label_top - 4
             parts.append(
                 f'<text class="dj-heatmap__xlabel" x="{x:.1f}" y="{y:.1f}" '
                 f'text-anchor="middle" font-size="10">{conditional_escape(str(lbl))}</text>'
@@ -8195,7 +8205,7 @@ class HeatmapHandler:
                 except (ValueError, TypeError):
                     val = 0
                 t = (val - min_v) / val_range
-                color = self._interpolate_color(color_min, color_max, t)
+                color = self._interpolate_color(str(color_min), str(color_max), t)
                 x = label_left + ci * cs
                 y_pos = title_h + label_top + ri * cs
                 parts.append(
@@ -8213,7 +8223,7 @@ class HeatmapHandler:
                     )
 
         parts.append("</svg>")
-        return mark_safe(f'<div class="{class_str}">{"".join(parts)}</div>')
+        return _safe(f'<div class="{class_str}">{"".join(parts)}</div>')
 
 
 class TreemapHandler:
@@ -8233,8 +8243,14 @@ class TreemapHandler:
     ]
 
     @staticmethod
-    def _squarify(items, x, y, w, h):
-        rects = []
+    def _squarify(
+        items: list[tuple[str, float, int]],
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+    ) -> list[tuple[float, float, float, float, str, float, int]]:
+        rects: list[tuple[float, float, float, float, str, float, int]] = []
         if not items or w <= 0 or h <= 0:
             return rects
         total = sum(v for _, v, _ in items)
@@ -8254,7 +8270,7 @@ class TreemapHandler:
                 cy += rh
         return rects
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         data = kw.get("data", [])
         value_key = kw.get("value_key", "size")
@@ -8273,16 +8289,16 @@ class TreemapHandler:
         if not isinstance(data, list):
             data = []
         try:
-            width = int(width)
+            width = int(cast("str | int | float", width))
         except (ValueError, TypeError):
             width = 400
         try:
-            height = int(height)
+            height = int(cast("str | int | float", height))
         except (ValueError, TypeError):
             height = 250
 
         if not data:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         w, h = width, height
         title_h = 24 if title else 0
@@ -8335,7 +8351,7 @@ class TreemapHandler:
                 )
 
         parts.append("</svg>")
-        return mark_safe(f'<div class="{class_str}">{"".join(parts)}</div>')
+        return _safe(f'<div class="{class_str}">{"".join(parts)}</div>')
 
 
 class CalendarHeatmapHandler:
@@ -8343,7 +8359,7 @@ class CalendarHeatmapHandler:
 
     LEVELS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
 
-    def _get_color(self, value, max_val):
+    def _get_color(self, value: float, max_val: float) -> str:
         if value <= 0:
             return self.LEVELS[0]
         if max_val <= 0:
@@ -8358,7 +8374,7 @@ class CalendarHeatmapHandler:
         else:
             return self.LEVELS[4]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         data = kw.get("data", {})
         year = kw.get("year", _date.today().year)
@@ -8378,15 +8394,15 @@ class CalendarHeatmapHandler:
         if not isinstance(data, dict):
             data = {}
         try:
-            year = int(year)
+            year = int(cast("str | int | float", year))
         except (ValueError, TypeError):
             year = _date.today().year
         try:
-            cell_size = int(cell_size)
+            cell_size = int(cast("str | int | float", cell_size))
         except (ValueError, TypeError):
             cell_size = 12
         try:
-            cell_gap = int(cell_gap)
+            cell_gap = int(cast("str | int | float", cell_gap))
         except (ValueError, TypeError):
             cell_gap = 2
 
@@ -8494,7 +8510,7 @@ class CalendarHeatmapHandler:
                 )
 
         parts.append("</svg>")
-        return mark_safe(f'<div class="{class_str}">{"".join(parts)}</div>')
+        return _safe(f'<div class="{class_str}">{"".join(parts)}</div>')
 
 
 INLINE_HANDLERS.extend(
@@ -8541,7 +8557,7 @@ class TerminalHandler:
     }
 
     @classmethod
-    def _ansi_to_html(cls, text):
+    def _ansi_to_html(cls, text: str) -> str:
         result = []
         open_spans = 0
         last_end = 0
@@ -8565,7 +8581,7 @@ class TerminalHandler:
         result.append("</span>" * open_spans)
         return "".join(result)
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         output = kw.get("output", [])
         title = kw.get("title", "")
@@ -8614,7 +8630,7 @@ class TerminalHandler:
             e_stream = conditional_escape(str(stream_event))
             stream_attr = f' data-stream-event="{e_stream}"'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}>'
             f"{title_html}"
             f'<div class="dj-terminal__body">{"".join(lines_html)}</div>'
@@ -8633,7 +8649,7 @@ class MarkdownEditorHandler:
         ("heading", "H", "## ", ""),
     ]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "content")
         value = kw.get("value", "")
@@ -8651,7 +8667,7 @@ class MarkdownEditorHandler:
         e_class = conditional_escape(str(custom_class))
 
         try:
-            rows = int(rows)
+            rows = int(cast("str | int | float", rows))
         except (ValueError, TypeError):
             rows = 12
 
@@ -8694,7 +8710,7 @@ class MarkdownEditorHandler:
 
         panes = f'<div class="dj-md-editor__panes">{textarea_html}{preview_html}</div>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="MarkdownEditor">{toolbar_html}{panes}</div>'
         )
 
@@ -8702,7 +8718,7 @@ class MarkdownEditorHandler:
 class JsonViewerHandler:
     """Inline handler for {% json_viewer data=json_data %}"""
 
-    def _render_node(self, value, depth, collapsed_depth):
+    def _render_node(self, value: object, depth: int, collapsed_depth: int) -> str:
         collapsed = depth >= collapsed_depth
 
         if isinstance(value, dict):
@@ -8770,7 +8786,7 @@ class JsonViewerHandler:
 
         return f'<span class="dj-json__value">{conditional_escape(str(value))}</span>'
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         data = kw.get("data", None)
         collapsed_depth = kw.get("collapsed_depth", 2)
@@ -8782,7 +8798,7 @@ class JsonViewerHandler:
         e_label = conditional_escape(str(root_label))
 
         try:
-            collapsed_depth = int(collapsed_depth)
+            collapsed_depth = int(cast("str | int | float", collapsed_depth))
         except (ValueError, TypeError):
             collapsed_depth = 2
 
@@ -8805,7 +8821,7 @@ class JsonViewerHandler:
 
         tree_html = self._render_node(data, 0, collapsed_depth)
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="JsonViewer" '
             f'data-collapsed-depth="{collapsed_depth}">'
             f'<div class="dj-json-viewer__header">'
@@ -8826,7 +8842,7 @@ class LogViewerHandler:
     )
 
     @classmethod
-    def _detect_level(cls, line):
+    def _detect_level(cls, line: str) -> str:
         m = cls.LEVEL_RE.search(line)
         if m:
             level = m.group(1).upper()
@@ -8839,7 +8855,7 @@ class LogViewerHandler:
             return "info"
         return ""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         lines = kw.get("lines", [])
         stream_event = kw.get("stream_event", "")
@@ -8861,7 +8877,7 @@ class LogViewerHandler:
         if not isinstance(lines, list):
             lines = []
         try:
-            max_lines = int(max_lines)
+            max_lines = int(cast("str | int | float", max_lines))
         except (ValueError, TypeError):
             max_lines = 0
 
@@ -8894,7 +8910,7 @@ class LogViewerHandler:
 
         scroll_attr = ' data-auto-scroll="true"' if auto_scroll else ""
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="LogViewer"'
             f'{stream_attr}{scroll_attr} role="log" aria-live="polite">'
             f'<div class="dj-log-viewer__body">{"".join(lines_html)}</div>'
@@ -8909,7 +8925,14 @@ class FileTreeHandler:
     FOLDER_OPEN_ICON = "&#x1F4C2;"
     DEFAULT_FILE_ICON = "&#x1F4C4;"
 
-    def _render_tree_node(self, node, depth, event, show_icons, selected):
+    def _render_tree_node(
+        self,
+        node: object,
+        depth: int,
+        event: str,
+        show_icons: object,
+        selected: str,
+    ) -> str:
         if not isinstance(node, dict):
             return ""
 
@@ -8964,7 +8987,7 @@ class FileTreeHandler:
             f'{icon_html}<span class="dj-file-tree__name">{e_name}</span></div>'
         )
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         nodes = kw.get("nodes", [])
         selected = kw.get("selected", "")
@@ -8986,9 +9009,11 @@ class FileTreeHandler:
 
         nodes_html = []
         for node in nodes:
-            nodes_html.append(self._render_tree_node(node, 0, event, show_icons, str(selected)))
+            nodes_html.append(
+                self._render_tree_node(node, 0, str(event), show_icons, str(selected))
+            )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="FileTree" '
             f'data-event="{e_event}" data-selected="{e_selected}" '
             f'role="tree">{"".join(nodes_html)}</div>'
@@ -8998,7 +9023,7 @@ class FileTreeHandler:
 class TourHandler:
     """Inline handler for {% tour steps=tour_steps active=0 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         steps = kw.get("steps", [])
         active = kw.get("active", 0)
@@ -9017,7 +9042,7 @@ class TourHandler:
             return ""
 
         try:
-            idx = int(active)
+            idx = int(cast("str | int | float", active))
         except (ValueError, TypeError):
             idx = 0
         total = len(steps)
@@ -9067,7 +9092,7 @@ class TourHandler:
 
         step_label = f'<span class="dj-tour__step-label">Step {idx + 1} of {total}</span>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="Tour" '
             f'data-target="{e_target}" data-step="{idx}" '
             f'data-total="{total}" data-event="{e_event}" role="dialog" aria-modal="true">'
@@ -9108,7 +9133,7 @@ class CalendarViewHandler:
 
     COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6"]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         events = kw.get("events", [])
         month = kw.get("month", 1)
@@ -9126,19 +9151,19 @@ class CalendarViewHandler:
         if not isinstance(events, list):
             events = []
         try:
-            month = int(month)
+            month = int(cast("str | int | float", month))
         except (ValueError, TypeError):
             month = 1
         try:
-            year = int(year)
+            year = int(cast("str | int | float", year))
         except (ValueError, TypeError):
             year = 2026
         try:
-            start_day = int(start_day) % 7
+            start_day = int(cast("str | int | float", start_day)) % 7
         except (ValueError, TypeError):
             start_day = 0
 
-        emap = {}
+        emap: dict[object, list[object]] = {}
         for ev in events:
             if not isinstance(ev, dict):
                 continue
@@ -9183,7 +9208,8 @@ class CalendarViewHandler:
                 date_str = f"{year}-{month:02d}-{day:02d}"
                 day_events = emap.get(date_str, [])
                 ev_html = ""
-                for i, ev in enumerate(day_events[:3]):
+                for i, ev_obj in enumerate(day_events[:3]):
+                    ev = cast("dict[str, object]", ev_obj)
                     title = conditional_escape(str(ev.get("title", "")))
                     color = conditional_escape(
                         str(ev.get("color", self.COLORS[i % len(self.COLORS)]))
@@ -9205,7 +9231,7 @@ class CalendarViewHandler:
 
         grid = f'<div class="dj-calendar__grid">{"".join(weeks_html)}</div>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" role="grid" '
             f'aria-label="{e_month} {e_year}">{header}{day_names_row}{grid}</div>'
         )
@@ -9225,7 +9251,7 @@ class GanttChartHandler:
         "#f97316",
     ]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         tasks = kw.get("tasks", [])
         title = kw.get("title", "")
@@ -9244,16 +9270,16 @@ class GanttChartHandler:
         if not isinstance(tasks, list):
             tasks = []
         try:
-            width = int(width)
+            width = int(cast("str | int | float", width))
         except (ValueError, TypeError):
             width = 600
         try:
-            row_height = int(row_height)
+            row_height = int(cast("str | int | float", row_height))
         except (ValueError, TypeError):
             row_height = 32
 
         if not tasks:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         parsed = []
         for i, t in enumerate(tasks):
@@ -9276,11 +9302,13 @@ class GanttChartHandler:
             parsed.append((name, start, dur, color, progress))
 
         if not parsed:
-            return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
+            return _safe(f'<div class="{class_str}"><svg></svg></div>')
 
         max_end = max(s + d for _, s, d, _, _ in parsed)
         try:
-            total_units = int(units) if units is not None else int(max_end) + 1
+            total_units = (
+                int(cast("str | int | float", units)) if units is not None else int(max_end) + 1
+            )
         except (ValueError, TypeError):
             total_units = int(max_end) + 1
         if total_units <= 0:
@@ -9357,14 +9385,16 @@ class GanttChartHandler:
                 )
 
         parts.append("</svg>")
-        return mark_safe(f'<div class="{class_str}">{"".join(parts)}</div>')
+        return _safe(f'<div class="{class_str}">{"".join(parts)}</div>')
 
 
 class DiffViewerHandler:
     """Inline handler for {% diff_viewer old=old_text new=new_text %}"""
 
     @staticmethod
-    def _compute_diff(old_lines, new_lines):
+    def _compute_diff(
+        old_lines: list[str], new_lines: list[str]
+    ) -> list[tuple[str, str | None, str | None]]:
         m, n = len(old_lines), len(new_lines)
         dp = [[0] * (n + 1) for _ in range(m + 1)]
         for i in range(1, m + 1):
@@ -9373,7 +9403,7 @@ class DiffViewerHandler:
                     dp[i][j] = dp[i - 1][j - 1] + 1
                 else:
                     dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
-        result = []
+        result: list[tuple[str, str | None, str | None]] = []
         i, j = m, n
         while i > 0 or j > 0:
             if i > 0 and j > 0 and old_lines[i - 1] == new_lines[j - 1]:
@@ -9389,7 +9419,7 @@ class DiffViewerHandler:
         result.reverse()
         return result
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         old = str(kw.get("old", ""))
         new = str(kw.get("new", ""))
@@ -9414,12 +9444,17 @@ class DiffViewerHandler:
         ops = self._compute_diff(old_lines, new_lines)
 
         if mode == "unified":
-            return mark_safe(self._render_unified(class_str, ops, show_line_numbers))
-        return mark_safe(
-            self._render_split(class_str, ops, title_old, title_new, show_line_numbers)
-        )
+            return _safe(self._render_unified(class_str, ops, show_line_numbers))
+        return _safe(self._render_split(class_str, ops, title_old, title_new, show_line_numbers))
 
-    def _render_split(self, class_str, ops, title_old, title_new, show_ln):
+    def _render_split(
+        self,
+        class_str: str,
+        ops: list[tuple[str, str | None, str | None]],
+        title_old: object,
+        title_new: object,
+        show_ln: object,
+    ) -> str:
         e_title_old = conditional_escape(str(title_old))
         e_title_new = conditional_escape(str(title_new))
         old_rows, new_rows = [], []
@@ -9458,7 +9493,12 @@ class DiffViewerHandler:
             f'<div class="dj-diff__pane dj-diff__pane--new"><div class="dj-diff__pane-header">{e_title_new}</div>{"".join(new_rows)}</div></div>'
         )
 
-    def _render_unified(self, class_str, ops, show_ln):
+    def _render_unified(
+        self,
+        class_str: str,
+        ops: list[tuple[str, str | None, str | None]],
+        show_ln: object,
+    ) -> str:
         rows = []
         old_num = new_num = 0
         for tag, old_line, new_line in ops:
@@ -9508,12 +9548,12 @@ class PivotTableHandler:
     }
 
     @staticmethod
-    def _format_val(v):
+    def _format_val(v: float) -> str:
         if v == int(v):
             return str(int(v))
         return f"{v:.2f}"
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         data = kw.get("data", [])
         rows_field = str(kw.get("rows", ""))
@@ -9534,15 +9574,14 @@ class PivotTableHandler:
             data = []
         if agg not in self.AGG_FUNCS:
             agg = "sum"
-        agg_fn = self.AGG_FUNCS[agg]
+        agg_fn = self.AGG_FUNCS[str(agg)]
 
         if not data or not rows_field or not cols_field or not values_field:
-            return mark_safe(
-                f'<div class="{class_str}"><table class="dj-pivot__table"></table></div>'
-            )
+            return _safe(f'<div class="{class_str}"><table class="dj-pivot__table"></table></div>')
 
-        row_keys, col_keys = [], []
-        cells = {}
+        row_keys: list[str] = []
+        col_keys: list[str] = []
+        cells: dict[tuple[str, str], list[object]] = {}
         for record in data:
             if not isinstance(record, dict):
                 continue
@@ -9574,11 +9613,11 @@ class PivotTableHandler:
         parts.append(f"<thead><tr>{''.join(header_cells)}</tr></thead>")
 
         body_rows = []
-        col_totals = {ck: 0 for ck in col_keys}
-        grand_total = 0
+        col_totals: dict[str, float] = {ck: 0 for ck in col_keys}
+        grand_total: float = 0
         for rk in row_keys:
             row_cells = [f'<th class="dj-pivot__rowheader">{conditional_escape(rk)}</th>']
-            row_total = 0
+            row_total: float = 0
             for ck in col_keys:
                 val = agg_cells.get((rk, ck), 0)
                 row_total += val
@@ -9603,7 +9642,7 @@ class PivotTableHandler:
             )
             parts.append(f"<tfoot><tr>{''.join(foot_cells)}</tr></tfoot>")
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}"><table class="dj-pivot__table" role="grid">{"".join(parts)}</table></div>'
         )
 
@@ -9611,8 +9650,14 @@ class PivotTableHandler:
 class OrgChartHandler:
     """Inline handler for {% org_chart nodes=nodes root=ceo_id %}"""
 
-    def _render_node(self, nid, node_map, children, e_event):
-        node = node_map.get(nid)
+    def _render_node(
+        self,
+        nid: str,
+        node_map: dict[str, object],
+        children: dict[str, object],
+        e_event: str,
+    ) -> str:
+        node = cast("dict[str, object]", node_map.get(nid))
         if not node:
             return ""
         name = conditional_escape(str(node.get("name", "")))
@@ -9632,7 +9677,7 @@ class OrgChartHandler:
             f'<span class="dj-org__name">{name}</span>'
             f'<span class="dj-org__title">{title}</span></div></div>'
         )
-        child_ids = children.get(nid, [])
+        child_ids = cast("list[str]", children.get(nid, []))
         if not child_ids:
             return f'<li class="dj-org__node">{node_html}</li>'
         child_items = "".join(
@@ -9640,7 +9685,7 @@ class OrgChartHandler:
         )
         return f'<li class="dj-org__node">{node_html}<ul class="dj-org__children">{child_items}</ul></li>'
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         nodes = kw.get("nodes", [])
         root = kw.get("root", "")
@@ -9658,8 +9703,8 @@ class OrgChartHandler:
 
         if not isinstance(nodes, list):
             nodes = []
-        node_map = {}
-        children = {}
+        node_map: dict[str, object] = {}
+        children: dict[str, object] = {}
         child_ids_set = set()
         for n in nodes:
             if not isinstance(n, dict):
@@ -9670,7 +9715,7 @@ class OrgChartHandler:
             node_map[nid] = n
             parent = n.get("parent", "")
             if parent:
-                children.setdefault(str(parent), []).append(nid)
+                cast("list[str]", children.setdefault(str(parent), [])).append(nid)
                 child_ids_set.add(nid)
 
         root_id = str(root) if root else ""
@@ -9679,11 +9724,11 @@ class OrgChartHandler:
             root_id = roots[0] if roots else (list(node_map.keys())[0] if node_map else "")
 
         if not node_map or not root_id:
-            return mark_safe(f'<div class="{class_str}" role="tree"></div>')
+            return _safe(f'<div class="{class_str}" role="tree"></div>')
 
         e_event = conditional_escape(str(event)) if event else ""
         tree_html = self._render_node(root_id, node_map, children, e_event)
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" role="tree"><ul class="dj-org__root">{tree_html}</ul></div>'
         )
 
@@ -9692,14 +9737,14 @@ class ComparisonTableHandler:
     """Inline handler for {% comparison_table plans=plans features=features %}"""
 
     @staticmethod
-    def _render_value(val):
+    def _render_value(val: object) -> str:
         if val is True:
             return '<span class="dj-compare__check" aria-label="Yes">&#10003;</span>'
         if val is False:
             return '<span class="dj-compare__cross" aria-label="No">&#10007;</span>'
-        return conditional_escape(str(val))
+        return str(conditional_escape(str(val)))
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         plans = kw.get("plans", [])
         features = kw.get("features", [])
@@ -9717,7 +9762,7 @@ class ComparisonTableHandler:
         if not isinstance(features, list):
             features = []
         if not plans:
-            return mark_safe(
+            return _safe(
                 f'<div class="{class_str}"><table class="dj-compare__table"></table></div>'
             )
 
@@ -9761,7 +9806,7 @@ class ComparisonTableHandler:
             body_rows.append(f"<tr>{''.join(cells)}</tr>")
         body = f"<tbody>{''.join(body_rows)}</tbody>"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}"><table class="dj-compare__table" role="grid">{header}{body}</table></div>'
         )
 
@@ -9769,7 +9814,7 @@ class ComparisonTableHandler:
 class MasonryGridHandler:
     """Inline handler for {% masonry_grid items=items columns=3 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
@@ -9785,19 +9830,19 @@ class MasonryGridHandler:
         if not isinstance(items, list):
             items = []
         try:
-            columns = max(1, int(columns))
+            columns = max(1, int(cast("str | int | float", columns)))
         except (ValueError, TypeError):
             columns = 3
         try:
-            gap = int(gap)
+            gap = int(cast("str | int | float", gap))
         except (ValueError, TypeError):
             gap = 16
 
         if not items:
-            return mark_safe(f'<div class="{class_str}"></div>')
+            return _safe(f'<div class="{class_str}"></div>')
 
         col_heights = [0] * columns
-        col_items = [[] for _ in range(columns)]
+        col_items: list[list[object]] = [[] for _ in range(columns)]
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -9812,7 +9857,8 @@ class MasonryGridHandler:
         col_html = []
         for items_in_col in col_items:
             item_cards = []
-            for item in items_in_col:
+            for item_obj in items_in_col:
+                item = cast("dict[str, object]", item_obj)
                 content = str(item.get("content", ""))
                 item_class = conditional_escape(str(item.get("class", "")))
                 extra = f" {item_class}" if item_class else ""
@@ -9820,7 +9866,7 @@ class MasonryGridHandler:
             col_html.append(f'<div class="dj-masonry__col">{"".join(item_cards)}</div>')
 
         style = f"--dj-masonry-columns: {columns}; --dj-masonry-gap: {gap}px"
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" style="{style}" role="list">{"".join(col_html)}</div>'
         )
 
@@ -9857,7 +9903,7 @@ class CursorsOverlayHandler:
         "#f97316",
     ]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         users = kw.get("users", [])
         custom_class = kw.get("class", "")
@@ -9916,7 +9962,7 @@ class CursorsOverlayHandler:
         total = len(users)
         label = f"{total} cursor{'s' if total != 1 else ''}"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="group" aria-label="{label}" '
             f'dj-hook="CursorsOverlay">'
             f"{''.join(parts)}"
@@ -9927,7 +9973,7 @@ class CursorsOverlayHandler:
 class LiveIndicatorHandler:
     """Inline handler for {% live_indicator user=user field="title" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         user = kw.get("user", None)
         field = kw.get("field", "")
@@ -9941,7 +9987,7 @@ class LiveIndicatorHandler:
             cls = "dj-live-indicator dj-live-indicator--hidden"
             if e_class:
                 cls += f" {e_class}"
-            return mark_safe(f'<div class="{cls}"></div>')
+            return _safe(f'<div class="{cls}"></div>')
 
         if isinstance(user, dict):
             name = user.get("name", "")
@@ -9973,7 +10019,7 @@ class LiveIndicatorHandler:
 
         field_attr = f' data-field="{e_field}"' if e_field else ""
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}"{field_attr} role="status" aria-live="polite">'
             f"{avatar_html}"
             f'<span class="dj-live-indicator__text">'
@@ -9996,7 +10042,7 @@ class CollabSelectionHandler:
         "#f97316",
     ]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         users = kw.get("users", [])
         custom_class = kw.get("class", "")
@@ -10051,7 +10097,7 @@ class CollabSelectionHandler:
         total = len(users)
         label = f"{total} selection{'s' if total != 1 else ''}"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="group" aria-label="{label}" '
             f'dj-hook="CollabSelection">'
             f"{''.join(parts)}"
@@ -10062,13 +10108,13 @@ class CollabSelectionHandler:
 class ActivityFeedHandler:
     """Inline handler for {% activity_feed events=events stream=True %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         events = kw.get("events", [])
         stream_event = kw.get("stream", "")
         max_items = 50
         try:
-            max_items = int(kw.get("max", 50))
+            max_items = int(cast("str | int | float", kw.get("max", 50)))
         except (ValueError, TypeError):
             # Keep the default (50) if caller passed a non-int.
             pass
@@ -10142,13 +10188,13 @@ class ActivityFeedHandler:
             )
 
         attrs_str = " ".join(attrs)
-        return mark_safe(f"<div {attrs_str}>{''.join(items)}</div>")
+        return _safe(f"<div {attrs_str}>{''.join(items)}</div>")
 
 
 class ReactionsHandler:
     """Inline handler for {% reactions options=emojis counts=counts event="react" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         options = kw.get("options", [])
         counts = kw.get("counts", {})
@@ -10201,7 +10247,7 @@ class ReactionsHandler:
                 f"</button>"
             )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="group" aria-label="Reactions">{"".join(buttons)}</div>'
         )
 
@@ -10225,7 +10271,7 @@ INLINE_HANDLERS.extend(
 class MapPickerHandler:
     """Inline handler for {% map_picker lat=lat lng=lng pick_event="set_location" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         lat = kw.get("lat", 0)
         lng = kw.get("lng", 0)
@@ -10235,15 +10281,15 @@ class MapPickerHandler:
         custom_class = kw.get("class", "")
 
         try:
-            lat = float(lat)
+            lat = float(cast("str | int | float", lat))
         except (ValueError, TypeError):
             lat = 0.0
         try:
-            lng = float(lng)
+            lng = float(cast("str | int | float", lng))
         except (ValueError, TypeError):
             lng = 0.0
         try:
-            zoom = int(zoom)
+            zoom = int(cast("str | int | float", zoom))
         except (ValueError, TypeError):
             zoom = 13
 
@@ -10255,7 +10301,7 @@ class MapPickerHandler:
         if e_class:
             cls += f" {e_class}"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" dj-hook="MapPicker" '
             f'data-lat="{lat}" data-lng="{lng}" '
             f'data-zoom="{zoom}" data-pick-event="{e_event}" '
@@ -10269,7 +10315,7 @@ class MapPickerHandler:
 class PromptEditorHandler:
     """Inline handler for {% prompt_editor template=t variables=v event="save_prompt" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         import re as _re
 
         kw = _parse_args(args, context)
@@ -10283,7 +10329,7 @@ class PromptEditorHandler:
         if not isinstance(variables, dict):
             variables = {}
         try:
-            rows = int(rows)
+            rows = int(cast("str | int | float", rows))
         except (ValueError, TypeError):
             rows = 6
 
@@ -10327,7 +10373,7 @@ class PromptEditorHandler:
         if e_event:
             event_attr = f' dj-click="{e_event}"'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f'<textarea class="dj-prompt-editor__textarea" '
             f'name="template" rows="{rows}" '
@@ -10343,7 +10389,7 @@ class PromptEditorHandler:
 class VoiceInputHandler:
     """Inline handler for {% voice_input event="transcribe" lang="en-US" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         event = kw.get("event", "transcribe")
         lang = kw.get("lang", "en-US")
@@ -10371,7 +10417,7 @@ class VoiceInputHandler:
 
         cont = "true" if continuous else "false"
 
-        return mark_safe(
+        return _safe(
             f'<button type="button" class="{cls}" '
             f'dj-hook="VoiceInput" '
             f'data-event="{e_event}" data-lang="{e_lang}" '
@@ -10388,7 +10434,7 @@ class CronInputHandler:
 
     FIELD_LABELS = ["Minute", "Hour", "Day", "Month", "Weekday"]
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "cron")
         value = kw.get("value", "* * * * *")
@@ -10426,7 +10472,7 @@ class CronInputHandler:
         if e_event:
             event_attr = f' dj-change="{e_event}"'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}"{event_attr}>'
             f'<input type="hidden" name="{e_name}" value="{e_value}">'
             f'<div class="dj-cron-input__fields">{"".join(fields)}</div>'
@@ -10439,7 +10485,7 @@ class CronInputHandler:
 class ErrorPageHandler:
     """Inline handler for {% error_page code=404 title="Not Found" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         code = kw.get("code", 500)
         title = kw.get("title", "Something went wrong")
@@ -10449,7 +10495,7 @@ class ErrorPageHandler:
         custom_class = kw.get("class", "")
 
         try:
-            code = int(code)
+            code = int(cast("str | int | float", code))
         except (ValueError, TypeError):
             code = 500
 
@@ -10471,7 +10517,7 @@ class ErrorPageHandler:
         if e_url:
             action_html = f'<a href="{e_url}" class="dj-error-page__action">{e_label}</a>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="alert">'
             f'<div class="dj-error-page__code">{code}</div>'
             f'<h1 class="dj-error-page__title">{e_title}</h1>'
@@ -10484,7 +10530,7 @@ class ErrorPageHandler:
 class ImageUploadPreviewHandler:
     """Inline handler for {% image_upload_preview name="photos" max=5 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         name = kw.get("name", "images")
         max_count = kw.get("max", 5)
@@ -10494,7 +10540,7 @@ class ImageUploadPreviewHandler:
         custom_class = kw.get("class", "")
 
         try:
-            max_count = int(max_count)
+            max_count = int(cast("str | int | float", max_count))
         except (ValueError, TypeError):
             max_count = 5
 
@@ -10533,7 +10579,7 @@ class ImageUploadPreviewHandler:
             "</svg>"
         )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" dj-hook="ImageUploadPreview" '
             f'data-event="{e_event}" data-max="{max_count}">'
             f'<label class="dj-img-upload__dropzone">'
@@ -10551,7 +10597,7 @@ class ImageUploadPreviewHandler:
 class AnimatedNumberHandler:
     """Inline handler for {% animated_number value=revenue prefix="$" %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         value = kw.get("value", 0)
         prefix = kw.get("prefix", "")
@@ -10562,15 +10608,15 @@ class AnimatedNumberHandler:
         custom_class = kw.get("class", "")
 
         try:
-            val = float(value)
+            val = float(cast("str | int | float", value))
         except (ValueError, TypeError):
             val = 0
         try:
-            duration = int(duration)
+            duration = int(cast("str | int | float", duration))
         except (ValueError, TypeError):
             duration = 800
         try:
-            decimals = int(decimals)
+            decimals = int(cast("str | int | float", decimals))
         except (ValueError, TypeError):
             decimals = 0
 
@@ -10588,7 +10634,7 @@ class AnimatedNumberHandler:
         else:
             formatted = f"{int(val):,}"
         if separator != ",":
-            formatted = formatted.replace(",", separator)
+            formatted = formatted.replace(",", str(separator))
         e_formatted = conditional_escape(formatted)
 
         prefix_html = ""
@@ -10598,7 +10644,7 @@ class AnimatedNumberHandler:
         if e_suffix:
             suffix_html = f'<span class="dj-animated-number__suffix">{e_suffix}</span>'
 
-        return mark_safe(
+        return _safe(
             f'<span class="{cls}" dj-hook="AnimatedNumber" '
             f'data-value="{val}" data-duration="{duration}" '
             f'data-decimals="{decimals}" data-separator="{e_sep}">'
@@ -10619,7 +10665,7 @@ class RibbonHandler:
         "danger": "dj-ribbon--danger",
     }
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         text = kw.get("text", "")
         variant = kw.get("variant", "primary")
@@ -10645,7 +10691,7 @@ class RibbonHandler:
 
         cls = " ".join(classes)
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" aria-label="{e_text}">'
             f'<span class="dj-ribbon__text">{e_text}</span>'
             f"</div>"
@@ -10655,7 +10701,7 @@ class RibbonHandler:
 class BreadcrumbDropdownHandler:
     """Inline handler for {% breadcrumb_dropdown items=items %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         items = kw.get("items", [])
         max_visible = kw.get("max_visible", 4)
@@ -10666,7 +10712,7 @@ class BreadcrumbDropdownHandler:
             items = []
 
         try:
-            max_vis = int(max_visible)
+            max_vis = int(cast("str | int | float", max_visible))
         except (ValueError, TypeError):
             max_vis = 4
 
@@ -10679,7 +10725,7 @@ class BreadcrumbDropdownHandler:
 
         need_collapse = len(items) > max_vis and max_vis >= 2
 
-        def render_item(item, is_last):
+        def render_item(item: object, is_last: bool) -> str:
             if not isinstance(item, dict):
                 return ""
             label = conditional_escape(str(item.get("label", "")))
@@ -10730,7 +10776,7 @@ class BreadcrumbDropdownHandler:
                 is_last = i == len(items) - 1
                 parts.append(render_item(it, is_last))
 
-        return mark_safe(
+        return _safe(
             f'<nav class="{cls}" aria-label="Breadcrumb">'
             f'<ol class="dj-breadcrumb__list">{"".join(parts)}</ol>'
             f"</nav>"
@@ -10740,7 +10786,7 @@ class BreadcrumbDropdownHandler:
 class DataCardGridHandler:
     """Inline handler for {% data_card_grid items=items columns=3 %}"""
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
@@ -10752,7 +10798,7 @@ class DataCardGridHandler:
             items = []
 
         try:
-            cols = int(columns)
+            cols = int(cast("str | int | float", columns))
         except (ValueError, TypeError):
             cols = 3
 
@@ -10816,7 +10862,7 @@ class DataCardGridHandler:
 
         style = f"--dj-data-card-grid-cols:{cols}"
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" style="{style}">'
             f"{filter_html}"
             f'<div class="dj-data-card-grid__grid" role="list">'
@@ -10834,7 +10880,7 @@ class AgentStepHandler:
         "error": "&#10007;",
     }
 
-    def render(self, args, content, context):
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         tool = kw.get("tool", "")
         status = kw.get("status", "pending")
@@ -10863,7 +10909,7 @@ class AgentStepHandler:
         if e_content:
             content_html = f'<div class="dj-agent-step__content">{e_content}</div>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}" role="listitem">'
             f'<div class="dj-agent-step__header">'
             f'<span class="dj-agent-step__icon" aria-hidden="true">{icon}</span>'
@@ -10882,11 +10928,11 @@ class QRCodeHandler:
     SIZE_MAP = {"sm": 128, "md": 200, "lg": 300}
 
     @staticmethod
-    def _generate_matrix(data_str):
+    def _generate_matrix(data_str: str) -> list[list[bool]]:
         size = 21
         matrix = [[False] * size for _ in range(size)]
 
-        def add_finder(row, col):
+        def add_finder(row: int, col: int) -> None:
             for r in range(7):
                 for c in range(7):
                     if row + r < size and col + c < size:
@@ -10922,7 +10968,7 @@ class QRCodeHandler:
 
         return matrix
 
-    def render(self, args, context):
+    def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         data = kw.get("data", "")
         size = kw.get("size", "md")
@@ -10943,7 +10989,7 @@ class QRCodeHandler:
             px = self.SIZE_MAP[size]
         else:
             try:
-                px = int(size)
+                px = int(cast("str | int | float", size))
             except (ValueError, TypeError):
                 px = 200
 
@@ -10963,7 +11009,7 @@ class QRCodeHandler:
                         f'fill="{e_fg}"/>'
                     )
 
-        return mark_safe(
+        return _safe(
             f'<div class="{cls}">'
             f'<svg class="dj-qr-code__svg" viewBox="0 0 {px} {px}" '
             f'width="{px}" height="{px}" xmlns="http://www.w3.org/2000/svg" '

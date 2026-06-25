@@ -578,12 +578,10 @@ warn_return_any = true
 # (djust_components/_advanced/_forms/_charts), the per-widget data_table mixin,
 # the gallery LiveView/view/registry/examples surface + its management command,
 # the ~24 remaining components/components/ widgets, the layout/data/ttyd leaves,
-# and the union-typed `ui/*_simple` + ui/dropdown stateless widgets. The large
-# Rust-bridge handler registry (rust_handlers) is intentionally left LENIENT — it
-# is a genuinely-dynamic registry whose handlers parse untyped Rust-engine arg
-# lists into object-valued dicts (kw.get()->object cascades), so strict typing
-# would require >200 narrowing changes / type: ignores with real rendering-behavior
-# risk; the global lenient default is the correct home for it (documented exception).
+# and the union-typed `ui/*_simple` + ui/dropdown stateless widgets.
+# (The large Rust-bridge handler registry `djust.components.rust_handlers` was
+# the last lenient holdout; it was flipped to a strict island in M4g — see the
+# dedicated block below.)
 [[tool.mypy.overrides]]
 module = [
     "djust.components.components.animated_number",
@@ -654,6 +652,30 @@ module = [
     "djust.components.ui.textarea_simple",
     "djust.components.ui.toast_simple",
     "djust.components.ui.tooltip_simple",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# components/rust_handlers (ADR-023 M4g, ratchet COMPLETE) — the Rust template-
+# engine component tag-registration shim: ~193 `render()` handlers (inline +
+# block) that parse untyped Rust-engine arg lists (`["key=val", ...]`) into
+# object-valued dicts and emit component HTML. This was the SOLE remaining
+# lenient module (the genuinely-dynamic Rust-FFI boundary). It is now strict:
+# - All 193 handler returns are pinned via a typed `_safe()` wrapper that casts
+#   Django's `@keep_lazy`-decorated (untyped -> Any) `mark_safe` to `str`,
+#   absorbing the no-any-return cascade WITHOUT any `# type: ignore`.
+# - The `kw.get(...) -> object` cascades are narrowed with inline `cast(...)` /
+#   `str(...)` (runtime no-ops) at each `int()`/`float()`/dict-key/attr site.
+# Zero new `# type: ignore` were needed (the only one is the pre-existing
+# `_rust` `[import]`). Render output is proven byte-identical (382 outputs across
+# all 193 handlers). Flipping this module retires the last ADR-023 lenient
+# exception — the global lenient default now parks only legacy non-components
+# modules.
+[[tool.mypy.overrides]]
+module = [
+    "djust.components.rust_handlers",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
