@@ -8,7 +8,7 @@ and visual debugging capabilities for theme development.
 from typing import Dict, List, Any
 import json
 import logging
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.template.response import TemplateResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class ThemeInspector:
     """Runtime theme inspection and debugging utilities."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.design_systems = get_all_design_systems()
         self.color_presets = THEME_PRESETS
 
@@ -114,7 +114,7 @@ class ThemeInspector:
         }
 
         # Extract color preset details
-        def color_to_dict(color_scale):
+        def color_to_dict(color_scale: Any) -> Dict[str, Any]:
             return {
                 "hue": color_scale.h,
                 "saturation": color_scale.s,
@@ -250,7 +250,7 @@ class ThemeInspector:
 
 
 # Django views for the inspector
-def theme_inspector_view(request):
+def theme_inspector_view(request: HttpRequest) -> TemplateResponse:
     """Theme inspector interface."""
 
     inspector = ThemeInspector()
@@ -275,7 +275,7 @@ def theme_inspector_view(request):
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
-def theme_inspector_api(request):
+def theme_inspector_api(request: HttpRequest) -> JsonResponse:
     """API endpoint for theme inspection.
 
     CSRF exempt: This is a read-only/stateless API used by the theme inspector
@@ -330,7 +330,7 @@ def theme_inspector_api(request):
     return JsonResponse({"error": "Method not allowed"}, status=405)
 
 
-def theme_css_api(request):
+def theme_css_api(request: HttpRequest) -> JsonResponse:
     """API endpoint to get CSS for a theme combination."""
 
     design = request.GET.get("design", "minimalist")

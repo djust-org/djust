@@ -9,7 +9,7 @@ import logging
 import os
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -267,7 +267,7 @@ class BuildTimeGenerator:
         design_systems = get_all_design_systems()
 
         # Build manifest data
-        manifest = {
+        manifest: dict[str, Any] = {
             "generator": "djust-theming",
             "version": "1.0.0",
             "generated_at": datetime.now().isoformat(),
@@ -497,17 +497,19 @@ if (typeof module !== 'undefined' && module.exports) {
         logger.info("  Generated theme switcher: %s", js_filename)
         return str(js_path)
 
-    def build_all(self) -> Dict[str, str]:
+    def build_all(self) -> Dict[str, Any]:
         """
         Generate all build artifacts.
 
         Returns:
-            Dictionary of artifact types to file paths
+            Dictionary of artifact types to file paths. ``individual_themes``
+            maps to a ``list[str]`` of paths; the other keys map to single
+            path strings.
         """
         logger.info("Starting djust-theming build process...")
         logger.info("Output directory: %s", self.output_dir)
 
-        artifacts = {}
+        artifacts: Dict[str, Any] = {}
 
         # Generate individual theme files
         generated_files = self.generate_individual_themes()
@@ -537,7 +539,7 @@ def build_themes(
     minify: bool = True,
     source_maps: bool = False,
     manifest: bool = True,
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """
     Convenience function to build all themes.
 

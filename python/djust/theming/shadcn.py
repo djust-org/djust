@@ -298,7 +298,7 @@ def import_shadcn_theme_from_file(file_path: str) -> ThemePreset:
     return parse_shadcn_theme(theme_json)
 
 
-def export_shadcn_theme_to_file(preset_name: str, file_path: str):
+def export_shadcn_theme_to_file(preset_name: str, file_path: str) -> None:
     """
     Export a djust-theming preset to a shadcn theme JSON file.
 

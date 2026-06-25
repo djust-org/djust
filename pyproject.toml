@@ -729,6 +729,65 @@ disallow_incomplete_defs = true
 warn_return_any = true
 
 
+# theming/ subpackage (ADR-023 M4c, part 3) — every top-level module of the
+# theming system flipped from the lenient default to strict islands. Spans the
+# registry singleton + accessor + discovery wiring, the ThemeManager + state,
+# the CSS generators (theme / pack / component / design-system / color), the
+# palette/colors/accessibility/high-contrast color machinery, the
+# context-processor + template-resolver render paths, the ThemeMixin +
+# components + forms renderer, the build-time generator, the shadcn/tailwind
+# adapters, the inspector dev tool, the system checks, the AppConfig, the
+# Rust-engine tag-handler registry (rust_handlers — small + already typed,
+# unlike components/rust_handlers), and the leaf config/constants/types modules.
+# The theming/{management,templatetags,gallery} subpackages remain lenient for a
+# continuation batch. No theming/tests/ dir exists (nothing to exclude).
+[[tool.mypy.overrides]]
+module = [
+    "djust.theming.__init__",
+    "djust.theming._builtin_presets",
+    "djust.theming._config",
+    "djust.theming._constants",
+    "djust.theming._registry_accessor",
+    "djust.theming._types",
+    "djust.theming.accessibility",
+    "djust.theming.apps",
+    "djust.theming.build_themes",
+    "djust.theming.cache",
+    "djust.theming.checks",
+    "djust.theming.colors",
+    "djust.theming.compat",
+    "djust.theming.component_css_generator",
+    "djust.theming.components",
+    "djust.theming.context_processors",
+    "djust.theming.contracts",
+    "djust.theming.css_generator",
+    "djust.theming.design_system_css",
+    "djust.theming.design_tokens",
+    "djust.theming.forms",
+    "djust.theming.high_contrast",
+    "djust.theming.inspector",
+    "djust.theming.loaders",
+    "djust.theming.manager",
+    "djust.theming.manifest",
+    "djust.theming.mixins",
+    "djust.theming.pack_css_generator",
+    "djust.theming.palette",
+    "djust.theming.presets",
+    "djust.theming.registry",
+    "djust.theming.rust_handlers",
+    "djust.theming.shadcn",
+    "djust.theming.tailwind",
+    "djust.theming.template_resolver",
+    "djust.theming.theme_css_generator",
+    "djust.theming.theme_packs",
+    "djust.theming.urls",
+    "djust.theming.views",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework
 # where mark_safe is expected and safe (content comes from trusted templates)

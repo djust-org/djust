@@ -17,6 +17,7 @@ it as the registry's discovery hook at import time. It re-exports
 import importlib
 import logging
 from pathlib import Path
+from typing import Any
 
 # Re-export the singleton + accessor from the leaf for back-compat. External
 # callers and ``__init__`` import these from ``.registry``; identity is preserved.
@@ -101,7 +102,7 @@ def _load_theme_package(registry: ThemeRegistry, package_name: str) -> None:
             registry._packs[name] = pack
 
 
-def _detect_package_templates(mod, manifest) -> None:
+def _detect_package_templates(mod: Any, manifest: Any) -> None:
     """Detect templates/ dir in a package and set manifest.templates_dir."""
     if manifest.templates_dir is not None:
         return  # Already set by the package itself
@@ -147,7 +148,7 @@ set_discovery_hook(_do_discover)
 # ------------------------------------------------------------------
 
 
-def register_preset(name: str, preset) -> None:
+def register_preset(name: str, preset: Any) -> None:
     """Register a custom color preset.
 
     Call in your AppConfig.ready():
@@ -165,7 +166,7 @@ def register_preset(name: str, preset) -> None:
     get_registry().register_preset(name, preset)
 
 
-def register_design_system(name: str, design_system) -> None:
+def register_design_system(name: str, design_system: Any) -> None:
     """Register a custom design system.
 
     Call in your AppConfig.ready():
@@ -178,7 +179,7 @@ def register_design_system(name: str, design_system) -> None:
     get_registry().register_theme(name, design_system)
 
 
-def register_theme_pack(name: str, pack) -> None:
+def register_theme_pack(name: str, pack: Any) -> None:
     """Register a custom theme pack.
 
     Call in your AppConfig.ready():

@@ -23,7 +23,7 @@ change, no public-API change.
 
 import logging
 import threading
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,16 @@ class ThemeRegistry:
     _instance: Optional["ThemeRegistry"] = None
     _lock = threading.Lock()
 
-    def __new__(cls):
+    # Instance state initialized in __new__ (via the singleton-construction
+    # local ``inst``); declared at class level so the types are visible to
+    # static analysis (the attrs are populated once per process).
+    _presets: dict[str, Any]
+    _themes: dict[str, Any]  # design systems
+    _packs: dict[str, Any]  # theme packs
+    _manifests: dict[str, Any]  # ThemeManifest objects
+    _discovered: bool
+
+    def __new__(cls) -> "ThemeRegistry":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -72,22 +81,22 @@ class ThemeRegistry:
     # Registration API
     # ------------------------------------------------------------------
 
-    def register_preset(self, name: str, preset) -> None:
+    def register_preset(self, name: str, preset: Any) -> None:
         """Register a color preset. Overwrites if name exists."""
         with self._lock:
             self._presets[name] = preset
 
-    def register_theme(self, name: str, theme) -> None:
+    def register_theme(self, name: str, theme: Any) -> None:
         """Register a design system. Overwrites if name exists."""
         with self._lock:
             self._themes[name] = theme
 
-    def register_pack(self, name: str, pack) -> None:
+    def register_pack(self, name: str, pack: Any) -> None:
         """Register a theme pack. Overwrites if name exists."""
         with self._lock:
             self._packs[name] = pack
 
-    def register_manifest(self, name: str, manifest) -> None:
+    def register_manifest(self, name: str, manifest: Any) -> None:
         """Register a parsed ThemeManifest."""
         with self._lock:
             self._manifests[name] = manifest
@@ -96,19 +105,19 @@ class ThemeRegistry:
     # Lookup API
     # ------------------------------------------------------------------
 
-    def get_preset(self, name: str, default=None):
+    def get_preset(self, name: str, default: Any = None) -> Any:
         """Get a preset by name, or *default* if not found."""
         return self._presets.get(name, default)
 
-    def get_theme(self, name: str, default=None):
+    def get_theme(self, name: str, default: Any = None) -> Any:
         """Get a design system by name, or *default* if not found."""
         return self._themes.get(name, default)
 
-    def get_pack(self, name: str, default=None):
+    def get_pack(self, name: str, default: Any = None) -> Any:
         """Get a theme pack by name, or *default* if not found."""
         return self._packs.get(name, default)
 
-    def get_manifest(self, name: str):
+    def get_manifest(self, name: str) -> Any:
         """Get a ThemeManifest by name, or None if not found."""
         return self._manifests.get(name)
 
@@ -170,7 +179,7 @@ class ThemeRegistry:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _reset(cls):
+    def _reset(cls) -> None:
         """Reset singleton. For tests only."""
         with cls._lock:
             cls._instance = None

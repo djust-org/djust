@@ -6,6 +6,8 @@ Works with both Django templates (via context processors) and LiveView
 (via instance attributes and push_event).
 """
 
+from typing import Any, Callable
+
 try:
     from djust.decorators import event_handler
 
@@ -13,10 +15,10 @@ try:
 except ImportError:
     DJUST_AVAILABLE = False
 
-    def event_handler(*args, **kwargs):
+    def event_handler(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef]
         """Dummy decorator when djust is not available."""
 
-        def decorator(func):
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             return func
 
         if args and callable(args[0]):
@@ -63,14 +65,16 @@ class ThemeMixin:
     """
 
     # Internal state (prefixed to avoid serialization)
-    _theme_manager: ThemeManager = None
-    _theme_state = None
+    _theme_manager: ThemeManager | None = None
+    _theme_state: Any = None
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: Any, **kwargs: Any) -> None:
         """Initialize theme manager and add theme context as instance attributes."""
-        # Call parent mount if it exists
+        # Call parent mount if it exists. ThemeMixin is mixed into a LiveView
+        # at runtime (the MRO provides ``mount``); ``object`` has none, so the
+        # static checker can't see it — guarded by the hasattr check above.
         if hasattr(super(), "mount"):
-            super().mount(request, **kwargs)
+            super().mount(request, **kwargs)  # type: ignore[misc]
 
         # Initialize theme manager (underscore prefix to avoid serialization)
         self._theme_manager = get_theme_manager(request)
@@ -80,7 +84,7 @@ class ThemeMixin:
         # These get picked up by get_context_data() in LiveView
         self._setup_theme_context()
 
-    def _setup_theme_context(self):
+    def _setup_theme_context(self) -> None:
         """Set up theme context variables as instance attributes.
 
         Renders ``theme_head`` via the shared ``theme_head.html`` template and
@@ -144,7 +148,9 @@ class ThemeMixin:
         self.theme_resolved_mode = state.resolved_mode
         self.theme_presets = presets
 
-    def _push_theme_update(self, mode: str = None, preset: str = None, css: str = None):
+    def _push_theme_update(
+        self, mode: str | None = None, preset: str | None = None, css: str | None = None
+    ) -> None:
         """
         Push theme update to client via push_event.
 
@@ -173,7 +179,7 @@ class ThemeMixin:
     if DJUST_AVAILABLE:
 
         @event_handler()
-        def set_theme_mode(self, mode: str = "", value: str = "", **kwargs):
+        def set_theme_mode(self, mode: str = "", value: str = "", **kwargs: Any) -> None:
             """
             Set theme mode to light, dark, or system.
 
@@ -183,6 +189,8 @@ class ThemeMixin:
             # Support both data-dj-mode (dj-click) and value (dj-change)
             mode = mode or value or "system"
             if mode not in ("light", "dark", "system"):
+                return
+            if self._theme_manager is None:
                 return
 
             success = self._theme_manager.set_mode(mode)
@@ -194,7 +202,7 @@ class ThemeMixin:
                 self._push_theme_update(mode=mode)
 
         @event_handler()
-        def set_theme_preset(self, preset: str = "", value: str = "", **kwargs):
+        def set_theme_preset(self, preset: str = "", value: str = "", **kwargs: Any) -> None:
             """
             Set theme preset.
 
@@ -211,6 +219,8 @@ class ThemeMixin:
             preset = preset or value or "default"
             if preset not in THEME_PRESETS:
                 return
+            if self._theme_manager is None:
+                return
 
             success = self._theme_manager.set_preset(preset)
             if success:
@@ -221,13 +231,15 @@ class ThemeMixin:
                 self._push_theme_update(preset=preset, css=self._theme_css_raw)
 
         @event_handler()
-        def toggle_theme_mode(self, **kwargs):
+        def toggle_theme_mode(self, **kwargs: Any) -> None:
             """
             Toggle between light and dark mode.
 
             Usage in template:
                 <button dj-click="toggle_theme_mode">Toggle Theme</button>
             """
+            if self._theme_manager is None:
+                return
             new_mode = self._theme_manager.toggle_mode()
             self._theme_state = self._theme_manager.get_state()
             self._setup_theme_context()
@@ -236,13 +248,15 @@ class ThemeMixin:
             self._push_theme_update(mode=new_mode)
 
         @event_handler()
-        def cycle_theme_preset(self, **kwargs):
+        def cycle_theme_preset(self, **kwargs: Any) -> None:
             """
             Cycle through available theme presets.
 
             Usage in template:
                 <button dj-click="cycle_theme_preset">Next Theme</button>
             """
+            if self._theme_manager is None:
+                return
             current = self._theme_state.preset
             presets = list(THEME_PRESETS.keys())
             current_index = presets.index(current) if current in presets else 0

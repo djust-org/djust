@@ -1,4 +1,6 @@
-from django.http import HttpResponse
+from typing import Any
+
+from django.http import HttpRequest, HttpResponse
 from django.views.decorators.cache import cache_control
 from django.views.decorators.http import etag
 from django.utils.cache import patch_vary_headers
@@ -11,14 +13,14 @@ from .manager import (
 )
 
 
-def _generate_css_content(request):
+def _generate_css_content(request: HttpRequest) -> str:
     """Generate the CSS content based on the request."""
     manager = get_theme_manager(request)
     state = manager.get_state()
     return generate_css_for_state(state, css_prefix=get_css_prefix())
 
 
-def _css_etag(request, *args, **kwargs):
+def _css_etag(request: HttpRequest, *args: Any, **kwargs: Any) -> str:
     """Generate ETag based on theme state."""
     manager = get_theme_manager(request)
     state = manager.get_state()
@@ -27,7 +29,7 @@ def _css_etag(request, *args, **kwargs):
 
 @cache_control(max_age=3600, private=True)  # Cache for 1 hour, private (vary by user)
 @etag(_css_etag)
-def theme_css_view(request):
+def theme_css_view(request: HttpRequest) -> HttpResponse:
     """
     Serve dynamic theme CSS.
 
@@ -41,7 +43,7 @@ def theme_css_view(request):
     return response
 
 
-def _deferred_css_etag(request, *args, **kwargs):
+def _deferred_css_etag(request: HttpRequest, *args: Any, **kwargs: Any) -> str:
     """Generate ETag for deferred CSS based on theme state."""
     manager = get_theme_manager(request)
     state = manager.get_state()
@@ -50,7 +52,7 @@ def _deferred_css_etag(request, *args, **kwargs):
 
 @cache_control(max_age=3600, private=True)
 @etag(_deferred_css_etag)
-def deferred_theme_css_view(request):
+def deferred_theme_css_view(request: HttpRequest) -> HttpResponse:
     """
     Serve deferred theme CSS (base styles, utilities, component styles).
 

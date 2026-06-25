@@ -32,7 +32,7 @@ class ThemeFormRenderer(DjangoFormRenderer):
     """
 
     @cached_property
-    def engine(self):
+    def engine(self) -> DjangoBackend:
         import django.forms
 
         theme_templates_dir = (

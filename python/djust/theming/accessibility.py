@@ -9,7 +9,7 @@ from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
 from .presets import ColorScale, get_preset, THEME_PRESETS
-from .theme_packs import get_design_system, get_all_design_systems
+from .theme_packs import DesignSystem, get_design_system, get_all_design_systems
 
 
 @dataclass
@@ -46,7 +46,7 @@ class AccessibilityValidator:
     AAA_NORMAL = 7.0
     AAA_LARGE = 4.5
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.design_systems = get_all_design_systems()
         self.color_presets = THEME_PRESETS
 
@@ -64,7 +64,7 @@ class AccessibilityValidator:
             if channel <= 0.03928:
                 return channel / 12.92
             else:
-                return ((channel + 0.055) / 1.055) ** 2.4
+                return float(((channel + 0.055) / 1.055) ** 2.4)
 
         r_linear = gamma_correct(r)
         g_linear = gamma_correct(g)
@@ -199,7 +199,7 @@ class AccessibilityValidator:
             recommendations=recommendations,
         )
 
-    def _check_focus_visibility(self, design_system) -> bool:
+    def _check_focus_visibility(self, design_system: DesignSystem) -> bool:
         """Check if focus states are sufficiently visible."""
         # Check if focus ring is defined and visible
         focus_ring_width = getattr(design_system.interaction, "focus_ring_width", "0px")
@@ -211,7 +211,7 @@ class AccessibilityValidator:
         except (ValueError, AttributeError):
             return False
 
-    def _check_motion_safety(self, design_system) -> bool:
+    def _check_motion_safety(self, design_system: DesignSystem) -> bool:
         """Check if animations respect motion preferences."""
         # Check if durations are reasonable and not excessive
         try:
@@ -228,7 +228,7 @@ class AccessibilityValidator:
         except (ValueError, AttributeError):
             return False
 
-    def _check_color_independence(self, design_system) -> bool:
+    def _check_color_independence(self, design_system: DesignSystem) -> bool:
         """Check if design doesn't rely solely on color for meaning."""
         # This is a heuristic - in real implementation would check for:
         # - Icons accompanying color states
@@ -242,7 +242,7 @@ class AccessibilityValidator:
             design_system.typography.heading_weight != design_system.typography.body_weight
         )
 
-        return has_shadows or has_borders or has_varied_typography
+        return bool(has_shadows or has_borders or has_varied_typography)
 
     def validate_all_combinations(self) -> Dict[str, AccessibilityReport]:
         """Validate accessibility for all theme combinations."""

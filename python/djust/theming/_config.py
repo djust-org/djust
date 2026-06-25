@@ -38,7 +38,7 @@ DEFAULT_CONFIG = {
 }
 
 
-def _validate_cookie_namespace(value):
+def _validate_cookie_namespace(value: str | None) -> str | None:
     """Validate ``LIVEVIEW_CONFIG['theme']['cookie_namespace']`` (#1169(b)).
 
     The value is interpolated directly into cookie names; characters

@@ -11,7 +11,7 @@ to force regeneration after modifying theme definitions.
 """
 
 
-def clear_css_cache():
+def clear_css_cache() -> None:
     """Clear all CSS generation caches.
 
     Calls ``cache_clear()`` on every cached convenience function:
