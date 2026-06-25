@@ -127,6 +127,20 @@ holding the boundary. Suggested coverage milestones:
   `streaming`) — alongside / after the ADR-022 ViewRuntime convergence settles
   (converging first avoids annotating code that's about to move).
 - **M4+:** mixins, components, theming, the long tail.
+- **M4g (ratchet COMPLETE):** `djust.components.rust_handlers` — the Rust
+  template-engine component tag-registration shim (~193 inline/block `render()`
+  handlers parsing untyped Rust-engine arg lists into object-valued dicts). This
+  was the **sole sanctioned lenient holdout** — the genuinely-dynamic Rust-FFI
+  boundary that an earlier attempt (M4b-1) had documented as intractable
+  (~344 errors). It flipped clean with **zero new `# type: ignore`** by: (a) a
+  typed `_safe()` wrapper that `cast`s Django's `@keep_lazy`-decorated
+  (untyped → `Any`) `mark_safe` to `str`, absorbing the ~200-strong
+  `no-any-return` cascade; and (b) inline `cast(...)`/`str(...)` (runtime
+  no-ops) at each `int()`/`float()`/dict-key/attribute site of the
+  `kw.get(...) -> object` cascade. Render output is proven byte-identical
+  (382 outputs across all 193 handlers, deterministic-UUID harness). With M4g,
+  **no lenient exception remains in the components/ package** — the global
+  lenient default now parks only legacy non-components modules.
 
 ## Consequences
 
