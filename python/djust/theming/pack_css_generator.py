@@ -9,7 +9,7 @@ from functools import lru_cache
 
 from ..config import config as djust_config
 from ._config import get_theme_config
-from .theme_packs import get_theme_pack, get_design_system
+from .theme_packs import ThemePack, get_theme_pack, get_design_system
 from .theme_css_generator import CompleteThemeCSSGenerator
 
 
@@ -111,9 +111,10 @@ class ThemePackCSSGenerator:
 
     def __init__(self, pack_name: str):
         """Initialize with a theme pack name."""
-        self.pack = get_theme_pack(pack_name)
-        if not self.pack:
+        pack = get_theme_pack(pack_name)
+        if not pack:
             raise ValueError(f"Theme pack '{pack_name}' not found")
+        self.pack: ThemePack = pack
 
         # Initialize base theme generator
         self.theme_generator = CompleteThemeCSSGenerator(

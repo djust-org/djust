@@ -483,14 +483,14 @@ class PaletteGenerator:
         if secondary is not None:
             s_h, s_s, _s_l = hex_to_hsl(secondary)
         else:
-            s_h = (p_h + params["secondary_hue_offset"]) % 360
+            s_h = (p_h + int(params["secondary_hue_offset"])) % 360
             s_s = _clamp(p_s * params["sat_scale"], 0, 100)
 
         # Derive or parse accent
         if accent is not None:
             a_h, a_s, _a_l = hex_to_hsl(accent)
         else:
-            a_h = (p_h + params["accent_hue_offset"]) % 360
+            a_h = (p_h + int(params["accent_hue_offset"])) % 360
             a_s = _clamp(p_s * params["sat_scale"], 0, 100)
 
         light = _build_light_tokens(p_h, p_s, p_l, s_h, s_s, a_h, a_s, params)

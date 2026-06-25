@@ -11,6 +11,9 @@ wins. If no theme-specific override exists, the default ships with the
 package and is always available.
 """
 
+from typing import Any
+
+from django.http import HttpRequest
 from django.template.loader import select_template
 
 from .manager import get_theme_manager
@@ -50,7 +53,7 @@ def _get_theme_template_candidates(theme_name: str, template_name: str) -> list[
     ]
 
 
-def resolve_component_template(request, component_name: str):
+def resolve_component_template(request: HttpRequest, component_name: str) -> Any:
     """
     Resolve the template for a component, checking theme-specific override first.
 
@@ -84,7 +87,7 @@ def _get_layout_candidates(theme_name: str, layout_name: str) -> list[str]:
     ]
 
 
-def resolve_layout_template(request, layout_name: str):
+def resolve_layout_template(request: HttpRequest, layout_name: str) -> Any:
     """
     Resolve the template for a layout, checking theme-specific override first.
 
@@ -118,7 +121,7 @@ def _get_page_candidates(theme_name: str, page_name: str) -> list[str]:
     ]
 
 
-def resolve_page_template(request, page_name: str):
+def resolve_page_template(request: HttpRequest, page_name: str) -> Any:
     """
     Resolve the template for a page, checking theme-specific override first.
 
@@ -135,7 +138,7 @@ def resolve_page_template(request, page_name: str):
     return select_template(candidates)
 
 
-def resolve_theme_template(request, template_name: str):
+def resolve_theme_template(request: HttpRequest, template_name: str) -> Any:
     """
     Resolve a top-level theme template, checking theme-specific override first.
 

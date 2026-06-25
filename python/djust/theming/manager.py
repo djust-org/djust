@@ -5,7 +5,7 @@ Manages theme preset and mode preferences, with session persistence.
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from django.conf import settings
 from django.http import HttpRequest
@@ -57,7 +57,7 @@ class ThemeState:
     preset: str  # Color preset
     mode: ThemeMode
     resolved_mode: str  # 'light' or 'dark' (system resolved to actual)
-    pack: str = None  # Theme pack name (optional, overrides theme + preset)
+    pack: str | None = None  # Theme pack name (optional, overrides theme + preset)
     layout: str = ""  # Layout template (sidebar, topbar, dashboard, centered, etc.)
 
     def to_dict(self) -> dict:
@@ -73,7 +73,7 @@ class ThemeState:
 
 def get_css_prefix() -> str:
     """Get the configured CSS namespace prefix."""
-    return get_theme_config().get("css_prefix", "")
+    return str(get_theme_config().get("css_prefix", ""))
 
 
 def get_direction() -> str:
@@ -88,7 +88,7 @@ def get_direction() -> str:
     direction = config.get("direction", "auto")
 
     if direction in ("ltr", "rtl"):
-        return direction
+        return str(direction)
 
     # "auto" -- detect from LANGUAGE_CODE
     lang_code = getattr(settings, "LANGUAGE_CODE", "en")
@@ -148,11 +148,11 @@ def generate_critical_css_for_state(state: "ThemeState", css_prefix: str = "") -
         try:
             from .pack_css_generator import ThemePackCSSGenerator
 
-            gen = ThemePackCSSGenerator(pack_name=state.pack)
-            critical = gen.theme_generator.generate_critical_css()
+            pack_gen = ThemePackCSSGenerator(pack_name=state.pack)
+            critical = pack_gen.theme_generator.generate_critical_css()
             # Include design system tokens (form, layout, typography vars)
             # in critical CSS so they're available for first paint.
-            ds_vars = gen._generate_design_system_vars()
+            ds_vars = pack_gen._generate_design_system_vars()
             # Framework CSS (theme vars → Bootstrap/Tailwind selectors) is
             # emitted separately by {% theme_framework_overrides %} so it
             # loads AFTER the framework's static CSS file in the cascade.
@@ -185,8 +185,8 @@ def generate_deferred_css_for_state(state: "ThemeState", css_prefix: str = "") -
         try:
             from .pack_css_generator import ThemePackCSSGenerator
 
-            gen = ThemePackCSSGenerator(pack_name=state.pack)
-            return gen.theme_generator.generate_deferred_css()
+            pack_gen = ThemePackCSSGenerator(pack_name=state.pack)
+            return pack_gen.theme_generator.generate_deferred_css()
         except ValueError:
             pass
 
@@ -206,7 +206,7 @@ def get_theme_manager(request: HttpRequest | None = None) -> "ThemeManager":
     for ``request.user``).
     """
     if request is not None:
-        manager = getattr(request, "_djust_theme_manager", None)
+        manager: ThemeManager | None = getattr(request, "_djust_theme_manager", None)
         if manager is not None:
             return manager
         manager = ThemeManager(request=request)
@@ -237,7 +237,7 @@ class ThemeManager:
         self._session_key = self.config["session_key"]
 
     @property
-    def session(self):
+    def session(self) -> Any:
         """Get session if available."""
         if self.request and hasattr(self.request, "session"):
             return self.request.session
@@ -247,7 +247,8 @@ class ThemeManager:
         """Get theme data from session."""
         if not self.session:
             return {}
-        return self.session.get(self._session_key, {})
+        data: dict = self.session.get(self._session_key, {})
+        return data
 
     def _set_session_data(self, data: dict) -> None:
         """Save theme data to session."""
@@ -307,9 +308,9 @@ class ThemeManager:
                 if prefix:
                     namespaced = cookies.get(f"{prefix}{name}")
                     if namespaced is not None:
-                        return namespaced
-                    return cookies.get(name, default)
-                return cookies.get(name, default)
+                        return str(namespaced)
+                    return str(cookies.get(name, default))
+                return str(cookies.get(name, default))
 
             # _read returns "" when the cookie is set to empty; preserve that
             # rather than coercing to None via `or None` (which would re-trigger

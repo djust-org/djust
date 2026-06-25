@@ -1,7 +1,9 @@
 """Django system checks for djust-theming configuration validation."""
 
+from typing import Any, Iterator
+
 from django.conf import settings
-from django.core.checks import Error, Warning, register, Tags
+from django.core.checks import CheckMessage, Error, Warning, register, Tags
 
 from ._config import get_theme_config
 from .accessibility import AccessibilityValidator
@@ -47,7 +49,7 @@ def _contrast_check_scope() -> str:
     return "all" if scope == "all" else "active"
 
 
-def _presets_to_check():
+def _presets_to_check() -> Iterator[tuple[str, Any]]:
     """Yield ``(preset_name, preset)`` pairs for W001 contrast checks.
 
     Honors the scope returned by ``_contrast_check_scope()``: in
@@ -72,7 +74,7 @@ def _presets_to_check():
 
 
 @register(Tags.compatibility)
-def check_preset_contrast(app_configs, **kwargs):
+def check_preset_contrast(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate the active theme preset meets WCAG AA contrast ratios.
 
     #1005 — scoped by default to the active preset only. Set
@@ -104,11 +106,11 @@ def check_preset_contrast(app_configs, **kwargs):
 
 
 @register(Tags.compatibility)
-def check_css_prefix(app_configs, **kwargs):
+def check_css_prefix(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate css_prefix is safe and well-formed."""
     import re
 
-    errors = []
+    errors: list[CheckMessage] = []
     config = get_theme_config()
     prefix = config.get("css_prefix", "")
 
@@ -142,7 +144,7 @@ def check_css_prefix(app_configs, **kwargs):
 
 
 @register(Tags.compatibility)
-def check_context_processor(app_configs, **kwargs):
+def check_context_processor(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate that theme_context is in TEMPLATES context_processors."""
     errors = []
     context_processor_path = "djust.theming.context_processors.theme_context"
@@ -173,7 +175,7 @@ def check_context_processor(app_configs, **kwargs):
 
 
 @register(Tags.compatibility)
-def check_preset_valid(app_configs, **kwargs):
+def check_preset_valid(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate that the configured preset name exists in THEME_PRESETS."""
     errors = []
     config = get_theme_config()
@@ -195,7 +197,7 @@ def check_preset_valid(app_configs, **kwargs):
 
 
 @register(Tags.compatibility)
-def check_design_system_valid(app_configs, **kwargs):
+def check_design_system_valid(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate that the configured design system (theme) name exists in DESIGN_SYSTEMS."""
     errors = []
     config = get_theme_config()

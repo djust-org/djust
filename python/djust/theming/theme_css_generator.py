@@ -68,7 +68,7 @@ def _compute_type_scale(base_size: str, heading_scale: float) -> dict:
     xxxxl_px = xxxl_px * heading_scale
     xxxxxl_px = xxxxl_px * heading_scale
 
-    def fmt(px):
+    def fmt(px: float) -> str:
         rem = px / 16
         if rem == int(rem):
             return f"{int(rem)}rem"
@@ -194,7 +194,7 @@ class CompleteThemeCSSGenerator:
     """Generate complete theme CSS including colors, typography, spacing, etc."""
 
     def __init__(
-        self, theme_name: str = "material", color_preset: str = None, css_prefix: str = ""
+        self, theme_name: str = "material", color_preset: str | None = None, css_prefix: str = ""
     ):
         """
         Initialize complete theme CSS generator.
@@ -204,9 +204,10 @@ class CompleteThemeCSSGenerator:
             color_preset: Color preset name (default, blue, dracula, etc.)
             css_prefix: Namespace prefix for component CSS classes (e.g. "dj-")
         """
-        self.ds = get_design_system(theme_name)
-        if not self.ds:
+        ds = get_design_system(theme_name)
+        if not ds:
             raise ValueError(f"Design system '{theme_name}' not found")
+        self.ds: DesignSystem = ds
 
         self.color_preset = color_preset or "default"
         self.css_prefix = css_prefix
@@ -531,7 +532,7 @@ class CompleteThemeCSSGenerator:
         _parse_size_to_px(r_md)
         r_lg_px = _parse_size_to_px(r_lg)
 
-        def fmt_radius(px):
+        def fmt_radius(px: float) -> str:
             if px == 0:
                 return "0px"
             rem = px / 16
@@ -820,7 +821,9 @@ class CompleteThemeCSSGenerator:
 
 
 @lru_cache(maxsize=256)
-def generate_theme_css(theme_name: str, color_preset: str = None, css_prefix: str = "") -> str:
+def generate_theme_css(
+    theme_name: str, color_preset: str | None = None, css_prefix: str = ""
+) -> str:
     """
     Generate complete CSS for a theme (cached).
 

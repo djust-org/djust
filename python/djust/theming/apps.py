@@ -7,7 +7,7 @@ class DjustThemingConfig(AppConfig):
     verbose_name = "Djust Theming"
     default_auto_field = "django.db.models.BigAutoField"
 
-    def ready(self):
+    def ready(self) -> None:
         from . import checks  # noqa: F401 -- triggers @register
 
         # Import ``registry`` (not the leaf) so its discovery hook is installed

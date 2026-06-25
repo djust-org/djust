@@ -6,11 +6,14 @@ Adds theme CSS and state to template context.
 
 import logging
 from functools import lru_cache
+from typing import Any, Callable
 
 from django.contrib.staticfiles.storage import staticfiles_storage
+from django.http import HttpRequest
 from django.utils.safestring import mark_safe
 
 from .manager import (
+    ThemeMode,
     ThemeState,
     generate_css_for_state,
     get_css_prefix,
@@ -36,7 +39,15 @@ _ANTI_FOUC_SCRIPT = """<script>
 
 
 @lru_cache(maxsize=512)
-def _render_theme_outputs(theme, preset, pack, mode, resolved_mode, layout, presets_key):
+def _render_theme_outputs(
+    theme: str,
+    preset: str,
+    pack: str | None,
+    mode: ThemeMode,
+    resolved_mode: str,
+    layout: str,
+    presets_key: Any,
+) -> tuple[str, str]:
     """Pure-function render of (theme_head_html, theme_switcher_html).
 
     Cached because the output is byte-identical for the same theme
@@ -75,7 +86,7 @@ def _render_theme_outputs(theme, preset, pack, mode, resolved_mode, layout, pres
     return theme_head, theme_switcher
 
 
-def _presets_to_cache_key(presets):
+def _presets_to_cache_key(presets: list[dict]) -> tuple:
     """Convert the available-presets list (list of dicts) into a
     hashable tuple-of-tuples for use as an `lru_cache` key. Only the
     fields actually consumed by `_render_theme_switcher` are kept."""
@@ -85,7 +96,7 @@ def _presets_to_cache_key(presets):
     )
 
 
-def clear_theme_context_cache():
+def clear_theme_context_cache() -> None:
     """Drop the per-process render cache.
 
     Call this on theme-pack reload, or in tests that mutate theme state
@@ -94,7 +105,7 @@ def clear_theme_context_cache():
     _render_theme_outputs.cache_clear()
 
 
-def theme_context(request):
+def theme_context(request: HttpRequest) -> dict:
     """
     Add theme CSS and state to template context.
 
@@ -158,7 +169,7 @@ def theme_context(request):
 
     tag_context = {"request": request}
 
-    def _safe_render(fn) -> str:
+    def _safe_render(fn: Callable[..., Any]) -> str:
         try:
             return fn(tag_context) or ""
         except Exception:
@@ -246,7 +257,7 @@ def theme_context(request):
     }
 
 
-def _render_theme_switcher(state, presets):
+def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     """Render the theme switcher HTML inline."""
     # Mode buttons
     mode_buttons = ""
@@ -346,13 +357,13 @@ def _render_theme_switcher(state, presets):
 </style>"""
 
 
-def _sun_icon():
+def _sun_icon() -> str:
     return """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>"""
 
 
-def _moon_icon():
+def _moon_icon() -> str:
     return """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>"""
 
 
-def _monitor_icon():
+def _monitor_icon() -> str:
     return """<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>"""
