@@ -216,7 +216,7 @@ ignore_errors = true
 # djust.permissions). Mark those libraries untyped explicitly so the strict
 # islands stay green without weakening the island's own def/return strictness.
 [[tool.mypy.overrides]]
-module = ["yaml"]
+module = ["yaml", "requests"]
 ignore_missing_imports = true
 
 # --------------------------------------------------------------------------- #
@@ -782,6 +782,52 @@ module = [
     "djust.theming.theme_packs",
     "djust.theming.urls",
     "djust.theming.views",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# mcp/ + contrib/uploads/ + uploads/ subpackages (ADR-023 M4d, group 4) —
+# flipped from the lenient default to strict islands. Spans: the MCP server
+# (the AI-assistant introspection/scaffolding tool — server/__init__/__main__),
+# the binary-WebSocket-frame upload system (uploads/ — the UploadWriter base +
+# BufferedUploadWriter + UploadConfig, the resumable chunk protocol, the
+# pluggable state stores (in-memory + Redis), and the upload-status view), and
+# the contrib upload-writer adapters (contrib/uploads/ — S3 presigned/event,
+# GCS resumable, Azure block-blob, shared errors). None of these subpackages has
+# a tests/ dir, so there is no test sub-package to exclude. Upload logic is
+# byte-identical — annotations only (security-relevant binary-frame handling).
+# Real type bugs / boundary narrows fixed to clean this island:
+#   - uploads/storage.py, contrib/uploads/s3_presigned.py, mcp/server.py: several
+#     [no-any-return] narrowed with cast() at the json.loads / boto3-presign /
+#     requests.Response.text untyped boundaries.
+#   - mcp/server.py: two observability-tool `params` dicts inferred as
+#     homogeneous str/int from their first key, then mutated with the other type
+#     ([assignment]); annotated `dict[str, object]` (mixed query-param values).
+#   - uploads/{__init__,contrib/uploads/gcs,contrib/uploads/azure}.py: the
+#     legacy `write_chunk(self, chunk)` overrides (no `chunk_index`) carry a
+#     coded `# type: ignore[override]` — the dropped trailing default is an
+#     intentional, runtime-dispatched part of the UploadWriter contract
+#     (`_writer_accepts_chunk_index`), documented on the base method.
+# Third-party `requests` (consumed by mcp/server + contrib/uploads/gcs, no stubs)
+# is marked untyped in the `["yaml", "requests"]` override above.
+[[tool.mypy.overrides]]
+module = [
+    "djust.mcp.__init__",
+    "djust.mcp.__main__",
+    "djust.mcp.server",
+    "djust.uploads.__init__",
+    "djust.uploads.resumable",
+    "djust.uploads.storage",
+    "djust.uploads.views",
+    "djust.contrib.__init__",
+    "djust.contrib.uploads.__init__",
+    "djust.contrib.uploads.azure",
+    "djust.contrib.uploads.errors",
+    "djust.contrib.uploads.gcs",
+    "djust.contrib.uploads.s3_events",
+    "djust.contrib.uploads.s3_presigned",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
