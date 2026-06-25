@@ -8,7 +8,9 @@ Usage:
     python manage.py djust_theme generate-examples
 """
 
-from django.core.management.base import BaseCommand, CommandError
+from typing import TYPE_CHECKING, Any
+
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 from djust.theming._registry_accessor import get_registry
 from djust.theming.tailwind import (
     generate_tailwind_config,
@@ -21,11 +23,17 @@ from djust.theming.shadcn import (
 )
 import json
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from djust.theming._registry_accessor import ThemeRegistry
+    from djust.theming.presets import ThemeTokens
+
 
 class Command(BaseCommand):
     help = "djust-theming utilities for Tailwind CSS integration"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand to run")
 
         # tailwind-config subcommand
@@ -224,7 +232,7 @@ class Command(BaseCommand):
         mp_parser.add_argument("mp_theme_name", type=str, help="Theme name to inspect")
         mp_parser.add_argument("--dir", type=str, dest="dir", help="Override themes directory")
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         subcommand = options.get("subcommand")
 
         if not subcommand:
@@ -258,7 +266,7 @@ class Command(BaseCommand):
         else:
             raise CommandError(f"Unknown subcommand: {subcommand}")
 
-    def handle_tailwind_config(self, options):
+    def handle_tailwind_config(self, options: dict[str, Any]) -> None:
         """Generate tailwind.config.js file."""
         preset = options["preset"]
         output = options["output"]
@@ -304,7 +312,7 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to generate config: {e}")
 
-    def handle_export_colors(self, options):
+    def handle_export_colors(self, options: dict[str, Any]) -> None:
         """Export preset colors."""
         preset = options["preset"]
         format_type = options["format"]
@@ -341,7 +349,7 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to export colors: {e}")
 
-    def handle_list_presets(self):
+    def handle_list_presets(self) -> None:
         """List all available presets."""
         self.stdout.write(self.style.SUCCESS("Available theme presets:\n"))
 
@@ -353,7 +361,7 @@ class Command(BaseCommand):
 
         self.stdout.write(f"\nTotal: {len(presets)} presets")
 
-    def handle_generate_examples(self, options):
+    def handle_generate_examples(self, options: dict[str, Any]) -> None:
         """Generate @apply examples."""
         output = options["output"]
 
@@ -370,7 +378,7 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to generate examples: {e}")
 
-    def handle_shadcn_import(self, options):
+    def handle_shadcn_import(self, options: dict[str, Any]) -> None:
         """Import a shadcn theme from JSON file."""
         input_file = options["input_file"]
         register = options["register"]
@@ -399,7 +407,7 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to import theme: {e}")
 
-    def handle_shadcn_export(self, options):
+    def handle_shadcn_export(self, options: dict[str, Any]) -> None:
         """Export a preset to shadcn theme JSON format."""
         preset = options["preset"]
         output = options["output"]
@@ -423,7 +431,7 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Failed to export theme: {e}")
 
-    def handle_init(self, options):
+    def handle_init(self, options: dict[str, Any]) -> None:
         """Initialize djust-theming in the project."""
         preset = options["preset"]
         with_tailwind = options["with_tailwind"]
@@ -536,7 +544,7 @@ class Command(BaseCommand):
         self.stdout.write("🎨 Theme switcher: { theme_switcher }")
         self.stdout.write("🌓 Mode toggle: { theme_mode_toggle }\n")
 
-    def handle_create_theme(self, options):
+    def handle_create_theme(self, options: dict[str, Any]) -> None:
         """Scaffold a new user theme directory."""
         from pathlib import Path
 
@@ -651,7 +659,7 @@ class Command(BaseCommand):
         self.stdout.write("  static/css/    — additional stylesheets")
         self.stdout.write("  static/fonts/  — custom web fonts\n")
 
-    def handle_validate_theme(self, options):
+    def handle_validate_theme(self, options: dict[str, Any]) -> None:
         """Validate a theme manifest and its referenced files."""
         from pathlib import Path
 
@@ -700,7 +708,12 @@ class Command(BaseCommand):
 
         self._validate_single_theme(theme_dir, registry, ThemeTokens)
 
-    def _validate_single_theme(self, theme_dir, registry, ThemeTokens):
+    def _validate_single_theme(
+        self,
+        theme_dir: "Path",
+        registry: "ThemeRegistry",
+        ThemeTokens: "type[ThemeTokens]",
+    ) -> None:
         """Run all validation checks on a single theme directory."""
         from djust.theming.manifest import ThemeManifest
 
@@ -758,7 +771,7 @@ class Command(BaseCommand):
                 self.style.SUCCESS(f"  PASS: Valid (with {len(warnings)} warning(s)).")
             )
 
-    def handle_create_package(self, options):
+    def handle_create_package(self, options: dict[str, Any]) -> None:
         """Generate a pip-installable theme package scaffold."""
         import re
         from pathlib import Path
@@ -973,7 +986,7 @@ SOFTWARE.
         self.stdout.write(f"  3. Build: pip install -e {pkg_root}")
         self.stdout.write("  4. Publish: python -m build && twine upload dist/*\n")
 
-    def handle_check_compat(self, options):
+    def handle_check_compat(self, options: dict[str, Any]) -> None:
         """Check theme overrides against component contracts."""
         from pathlib import Path
 
@@ -1015,7 +1028,7 @@ SOFTWARE.
 
         self._check_compat_single(theme_dir)
 
-    def _check_compat_single(self, theme_dir):
+    def _check_compat_single(self, theme_dir: "Path") -> None:
         """Run compatibility check on a single theme directory."""
         from djust.theming.compat import check_theme_compat
 
@@ -1045,7 +1058,7 @@ SOFTWARE.
                 )
             )
 
-    def handle_marketplace_info(self, options):
+    def handle_marketplace_info(self, options: dict[str, Any]) -> None:
         """Show marketplace metadata and component coverage for a theme."""
         from pathlib import Path
 
@@ -1055,7 +1068,9 @@ SOFTWARE.
         from djust.theming.manager import get_theme_config
         from djust.theming.manifest import ThemeManifest
 
-        theme_name = options.get("mp_theme_name")
+        # ``mp_theme_name`` is a required positional argument (see add_arguments),
+        # so it is always present; subscript access keeps the value non-Optional.
+        theme_name = options["mp_theme_name"]
         dir_override = options.get("dir")
 
         # Resolve themes directory

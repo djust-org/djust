@@ -13,9 +13,11 @@ Falling back to:
 
 import uuid
 
-from django import template
-from django.utils.safestring import mark_safe
 from typing import Any, Optional
+
+from django import template
+from django.template import Context
+from django.utils.safestring import SafeString, mark_safe
 
 from ..manager import get_theme_config
 from ..template_resolver import resolve_component_template
@@ -25,17 +27,17 @@ register = template.Library()
 
 def _css_prefix() -> str:
     """Return the current css_prefix from theme config."""
-    return get_theme_config().get("css_prefix", "")
+    return str(get_theme_config().get("css_prefix", ""))
 
 
-def _extract_slots(attrs: dict) -> tuple[dict, dict]:
+def _extract_slots(attrs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Separate slot_* keys from regular attrs.
 
     Returns:
         (slots_dict, remaining_attrs_dict)
     """
-    slots = {}
-    remaining = {}
+    slots: dict[str, Any] = {}
+    remaining: dict[str, Any] = {}
     for k, v in attrs.items():
         if k.startswith("slot_"):
             slots[k] = v
@@ -45,7 +47,9 @@ def _extract_slots(attrs: dict) -> tuple[dict, dict]:
 
 
 @register.simple_tag(takes_context=True)
-def theme_button(context, text: str, variant: str = "primary", size: str = "md", **attrs):
+def theme_button(
+    context: Context, text: str, variant: str = "primary", size: str = "md", **attrs: Any
+) -> SafeString:
     """
     Render a themed button.
 
@@ -72,7 +76,9 @@ def theme_button(context, text: str, variant: str = "primary", size: str = "md",
 
 
 @register.simple_tag(takes_context=True)
-def theme_card(context, title: Optional[str] = None, footer: Optional[str] = None, **attrs):
+def theme_card(
+    context: Context, title: Optional[str] = None, footer: Optional[str] = None, **attrs: Any
+) -> SafeString:
     """
     Render a themed card container.
 
@@ -98,7 +104,7 @@ def theme_card(context, title: Optional[str] = None, footer: Optional[str] = Non
 
 
 @register.simple_tag(takes_context=True)
-def theme_badge(context, text: str, variant: str = "default", **attrs):
+def theme_badge(context: Context, text: str, variant: str = "default", **attrs: Any) -> SafeString:
     """
     Render a themed badge.
 
@@ -124,13 +130,13 @@ def theme_badge(context, text: str, variant: str = "default", **attrs):
 
 @register.simple_tag(takes_context=True)
 def theme_alert(
-    context,
+    context: Context,
     message: str,
     title: Optional[str] = None,
     variant: str = "default",
     dismissible: bool = False,
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed alert.
 
@@ -160,13 +166,13 @@ def theme_alert(
 
 @register.simple_tag(takes_context=True)
 def theme_input(
-    context,
+    context: Context,
     name: str,
     label: Optional[str] = None,
     placeholder: str = "",
     type: str = "text",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed input field.
 
@@ -194,7 +200,9 @@ def theme_input(
 
 
 @register.simple_tag(takes_context=True)
-def theme_modal(context, id: str, title: Optional[str] = None, size: str = "md", **attrs):
+def theme_modal(
+    context: Context, id: str, title: Optional[str] = None, size: str = "md", **attrs: Any
+) -> SafeString:
     """
     Render a themed modal dialog.
 
@@ -221,7 +229,9 @@ def theme_modal(context, id: str, title: Optional[str] = None, size: str = "md",
 
 
 @register.simple_tag(takes_context=True)
-def theme_dropdown(context, id: str, label: str, align: str = "left", **attrs):
+def theme_dropdown(
+    context: Context, id: str, label: str, align: str = "left", **attrs: Any
+) -> SafeString:
     """
     Render a themed dropdown menu.
 
@@ -247,7 +257,9 @@ def theme_dropdown(context, id: str, label: str, align: str = "left", **attrs):
 
 
 @register.simple_tag(takes_context=True)
-def theme_tabs(context, id: str, tabs: Any = None, active: int = 0, **attrs):
+def theme_tabs(
+    context: Context, id: str, tabs: Any = None, active: int = 0, **attrs: Any
+) -> SafeString:
     """
     Render themed tabs with panels.
 
@@ -274,13 +286,13 @@ def theme_tabs(context, id: str, tabs: Any = None, active: int = 0, **attrs):
 
 @register.simple_tag(takes_context=True)
 def theme_table(
-    context,
+    context: Context,
     headers: Any = None,
     rows: Any = None,
     variant: str = "default",
     caption: Optional[str] = None,
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed responsive table.
 
@@ -309,13 +321,13 @@ def theme_table(
 
 @register.simple_tag(takes_context=True)
 def theme_pagination(
-    context,
+    context: Context,
     current_page: int = 1,
     total_pages: int = 1,
     url_pattern: str = "?page={}",
     show_edges: bool = True,
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render themed pagination controls.
 
@@ -375,13 +387,13 @@ def theme_pagination(
 
 @register.simple_tag(takes_context=True)
 def theme_select(
-    context,
+    context: Context,
     name: str,
     label: Optional[str] = None,
     options: Any = None,
     placeholder: str = "",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed select dropdown.
 
@@ -412,8 +424,13 @@ def theme_select(
 
 @register.simple_tag(takes_context=True)
 def theme_textarea(
-    context, name: str, label: Optional[str] = None, placeholder: str = "", rows: int = 4, **attrs
-):
+    context: Context,
+    name: str,
+    label: Optional[str] = None,
+    placeholder: str = "",
+    rows: int = 4,
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed textarea.
 
@@ -443,7 +460,9 @@ def theme_textarea(
 
 
 @register.simple_tag(takes_context=True)
-def theme_checkbox(context, name: str, label: str = "", description: Optional[str] = None, **attrs):
+def theme_checkbox(
+    context: Context, name: str, label: str = "", description: Optional[str] = None, **attrs: Any
+) -> SafeString:
     """
     Render a themed checkbox.
 
@@ -473,13 +492,13 @@ def theme_checkbox(context, name: str, label: str = "", description: Optional[st
 
 @register.simple_tag(takes_context=True)
 def theme_radio(
-    context,
+    context: Context,
     name: str,
     label: Optional[str] = None,
     options: Any = None,
     selected: str = "",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed radio button group.
 
@@ -509,7 +528,9 @@ def theme_radio(
 
 
 @register.simple_tag(takes_context=True)
-def theme_breadcrumb(context, items: Any = None, separator: str = "/", **attrs):
+def theme_breadcrumb(
+    context: Context, items: Any = None, separator: str = "/", **attrs: Any
+) -> SafeString:
     """
     Render a themed breadcrumb navigation.
 
@@ -536,8 +557,13 @@ def theme_breadcrumb(context, items: Any = None, separator: str = "/", **attrs):
 
 @register.simple_tag(takes_context=True)
 def theme_avatar(
-    context, src: Optional[str] = None, alt: str = "", name: str = "", size: str = "md", **attrs
-):
+    context: Context,
+    src: Optional[str] = None,
+    alt: str = "",
+    name: str = "",
+    size: str = "md",
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed avatar with image or initials fallback.
 
@@ -580,13 +606,13 @@ def theme_avatar(
 
 @register.simple_tag(takes_context=True)
 def theme_toast(
-    context,
+    context: Context,
     message: str,
     variant: str = "info",
     position: str = "top-right",
     duration: int = 5000,
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed toast notification.
 
@@ -617,7 +643,9 @@ def theme_toast(
 
 
 @register.simple_tag(takes_context=True)
-def theme_progress(context, value: Any = None, max: int = 100, label: str = "", **attrs):
+def theme_progress(
+    context: Context, value: Any = None, max: int = 100, label: str = "", **attrs: Any
+) -> SafeString:
     """
     Render a themed progress bar.
 
@@ -636,7 +664,7 @@ def theme_progress(context, value: Any = None, max: int = 100, label: str = "", 
     tmpl = resolve_component_template(request, "progress")
 
     is_indeterminate = value is None
-    percentage = 0
+    percentage: float = 0
     if not is_indeterminate and max > 0:
         percentage = min(100, (int(value) / int(max)) * 100)
 
@@ -655,8 +683,8 @@ def theme_progress(context, value: Any = None, max: int = 100, label: str = "", 
 
 @register.simple_tag(takes_context=True)
 def theme_skeleton(
-    context, variant: str = "text", width: str = "100%", height: str = "1rem", **attrs
-):
+    context: Context, variant: str = "text", width: str = "100%", height: str = "1rem", **attrs: Any
+) -> SafeString:
     """
     Render a themed skeleton loading placeholder.
 
@@ -683,7 +711,7 @@ def theme_skeleton(
 
 
 @register.simple_tag(takes_context=True)
-def theme_tooltip(context, text: str, position: str = "top", **attrs):
+def theme_tooltip(context: Context, text: str, position: str = "top", **attrs: Any) -> SafeString:
     """
     Render a CSS-only tooltip.
 
@@ -711,7 +739,7 @@ def theme_tooltip(context, text: str, position: str = "top", **attrs):
 
 
 @register.simple_tag
-def theme_icon(name: str, size: int = 20):
+def theme_icon(name: str, size: int = 20) -> SafeString:
     """
     Render an SVG icon (placeholder - integrate with your icon library).
 
@@ -734,14 +762,14 @@ def theme_icon(name: str, size: int = 20):
 
 @register.simple_tag(takes_context=True)
 def theme_nav_item(
-    context,
+    context: Context,
     label: str,
     url: str,
     icon: Optional[str] = None,
     active: Optional[bool] = None,
     badge: Optional[str] = None,
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed navigation link with active state detection.
 
@@ -787,13 +815,13 @@ def theme_nav_item(
 
 @register.simple_tag(takes_context=True)
 def theme_nav_group(
-    context,
+    context: Context,
     label: str,
     items: Any = None,
     icon: Optional[str] = None,
     expanded: bool = True,
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a collapsible navigation group with a heading and child items.
 
@@ -824,7 +852,9 @@ def theme_nav_group(
 
 
 @register.simple_tag(takes_context=True)
-def theme_nav(context, brand: Optional[str] = None, items: Any = None, **attrs):
+def theme_nav(
+    context: Context, brand: Optional[str] = None, items: Any = None, **attrs: Any
+) -> SafeString:
     """
     Render a themed horizontal navigation bar.
 
@@ -851,7 +881,7 @@ def theme_nav(context, brand: Optional[str] = None, items: Any = None, **attrs):
 
 
 @register.simple_tag(takes_context=True)
-def theme_sidebar_nav(context, sections: Any = None, **attrs):
+def theme_sidebar_nav(context: Context, sections: Any = None, **attrs: Any) -> SafeString:
     """
     Render a themed vertical sidebar navigation with sections.
 

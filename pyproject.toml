@@ -1046,6 +1046,47 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# theming/templatetags/ + theming/management/ subpackages (ADR-023 M4e, group 3)
+# — the deferred theming leaf template tags + the theming management command,
+# flipped from the lenient default to strict islands. The theming MACHINERY was
+# made strict in M4c (part 3); this group finishes theming by flipping its
+# user-facing render surface: the four template-tag modules (theme_components —
+# the ~26 themed component tags; theme_pages — the auth/error/utility page-fragment
+# tags; theme_tags — theme_head/css/switcher/mode/preset accessors; theme_form_tags
+# — the form-render tags) and the djust_theme management command (tailwind-config /
+# export-colors / list-presets / shadcn-import-export / init / create-theme /
+# validate-theme / create-package / check-compat / marketplace-info subcommands).
+# These tags RENDER theme components into pages: their mark_safe / format_html
+# return values are typed SafeString (the HTML-safe boundary), output byte-identical.
+# Real type fixes to clean the islands:
+#   - theme_components.theme_progress: `percentage` annotated `float` (the
+#     `min(100, (int(value)/int(max))*100)` reassignment is a float; the `= 0`
+#     seed inferred int).
+#   - theme_tags.theme_framework_overrides: format_html result narrowed via a
+#     `str` local at the unstubbed-django boundary ([no-any-return]).
+#   - theme_pages/theme_components/theme_form_tags `_css_prefix()`: `str(...)`
+#     narrow over the untyped `get_theme_config().get(...)` boundary.
+#   - theme_pages._csrf_token_value: `str(get_token(request))` narrow.
+#   - djust_theme.handle_marketplace_info: required-positional `mp_theme_name`
+#     read via subscript (not `.get()`) so it stays non-Optional for the Path
+#     division + `get_component_coverage(str, ...)` call ([operator]/[arg-type]).
+# No theming/{templatetags,management}/tests/ dirs exist (nothing to exclude).
+[[tool.mypy.overrides]]
+module = [
+    "djust.theming.templatetags.__init__",
+    "djust.theming.templatetags.theme_components",
+    "djust.theming.templatetags.theme_form_tags",
+    "djust.theming.templatetags.theme_pages",
+    "djust.theming.templatetags.theme_tags",
+    "djust.theming.management.__init__",
+    "djust.theming.management.commands.__init__",
+    "djust.theming.management.commands.djust_theme",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework
 # where mark_safe is expected and safe (content comes from trusted templates)
