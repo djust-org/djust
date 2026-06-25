@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import sys
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from ..serialization import normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _template_hash_cache: Dict[int, str] = {}
 
 # Cache (template_hash, variable_name) → expected top-level key count
-_expected_keys_cache: Dict[tuple, int] = {}
+_expected_keys_cache: Dict[Tuple[str, str], int] = {}
 
 # Pre-compiled regex for {% include %} — handles normal and doubled quotes from Rust resolver
 _INCLUDE_RE = re.compile(
@@ -32,14 +32,14 @@ try:
     from .._rust import extract_template_variables
 
 except ImportError:
-    extract_template_variables = None
+    extract_template_variables = None  # type: ignore[assignment]
 
 # Cache template content hash → extract_template_variables() result.
 # Keyed by SHA-256 content hash (not id()) so it survives GC and works across requests.
 # Hot reload is safe: changed template content produces a different hash.
 # Size cap: one entry per unique template file; typical djust apps have < 50 templates.
 # If the cache exceeds 256 entries (defensive cap), it is cleared to prevent unbounded growth.
-_variable_extraction_cache: Dict[str, dict] = {}
+_variable_extraction_cache: Dict[str, Optional[dict]] = {}
 _VARIABLE_EXTRACTION_CACHE_MAX = 256
 
 
@@ -48,7 +48,7 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
 
     Returns the variable paths map, or None if extraction is unavailable.
     """
-    if not extract_template_variables:
+    if extract_template_variables is None:
         return None
 
     # Compute SHA-256 directly from content — safe regardless of GC/id reuse.
@@ -83,6 +83,16 @@ except ImportError:
 
 class JITMixin:
     """JIT serialization: _jit_serialize_queryset, _jit_serialize_model, _get_template_content."""
+
+    if TYPE_CHECKING:
+        # Cooperating attributes supplied by the host class (LiveView,
+        # live_view.py:291-292; _full_template is a render-time framework slot).
+        # Declared type-only so the strict-island mypy run resolves them on the
+        # mixin without a runtime change — this mixin is never instantiated
+        # standalone.
+        _full_template: Optional[str]
+        template: Optional[str]
+        template_name: Optional[str]
 
     def _get_template_content(self) -> Optional[str]:
         """
@@ -131,7 +141,8 @@ class JITMixin:
                 if hasattr(django_template, "template") and hasattr(
                     django_template.template, "source"
                 ):
-                    return django_template.template.source
+                    source: str = django_template.template.source
+                    return source
                 elif hasattr(django_template, "origin") and hasattr(django_template.origin, "name"):
                     with open(django_template.origin.name, "r") as f:
                         return f.read()
@@ -142,18 +153,18 @@ class JITMixin:
         return None
 
     @staticmethod
-    def _inline_includes(template_content: str, template_dirs: list) -> str:
+    def _inline_includes(template_content: str, template_dirs: List[str]) -> str:
         """Inline {% include "..." %} directives for variable extraction.
 
         Only handles simple static includes (not variable includes).
         Recursively resolves nested includes up to 5 levels deep.
         """
 
-        def resolve(content, depth=0):
+        def resolve(content: str, depth: int = 0) -> str:
             if depth > 5:
                 return content
 
-            def replacer(match):
+            def replacer(match: "re.Match[str]") -> str:
                 include_path = match.group(1) or match.group(2)
                 for tpl_dir in template_dirs:
                     full_path = os.path.join(tpl_dir, include_path)
@@ -170,7 +181,9 @@ class JITMixin:
 
         return resolve(template_content)
 
-    def _jit_serialize_queryset(self, queryset, template_content: str, variable_name: str):
+    def _jit_serialize_queryset(
+        self, queryset: Any, template_content: str, variable_name: str
+    ) -> List[Any]:
         """
         Apply JIT auto-serialization to a Django QuerySet.
 
@@ -279,17 +292,19 @@ class JITMixin:
             )
             return [normalize_django_value(obj) for obj in queryset]
 
-    def _jit_serialize_model(self, obj, template_content: str, variable_name: str) -> Dict:
+    def _jit_serialize_model(
+        self, obj: Any, template_content: str, variable_name: str
+    ) -> Dict[str, Any]:
         """
         Apply JIT auto-serialization to a single Django Model instance.
         """
         if not JIT_AVAILABLE:
-            return normalize_django_value(obj)
+            return cast(Dict[str, Any], normalize_django_value(obj))
 
         try:
             variable_paths_map = _cached_extract_template_variables(template_content)
             if variable_paths_map is None:
-                return normalize_django_value(obj)
+                return cast(Dict[str, Any], normalize_django_value(obj))
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
@@ -325,8 +340,8 @@ class JITMixin:
                 serializer = compile_serializer(code, func_name)
                 _jit_serializer_cache[cache_key] = (serializer, None)
 
-            return serializer(obj)
+            return cast(Dict[str, Any], serializer(obj))
 
         except Exception as e:
             logger.debug("JIT serialization failed for %s: %s", variable_name, e)
-            return normalize_django_value(obj)
+            return cast(Dict[str, Any], normalize_django_value(obj))

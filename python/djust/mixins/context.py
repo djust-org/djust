@@ -4,7 +4,7 @@ ContextMixin - Context data management for LiveView.
 
 import json
 import logging
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from django.db import models
 from django.test.signals import setting_changed
@@ -15,13 +15,13 @@ from ..utils import is_model_list
 logger = logging.getLogger(__name__)
 
 # Module-level cache for context processors, keyed by TEMPLATES config tuple
-_context_processors_cache: Dict[Any, list] = {}
+_context_processors_cache: Dict[Any, List[Any]] = {}
 
 # Module-level cache for resolved processor callables, keyed by tuple of processor paths
-_resolved_processors_cache: Dict[tuple, list] = {}
+_resolved_processors_cache: Dict[Tuple[Any, ...], List[Callable[..., Any]]] = {}
 
 
-def _clear_processor_caches(**kwargs):
+def _clear_processor_caches(**kwargs: Any) -> None:
     """Clear caches when settings change (e.g., during @override_settings in tests)."""
     if kwargs.get("setting") == "TEMPLATES":
         _context_processors_cache.clear()
@@ -67,7 +67,27 @@ def _is_json_serializable(value: Any) -> bool:
 class ContextMixin:
     """Context methods: get_context_data, _get_context_processors, _apply_context_processors."""
 
-    def get_context_data(self, **kwargs) -> Dict[str, Any]:
+    if TYPE_CHECKING:
+        # Cooperating attributes/methods supplied by the host class (LiveView)
+        # and sibling mixins. Declared type-only so the strict-island mypy run
+        # resolves them on this mixin without a runtime change — the real
+        # definitions live on LiveView / the other mixins (this mixin is never
+        # instantiated standalone). See streaming.py for the same pattern.
+        _cached_context: Optional[Dict[str, Any]]
+
+        def _register_component(self, component: Any) -> None: ...
+
+        def _get_template_content(self) -> Optional[str]: ...
+
+        def _jit_serialize_queryset(
+            self, queryset: Any, template_content: str, variable_name: str
+        ) -> List[Any]: ...
+
+        def _jit_serialize_model(
+            self, obj: Any, template_content: str, variable_name: str
+        ) -> Dict[str, Any]: ...
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """
         Get the context data for rendering. Override to customize context.
 
@@ -92,7 +112,7 @@ class ContextMixin:
         from ..components.base import Component, LiveComponent
         from django.db.models import QuerySet
 
-        context = {}
+        context: Dict[str, Any] = {}
 
         # Skip static assigns after first render — Rust retains them
         _static_skip = set()
@@ -320,7 +340,12 @@ class ContextMixin:
 
         return context
 
-    def _deep_serialize_dict(self, d: dict, template_content=None, var_name: str = "") -> dict:
+    def _deep_serialize_dict(
+        self,
+        d: Dict[str, Any],
+        template_content: Optional[str] = None,
+        var_name: str = "",
+    ) -> Dict[str, Any]:
         """Recursively walk a dict, serializing any Model/QuerySet values found.
 
         When template_content is provided, uses JIT serialization; otherwise
@@ -328,7 +353,7 @@ class ContextMixin:
         """
         from django.db.models import QuerySet
 
-        result = {}
+        result: Dict[str, Any] = {}
         for k, v in d.items():
             child_name = f"{var_name}.{k}" if var_name else k
             if isinstance(v, models.Model):
@@ -354,7 +379,7 @@ class ContextMixin:
                 result[k] = v
         return result
 
-    def _get_context_processors(self) -> list:
+    def _get_context_processors(self) -> List[Any]:
         """
         Get context processors from template backend settings.
 
@@ -379,7 +404,9 @@ class ContextMixin:
         )
         for template_config in getattr(settings, "TEMPLATES", []):
             if template_config.get("BACKEND") in _BACKENDS:
-                processors = template_config.get("OPTIONS", {}).get("context_processors", [])
+                processors: List[Any] = template_config.get("OPTIONS", {}).get(
+                    "context_processors", []
+                )
                 if processors:
                     _context_processors_cache[cache_key] = processors
                     return processors
@@ -387,7 +414,7 @@ class ContextMixin:
         _context_processors_cache[cache_key] = []
         return []
 
-    def _apply_context_processors(self, context: Dict[str, Any], request) -> Dict[str, Any]:
+    def _apply_context_processors(self, context: Dict[str, Any], request: Any) -> Dict[str, Any]:
         """
         Apply Django context processors to the context.
 

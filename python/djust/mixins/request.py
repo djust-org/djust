@@ -7,6 +7,16 @@ import json
 import logging
 import time
 from contextlib import contextmanager
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+)
 
 from django.core.exceptions import PermissionDenied
 from django.http import (
@@ -29,14 +39,75 @@ from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
 from ..hooks import run_on_mount_hooks
 
+if TYPE_CHECKING:
+    from django.http import HttpRequest
+
 logger = logging.getLogger(__name__)
 
 
 class RequestMixin:
     """HTTP handling: get, post."""
 
+    if TYPE_CHECKING:
+        # Cooperating attributes/methods supplied by the host class (LiveView)
+        # and sibling mixins. Declared type-only so the strict-island mypy run
+        # resolves them on this mixin without any runtime change — the real
+        # definitions live on LiveView / the other mixins (this mixin is never
+        # instantiated standalone). See streaming.py for the same pattern.
+        request: Any
+        _rust_view: Any
+        _lazy_thunks: List[Any]
+        _chunk_emitter: Any
+        wrapper_template: Optional[str]
+        _cached_context: Optional[Dict[str, Any]]
+        _child_views: Dict[str, Any]
+
+        def _apply_context_processors(
+            self, context: Dict[str, Any], request: Any
+        ) -> Dict[str, Any]: ...
+
+        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
+
+        def _split_for_streaming(self, full_html: str) -> Tuple[str, str, str]: ...
+
+        async def arender_chunks(self, full_html: str, emitter: Any) -> None: ...
+
+        def get_debug_update(self) -> Dict[str, Any]: ...
+
+        def _drain_flash(self) -> List[Dict[str, str]]: ...
+
+        def _drain_page_metadata(self) -> List[Dict[str, str]]: ...
+
+        def render_with_diff(self, *args: Any, **kwargs: Any) -> Any: ...
+
+        def render_full_template(self, *args: Any, **kwargs: Any) -> str: ...
+
+        def get_template(self) -> str: ...
+
+        def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
+
+        def mount(self, request: Any, **kwargs: Any) -> None: ...
+
+        def _initialize_temporary_assigns(self) -> None: ...
+
+        def _get_private_state(self) -> Dict[str, Any]: ...
+
+        def _restore_private_state(self, private_state: Dict[str, Any]) -> None: ...
+
+        def _snapshot_user_private_attrs(self) -> None: ...
+
+        def _inject_client_script(self, html: str) -> str: ...
+
+        def _get_all_child_views(self) -> Dict[str, Any]: ...
+
+        def _assign_component_ids(self) -> None: ...
+
+        def _restore_component_state(self, component: Any, state: Dict[str, Any]) -> None: ...
+
+        def _save_components_to_session(self, request: Any, context: Dict[str, Any]) -> None: ...
+
     @contextmanager
-    def _processor_context(self, request):
+    def _processor_context(self, request: "HttpRequest") -> Iterator[Dict[str, Any]]:
         """Temporarily inject context processor output as instance attributes.
 
         Used by the POST (HTTP fallback) path to ensure auth context (user,
@@ -59,7 +130,7 @@ class RequestMixin:
                     pass
 
     @method_decorator(ensure_csrf_cookie)
-    def get(self, request, *args, **kwargs):
+    def get(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle GET requests - initial page load.
 
         On WSGI deployments, or when ``streaming_render = False``, this is
@@ -293,7 +364,7 @@ class RequestMixin:
         """
         shell_open, main, shell_close = self._split_for_streaming(full_html)
 
-        def _iter():
+        def _iter() -> Iterator[str]:
             if shell_open:
                 yield shell_open
             if main:
@@ -307,7 +378,7 @@ class RequestMixin:
         response["X-Djust-Streaming"] = "1"
         return response
 
-    def _is_asgi_context(self, request=None) -> bool:
+    def _is_asgi_context(self, request: Optional["HttpRequest"] = None) -> bool:
         """Detect whether we are handling a real ASGI request.
 
         The accurate signal is ``isinstance(request, ASGIRequest)`` —
@@ -335,7 +406,7 @@ class RequestMixin:
         except RuntimeError:
             return False
 
-    async def aget(self, request, *args, **kwargs):
+    async def aget(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Async-streaming GET path. PR-A foundation (ADR-015).
 
         Parallel to :meth:`get`. Returns a ``StreamingHttpResponse`` whose
@@ -431,7 +502,7 @@ class RequestMixin:
         # Producer task: render chunks into the emitter's queue.
         # ``arender_chunks`` is a regular coroutine that pushes via
         # ``emitter.emit()``; awaiting it once drives the full emit loop.
-        async def _produce():
+        async def _produce() -> None:
             try:
                 await self.arender_chunks(full_html, emitter)
             except Exception:  # pragma: no cover — defensive
@@ -444,7 +515,7 @@ class RequestMixin:
 
         # Disconnect watcher: poll request.is_disconnected() (Django 5.x).
         # Older Django versions don't expose it; we degrade silently.
-        async def _watch_disconnect():
+        async def _watch_disconnect() -> None:
             is_disconnected = getattr(request, "is_disconnected", None)
             if not callable(is_disconnected):
                 return
@@ -468,7 +539,7 @@ class RequestMixin:
 
         disconnect_task = asyncio.ensure_future(_watch_disconnect())
 
-        async def _streaming_iter():
+        async def _streaming_iter() -> AsyncIterator[str]:
             try:
                 async for chunk in emitter:
                     yield chunk
@@ -505,7 +576,7 @@ class RequestMixin:
 
         return response
 
-    def post(self, request, *args, **kwargs):
+    def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling"""
         from ..components.base import Component, LiveComponent
 
@@ -697,7 +768,7 @@ class RequestMixin:
             # Inject debug info for the debug panel (HTTP-only mode)
             from django.conf import settings as _settings
 
-            def _inject_debug(resp_data):
+            def _inject_debug(resp_data: Dict[str, Any]) -> None:
                 if _settings.DEBUG:
                     try:
                         debug_info = self.get_debug_update()
@@ -712,7 +783,7 @@ class RequestMixin:
 
             # Drain side-channel commands (flash, page metadata) so they
             # are delivered in the HTTP response, not only via WebSocket.
-            def _inject_side_channels(resp_data):
+            def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
                 if hasattr(self, "_drain_flash"):
                     flash_commands = self._drain_flash()
                     if flash_commands:

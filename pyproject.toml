@@ -690,6 +690,44 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# mixins/ subpackage (ADR-023 M4c, part 1) — the LiveView mixin layer that
+# composes the public LiveView class. Spans the small leaf mixins (flash,
+# layout, page_metadata, post_processing, async_work, waiters, model_binding,
+# components), the context/JIT serialization mixins (context, jit), the HTTP
+# request handling mixin (request), the Rust-bridge / change-detection mixin
+# (rust_bridge — annotations only; the _sync_state_to_rust change-detection +
+# _framework_attrs filter logic is byte-identical, no comparison/filter change),
+# and the large template-rendering mixin (template). The mixins/ tests directory
+# does not exist; there is no test sub-package to exclude.
+[[tool.mypy.overrides]]
+module = [
+    "djust.mixins.__init__",
+    "djust.mixins.activity",
+    "djust.mixins.async_work",
+    "djust.mixins.components",
+    "djust.mixins.context",
+    "djust.mixins.flash",
+    "djust.mixins.handlers",
+    "djust.mixins.jit",
+    "djust.mixins.layout",
+    "djust.mixins.model_binding",
+    "djust.mixins.navigation",
+    "djust.mixins.notifications",
+    "djust.mixins.page_metadata",
+    "djust.mixins.post_processing",
+    "djust.mixins.push_events",
+    "djust.mixins.request",
+    "djust.mixins.rust_bridge",
+    "djust.mixins.sticky",
+    "djust.mixins.streams",
+    "djust.mixins.template",
+    "djust.mixins.waiters",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework

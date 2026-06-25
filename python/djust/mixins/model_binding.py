@@ -6,12 +6,13 @@ view instance when the client sends dj-model changes.
 """
 
 import logging
+from typing import Any, List, Optional
 
 try:
     from ..decorators import event_handler
 except (ImportError, SystemError):
     # Fallback for direct-file imports (e.g. test_model_binding.py)
-    def event_handler(fn=None, **kw):  # type: ignore[misc]
+    def event_handler(fn: Any = None, **kw: Any) -> Any:  # type: ignore[misc,no-redef]
         return fn if fn is not None else (lambda f: f)
 
 
@@ -69,7 +70,7 @@ class ModelBindingMixin:
     # UNION with the auto-allowlist below — a field is bindable if it is in
     # EITHER. Subclasses set this to allow a field that is never rendered as a
     # ``dj-model`` binding (e.g. a value written purely programmatically).
-    allowed_model_fields = None
+    allowed_model_fields: Optional[List[str]] = None
 
     # Auto-allowlist (CWE-915 mass-assignment fix): the set of fields the
     # developer exposed via static ``dj-model="<field>"`` bindings in the
@@ -96,9 +97,9 @@ class ModelBindingMixin:
     # attribute that the template never binds via ``dj-model`` (and is not in
     # ``allowed_model_fields``) cannot be set by the client, even though it
     # passes the ``_``-prefix / FORBIDDEN_MODEL_FIELDS / ``hasattr`` checks.
-    _dj_model_fields: frozenset = frozenset()
+    _dj_model_fields: "frozenset[str]" = frozenset()
 
-    def _record_dj_model_fields_from_rust(self, rust_view) -> None:
+    def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None:
         """Populate ``_dj_model_fields`` from a live ``RustLiveView``'s template.
 
         Called from every LiveView render site (``render``,
@@ -133,7 +134,9 @@ class ModelBindingMixin:
             return
         self._dj_model_fields = frozenset(fields)
 
-    def _record_dj_model_fields_from_source(self, template_source, template_dirs=None) -> None:
+    def _record_dj_model_fields_from_source(
+        self, template_source: Optional[str], template_dirs: Optional[List[str]] = None
+    ) -> None:
         """Populate ``_dj_model_fields`` from a raw template source string.
 
         Used by embedded ``{% live_render %}`` children, which render through
@@ -155,7 +158,7 @@ class ModelBindingMixin:
         self._dj_model_fields = frozenset(fields)
 
     @event_handler
-    def update_model(self, field: str = "", value=None, **kwargs):
+    def update_model(self, field: str = "", value: Any = None, **kwargs: Any) -> None:
         """
         Default handler for dj-model changes from the client.
 

@@ -6,13 +6,20 @@ import json
 import logging
 import re
 import sys
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 
 logger = logging.getLogger(__name__)
 
 
 class PostProcessingMixin:
     """Post-processing: get_debug_info, _hydrate_react_components, _inject_client_script."""
+
+    if TYPE_CHECKING:
+        # Cooperating method supplied by the host class (LiveView via
+        # ContextMixin.get_context_data, mixins/context.py). Declared type-only
+        # so the strict-island mypy run resolves it on the mixin without a
+        # runtime change — this mixin is never instantiated standalone.
+        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
 
     def get_debug_info(self) -> Dict[str, Any]:
         """
@@ -196,7 +203,7 @@ class PostProcessingMixin:
 
         pattern = r'<div data-react-component="([^"]+)" data-react-props=\'([^\']+)\'>(.*?)</div>'
 
-        def replace_component(match):
+        def replace_component(match: "re.Match[str]") -> str:
             component_name = match.group(1)
             props_json = match.group(2)
             children = match.group(3)
