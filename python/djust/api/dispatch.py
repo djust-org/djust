@@ -20,7 +20,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Iterable, Optional, cast
 
 from asgiref.sync import async_to_sync
 from django.core.exceptions import PermissionDenied
@@ -64,7 +64,7 @@ def _caller_key(request: HttpRequest) -> str:
     return caller_key(request, client_ip)
 
 
-def _rate_limit_check(request: HttpRequest, handler_name: str, handler) -> bool:
+def _rate_limit_check(request: HttpRequest, handler_name: str, handler: Any) -> bool:
     """Token-bucket check honoring the handler's ``@rate_limit`` settings.
 
     Routes through the SHARED per-caller store (:func:`djust.rate_limit.handler_rate_check`)
@@ -89,12 +89,12 @@ def reset_rate_buckets() -> None:
     reset_handler_buckets()
 
 
-def _is_exposed(handler) -> bool:
+def _is_exposed(handler: Any) -> bool:
     meta = getattr(handler, "_djust_decorators", None)
     return bool(meta and meta.get("event_handler", {}).get("expose_api"))
 
 
-def _instantiate_view(view_cls, request: HttpRequest):
+def _instantiate_view(view_cls: type, request: HttpRequest) -> Any:
     """Create a fresh view instance for a single HTTP API call.
 
     Mirrors the WS consumer's setup: set ``request``, call ``mount()`` (or the
@@ -121,18 +121,20 @@ def _instantiate_view(view_cls, request: HttpRequest):
     return instance
 
 
-def _call_possibly_async(fn, *args, **kwargs):
+def _call_possibly_async(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     result = fn(*args, **kwargs)
     if inspect.iscoroutine(result):
         return async_to_sync(_await)(result)
     return result
 
 
-async def _await(coro):
+async def _await(coro: Any) -> Any:
     return await coro
 
 
-def _public_assigns_snapshot_diff(view_instance, changed_keys):
+def _public_assigns_snapshot_diff(
+    view_instance: Any, changed_keys: Iterable[str]
+) -> Dict[str, Any]:
     """Build the JSON-safe assigns diff from changed keys."""
     diff: Dict[str, Any] = {}
     for key in changed_keys:
@@ -145,7 +147,7 @@ def _public_assigns_snapshot_diff(view_instance, changed_keys):
     return diff
 
 
-def _resolve_serializer(spec, view):
+def _resolve_serializer(spec: Any, view: Any) -> Optional[Callable[..., Any]]:
     """Turn a ``serialize=`` spec into a callable; return None if unset.
 
     Raises ``TypeError`` if ``spec`` is a string that doesn't name a callable
@@ -157,15 +159,15 @@ def _resolve_serializer(spec, view):
         method = getattr(view, spec, None)
         if not callable(method):
             raise TypeError(f"serialize={spec!r} names no callable method on {type(view).__name__}")
-        return method
+        return cast("Callable[..., Any]", method)
     if callable(spec):
-        return spec
+        return cast("Callable[..., Any]", spec)
     raise TypeError(
         f"serialize must be None, a callable, or a method-name string; got {type(spec).__name__}"
     )
 
 
-def _call_serializer(fn, view, return_value):
+def _call_serializer(fn: Callable[..., Any], view: Any, return_value: Any) -> Any:
     """Call ``fn`` with arity-appropriate args; await if the result is a coroutine.
 
     Two shapes are supported:
@@ -204,7 +206,7 @@ def _call_serializer(fn, view, return_value):
     return result
 
 
-def _apply_response_transform(view, handler, return_value):
+def _apply_response_transform(view: Any, handler: Any, return_value: Any) -> Any:
     """Resolve per-handler ``serialize=`` or view-level ``api_response()``; fall through otherwise.
 
     Resolution order (first match wins):
@@ -217,6 +219,9 @@ def _apply_response_transform(view, handler, return_value):
 
     if spec is not None:
         serializer = _resolve_serializer(spec, view)
+        # _resolve_serializer returns None only for a None spec; spec is
+        # not None here, so it either returned a callable or raised.
+        assert serializer is not None
         return _call_serializer(serializer, view, return_value)
 
     api_response = getattr(view, "api_response", None)
@@ -413,7 +418,7 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
     )
 
 
-def _enforce_csrf(request: HttpRequest):
+def _enforce_csrf(request: HttpRequest) -> Optional[JsonResponse]:
     """Run Django's CSRF middleware for this request.
 
     Returns a 403 JsonResponse on failure, or None on success.
@@ -441,7 +446,7 @@ def _enforce_csrf(request: HttpRequest):
 #   500: function raised an unexpected exception (logged; not leaked)
 
 
-def _is_server_function(fn) -> bool:
+def _is_server_function(fn: Any) -> bool:
     meta = getattr(fn, "_djust_decorators", None)
     return bool(meta and meta.get("server_function"))
 

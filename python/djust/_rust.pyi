@@ -805,6 +805,44 @@ class RustLiveView:
         """
         ...
 
+    def serialize_msgpack(self) -> bytes:
+        """
+        Serialize the view state to MessagePack bytes (with embedded timestamp).
+
+        The compact binary form (~30-40% smaller than JSON) used by the state
+        backends (``djust.state_backends.memory`` / ``redis``) to persist a view
+        across requests. The current timestamp is embedded for session-age
+        tracking (see :meth:`get_timestamp`).
+
+        Returns:
+            ``bytes`` containing the serialized state plus timestamp.
+        """
+        ...
+
+    @staticmethod
+    def deserialize_msgpack(data: bytes) -> "RustLiveView":
+        """
+        Reconstruct a ``RustLiveView`` from bytes produced by
+        :meth:`serialize_msgpack`.
+
+        Args:
+            data: ``bytes`` containing MessagePack data.
+
+        Returns:
+            A ``RustLiveView`` instance with restored state.
+        """
+        ...
+
+    def get_timestamp(self) -> float:
+        """
+        Return the Unix timestamp (seconds since epoch) embedded when this view
+        was last serialized via :meth:`serialize_msgpack`.
+
+        Returns:
+            ``float`` Unix timestamp; ``0`` for a never-serialized view.
+        """
+        ...
+
 # ============================================================================
 # Rust UI Components
 # ============================================================================

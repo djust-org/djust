@@ -154,7 +154,7 @@ class InMemoryStateBackend(StateBackend):
         view: RustLiveView,
         ttl: Optional[int] = None,
         warn_on_large_state: bool = True,
-    ):
+    ) -> None:
         """
         Store in in-memory cache with timestamp (thread-safe).
 
@@ -331,8 +331,11 @@ class InMemoryStateBackend(StateBackend):
         try:
             with self._lock:
                 # Test basic operations: check cache is accessible and operational
-                # Test write
-                self._cache[test_key] = (None, time.time())
+                # Test write. The probe value's view slot is None (never read
+                # as a RustLiveView — it is popped a few lines below), so the
+                # cache's declared (RustLiveView, float) value type doesn't hold
+                # for this transient health-check entry.
+                self._cache[test_key] = (None, time.time())  # type: ignore[assignment]
 
                 # Test read
                 _ = self._cache.get(test_key)

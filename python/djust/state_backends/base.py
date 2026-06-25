@@ -60,7 +60,7 @@ class StateBackend(ABC):
         pass
 
     @abstractmethod
-    def set(self, key: str, view: RustLiveView, ttl: Optional[int] = None):
+    def set(self, key: str, view: RustLiveView, ttl: Optional[int] = None) -> None:
         """
         Store a RustLiveView instance with optional TTL.
 

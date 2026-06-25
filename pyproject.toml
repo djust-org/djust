@@ -219,7 +219,7 @@ ignore_errors = true
 # package mypy refuses to silence via this mechanism, so that single import
 # carries a narrow inline `# type: ignore[import-untyped]` instead.)
 [[tool.mypy.overrides]]
-module = ["yaml"]
+module = ["yaml", "requests"]
 ignore_missing_imports = true
 
 # --------------------------------------------------------------------------- #
@@ -837,6 +837,95 @@ module = [
     "djust.observability.tracebacks",
     "djust.observability.urls",
     "djust.observability.views",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# tutorials / api / template / state_backends subpackages (ADR-023 M4d, part 3)
+# — four independent transport/render/persistence subpackages flipped from the
+# lenient default to strict islands. Spans the declarative guided-tour state
+# machine (tutorials: the TutorialStep dataclass + TutorialMixin), the opt-in
+# HTTP-API transport (api: the @event_handler(expose_api=True) / @server_function
+# dispatch views, pluggable auth, the registry, OpenAPI schema, and URL wiring),
+# the Rust template engine's Django backend (template: backend, the multi-line
+# {# #} loaders, the rendering pipeline, and the JSON-value serializer), and the
+# LiveView state-persistence backends (state_backends: the StateBackend ABC, the
+# in-memory + Redis backends, and the registry). api/ and state_backends/ are
+# security/correctness-relevant — annotations only, logic byte-identical. Three
+# PyO3 methods consumed by the state backends (RustLiveView.serialize_msgpack /
+# deserialize_msgpack / get_timestamp) were added to `_rust.pyi` (they existed at
+# runtime but were missing from the wire-boundary stub). None of the four
+# subpackages has a tests/ subdir, so there is no test sub-package to exclude.
+[[tool.mypy.overrides]]
+module = [
+    "djust.tutorials.__init__",
+    "djust.tutorials.mixin",
+    "djust.tutorials.step",
+    "djust.api.__init__",
+    "djust.api.auth",
+    "djust.api.dispatch",
+    "djust.api.errors",
+    "djust.api.openapi",
+    "djust.api.registry",
+    "djust.api.urls",
+    "djust.template.__init__",
+    "djust.template.backend",
+    "djust.template.loaders",
+    "djust.template.rendering",
+    "djust.template.serialization",
+    "djust.state_backends.__init__",
+    "djust.state_backends.base",
+    "djust.state_backends.memory",
+    "djust.state_backends.redis",
+    "djust.state_backends.registry",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# mcp/ + contrib/uploads/ + uploads/ subpackages (ADR-023 M4d, group 4) —
+# flipped from the lenient default to strict islands. Spans: the MCP server
+# (the AI-assistant introspection/scaffolding tool — server/__init__/__main__),
+# the binary-WebSocket-frame upload system (uploads/ — the UploadWriter base +
+# BufferedUploadWriter + UploadConfig, the resumable chunk protocol, the
+# pluggable state stores (in-memory + Redis), and the upload-status view), and
+# the contrib upload-writer adapters (contrib/uploads/ — S3 presigned/event,
+# GCS resumable, Azure block-blob, shared errors). None of these subpackages has
+# a tests/ dir, so there is no test sub-package to exclude. Upload logic is
+# byte-identical — annotations only (security-relevant binary-frame handling).
+# Real type bugs / boundary narrows fixed to clean this island:
+#   - uploads/storage.py, contrib/uploads/s3_presigned.py, mcp/server.py: several
+#     [no-any-return] narrowed with cast() at the json.loads / boto3-presign /
+#     requests.Response.text untyped boundaries.
+#   - mcp/server.py: two observability-tool `params` dicts inferred as
+#     homogeneous str/int from their first key, then mutated with the other type
+#     ([assignment]); annotated `dict[str, object]` (mixed query-param values).
+#   - uploads/{__init__,contrib/uploads/gcs,contrib/uploads/azure}.py: the
+#     legacy `write_chunk(self, chunk)` overrides (no `chunk_index`) carry a
+#     coded `# type: ignore[override]` — the dropped trailing default is an
+#     intentional, runtime-dispatched part of the UploadWriter contract
+#     (`_writer_accepts_chunk_index`), documented on the base method.
+# Third-party `requests` (consumed by mcp/server + contrib/uploads/gcs, no stubs)
+# is marked untyped in the `["yaml", "requests"]` override above.
+[[tool.mypy.overrides]]
+module = [
+    "djust.mcp.__init__",
+    "djust.mcp.__main__",
+    "djust.mcp.server",
+    "djust.uploads.__init__",
+    "djust.uploads.resumable",
+    "djust.uploads.storage",
+    "djust.uploads.views",
+    "djust.contrib.__init__",
+    "djust.contrib.uploads.__init__",
+    "djust.contrib.uploads.azure",
+    "djust.contrib.uploads.errors",
+    "djust.contrib.uploads.gcs",
+    "djust.contrib.uploads.s3_events",
+    "djust.contrib.uploads.s3_presigned",
 ]
 ignore_errors = false
 disallow_untyped_defs = true

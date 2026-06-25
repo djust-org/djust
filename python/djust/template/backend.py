@@ -71,7 +71,7 @@ class DjustTemplateBackend(BaseEngine):
 
         return template_dirs
 
-    def from_string(self, template_code: str):
+    def from_string(self, template_code: str) -> DjustTemplate:
         """
         Create a template from a string.
 
@@ -83,7 +83,7 @@ class DjustTemplateBackend(BaseEngine):
         """
         return DjustTemplate(template_code, backend=self)
 
-    def get_template(self, template_name: str):
+    def get_template(self, template_name: str) -> DjustTemplate:
         """
         Load a template by name.
 

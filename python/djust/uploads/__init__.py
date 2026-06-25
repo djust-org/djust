@@ -376,7 +376,15 @@ class UploadWriter:
         return None
 
     def write_chunk(self, chunk: bytes, chunk_index: int = 0) -> None:
-        """Called once per WebSocket binary frame. Must be overridden."""
+        """Called once per WebSocket binary frame. Must be overridden.
+
+        Subclasses MAY drop the ``chunk_index`` parameter (legacy writers
+        declare ``write_chunk(self, chunk)``); the upload manager introspects
+        the signature via ``_writer_accepts_chunk_index`` and dispatches the
+        narrower form for such writers. Those narrower overrides carry a
+        ``# type: ignore[override]`` since the dropped trailing default is an
+        intentional, supported part of this contract — not an LSP bug.
+        """
         raise NotImplementedError("UploadWriter subclasses must implement write_chunk()")
 
     def close(self) -> Any:
@@ -517,7 +525,7 @@ class BufferedUploadWriter(UploadWriter):
         self._part_num = 0
         self._finalized = False
 
-    def write_chunk(self, chunk: bytes) -> None:
+    def write_chunk(self, chunk: bytes) -> None:  # type: ignore[override]
         """Buffer the chunk; emit full parts while buffer exceeds threshold.
 
         Raises ``RuntimeError`` if called after ``close()`` has returned —
@@ -594,7 +602,7 @@ class UploadConfig:
     # unless this is True.
     allow_active_content: bool = False
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.accept:
             for part in self.accept.split(","):
                 part = part.strip().lower()

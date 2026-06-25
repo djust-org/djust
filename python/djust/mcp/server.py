@@ -14,6 +14,10 @@ Two modes:
 import json
 import logging
 import sys
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +30,7 @@ __all__ = ["create_server", "_django_ready"]
 _django_ready = False
 
 
-def _ensure_django():
+def _ensure_django() -> bool:
     """Try to set up Django if not already configured."""
     global _django_ready
     if _django_ready:
@@ -49,7 +53,7 @@ def _ensure_django():
 # ---------------------------------------------------------------------------
 
 
-def create_server():
+def create_server() -> "FastMCP":
     """Create and configure the djust MCP server with all tools."""
     try:
         from mcp.server.fastmcp import FastMCP
@@ -535,7 +539,7 @@ def create_server():
             )
         if r.status_code != 200:
             return json.dumps({"error": r.text, "status": r.status_code})
-        return r.text
+        return cast(str, r.text)
 
     @mcp.tool()
     def eval_handler(
@@ -600,7 +604,7 @@ def create_server():
             )
         if r.status_code != 200:
             return json.dumps({"error": r.text, "status": r.status_code})
-        return r.text
+        return cast(str, r.text)
 
     @mcp.tool()
     def reset_view_state(session_id: str) -> str:
@@ -642,7 +646,7 @@ def create_server():
             )
         if r.status_code != 200:
             return json.dumps({"error": r.text, "status": r.status_code})
-        return r.text
+        return cast(str, r.text)
 
     @mcp.tool()
     def get_handler_timings(handler_name: str = "", since_ms: int = 0) -> str:
@@ -672,7 +676,7 @@ def create_server():
 
         base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
         url = f"{base}/_djust/observability/handler_timings/"
-        params = {}
+        params: dict[str, object] = {}
         if handler_name:
             params["handler_name"] = handler_name
         if since_ms:
@@ -688,7 +692,7 @@ def create_server():
             )
         if r.status_code != 200:
             return json.dumps({"error": r.text, "status": r.status_code})
-        return r.text
+        return cast(str, r.text)
 
     @mcp.tool()
     def get_sql_queries_since(
@@ -722,7 +726,7 @@ def create_server():
 
         base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
         url = f"{base}/_djust/observability/sql_queries/"
-        params = {"since_ms": since_ms, "limit": limit}
+        params: dict[str, object] = {"since_ms": since_ms, "limit": limit}
         if session_id:
             params["session_id"] = session_id
         if handler_name:
@@ -738,7 +742,7 @@ def create_server():
             )
         if r.status_code != 200:
             return json.dumps({"error": r.text, "status": r.status_code})
-        return r.text
+        return cast(str, r.text)
 
     @mcp.tool()
     def tail_server_log(since_ms: int = 0, level: str = "INFO", limit: int = 500) -> str:
@@ -783,7 +787,7 @@ def create_server():
             )
         if r.status_code != 200:
             return json.dumps({"error": r.text, "status": r.status_code})
-        return r.text
+        return cast(str, r.text)
 
     @mcp.tool()
     def get_last_traceback(n: int = 1) -> str:
@@ -821,7 +825,7 @@ def create_server():
             )
         if r.status_code != 200:
             return json.dumps({"error": r.text, "status": r.status_code})
-        return r.text
+        return cast(str, r.text)
 
     # === Runtime tools ===
 
@@ -1574,7 +1578,7 @@ def create_server():
 # ---------------------------------------------------------------------------
 
 
-def main():
+def main() -> None:
     """Run the MCP server with stdio transport."""
     server = create_server()
     server.run(transport="stdio")

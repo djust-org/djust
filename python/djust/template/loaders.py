@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import re
 
+from django.template.base import Origin
 from django.template.loaders.app_directories import (
     Loader as DjangoAppDirectoriesLoader,
 )
@@ -114,7 +115,7 @@ class FilesystemLoader(DjangoFilesystemLoader):
     See module docstring for the asymmetry this fixes (#1551).
     """
 
-    def get_contents(self, origin):
+    def get_contents(self, origin: Origin) -> str:
         source = super().get_contents(origin)
         return strip_multiline_comments(source)
 
@@ -125,6 +126,6 @@ class AppDirectoriesLoader(DjangoAppDirectoriesLoader):
     ``{# ... #}`` preprocessing as :class:`FilesystemLoader`.
     """
 
-    def get_contents(self, origin):
+    def get_contents(self, origin: Origin) -> str:
         source = super().get_contents(origin)
         return strip_multiline_comments(source)

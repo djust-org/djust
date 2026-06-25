@@ -22,13 +22,16 @@ Or use :func:`api_patterns` to embed the routes under a custom prefix::
 
 from __future__ import annotations
 
+from typing import List
+
 from django.urls import include, path
+from django.urls.resolvers import URLPattern, URLResolver
 
 from djust.api.dispatch import DjustAPIDispatchView, DjustServerFunctionView
 from djust.api.openapi import OpenAPISchemaView
 
 
-def default_api_urlpatterns():
+def default_api_urlpatterns() -> List[URLPattern]:
     """Return the default djust API URL patterns (relative to their mount prefix)."""
     return [
         path("openapi.json", OpenAPISchemaView.as_view(), name="djust-api-openapi"),
@@ -48,7 +51,7 @@ def default_api_urlpatterns():
     ]
 
 
-def api_patterns(prefix: str = "djust/api/"):
+def api_patterns(prefix: str = "djust/api/") -> URLResolver:
     """Return a single ``path()`` mounting the djust API under ``prefix``.
 
     The returned value is a Django ``URLPattern`` / ``URLResolver`` suitable for

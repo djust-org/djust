@@ -105,7 +105,7 @@ def _error_schema() -> Dict[str, Any]:
     }
 
 
-def _build_operation(view_cls, handler_name: str, handler) -> Dict[str, Any]:
+def _build_operation(view_cls: type, handler_name: str, handler: Any) -> Dict[str, Any]:
     sig_info = get_handler_signature_info(handler)
     body_schema = _build_request_body_schema(sig_info)
     summary = (

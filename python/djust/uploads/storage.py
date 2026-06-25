@@ -29,7 +29,7 @@ import json
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, cast, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ class InMemoryUploadState:
             self._check_size(merged)
             self._entries[upload_id] = merged
             # Preserve TTL — the docstring promises this.
-            return json.loads(json.dumps(merged))
+            return cast(Dict[str, Any], json.loads(json.dumps(merged)))
 
     def delete(self, upload_id: str) -> None:
         with self._lock:
@@ -245,7 +245,7 @@ class RedisUploadState:
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
         try:
-            return json.loads(raw)
+            return cast(Dict[str, Any], json.loads(raw))
         except json.JSONDecodeError:
             logger.warning("Corrupt JSON in upload state for %s; discarding", upload_id)
             self.delete(upload_id)
