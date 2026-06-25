@@ -409,6 +409,56 @@ Launching all 5 drain fixers as concurrent worktree-isolated agents tripped a tr
 - [ ] #316 — propagate the worktree-agent concurrency cap into the pipeline-run/pipeline-drain skill prompts (OUT-OF-REPO; in-repo CLAUDE.md half done)
 - [ ] #1561 / #1562 — priority:low bug-capture features, deferred (not in this bucket)
 
+## v1.1 type-enforcement arc (ADR-023) + rc1/rc2 prep (PRs #1926–#1960)
+
+**Date**: 2026-06-24 → 2026-06-25
+**Scope**: The headline is the **ADR-023 incremental type-enforcement ratchet** (#1936–#1960, ~21 PRs): turn a *dead* mypy config (`disallow_untyped_defs` was set but never invoked — ~8,484 parked errors — while `py.typed` shipped, making djust's untyped internals a type contract consumers inherit) into an enforced gate via a lenient-global + per-module strict-island model. M1 (foundation + security + `_rust.pyi` wire boundary) → M2 (public-API quartet) → M3 (dispatch/runtime core) → M4a–M4g (the long tail, including the `components/rust_handlers` Rust-FFI boundary) → #1960 (env-independent gate fix). End state: **546 strict module entries / 823 source files, zero lenient exceptions**, enforced blocking in CI + pre-commit. Preceded by the rc1/rc2 release-prep + de-flake batch (#1926 browser-smoke promoted to a hard merge gate #1869; #1929/#1932/#1933 de-flakes; #1935 `live_redirect`-to-non-LiveView full-page fallback #1934). This entry closes the retro gap between the v1.1.0-3 convergence retro and the v1.1.0-4 drain retro. This arc was `/goal`-driven, not a numbered ROADMAP milestone, which is why it lacked an entry until now.
+**Tests at close**: 8604 → 8608 across the arc; mypy 823 source files strict, 0 lenient exceptions.
+
+### What We Learned
+
+**1. The ratchet dividend: enforcing dead config found ~8 latent bugs and closed a real consumer liability.**
+The config existed but was never run, *and* `py.typed` was shipped — so consumers were handed djust's unchecked internals as a typing contract. Enforcing it (not the annotations themselves) is what paid off: the ratchet surfaced ~8 real bugs the green suite never caught — `event_handler`'s untyped dual-call API (→ `@overload`, the consumer-facing case ADR-023 was named for), `delete_offline` calling with a missing required arg (TypeError on every call — an untested path), `request._streaming_iter` typed `str` but yielding `bytes`, `AccordionState.active` str→Union, a `frozenset`-denylist mutability lie, `modal_simple` reading an unset attr — plus the three latent crashes (#1947/#1952/#1940) that the v1.1.0-4 drain then fixed.
+
+**Action taken**: Closed — ADR-023 shipped (`docs/adr/023-incremental-type-enforcement.md`, marked complete in #1960); 546 strict modules / 0 lenient exceptions; all surfaced bugs fixed across the arc + v1.1.0-4. The generalizable "type-ratchet dividend" is canonized in CLAUDE.md "Process canonicalizations from v1.1.0-4 retro arc" rule 1.
+
+**2. A green CI lint/type gate can be RED in a full dev environment.**
+After the ratchet, `mypy python/djust` passed CI but failed a full local dev env. Root cause: `import-untyped` (third-party lib *installed without stubs*, e.g. requests/yaml in a full dev env) is a different error code than `import-not-found` (lib *absent*, which CI's minimal env hit and `ignore_missing_imports` suppressed) — and it's reported against the *importing* strict-island module, so a per-lib override can't reach it. A contributor's local `mypy`/pre-commit would have hit 3 errors a green CI hid.
+
+**Action taken**: Added CLAUDE.md canon "Process canonicalizations from the v1.1 type-enforcement arc (ADR-023)" — verify a newly-enforced lint/type gate in a FULL dev env (all deps installed), not just CI's minimal env; CI-green ≠ contributor-green. Fixed in #1960 (`disable_error_code = ["import-untyped"]` in global `[tool.mypy]`).
+
+**3. An "intractable" boundary can flip clean once the right pattern is proven — don't accept an early verdict.**
+M4b-1 deemed `components/rust_handlers` (193 component-tag render handlers) a ~344-error intractable iceberg and documented it as *the* lenient exception. M4g re-attempted with the now-proven `_safe()` cast wrapper (`SafeString` resolves to `Any` under unstubbed django, so a `cast(str, mark_safe(...))` *wrapper* — not the return annotation — absorbs the ~200-strong `no-any-return` cascade) + inline `cast()` for the `kw.get()→object` cascade → flipped clean, **0 new `# type: ignore`**, render byte-identity verified (382 outputs across all 193 handlers). The "intractable" verdict predated the right tooling.
+
+**Action taken**: Closed — PR #1959 (rust_handlers strict; ADR-023 ratchet 100% complete, no exceptions).
+
+### Insights
+
+- **Parallel-worktree batches scaled the ratchet** — ~5 concurrent worktree implementers per wave, the only merge conflict being the *additive* pyproject override blocks (resolved by reconstruct-both-blocks). The 5-concurrent throttle that bit the v1.1.0-4 drain is the one cost; cap at ~3 (v1.1.0-4 canon).
+- **Render byte-identity (382 outputs) was the load-bearing check** for the rust_handlers render module — a strict-typing flip of rendering code needs an output-equality harness, not just gate-off.
+- **Every rc-prep de-flake followed the same canon** (#1795): #1932 owned the clock in rate-limit tests, #1933 awaited async-work completion deterministically — never assert on wall-clock; assert an ordering/completion invariant.
+- **Goal-driven arcs need a retro too.** This 25-PR body of work slipped the milestone-retro net purely because it was `/goal`-driven rather than ROADMAP-numbered. The per-PR retros all existed, so the gap was invisible until asked about — worth a check at each release that every shipped PR maps to a milestone-retro entry.
+
+### Review Stats
+
+| Metric | type-arc (#1936–#1960) | rc-prep (#1926–#1935) | Total |
+|--------|------------------------|------------------------|-------|
+| PRs | 21 | 5 (incl. 1 hard-gate promotion) | 26 |
+| Latent bugs surfaced+fixed | ~8 + 3 (drained in v1.1.0-4) | — | ~11 |
+| 🔴 / 🟡 Findings | 0 / 0 | 0 / 0 | 0 |
+| Gate-off / empirical-canary verified | every strict batch | n/a | ✓ |
+| Strict module entries at close | 546 (0 lenient) | — | 546 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Added "Process canonicalizations from the v1.1 type-enforcement arc (ADR-023)" — the CI-green ≠ dev-green gate rule.
+**ADR**: ADR-023 authored + marked complete (#1936 → #1960).
+**Pipeline template / Checklist / Skills**: none.
+
+### Open Items
+
+- None. The ratchet is complete (546 strict / 0 lenient); all surfaced bugs fixed or drained in v1.1.0-4. ADR-023 closed.
+
 ## v1.1.0-3 — ViewRuntime dispatch convergence (ADR-022 headline) (PRs #1886/#1888/#1890/#1893/#1895/#1897/#1909/#1912/#1914/#1916/#1918/#1920 + followups #1910/#1923/#1924 + resync #1925)
 
 **Date**: 2026-06-24
