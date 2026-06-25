@@ -26,7 +26,7 @@ import logging
 import re
 from typing import Any, Callable, Dict, Optional, Union
 
-from django.db import connection
+from django.db import connection, models
 from django.db.models.signals import post_delete, post_save
 
 logger = logging.getLogger(__name__)
@@ -124,13 +124,13 @@ def notify_on_save(
         class Order(models.Model): ...
     """
 
-    def decorate(model: type) -> type:
+    def decorate(model: type[models.Model]) -> type[models.Model]:
         effective = _validate_channel(
             channel or f"{model._meta.app_label}_{model._meta.model_name}"
         )
         label = model._meta.label
 
-        def _on_save(sender, instance, **_kw):
+        def _on_save(sender: type, instance: Any, **_kw: Any) -> None:
             try:
                 send_pg_notify(
                     effective,
@@ -144,7 +144,7 @@ def notify_on_save(
                     exc,
                 )
 
-        def _on_delete(sender, instance, **_kw):
+        def _on_delete(sender: type, instance: Any, **_kw: Any) -> None:
             try:
                 send_pg_notify(
                     effective,
@@ -160,9 +160,10 @@ def notify_on_save(
 
         post_save.connect(_on_save, sender=model, weak=False)
         post_delete.connect(_on_delete, sender=model, weak=False)
-        # Stash for introspection / test teardown.
-        model._djust_notify_channel = effective
-        model._djust_notify_receivers = (_on_save, _on_delete)
+        # Stash for introspection / test teardown. These are dynamic
+        # framework-private attributes the model class doesn't declare.
+        model._djust_notify_channel = effective  # type: ignore[attr-defined]
+        model._djust_notify_receivers = (_on_save, _on_delete)  # type: ignore[attr-defined]
         return model
 
     # Bare @notify_on_save — called with the class directly.
@@ -209,11 +210,11 @@ def untrack(model: type) -> bool:
     # trips cleanly (re-decoration wires new receivers with a new
     # channel; leaving stale attributes would mask the re-wire).
     try:
-        del model._djust_notify_channel
+        del model._djust_notify_channel  # type: ignore[attr-defined]
     except AttributeError:
         pass
     try:
-        del model._djust_notify_receivers
+        del model._djust_notify_receivers  # type: ignore[attr-defined]
     except AttributeError:
         pass
     return True

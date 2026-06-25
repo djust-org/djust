@@ -131,7 +131,7 @@ class RedisPresenceBackend(PresenceBackend):
 
     def count(self, presence_key: str) -> int:
         cutoff = time.time() - self._timeout
-        return self._client.zcount(self._zset_key(presence_key), cutoff, "+inf")
+        return int(self._client.zcount(self._zset_key(presence_key), cutoff, "+inf"))
 
     def heartbeat(self, presence_key: str, user_id: str) -> None:
         now = time.time()
