@@ -32,3 +32,12 @@ query-filters:
       id: js/remote-property-injection
   - exclude:
       id: js/log-injection
+  # py/ineffectual-statement fires on the ``...`` Ellipsis body of the
+  # ``if TYPE_CHECKING:`` forward-declaration stubs that the ADR-023 strict-mypy
+  # ratchet added across the mixins (cooperating-attribute/method declarations so
+  # each strict-island mixin resolves names supplied by sibling classes at MRO
+  # time — zero runtime effect; see ``python/djust/mixins/*.py`` + ``streaming.py``).
+  # All 50 hits are this idiom; the genuine useless-expression class is covered by
+  # ruff. Excluded repo-wide as pure false-positive noise.
+  - exclude:
+      id: py/ineffectual-statement

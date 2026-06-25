@@ -453,3 +453,51 @@ class TestSnapshotAssigns:
         view.items.append(3)
         snap2 = _snapshot_assigns(view)
         assert snap1 != snap2
+
+
+class TestEndTagWhitespacePreservation:
+    """#2482 (CodeQL py/bad-tag-filter): an end tag may carry trailing
+    whitespace (``</script >``, ``</style\\n>``, ``</pre >``) per the HTML spec —
+    browsers accept it. The preserve-block regexes must match those forms;
+    a bare ``</tag>`` pattern misses them, so the block is NOT preserved and
+    the HTML-comment strip / whitespace collapse corrupts the raw-text body.
+    These are gate-off tests: each FAILS against the pre-fix ``</tag>`` pattern.
+    """
+
+    def test_script_with_whitespace_end_tag_is_preserved(self, mixin):
+        # JS body containing a comment-looking token, closed with </script >.
+        # Pre-fix the block wasn't preserved → the comment-strip removed the token.
+        html = "<div><script>var s = '<!-- not a comment -->';</script ></div>"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "<!-- not a comment -->" in result
+
+    def test_style_with_whitespace_end_tag_is_preserved(self, mixin):
+        html = "<style>.x{content:'<!-- y -->'}</style >"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "<!-- y -->" in result
+
+    def test_newline_before_script_end_tag_is_preserved(self, mixin):
+        html = "<script>a = 1; // keep\nb = 2;</script\n>"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "// keep" in result
+        assert "b = 2;" in result
+
+    def test_script_end_tag_with_bogus_attributes_is_preserved(self, mixin):
+        # Per the HTML5 tokenizer, bogus attributes on an end tag still close
+        # the element: ``</script bar>`` / ``</script\t\n foo="x">`` close a
+        # <script> in a browser (CodeQL py/bad-tag-filter requires matching these).
+        html = '<div><script>var s = "<!-- y -->";</script foo="x"></div>'
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "<!-- y -->" in result
+        html2 = "<script>z = '<!-- w -->';</script\t\n bar>"
+        result2 = mixin._strip_comments_and_whitespace(html2)
+        assert "<!-- w -->" in result2
+
+    @pytest.mark.parametrize("tag", ["pre", "code", "textarea"])
+    def test_rawtext_block_with_whitespace_end_tag_preserves_inner_whitespace(self, mixin, tag):
+        # Significant newlines/indent inside the block must survive the collapse;
+        # pre-fix </tag > didn't match </tag>, so the block wasn't preserved and
+        # the whitespace was flattened.
+        html = f"<{tag}>line1\n   line2</{tag} >"
+        result = mixin._strip_comments_and_whitespace(html)
+        assert "line1\n   line2" in result
