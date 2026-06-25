@@ -10,12 +10,13 @@ Usage:
 """
 
 import json
+from typing import Optional, Any
 import logging
 import os
 import re
 
 from django.core.checks import Error, Warning, run_checks
-from django.core.management.base import BaseCommand
+from django.core.management.base import CommandParser, BaseCommand
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,14 @@ CATEGORIES = list(_CATEGORY_PREFIXES.keys())
 _SAFE_FIX_IDS = frozenset({"djust.V004", "djust.T001", "djust.T004"})
 
 
-def _check_id_suffix(check_id):
+def _check_id_suffix(check_id: Optional[str]) -> str:
     """Extract the suffix after 'djust.' from a check ID."""
     if check_id and check_id.startswith("djust."):
         return check_id[len("djust.") :]
     return check_id or ""
 
 
-def _category_for_check(check_id):
+def _category_for_check(check_id: Optional[str]) -> str:
     """Return the category name for a check ID, or 'other'."""
     suffix = _check_id_suffix(check_id)
     for category, prefixes in _CATEGORY_PREFIXES.items():
@@ -50,7 +51,7 @@ def _category_for_check(check_id):
     return "other"
 
 
-def _severity_label(check):
+def _severity_label(check: Any) -> tuple[str, str]:
     """Return (label, style_method_name) for a check."""
     if isinstance(check, Error) or check.level >= 40:
         return "ERROR", "ERROR"
@@ -59,12 +60,12 @@ def _severity_label(check):
     return "INFO", "HTTP_INFO"
 
 
-def _has_fix_hint(check):
+def _has_fix_hint(check: Any) -> bool:
     """Return True if check has a non-empty fix_hint attribute."""
     return bool(getattr(check, "fix_hint", ""))
 
 
-def _is_fixable(check):
+def _is_fixable(check: Any) -> bool:
     """Return True if the check can be safely auto-fixed."""
     return check.id in _SAFE_FIX_IDS and _has_fix_hint(check)
 
@@ -74,7 +75,7 @@ def _is_fixable(check):
 # ---------------------------------------------------------------------------
 
 
-def _fix_v004_add_event_handler(check):
+def _fix_v004_add_event_handler(check: Any) -> Optional[str]:
     """Add @event_handler() decorator to a method missing it.
 
     Returns a description of what was fixed, or None if fix failed.
@@ -139,7 +140,7 @@ def _fix_v004_add_event_handler(check):
     )
 
 
-def _fix_t001_replace_deprecated_attr(check):
+def _fix_t001_replace_deprecated_attr(check: Any) -> Optional[str]:
     """Replace deprecated @click with dj-click in templates.
 
     Returns a description of what was fixed, or None if fix failed.
@@ -180,7 +181,7 @@ def _fix_t001_replace_deprecated_attr(check):
     )
 
 
-def _fix_t004_document_to_window(check):
+def _fix_t004_document_to_window(check: Any) -> Optional[str]:
     """Replace document.addEventListener with window.addEventListener for djust events.
 
     Returns a description of what was fixed, or None if fix failed.
@@ -237,7 +238,7 @@ _FIX_HANDLERS = {
 class Command(BaseCommand):
     help = "Run djust framework checks with pretty output"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--category",
             choices=CATEGORIES,
@@ -263,7 +264,7 @@ class Command(BaseCommand):
             help="Automatically apply safe fixes",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         category = options.get("category")
         json_output = options.get("json_output", False)
         output_format = options.get("output_format", "text")
@@ -297,7 +298,7 @@ class Command(BaseCommand):
         else:
             self._output_pretty(all_checks, category)
 
-    def _output_json(self, checks):
+    def _output_json(self, checks: list[Any]) -> None:
         """Output checks as JSON for CI pipelines (legacy format)."""
         results = []
         for check in checks:
@@ -322,7 +323,7 @@ class Command(BaseCommand):
         output = {"checks": results, "summary": summary}
         self.stdout.write(json.dumps(output, indent=2))
 
-    def _output_json_enhanced(self, checks):
+    def _output_json_enhanced(self, checks: list[Any]) -> None:
         """Output checks as enhanced JSON with fix_hints, file paths, and line numbers."""
         results = []
         fixable_count = 0
@@ -362,7 +363,7 @@ class Command(BaseCommand):
         output = {"checks": results, "summary": summary}
         self.stdout.write(json.dumps(output, indent=2))
 
-    def _output_pretty(self, checks, category):
+    def _output_pretty(self, checks: list[Any], category: Optional[str]) -> None:
         """Output checks with colour-coded severity."""
         if not checks:
             scope = " (%s)" % category if category else ""
@@ -370,7 +371,7 @@ class Command(BaseCommand):
             return
 
         # Group by category
-        by_category = {}
+        by_category: dict[str, list[Any]] = {}
         for check in checks:
             cat = _category_for_check(check.id)
             by_category.setdefault(cat, []).append(check)
@@ -422,7 +423,7 @@ class Command(BaseCommand):
         self.stdout.write("  Summary: %s" % ", ".join(parts))
         self.stdout.write("")
 
-    def _apply_fixes(self, checks):
+    def _apply_fixes(self, checks: list[Any]) -> None:
         """Apply safe auto-fixes and report results."""
         fixable = [c for c in checks if _is_fixable(c)]
         unsafe = [c for c in checks if not _is_fixable(c) and _has_fix_hint(c)]

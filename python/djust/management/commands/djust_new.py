@@ -14,8 +14,9 @@ Also available as a CLI command:
 """
 
 import logging
+from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandParser, BaseCommand, CommandError
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 class Command(BaseCommand):
     help = "Generate a new djust project with optional features"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "app_name",
             help="Name for the new project (must be a valid Python identifier)",
@@ -71,7 +72,7 @@ class Command(BaseCommand):
             help="Parent directory to create project in (default: current directory)",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         from djust.scaffolding.generator import generate_project
 
         app_name = options["app_name"]

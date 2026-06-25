@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Callable
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ _HTML_CONTENT_TYPES = frozenset(
 )
 
 
-def _is_html_response(response) -> bool:
+def _is_html_response(response: Any) -> bool:
     """Return True when the response Content-Type is HTML or XHTML.
 
     Charset and boundary suffixes are stripped before matching so
@@ -83,7 +83,7 @@ class DjustMainOnlyMiddleware:
     def __init__(self, get_response: Callable):
         self.get_response = get_response
 
-    def __call__(self, request):
+    def __call__(self, request: Any) -> Any:
         response = self.get_response(request)
 
         # Only act on opt-in requests.

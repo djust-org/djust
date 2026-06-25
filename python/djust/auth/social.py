@@ -4,6 +4,8 @@ Provides a context processor that detects available OAuth backends
 and injects provider metadata (name, label, icon) into template context.
 """
 
+from typing import Any
+
 from django.utils.safestring import mark_safe
 
 # Provider display metadata: allauth provider ID -> (label, SVG icon)
@@ -42,7 +44,7 @@ _PROVIDER_META = {
 }
 
 
-def social_auth_providers(request):
+def social_auth_providers(request: Any) -> dict[str, Any]:
     """Inject available OAuth providers into template context.
 
     Returns ``{"oauth_providers": [...]}``.  Each item is a dict with keys:

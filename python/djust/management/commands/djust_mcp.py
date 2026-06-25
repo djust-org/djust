@@ -23,6 +23,7 @@ Or in .mcp.json:
 """
 
 import logging
+from typing import Any
 import sys
 
 from django.core.management.base import BaseCommand
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 class Command(BaseCommand):
     help = "Start the djust MCP server for AI assistant integration"
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         # Suppress Django's default logging to stderr — MCP uses stdio
         logging.getLogger("django").setLevel(logging.WARNING)
         logging.getLogger("djust").setLevel(logging.WARNING)

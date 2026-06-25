@@ -10,17 +10,17 @@ Usage:
 import os
 import time
 from datetime import datetime
-from typing import List, Set
+from typing import Any, List, Set
 
 from django.conf import settings
-from django.core.management.base import BaseCommand
+from django.core.management.base import CommandParser, BaseCommand
 from django.template import Template, Context
 
 
 class Command(BaseCommand):
     help = "Generate a service worker for PWA/offline support"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--output",
             "-o",
@@ -57,7 +57,7 @@ class Command(BaseCommand):
             help="Patterns to exclude from caching (comma-separated)",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         # Determine output path
         output_path = options["output"]
         if not output_path:
@@ -202,7 +202,7 @@ class Command(BaseCommand):
 
             resolver = get_resolver()
 
-            def extract_views(patterns, prefix=""):
+            def extract_views(patterns: Any, prefix: str = "") -> None:
                 for pattern in patterns:
                     if hasattr(pattern, "url_patterns"):
                         # Nested URLResolver
@@ -459,7 +459,7 @@ _log('[djust SW] Service worker loaded, version {{ version }}');
                 "template_urls": template_urls,
             }
         )
-        return template.render(context)
+        return str(template.render(context))
 
     def _generate_manifest(self, output_path: str) -> None:
         """Generate a basic PWA manifest.json file."""

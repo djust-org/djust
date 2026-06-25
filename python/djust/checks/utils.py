@@ -6,6 +6,8 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 import ast
 import os
 import re
+from collections.abc import Iterable, Iterator
+from typing import Any, Optional
 
 from django.core.checks import Error, Info, Warning
 
@@ -45,7 +47,14 @@ __all__ = [
 class _DjustCheckMixin:
     """Mixin that adds fix_hint, file_path, and line_number to check results."""
 
-    def __init__(self, *args, fix_hint="", file_path="", line_number=None, **kwargs):
+    def __init__(
+        self,
+        *args: Any,
+        fix_hint: str = "",
+        file_path: str = "",
+        line_number: Optional[int] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.fix_hint = fix_hint
         self.file_path = file_path
@@ -113,7 +122,7 @@ def _is_check_suppressed(check_id: str) -> bool:
     return check_id.lower() in normalised
 
 
-def _is_within_djust_package(path):
+def _is_within_djust_package(path: str) -> bool:
     """True if ``path`` is djust's own package dir or a directory inside it.
 
     Compares against the ACTUAL djust package location
@@ -137,7 +146,7 @@ def _is_within_djust_package(path):
     return real_path.startswith(djust_dir + os.sep)
 
 
-def _get_project_app_dirs():
+def _get_project_app_dirs() -> list[str]:
     """Return directories for project apps (excluding third-party and djust itself)."""
     from django.apps import apps
 
@@ -156,7 +165,7 @@ def _get_project_app_dirs():
     return dirs
 
 
-def _get_template_dirs():
+def _get_template_dirs() -> list[str]:
     """Return all configured template directories."""
     from django.conf import settings
 
@@ -167,14 +176,19 @@ def _get_template_dirs():
                 dirs.append(d)
         # Also check APP_DIRS templates
         if backend.get("APP_DIRS"):
-            for app_dir in _root._get_project_app_dirs():
+            # ``_root`` is ``djust.checks``, whose symbols are re-exported
+            # dynamically via ``setattr`` in ``__init__`` (so tests can
+            # monkeypatch by the ``djust.checks._get_project_app_dirs`` path).
+            # mypy can't see that dynamic attribute — narrow ignore preserves
+            # the patch-by-path contract.
+            for app_dir in _root._get_project_app_dirs():  # type: ignore[attr-defined]
                 tpl_dir = os.path.join(app_dir, "templates")
                 if os.path.isdir(tpl_dir):
                     dirs.append(tpl_dir)
     return dirs
 
 
-def _iter_python_files(directories):
+def _iter_python_files(directories: Iterable[str]) -> Iterator[str]:
     """Yield .py file paths from directories, skipping migrations/tests."""
     for directory in directories:
         for root, _dirs, files in os.walk(directory):
@@ -187,7 +201,7 @@ def _iter_python_files(directories):
                     yield os.path.join(root, fname)
 
 
-def _iter_template_files(directories):
+def _iter_template_files(directories: Iterable[str]) -> Iterator[str]:
     """Yield .html template file paths from directories."""
     for directory in directories:
         for root, _dirs, files in os.walk(directory):
@@ -196,7 +210,7 @@ def _iter_template_files(directories):
                     yield os.path.join(root, fname)
 
 
-def _iter_js_files(directories):
+def _iter_js_files(directories: Iterable[str]) -> Iterator[str]:
     """Yield .js file paths from directories."""
     for directory in directories:
         for root, _dirs, files in os.walk(directory):
@@ -208,7 +222,9 @@ def _iter_js_files(directories):
                     yield os.path.join(root, fname)
 
 
-def _parse_python_file(filepath):
+def _parse_python_file(
+    filepath: str,
+) -> tuple[Optional[ast.Module], list[str]]:
     """Return (AST tree, source_lines) for a Python file, or (None, []) on failure.
 
     source_lines is 1-indexed: source_lines[0] is unused, source_lines[1] is line 1.
@@ -224,7 +240,7 @@ def _parse_python_file(filepath):
         return None, []
 
 
-def _has_noqa(source_lines, lineno, check_id):
+def _has_noqa(source_lines: list[str], lineno: int, check_id: str) -> bool:
     """Return True if source line has a # noqa comment suppressing check_id.
 
     Supports:
@@ -258,7 +274,7 @@ def _has_noqa(source_lines, lineno, check_id):
 # ---------------------------------------------------------------------------
 
 
-def _walk_subclasses(cls):
+def _walk_subclasses(cls: type) -> Iterator[type]:
     """Recursively yield all subclasses of cls."""
     for sub in cls.__subclasses__():
         yield sub

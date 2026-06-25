@@ -8,8 +8,10 @@ import inspect
 import logging
 import os
 import re
+from collections.abc import Iterator
+from typing import Any, Optional
 
-from django.core.checks import register
+from django.core.checks import CheckMessage, register
 
 import djust.checks as _root
 from djust.checks.utils import (
@@ -83,7 +85,7 @@ def _strip_template_comments(content: str) -> str:
     return content
 
 
-def _routed_liveview_classes():
+def _routed_liveview_classes() -> Iterator[type]:
     """Yield LiveView subclasses reachable from the root URLconf.
 
     ``check_liveviews`` otherwise discovers views only via ``__subclasses__()``,
@@ -105,7 +107,7 @@ def _routed_liveview_classes():
     except Exception:
         return
 
-    def _walk(node):
+    def _walk(node: Any) -> Iterator[type]:
         nested = getattr(node, "url_patterns", None)
         if nested is not None:
             for child in nested:
@@ -122,9 +124,9 @@ def _routed_liveview_classes():
 
 
 @register("djust")
-def check_liveviews(app_configs, **kwargs):
+def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate LiveView subclasses."""
-    errors = []
+    errors: list[CheckMessage] = []
 
     try:
         from djust.live_view import LiveView
@@ -484,7 +486,7 @@ def check_liveviews(app_configs, **kwargs):
     return errors
 
 
-def _check_tutorial_mixin_mro(errors, LiveView):
+def _check_tutorial_mixin_mro(errors: list[CheckMessage], LiveView: type) -> None:
     """V010 (Error): Detect TutorialMixin listed after LiveView in the MRO.
 
     Django's ``View.__init__`` does not call ``super().__init__()``, so any
@@ -567,7 +569,7 @@ _LIVE_RENDER_FIRST_ARG_RE = re.compile(r"""^\s*["']([^"']+)["']""")
 
 
 @register("djust")
-def check_sticky_child_optin(app_configs, **kwargs):
+def check_sticky_child_optin(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """V011 (Warning): sticky child opts into ``enable_state_snapshot`` but its
     embedding parent does not — ADR-018 Decision 5 enforcement.
 
@@ -594,7 +596,7 @@ def check_sticky_child_optin(app_configs, **kwargs):
     runtime one-shot warning (``warn_sticky_child_optin_skip``) is the safety
     net for cases the static scan can't see.
     """
-    errors = []
+    errors: list[CheckMessage] = []
 
     if _is_check_suppressed("djust.V011"):
         return errors
@@ -609,7 +611,7 @@ def check_sticky_child_optin(app_configs, **kwargs):
     # Build template_name -> [parent LiveView class, ...]. Mirrors
     # check_liveviews' internal-class skip: djust-internal classes are
     # skipped UNLESS the module is a test/example module.
-    parent_map = {}
+    parent_map: dict[str, list[type]] = {}
     for cls in _walk_subclasses(LiveView):
         module = getattr(cls, "__module__", "") or ""
         if module.startswith("djust.") or module.startswith("djust_"):
@@ -723,7 +725,7 @@ def check_sticky_child_optin(app_configs, **kwargs):
     return errors
 
 
-def _sticky_child_template_source(cls):
+def _sticky_child_template_source(cls: type) -> Optional[str]:
     """Return the raw template source for a sticky-child view, or None.
 
     Reads ``cls.template`` (inline string) directly, otherwise resolves
@@ -746,7 +748,8 @@ def _sticky_child_template_source(cls):
     try:
         from django.template import loader
 
-        return loader.get_template(tpl_name).template.source
+        source: str = loader.get_template(tpl_name).template.source
+        return source
     except Exception:
         # TemplateDoesNotExist, backend errors, missing engine, etc. — the
         # template-resolution problem is V001/runtime's concern, not V012's.
@@ -754,7 +757,7 @@ def _sticky_child_template_source(cls):
 
 
 @register("djust")
-def check_sticky_child_own_dj_view(app_configs, **kwargs):
+def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """V012 (Warning): a sticky-child LiveView declares its own ``dj-view`` on
     its template root — a nested/duplicate binding footgun (closes #1803).
 
@@ -791,7 +794,7 @@ def check_sticky_child_own_dj_view(app_configs, **kwargs):
 
     Suppress with ``DJUST_CONFIG = {'suppress_checks': ['V012']}``.
     """
-    errors = []
+    errors: list[CheckMessage] = []
 
     if _is_check_suppressed("djust.V012"):
         return errors
@@ -866,14 +869,14 @@ def check_sticky_child_own_dj_view(app_configs, **kwargs):
     return errors
 
 
-def _check_service_instances_in_mount(errors):
+def _check_service_instances_in_mount(errors: list[CheckMessage]) -> None:
     """V006 (Warning): Detect service/client/session instantiation in mount() methods via AST.
 
     High-confidence subset of V008. Fires for names matching _SERVICE_INSTANCE_KEYWORDS
     (Service, Client, Session, API, Connection). Because V006 already emits a Warning for
     these patterns, V008 explicitly skips them so developers see only one message per line.
     """
-    app_dirs = _root._get_project_app_dirs()
+    app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return
 
@@ -932,7 +935,7 @@ def _check_service_instances_in_mount(errors):
                                 )
 
 
-def _check_non_primitive_assignments_in_mount(errors):
+def _check_non_primitive_assignments_in_mount(errors: list[CheckMessage]) -> None:
     """V008: Detect assignments of non-primitive types in mount() methods via AST.
 
     This is a broader, lower-confidence check than V006. V006 covers a specific
@@ -961,7 +964,7 @@ def _check_non_primitive_assignments_in_mount(errors):
     if _is_check_suppressed("djust.V008"):
         return
 
-    app_dirs = _root._get_project_app_dirs()
+    app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return
 
@@ -1128,15 +1131,15 @@ def _check_non_primitive_assignments_in_mount(errors):
                                 )
 
 
-def _get_call_name(call_node):
+def _get_call_name(call_node: ast.Call) -> Optional[str]:
     """Extract a human-readable name from a Call node's function."""
     func = call_node.func
     if isinstance(func, ast.Name):
         return func.id
     if isinstance(func, ast.Attribute):
         # e.g., boto3.client -> "boto3.client"
-        parts = []
-        current = func
+        parts: list[str] = []
+        current: ast.expr = func
         while isinstance(current, ast.Attribute):
             parts.append(current.attr)
             current = current.value
@@ -1165,7 +1168,7 @@ _PRIMITIVE_ANNOTATION_NAMES = frozenset(
 )
 
 
-def _build_primitive_return_funcs(tree):
+def _build_primitive_return_funcs(tree: ast.Module) -> set[str]:
     """Return the set of top-level function names whose return annotation is a primitive type.
 
     Only inspects module-level (top-level) function definitions.  If a function

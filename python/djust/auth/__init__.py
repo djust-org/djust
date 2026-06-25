@@ -26,7 +26,7 @@ Usage:
     ]
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # Core auth functions (originally djust/auth.py) — safe to import eagerly
 # since they only depend on django.conf and django.core.exceptions
@@ -75,7 +75,7 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     if name in _LAZY_IMPORTS:
         import importlib
 

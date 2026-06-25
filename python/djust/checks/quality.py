@@ -7,8 +7,9 @@ import ast
 import logging
 import os
 import re
+from typing import Any
 
-from django.core.checks import register
+from django.core.checks import CheckMessage, register
 
 import djust.checks as _root
 from djust.checks.utils import (
@@ -23,7 +24,7 @@ from djust.checks.utils import (
 logger = logging.getLogger(__name__)
 
 
-def _collect_patch_param_names(class_node, original_source):
+def _collect_patch_param_names(class_node: ast.ClassDef, original_source: str) -> set[str]:
     """Collect URL param names from self.patch() calls in a class.
 
     Inspects all methods in the class for ``self.patch(...)`` calls and extracts
@@ -68,7 +69,7 @@ def _collect_patch_param_names(class_node, original_source):
     return param_names
 
 
-def _nav_var_matches_patch_params(var_name, param_names):
+def _nav_var_matches_patch_params(var_name: str, param_names: set[str]) -> bool:
     """Return True if *var_name* plausibly corresponds to a URL param in *param_names*.
 
     Checks direct match and simple prefix/suffix stripping so that, for example,
@@ -81,7 +82,7 @@ def _nav_var_matches_patch_params(var_name, param_names):
     return base in param_names
 
 
-def _check_navigation_state_in_handlers(errors):
+def _check_navigation_state_in_handlers(errors: list[CheckMessage]) -> None:
     """Q010: Heuristic to detect event handlers that set navigation state without patching.
 
     Lower-confidence check that looks for @event_handler methods whose body primarily
@@ -96,7 +97,7 @@ def _check_navigation_state_in_handlers(errors):
 
     This is INFO level as it's a heuristic and may have false positives.
     """
-    app_dirs = _root._get_project_app_dirs()
+    app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return
 
@@ -202,10 +203,10 @@ def _check_navigation_state_in_handlers(errors):
 
 
 @register("djust")
-def check_code_quality(app_configs, **kwargs):
+def check_code_quality(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """AST-based code quality checks on project Python files."""
-    errors = []
-    app_dirs = _root._get_project_app_dirs()
+    errors: list[CheckMessage] = []
+    app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return errors
 

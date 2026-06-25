@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, List, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class ChunkEmitter:
     ``StreamingHttpResponse`` via the ASGI handler.
     """
 
-    def __init__(self, request, *, max_queue: Optional[int] = None) -> None:
+    def __init__(self, request: Any, *, max_queue: Optional[int] = None) -> None:
         """Create a chunk emitter bound to a request.
 
         :param request: The :class:`HttpRequest` for the current GET.
@@ -213,10 +214,10 @@ class ChunkEmitter:
     # Consumer side — called by StreamingHttpResponse via ASGI.
     # ------------------------------------------------------------------
 
-    def __aiter__(self):
+    def __aiter__(self) -> AsyncIterator[bytes]:
         return self._aiter_impl()
 
-    async def _aiter_impl(self):
+    async def _aiter_impl(self) -> AsyncIterator[bytes]:
         """Yield queued chunks until the end-of-stream sentinel arrives.
 
         ASGI's StreamingHttpResponse iterates this generator and ships

@@ -6,8 +6,9 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 import logging
 import os
 import re
+from typing import Any
 
-from django.core.checks import register
+from django.core.checks import CheckMessage, register
 
 from djust.checks.utils import (
     DjustWarning,
@@ -165,7 +166,7 @@ def _content_is_icon_only(inner: str) -> bool:
 
 
 @register("djust")
-def check_accessibility(app_configs, **kwargs):
+def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Regex-scan template files for ARIA/WCAG accessibility issues.
 
     Checks:
@@ -190,7 +191,7 @@ def check_accessibility(app_configs, **kwargs):
     never fails ``manage.py check``; all are suppressible via
     ``DJUST_CONFIG['suppress_checks']``.
     """
-    errors = []
+    errors: list[CheckMessage] = []
 
     y001_suppressed = _is_check_suppressed("djust.Y001")
     y002_suppressed = _is_check_suppressed("djust.Y002")

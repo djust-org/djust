@@ -5,8 +5,9 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 
 import logging
 import re
+from typing import Any, Optional
 
-from django.core.checks import register
+from django.core.checks import CheckMessage, register
 
 from djust.checks.utils import (
     DjustError,
@@ -36,7 +37,7 @@ _PII_NAME_PATTERN = re.compile(
 
 
 @register("djust")
-def check_service_worker_advanced(app_configs, **kwargs):
+def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate service-worker advanced-feature configuration (v0.6.0).
 
     Covers the VDOM-cache TTL / max-entries ranges and the per-view
@@ -182,7 +183,7 @@ def check_service_worker_advanced(app_configs, **kwargs):
 
 
 @register("djust")
-def check_hot_view_replacement(app_configs, **kwargs):
+def check_hot_view_replacement(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """C401 — Hot View Replacement requires ``watchdog`` for file watching.
 
     Only fires when the operator has explicitly opted into the dev-time
@@ -197,7 +198,7 @@ def check_hot_view_replacement(app_configs, **kwargs):
     """
     from django.conf import settings
 
-    warnings = []
+    warnings: list[CheckMessage] = []
     debug = bool(getattr(settings, "DEBUG", False))
     if not debug:
         return warnings
@@ -234,7 +235,7 @@ def check_hot_view_replacement(app_configs, **kwargs):
 
 
 @register("djust")
-def check_time_travel_debugging(app_configs, **kwargs):
+def check_time_travel_debugging(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """C501/C502 — Time-travel debugging config validation.
 
     C501 (info) — surfaced when ``DEBUG=True`` AND the global
@@ -249,7 +250,7 @@ def check_time_travel_debugging(app_configs, **kwargs):
     """
     from django.conf import settings
 
-    results = []
+    results: list[CheckMessage] = []
     debug = bool(getattr(settings, "DEBUG", False))
     if not debug:
         return results
@@ -301,7 +302,9 @@ def check_time_travel_debugging(app_configs, **kwargs):
 
 
 @register("djust")
-def check_admin_widgets(app_configs, _admin_sites=None, **kwargs):
+def check_admin_widgets(
+    app_configs: Any, _admin_sites: Optional[Any] = None, **kwargs: Any
+) -> list[CheckMessage]:
     """Audit widget-slot registrations on DjustModelAdmin subclasses.
 
     - **A072** (Warning): non-LiveView class registered in
@@ -321,7 +324,7 @@ def check_admin_widgets(app_configs, _admin_sites=None, **kwargs):
     The ``_admin_sites`` kwarg is for tests; production runs walk the
     default admin site registry.
     """
-    results = []
+    results: list[CheckMessage] = []
 
     try:
         from djust.admin_ext import site as default_site
@@ -451,7 +454,7 @@ def _parse_psycopg_version(version_str: str) -> tuple:
 
 
 @register("djust")
-def check_psycopg3_for_pg_notify(app_configs, **kwargs):
+def check_psycopg3_for_pg_notify(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """djust.D001 — warn when Postgres is configured but psycopg3 is missing.
 
     djust's ``db.notifications`` (LISTEN/NOTIFY bridge) requires

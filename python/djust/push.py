@@ -7,6 +7,7 @@ state updates to connected LiveView clients.
 
 import contextvars
 import re
+from typing import Any, Optional
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -35,7 +36,13 @@ def view_group_name(view_path: str) -> str:
     return f"djust_view_{view_path.replace('.', '_')}"
 
 
-def push_to_view(view_path, *, state=None, handler=None, payload=None):
+def push_to_view(
+    view_path: str,
+    *,
+    state: Optional[dict[str, Any]] = None,
+    handler: Optional[str] = None,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
     """
     Push an update to all clients connected to a LiveView.
 
@@ -82,7 +89,13 @@ def push_to_view(view_path, *, state=None, handler=None, payload=None):
     async_to_sync(channel_layer.group_send)(group, message)
 
 
-async def apush_to_view(view_path, *, state=None, handler=None, payload=None):
+async def apush_to_view(
+    view_path: str,
+    *,
+    state: Optional[dict[str, Any]] = None,
+    handler: Optional[str] = None,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
     """
     Async version of :func:`push_to_view`.
 

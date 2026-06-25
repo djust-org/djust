@@ -44,7 +44,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import CommandParser, BaseCommand
 
 from djust.management._introspect import (
     app_label_for_class as _app_label,
@@ -97,7 +97,7 @@ _IDENT_RE = re.compile(r"([A-Za-z_][\w]*)")
 _NOQA_RE = re.compile(r"\{#\s*djust_typecheck:\s*noqa(?:\s+(\w+(?:\s*,\s*\w+)*))?\s*#\}")
 
 
-def _public_class_attrs(cls) -> Set[str]:
+def _public_class_attrs(cls: type) -> Set[str]:
     """Names declared directly on the class body (or inherited from user bases)."""
     names: Set[str] = set()
     for klass in cls.__mro__:
@@ -111,7 +111,7 @@ def _public_class_attrs(cls) -> Set[str]:
     return names
 
 
-def _extract_context_keys_from_ast(cls) -> Set[str]:
+def _extract_context_keys_from_ast(cls: type) -> Set[str]:
     """Best-effort static extraction of context-provided names.
 
     Collects three sources from the class source, walking the MRO so keys
@@ -362,7 +362,7 @@ def _globals_from_settings() -> Set[str]:
     return {str(x) for x in raw}
 
 
-def _check_view(cls, verbose: bool = False) -> Optional[Dict[str, Any]]:
+def _check_view(cls: type, verbose: bool = False) -> Optional[Dict[str, Any]]:
     template_name = getattr(cls, "template_name", None)
     if not template_name or not isinstance(template_name, str):
         return None
@@ -422,7 +422,7 @@ def _check_view(cls, verbose: bool = False) -> Optional[Dict[str, Any]]:
 class Command(BaseCommand):
     help = "Static template-variable validation for djust LiveView templates."
 
-    def add_arguments(self, parser) -> None:
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
         parser.add_argument(
             "--strict", action="store_true", help="Exit non-zero if any view has unresolved names."

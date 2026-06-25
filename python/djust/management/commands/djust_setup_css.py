@@ -5,15 +5,16 @@ Auto-configures CSS framework compilation (Tailwind, Bootstrap, etc.)
 """
 
 import os
+from typing import Optional, Any
 import subprocess
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandParser, BaseCommand, CommandError
 from django.conf import settings
 
 
 class Command(BaseCommand):
     help = "Set up CSS framework compilation (Tailwind, Bootstrap, etc.)"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "framework",
             nargs="?",
@@ -32,7 +33,7 @@ class Command(BaseCommand):
             help="Minify output CSS (recommended for production)",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         framework = options["framework"]
         watch = options["watch"]
         minify = options["minify"]
@@ -48,7 +49,7 @@ class Command(BaseCommand):
         else:
             raise CommandError(f"Unsupported framework: {framework}")
 
-    def _setup_tailwind(self, watch=False, minify=False):
+    def _setup_tailwind(self, watch: bool = False, minify: bool = False) -> None:
         """Set up Tailwind CSS compilation."""
         # Create static/css directory
         static_dirs = getattr(settings, "STATICFILES_DIRS", [])
@@ -89,7 +90,7 @@ class Command(BaseCommand):
         output_css = os.path.join(css_dir, "output.css")
         self._build_tailwind_css(input_css, output_css, watch=watch, minify=minify)
 
-    def _create_tailwind_input_css(self, path):
+    def _create_tailwind_input_css(self, path: str) -> None:
         """Create Tailwind v4 input.css."""
         # Detect template directories for @source directives
         template_dirs = self._get_template_dirs()
@@ -107,7 +108,7 @@ class Command(BaseCommand):
         with open(path, "w") as f:
             f.write(content)
 
-    def _create_tailwind_config(self):
+    def _create_tailwind_config(self) -> None:
         """Create tailwind.config.js for Tailwind v3."""
         template_dirs = self._get_template_dirs()
         content_patterns = ",\n    ".join(
@@ -128,7 +129,9 @@ module.exports = {{
         with open("tailwind.config.js", "w") as f:
             f.write(content)
 
-    def _build_tailwind_css(self, input_css, output_css, watch=False, minify=False):
+    def _build_tailwind_css(
+        self, input_css: str, output_css: str, watch: bool = False, minify: bool = False
+    ) -> None:
         """Run Tailwind CSS build."""
         # Check if tailwindcss CLI is available
         tailwind_cmd = self._get_tailwind_command()
@@ -181,7 +184,7 @@ module.exports = {{
         except subprocess.CalledProcessError as e:
             raise CommandError(f"Tailwind CSS build failed: {e}")
 
-    def _get_tailwind_command(self):
+    def _get_tailwind_command(self) -> Optional[str]:
         """Find tailwindcss CLI command."""
         # Check npx
         try:
@@ -223,7 +226,7 @@ module.exports = {{
 
         return None
 
-    def _setup_bootstrap(self, watch=False, minify=False):
+    def _setup_bootstrap(self, watch: bool = False, minify: bool = False) -> None:
         """Set up Bootstrap + Sass compilation."""
         self.stdout.write(
             self.style.WARNING(
@@ -231,7 +234,7 @@ module.exports = {{
             )
         )
 
-    def _get_template_dirs(self):
+    def _get_template_dirs(self) -> list[str]:
         """Get all template directories from settings."""
         dirs = []
         for backend in settings.TEMPLATES:

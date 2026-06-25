@@ -17,14 +17,15 @@ Usage:
 """
 
 import os
+from typing import Any
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import CommandParser, BaseCommand
 
 
 class Command(BaseCommand):
     help = "Generate AI assistant context files for this djust project"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--format",
             type=str,
@@ -45,7 +46,7 @@ class Command(BaseCommand):
             help="Print to stdout instead of writing to file",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         from djust.schema import get_framework_schema, get_project_schema
 
         fmt = options["format"]
@@ -127,7 +128,7 @@ def _section_directives(framework: dict) -> str:
     """Generate the template directives reference section."""
     lines = ["## Template Directives\n"]
 
-    by_category = {}
+    by_category: dict[str, list[Any]] = {}
     for d in framework.get("directives", []):
         cat = d.get("category", "other")
         by_category.setdefault(cat, []).append(d)

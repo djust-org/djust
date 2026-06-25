@@ -7,14 +7,24 @@ Usage:
     python manage.py cleanup_liveview_sessions --stats     # Show stats only
 """
 
-from django.core.management.base import BaseCommand
-from djust.live_view import cleanup_expired_sessions, get_session_stats, DEFAULT_SESSION_TTL
+from typing import Any
+
+from django.core.management.base import CommandParser, BaseCommand
+
+# Imported from the canonical source module (``session_utils``) rather than the
+# ``live_view`` re-export so the strict-island type-check resolves them; the
+# names are equivalently exported by ``live_view.__all__`` for back-compat.
+from djust.session_utils import (
+    DEFAULT_SESSION_TTL,
+    cleanup_expired_sessions,
+    get_session_stats,
+)
 
 
 class Command(BaseCommand):
     help = "Clean up expired LiveView sessions from memory cache"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--ttl",
             type=int,
@@ -25,7 +35,7 @@ class Command(BaseCommand):
             "--stats", action="store_true", help="Show session statistics without cleaning up"
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         ttl = options["ttl"]
         show_stats = options["stats"]
 

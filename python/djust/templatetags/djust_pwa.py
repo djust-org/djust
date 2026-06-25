@@ -18,17 +18,20 @@ Usage:
 """
 
 import json
+from typing import Any
+
 from django import template
 from django.conf import settings
+from django.template.context import Context
 from django.utils.html import escape, format_html
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 from ..utils import get_csp_nonce
 
 register = template.Library()
 
 
-def _nonce_attr(context) -> str:
+def _nonce_attr(context: Context | None) -> str:
     """Return ``' nonce="..."'`` if the context's request has a CSP nonce, else ``''``.
 
     Used by the PWA inline-script/style tags so apps can drop ``'unsafe-inline'``
@@ -42,15 +45,15 @@ def _nonce_attr(context) -> str:
 
 @register.simple_tag
 def djust_pwa_manifest(
-    name=None,
-    short_name=None,
-    description=None,
-    theme_color=None,
-    background_color=None,
-    display="standalone",
-    start_url="/",
-    icons=None,
-):
+    name: str | None = None,
+    short_name: str | None = None,
+    description: str | None = None,
+    theme_color: str | None = None,
+    background_color: str | None = None,
+    display: str = "standalone",
+    start_url: str = "/",
+    icons: list[dict[str, Any]] | None = None,
+) -> SafeString:
     """
     Generate a PWA manifest as an inline <link> tag with data URI.
 
@@ -125,7 +128,11 @@ def djust_pwa_manifest(
 
 
 @register.simple_tag(takes_context=True)
-def djust_sw_register(context, sw_url=None, scope="/"):
+def djust_sw_register(
+    context: Context,
+    sw_url: str | None = None,
+    scope: str = "/",
+) -> SafeString:
     """
     Generate JavaScript to register the service worker.
 
@@ -189,13 +196,13 @@ if ('serviceWorker' in navigator) {
 
 @register.simple_tag(takes_context=True)
 def djust_offline_indicator(
-    context,
-    online_text="Online",
-    offline_text="Offline",
-    online_class="djust-status-online",
-    offline_class="djust-status-offline",
-    show_when="offline",
-):
+    context: Context,
+    online_text: str = "Online",
+    offline_text: str = "Offline",
+    online_class: str = "djust-status-online",
+    offline_class: str = "djust-status-offline",
+    show_when: str = "offline",
+) -> SafeString:
     """
     Render an offline status indicator element.
 
@@ -291,7 +298,7 @@ def djust_offline_indicator(
 
 
 @register.simple_tag(takes_context=True)
-def djust_offline_styles(context):
+def djust_offline_styles(context: Context) -> SafeString:
     """
     Include CSS styles for offline-related directives.
 
@@ -386,7 +393,11 @@ body.djust-offline .djust-queued-indicator.has-queued {
 
 
 @register.inclusion_tag("djust/pwa_head.html", takes_context=True)
-def djust_pwa_head(context, name=None, theme_color=None):
+def djust_pwa_head(
+    context: Context,
+    name: str | None = None,
+    theme_color: str | None = None,
+) -> dict[str, Any]:
     """
     Include all PWA-related head tags at once.
 
@@ -414,7 +425,7 @@ def djust_pwa_head(context, name=None, theme_color=None):
 
 
 @register.filter
-def offline_fallback(value, fallback):
+def offline_fallback(value: Any, fallback: Any) -> Any:
     """
     Template filter to provide a fallback value for offline mode.
 

@@ -539,7 +539,7 @@ class RequestMixin:
 
         disconnect_task = asyncio.ensure_future(_watch_disconnect())
 
-        async def _streaming_iter() -> AsyncIterator[str]:
+        async def _streaming_iter() -> AsyncIterator[bytes]:
             try:
                 async for chunk in emitter:
                     yield chunk

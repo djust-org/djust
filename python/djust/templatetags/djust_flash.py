@@ -19,12 +19,13 @@ Usage:
 
 from django import template
 from django.utils.html import format_html
+from django.utils.safestring import SafeString
 
 register = template.Library()
 
 
 @register.simple_tag
-def dj_flash(auto_dismiss: int = 5000, position: str = "") -> str:
+def dj_flash(auto_dismiss: int = 5000, position: str = "") -> SafeString:
     """
     Render the flash message container element.
 
