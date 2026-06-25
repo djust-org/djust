@@ -12,14 +12,15 @@ Usage:
 """
 
 import json
+from typing import Any
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import CommandParser, BaseCommand
 
 
 class Command(BaseCommand):
     help = "Output the djust framework and project schema as JSON"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--framework-only",
             action="store_true",
@@ -39,7 +40,7 @@ class Command(BaseCommand):
             help="JSON indentation level (default: 2, use 0 for compact)",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         from djust.schema import get_framework_schema, get_project_schema
 
         framework_only = options.get("framework_only", False)

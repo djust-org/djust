@@ -31,9 +31,10 @@ import argparse
 import os
 import re
 import sys
+from typing import Optional
 
 
-def setup_django():
+def setup_django() -> bool:
     """Set up Django environment if not already configured."""
     try:
         import django
@@ -47,7 +48,7 @@ def setup_django():
         return False
 
 
-def cmd_stats(args):
+def cmd_stats(args: argparse.Namespace) -> None:
     """Show state backend statistics."""
     setup_django()
 
@@ -102,7 +103,7 @@ def cmd_stats(args):
         sys.exit(1)
 
 
-def cmd_health(args):
+def cmd_health(args: argparse.Namespace) -> int:
     """Run health checks."""
     setup_django()
 
@@ -165,7 +166,7 @@ def cmd_health(args):
         return 1
 
 
-def cmd_profile(args):
+def cmd_profile(args: argparse.Namespace) -> None:
     """Show profiling statistics."""
     setup_django()
 
@@ -227,7 +228,7 @@ def cmd_profile(args):
         sys.exit(1)
 
 
-def cmd_analyze(args):
+def cmd_analyze(args: argparse.Namespace) -> None:
     """Analyze LiveView templates for optimization opportunities."""
     if not args.path:
         print("Error: Please provide a path to analyze")
@@ -325,7 +326,7 @@ def cmd_analyze(args):
     print(f"\nAnalyzed {len(files_to_check)} file(s)")
 
 
-def cmd_new(args):
+def cmd_new(args: argparse.Namespace) -> None:
     """Create a new djust project with optional features."""
     from djust.scaffolding.generator import generate_project
 
@@ -364,7 +365,7 @@ def cmd_new(args):
     print()
 
 
-def cmd_startproject(args):
+def cmd_startproject(args: argparse.Namespace) -> None:
     """Deprecated: scaffold a project via the canonical ``djust new`` generator.
 
     ``startproject`` predates ``djust new`` and used to emit its own divergent
@@ -403,7 +404,7 @@ def cmd_startproject(args):
     print()
 
 
-def cmd_startapp(args):
+def cmd_startapp(args: argparse.Namespace) -> None:
     """Create a new djust app with a LiveView and template."""
     name = args.name
     if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name):
@@ -498,14 +499,14 @@ urlpatterns = [
     print()
 
 
-def _write(filepath, content):
+def _write(filepath: str, content: str) -> None:
     """Write content to a file, creating parent directories if needed."""
     os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
     with open(filepath, "w") as f:
         f.write(content)
 
 
-def cmd_mcp(args):
+def cmd_mcp(args: argparse.Namespace) -> None:
     """MCP server management."""
     if not hasattr(args, "mcp_command") or not args.mcp_command:
         print("Usage: python -m djust mcp <command>")
@@ -517,7 +518,7 @@ def cmd_mcp(args):
         _mcp_install()
 
 
-def _mcp_install():
+def _mcp_install() -> None:
     """Install djust MCP server config for Claude Code / Cursor / Windsurf."""
     import shutil
     import subprocess
@@ -565,7 +566,7 @@ def _mcp_install():
     _write_mcp_json(python_path, manage_path)
 
 
-def _write_mcp_json(python_path, manage_path):
+def _write_mcp_json(python_path: str, manage_path: str) -> None:
     """Write .mcp.json directly (fallback for Cursor/Windsurf or missing claude CLI)."""
     import json
 
@@ -609,7 +610,7 @@ def _write_mcp_json(python_path, manage_path):
     print("\nRestart Claude Code to activate.")
 
 
-def _find_manage_py():
+def _find_manage_py() -> Optional[str]:
     """Walk up from cwd looking for manage.py."""
     current = os.getcwd()
     while True:
@@ -622,7 +623,7 @@ def _find_manage_py():
         current = parent
 
 
-def cmd_clear(args):
+def cmd_clear(args: argparse.Namespace) -> None:
     """Clear state backend caches."""
     setup_django()
 
@@ -683,7 +684,7 @@ Note:
 """
 
 
-def cmd_deploy(rest):
+def cmd_deploy(rest: list[str]) -> int:
     """Delegate to the Click-based deploy CLI in djust.deploy_cli."""
     try:
         from djust.deploy_cli import cli as deploy_cli
@@ -761,7 +762,7 @@ def cmd_deploy(rest):
     return 0
 
 
-def main():
+def main() -> None:
     # `deploy` is detected before argparse so the Click subcommand owns its
     # own argv (flags, prompts, streaming output) without argparse interference.
     if len(sys.argv) >= 2 and sys.argv[1] == "deploy":

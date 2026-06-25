@@ -6,8 +6,9 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 import logging
 import os
 import re
+from typing import Any
 
-from django.core.checks import register
+from django.core.checks import CheckMessage, register
 
 from djust.checks.utils import (
     DjustError,
@@ -163,9 +164,9 @@ _DJ_TABLE_SECTION_ROOT_RE = re.compile(
 
 
 @register("djust")
-def check_templates(app_configs, **kwargs):
+def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Regex-scan template files for common issues."""
-    errors = []
+    errors: list[CheckMessage] = []
     tpl_dirs = _get_template_dirs()
     if not tpl_dirs:
         return errors
@@ -591,7 +592,9 @@ def check_templates(app_configs, **kwargs):
     return errors
 
 
-def _check_view_root_same_element(content, relpath, filepath, errors):
+def _check_view_root_same_element(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
     """T005: Detect when dj-view and dj-root are on different elements."""
     # Use regex to find HTML tags and check if both attributes co-occur
     # Find all tags that have either attribute
@@ -641,7 +644,9 @@ _UNSUPPORTED_TAGS_RE = re.compile(
 )
 
 
-def _check_unsupported_tags(content, relpath, filepath, errors):
+def _check_unsupported_tags(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
     """T011: Detect unsupported Django template tags in LiveView templates.
 
     The Rust renderer silently ignores these tags, rendering an HTML comment
@@ -669,7 +674,9 @@ def _check_unsupported_tags(content, relpath, filepath, errors):
         )
 
 
-def _check_click_for_navigation(content, relpath, filepath, errors):
+def _check_click_for_navigation(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
     """T010: Detect dj-click with navigation-style data attributes.
 
     Elements with both dj-click and navigation-style data attributes (data-view,
@@ -709,7 +716,9 @@ def _check_click_for_navigation(content, relpath, filepath, errors):
             )
 
 
-def _check_deprecated_data_dj_id(content, relpath, filepath, errors):
+def _check_deprecated_data_dj_id(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
     """T014: Detect deprecated data-dj-id attribute (renamed to dj-id in v1.0).
 
     data-dj-id was the internal VDOM tracking attribute in pre-1.0 versions.
@@ -737,7 +746,9 @@ def _check_deprecated_data_dj_id(content, relpath, filepath, errors):
         )
 
 
-def _check_legacy_root_attrs(content, relpath, filepath, errors):
+def _check_legacy_root_attrs(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
     """T015 (#1602): Detect the pre-1.0 legacy root attributes.
 
     djust 1.0 renamed the LiveView root markers from ``data-djust-root`` /
@@ -777,7 +788,9 @@ def _check_legacy_root_attrs(content, relpath, filepath, errors):
         )
 
 
-def _check_table_section_root(content, relpath, filepath, errors):
+def _check_table_section_root(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
     """T017 (#1837): Detect dj-view / dj-root on an HTML table-section element.
 
     A LiveView whose root element is a table-section element (``<tbody>``,

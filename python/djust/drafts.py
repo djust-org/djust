@@ -4,7 +4,7 @@ Draft Mode functionality for djust LiveView.
 Provides automatic draft saving to localStorage for forms and editors.
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 
 class DraftModeMixin:
@@ -60,7 +60,7 @@ class DraftModeMixin:
         # Default: Use view class name
         return f"{self.__class__.__name__.lower()}_draft"
 
-    def clear_draft(self):
+    def clear_draft(self) -> None:
         """
         Clear the draft from localStorage.
 
@@ -73,13 +73,19 @@ class DraftModeMixin:
         if not hasattr(self, "_draft_clear_requested"):
             self._draft_clear_requested = True
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         """
         Add draft configuration to template context.
 
         This is called automatically by LiveView. Override to customize context.
         """
-        context = super().get_context_data(**kwargs) if hasattr(super(), "get_context_data") else {}
+        # Mixin: ``get_context_data`` is provided by the LiveView it's combined
+        # with; guarded by ``hasattr`` so the bare-mixin MRO stays safe.
+        context = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
 
         # Add draft configuration
         context["draft_enabled"] = self.draft_enabled

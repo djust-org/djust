@@ -17,9 +17,10 @@ import json
 import logging
 import os
 import textwrap
-from typing import Dict
+from collections.abc import Iterator
+from typing import Any, Dict, Optional
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import CommandParser, BaseCommand
 
 # Shared class-introspection helpers live in djust.management._introspect so
 # djust_audit and djust_typecheck stay in sync.
@@ -54,7 +55,9 @@ _DECORATOR_KEYS = {
 }
 
 
-def _get_handler_metadata(cls, base_classes=None):
+def _get_handler_metadata(
+    cls: type, base_classes: Optional[list[type]] = None
+) -> Iterator[tuple[str, dict[str, Any]]]:
     """Extract event handler metadata from class without instantiating.
 
     Skips handlers that are defined only on base framework classes (e.g.,
@@ -91,7 +94,7 @@ def _get_handler_metadata(cls, base_classes=None):
                 yield name, meta
 
 
-def _format_handler_params(handler_meta):
+def _format_handler_params(handler_meta: dict[str, Any]) -> str:
     """Format handler parameters as a human-readable signature string."""
     eh = handler_meta.get("event_handler", {})
     params = eh.get("params", [])
@@ -117,7 +120,7 @@ def _format_handler_params(handler_meta):
     return ", ".join(parts)
 
 
-def _format_decorator_tags(handler_meta):
+def _format_decorator_tags(handler_meta: dict[str, Any]) -> list[str]:
     """Return list of formatted decorator annotations like '@debounce(wait=0.3)'."""
     tags = []
     for key in sorted(_DECORATOR_KEYS):
@@ -137,7 +140,7 @@ def _format_decorator_tags(handler_meta):
     return tags
 
 
-def _extract_exposed_state(cls):
+def _extract_exposed_state(cls: type) -> dict[str, Any]:
     """Extract public state attributes set via self.xxx = ... using AST inspection.
 
     Walks the class MRO (stopping at LiveView/LiveComponent) and scans all
@@ -148,7 +151,7 @@ def _extract_exposed_state(cls):
     Returns:
         dict mapping attribute name to {"source": method_name, "defined_in": class_qualname}
     """
-    assigns = {}  # name → {"source": method_name, "defined_in": qualname}
+    assigns: dict[str, Any] = {}  # name → {"source": method_name, "defined_in": qualname}
 
     for klass in cls.__mro__:
         # Stop at framework base classes — don't parse internals
@@ -191,7 +194,7 @@ def _extract_exposed_state(cls):
     return assigns
 
 
-def _has_auth_mixin(cls):
+def _has_auth_mixin(cls: type) -> bool:
     """Check if any class in the MRO provides auth via dispatch() or naming.
 
     Detects Django-style auth mixins (LoginRequiredMixin, etc.) and
@@ -212,14 +215,14 @@ def _has_auth_mixin(cls):
     return False
 
 
-def _extract_auth_info(cls):
+def _extract_auth_info(cls: type) -> dict[str, Any]:
     """Extract authentication/authorization configuration from a class.
 
     Returns:
         dict with keys like 'login_required', 'permission_required',
         'custom_check', 'dispatch_mixin'.
     """
-    info = {}
+    info: dict[str, Any] = {}
     if getattr(cls, "login_required", None):
         info["login_required"] = True
     perm = getattr(cls, "permission_required", None)
@@ -238,7 +241,12 @@ def _extract_auth_info(cls):
     return info
 
 
-def _audit_class(cls, cls_type, verbose=False, base_classes=None):
+def _audit_class(
+    cls: type,
+    cls_type: str,
+    verbose: bool = False,
+    base_classes: Optional[list[type]] = None,
+) -> dict[str, Any]:
     """Introspect a LiveView or LiveComponent class and return an audit dict."""
     template = getattr(cls, "template_name", None)
     if template is None:
@@ -306,7 +314,7 @@ def _audit_class(cls, cls_type, verbose=False, base_classes=None):
     return result
 
 
-def _extract_vars(cls):
+def _extract_vars(cls: type) -> Optional[Any]:
     """Try to extract template variables using the Rust extension."""
     try:
         from djust._rust import extract_template_variables
@@ -340,7 +348,7 @@ def _extract_vars(cls):
 class Command(BaseCommand):
     help = "Audit all LiveViews and LiveComponents in this project"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--json",
             action="store_true",
@@ -486,7 +494,7 @@ class Command(BaseCommand):
             ),
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         json_output = options.get("json_output", False)
         app_label = options.get("app_label")
         verbose = options.get("verbose", False)
@@ -550,7 +558,7 @@ class Command(BaseCommand):
 
         return None
 
-    def _run_ast_audit(self, options):
+    def _run_ast_audit(self, options: dict[str, Any]) -> None:
         """Run the AST security anti-pattern scanner (#660)."""
         from djust.audit_ast import run_ast_audit
 
@@ -580,7 +588,7 @@ class Command(BaseCommand):
             raise SystemExit(1)
         return
 
-    def _output_ast_pretty(self, report, root):
+    def _output_ast_pretty(self, report: Any, root: str) -> None:
         """Pretty-print an ASTAuditReport to the terminal."""
         line = "=" * 50
         self.stdout.write("")
@@ -620,7 +628,7 @@ class Command(BaseCommand):
         )
         self.stdout.write("")
 
-    def _run_a11y_audit(self, options):
+    def _run_a11y_audit(self, options: dict[str, Any]) -> None:
         """Run the accessibility (Y0xx) audit (#1523).
 
         Mirrors :meth:`_run_ast_audit`: invokes :func:`check_accessibility`
@@ -633,7 +641,9 @@ class Command(BaseCommand):
         which also only fails on warnings under ``strict`` — accessibility
         simply has no error tier to fail on outside ``strict``.
         """
-        from djust.checks import check_accessibility
+        # ``check_accessibility`` is re-exported dynamically by
+        # ``djust.checks.__init__`` (setattr loop); mypy can't see it.
+        from djust.checks import check_accessibility  # type: ignore[attr-defined]
 
         json_output = options.get("json_output", False)
         strict = options.get("strict", False)
@@ -652,7 +662,7 @@ class Command(BaseCommand):
         return
 
     @staticmethod
-    def _a11y_findings_to_json(findings):
+    def _a11y_findings_to_json(findings: Any) -> dict[str, Any]:
         """Project a list of DjustWarning findings into a JSON-safe dict.
 
         A :class:`DjustWarning` is not natively JSON-serializable; pull the
@@ -678,7 +688,7 @@ class Command(BaseCommand):
         summary["total"] = len(items)
         return {"a11y_findings": items, "summary": summary}
 
-    def _output_a11y_pretty(self, findings):
+    def _output_a11y_pretty(self, findings: Any) -> None:
         """Pretty-print accessibility (Y0xx) findings to the terminal.
 
         Mirrors :meth:`_output_ast_pretty`. Since every Y finding is a
@@ -730,7 +740,7 @@ class Command(BaseCommand):
             self.stdout.write("  Summary: 0 warning(s)")
         self.stdout.write("")
 
-    def _run_live_audit(self, options):
+    def _run_live_audit(self, options: dict[str, Any]) -> None:
         """Run the --live runtime probe and return the command exit code."""
         from djust.audit_live import run_live_audit
 
@@ -773,7 +783,7 @@ class Command(BaseCommand):
             raise SystemExit(1)
         return
 
-    def _output_live_pretty(self, report):
+    def _output_live_pretty(self, report: Any) -> None:
         """Pretty-print a LiveAuditReport to the terminal."""
         line = "=" * 50
         self.stdout.write("")
@@ -816,7 +826,7 @@ class Command(BaseCommand):
         )
         self.stdout.write("")
 
-    def _run_permissions_check(self, audits, path):
+    def _run_permissions_check(self, audits: list[Any], path: str) -> Any:
         """Load a permissions document and compare it against the audits."""
         from djust.permissions import PermissionsDocument, PermissionsDocumentError
 
@@ -830,9 +840,9 @@ class Command(BaseCommand):
         actual = {a["class"]: (a.get("auth") or {}) for a in audits}
         return doc.compare_all(actual)
 
-    def _collect_audits(self, app_label, verbose):
+    def _collect_audits(self, app_label: Optional[str], verbose: bool) -> list[Any]:
         """Discover and audit all LiveView and LiveComponent subclasses."""
-        audits = []
+        audits: list[Any] = []
 
         # Discover LiveViews
         try:
@@ -864,7 +874,7 @@ class Command(BaseCommand):
 
         return audits
 
-    def _output_json(self, audits, findings=None):
+    def _output_json(self, audits: list[Any], findings: Any = None) -> None:
         """Output audit results as JSON."""
         view_count = sum(1 for a in audits if a["type"] == "LiveView")
         component_count = sum(1 for a in audits if a["type"] == "LiveComponent")
@@ -872,7 +882,7 @@ class Command(BaseCommand):
 
         unprotected = sum(1 for a in audits if not a.get("auth") and a.get("exposed_state"))
 
-        output = {
+        output: dict[str, Any] = {
             "audits": audits,
             "summary": {
                 "views": view_count,
@@ -891,7 +901,7 @@ class Command(BaseCommand):
             )
         self.stdout.write(json.dumps(output, indent=2))
 
-    def _output_pretty(self, audits, findings=None):
+    def _output_pretty(self, audits: list[Any], findings: Any = None) -> None:
         """Output audit results with formatted terminal display."""
         if not audits:
             self.stdout.write(self.style.SUCCESS("No LiveViews or LiveComponents found."))
@@ -905,7 +915,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(line))
 
         # Group by app
-        by_app = {}
+        by_app: dict[str, list[Any]] = {}
         for audit in audits:
             app = audit["class"].split(".")[0]
             by_app.setdefault(app, []).append(audit)
@@ -1084,7 +1094,7 @@ class Command(BaseCommand):
         )
         self.stdout.write("")
 
-    def _output_api_exposed_section(self):
+    def _output_api_exposed_section(self) -> None:
         """List every ``@event_handler(expose_api=True)`` handler (ADR-008).
 
         Flags any exposed handler that is NOT also guarded by

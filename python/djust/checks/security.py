@@ -8,8 +8,10 @@ import ast
 import logging
 import os
 import re
+from collections.abc import Iterator
+from typing import Any, Optional, Union
 
-from django.core.checks import register
+from django.core.checks import CheckMessage, register
 
 import djust.checks as _root
 from djust.checks.utils import (
@@ -32,10 +34,10 @@ logger = logging.getLogger(__name__)
 
 
 @register("djust")
-def check_security(app_configs, **kwargs):
+def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """AST-based security checks on project Python files."""
-    errors = []
-    app_dirs = _root._get_project_app_dirs()
+    errors: list[CheckMessage] = []
+    app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return errors
 
@@ -93,7 +95,7 @@ def check_security(app_configs, **kwargs):
                             and isinstance(node.body[0].value, ast.Constant)
                         ):
                             doc = node.body[0].value.value
-                            if "csrf" in doc.lower():
+                            if isinstance(doc, str) and "csrf" in doc.lower():
                                 has_justification = True
                         if not has_justification and not _has_noqa(
                             source_lines, deco.lineno, "S002"
@@ -327,7 +329,11 @@ def _is_os_path_join(func: "ast.AST") -> bool:
     return isinstance(func, ast.Attribute) and func.attr == "join"
 
 
-def _scan_client_name_path_sink(tree, source_lines, relpath):
+def _scan_client_name_path_sink(
+    tree: ast.AST,
+    source_lines: list[str],
+    relpath: str,
+) -> list[DjustWarning]:
     """Return DjustWarnings for raw ``client_name`` used in a path/key sink.
 
     Extracted as a standalone, side-effect-free function so it can be unit
@@ -373,12 +379,12 @@ def _scan_client_name_path_sink(tree, source_lines, relpath):
 
 
 @register("djust")
-def check_upload_client_name_path_sink(app_configs, **kwargs):
+def check_upload_client_name_path_sink(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """S008 -- raw upload ``client_name`` interpolated into a storage path/key."""
-    errors = []
+    errors: list[CheckMessage] = []
     if _is_check_suppressed("djust.S008"):
         return errors
-    app_dirs = _root._get_project_app_dirs()
+    app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return errors
 
@@ -411,7 +417,9 @@ _AUTH_REFERENCE_NAMES = frozenset(
 )
 
 
-def _liveview_auth_dispatch_method(node: "ast.ClassDef"):
+def _liveview_auth_dispatch_method(
+    node: "ast.ClassDef",
+) -> Union[ast.FunctionDef, ast.AsyncFunctionDef, None]:
     """Return the overridden ``dispatch`` method node if it performs auth.
 
     Heuristic: the class defines ``def dispatch``/``async def dispatch`` whose
@@ -463,7 +471,7 @@ _AUTH_DECORATOR_NAMES = frozenset(
 )
 
 
-def _is_dispatch_auth_method_decorator(deco) -> bool:
+def _is_dispatch_auth_method_decorator(deco: ast.expr) -> bool:
     """True if ``deco`` is ``@method_decorator(<auth-decorator>, name="dispatch")``."""
     if not isinstance(deco, ast.Call):
         return False
@@ -553,7 +561,7 @@ _READ_ONLY_HANDLER_PREFIXES = (
 )
 
 
-def _decorator_callable_name(deco):
+def _decorator_callable_name(deco: ast.expr) -> Optional[str]:
     """Return the simple callable name of a decorator node (Name/Call/Attribute)."""
     target = deco.func if isinstance(deco, ast.Call) else deco
     if isinstance(target, ast.Name):
@@ -563,12 +571,12 @@ def _decorator_callable_name(deco):
     return None
 
 
-def _is_event_handler_decorator(deco) -> bool:
+def _is_event_handler_decorator(deco: ast.expr) -> bool:
     """True if ``deco`` is ``@event_handler`` / ``@event_handler(...)`` / ``@action(...)``."""
     return _decorator_callable_name(deco) in ("event_handler", "action")
 
 
-def _is_permission_required_decorator(deco) -> bool:
+def _is_permission_required_decorator(deco: ast.expr) -> bool:
     """True if ``deco`` is ``@permission_required(...)`` (the per-handler gate)."""
     return _decorator_callable_name(deco) == "permission_required"
 
@@ -655,7 +663,9 @@ def _class_gates_events(node: "ast.ClassDef") -> bool:
     return False
 
 
-def _ungated_event_handlers(node: "ast.ClassDef"):
+def _ungated_event_handlers(
+    node: "ast.ClassDef",
+) -> Iterator[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
     """Yield public ``@event_handler`` method nodes with no per-handler auth gate.
 
     Yields nothing unless the class declares view-level auth (so the gap is
@@ -785,7 +795,7 @@ def _blank_pre_code(content: str) -> str:
     return _PRE_CODE_BLOCK_RE.sub(_redact, content)
 
 
-def _dj_root_ranges(content: str):
+def _dj_root_ranges(content: str) -> list[tuple[int, int]]:
     """Return ``[(start, end), ...]`` char ranges of each dj-root/dj-view subtree.
 
     For each real opening tag bearing ``dj-root`` / ``dj-view`` we balance the
@@ -854,14 +864,14 @@ def _csp_is_configured() -> bool:
 
 
 @register("djust")
-def check_inline_script_csp(app_configs, **kwargs):
+def check_inline_script_csp(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """S011 (#1854 / #1848): inline executable <script> in a LiveView template
     shipped without a CSP setting.
 
     Separate registered check (mirrors ``check_upload_client_name_path_sink``)
     so the template-scan stays out of the AST-only ``check_security`` walk.
     """
-    errors = []
+    errors: list[CheckMessage] = []
     if _is_check_suppressed("djust.S011"):
         return errors
     if _csp_is_configured():

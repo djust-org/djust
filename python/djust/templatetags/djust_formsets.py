@@ -32,7 +32,14 @@ plain event handlers the developer writes (helpers in
 from __future__ import annotations
 
 from django import template
-from django.template.base import Node, NodeList, TemplateSyntaxError
+from django.template.base import (
+    Node,
+    NodeList,
+    Parser,
+    TemplateSyntaxError,
+    Token,
+)
+from django.template.context import Context
 
 register = template.Library()
 
@@ -44,12 +51,17 @@ class InputsForNode(Node):
     inputs use the prefixed name Django expects on submit.
     """
 
-    def __init__(self, formset_var: template.Variable, loop_var: str, nodelist: NodeList):
+    def __init__(
+        self,
+        formset_var: template.Variable,
+        loop_var: str,
+        nodelist: NodeList,
+    ) -> None:
         self.formset_var = formset_var
         self.loop_var = loop_var
         self.nodelist = nodelist
 
-    def render(self, context) -> str:
+    def render(self, context: Context) -> str:
         try:
             formset = self.formset_var.resolve(context)
         except template.VariableDoesNotExist:
@@ -77,7 +89,7 @@ class InputsForNode(Node):
 
 
 @register.tag("inputs_for")
-def do_inputs_for(parser, token):
+def do_inputs_for(parser: Parser, token: Token) -> InputsForNode:
     """Parse ``{% inputs_for formset as form %}...{% endinputs_for %}``.
 
     The ``as <name>`` clause is required so templates are explicit about the

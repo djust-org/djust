@@ -14,11 +14,12 @@ Usage:
 """
 
 import json as json_module
+from typing import Any, Callable, Optional
 import logging
 import sys
 import time
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import CommandParser, BaseCommand
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,15 @@ class _CheckResult:
 
     __slots__ = ("name", "category", "status", "message", "detail", "elapsed_ms")
 
-    def __init__(self, name, category, status, message, detail="", elapsed_ms=0.0):
+    def __init__(
+        self,
+        name: str,
+        category: str,
+        status: str,
+        message: str,
+        detail: str = "",
+        elapsed_ms: float = 0.0,
+    ) -> None:
         self.name = name
         self.category = category
         self.status = status
@@ -44,8 +53,8 @@ class _CheckResult:
         self.detail = detail
         self.elapsed_ms = elapsed_ms
 
-    def to_dict(self):
-        d = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "name": self.name,
             "category": self.category,
             "status": self.status,
@@ -58,7 +67,7 @@ class _CheckResult:
         return d
 
 
-def _timed(fn):
+def _timed(fn: "Callable[[], Optional[_CheckResult]]") -> "Optional[_CheckResult]":
     """Measure wall-clock time of a check function (returns elapsed_ms)."""
     start = time.monotonic()
     result = fn()
@@ -73,7 +82,7 @@ def _timed(fn):
 # ---------------------------------------------------------------------------
 
 
-def check_djust_version():
+def check_djust_version() -> "_CheckResult":
     """Display djust version."""
     try:
         import djust
@@ -89,7 +98,7 @@ def check_djust_version():
         )
 
 
-def check_python_version():
+def check_python_version() -> "_CheckResult":
     """Check Python version."""
     vi = sys.version_info
     ver = "%d.%d.%d" % (vi[0], vi[1], vi[2])
@@ -102,7 +111,7 @@ def check_python_version():
     return _CheckResult("python_version", "versions", status, msg)
 
 
-def check_django_version():
+def check_django_version() -> "_CheckResult":
     """Check Django version."""
     import django
 
@@ -114,14 +123,15 @@ def check_django_version():
     return _CheckResult("django_version", "versions", _CheckResult.OK, "Django %s" % ver)
 
 
-def check_rust_extension():
+def check_rust_extension() -> "_CheckResult":
     """Check if the Rust extension is importable."""
     try:
         from djust._rust import render_template  # noqa: F401
 
-        # Try to get Rust core version if available
+        # Try to get Rust core version if available. ``version`` is an
+        # optional export not declared in ``_rust.pyi``; guarded at runtime.
         try:
-            from djust._rust import version as rust_version
+            from djust._rust import version as rust_version  # type: ignore[attr-defined]
 
             ver = rust_version()
         except (ImportError, AttributeError):
@@ -142,7 +152,7 @@ def check_rust_extension():
         )
 
 
-def check_channels_installed():
+def check_channels_installed() -> "_CheckResult":
     """Check if Django Channels is installed."""
     try:
         import channels  # noqa: F401
@@ -164,7 +174,7 @@ def check_channels_installed():
         )
 
 
-def check_asgi_configured():
+def check_asgi_configured() -> "_CheckResult":
     """Check ASGI_APPLICATION setting."""
     from django.conf import settings
 
@@ -185,7 +195,7 @@ def check_asgi_configured():
     )
 
 
-def check_channel_layers():
+def check_channel_layers() -> "_CheckResult":
     """Check CHANNEL_LAYERS setting."""
     from django.conf import settings
 
@@ -216,7 +226,7 @@ def check_channel_layers():
     )
 
 
-def check_redis():
+def check_redis() -> "Optional[_CheckResult]":
     """If CHANNEL_LAYERS uses Redis, attempt a ping."""
     from django.conf import settings
 
@@ -265,7 +275,7 @@ def check_redis():
         )
 
 
-def check_template_dirs():
+def check_template_dirs() -> "_CheckResult":
     """Check that configured template directories exist."""
     from django.conf import settings
     import os
@@ -317,7 +327,7 @@ def check_template_dirs():
     )
 
 
-def check_rust_render():
+def check_rust_render() -> "_CheckResult":
     """Render a trivial template through the Rust engine."""
     try:
         from djust._rust import render_template
@@ -356,7 +366,7 @@ def check_rust_render():
         )
 
 
-def check_static_files():
+def check_static_files() -> "_CheckResult":
     """Check that djust/client.js is findable via staticfiles."""
     try:
         from django.contrib.staticfiles.finders import find
@@ -386,7 +396,7 @@ def check_static_files():
         )
 
 
-def check_asgi_server():
+def check_asgi_server() -> "_CheckResult":
     """Check if daphne or uvicorn is installed."""
     servers = []
     try:
@@ -438,7 +448,7 @@ _ALL_CHECKS = [
 class Command(BaseCommand):
     help = "Run djust environment health checks"
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--json",
             action="store_true",
@@ -461,7 +471,7 @@ class Command(BaseCommand):
             help="Include timing and extra detail",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         use_json = options["json"]
         quiet = options["quiet"]
         single = options.get("check")
@@ -503,7 +513,7 @@ class Command(BaseCommand):
         if has_warn:
             raise SystemExit(1)
 
-    def _pretty_output(self, results, verbose):
+    def _pretty_output(self, results: list["_CheckResult"], verbose: bool) -> None:
         self.stdout.write("")
         self.stdout.write(self.style.MIGRATE_HEADING("djust doctor"))
         self.stdout.write(self.style.MIGRATE_HEADING("============"))
@@ -553,11 +563,11 @@ class Command(BaseCommand):
             )
         self.stdout.write("")
 
-    def _status_style(self, status):
+    def _status_style(self, status: str) -> str:
         if status == _CheckResult.OK:
-            return self.style.SUCCESS("OK  ")
+            return str(self.style.SUCCESS("OK  "))
         if status == _CheckResult.INFO:
-            return self.style.HTTP_INFO("INFO")
+            return str(self.style.HTTP_INFO("INFO"))
         if status == _CheckResult.WARN:
-            return self.style.WARNING("WARN")
-        return self.style.ERROR("FAIL")
+            return str(self.style.WARNING("WARN"))
+        return str(self.style.ERROR("FAIL"))

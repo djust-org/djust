@@ -26,7 +26,7 @@ Usage:
 """
 
 import logging
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union, cast
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
@@ -35,7 +35,7 @@ from django.http import Http404
 logger = logging.getLogger(__name__)
 
 
-def check_view_auth(view_instance, request) -> Optional[str]:
+def check_view_auth(view_instance: Any, request: Any) -> Optional[str]:
     """Check view-level auth. Returns None if OK, or a redirect URL if denied.
 
     Called by websocket.py before mount(). Checks in order:
@@ -56,8 +56,13 @@ def check_view_auth(view_instance, request) -> Optional[str]:
     """
     login_required = getattr(view_instance, "login_required", None)
     permission_required = getattr(view_instance, "permission_required", None)
-    login_url = getattr(view_instance, "login_url", None) or getattr(
-        settings, "LOGIN_URL", "/accounts/login/"
+    # ``LOGIN_URL`` is always a non-empty str (Django default
+    # ``/accounts/login/``); cast for the strict ``login_url: str`` contract
+    # without altering the original ``or``-fallback runtime behavior.
+    login_url: str = cast(
+        str,
+        getattr(view_instance, "login_url", None)
+        or getattr(settings, "LOGIN_URL", "/accounts/login/"),
     )
 
     # 1. Login check
@@ -122,7 +127,7 @@ def check_view_auth(view_instance, request) -> Optional[str]:
     return None  # Auth passed
 
 
-def _check_django_access_mixins(view_instance, request, login_url):
+def _check_django_access_mixins(view_instance: Any, request: Any, login_url: str) -> Optional[str]:
     """Enforce ``django.contrib.auth.mixins`` (the AccessMixin family) on the
     WS/SSE mount path, mirroring each mixin's ``handle_no_permission()``.
 
@@ -199,7 +204,7 @@ def _check_django_access_mixins(view_instance, request, login_url):
                 )
 
 
-def _has_custom_check_permissions(view_instance) -> bool:
+def _has_custom_check_permissions(view_instance: Any) -> bool:
     """Check if the view subclass overrides check_permissions()."""
     from djust.live_view import LiveView
 
@@ -211,7 +216,7 @@ def _has_custom_check_permissions(view_instance) -> bool:
     return False
 
 
-def _has_custom_get_object(view_instance) -> bool:
+def _has_custom_get_object(view_instance: Any) -> bool:
     """Check if the view subclass overrides get_object().
 
     Mirrors :func:`_has_custom_check_permissions` for the object-permission
@@ -229,7 +234,7 @@ def _has_custom_get_object(view_instance) -> bool:
     return False
 
 
-def check_object_permission(view_instance, request) -> None:
+def check_object_permission(view_instance: Any, request: Any) -> None:
     """Step 4 of ADR-017's auth onion — post-mount object-permission check.
 
     Called by ``websocket.py:handle_mount`` AFTER ``mount()`` has executed
@@ -325,7 +330,7 @@ def check_object_permission(view_instance, request) -> None:
     view_instance._object = obj
 
 
-def enforce_object_permission(view_instance, request) -> None:
+def enforce_object_permission(view_instance: Any, request: Any) -> None:
     """Run the ADR-017 post-mount object-permission check on ANY render path.
 
     A shared chokepoint so object-level authorization is enforced uniformly,
@@ -374,7 +379,7 @@ def enforce_object_permission(view_instance, request) -> None:
         raise PermissionDenied("Access denied for this object.") from exc
 
 
-def _bind_current_tenant(tenant) -> None:
+def _bind_current_tenant(tenant: Any) -> None:
     """Bind *tenant* into the current-tenant ContextVar (Finding #6).
 
     Lazily imports ``djust.tenants.middleware.set_current_tenant`` and is a
@@ -393,7 +398,7 @@ def _bind_current_tenant(tenant) -> None:
         pass
 
 
-def run_pre_mount_auth(view_instance, request) -> Optional[str]:
+def run_pre_mount_auth(view_instance: Any, request: Any) -> Optional[str]:
     """Run the canonical pre-mount security sequence and return the auth verdict.
 
     Single-sources the ORDER in which every live mount path (WebSocket
@@ -450,7 +455,7 @@ def run_pre_mount_auth(view_instance, request) -> Optional[str]:
     return None  # Mount may proceed.
 
 
-def check_view_auth_lightweight(view_instance, request) -> bool:
+def check_view_auth_lightweight(view_instance: Any, request: Any) -> bool:
     """Return True if ``view_instance`` is allowed to mount under ``request``.
 
     Thin wrapper around :func:`check_view_auth` that returns a boolean
@@ -469,7 +474,7 @@ def check_view_auth_lightweight(view_instance, request) -> bool:
         return False
 
 
-def check_handler_permission(handler, request) -> bool:
+def check_handler_permission(handler: Any, request: Any) -> bool:
     """Check handler-level @permission_required. Returns True if OK.
 
     Args:
@@ -487,7 +492,7 @@ def check_handler_permission(handler, request) -> bool:
     if user is None:
         return False
     perms: tuple = (perm,) if isinstance(perm, str) else tuple(perm)
-    return user.has_perms(perms)
+    return bool(user.has_perms(perms))
 
 
 class LoginRequiredMixin:

@@ -7,8 +7,9 @@ import inspect
 import logging
 import os
 from importlib import import_module
+from typing import Any
 
-from django.core.checks import register
+from django.core.checks import CheckMessage, register
 
 import djust.checks as _root
 from djust.checks.utils import (
@@ -46,7 +47,7 @@ def _has_asgi_server() -> bool:
     return False
 
 
-def _has_multiple_permission_groups(settings) -> bool:
+def _has_multiple_permission_groups(settings: Any) -> bool:
     """Return True if the project appears to use a role/group-based auth model.
 
     Detects one of:
@@ -76,12 +77,12 @@ def _has_multiple_permission_groups(settings) -> bool:
     try:
         from django.contrib.auth.models import Group
 
-        return Group.objects.count() > 1
+        return bool(Group.objects.count() > 1)
     except Exception:
         return False
 
 
-def _check_tailwind_cdn_in_production(errors):
+def _check_tailwind_cdn_in_production(errors: list[CheckMessage]) -> None:
     """Check for Tailwind CDN usage in production (performance issue)."""
     template_dirs = _get_template_dirs()
     for template_dir in template_dirs:
@@ -152,7 +153,7 @@ def _output_css_looks_built(path: str) -> bool:
     return "tailwindcss" in head.lower() or "@layer" in head
 
 
-def _check_missing_compiled_css(errors):
+def _check_missing_compiled_css(errors: list[CheckMessage]) -> None:
     """Warn if Tailwind is configured but compiled CSS is missing or stale."""
     from django.conf import settings
 
@@ -219,7 +220,7 @@ def _check_missing_compiled_css(errors):
                 )
 
 
-def _check_stale_collected_client(errors):
+def _check_stale_collected_client(errors: list[CheckMessage]) -> None:
     """C013 — STATIC_ROOT/djust/client.min.js is older than the wheel-bundled
     copy at python/djust/static/djust/client.min.js (closes #1088).
 
@@ -296,7 +297,7 @@ def _check_stale_collected_client(errors):
     )
 
 
-def _check_manual_client_js(errors):
+def _check_manual_client_js(errors: list[CheckMessage]) -> None:
     """Detect manual client.js loading in base templates (causes double-loading)."""
     template_dirs = _get_template_dirs()
     for template_dir in template_dirs:
@@ -337,7 +338,7 @@ def _check_manual_client_js(errors):
                             pass  # Skip files that can't be read
 
 
-def _check_multi_tenant_asgi_set_calls(errors):
+def _check_multi_tenant_asgi_set_calls(errors: list[CheckMessage]) -> None:
     """C014 — django-tenants + ASGI without TENANT_LIMIT_SET_CALLS (closes #1556).
 
     Under ASGI + django-tenants, every WS event handler runs through
@@ -429,7 +430,7 @@ def _check_multi_tenant_asgi_set_calls(errors):
     )
 
 
-def _check_tenant_strict_mode_disabled(errors):
+def _check_tenant_strict_mode_disabled(errors: list[CheckMessage]) -> None:
     """S006 — DJUST_TENANTS['STRICT_MODE'] explicitly False (fail-open tenancy).
 
     Finding #6 (CWE-862/CWE-636). djust's tenant-scoped managers
@@ -496,11 +497,11 @@ def _check_tenant_strict_mode_disabled(errors):
 
 
 @register("djust")
-def check_configuration(app_configs, **kwargs):
+def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate Django settings required by djust."""
     from django.conf import settings
 
-    errors = []
+    errors: list[CheckMessage] = []
 
     # C001 -- ASGI_APPLICATION not set
     if not getattr(settings, "ASGI_APPLICATION", None):
@@ -554,7 +555,7 @@ def check_configuration(app_configs, **kwargs):
         # canonical recommendation is uvicorn (README + djust-start), not
         # daphne — so projects with uvicorn or hypercorn installed should
         # not get nagged to install daphne.
-        if not _root._has_asgi_server():
+        if not _root._has_asgi_server():  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
             errors.append(
                 DjustInfo(
                     "No ASGI server detected (daphne, uvicorn, or hypercorn).",
@@ -579,13 +580,13 @@ def check_configuration(app_configs, **kwargs):
 
     # C010 -- Tailwind CDN in production
     if not settings.DEBUG:
-        _root._check_tailwind_cdn_in_production(errors)
+        _root._check_tailwind_cdn_in_production(errors)  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
 
     # C011 -- Missing compiled CSS
-    _root._check_missing_compiled_css(errors)
+    _root._check_missing_compiled_css(errors)  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
 
     # C012 -- Manual client.js in base templates
-    _root._check_manual_client_js(errors)
+    _root._check_manual_client_js(errors)  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
 
     # C013 -- Stale collectstatic copy of client.min.js (closes #1088)
     _check_stale_collected_client(errors)
@@ -762,7 +763,7 @@ def check_configuration(app_configs, **kwargs):
 
     # A020 -- LOGIN_REDIRECT_URL is a single hardcoded path but the project has roles
     login_redirect = getattr(settings, "LOGIN_REDIRECT_URL", None)
-    if isinstance(login_redirect, str) and _root._has_multiple_permission_groups(settings):
+    if isinstance(login_redirect, str) and _root._has_multiple_permission_groups(settings):  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
         errors.append(
             DjustWarning(
                 "LOGIN_REDIRECT_URL is a single hardcoded path (%r) but the project has "

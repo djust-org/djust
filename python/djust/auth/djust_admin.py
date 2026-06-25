@@ -11,9 +11,11 @@ Only active when djust.admin_ext (or djust-admin) is installed.
 
 import logging
 from datetime import timedelta
+from typing import Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.http import HttpRequest
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -24,12 +26,19 @@ try:
     from djust.admin_ext.plugins import AdminPage, AdminPlugin, AdminWidget
 except ImportError:
     try:
-        from djust_admin import DjustModelAdmin, site
-        from djust_admin.decorators import register
-        from djust_admin.plugins import AdminPage, AdminPlugin, AdminWidget
+        # Fallback to the standalone ``djust-admin`` distribution. These rebind
+        # the same names from a different package; mypy flags the redefinition,
+        # but it's the intended optional-dependency fallback.
+        from djust_admin import DjustModelAdmin, site  # type: ignore[no-redef]
+        from djust_admin.decorators import register  # type: ignore[no-redef]
+        from djust_admin.plugins import (  # type: ignore[no-redef]
+            AdminPage,
+            AdminPlugin,
+            AdminWidget,
+        )
     except ImportError:
         # djust-admin not installed — skip plugin registration
-        DjustModelAdmin = None
+        DjustModelAdmin = None  # type: ignore[assignment,misc]
 
 if DjustModelAdmin is not None:
     from .admin_views import OAuthProvidersView, SocialAccountsView
@@ -60,7 +69,7 @@ if DjustModelAdmin is not None:
         order = 5
         size = "lg"
 
-        def get_context(self, request):
+        def get_context(self, request: HttpRequest) -> dict[str, Any]:
             User = get_user_model()
             week_ago = timezone.now() - timedelta(days=7)
 
@@ -95,7 +104,7 @@ if DjustModelAdmin is not None:
         name = "auth"
         verbose_name = "Authentication"
 
-        def get_pages(self):
+        def get_pages(self) -> list[Any]:
             pages = [
                 AdminPage(
                     url_path="auth/providers",
@@ -121,7 +130,7 @@ if DjustModelAdmin is not None:
                 )
             return pages
 
-        def get_widgets(self):
+        def get_widgets(self) -> list[Any]:
             return [AuthSummaryWidget()]
 
     site.register_plugin(AuthAdminPlugin)

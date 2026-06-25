@@ -14,8 +14,9 @@ Usage::
 """
 
 import logging
+from typing import Any
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import CommandParser, BaseCommand, CommandError
 
 from djust.scaffolding.gen_live import generate_liveview, parse_field_defs
 
@@ -28,7 +29,7 @@ class Command(BaseCommand):
         "Creates views.py, urls.py, HTML template, and tests."
     )
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "app_name",
             type=str,
@@ -74,7 +75,7 @@ class Command(BaseCommand):
             help="Generate a JSON API (render_json) instead of HTML templates.",
         )
 
-    def handle(self, *args, **options):
+    def handle(self, *args: Any, **options: Any) -> None:
         app_name = options["app_name"]
         model_name = options["model_name"]
         field_specs = options.get("fields", []) or []
@@ -108,7 +109,7 @@ class Command(BaseCommand):
         if options["dry_run"]:
             self.stdout.write(self.style.WARNING("Dry run — no files written.\n"))
             self.stdout.write("Would create:\n")
-            for path in result:
+            for path in result or []:
                 self.stdout.write("  %s\n" % path)
         else:
             self.stdout.write(

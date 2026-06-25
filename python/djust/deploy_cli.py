@@ -19,7 +19,7 @@ import time
 import urllib.parse
 import webbrowser
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, cast
 
 import click
 import requests
@@ -171,7 +171,7 @@ def load_credentials() -> dict:
     path = credentials_path()
     if not path.exists():
         raise click.ClickException("Not logged in. Run `djust deploy login` first.")
-    return json.loads(path.read_text())
+    return cast(dict, json.loads(path.read_text()))
 
 
 def _api_headers(creds: dict) -> dict:
@@ -352,7 +352,7 @@ def _resolve_project_slug(
             "No project slug provided and none found in pyproject.toml "
             "[tool.djust.deploy].project. Pass it as a positional argument."
         )
-    slug = click.prompt(
+    slug: str = click.prompt(
         "Project slug to deploy to (will be saved to pyproject.toml)",
         type=str,
     ).strip()
@@ -685,7 +685,7 @@ def _decode_id_token_email(id_token: str) -> Optional[str]:
         # base64url-decode with padding fixup.
         payload_b64 += "=" * (-len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-        return payload.get("email")
+        return cast(Optional[str], payload.get("email"))
     except (ValueError, json.JSONDecodeError) as exc:
         logger.debug("Could not decode id_token email claim: %s", exc)
         return None
@@ -703,7 +703,7 @@ class _OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
 
     server_version = "djust-cli-oauth/1.0"
 
-    def log_message(self, *_args, **_kwargs) -> None:  # noqa: D401
+    def log_message(self, *_args: Any, **_kwargs: Any) -> None:  # noqa: D401
         return
 
     def do_GET(self) -> None:  # noqa: N802 — http.server convention
@@ -1347,7 +1347,7 @@ _DOCTOR_SKIP_DIRS = frozenset(
 )
 
 
-def _find_settings_files(source_dir) -> list:
+def _find_settings_files(source_dir: Path) -> list:
     """Locate the project's primary Django settings file(s) under ``source_dir``.
 
     Prefers the module named by ``manage.py``'s ``DJANGO_SETTINGS_MODULE``
@@ -1380,7 +1380,7 @@ def _find_settings_files(source_dir) -> list:
     )
 
 
-def _run_deploy_doctor(source_dir) -> None:
+def _run_deploy_doctor(source_dir: Path) -> None:
     """Run the deploy doctor (#1760) over ``source_dir`` and print any warnings
     to stderr. Always non-blocking — a doctor failure must never stop a deploy.
     """

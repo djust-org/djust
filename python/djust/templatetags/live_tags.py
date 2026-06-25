@@ -21,14 +21,16 @@ import contextlib
 import logging
 import re
 import threading
+from collections.abc import Iterator
 from typing import Any, Dict, Optional
 
 from django import template
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
+from django.template.base import NodeList, Parser, Token
 from django.utils.html import escape, format_html
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 from .._html import build_tag
 from ..config import config
@@ -38,7 +40,7 @@ register = template.Library()
 logger = logging.getLogger(__name__)
 
 
-def _record_child_dj_model_allowlist(child) -> None:
+def _record_child_dj_model_allowlist(child: Any) -> None:
     """Populate an embedded ``{% live_render %}`` child's dj-model allowlist
     from the CHILD's own TEMPLATE SOURCE (CWE-915 mass-assignment guard).
 
@@ -139,7 +141,7 @@ def _resolve_api_prefix() -> str:
 
     for name in _DJUST_API_CALL_URL_NAMES:
         try:
-            url = reverse(name, kwargs=_REVERSE_PROBE_KWARGS)
+            url: str = reverse(name, kwargs=_REVERSE_PROBE_KWARGS)
         except NoReverseMatch:
             continue
         # url ends with the suffix we probed for; strip it to recover
@@ -166,7 +168,7 @@ def _resolve_sse_prefix() -> str:
 
     for name in _DJUST_SSE_URL_NAMES:
         try:
-            url = reverse(name, kwargs=_SSE_PROBE_KWARGS)
+            url: str = reverse(name, kwargs=_SSE_PROBE_KWARGS)
         except NoReverseMatch:
             continue
         if url.endswith(_SSE_PROBE_SUFFIX):
@@ -231,7 +233,7 @@ def _client_config_html(request: Any = None) -> Any:
 
 
 @register.simple_tag(takes_context=True)
-def djust_client_config(context) -> Any:
+def djust_client_config(context: Context) -> Any:
     """Emit client bootstrap configuration as ``<meta>`` tags + route map.
 
     Emits::
@@ -281,7 +283,7 @@ def djust_client_config(context) -> Any:
 
 
 @register.simple_tag
-def live_form(view, **kwargs):
+def live_form(view: Any, **kwargs: Any) -> Any:
     """
     Render an entire form automatically using the configured CSS framework.
 
@@ -312,7 +314,7 @@ def live_form(view, **kwargs):
 
 
 @register.simple_tag
-def live_field(view, field_name: str, **kwargs):
+def live_field(view: Any, field_name: str, **kwargs: Any) -> Any:
     """
     Render a single form field automatically using the configured CSS framework.
 
@@ -343,7 +345,7 @@ def live_field(view, field_name: str, **kwargs):
 
 
 @register.simple_tag
-def live_errors(view, field_name: str = None):
+def live_errors(view: Any, field_name: str | None = None) -> str:
     """
     Render form errors for a specific field or all non-field errors.
 
@@ -380,7 +382,7 @@ def live_errors(view, field_name: str = None):
 
 
 @register.filter
-def field_value(view, field_name: str) -> Any:
+def field_value(view: Any, field_name: str) -> Any:
     """
     Get the current value of a form field.
 
@@ -401,7 +403,7 @@ def field_value(view, field_name: str) -> Any:
 
 
 @register.filter
-def has_errors(view, field_name: str) -> bool:
+def has_errors(view: Any, field_name: str) -> bool:
     """
     Check if a field has validation errors.
 
@@ -417,7 +419,7 @@ def has_errors(view, field_name: str) -> bool:
         <input class="{% if view|has_errors:'email' %}is-invalid{% endif %}">
     """
     if hasattr(view, "has_field_errors"):
-        return view.has_field_errors(field_name)
+        return bool(view.has_field_errors(field_name))
     return False
 
 
@@ -429,7 +431,7 @@ def has_errors(view, field_name: str) -> bool:
 # Default dj-* event per field type. Callers can override via ``event=``.
 # text-like fields default to per-keystroke dj-input; select/radio/checkbox
 # default to dj-change; hidden has no interactive event.
-_DEFAULT_EVENT_BY_TYPE: Dict[str, str] = {
+_DEFAULT_EVENT_BY_TYPE: Dict[str, Optional[str]] = {
     "text": "dj-input",
     "textarea": "dj-input",
     "password": "dj-input",
@@ -661,7 +663,7 @@ _FIELD_RENDERERS = {
 
 
 @register.simple_tag
-def live_input(field_type: str = "text", **kwargs) -> Any:
+def live_input(field_type: str = "text", **kwargs: Any) -> Any:
     """Render a standalone state-bound form field.
 
     This is the lightweight alternative to ``{% live_field %}`` for state
@@ -845,12 +847,17 @@ class ColocatedHookNode(Node):
     avoid this tag and register hooks via a nonce-bearing script instead.
     """
 
-    def __init__(self, name, nodelist, force_global=False):
+    def __init__(
+        self,
+        name: str,
+        nodelist: NodeList,
+        force_global: bool = False,
+    ) -> None:
         self.name = name
         self.nodelist = nodelist
         self.force_global = force_global
 
-    def _namespace(self, context):
+    def _namespace(self, context: Context) -> str:
         if self.force_global:
             return self.name
         cfg = getattr(settings, "DJUST_CONFIG", {}) or {}
@@ -865,7 +872,7 @@ class ColocatedHookNode(Node):
             return self.name
         return f"{prefix}.{self.name}"
 
-    def render(self, context):
+    def render(self, context: Context) -> SafeString:
         body = self.nodelist.render(context)
         namespaced = self._namespace(context)
 
@@ -898,7 +905,7 @@ class ColocatedHookNode(Node):
 
 
 @register.tag("colocated_hook")
-def do_colocated_hook(parser, token):
+def do_colocated_hook(parser: Parser, token: Token) -> "ColocatedHookNode":
     """
     ``{% colocated_hook "HookName" [global] %}js body{% endcolocated_hook %}``
 
@@ -978,7 +985,14 @@ def _validate_skeleton_size(value: Any, default: str) -> str:
 
 
 @register.simple_tag(takes_context=True)
-def djust_skeleton(context, shape="line", width=None, height=None, count=1, class_=None):
+def djust_skeleton(
+    context: Context,
+    shape: str = "line",
+    width: str | None = None,
+    height: str | None = None,
+    count: int = 1,
+    class_: str | None = None,
+) -> SafeString:
     """Emit a shimmering skeleton placeholder block (v0.6.0).
 
     Phoenix / Vercel / Shadcn-ui parity for loading placeholders. Renders
@@ -1078,7 +1092,7 @@ def djust_skeleton(context, shape="line", width=None, height=None, count=1, clas
 
 
 @register.simple_tag
-def djust_track_static():
+def djust_track_static() -> SafeString:
     """Emit the ``dj-track-static`` attribute marker (v0.6.0).
 
     Convenience tag so template authors don't have to remember the exact
@@ -1132,13 +1146,19 @@ class DjActivityNode(Node):
     removing the subtree.
     """
 
-    def __init__(self, name_expr, visible_expr, eager_expr, nodelist):
+    def __init__(
+        self,
+        name_expr: Any,
+        visible_expr: Any | None,
+        eager_expr: Any | None,
+        nodelist: NodeList,
+    ) -> None:
         self.name_expr = name_expr
         self.visible_expr = visible_expr
         self.eager_expr = eager_expr
         self.nodelist = nodelist
 
-    def _resolve_bool(self, expr, context, default):
+    def _resolve_bool(self, expr: Any | None, context: Context, default: bool) -> bool:
         if expr is None:
             return default
         try:
@@ -1149,7 +1169,7 @@ class DjActivityNode(Node):
             return default
         return bool(value)
 
-    def _resolve_name(self, context):
+    def _resolve_name(self, context: Context) -> str:
         try:
             raw = self.name_expr.resolve(context)
         except Exception:  # noqa: BLE001
@@ -1159,7 +1179,7 @@ class DjActivityNode(Node):
         name = str(raw).strip()
         return name
 
-    def render(self, context):
+    def render(self, context: Context) -> str:
         body = self.nodelist.render(context)
         name = self._resolve_name(context)
         visible = self._resolve_bool(self.visible_expr, context, True)
@@ -1197,7 +1217,7 @@ class DjActivityNode(Node):
 
 
 @register.tag("dj_activity")
-def do_dj_activity(parser, token):
+def do_dj_activity(parser: Parser, token: Token) -> "DjActivityNode":
     """Parse ``{% dj_activity "name" visible=expr eager=expr %} ... {% enddj_activity %}``.
 
     The ``name`` argument is required and must be non-empty; duplicates in
@@ -1464,7 +1484,7 @@ def get_active_parent_view() -> Any:
 
 
 @contextlib.contextmanager
-def active_parent_view(view: Any):
+def active_parent_view(view: Any) -> Iterator[None]:
     """Context manager that registers ``view`` as the active parent
     :class:`~djust.live_view.LiveView` for the current thread so an embedded
     ``{% live_render %}`` tag can find it during a Rust render that carries
@@ -1485,7 +1505,7 @@ def active_parent_view(view: Any):
 
 
 @register.simple_tag(takes_context=True)
-def live_render(context, view_path: str, **kwargs) -> Any:
+def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     """Embed a LiveView as a child of the current view (Phoenix nested-LV parity).
 
     Resolves the dotted path to a :class:`~djust.live_view.LiveView`
@@ -1645,6 +1665,11 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                 "{%% live_render %%} sticky=True requires %r to set a "
                 "non-empty ``sticky_id`` class attribute; no slot key." % view_path
             )
+        # Past the truthiness guard, ``sticky_id`` is a non-empty class string.
+        # Pin it to a ``str``-typed local so downstream helpers that require a
+        # ``str`` slot key (``_render_sticky_child_html``) type-check without
+        # widening their contract back to ``Any | None``.
+        sticky_id_value = str(sticky_id_value)
         # Enforce sticky_id uniqueness across the current render pass.
         seen = context.render_context.setdefault(_STICKY_IDS_SEEN_KEY, set())
         if sticky_id_value in seen:
@@ -1685,6 +1710,11 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                 # may have populated attributes (auth, session, etc.)
                 # the survivor's handlers will read.
                 survivor.request = request
+                # ``consumer`` is guaranteed non-None here: ``survivor`` was
+                # read from ``preserved_map``, which is only set when
+                # ``consumer`` is truthy (see the ``... if consumer else None``
+                # guard above). Assert for the type-checker; inert at runtime.
+                assert consumer is not None
                 auto_set = getattr(consumer, "_sticky_auto_reattached", None)
                 if auto_set is None:
                     consumer._sticky_auto_reattached = {sticky_id_value}
@@ -1718,6 +1748,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                 "Pick one." % view_path
             )
         # Normalize the three forms of ``lazy=`` into a single config dict.
+        lazy_config: Dict[str, Any]
         if lazy_kwarg is True:
             lazy_config = {
                 "trigger": "flush",
@@ -1782,7 +1813,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         # locked here).
         # We don't register a real child until the thunk fires;
         # _assign_view_id has already mutated the parent's id-counter.
-        escaped_id = escape(view_id)
+        escaped_id: str = escape(view_id)
 
         # #1147 — CSP nonce propagation. When the project uses
         # ``django-csp`` (or compatible) middleware, ``request.csp_nonce``
@@ -1797,7 +1828,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         _csp_nonce_raw = get_csp_nonce(request)
         _csp_nonce_attr = ' nonce="' + escape(_csp_nonce_raw) + '"' if _csp_nonce_raw else ""
 
-        async def _lazy_thunk():
+        async def _lazy_thunk() -> bytes:
             """Run the eager mount+render path and emit the fill chunk
             envelope. Catches its own exceptions and wraps them in a
             data-status="error" envelope per ADR §"Error propagation".
@@ -2023,6 +2054,10 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             # (auth, session) read from the CURRENT parent render's request —
             # mirrors the ``_sticky_preserved`` auto-reattach path above.
             existing_child.request = request
+            # ``sticky_kwarg`` is True here, so ``sticky_id_value`` passed the
+            # non-empty guard above and is a ``str``. Narrow for the helper's
+            # ``str`` slot-key contract (inert at runtime).
+            assert sticky_id_value is not None
             return _render_sticky_child_html(
                 existing_child,
                 preferred_view_id,
@@ -2125,6 +2160,10 @@ def live_render(context, view_path: str, **kwargs) -> Any:
     #      re-attaches each at ``[dj-sticky-slot="<id>"]`` via ``replaceWith()``
     #      after the new mount arrives (the #1471 reconnect path).
     if sticky_kwarg:
+        # ``sticky_id_value`` passed the non-empty guard above (set whenever
+        # ``sticky_kwarg`` is True) and is a ``str``. Narrow for the helper's
+        # ``str`` slot-key contract (inert at runtime).
+        assert sticky_id_value is not None
         return _render_sticky_child_html(child, view_id, sticky_id_value, request, view_path)
 
     # Non-sticky branch (the Phase A contract) — unchanged. Build the child's

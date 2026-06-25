@@ -1,8 +1,11 @@
 import logging
+from typing import Any, Optional
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.shortcuts import redirect
 from django.utils.http import url_has_allowed_host_and_scheme
 
@@ -16,9 +19,9 @@ class LoginRequiredLiveViewMixin:
     so no LiveView state is initialized for anonymous users.
     """
 
-    login_url = None  # Falls back to settings.LOGIN_URL
+    login_url: Optional[str] = None  # Falls back to settings.LOGIN_URL
 
-    def dispatch(self, request, *args, **kwargs):
+    def dispatch(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:
         if not request.user.is_authenticated:
             login_url = self.login_url or getattr(settings, "LOGIN_URL", "/accounts/login/")
             url = f"{login_url}?{urlencode({'next': request.get_full_path()})}"
@@ -37,7 +40,9 @@ class LoginRequiredLiveViewMixin:
                 )
                 return redirect("/accounts/login/")
             return redirect(url)
-        return super().dispatch(request, *args, **kwargs)
+        # Mixin: ``dispatch`` is provided by the View/LiveView it's combined
+        # with, not by this mixin's MRO in isolation.
+        return super().dispatch(request, *args, **kwargs)  # type: ignore[misc]
 
 
 class PermissionRequiredLiveViewMixin:
@@ -48,9 +53,11 @@ class PermissionRequiredLiveViewMixin:
     AuthenticationMiddleware.
     """
 
-    permission_required = None  # Set to a permission string like "app.change_model"
+    permission_required: Optional[str] = None  # Set to a permission string like "app.change_model"
 
-    def dispatch(self, request, *args, **kwargs):
+    def dispatch(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:
         if self.permission_required and not request.user.has_perm(self.permission_required):
             raise PermissionDenied
-        return super().dispatch(request, *args, **kwargs)
+        # Mixin: ``dispatch`` is provided by the View/LiveView it's combined
+        # with, not by this mixin's MRO in isolation.
+        return super().dispatch(request, *args, **kwargs)  # type: ignore[misc]

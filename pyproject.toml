@@ -213,11 +213,10 @@ ignore_errors = true
 # `ignore_missing_imports` in the global section is honored by lenient modules,
 # but a strict island (ignore_errors=false) still surfaces `import-untyped` for
 # an installed-but-unstubbed dependency (e.g. PyYAML, consumed by
-# djust.permissions). Mark those libraries untyped explicitly so the strict
-# islands stay green without weakening the island's own def/return strictness.
-# (`requests`, consumed lazily by djust.observability.dry_run, is a known-stub
-# package mypy refuses to silence via this mechanism, so that single import
-# carries a narrow inline `# type: ignore[import-untyped]` instead.)
+# djust.permissions; `requests`, consumed by djust.deploy_cli +
+# djust.observability.dry_run). Mark those libraries untyped explicitly so the
+# strict islands stay green without weakening the island's own def/return
+# strictness.
 [[tool.mypy.overrides]]
 module = ["yaml", "requests"]
 ignore_missing_imports = true
@@ -926,6 +925,78 @@ module = [
     "djust.contrib.uploads.gcs",
     "djust.contrib.uploads.s3_events",
     "djust.contrib.uploads.s3_presigned",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# management/ + checks/ + auth/ + templatetags/ subpackages + loose top-level
+# modules (ADR-023 M4d, group 1) — flipped from the lenient default to strict
+# islands. Spans every management command (audit / check / doctor / setup_css /
+# typecheck / gen_live / new / schema / mcp / ai_context / generate_sw /
+# cleanup) + their shared introspection helper; the full Django system-check
+# family (configuration / security / templates / quality / components /
+# integrations / accessibility + the shared utils); the auth layer (view-auth
+# core, mixins, social context processor, signup/login views + forms, the admin
+# plugin + its LiveView pages); all five template-tag modules (live_tags / flash
+# / formsets / pwa / tutorials); and the independent loose modules (cli,
+# dev_server, deploy_cli, drafts, http_streaming, session_utils, push,
+# middleware). `_root.*` system-check re-exports + a few optional-dependency
+# fallback imports carry narrow coded `# type: ignore`s for the genuinely
+# dynamic edges (setattr re-export, djust-admin fallback class, _rust optional
+# `version`). The */tests/ dirs stay lenient. Third-party `requests` (consumed
+# by deploy_cli) is marked untyped in the override above alongside `yaml`.
+[[tool.mypy.overrides]]
+module = [
+    "djust.management.__init__",
+    "djust.management._introspect",
+    "djust.management.commands.__init__",
+    "djust.management.commands.cleanup_liveview_sessions",
+    "djust.management.commands.djust_ai_context",
+    "djust.management.commands.djust_audit",
+    "djust.management.commands.djust_check",
+    "djust.management.commands.djust_doctor",
+    "djust.management.commands.djust_gen_live",
+    "djust.management.commands.djust_mcp",
+    "djust.management.commands.djust_new",
+    "djust.management.commands.djust_schema",
+    "djust.management.commands.djust_setup_css",
+    "djust.management.commands.djust_typecheck",
+    "djust.management.commands.generate_sw",
+    "djust.checks.__init__",
+    "djust.checks.accessibility",
+    "djust.checks.components",
+    "djust.checks.configuration",
+    "djust.checks.integrations",
+    "djust.checks.quality",
+    "djust.checks.security",
+    "djust.checks.templates",
+    "djust.checks.utils",
+    "djust.auth.__init__",
+    "djust.auth.admin_views",
+    "djust.auth.apps",
+    "djust.auth.core",
+    "djust.auth.djust_admin",
+    "djust.auth.forms",
+    "djust.auth.mixins",
+    "djust.auth.social",
+    "djust.auth.urls",
+    "djust.auth.views",
+    "djust.templatetags.__init__",
+    "djust.templatetags.djust_flash",
+    "djust.templatetags.djust_formsets",
+    "djust.templatetags.djust_pwa",
+    "djust.templatetags.djust_tutorials",
+    "djust.templatetags.live_tags",
+    "djust.cli",
+    "djust.dev_server",
+    "djust.deploy_cli",
+    "djust.drafts",
+    "djust.http_streaming",
+    "djust.session_utils",
+    "djust.push",
+    "djust.middleware",
 ]
 ignore_errors = false
 disallow_untyped_defs = true

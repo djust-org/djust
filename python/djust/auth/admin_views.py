@@ -2,10 +2,12 @@
 
 import logging
 from datetime import timedelta
+from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.core.paginator import Paginator
 from django.db.models import Max, Q
+from django.http import HttpRequest
 from django.utils import timezone
 from djust import LiveView
 from djust.decorators import debounce, event_handler, state
@@ -16,11 +18,13 @@ try:
     from djust.admin_ext.views import AdminBaseMixin
 except ImportError:
     try:
-        from djust_admin.views import AdminBaseMixin
+        # Standalone ``djust-admin`` fallback — rebinds the same name from a
+        # different package (intended optional-dependency fallback).
+        from djust_admin.views import AdminBaseMixin  # type: ignore[no-redef]
     except ImportError:
 
-        class AdminBaseMixin:
-            def get_admin_context(self):
+        class AdminBaseMixin:  # type: ignore[no-redef]
+            def get_admin_context(self) -> dict[str, Any]:
                 return {}
 
 
@@ -29,10 +33,10 @@ class OAuthProvidersView(AdminBaseMixin, LiveView):
 
     template_name = "djust_auth/admin/providers.html"
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         providers = self._get_providers(self.request)
         User = get_user_model()
         allauth_installed = self._is_allauth_installed()
@@ -66,11 +70,11 @@ class OAuthProvidersView(AdminBaseMixin, LiveView):
             "oauth_percentage": oauth_percentage,
         }
 
-    def _is_allauth_installed(self):
+    def _is_allauth_installed(self) -> bool:
         try:
             from django.apps import apps
 
-            return apps.is_installed("allauth.socialaccount")
+            return bool(apps.is_installed("allauth.socialaccount"))
         except Exception:
             return False
 
@@ -108,7 +112,7 @@ class OAuthProvidersView(AdminBaseMixin, LiveView):
         },
     }
 
-    def _get_providers(self, request):
+    def _get_providers(self, request: HttpRequest) -> list[dict[str, Any]]:
         """Build provider status list from allauth configuration."""
         if not self._is_allauth_installed():
             return []
@@ -254,10 +258,10 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
     ordering = state(default="-date_joined")
     filter_provider = state(default="")
 
-    def mount(self, request, **kwargs):
+    def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request
 
-    def _get_queryset(self):
+    def _get_queryset(self) -> Any:
         from allauth.socialaccount.models import SocialAccount
 
         qs = SocialAccount.objects.select_related("user").all()
@@ -277,7 +281,7 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
 
         return qs
 
-    def _get_provider_choices(self):
+    def _get_provider_choices(self) -> list[dict[str, str]]:
         from allauth.socialaccount.models import SocialAccount
 
         providers = (
@@ -285,7 +289,7 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
         )
         return [{"value": p, "label": p.title()} for p in providers]
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         qs = self._get_queryset()
         paginator = Paginator(qs, 25)
         page = paginator.get_page(self.current_page)
@@ -330,12 +334,12 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
 
     @event_handler
     @debounce(300)
-    def search(self, value: str):
+    def search(self, value: str) -> None:
         self.search_query = value
         self.current_page = 1
 
     @event_handler
-    def sort_by(self, field: str):
+    def sort_by(self, field: str) -> None:
         if self.ordering == field:
             self.ordering = f"-{field}"
         elif self.ordering == f"-{field}":
@@ -345,10 +349,10 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
         self.current_page = 1
 
     @event_handler
-    def filter_by_provider(self, value: str):
+    def filter_by_provider(self, value: str) -> None:
         self.filter_provider = value
         self.current_page = 1
 
     @event_handler
-    def go_to_page(self, page: int):
+    def go_to_page(self, page: int) -> None:
         self.current_page = page

@@ -5,10 +5,11 @@ This module provides file watching and hot reload capabilities for djust develop
 """
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
-from typing import Set, Callable, Optional
+from typing import Any, Set, Callable, Optional
 
 try:
     from watchdog.observers import Observer
@@ -64,7 +65,7 @@ class DjustFileChangeHandler(FileSystemEventHandler):
         """
         super().__init__()
         self.on_change_callback = on_change_callback
-        self._last_change_time = 0
+        self._last_change_time: float = 0
         self._pending_reload = False
         self._reload_lock = threading.Lock()
         self._debounce_thread: Optional[threading.Thread] = None
@@ -78,7 +79,7 @@ class DjustFileChangeHandler(FileSystemEventHandler):
         # Check if file has a watched extension
         return Path(path).suffix in self.WATCHED_EXTENSIONS
 
-    def schedule_reload(self, path: str):
+    def schedule_reload(self, path: str) -> None:
         """Schedule a reload after debounce period."""
         with self._reload_lock:
             self._last_change_time = time.time()
@@ -94,7 +95,7 @@ class DjustFileChangeHandler(FileSystemEventHandler):
             )
             self._debounce_thread.start()
 
-    def _debounced_reload(self, path: str):
+    def _debounced_reload(self, path: str) -> None:
         """Wait for debounce period then trigger reload."""
         while True:
             time.sleep(self.DEBOUNCE_SECONDS)
@@ -108,15 +109,19 @@ class DjustFileChangeHandler(FileSystemEventHandler):
                         self.on_change_callback(path)
                     break
 
-    def on_modified(self, event: FileSystemEvent):
+    def on_modified(self, event: FileSystemEvent) -> None:
         """Handle file modification events."""
-        if not event.is_directory and self.should_reload_for_path(event.src_path):
-            self.schedule_reload(event.src_path)
+        # watchdog types ``src_path`` as ``bytes | str``; normalise to ``str``.
+        src_path = os.fsdecode(event.src_path)
+        if not event.is_directory and self.should_reload_for_path(src_path):
+            self.schedule_reload(src_path)
 
-    def on_created(self, event: FileSystemEvent):
+    def on_created(self, event: FileSystemEvent) -> None:
         """Handle file creation events."""
-        if not event.is_directory and self.should_reload_for_path(event.src_path):
-            self.schedule_reload(event.src_path)
+        # watchdog types ``src_path`` as ``bytes | str``; normalise to ``str``.
+        src_path = os.fsdecode(event.src_path)
+        if not event.is_directory and self.should_reload_for_path(src_path):
+            self.schedule_reload(src_path)
 
 
 class HotReloadServer:
@@ -134,9 +139,11 @@ class HotReloadServer:
             )
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the hot reload server."""
-        self.observer: Optional[Observer] = None
+        # ``watchdog.observers.Observer`` is a runtime factory alias, not a
+        # static class, so it can't be used as a type annotation; ``Any``.
+        self.observer: Optional[Any] = None
         self.watch_dirs: Set[Path] = set()
         self.on_change_callback: Optional[Callable[[str], None]] = None
         self._started = False
@@ -146,7 +153,7 @@ class HotReloadServer:
         watch_dirs: list,
         on_change: Callable[[str], None],
         exclude_dirs: Optional[Set[str]] = None,
-    ):
+    ) -> None:
         """
         Start watching for file changes.
 
@@ -202,7 +209,7 @@ class HotReloadServer:
         self._started = True
         logger.info("[HotReload] Hot reload server started")
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop watching for file changes."""
         if self.observer and self._started:
             self.observer.stop()

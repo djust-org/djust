@@ -27,6 +27,7 @@ apply their own styles via the ``#dj-tutorial-bubble`` id selector.
 
 from django import template
 from django.utils.html import format_html
+from django.utils.safestring import SafeString
 
 register = template.Library()
 
@@ -36,7 +37,7 @@ def tutorial_bubble(
     css_class: str = "dj-tutorial-bubble",
     event: str = "tour:narrate",
     position: str = "bottom",
-) -> str:
+) -> SafeString:
     """
     Render the tutorial narration bubble container element.
 

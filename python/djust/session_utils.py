@@ -6,6 +6,7 @@ Extracted from live_view.py for modularity.
 
 import hashlib
 import logging
+from collections.abc import Iterator
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
 
@@ -71,7 +72,10 @@ def _get_model_hash(model_class: type) -> str:
     # Build a string representation of the model's field structure
     field_info = []
     for field in sorted(
-        model_class._meta.get_fields(),
+        # ``model_class`` is a Django ``Model`` subclass; ``_meta`` is the
+        # model options object Django stamps on every model (not on plain
+        # ``type``, which is why mypy can't see it without django-stubs).
+        model_class._meta.get_fields(),  # type: ignore[attr-defined]
         key=lambda f: f.name if hasattr(f, "name") else "",
     ):
         if hasattr(field, "name"):
@@ -128,7 +132,7 @@ def clear_jit_cache() -> int:
 
 
 # Auto-clear cache on Django's autoreload in development
-def _setup_autoreload_cache_clear():
+def _setup_autoreload_cache_clear() -> None:
     """Register a callback to clear JIT cache when Python files change."""
     try:
         from django.conf import settings
@@ -138,7 +142,7 @@ def _setup_autoreload_cache_clear():
 
         from django.utils.autoreload import file_changed
 
-        def clear_cache_on_file_change(sender, file_path, **kwargs):
+        def clear_cache_on_file_change(sender: Any, file_path: Any, **kwargs: Any) -> None:
             # Only clear cache when Python files change (models, views, etc.)
             if file_path.suffix == ".py":
                 count = clear_jit_cache()
@@ -220,8 +224,8 @@ class Stream:
         self.items.clear()
         self._deleted_ids.clear()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Any]:
         return iter(self.items)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.items)
