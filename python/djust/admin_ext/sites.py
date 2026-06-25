@@ -7,8 +7,13 @@ for reactive, real-time admin interfaces.
 """
 
 import logging
+from typing import Any, Dict, List, Optional, Tuple, Type
+
 from django.apps import apps
+from django.db import models
+from django.http import HttpRequest
 from django.urls import path, reverse
+from django.urls.resolvers import URLPattern
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +40,19 @@ class DjustAdminSite:
     site_title = "djust admin"
     index_title = "Dashboard"
 
-    def __init__(self, name="djust_admin"):
+    def __init__(self, name: str = "djust_admin") -> None:
         self.name = name
-        self._registry = {}  # model -> DjustModelAdmin
-        self._plugins = {}  # name -> AdminPlugin instance
+        self._registry: Dict[Type[models.Model], Any] = {}  # model -> DjustModelAdmin
+        self._plugins: Dict[str, Any] = {}  # name -> AdminPlugin instance
 
     # ---- Model registration (ported API) ----
 
-    def register(self, model_or_iterable, admin_class=None, **options):
+    def register(
+        self,
+        model_or_iterable: Any,
+        admin_class: Optional[Type[Any]] = None,
+        **options: Any,
+    ) -> Any:
         """
         Register a model with the admin site.
 
@@ -55,7 +65,7 @@ class DjustAdminSite:
             admin_site.register(MyModel, MyModelAdmin)
         """
 
-        def _model_admin_wrapper(admin_cls):
+        def _model_admin_wrapper(admin_cls: Type[Any]) -> Type[Any]:
             if isinstance(model_or_iterable, (list, tuple)):
                 models = model_or_iterable
             else:
@@ -72,7 +82,7 @@ class DjustAdminSite:
 
         return _model_admin_wrapper
 
-    def unregister(self, model_or_iterable):
+    def unregister(self, model_or_iterable: Any) -> None:
         """Unregister a model from the admin site."""
         if isinstance(model_or_iterable, type):
             model_or_iterable = [model_or_iterable]
@@ -82,13 +92,13 @@ class DjustAdminSite:
                 raise ValueError(f"Model {model.__name__} is not registered")
             del self._registry[model]
 
-    def is_registered(self, model):
+    def is_registered(self, model: Type[models.Model]) -> bool:
         """Check if a model is registered with this site."""
         return model in self._registry
 
     # ---- Plugin registration (NEW) ----
 
-    def register_plugin(self, plugin_class_or_instance):
+    def register_plugin(self, plugin_class_or_instance: Any) -> None:
         """
         Register a plugin with the admin site.
 
@@ -112,19 +122,19 @@ class DjustAdminSite:
         self._plugins[plugin.name] = plugin
         plugin.ready()
 
-    def unregister_plugin(self, name):
+    def unregister_plugin(self, name: str) -> None:
         """Unregister a plugin by name."""
         if name not in self._plugins:
             raise ValueError(f"Plugin '{name}' is not registered")
         del self._plugins[name]
 
-    def get_plugin(self, name):
+    def get_plugin(self, name: str) -> Any:
         """Get a registered plugin by name."""
         return self._plugins.get(name)
 
     # ---- URL generation ----
 
-    def get_urls(self):
+    def get_urls(self) -> List[URLPattern]:
         """Return URL patterns for the admin site (models + plugins)."""
         from .progress import BulkActionProgressView
         from .views import (
@@ -151,7 +161,7 @@ class DjustAdminSite:
         # Bulk-action progress view
         progress_id = f"{self.name}_progress"
         register_admin_view(progress_id, admin_site=self)
-        urlpatterns = [
+        urlpatterns: List[URLPattern] = [
             path("login/", LoginView.as_view(_view_registry_id=login_id), name="login"),
             path("logout/", LogoutView.as_view(_view_registry_id=logout_id), name="logout"),
             path("", AdminIndexView.as_view(_view_registry_id=index_id), name="index"),
@@ -219,15 +229,15 @@ class DjustAdminSite:
         return urlpatterns
 
     @property
-    def urls(self):
+    def urls(self) -> Tuple[List[URLPattern], str, str]:
         """Return (urlpatterns, app_name, namespace) tuple."""
         return self.get_urls(), "djust_admin", self.name
 
     # ---- Navigation data ----
 
-    def get_app_list(self, request):
+    def get_app_list(self, request: HttpRequest) -> List[Dict[str, Any]]:
         """Return a sorted list of all installed apps with their models."""
-        app_dict = {}
+        app_dict: Dict[str, Dict[str, Any]] = {}
 
         for model, model_admin in self._registry.items():
             app_label = model._meta.app_label
@@ -263,7 +273,7 @@ class DjustAdminSite:
 
         return app_list
 
-    def get_plugin_nav(self, request):
+    def get_plugin_nav(self, request: HttpRequest) -> List[Dict[str, Any]]:
         """
         Return plugin nav items grouped by section.
 
@@ -273,7 +283,7 @@ class DjustAdminSite:
             ...
         ]
         """
-        sections = {}
+        sections: Dict[str, List[Dict[str, Any]]] = {}
 
         for plugin_name, plugin in self._plugins.items():
             for nav_item in plugin.get_nav_items():
@@ -303,21 +313,21 @@ class DjustAdminSite:
                 )
 
         # Sort items within each section and build result
-        result = []
+        result: List[Dict[str, Any]] = []
         for section_name in sorted(sections.keys()):
             items = sorted(sections[section_name], key=lambda x: x["order"])
             result.append({"section": section_name, "items": items})
 
         return result
 
-    def get_widgets(self, request):
+    def get_widgets(self, request: HttpRequest) -> List[Dict[str, Any]]:
         """
         Collect and render all widgets from registered plugins.
 
         Returns a list of dicts with pre-rendered HTML:
         [{"widget_id": ..., "label": ..., "html": ..., "size": ..., "order": ...}, ...]
         """
-        widgets = []
+        widgets: List[Dict[str, Any]] = []
 
         for plugin_name, plugin in self._plugins.items():
             for widget in plugin.get_widgets():

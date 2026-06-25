@@ -19,7 +19,7 @@ from .sites import DjustAdminSite
 site = DjustAdminSite()
 
 
-def autodiscover():
+def autodiscover() -> None:
     """
     Auto-discover djust_admin.py modules in all installed apps.
 

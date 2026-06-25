@@ -45,10 +45,10 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import wraps
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Type
 
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponseRedirect
+from django.http import HttpRequest, HttpResponseRedirect
 from django.urls import reverse
 
 from djust import LiveView
@@ -202,7 +202,7 @@ class BulkActionProgressWidget(LiveView):
     action_label = state(default="")
     redirect_url = state(default="")
 
-    def mount(self, request, job_id: str = "", **kwargs) -> None:
+    def mount(self, request: HttpRequest, job_id: str = "", **kwargs: Any) -> None:
         """Verify auth and attach to the job, starting a polling loop.
 
         Re-checks ``is_staff`` on top of ``login_required=True`` (the
@@ -254,7 +254,7 @@ class BulkActionProgressWidget(LiveView):
         self.redirect_url = job.redirect_url
 
     @event_handler
-    def cancel(self, **kwargs) -> None:
+    def cancel(self, **kwargs: Any) -> None:
         """Cancel the running job — both flags flip atomically.
 
         Terminal: sets ``cancelled=True`` AND ``done=True`` so the
@@ -266,7 +266,7 @@ class BulkActionProgressWidget(LiveView):
             job.done = True
             self._refresh_from_job(job)
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Expose template-friendly fields."""
         percent = 0
         if self.total:
@@ -316,9 +316,9 @@ def admin_action_with_progress(
     request/session cannot affect the background run.
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        def wrapper(self, request, queryset):
+        def wrapper(self: Any, request: HttpRequest, queryset: Any) -> HttpResponseRedirect:
             job_id = uuid.uuid4().hex
             admin_site = self.admin_site
             try:
@@ -368,7 +368,7 @@ def admin_action_with_progress(
             model = self.model
             admin_instance = self
 
-            def _run():
+            def _run() -> None:
                 try:
                     pinned = model._default_manager.filter(pk__in=pks)
                     func(admin_instance, request, pinned, job)
@@ -390,15 +390,15 @@ def admin_action_with_progress(
             ).start()
             return HttpResponseRedirect(progress_url)
 
-        wrapper.short_description = description or func.__name__.replace("_", " ").title()
-        wrapper.allowed_permissions = permissions or []
-        wrapper._djust_admin_action_with_progress = True
+        wrapper.short_description = description or func.__name__.replace("_", " ").title()  # type: ignore[attr-defined]
+        wrapper.allowed_permissions = permissions or []  # type: ignore[attr-defined]
+        wrapper._djust_admin_action_with_progress = True  # type: ignore[attr-defined]
         return wrapper
 
     return decorator
 
 
-def _make_bulk_action_progress_view():
+def _make_bulk_action_progress_view() -> Type[Any]:
     """Build ``BulkActionProgressView`` class.
 
     Done lazily so we don't import ``AdminBaseMixin`` (from views.py) at
@@ -419,14 +419,14 @@ def _make_bulk_action_progress_view():
 
         # Declared as a class attr so ``as_view(_view_registry_id=...)``
         # is accepted by Django's View.as_view signature check.
-        _view_registry_id = None
+        _view_registry_id: Optional[str] = None
 
-        def mount(self, request, job_id: str = "", **kwargs) -> None:
+        def mount(self, request: HttpRequest, job_id: str = "", **kwargs: Any) -> None:
             # AdminBaseMixin.as_view installs admin_login_required; we
             # still call the widget's mount for is_staff + owner checks.
             BulkActionProgressWidget.mount(self, request, job_id=job_id, **kwargs)
 
-        def get_context_data(self, **kwargs):
+        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
             base = BulkActionProgressWidget.get_context_data(self, **kwargs)
             admin_ctx = self.get_admin_context()
             return {
@@ -438,7 +438,7 @@ def _make_bulk_action_progress_view():
     return BulkActionProgressView
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     """Lazy-construct ``BulkActionProgressView`` on first access.
 
     This avoids the circular import (progress.py -> views.py -> sites.py

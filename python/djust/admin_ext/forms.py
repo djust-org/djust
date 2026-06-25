@@ -39,7 +39,15 @@ class AdminFormMixin(FormMixin):
     # Set by subclass or during mount()
     object: Optional[Any] = None
 
-    def mount(self, request, object_id=None, **kwargs):
+    # Provided by the co-mixed ``AdminBaseMixin`` / ``LiveView`` collaborators
+    # (e.g. ``ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView)``).
+    # Annotation-only so they document the contract for the strict type-checker
+    # without shadowing the runtime attrs/properties from those mixins.
+    request: Any
+    _model: Any
+    _model_admin: Any
+
+    def mount(self, request: Any, object_id: Optional[Any] = None, **kwargs: Any) -> None:
         """Initialize form on view mount with model instance."""
         self.request = request
         self.object_id = object_id
@@ -221,7 +229,7 @@ class AdminFormMixin(FormMixin):
             logger.debug("Failed to get field value for %s", field_name, exc_info=True)
             return default
 
-    def validate_field(self, field_name: str = "", value: Any = None, **kwargs):
+    def validate_field(self, field_name: str = "", value: Any = None, **kwargs: Any) -> None:
         """
         Validate a single field in real-time.
 
@@ -272,7 +280,7 @@ class AdminFormMixin(FormMixin):
         # Update form instance
         self.form_instance = form
 
-    def submit_form(self, **kwargs):
+    def submit_form(self, **kwargs: Any) -> None:
         """
         Handle form submission.
 

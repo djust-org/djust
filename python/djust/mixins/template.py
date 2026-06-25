@@ -7,11 +7,13 @@ import json
 import logging
 import os
 import re
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from ..utils import get_template_dirs
 
 if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
+    from django.http import HttpRequest
+
     from ..http_streaming import ChunkEmitter
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,41 @@ _SCRIPT_BLOCK_RE = re.compile(
 class TemplateMixin:
     """Template-related methods: get_template, render, render_full_template, render_with_diff,
     and various HTML extraction/stripping helpers."""
+
+    if TYPE_CHECKING:
+        # Cooperating attributes/methods supplied by the host class (LiveView)
+        # and sibling mixins. Declared type-only so the strict-island mypy run
+        # resolves them on this mixin without a runtime change — the real
+        # definitions live on LiveView / the other mixins (this mixin is never
+        # instantiated standalone). See streaming.py for the same pattern.
+        template: Optional[str]
+        template_name: Optional[str]
+        _full_template: Optional[str]
+        _rust_view: Any
+        _current_html_size: Optional[int]
+        _previous_html_size: Optional[int]
+        _rust_render_timing: Any
+        _sync_done_this_cycle: bool
+
+        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
+
+        def _apply_context_processors(
+            self, context: Dict[str, Any], request: Any
+        ) -> Dict[str, Any]: ...
+
+        def _initialize_rust_view(self, request: Any = None) -> None: ...
+
+        def _sync_state_to_rust(
+            self, preloaded_context: Optional[Dict[str, Any]] = None
+        ) -> None: ...
+
+        def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None: ...
+
+        def _hydrate_react_components(self, html: str) -> str: ...
+
+        def _reset_temporary_assigns(self) -> None: ...
+
+        def _extract_handler_metadata(self) -> Dict[str, Dict[str, Any]]: ...
 
     def get_template(self) -> str:
         """
@@ -215,7 +252,7 @@ class TemplateMixin:
         else:
             raise ValueError("Either template_name or template must be set")
 
-    def render(self, request=None) -> str:
+    def render(self, request: Optional["HttpRequest"] = None) -> str:
         """
         Render the view to HTML.
 
@@ -251,7 +288,7 @@ class TemplateMixin:
 
         return html
 
-    def _inject_handler_metadata(self, html: str, request=None) -> str:
+    def _inject_handler_metadata(self, html: str, request: Optional["HttpRequest"] = None) -> str:
         """
         Inject handler metadata script into HTML.
 
@@ -341,9 +378,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         a marker-less DOM) and every subsequent event fell back to
         ``html_recovery``.
         """
-        preserved_blocks = []
+        preserved_blocks: list[str] = []
 
-        def preserve_block(match):
+        def preserve_block(match: "re.Match[str]") -> str:
             preserved_blocks.append(match.group(0))
             return f"__PRESERVED_BLOCK_{len(preserved_blocks) - 1}__"
 
@@ -557,7 +594,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # t.exception() ...)`` recovery returns the FIRST done-with-
         # exception task — on multi-failure that attributes the wrong
         # view_id. Wrapping packages the identity at thunk-start time.
-        async def _wrap(view_id, thunk_fn):
+        async def _wrap(view_id: str, thunk_fn: Any) -> Tuple[str, Any, Optional[Exception]]:
             try:
                 result = await thunk_fn()
             except asyncio.CancelledError:
@@ -575,12 +612,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             asyncio.ensure_future(_wrap(view_id, thunk_fn)) for view_id, thunk_fn in emitter.thunks
         ]
 
-        def _cancel_pending():
+        def _cancel_pending() -> None:
             for task in thunk_tasks:
                 if not task.done():
                     task.cancel()
 
-        async def _drain_iterator(it):
+        async def _drain_iterator(it: Any) -> None:
             """Drain a partially-consumed ``asyncio.as_completed``
             iterator so its internally-queued ``_wait_for_one``
             coroutines are awaited and don't trigger
@@ -676,7 +713,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 # Best-effort drain — never raise from finally.
                 pass
 
-    def _split_for_streaming(self, full_html: str) -> tuple:
+    def _split_for_streaming(self, full_html: str) -> Tuple[str, str, str]:
         """Split rendered HTML into ``(shell_open, main_content, shell_close)``.
 
         .. deprecated:: 0.9.0
@@ -875,7 +912,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
             if open_pos < close_pos:
                 depth += 1
-                pos = open_pos + 4
+                # open_pos < close_pos (an int) implies open_pos is the real
+                # int match position, never the float("inf") sentinel.
+                pos = int(open_pos) + 4
             else:
                 depth -= 1
                 if depth == 0:
@@ -907,7 +946,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             return html[:start_pos] + stripped_div + html[result[1] :]
         return html
 
-    def render_full_template(self, request=None, serialized_context=None) -> str:
+    def render_full_template(
+        self,
+        request: Optional["HttpRequest"] = None,
+        serialized_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """
         Render the full template including base template inheritance.
         Used for initial GET requests when using template inheritance.
@@ -939,7 +982,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         with active_parent_view(self):
             return self._render_full_template_inner(request, serialized_context)
 
-    def _render_full_template_inner(self, request=None, serialized_context=None) -> str:
+    def _render_full_template_inner(
+        self,
+        request: Optional["HttpRequest"] = None,
+        serialized_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Body of :meth:`render_full_template`. Split out so the
         active-parent-view thread-local (#1784) wraps the entire render in a
         ``with`` block without indenting the whole method."""
@@ -1070,8 +1117,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             return self.render(request)
 
     def render_with_diff(
-        self, request=None, extract_liveview_root=False, preloaded_context=None
-    ) -> tuple[str, Optional[str], int]:
+        self,
+        request: Optional["HttpRequest"] = None,
+        extract_liveview_root: bool = False,
+        preloaded_context: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Optional[str], int]:
         """
         Render the view and compute diff from last render.
 

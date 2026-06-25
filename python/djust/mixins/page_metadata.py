@@ -14,7 +14,7 @@ consumer to flush to the client, without requiring a VDOM diff cycle:
             self.page_meta = {"description": "Active chat"}
 """
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 class PageMetadataMixin:
@@ -34,9 +34,9 @@ class PageMetadataMixin:
             return ctx
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._pending_page_metadata: List[Dict] = []
+        self._pending_page_metadata: List[Dict[str, str]] = []
         self._page_title: str = ""
         self._page_meta: Dict[str, str] = {}
 
@@ -63,7 +63,7 @@ class PageMetadataMixin:
         for name, content in value.items():
             self._pending_page_metadata.append({"action": "meta", "name": name, "content": content})
 
-    def _drain_page_metadata(self) -> List[Dict]:
+    def _drain_page_metadata(self) -> List[Dict[str, str]]:
         """
         Drain and return all pending page metadata commands.
 

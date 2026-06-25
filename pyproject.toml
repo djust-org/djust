@@ -658,6 +658,76 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# admin_ext/ subpackage (ADR-023 M4c, part 2) — the Django-admin integration:
+# the DjustAdminSite + DjustModelAdmin config, the plugin system (AdminPlugin /
+# AdminPage / AdminWidget / NavItem), the LiveView-based admin views (list /
+# detail / create / delete / login / logout), the AdminFormMixin (FK/M2M/date
+# field handling), the bulk-action progress widget + decorator, the admin
+# CSS-framework adapter, the register/action/display decorators, the AppConfig,
+# the autodiscover __init__, and the admin template-tag helpers. Excludes
+# admin_ext/tests/, which stays on the lenient global default. Real type bugs
+# fixed to clean this island: implicit-Optional defaults in LoginView field
+# handlers, an LSP-incompatible ModelCreateView.mount override, and several
+# Any-leak returns narrowed at the Django-untyped boundary (str()/bool()).
+[[tool.mypy.overrides]]
+module = [
+    "djust.admin_ext.__init__",
+    "djust.admin_ext.adapters",
+    "djust.admin_ext.apps",
+    "djust.admin_ext.components.__init__",
+    "djust.admin_ext.decorators",
+    "djust.admin_ext.forms",
+    "djust.admin_ext.options",
+    "djust.admin_ext.plugins",
+    "djust.admin_ext.progress",
+    "djust.admin_ext.sites",
+    "djust.admin_ext.templatetags.__init__",
+    "djust.admin_ext.templatetags.djust_admin_tags",
+    "djust.admin_ext.views",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
+# mixins/ subpackage (ADR-023 M4c, part 1) — the LiveView mixin layer that
+# composes the public LiveView class. Spans the small leaf mixins (flash,
+# layout, page_metadata, post_processing, async_work, waiters, model_binding,
+# components), the context/JIT serialization mixins (context, jit), the HTTP
+# request handling mixin (request), the Rust-bridge / change-detection mixin
+# (rust_bridge — annotations only; the _sync_state_to_rust change-detection +
+# _framework_attrs filter logic is byte-identical, no comparison/filter change),
+# and the large template-rendering mixin (template). The mixins/ tests directory
+# does not exist; there is no test sub-package to exclude.
+[[tool.mypy.overrides]]
+module = [
+    "djust.mixins.__init__",
+    "djust.mixins.activity",
+    "djust.mixins.async_work",
+    "djust.mixins.components",
+    "djust.mixins.context",
+    "djust.mixins.flash",
+    "djust.mixins.handlers",
+    "djust.mixins.jit",
+    "djust.mixins.layout",
+    "djust.mixins.model_binding",
+    "djust.mixins.navigation",
+    "djust.mixins.notifications",
+    "djust.mixins.page_metadata",
+    "djust.mixins.post_processing",
+    "djust.mixins.push_events",
+    "djust.mixins.request",
+    "djust.mixins.rust_bridge",
+    "djust.mixins.sticky",
+    "djust.mixins.streams",
+    "djust.mixins.template",
+    "djust.mixins.waiters",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 
 # theming/ subpackage (ADR-023 M4c, part 3) — every top-level module of the
 # theming system flipped from the lenient default to strict islands. Spans the

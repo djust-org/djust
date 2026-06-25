@@ -4,7 +4,7 @@ RustBridgeMixin - Rust backend integration for LiveView.
 
 import hashlib
 import logging
-from typing import Any, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from urllib.parse import parse_qs, urlencode
 
 from ..security import sanitize_for_log
@@ -62,7 +62,7 @@ _MISSING = object()
 try:
     from .._rust import RustLiveView
 except ImportError:
-    RustLiveView = None
+    RustLiveView = None  # type: ignore[assignment,misc]
 
 
 # Process-level guard for the custom-filter bootstrap (#1121). Set after
@@ -83,7 +83,7 @@ _CUSTOM_FILTERS_BRIDGED = False
 _NORMALIZE_DEPTH_LIMIT = 3
 
 
-def _normalize_db_values(value, depth: int = 0):
+def _normalize_db_values(value: Any, depth: int = 0) -> Any:
     """Recursively normalize raw Django DB values (Model / QuerySet /
     list[Model] / list[list[Model]]) into JSON-serializable dicts.
 
@@ -229,7 +229,12 @@ def _collect_safe_keys(
     return safe_keys
 
 
-def _collect_sub_ids(value, collected, visited=None, depth=0):
+def _collect_sub_ids(
+    value: Any,
+    collected: Set[int],
+    visited: Optional[Set[int]] = None,
+    depth: int = 0,
+) -> None:
     """Collect id() of all objects reachable from *value* (dicts, lists, tuples).
 
     Used by ``_sync_state_to_rust`` to detect derived context variables that
@@ -256,7 +261,33 @@ def _collect_sub_ids(value, collected, visited=None, depth=0):
 class RustBridgeMixin:
     """Rust integration: _initialize_rust_view, _sync_state_to_rust."""
 
-    def _initialize_rust_view(self, request=None):
+    if TYPE_CHECKING:
+        # Cooperating attributes/methods supplied by the host class (LiveView)
+        # and sibling mixins. Declared type-only so the strict-island mypy run
+        # resolves them on this mixin without a runtime change — the real
+        # definitions live on LiveView / the other mixins (this mixin is never
+        # instantiated standalone). See streaming.py for the same pattern.
+        request: Any
+        _rust_view: Any
+        _websocket_session_id: Optional[str]
+        _django_session_key: Optional[str]
+        _cached_csrf_token: Optional[str]
+
+        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
+
+        def _apply_context_processors(
+            self, context: Dict[str, Any], request: Any
+        ) -> Dict[str, Any]: ...
+
+        def get_template(self) -> str: ...
+
+    # Cached per-template hash slot — a class-level cache written into
+    # ``cls.__dict__`` by ``_get_cached_template_hash_slot``. Declared here so
+    # the strict-island resolves the dynamic class-attribute write without a
+    # runtime change.
+    _djust_template_hash_slot: str
+
+    def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""
 
         logger.debug("[LiveView] _initialize_rust_view() called, _rust_view=%s", self._rust_view)
@@ -436,7 +467,7 @@ class RustBridgeMixin:
         # via MRO lookups) so subclasses with different templates don't
         # see the parent's hash. Using ``__dict__`` access avoids the
         # standard attribute resolution that would walk the MRO.
-        cached = cls.__dict__.get("_djust_template_hash_slot")
+        cached: Optional[str] = cls.__dict__.get("_djust_template_hash_slot")
         if cached is not None:
             return cached
         try:
@@ -462,13 +493,13 @@ class RustBridgeMixin:
         cls._djust_template_hash_slot = slot
         return slot
 
-    def _get_template_deps(self):
+    def _get_template_deps(self) -> Optional[Dict[str, Any]]:
         """Build template dependency map: which context keys does the template use?
 
         Caches the result per template content hash so it's computed only once.
         Returns None if extraction is unavailable (no Rust backend).
         """
-        deps = getattr(self, "_template_deps", None)
+        deps: Optional[Dict[str, Any]] = getattr(self, "_template_deps", None)
         if deps is not None:
             return deps
 
@@ -485,7 +516,7 @@ class RustBridgeMixin:
         self._template_deps = deps
         return deps
 
-    def _sync_state_to_rust(self, preloaded_context=None):
+    def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.
 
         Phoenix-style change tracking: only sends values that actually changed
@@ -639,7 +670,7 @@ class RustBridgeMixin:
                     # detection. Trust it exclusively — don't also run id()
                     # comparison which produces false positives due to Python
                     # int cache misses on the double-sync path.
-                    changed_sub_ids = set()
+                    changed_sub_ids: Set[int] = set()
                     for key in changed_keys:
                         val = getattr(self, key, None) or full_context.get(key)
                         if val is not None:
@@ -758,8 +789,8 @@ class RustBridgeMixin:
             # Fast path: skip _collect_safe_keys for JSON-native primitives
             # (int, float, bool, str, None) which can never contain SafeString.
             _JSON_PRIMITIVES = (int, float, bool, type(None))
-            safe_keys = []
-            rendered_context = {}
+            safe_keys: List[str] = []
+            rendered_context: Dict[str, Any] = {}
             needs_normalize = False
             for key, value in context.items():
                 # #1786: request-scoped, framework-provided context values
