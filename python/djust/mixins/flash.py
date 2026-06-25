@@ -15,7 +15,7 @@ notifications (success, error, info, warning) in the browser:
             self.clear_flash("success")
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class FlashMixin:
@@ -26,7 +26,7 @@ class FlashMixin:
     WebSocket consumer after the response is sent.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._pending_flash: List[Dict[str, str]] = []
 
