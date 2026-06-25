@@ -1,8 +1,8 @@
 # ADR-023: Incremental Type Enforcement — mypy Gate + Strict Islands
 
-**Status**: Accepted — foundation shipped 2026-06-24 (this PR); the strict-island ratchet is ongoing.
+**Status**: Accepted — foundation shipped 2026-06-24; the strict-island ratchet is **COMPLETE as of 2026-06-25** (M1 → M4g, PRs #1936–#1959). Every shipped non-test module in `python/djust/` is now strict-mypy-enforced — **546 module entries / 822 source files, zero lenient exceptions** (the final holdout, `components/rust_handlers`, flipped clean in M4g/#1959). The gate is environment-independent (PR #1960 disabled `import-untyped` globally so a full dev env matches CI).
 
-**Shipped in**: v1.1 (foundation — the enforced gate + the initial strict-island set + the `_rust.pyi` boundary). The per-module ratchet continues post-1.0 across the v1.1 code-quality arc.
+**Shipped in**: v1.1 (foundation — the enforced gate + the initial strict-island set + the `_rust.pyi` boundary) → the full ratchet (M2 public-API, M3 dispatch core, M4 the long tail, M4g the Rust-FFI boundary) completed across the v1.1 code-quality arc.
 
 **Relates to**: [ADR-022](022-v1.1-code-quality-single-path-convergence.md) (v1.1 code-quality headline). Type enforcement is a code-quality groundwork item under that arc — it makes a whole class of contract drift mechanically detectable, the same discipline ADR-022's anti-drift parity nets apply to transport paths.
 
