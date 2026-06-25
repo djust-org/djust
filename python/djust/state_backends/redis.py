@@ -5,7 +5,7 @@ Redis-backed state backend for production horizontal scaling.
 import logging
 import threading
 import time
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, cast
 from djust._rust import RustLiveView
 from djust.profiler import profiler
 
@@ -128,7 +128,7 @@ class RedisStateBackend(StateBackend):
         """Add prefix to key."""
         return f"{self._key_prefix}{key}"
 
-    def _get_compressor(self):
+    def _get_compressor(self) -> Optional[Any]:
         """Return this thread's `ZstdCompressor`, creating it lazily.
 
         Returns ``None`` if compression is disabled or zstandard isn't
@@ -142,7 +142,7 @@ class RedisStateBackend(StateBackend):
             self._tls.compressor = c
         return c
 
-    def _get_decompressor(self):
+    def _get_decompressor(self) -> Optional[Any]:
         """Return this thread's `ZstdDecompressor`, creating it lazily.
 
         Always returns a real decompressor when zstandard is available,
@@ -172,7 +172,12 @@ class RedisStateBackend(StateBackend):
             return NO_COMPRESSION_MARKER + data
 
         try:
-            compressed = self._get_compressor().compress(data)
+            # The line-170 guard guarantees ``_compression_enabled`` is True
+            # here, so ``_get_compressor()`` returns a live compressor (only
+            # returns None when compression is disabled).
+            compressor = self._get_compressor()
+            assert compressor is not None
+            compressed: bytes = compressor.compress(data)
 
             # Only use compression if it actually saves space
             if len(compressed) < len(data):
@@ -209,7 +214,7 @@ class RedisStateBackend(StateBackend):
                     "Install with: pip install zstandard"
                 )
             try:
-                return decompressor.decompress(payload)
+                return cast(bytes, decompressor.decompress(payload))
             except Exception as e:
                 logger.error("Decompression failed: %s", e)
                 raise
@@ -251,7 +256,7 @@ class RedisStateBackend(StateBackend):
                 logger.error("Failed to deserialize from Redis key '%s': %s", key, e)
                 return None
 
-    def set(self, key: str, view: RustLiveView, ttl: Optional[int] = None):
+    def set(self, key: str, view: RustLiveView, ttl: Optional[int] = None) -> None:
         """
         Store in Redis using native Rust serialization with optional compression.
 
@@ -290,7 +295,7 @@ class RedisStateBackend(StateBackend):
 
         # Delete the data (timestamp is embedded, no separate key)
         deleted = self._client.delete(redis_key)
-        return deleted > 0
+        return bool(deleted > 0)
 
     def cleanup_expired(self, ttl: Optional[int] = None) -> int:
         """

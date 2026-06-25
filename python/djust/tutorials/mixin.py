@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, List, Optional
 
 from djust.decorators import background, event_handler
-from djust.js import JS
+from djust.js import JS, JSChain
 
 from .step import TutorialStep
 
@@ -76,6 +76,16 @@ class TutorialMixin:
     interfering with the mixin's behavior.
     """
 
+    if TYPE_CHECKING:
+        # Provided by sibling LiveView mixins at runtime (PushEventsMixin /
+        # WaitersMixin); declared here so the type checker can see the
+        # composed surface without a runtime import cycle.
+        def push_commands(self, chain: JSChain) -> None: ...
+        async def _flush_pending_push_events(self) -> None: ...
+        async def wait_for_event(
+            self, name: str, *, timeout: Optional[float] = None
+        ) -> dict[str, Any]: ...
+
     # Class-level default — override in subclasses with your tour.
     # Stored with a ``_`` prefix so ContextMixin's MRO walker doesn't
     # pick it up and try to serialize TutorialStep objects (#694).
@@ -86,7 +96,7 @@ class TutorialMixin:
     # override this at the class level to change the default look.
     default_highlight_class: str = "tour-highlight"
 
-    def __init_subclass__(cls, **kwargs) -> None:
+    def __init_subclass__(cls, **kwargs: Any) -> None:
         """Move ``tutorial_steps`` to ``_tutorial_steps`` at class creation.
 
         If a subclass defines ``tutorial_steps`` (the documented public
@@ -113,7 +123,7 @@ class TutorialMixin:
     # These use _ prefix to avoid triggering VDOM re-renders when the
     # tour background task changes them. Templates that need these values
     # should access them via get_context_data (which the mixin populates).
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._tutorial_running: bool = False
         self._tutorial_current_step: int = -1
@@ -157,7 +167,7 @@ class TutorialMixin:
 
     @event_handler
     @background
-    async def start_tutorial(self, **kwargs) -> None:
+    async def start_tutorial(self, **kwargs: Any) -> None:
         """
         Begin the tour. Runs as a ``@background`` task so the handler
         returns quickly and subsequent steps don't block the event
@@ -208,7 +218,7 @@ class TutorialMixin:
                 logger.debug("Tutorial hide push failed: %s", exc)
 
     @event_handler
-    def skip_tutorial(self, **kwargs) -> None:
+    def skip_tutorial(self, **kwargs: Any) -> None:
         """
         Advance past the current step immediately.
 
@@ -222,7 +232,7 @@ class TutorialMixin:
             self._tutorial_skip_signal.set()
 
     @event_handler
-    def cancel_tutorial(self, **kwargs) -> None:
+    def cancel_tutorial(self, **kwargs: Any) -> None:
         """
         Abort the tour entirely, or dismiss the bubble if the tour
         already ended.
@@ -243,7 +253,7 @@ class TutorialMixin:
             self._tutorial_skip_signal.set()
 
     @event_handler
-    async def restart_tutorial(self, **kwargs) -> None:
+    async def restart_tutorial(self, **kwargs: Any) -> None:
         """Cancel any running tour and start fresh from step 0."""
         if self.tutorial_running:
             self.cancel_tutorial()
@@ -339,7 +349,10 @@ class TutorialMixin:
             return
 
         if step.wait_for is None:
-            # Pure auto-advance — race timeout against skip/cancel
+            # Pure auto-advance — race timeout against skip/cancel.
+            # The line-348 guard already excludes "both None", so reaching
+            # here with ``wait_for is None`` implies ``timeout`` is set.
+            assert step.timeout is not None
             await self._race_with_skip(asyncio.sleep(step.timeout))
             return
 
@@ -358,7 +371,7 @@ class TutorialMixin:
                 step.wait_for,
             )
 
-    async def _race_with_skip(self, coro) -> None:
+    async def _race_with_skip(self, coro: Awaitable[Any]) -> None:
         """
         Run ``coro`` but return early if the skip or cancel signal
         fires first. Propagates ``TimeoutError`` from the wrapped
@@ -391,7 +404,7 @@ class TutorialMixin:
                 self._tutorial_skip_signal.clear()
 
     @staticmethod
-    async def _await_coro(coro):
+    async def _await_coro(coro: Awaitable[Any]) -> Any:
         """Helper: wrap a coroutine so asyncio.wait can observe it."""
         return await coro
 

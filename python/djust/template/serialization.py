@@ -6,15 +6,18 @@ Converts Django/Python types to JSON-compatible values for the Rust engine.
 
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, cast
 from uuid import UUID
 
 from django.db.models.fields.files import FieldFile
 
+# JSON-compatible value the Rust engine accepts.
+JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
+
 
 def serialize_value(
     value: Any,
-) -> Union[str, int, float, bool, None, List[Any], Dict[str, Any]]:
+) -> JSONValue:
     """
     Serialize a single value to a JSON-compatible type.
 
@@ -53,7 +56,7 @@ def serialize_value(
     if isinstance(value, FieldFile):
         if value:
             try:
-                return value.url
+                return cast(str, value.url)
             except ValueError:
                 return None
         return None
@@ -66,7 +69,7 @@ def serialize_value(
         if not isinstance(value, (dict, list, tuple, str)):
             if value:
                 try:
-                    return value.url
+                    return cast(str, value.url)
                 except (ValueError, AttributeError):
                     return None
             return None
@@ -77,7 +80,7 @@ def serialize_value(
 
     form_result = render_form_value(value)
     if form_result is not None:
-        return form_result
+        return cast(str, form_result)
 
     # Handle dict - recursively serialize
     if isinstance(value, dict):
@@ -88,7 +91,7 @@ def serialize_value(
         return [serialize_value(item) for item in value]
 
     # Pass through other types (str, int, float, bool, etc.)
-    return value
+    return cast(JSONValue, value)
 
 
 def serialize_context(context: Dict[str, Any]) -> Dict[str, Any]:
