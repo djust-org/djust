@@ -20,9 +20,13 @@ Falling back to:
     djust_theming/pages/{page}.html
 """
 
+from typing import Any
+
 from django import template
+from django.http import HttpRequest
 from django.middleware.csrf import get_token
-from django.utils.safestring import mark_safe
+from django.template import Context
+from django.utils.safestring import SafeString, mark_safe
 
 from ..manager import get_theme_config
 from ..template_resolver import resolve_page_template
@@ -32,13 +36,13 @@ register = template.Library()
 
 def _css_prefix() -> str:
     """Return the current css_prefix from theme config."""
-    return get_theme_config().get("css_prefix", "")
+    return str(get_theme_config().get("css_prefix", ""))
 
 
-def _extract_slots(attrs: dict) -> tuple[dict, dict]:
+def _extract_slots(attrs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Separate slot_* keys from regular attrs."""
-    slots = {}
-    remaining = {}
+    slots: dict[str, Any] = {}
+    remaining: dict[str, Any] = {}
     for k, v in attrs.items():
         if k.startswith("slot_"):
             slots[k] = v
@@ -47,12 +51,12 @@ def _extract_slots(attrs: dict) -> tuple[dict, dict]:
     return slots, remaining
 
 
-def _csrf_token_value(request) -> str:
+def _csrf_token_value(request: HttpRequest | None) -> str:
     """Return the CSRF token string for the given request, or empty string."""
     if request is None:
         return ""
     try:
-        return get_token(request)
+        return str(get_token(request))
     except Exception:
         return ""
 
@@ -64,13 +68,13 @@ def _csrf_token_value(request) -> str:
 
 @register.simple_tag(takes_context=True)
 def theme_login_page(
-    context,
+    context: Context,
     action: str = "",
     title: str = "Sign in",
     forgot_password_url: str = "",
     register_url: str = "",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed login page fragment.
 
@@ -102,13 +106,13 @@ def theme_login_page(
 
 @register.simple_tag(takes_context=True)
 def theme_register_page(
-    context,
+    context: Context,
     action: str = "",
     title: str = "Create account",
     login_url: str = "",
     terms_url: str = "",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed registration page fragment.
 
@@ -140,13 +144,13 @@ def theme_register_page(
 
 @register.simple_tag(takes_context=True)
 def theme_password_reset_page(
-    context,
+    context: Context,
     action: str = "",
     title: str = "Reset password",
     description: str = "Enter your email address and we'll send you a link to reset your password.",
     login_url: str = "",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed password reset page fragment.
 
@@ -178,12 +182,12 @@ def theme_password_reset_page(
 
 @register.simple_tag(takes_context=True)
 def theme_password_confirm_page(
-    context,
+    context: Context,
     action: str = "",
     title: str = "Set new password",
     description: str = "Choose a strong password for your account.",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed password confirmation page fragment.
 
@@ -218,12 +222,12 @@ def theme_password_confirm_page(
 
 @register.simple_tag(takes_context=True)
 def theme_404_page(
-    context,
+    context: Context,
     title: str = "Page not found",
     description: str = "Sorry, the page you're looking for doesn't exist or has been moved.",
     home_url: str = "/",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed 404 error page fragment.
 
@@ -252,13 +256,13 @@ def theme_404_page(
 
 @register.simple_tag(takes_context=True)
 def theme_500_page(
-    context,
+    context: Context,
     title: str = "Something went wrong",
     description: str = "We're experiencing an internal server error. Please try again later.",
     home_url: str = "/",
     retry_url: str = "",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed 500 error page fragment.
 
@@ -289,12 +293,12 @@ def theme_500_page(
 
 @register.simple_tag(takes_context=True)
 def theme_403_page(
-    context,
+    context: Context,
     title: str = "Access denied",
     description: str = "You don't have permission to access this resource.",
     back_url: str = "/",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed 403 error page fragment.
 
@@ -328,11 +332,11 @@ def theme_403_page(
 
 @register.simple_tag(takes_context=True)
 def theme_maintenance_page(
-    context,
+    context: Context,
     title: str = "Under maintenance",
     description: str = "We're performing scheduled maintenance. We'll be back shortly.",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed maintenance page fragment.
 
@@ -359,13 +363,13 @@ def theme_maintenance_page(
 
 @register.simple_tag(takes_context=True)
 def theme_empty_state_page(
-    context,
+    context: Context,
     title: str = "No items yet",
     description: str = "Get started by creating your first item.",
     cta_text: str = "",
     cta_url: str = "",
-    **attrs,
-):
+    **attrs: Any,
+) -> SafeString:
     """
     Render a themed empty state page fragment.
 

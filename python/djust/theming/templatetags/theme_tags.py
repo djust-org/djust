@@ -18,13 +18,16 @@ Usage:
 """
 
 import json
+from typing import TYPE_CHECKING, Any
 
 from django import template
+from django.http import HttpRequest
+from django.template import Context
 from django.template.loader import render_to_string
 from django.urls import reverse, NoReverseMatch
 from django.utils.html import format_html
+from django.utils.safestring import SafeString, mark_safe
 from django.utils.http import urlencode
-from django.utils.safestring import mark_safe
 
 from ..components import PresetSelector, ThemeModeButton, ThemeSwitcher, ThemeSwitcherConfig
 from ..component_css_generator import generate_component_css
@@ -38,16 +41,19 @@ from ..manager import (
 )
 from ..template_resolver import resolve_theme_template
 
+if TYPE_CHECKING:
+    from ..manager import ThemeManager
+
 register = template.Library()
 
 
 def build_theme_head_context(
-    request,
+    request: HttpRequest | None,
     include_js: bool = True,
     link_css: bool = False,
     loading_class: bool = True,
-    manager=None,
-) -> dict:
+    manager: "ThemeManager | None" = None,
+) -> dict[str, Any]:
     """Build the full context dict consumed by ``djust_theming/theme_head.html``.
 
     Single source of truth for the ``theme_head`` render context. Both the
@@ -181,7 +187,7 @@ def build_theme_head_context(
 
 
 @register.simple_tag(takes_context=True)
-def theme_head(context, include_js: bool = True, link_css: bool = False):
+def theme_head(context: Context, include_js: bool = True, link_css: bool = False) -> SafeString:
     """
     Render theme CSS and anti-FOUC script in the <head>.
 
@@ -212,7 +218,7 @@ def theme_head(context, include_js: bool = True, link_css: bool = False):
 
 
 @register.simple_tag(takes_context=True)
-def theme_css(context):
+def theme_css(context: Context) -> SafeString:
     """
     Render only the theme CSS (no scripts).
 
@@ -231,7 +237,7 @@ def theme_css(context):
 
 
 @register.simple_tag(takes_context=True)
-def theme_css_link(context):
+def theme_css_link(context: Context) -> SafeString:
     """
     Render a ``<link>`` to ``/_theming/theme.css`` with cache-busting URL params.
 
@@ -283,7 +289,7 @@ def theme_css_link(context):
 
 
 @register.simple_tag(takes_context=True)
-def theme_framework_overrides(context):
+def theme_framework_overrides(context: Context) -> str:
     """
     Render theme-aware CSS overrides for the active CSS framework.
 
@@ -309,9 +315,12 @@ def theme_framework_overrides(context):
         gen = ThemePackCSSGenerator(pack_name=state.pack)
         fw_css = gen._generate_framework_css()
         if fw_css:
-            return format_html(
+            # format_html returns a SafeString; the local annotation narrows the
+            # untyped-boundary Any (django.utils.html is unstubbed here) to str.
+            overrides: str = format_html(
                 "<style data-djust-framework-overrides>{}</style>", mark_safe(fw_css)
             )
+            return overrides
     except (ValueError, ImportError):
         # Pack CSS generator is optional (older installs / missing pack); emit nothing.
         pass
@@ -321,14 +330,14 @@ def theme_framework_overrides(context):
 
 @register.simple_tag(takes_context=True)
 def theme_switcher(
-    context,
+    context: Context,
     show_presets: bool = True,
     show_mode_toggle: bool = True,
     show_labels: bool = True,
     dropdown_position: str = "bottom-end",
     button_class: str = "",
     dropdown_class: str = "",
-):
+) -> SafeString:
     """
     Render the full theme switcher component.
 
@@ -356,7 +365,9 @@ def theme_switcher(
 
 
 @register.simple_tag(takes_context=True)
-def theme_mode_toggle(context, button_class: str = "", show_label: bool = False):
+def theme_mode_toggle(
+    context: Context, button_class: str = "", show_label: bool = False
+) -> SafeString:
     """
     Render a simple theme mode toggle button.
 
@@ -378,11 +389,11 @@ def theme_mode_toggle(context, button_class: str = "", show_label: bool = False)
 
 @register.simple_tag(takes_context=True)
 def theme_preset_selector(
-    context,
+    context: Context,
     layout: str = "dropdown",
     show_descriptions: bool = True,
     dropdown_class: str = "",
-):
+) -> SafeString:
     """
     Render theme preset selector.
 
@@ -405,13 +416,13 @@ def theme_preset_selector(
 
 @register.simple_tag(takes_context=True)
 def theme_panel(
-    context,
+    context: Context,
     show_mode: bool = True,
     show_packs: bool = True,
     show_presets: bool = True,
     show_design: bool = True,
     show_layout: bool = True,
-):
+) -> SafeString:
     """
     Render a combined theme settings panel in a single dropdown.
 
@@ -475,7 +486,7 @@ def theme_panel(
 
 
 @register.simple_tag(takes_context=True)
-def theme_preset(context):
+def theme_preset(context: Context) -> str:
     """
     Get current theme preset name.
 
@@ -488,7 +499,7 @@ def theme_preset(context):
 
 
 @register.simple_tag(takes_context=True)
-def theme_mode(context):
+def theme_mode(context: Context) -> str:
     """
     Get current theme mode setting.
 
@@ -503,7 +514,7 @@ def theme_mode(context):
 
 
 @register.simple_tag(takes_context=True)
-def theme_resolved_mode(context):
+def theme_resolved_mode(context: Context) -> str:
     """
     Get resolved theme mode (always 'light' or 'dark').
 

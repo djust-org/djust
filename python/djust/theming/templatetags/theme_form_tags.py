@@ -8,9 +8,13 @@ Provides:
 - ``{% get_css_prefix as var %}`` — expose css_prefix for templates
 """
 
+from typing import Any
+
 from django import template
+from django.forms import BaseForm
+from django.template import Context
 from django.utils.html import conditional_escape
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 from ..manager import get_theme_config
 
@@ -19,11 +23,11 @@ register = template.Library()
 
 def _css_prefix() -> str:
     """Return the current css_prefix from theme config."""
-    return get_theme_config().get("css_prefix", "")
+    return str(get_theme_config().get("css_prefix", ""))
 
 
 @register.simple_tag
-def get_css_prefix():
+def get_css_prefix() -> str:
     """
     Return the configured CSS prefix.
 
@@ -37,7 +41,9 @@ def get_css_prefix():
 
 
 @register.simple_tag(takes_context=True)
-def theme_form(context, form, layout="stacked", **kwargs):
+def theme_form(
+    context: Context, form: BaseForm, layout: str = "stacked", **kwargs: Any
+) -> SafeString:
     """
     Render a complete themed form.
 
@@ -133,7 +139,7 @@ def theme_form(context, form, layout="stacked", **kwargs):
 
 
 @register.simple_tag(takes_context=True)
-def theme_form_errors(context, form):
+def theme_form_errors(context: Context, form: BaseForm) -> SafeString:
     """
     Render form-level non-field errors as a themed alert.
 
