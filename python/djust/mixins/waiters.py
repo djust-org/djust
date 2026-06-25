@@ -72,7 +72,14 @@ class _Waiter:
 
     event_name: str
     predicate: Optional[Callable[[Dict[str, Any]], bool]] = None
-    future: asyncio.Future = field(default_factory=lambda: None)  # type: ignore[assignment]
+    # The default factory returns None to defer Future creation to
+    # __post_init__ (which needs the running loop). The field is always a
+    # real Future after init; the ignore covers the deliberate None default
+    # under the declared non-Optional Future type (runtime behaviour
+    # unchanged).
+    future: asyncio.Future[Any] = field(
+        default_factory=lambda: None  # type: ignore[arg-type,return-value]
+    )
 
     def __post_init__(self) -> None:
         if self.future is None:
@@ -90,7 +97,7 @@ class WaiterMixin:
     handler.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._waiters: Dict[str, List[_Waiter]] = {}
 
@@ -149,9 +156,12 @@ class WaiterMixin:
         self._waiters.setdefault(name, []).append(waiter)
 
         try:
+            payload: Dict[str, Any]
             if timeout is not None:
-                return await asyncio.wait_for(waiter.future, timeout=timeout)
-            return await waiter.future
+                payload = await asyncio.wait_for(waiter.future, timeout=timeout)
+            else:
+                payload = await waiter.future
+            return payload
         except (asyncio.TimeoutError, asyncio.CancelledError):
             # Remove the waiter so it doesn't linger — notify would skip
             # it anyway once the future is done, but an explicit remove

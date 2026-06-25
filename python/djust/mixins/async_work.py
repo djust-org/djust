@@ -24,7 +24,7 @@ and sends updated patches to the client.
 
 import inspect
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,13 @@ class AsyncWorkMixin:
     tracking and cancellation.
     """
 
-    def start_async(self, callback, *args, name: Optional[str] = None, **kwargs):
+    def start_async(
+        self,
+        callback: Callable[..., Any],
+        *args: Any,
+        name: Optional[str] = None,
+        **kwargs: Any,
+    ) -> None:
         """
         Schedule a callback to run in a background thread after the
         current handler's state is flushed to the client.
@@ -90,7 +96,7 @@ class AsyncWorkMixin:
 
         self._async_tasks[name] = (callback, args, kwargs)
 
-    def cancel_async(self, name: str):
+    def cancel_async(self, name: str) -> None:
         """
         Cancel a scheduled or running async task.
 
@@ -176,7 +182,7 @@ class AsyncWorkMixin:
             self._deferred_callbacks = []
         self._deferred_callbacks.append((callback, args, kwargs))
 
-    def _drain_deferred(self) -> list:
+    def _drain_deferred(self) -> List[Tuple[Callable[..., Any], Tuple[Any, ...], Dict[str, Any]]]:
         """Pop and return the queued deferred callbacks; reset the queue.
 
         Called by :class:`~djust.websocket.LiveViewConsumer` immediately
@@ -189,7 +195,9 @@ class AsyncWorkMixin:
         :meth:`_drain_deferred` after :meth:`render` if we ever want
         deferred-callback support there too.
         """
-        callbacks = getattr(self, "_deferred_callbacks", None)
+        callbacks: Optional[List[Tuple[Callable[..., Any], Tuple[Any, ...], Dict[str, Any]]]] = (
+            getattr(self, "_deferred_callbacks", None)
+        )
         if not callbacks:
             return []
         self._deferred_callbacks = []
@@ -251,7 +259,7 @@ class AsyncWorkMixin:
         # still matches — older in-flight loaders become no-ops and
         # can't overwrite a fresher pending state with stale data.
         if not hasattr(self, "_assign_async_gens"):
-            self._assign_async_gens: dict = {}
+            self._assign_async_gens: Dict[str, int] = {}
         self._assign_async_gens[name] = self._assign_async_gens.get(name, 0) + 1
         gen = self._assign_async_gens[name]
 

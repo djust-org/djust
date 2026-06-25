@@ -28,7 +28,7 @@ position, focused elements, dj-hook bookkeeping).
 Phoenix 1.1 added runtime layout support; this is the djust equivalent.
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 
 class LayoutMixin:
@@ -39,7 +39,7 @@ class LayoutMixin:
     only applies the final layout anyway).
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._pending_layout: Optional[str] = None
 
