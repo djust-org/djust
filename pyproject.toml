@@ -788,6 +788,49 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# tutorials / api / template / state_backends subpackages (ADR-023 M4d, part 3)
+# — four independent transport/render/persistence subpackages flipped from the
+# lenient default to strict islands. Spans the declarative guided-tour state
+# machine (tutorials: the TutorialStep dataclass + TutorialMixin), the opt-in
+# HTTP-API transport (api: the @event_handler(expose_api=True) / @server_function
+# dispatch views, pluggable auth, the registry, OpenAPI schema, and URL wiring),
+# the Rust template engine's Django backend (template: backend, the multi-line
+# {# #} loaders, the rendering pipeline, and the JSON-value serializer), and the
+# LiveView state-persistence backends (state_backends: the StateBackend ABC, the
+# in-memory + Redis backends, and the registry). api/ and state_backends/ are
+# security/correctness-relevant — annotations only, logic byte-identical. Three
+# PyO3 methods consumed by the state backends (RustLiveView.serialize_msgpack /
+# deserialize_msgpack / get_timestamp) were added to `_rust.pyi` (they existed at
+# runtime but were missing from the wire-boundary stub). None of the four
+# subpackages has a tests/ subdir, so there is no test sub-package to exclude.
+[[tool.mypy.overrides]]
+module = [
+    "djust.tutorials.__init__",
+    "djust.tutorials.mixin",
+    "djust.tutorials.step",
+    "djust.api.__init__",
+    "djust.api.auth",
+    "djust.api.dispatch",
+    "djust.api.errors",
+    "djust.api.openapi",
+    "djust.api.registry",
+    "djust.api.urls",
+    "djust.template.__init__",
+    "djust.template.backend",
+    "djust.template.loaders",
+    "djust.template.rendering",
+    "djust.template.serialization",
+    "djust.state_backends.__init__",
+    "djust.state_backends.base",
+    "djust.state_backends.memory",
+    "djust.state_backends.redis",
+    "djust.state_backends.registry",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 # mcp/ + contrib/uploads/ + uploads/ subpackages (ADR-023 M4d, group 4) —
 # flipped from the lenient default to strict islands. Spans: the MCP server
 # (the AI-assistant introspection/scaffolding tool — server/__init__/__main__),

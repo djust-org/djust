@@ -2,13 +2,15 @@
 Global state backend registry and initialization.
 """
 
+from typing import Any, Dict, cast
+
 from .base import StateBackend, DEFAULT_STATE_SIZE_WARNING_KB, DEFAULT_COMPRESSION_THRESHOLD_KB
 from .memory import InMemoryStateBackend
 from .redis import RedisStateBackend
 from ..utils import BackendRegistry
 
 
-def _create_state_backend(backend_type: str, config: dict) -> StateBackend:
+def _create_state_backend(backend_type: str, config: Dict[str, Any]) -> StateBackend:
     """Factory that creates the appropriate state backend from config."""
     ttl = config.get("SESSION_TTL", 3600)
     state_size_warning_kb = config.get("STATE_SIZE_WARNING_KB", DEFAULT_STATE_SIZE_WARNING_KB)
@@ -92,10 +94,10 @@ def get_backend() -> StateBackend:
     Returns:
         StateBackend instance (InMemory or Redis)
     """
-    return _registry.get()
+    return cast(StateBackend, _registry.get())
 
 
-def set_backend(backend: StateBackend):
+def set_backend(backend: StateBackend) -> None:
     """
     Manually set the state backend (useful for testing).
 

@@ -11,7 +11,7 @@ import hashlib
 import logging
 import re
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, cast
 
 from django.db import models
 from django.db.models import QuerySet
@@ -31,7 +31,10 @@ try:
     from djust._rust import extract_template_variables, serialize_queryset
     from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
     from djust.serialization import DjangoJSONEncoder, normalize_django_value
-    from djust.live_view import (
+
+    # Import from the true source module (re-exported via djust.live_view for
+    # back-compat) so the type checker resolves the symbols directly.
+    from djust.session_utils import (
         _get_model_hash,
         _jit_serializer_cache,  # Shared cache - cleared by clear_jit_cache()
     )
@@ -39,8 +42,8 @@ try:
     JIT_AVAILABLE = True
 except ImportError:
     JIT_AVAILABLE = False
-    DjangoJSONEncoder = None
-    _get_model_hash = None
+    DjangoJSONEncoder = None  # type: ignore[misc,assignment]
+    _get_model_hash = None  # type: ignore[assignment]
     _jit_serializer_cache = {}  # Fallback empty cache when JIT not available
 
 
@@ -198,7 +201,7 @@ class DjustTemplate:
         Returns:
             Serialized dictionary with 'id' and 'pk' keys (both native types)
         """
-        if not JIT_AVAILABLE or not DjangoJSONEncoder:
+        if not JIT_AVAILABLE or DjangoJSONEncoder is None:
             # Fallback to basic serialization
             return {
                 "id": model_instance.pk,
@@ -207,7 +210,7 @@ class DjustTemplate:
             }
 
         try:
-            return normalize_django_value(model_instance)
+            return cast(dict, normalize_django_value(model_instance))
         except Exception as e:
             logger.warning("Model serialization failed for '%s': %s", variable_name, e)
             return {
@@ -330,6 +333,9 @@ class DjustTemplate:
                 if start_pos < end_pos:
                     # Found nested block start
                     depth += 1
+                    # start_pos < end_pos here implies next_start matched
+                    # (otherwise start_pos == len(source) >= end_pos).
+                    assert next_start is not None
                     search_pos = next_start.end()
                 else:
                     # Found endblock
@@ -409,6 +415,9 @@ class DjustTemplate:
 
                 if start_pos < end_pos:
                     depth += 1
+                    # start_pos < end_pos here implies next_start matched
+                    # (otherwise start_pos == len(source) >= end_pos).
+                    assert next_start is not None
                     search_pos = next_start.end()
                 else:
                     depth -= 1
@@ -421,6 +430,8 @@ class DjustTemplate:
                 # Recursively strip nested blocks from content
                 block_content = template_source[content_start:content_end]
                 result.append(self._strip_block_wrappers(block_content))
+                # block_end_pos is set in the same branch that sets content_end.
+                assert block_end_pos is not None
                 pos = block_end_pos
             else:
                 # Malformed, keep as-is
@@ -472,6 +483,9 @@ class DjustTemplate:
                 if start_pos < end_pos:
                     # Found nested block start
                     depth += 1
+                    # start_pos < end_pos here implies next_start matched
+                    # (otherwise start_pos == len(source) >= end_pos).
+                    assert next_start is not None
                     search_pos = next_start.end()
                 else:
                     # Found endblock
@@ -540,7 +554,7 @@ class DjustTemplate:
             else:
                 return context.get(value_str)
 
-        def replace_url_tag(match: re.Match) -> str:
+        def replace_url_tag(match: re.Match[str]) -> str:
             """Replace a single {% url %} tag with its resolved URL."""
             url_name = match.group(1)
             args_string = match.group(2) or ""
@@ -631,8 +645,11 @@ class DjustTemplate:
 
             # Resolve the URL
             try:
-                url = reverse(
-                    url_name, args=args if args else None, kwargs=kwargs if kwargs else None
+                url = cast(
+                    str,
+                    reverse(
+                        url_name, args=args if args else None, kwargs=kwargs if kwargs else None
+                    ),
                 )
 
                 if as_variable:
@@ -652,7 +669,7 @@ class DjustTemplate:
         # Replace all {% url %} tags
         return self._URL_TAG_RE.sub(replace_url_tag, template_source)
 
-    def render(self, context=None, request=None) -> SafeString:
+    def render(self, context: Any = None, request: Any = None) -> SafeString:
         """
         Render the template with the given context.
 
@@ -823,8 +840,8 @@ class DjustTemplate:
             count=1,  # Only first match
         )
 
-    def _get_context_processor(self, processor_path: str):
+    def _get_context_processor(self, processor_path: str) -> Callable[..., Any]:
         """Import and return a context processor function."""
         from django.utils.module_loading import import_string
 
-        return import_string(processor_path)
+        return cast("Callable[..., Any]", import_string(processor_path))

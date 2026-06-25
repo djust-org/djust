@@ -9,7 +9,9 @@ auth keeps CSRF on, header/token auth can opt out.
 
 from __future__ import annotations
 
-from typing import Optional, Protocol, runtime_checkable
+from typing import Any, List, Optional, Protocol, cast, runtime_checkable
+
+from django.http import HttpRequest
 
 
 @runtime_checkable
@@ -23,7 +25,7 @@ class BaseAuth(Protocol):
 
     csrf_exempt: bool
 
-    def authenticate(self, request) -> Optional[object]:  # pragma: no cover - protocol
+    def authenticate(self, request: HttpRequest) -> Optional[object]:  # pragma: no cover - protocol
         """Return the authenticated user, or None if this auth class cannot handle the request."""
 
 
@@ -37,14 +39,14 @@ class SessionAuth:
 
     csrf_exempt = False
 
-    def authenticate(self, request):
+    def authenticate(self, request: HttpRequest) -> Optional[object]:
         user = getattr(request, "user", None)
         if user is not None and getattr(user, "is_authenticated", False):
-            return user
+            return cast("Optional[object]", user)
         return None
 
 
-def resolve_auth_classes(view_cls) -> list:
+def resolve_auth_classes(view_cls: type) -> List[Any]:
     """Return instantiated auth classes for a view class.
 
     Reads ``view_cls.api_auth_classes`` if set, else defaults to ``[SessionAuth]``.

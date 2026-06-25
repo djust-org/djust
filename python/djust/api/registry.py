@@ -12,7 +12,7 @@ Duplicate slugs raise ``ImproperlyConfigured``.
 from __future__ import annotations
 
 import threading
-from typing import Dict, Iterator, List, Optional, Tuple, Type
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -23,13 +23,13 @@ _registry_lock = threading.Lock()
 _registry_built = False
 
 
-def _iter_live_view_subclasses(cls) -> Iterator[Type]:
+def _iter_live_view_subclasses(cls: Type) -> Iterator[Type]:
     for sub in cls.__subclasses__():
         yield sub
         yield from _iter_live_view_subclasses(sub)
 
 
-def _has_exposed_handler(view_cls) -> bool:
+def _has_exposed_handler(view_cls: Type) -> bool:
     for name in dir(view_cls):
         if name.startswith("_"):
             continue
@@ -42,7 +42,7 @@ def _has_exposed_handler(view_cls) -> bool:
     return False
 
 
-def _has_server_function(view_cls) -> bool:
+def _has_server_function(view_cls: Type) -> bool:
     """Return True if ``view_cls`` has at least one ``@server_function`` method.
 
     Mirrors :func:`_has_exposed_handler` so the registry can include views
@@ -61,7 +61,7 @@ def _has_server_function(view_cls) -> bool:
     return False
 
 
-def _derive_slug(view_cls) -> str:
+def _derive_slug(view_cls: Type) -> str:
     explicit = getattr(view_cls, "api_name", None)
     if explicit:
         return str(explicit)
@@ -165,7 +165,7 @@ def reset_registry() -> None:
         _registry_built = False
 
 
-def iter_exposed_handlers() -> Iterator[Tuple[str, Type, str, callable]]:
+def iter_exposed_handlers() -> Iterator[Tuple[str, Type, str, Callable[..., Any]]]:
     """Yield ``(slug, view_cls, handler_name, handler)`` for every exposed handler."""
     for slug, view_cls in get_api_view_registry().items():
         for name in dir(view_cls):
@@ -179,7 +179,7 @@ def iter_exposed_handlers() -> Iterator[Tuple[str, Type, str, callable]]:
                 yield slug, view_cls, name, attr
 
 
-def iter_server_functions() -> Iterator[Tuple[str, Type, str, callable]]:
+def iter_server_functions() -> Iterator[Tuple[str, Type, str, Callable[..., Any]]]:
     """Yield ``(slug, view_cls, function_name, function)`` for every @server_function."""
     for slug, view_cls in get_api_view_registry().items():
         for name in dir(view_cls):
