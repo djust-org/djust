@@ -92,6 +92,38 @@ PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ 
 `--worktree-pythonpath` prints the path to prepend (empty in the main
 checkout, so the same command is a no-op there).
 
+#### Shared-config corruption: `core.bare = true` (#1938)
+
+A linked worktree shares **one** `.git/config` with the main checkout (the
+worktree's `.git` is a *file* pointing at `<main>/.git/worktrees/<name>`, and
+`core.*` is read from the shared `[core]` section). If anything flips
+`core.bare` to `true` in that shared config — a build/PyO3-repoint step that
+runs `git config core.bare true` to repoint the compiled extension (the #1804
+pattern), an IDE/GitKraken integration, or a stray manual command — then
+`git status` / `git push` break in **both** the worktree **and** the main
+checkout: every tracked file shows as deleted, because git now thinks the work
+tree has no working directory.
+
+No djust pre-push hook, test, or script writes `core.bare` (every in-repo git
+operation is read-only or scoped to an isolated tmp dir — verified in #1938),
+so this is an **external** corruption, not a framework bug. Two mitigations:
+
+- **Push `--no-verify` from worktrees.** A `--no-verify` push does not run the
+  pre-push hook chain and does not leak `core.bare`. Run the gates manually
+  first (the gated-PYTHONPATH command above) and rely on CI as the
+  authoritative gate. This is the established worktree-subagent pattern.
+- **Detect + recover with the helper.** Run the check before and after a
+  worktree `git push`; `--fix` performs the documented recovery
+  (`core.bare false`). It reads the **shared** config (works from any
+  worktree) and never writes `core.bare true`:
+
+  ```bash
+  bash scripts/check-shared-git-config.sh         # exit 1 if leaked
+  bash scripts/check-shared-git-config.sh --fix   # auto-recover a leak
+  ```
+
+  Manual recovery is equivalent: `git config core.bare false`.
+
 ## Code Style
 
 ### Python
