@@ -21,6 +21,7 @@ use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
+use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
 use djust_templates::Template;
 use djust_vdom::{
     cache_ignore_subtree_html, diff, parse_html, parse_html_continue, reset_id_counter,
@@ -130,6 +131,16 @@ pub struct RustLiveViewBackend {
     /// Not persisted across MessagePack serialize/deserialize —
     /// Python re-populates it on each sync cycle.
     raw_py_values: Option<HashMap<String, Py<PyAny>>>,
+    /// Per-item loop render cache (#1967). PERSISTENT across
+    /// `render_with_diff` calls — a content-hash → rendered-fragment map that
+    /// lets a pure reorder of a keyed list reuse every item subtree instead of
+    /// re-rendering from the AST. Default-OFF (split-foundation #1122); enabled
+    /// via `set_loop_render_cache_enabled` wired from the Python
+    /// `LIVEVIEW_CONFIG['loop_render_cache_enabled']` flag. Installed into the
+    /// render thread-local for the duration of each render via `LoopCacheGuard`.
+    /// Transient: not part of `SerializableViewState` (rebuilt across
+    /// serialize/deserialize, like `node_html_cache`).
+    loop_render_cache: LoopRenderCache,
 }
 
 #[derive(Clone, Debug)]
@@ -171,6 +182,9 @@ impl RustLiveViewBackend {
             fragment_text_map: None,
             text_node_index: None,
             raw_py_values: None,
+            // Default-OFF (#1967 / split-foundation #1122); flipped by
+            // set_loop_render_cache_enabled from the Python config flag.
+            loop_render_cache: LoopRenderCache::new(false),
         }
     }
 
@@ -190,6 +204,33 @@ impl RustLiveViewBackend {
                 self.changed_keys = Some(keys.into_iter().collect());
             }
         }
+    }
+
+    /// Enable or disable the per-item loop render cache (#1967).
+    ///
+    /// Wired from the Python `LIVEVIEW_CONFIG['loop_render_cache_enabled']`
+    /// flag (default False). When disabled (the default), the loop-cache code
+    /// path is never taken and `render_with_diff` is byte-identical to before
+    /// this feature. When enabled, position-INDEPENDENT loop bodies reuse a
+    /// content-hashed fragment across renders (a pure reorder = O(0) re-renders).
+    fn set_loop_render_cache_enabled(&mut self, enabled: bool) {
+        self.loop_render_cache.set_enabled(enabled);
+    }
+
+    /// Whether the loop render cache is currently enabled (introspection).
+    fn loop_render_cache_enabled(&self) -> bool {
+        self.loop_render_cache.is_enabled()
+    }
+
+    /// Number of cache HITS in the most recent render (debug / tests).
+    fn loop_render_cache_hits(&self) -> u64 {
+        self.loop_render_cache.hits()
+    }
+
+    /// Number of cache MISSES (AST renders) in the most recent render
+    /// (debug / tests).
+    fn loop_render_cache_misses(&self) -> u64 {
+        self.loop_render_cache.misses()
     }
 
     /// Set template directories for {% include %} tag support
@@ -236,6 +277,10 @@ impl RustLiveViewBackend {
         self.last_html = None; // Invalidate text fast path cache
         self.fragment_text_map = None; // Invalidate fragment→VDOM map
         self.text_node_index = None; // Invalidate text-region fast-path index
+                                     // The loop-cache fragments AND its body-pointer-keyed position
+                                     // verdicts reference the OLD template AST — clear both (#1967), keeping
+                                     // the enabled flag.
+        self.loop_render_cache.clear();
     }
 
     /// Return the canonical 8-hex template-source hash for this view's
@@ -287,6 +332,9 @@ impl RustLiveViewBackend {
         self.last_html = None;
         self.fragment_text_map = None;
         self.text_node_index = None;
+        // Also drop the loop-item cache so a forced full render is a true
+        // uncached control (#1967) for the byte-equality harness.
+        self.loop_render_cache.clear();
     }
 
     /// Get current state
@@ -380,26 +428,44 @@ impl RustLiveViewBackend {
 
         // Track old fragments for text-fast-path comparison
         let old_node_cache = self.node_html_cache.clone();
-        let (html, changed_indices) =
+
+        // Install the persistent per-item loop render cache (#1967) for the
+        // duration of this render. We `mem::take` it out of `self` to a local
+        // so the `LoopCacheGuard` holds a stable `&mut` independent of the
+        // other `self`-field borrows the render path uses, then put it back.
+        // When the cache is disabled the guard + thread-local lookups are
+        // effectively inert (the For-node path checks `is_enabled` and skips),
+        // so this is byte-identical to the pre-#1967 path.
+        let mut loop_cache = std::mem::take(&mut self.loop_render_cache);
+        loop_cache.begin_render();
+        let render_result: Result<(String, Vec<usize>), _> = {
+            let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
             if !self.node_html_cache.is_empty() && self.changed_keys.is_some() {
                 // Partial render: only re-render nodes whose deps changed
                 let changed = self.changed_keys.take().unwrap_or_default();
-                let (html, fragments, changed_indices) = template_arc.render_with_loader_partial(
-                    &context,
-                    &loader,
-                    &changed,
-                    &self.node_html_cache,
-                )?;
-                self.node_html_cache = fragments;
-                (html, changed_indices)
+                template_arc
+                    .render_with_loader_partial(&context, &loader, &changed, &self.node_html_cache)
+                    .map(|(html, fragments, changed_indices)| {
+                        self.node_html_cache = fragments;
+                        (html, changed_indices)
+                    })
             } else {
                 // Full render: first render or no change info
                 self.changed_keys = None;
-                let (html, fragments) =
-                    template_arc.render_with_loader_collecting(&context, &loader)?;
-                self.node_html_cache = fragments;
-                (html, vec![])
-            };
+                template_arc
+                    .render_with_loader_collecting(&context, &loader)
+                    .map(|(html, fragments)| {
+                        self.node_html_cache = fragments;
+                        (html, vec![])
+                    })
+            }
+        };
+        // Prune stale entries (keep only hashes seen this render) and put the
+        // cache back on `self` so it persists to the next render — persistence
+        // is what gives a reorder its O(changed) win.
+        loop_cache.prune();
+        self.loop_render_cache = loop_cache;
+        let (html, changed_indices) = render_result?;
         let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
         // Phase 2: HTML parse to VDOM
@@ -672,26 +738,38 @@ impl RustLiveViewBackend {
         let t_render_start = Instant::now();
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
 
-        let html = if !self.node_html_cache.is_empty()
-            && self.changed_keys.is_some()
-            && !template_arc.uses_extends()
-        {
-            let changed = self.changed_keys.take().unwrap_or_default();
-            let (html, fragments, _changed_indices) = template_arc.render_with_loader_partial(
-                &context,
-                &loader,
-                &changed,
-                &self.node_html_cache,
-            )?;
-            self.node_html_cache = fragments;
-            html
-        } else {
-            self.changed_keys = None;
-            let (html, fragments) =
-                template_arc.render_with_loader_collecting(&context, &loader)?;
-            self.node_html_cache = fragments;
-            html
+        // Install the persistent per-item loop render cache (#1967) for this
+        // render — same pattern as `render_with_diff` (mem::take to a local so
+        // the guard's `&mut` is independent of the other self-field borrows,
+        // prune + restore for persistence). Inert when disabled.
+        let mut loop_cache = std::mem::take(&mut self.loop_render_cache);
+        loop_cache.begin_render();
+        let html_result: Result<String, _> = {
+            let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
+            if !self.node_html_cache.is_empty()
+                && self.changed_keys.is_some()
+                && !template_arc.uses_extends()
+            {
+                let changed = self.changed_keys.take().unwrap_or_default();
+                template_arc
+                    .render_with_loader_partial(&context, &loader, &changed, &self.node_html_cache)
+                    .map(|(html, fragments, _changed_indices)| {
+                        self.node_html_cache = fragments;
+                        html
+                    })
+            } else {
+                self.changed_keys = None;
+                template_arc
+                    .render_with_loader_collecting(&context, &loader)
+                    .map(|(html, fragments)| {
+                        self.node_html_cache = fragments;
+                        html
+                    })
+            }
         };
+        loop_cache.prune();
+        self.loop_render_cache = loop_cache;
+        let html = html_result?;
         let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
         // Phase 2: HTML parse to VDOM
@@ -861,6 +939,9 @@ impl RustLiveViewBackend {
             fragment_text_map: None,
             text_node_index: None,
             raw_py_values: None,
+            // Transient cache — not deserialized; rebuilt fresh, default-OFF
+            // until the Python flag re-enables it post-restore (#1967).
+            loop_render_cache: LoopRenderCache::new(false),
         })
     }
 

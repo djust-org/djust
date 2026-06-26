@@ -635,6 +635,28 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     };
                     let saved_if_loop_path = ctx.get("__djust_if_loop_path").cloned();
 
+                    // Per-item render cache (#1967). Enabled only when:
+                    //   (a) a `LoopRenderCache` is installed for this render
+                    //       (via `LoopCacheGuard`) AND it is enabled (the
+                    //       Python `loop_render_cache_enabled` flag), and
+                    //   (b) the loop body is CACHEABLE — i.e. it is NOT
+                    //       position-dependent (no `{% if %}` / `{% cycle %}` /
+                    //       nested loop / forloop reference / opaque Python tag)
+                    //       AND it reads NOTHING but the loop variable(s). A body
+                    //       that reads any OUTER-context var (`{{ prefix }}`,
+                    //       `{% with l=flag %}`, `{% firstof flag x %}`) is NOT
+                    //       cacheable: outer context is constant within a render
+                    //       but not across renders, and the cache is persistent
+                    //       across renders, so a reorder after an outer-var
+                    //       change would serve stale fragments (#1967 review 🔴).
+                    //       See `loop_cache::body_is_cacheable`.
+                    // When disabled, `loop_caching_enabled` is `false` and the
+                    // render path below is byte-identical to before #1967.
+                    let loop_caching_enabled = crate::loop_cache::with_active_cache(|cache| {
+                        cache.body_cacheable(nodes, var_names)
+                    })
+                    .unwrap_or(false);
+
                     for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
                         // Set __djust_cycle_counter for {% cycle %} tag support
                         ctx.set(
@@ -681,7 +703,37 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                 }
                             }
                         }
-                        output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
+                        if loop_caching_enabled {
+                            // Build a content hash from the loop-variable
+                            // bindings the body reads (the item value). The
+                            // body is position-INDEPENDENT (checked above), so
+                            // its output is fully determined by these bindings
+                            // plus the constant-across-iterations outer context.
+                            let bindings: Vec<(&str, &Value)> = var_names
+                                .iter()
+                                .filter_map(|name| ctx.get(name).map(|v| (name.as_str(), v)))
+                                .collect();
+                            let hash = crate::loop_cache::content_hash(&bindings);
+
+                            // Cache HIT → reuse the previously rendered
+                            // fragment (a reorder is all hits). MISS → render
+                            // via the AST and insert.
+                            let cached =
+                                crate::loop_cache::with_active_cache(|cache| cache.get(hash))
+                                    .flatten();
+                            match cached {
+                                Some(html) => output.push_str(&html),
+                                None => {
+                                    let html = render_nodes_with_loader(nodes, &ctx, loader)?;
+                                    crate::loop_cache::with_active_cache(|cache| {
+                                        cache.insert(hash, html.clone())
+                                    });
+                                    output.push_str(&html);
+                                }
+                            }
+                        } else {
+                            output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
+                        }
                     }
 
                     // Restore outer cycle counter (for nested loops)
