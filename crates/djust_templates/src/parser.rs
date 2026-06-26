@@ -1370,6 +1370,27 @@ pub fn extract_per_node_deps(nodes: &[Node]) -> Vec<HashSet<String>> {
         .collect()
 }
 
+/// Collect the set of TOP-LEVEL context variable names a node subtree reads.
+///
+/// Returns the root identifiers referenced anywhere in `nodes` — `{{ x.name }}`
+/// contributes `x`, `{{ prefix }}` contributes `prefix`, `{% with l=flag %}`
+/// contributes `flag` (and `l`, once the body reads it), `{% firstof flag a %}`
+/// contributes `flag` and `a`, etc. Quoted/numeric literals contribute nothing.
+///
+/// Used by the loop render cache (#1967) to decide cacheability: a loop body is
+/// content-hash cacheable ONLY if every root it reads is one of the loop's bound
+/// variable names. A body that reads any OUTER-context root (`prefix`, `flag`, a
+/// localized label) is NOT cacheable, because outer context is constant within a
+/// single render but NOT across renders — and the cache is persistent across
+/// renders, so a reorder after an outer-var change would serve stale fragments.
+/// Reuses [`extract_from_nodes`] so the cacheability decision stays consistent
+/// with the partial-render dependency tracking it already trusts.
+pub fn body_root_var_names(nodes: &[Node]) -> HashSet<String> {
+    let mut variables: HashMap<String, Vec<String>> = HashMap::new();
+    extract_from_nodes(nodes, &mut variables);
+    variables.into_keys().collect()
+}
+
 /// Recursively extract variable paths from AST nodes
 fn extract_from_nodes(
     nodes: &[Node],

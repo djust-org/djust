@@ -122,3 +122,55 @@ class TestCacheBehavior:
         off = _render_sequence(PLAIN_SRC, enabled=False)
         for _html, hits, misses in off:
             assert hits == 0 and misses == 0
+
+
+# A loop body that reads an OUTER-context var (#1967 review 🔴). Outer context is
+# constant within a render but not across renders, and the cache is persistent
+# across renders — so without the dep-subset gate a reorder after an outer-var
+# change serves stale fragments. Such bodies must be NON-cacheable.
+PREFIX_SRC = "<ul>{% for x in xs %}<li>{{ prefix }}-{{ x.name }}</li>{% endfor %}</ul>"
+
+
+class TestOuterContextNonCacheable:
+    """A body reading outer context is non-cacheable; cache ON must equal OFF
+    even when the outer var changes across renders + the list reorders."""
+
+    def _render(self, src, enabled, prefix_seq, item_seq):
+        lv = RustLiveView(src)
+        lv.set_loop_render_cache_enabled(enabled)
+        out = []
+        for i, (prefix, items) in enumerate(zip(prefix_seq, item_seq)):
+            if i > 0:
+                lv.set_changed_keys(["xs", "prefix"])
+            lv.update_state({"xs": items, "prefix": prefix})
+            html, _patches, _ver = lv.render_with_diff()
+            out.append((html, lv.loop_render_cache_hits(), lv.loop_render_cache_misses()))
+        return out
+
+    def test_outer_context_change_enabled_equals_disabled(self):
+        # prefix flips A -> B while the list reorders (same items).
+        prefix_seq = ["A", "B"]
+        item_seq = [INITIAL, REORDERED]
+        on = self._render(PREFIX_SRC, True, prefix_seq, item_seq)
+        off = self._render(PREFIX_SRC, False, prefix_seq, item_seq)
+        for step, (s_on, s_off) in enumerate(zip(on, off)):
+            assert s_on[0] == s_off[0], (
+                f"step {step}: outer-context body served STALE cached fragment "
+                f"(cache served old prefix). on={s_on[0]!r} off={s_off[0]!r}"
+            )
+        # Render-2 must reflect the NEW prefix B for every item, never stale A.
+        html2 = on[1][0]
+        assert "B-" in html2 and "A-" not in html2, (
+            f"render-2 must use new prefix B for all items; got {html2!r}"
+        )
+
+    def test_outer_context_body_never_cached(self):
+        # The outer-context body must never hit/miss the cache (it's disabled
+        # for that body) — even on the reorder where an item-only body is all
+        # hits.
+        prefix_seq = ["A", "A"]
+        item_seq = [INITIAL, REORDERED]
+        on = self._render(PREFIX_SRC, True, prefix_seq, item_seq)
+        for step, (_html, hits, misses) in enumerate(on):
+            assert hits == 0, f"step {step}: outer-context body must not hit the cache"
+            assert misses == 0, f"step {step}: outer-context body must not touch the cache"

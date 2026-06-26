@@ -10,7 +10,7 @@
 
 use djust_core::{Context, Value};
 use djust_templates::loop_cache::{
-    body_is_position_dependent, content_hash, LoopCacheGuard, LoopRenderCache,
+    body_is_cacheable, body_is_position_dependent, content_hash, LoopCacheGuard, LoopRenderCache,
 };
 use djust_templates::Template;
 use std::collections::HashMap;
@@ -474,4 +474,268 @@ fn content_hash_is_stable_and_distinguishing() {
     // Variable name participates in the hash (no cross-loop collision).
     let hy = content_hash(&[("y", &a)]);
     assert_ne!(ha, hy, "different var name must hash differently");
+}
+
+// ---------------------------------------------------------------------------
+// OUTER-CONTEXT bodies (#1967 review 🔴). A position-INDEPENDENT body can still
+// read an OUTER-context variable (`{{ prefix }}`, `{% with l=flag %}`,
+// `{% firstof flag x %}`). Outer context is constant WITHIN a render but NOT
+// across renders, and the cache is PERSISTENT across renders — so without the
+// dep-subset gate, a reorder after an outer-var change serves STALE fragments.
+//
+// The fix: such bodies are NON-cacheable (rendered fresh every time). This
+// battery proves cache-ENABLED stays byte-identical to cache-DISABLED when an
+// outer var changes across renders while the items are unchanged/reordered.
+// (rc4 coverage-completeness: the missing axis was "body reads outer context".)
+// ---------------------------------------------------------------------------
+
+/// Render with NO cache, setting both an outer scalar var and the item list.
+fn render_with_outer(
+    src: &str,
+    outer_name: &str,
+    outer_val: &str,
+    var: &str,
+    items_value: &Value,
+) -> String {
+    let tmpl = Template::new(src).expect("parse");
+    let mut ctx = Context::new();
+    ctx.set(outer_name.to_string(), Value::String(outer_val.to_string()));
+    ctx.set(var.to_string(), items_value.clone());
+    tmpl.render(&ctx).expect("render")
+}
+
+/// Render WITH a (persistent) cache, setting both an outer scalar var and the
+/// item list; prune after.
+fn render_cached_with_outer(
+    src: &str,
+    outer_name: &str,
+    outer_val: &str,
+    var: &str,
+    items_value: &Value,
+    cache: &mut LoopRenderCache,
+) -> String {
+    cache.begin_render();
+    let html = {
+        let _g = LoopCacheGuard::install(cache);
+        let tmpl = Template::new(src).expect("parse");
+        let mut ctx = Context::new();
+        ctx.set(outer_name.to_string(), Value::String(outer_val.to_string()));
+        ctx.set(var.to_string(), items_value.clone());
+        tmpl.render(&ctx).expect("render")
+    };
+    cache.prune();
+    html
+}
+
+/// The three outer-context body shapes the review flagged. Each reads an outer
+/// var (`prefix` / `flag`) in addition to (or instead of) the loop item.
+fn outer_context_templates() -> Vec<(&'static str, &'static str)> {
+    vec![
+        // {{ prefix }} read directly in the body.
+        (
+            "prefix_var",
+            "<ul>{% for x in xs %}<li>{{ prefix }}-{{ x.name }}</li>{% endfor %}</ul>",
+        ),
+        // {% with label=flag %} binds an outer var into a body-local name.
+        (
+            "with_flag",
+            "<ul>{% for x in xs %}{% with label=flag %}<li>{{ label }}:{{ x.name }}</li>{% endwith %}{% endfor %}</ul>",
+        ),
+        // {% firstof flag x.name %} — falls back to the item, but reads `flag`.
+        (
+            "firstof_flag",
+            "<ul>{% for x in xs %}<li>{% firstof flag x.name %}</li>{% endfor %}</ul>",
+        ),
+    ]
+}
+
+#[test]
+fn outer_context_change_is_byte_identical_with_cache() {
+    // The list is REORDERED across the two renders while the outer var changes
+    // A -> B. WITHOUT the dep-subset gate, the cache (persistent) would serve
+    // the stale `A-...` fragments on the reorder render (cache hits) — wrong.
+    // WITH the gate, the body is non-cacheable, so it renders fresh = correct.
+    let initial = items(&[("1", "alpha"), ("2", "bravo"), ("3", "charlie")]);
+    let reordered = items(&[("3", "charlie"), ("1", "alpha"), ("2", "bravo")]);
+
+    for (label, src) in outer_context_templates() {
+        // Each template reads a single outer var: `prefix` for prefix_var,
+        // `flag` for the with/firstof shapes.
+        let outer_name = if label == "prefix_var" {
+            "prefix"
+        } else {
+            "flag"
+        };
+
+        let mut cache = LoopRenderCache::new(true);
+        // Render 1: outer = "A".
+        let cached_a = render_cached_with_outer(src, outer_name, "A", "xs", &initial, &mut cache);
+        let uncached_a = render_with_outer(src, outer_name, "A", "xs", &initial);
+        assert_eq!(cached_a, uncached_a, "template `{label}` render-1 diverged");
+
+        // Render 2: outer flips A -> B AND the list is reordered.
+        let cached_b = render_cached_with_outer(src, outer_name, "B", "xs", &reordered, &mut cache);
+        let uncached_b = render_with_outer(src, outer_name, "B", "xs", &reordered);
+        assert_eq!(
+            cached_b, uncached_b,
+            "template `{label}` render-2 (outer A->B + reorder): cache served STALE outer value",
+        );
+        // The correct render-2 must contain the NEW outer value "B", never "A".
+        assert!(
+            cached_b.contains('B') || label == "firstof_flag",
+            "template `{label}` render-2 must reflect new outer value B; got: {cached_b}",
+        );
+        assert!(
+            !cached_b.contains("A-") && !cached_b.contains("A:"),
+            "template `{label}` render-2 must NOT contain stale outer value A; got: {cached_b}",
+        );
+    }
+}
+
+#[test]
+fn outer_context_bodies_are_non_cacheable() {
+    // Direct classification: each outer-context body is NON-cacheable for var
+    // names `["x"]` (the loop var), because it reads `prefix`/`flag` ∉ {x}.
+    for (label, src) in outer_context_templates() {
+        let body = for_body(src);
+        assert!(
+            !body_is_cacheable(&body, &["x".to_string()]),
+            "outer-context body `{label}` must be NON-cacheable (reads outer var)",
+        );
+        // Sanity: these bodies are NOT position-dependent — they pass gate 1 and
+        // are caught ONLY by the outer-context gate (gate 2). This pins that the
+        // new gate, not the old one, is what disables them.
+        assert!(
+            !body_is_position_dependent(&body),
+            "outer-context body `{label}` is position-INDEPENDENT; gate 2 must be the one disabling it",
+        );
+    }
+}
+
+#[test]
+fn outer_context_body_never_hits_cache() {
+    // Behavioral: a body reading outer context produces ZERO cache hits AND zero
+    // misses (it never touches the cache), even on a pure reorder where an
+    // item-only body would be all hits.
+    let src = "<ul>{% for x in xs %}<li>{{ prefix }}-{{ x.name }}</li>{% endfor %}</ul>";
+    let initial = items(&[("1", "alpha"), ("2", "bravo"), ("3", "charlie")]);
+    let reordered = items(&[("3", "charlie"), ("1", "alpha"), ("2", "bravo")]);
+
+    let mut cache = LoopRenderCache::new(true);
+    let _ = render_cached_with_outer(src, "prefix", "A", "xs", &initial, &mut cache);
+    cache.begin_render();
+    {
+        let _g = LoopCacheGuard::install(&mut cache);
+        let tmpl = Template::new(src).unwrap();
+        let mut ctx = Context::new();
+        ctx.set("prefix".into(), Value::String("A".into()));
+        ctx.set("xs".into(), reordered.clone());
+        let _ = tmpl.render(&ctx).unwrap();
+    }
+    assert_eq!(
+        cache.hits(),
+        0,
+        "outer-context body must NOT be cached (0 hits)"
+    );
+    assert_eq!(
+        cache.misses(),
+        0,
+        "outer-context body must NOT touch the cache (0 misses)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// POSITIVE CONTROL: an item-ONLY body (`{{ x.* }}` only, no outer context) is
+// STILL cacheable — a reorder yields cache HITS. The dep-subset gate narrows
+// the cacheable surface to item-only bodies WITHOUT killing the win for them.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn item_only_body_still_caches_and_reorder_hits() {
+    // A body reading only `x.name` (root `x` == the loop var) is cacheable.
+    let src = "<ul>{% for x in xs %}<li>{{ x.name }}</li>{% endfor %}</ul>";
+    let body = for_body(src);
+    assert!(
+        body_is_cacheable(&body, &["x".to_string()]),
+        "item-only body must remain cacheable — the win must survive the gate",
+    );
+
+    let initial = items(&[("1", "alpha"), ("2", "bravo"), ("3", "charlie")]);
+    let reordered = items(&[("3", "charlie"), ("1", "alpha"), ("2", "bravo")]);
+
+    let mut cache = LoopRenderCache::new(true);
+    let _ = render_cached(src, "xs", &initial, &mut cache);
+    cache.begin_render();
+    {
+        let _g = LoopCacheGuard::install(&mut cache);
+        let tmpl = Template::new(src).unwrap();
+        let mut ctx = Context::new();
+        ctx.set("xs".into(), reordered.clone());
+        let _ = tmpl.render(&ctx).unwrap();
+    }
+    assert!(
+        cache.hits() > 0,
+        "item-only body reorder must still hit the cache (the win survives); got {} hits",
+        cache.hits()
+    );
+    assert_eq!(
+        cache.hits(),
+        3,
+        "a pure reorder of an item-only body is all hits"
+    );
+    assert_eq!(cache.misses(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// GATE-OFF #3 (#1468): the outer-context dep-subset gate is load-bearing.
+//
+// This test reproduces the EXACT review-cited bug shape and asserts the cached
+// render equals the uncached render. If the dep-subset check in
+// `body_is_cacheable` were reverted (back to `!body_is_position_dependent`),
+// the `{{ prefix }}` body would be (wrongly) deemed cacheable, the reorder
+// render would serve the stale `A-...` fragments, and this assertion goes RED.
+// We pin that by also asserting, via `body_is_cacheable`, that the gate's
+// decision is the one that matters here (position-dependence alone is false).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_off_outer_context_subset_check_is_load_bearing() {
+    let src = "<ul>{% for x in xs %}<li>{{ prefix }}-{{ x.name }}</li>{% endfor %}</ul>";
+    let initial = items(&[("1", "alpha"), ("2", "bravo"), ("3", "charlie")]);
+    let reordered = items(&[("3", "charlie"), ("1", "alpha"), ("2", "bravo")]);
+
+    let mut cache = LoopRenderCache::new(true);
+    // Render 1: prefix = "A".
+    let _ = render_cached_with_outer(src, "prefix", "A", "xs", &initial, &mut cache);
+    // Render 2: prefix flips to "B" AND the list reorders.
+    let cached = render_cached_with_outer(src, "prefix", "B", "xs", &reordered, &mut cache);
+    let uncached = render_with_outer(src, "prefix", "B", "xs", &reordered);
+
+    // The load-bearing assertion: WITHOUT the gate, `cached` would be the stale
+    // "A-..." reorder served from the persistent cache; WITH the gate it is the
+    // fresh "B-..." render. They must match the uncached (correct) render.
+    assert_eq!(
+        cached, uncached,
+        "GATE-OFF: outer-context dep-subset gate must keep cached==uncached after prefix A->B + reorder",
+    );
+    assert!(
+        cached.contains("B-charlie") && cached.contains("B-alpha"),
+        "render-2 must use the NEW prefix B for every item; got: {cached}",
+    );
+    assert!(
+        !cached.contains("A-"),
+        "render-2 must contain NO stale `A-` fragment; got: {cached}",
+    );
+
+    // Pin that the OUTER-CONTEXT gate (not the position-dependence gate) is the
+    // one disabling this body — so reverting JUST the dep-subset check breaks it.
+    let body = for_body(src);
+    assert!(
+        !body_is_position_dependent(&body),
+        "this body is position-INDEPENDENT — only the dep-subset gate disables it",
+    );
+    assert!(
+        !body_is_cacheable(&body, &["x".to_string()]),
+        "this body must be non-cacheable via the outer-context (dep-subset) gate",
+    );
 }

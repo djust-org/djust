@@ -21,7 +21,12 @@
 //! Persistence is load-bearing: a per-render cache gives ZERO reorder benefit
 //! because each item appears exactly once per render.
 //!
-//! ## Landmine — position-dependent loop bodies (correctness)
+//! ## Cacheability — two correctness gates
+//!
+//! A loop body is content-hash cacheable ONLY if its rendered output is fully
+//! determined by the loop item(s). Two distinct gates enforce this:
+//!
+//! ### Gate 1 — position-dependent loop bodies
 //!
 //! If the loop body's rendered output depends on the item's POSITION (not just
 //! its content), content-hash caching would emit STALE positions = wrong
@@ -37,10 +42,25 @@
 //!   implementation would make such a body position-dependent — so we treat
 //!   any `forloop`-prefixed variable as position-dependent defensively.
 //!
-//! [`LoopRenderCache::body_position_dependent`] scans a For body ONCE (the
-//! verdict is memoized per For-node body identity) and the cache is DISABLED
-//! (body rendered normally, no caching) for position-dependent bodies. The
-//! common data-list case (`{{ item.field }}` only) is cacheable.
+//! ### Gate 2 — outer-context reads (#1967 review 🔴)
+//!
+//! Even a position-INDEPENDENT body can read OUTER-context variables — a prefix,
+//! a flag, a currency symbol, a localized label — e.g.
+//! `{% for x in xs %}<li>{{ prefix }}-{{ x.name }}</li>{% endfor %}`,
+//! `{% with label=flag %}…`, `{% firstof flag x.name %}`. Outer context is
+//! constant WITHIN a single render but NOT across renders, and the cache is
+//! PERSISTENT across renders — so when an outer var changes while the loop items
+//! don't, a reorder (or even a no-op re-render) would serve STALE cached
+//! fragments built with the old outer value. The cache is therefore restricted
+//! to bodies that read NOTHING but the loop's bound variable name(s): a body
+//! root resolving under a loop var (`x.name`/`x.price` → root `x`) is allowed;
+//! any non-loop-rooted name (`prefix`, `flag`, `settings.X`) makes the body
+//! non-cacheable (it falls back to normal per-item render = correct).
+//!
+//! [`LoopRenderCache::body_cacheable`] applies BOTH gates, scanning a For body
+//! ONCE (the verdict is memoized per For-node body identity) and DISABLING the
+//! cache (body rendered normally) for any non-cacheable body. The common
+//! data-list case (`{{ item.field }}` only) is cacheable.
 
 use crate::parser::Node;
 use std::collections::hash_map::DefaultHasher;
@@ -65,11 +85,14 @@ pub struct LoopRenderCache {
     /// Content-hashes seen during the CURRENT render. Used by [`prune`] to drop
     /// stale entries after the render completes. Cleared at render start.
     seen_this_render: HashSet<u64>,
-    /// Memoized position-dependence verdict per For-node body, keyed by the
-    /// body slice's stable pointer+len identity. Avoids re-scanning the AST on
-    /// every render. (The AST is immutable for a cached `Template`, so the body
-    /// pointer is a stable identity for the lifetime of the process.)
-    position_dependent_verdict: HashMap<(usize, usize), bool>,
+    /// Memoized CACHEABILITY verdict per For-node body, keyed by the body
+    /// slice's stable pointer+len identity. Avoids re-scanning the AST on every
+    /// render. (The AST is immutable for a cached `Template`, so the body
+    /// pointer is a stable identity for the lifetime of the process.) `true` →
+    /// the body is content-hash cacheable; `false` → render normally. A body is
+    /// cacheable iff it is NOT position-dependent AND it reads NOTHING but the
+    /// loop's bound variable(s) — see [`LoopRenderCache::body_cacheable`].
+    cacheable_verdict: HashMap<(usize, usize), bool>,
     /// Debug hit counter (cache reuse count this render). Only mutated when the
     /// cache is enabled. Read by tests to prove a reorder yields hits.
     hits: u64,
@@ -99,18 +122,18 @@ impl LoopRenderCache {
             // a disabled cache holds no memory.
             self.fragments.clear();
             self.seen_this_render.clear();
-            self.position_dependent_verdict.clear();
+            self.cacheable_verdict.clear();
         }
     }
 
-    /// Drop all cached fragments and the position-dependence memoization,
-    /// preserving the `enabled` flag. Called when the template AST changes
+    /// Drop all cached fragments and the cacheability memoization, preserving
+    /// the `enabled` flag. Called when the template AST changes
     /// (`update_template`) — the cached fragments AND the body-pointer-keyed
     /// verdicts both reference the OLD AST and must not survive.
     pub fn clear(&mut self) {
         self.fragments.clear();
         self.seen_this_render.clear();
-        self.position_dependent_verdict.clear();
+        self.cacheable_verdict.clear();
         self.hits = 0;
         self.misses = 0;
     }
@@ -173,31 +196,66 @@ impl LoopRenderCache {
         self.fragments.insert(hash, html);
     }
 
-    /// Position-dependence verdict for a For body, memoized by body identity.
+    /// Cacheability verdict for a For body, memoized by body identity.
     ///
-    /// `true` → the body's output depends on the item's loop POSITION, so the
-    /// content-hash cache must be DISABLED for it (render normally).
-    pub fn body_position_dependent(&mut self, body: &[Node]) -> bool {
+    /// `true` → the body's rendered output is fully determined by the loop
+    /// item(s), so the persistent content-hash cache is SAFE to use. `false` →
+    /// render normally (the cache would serve stale fragments).
+    ///
+    /// A body is cacheable iff BOTH hold:
+    ///   1. it is NOT position-dependent (no `{% if %}` / `{% cycle %}` / nested
+    ///      loop / `forloop.*` / opaque Python tag — see
+    ///      [`body_is_position_dependent`]); AND
+    ///   2. it reads NOTHING but the loop's bound variable name(s) — any
+    ///      OUTER-context read (`{{ prefix }}`, `{% with l=flag %}`,
+    ///      `{% firstof flag x %}`, `settings.X`) makes it non-cacheable
+    ///      (#1967 review 🔴). Outer context is constant WITHIN a render but NOT
+    ///      across renders, and the cache is persistent across renders — so a
+    ///      reorder after an outer-var change would serve stale fragments.
+    ///
+    /// `var_names` is fixed for a given For-node body (both come from the same
+    /// AST node), so memoizing by body identity alone is correct.
+    pub fn body_cacheable(&mut self, body: &[Node], var_names: &[String]) -> bool {
         // (data-ptr, len) is a stable identity for an immutable AST slice held
         // by a cached `Template`. Two different bodies cannot share both unless
         // identical in memory, which is fine for a verdict that is a pure
-        // function of the body.
+        // function of (body, var_names) — and var_names is constant per body.
         let key = (body.as_ptr() as usize, body.len());
-        if let Some(&v) = self.position_dependent_verdict.get(&key) {
+        if let Some(&v) = self.cacheable_verdict.get(&key) {
             return v;
         }
-        let v = body_is_position_dependent(body);
-        self.position_dependent_verdict.insert(key, v);
+        let v = body_is_cacheable(body, var_names);
+        self.cacheable_verdict.insert(key, v);
         v
     }
+}
+
+/// Is this loop body content-hash CACHEABLE for the given loop variable names?
+///
+/// `true` iff the body is NOT position-dependent AND every top-level context
+/// root it reads is one of `var_names` (the loop-bound variable(s)). See
+/// [`LoopRenderCache::body_cacheable`] for the rationale. This is the conservative
+/// (opaque-by-default) decision: any uncertainty → non-cacheable → correct.
+pub fn body_is_cacheable(nodes: &[Node], var_names: &[String]) -> bool {
+    if body_is_position_dependent(nodes) {
+        return false;
+    }
+    // Cacheable only if the body reads NOTHING but the loop variable(s). A body
+    // root that resolves under a loop var (e.g. `x.name`/`x.price` → root `x`)
+    // is allowed; a NON-loop-rooted name (`prefix`, `flag`, `settings`) is not.
+    let loop_vars: HashSet<&str> = var_names.iter().map(|s| s.as_str()).collect();
+    crate::parser::body_root_var_names(nodes)
+        .iter()
+        .all(|root| loop_vars.contains(root.as_str()))
 }
 
 /// Build a content hash from the loop-variable bindings the body reads.
 ///
 /// Hashes the variable name(s) and the item value(s) bound for this iteration.
-/// Because the For body only reads the loop variables (and outer context, which
-/// is constant across a single render's iterations), the loop bindings fully
-/// determine a position-INDEPENDENT body's output. We also fold in the variable
+/// This is only called for CACHEABLE bodies (see [`body_is_cacheable`]), which
+/// read NOTHING but the loop variable(s) — so the loop bindings fully determine
+/// the body's output. (A body reading outer context is non-cacheable and never
+/// reaches this path.) We also fold in the variable
 /// NAMES so two loops over different vars don't collide.
 ///
 /// `bindings` is the list of `(var_name, value)` pairs set for this iteration
