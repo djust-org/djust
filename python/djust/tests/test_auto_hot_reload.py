@@ -178,3 +178,69 @@ def test_ready_completes_other_setup_even_when_auto_enable_skipped():
 
     after = sum(1 for f in djust_logger.filters if isinstance(f, DjustLogSanitizerFilter))
     assert after == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Filter-bridge startup warm (cold-start fix): ``ready()`` eagerly runs the
+# Django→Rust filter bridge so the FIRST mount/render doesn't pay the one-time
+# ~20ms cost of lazily importing every Django templatetag library on the
+# request path. Mirrors the HVR auto-enable gating (pytest-skip + opt-out).
+# ---------------------------------------------------------------------------
+
+
+def test_ready_warms_filter_bridge_when_pytest_env_cleared():
+    """``ready()`` warms the filter bridge when ``PYTEST_CURRENT_TEST`` is unset."""
+    app = _make_app_config()
+    with (
+        _no_pytest_env(),
+        mock.patch("djust.enable_hot_reload"),
+        mock.patch("djust.mixins.rust_bridge._ensure_custom_filters_bridged") as mock_warm,
+    ):
+        app.ready()
+    assert mock_warm.call_count == 1
+
+
+def test_ready_skips_filter_bridge_warm_under_pytest_env():
+    """The pytest env var skips the startup warm (same isolation guard as HVR)."""
+    assert "PYTEST_CURRENT_TEST" in os.environ
+    app = _make_app_config()
+    with mock.patch("djust.mixins.rust_bridge._ensure_custom_filters_bridged") as mock_warm:
+        app.ready()
+    assert mock_warm.call_count == 0
+
+
+def test_warm_filter_bridge_sets_the_bridge_guard():
+    """``_warm_filter_bridge()`` runs the bootstrap, flipping the one-shot
+    ``_CUSTOM_FILTERS_BRIDGED`` guard.
+
+    Resets the guard to False FIRST so the assertion is non-tautological
+    (#1200): a no-op warm would leave it False and fail.
+    """
+    from djust.mixins import rust_bridge
+
+    saved = rust_bridge._CUSTOM_FILTERS_BRIDGED
+    rust_bridge._CUSTOM_FILTERS_BRIDGED = False
+    try:
+        app = _make_app_config()
+        ran = app._warm_filter_bridge()
+        assert ran is True
+        assert rust_bridge._CUSTOM_FILTERS_BRIDGED is True
+    finally:
+        rust_bridge._CUSTOM_FILTERS_BRIDGED = saved
+
+
+def test_warm_filter_bridge_opt_out(fresh_config):
+    """``LIVEVIEW_CONFIG['filter_bridge_warm'] = False`` skips the warm (gate-off):
+    the bridge guard is NOT flipped and the method reports it didn't run."""
+    from djust.mixins import rust_bridge
+
+    fresh_config.set("filter_bridge_warm", False)
+    saved = rust_bridge._CUSTOM_FILTERS_BRIDGED
+    rust_bridge._CUSTOM_FILTERS_BRIDGED = False
+    try:
+        app = _make_app_config()
+        ran = app._warm_filter_bridge()
+        assert ran is False
+        assert rust_bridge._CUSTOM_FILTERS_BRIDGED is False
+    finally:
+        rust_bridge._CUSTOM_FILTERS_BRIDGED = saved
