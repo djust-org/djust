@@ -54,3 +54,35 @@ class DjustConfig(AppConfig):
                 logging.getLogger("djust").exception(
                     "[HotReload] auto-enable in DjustConfig.ready() failed"
                 )
+
+            # Warm the Django→Rust custom-filter bridge at startup so the FIRST
+            # mount/render doesn't pay the one-time ~20ms cost of lazily importing
+            # every Django templatetag library on the request path. The bridge is
+            # memoized after the first call (``_CUSTOM_FILTERS_BRIDGED``), so this
+            # only SHIFTS that cost from first-request latency to startup. Skipped
+            # during pytest (above guard) so the suite isn't slowed and so test
+            # bootstrap orderings without a configured template engine are
+            # unaffected. Opt out via ``LIVEVIEW_CONFIG['filter_bridge_warm'] = False``.
+            self._warm_filter_bridge()
+
+    def _warm_filter_bridge(self) -> bool:
+        """Eagerly run the Django→Rust filter bridge (off the request path).
+
+        Returns ``True`` if the warm ran, ``False`` if opted out or it failed.
+        Idempotent (the underlying bootstrap guards itself) and non-fatal —
+        startup must never break if the template engine isn't bridgeable.
+        """
+        try:
+            from djust.config import config
+
+            if not config.get("filter_bridge_warm", True):
+                return False
+            from djust.mixins.rust_bridge import _ensure_custom_filters_bridged
+
+            _ensure_custom_filters_bridged()
+            return True
+        except Exception:  # noqa: BLE001 — startup warm must never break ready()
+            logging.getLogger("djust").exception(
+                "[FilterBridge] startup warm in DjustConfig.ready() failed"
+            )
+            return False
