@@ -18,6 +18,7 @@ pub mod filter_registry;
 pub mod filters;
 pub mod inheritance;
 pub mod lexer;
+pub mod loop_cache;
 pub mod markdown;
 pub mod parser;
 pub mod registry;
