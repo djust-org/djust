@@ -192,10 +192,177 @@ pub fn ensure_id_counter_at_least(min_value: u64) {
     });
 }
 
+// ============================================================================
+// #1970 — loop parse-cache placeholder splice + dj-id re-walk
+// ============================================================================
+
+/// Replace every `<dj-pc h="<hex>">` placeholder element in `tree` (in place)
+/// with a clone of the cached parsed subtree roots looked up from `subtrees`
+/// (keyed by the decoded hex hash), then re-assign EVERY element dj-id in the
+/// whole tree by a pre-order (parent-before-children, document-order) re-walk
+/// starting from `counter_base`.
+///
+/// This is the load-bearing correctness primitive for the #1970 parse cache:
+/// dj-ids are purely positional (the parser assigns `next_djust_id()` pre-order
+/// — `parser::handle_to_vnode`), so a cached subtree carrying stale ids is
+/// position-WRONG when reused elsewhere. Re-walking the ASSEMBLED tree from the
+/// same `counter_base` the real parse would have used (`0` for an initial
+/// `parse_html`, `max(old_ids)+1` for a continuing `parse_html_continue` after
+/// the #1550/#1552 `ensure_id_counter_at_least` bump) reproduces a fresh
+/// full-parse's ids byte-for-byte — so the assembled tree, its patches
+/// (Insert/Replace embed the new node HTML), and `last_vdom` are all identical
+/// to the cache-OFF path.
+///
+/// Returns `Ok(found_count)` = the number of placeholders replaced, or `Err` if
+/// a placeholder's hash had no cached subtree (`subtrees` miss) — the caller
+/// treats that as a validation failure and falls back to a full parse. After a
+/// successful return, NO `<dj-pc>` element remains in `tree` (the caller asserts
+/// this as defense-in-depth against foster-parenting having relocated one).
+pub fn splice_loop_placeholders(
+    tree: &mut VNode,
+    subtrees: &std::collections::HashMap<u64, Vec<VNode>>,
+    counter_base: u64,
+    sentinel_tag: &str,
+) -> std::result::Result<usize, String> {
+    let mut found = 0usize;
+    splice_children_placeholders(tree, subtrees, sentinel_tag, &mut found)?;
+    // Re-assign all dj-ids pre-order from the counter base.
+    set_id_counter(counter_base);
+    rewalk_djust_ids(tree);
+    Ok(found)
+}
+
+/// Recurse into `node`'s children, replacing `<dj-pc>` placeholder elements with
+/// their cached subtree roots. A placeholder can ONLY appear as a child (the
+/// loop emits it among sibling items), never as the diff root, so we operate on
+/// children vectors. Errors out on a subtree-cache miss.
+fn splice_children_placeholders(
+    node: &mut VNode,
+    subtrees: &std::collections::HashMap<u64, Vec<VNode>>,
+    sentinel_tag: &str,
+    found: &mut usize,
+) -> std::result::Result<(), String> {
+    // First, recurse into NON-placeholder children so nested loops (if ever
+    // eligible) and deep structure are handled; build a new children vector
+    // that expands placeholders in place.
+    let old_children = std::mem::take(&mut node.children);
+    let mut new_children: Vec<VNode> = Vec::with_capacity(old_children.len());
+    for mut child in old_children {
+        if child.tag == sentinel_tag {
+            let hash = child
+                .attrs
+                .get("h")
+                .and_then(|h| from_base62_hex(h))
+                .ok_or_else(|| {
+                    format!(
+                        "dj-pc placeholder missing/invalid h attr: {:?}",
+                        child.attrs.get("h")
+                    )
+                })?;
+            let roots = subtrees
+                .get(&hash)
+                .ok_or_else(|| format!("no cached parsed subtree for hash {hash:x}"))?;
+            for root in roots {
+                new_children.push(root.clone());
+            }
+            *found += 1;
+        } else {
+            // Recurse: a placeholder could be nested deeper in non-loop
+            // structure in principle; handle it uniformly.
+            splice_children_placeholders(&mut child, subtrees, sentinel_tag, found)?;
+            new_children.push(child);
+        }
+    }
+    node.children = new_children;
+    Ok(())
+}
+
+/// Pre-order re-walk assigning a fresh `next_djust_id()` to every element node
+/// that carries a `djust_id` (text/comment nodes have `djust_id == None` and are
+/// skipped — matching the parser, which only ids elements). Keeps the `dj-id`
+/// attribute in sync when present.
+fn rewalk_djust_ids(node: &mut VNode) {
+    if node.djust_id.is_some() {
+        let id = next_djust_id();
+        // Update the existing `dj-id` attr value IN PLACE via `get_mut` rather
+        // than `insert`. `insert` on a key already present can perturb the
+        // HashMap's iteration order in some std implementations, which would
+        // change the attr order serde emits for a patch's embedded node — making
+        // the parse-cache patch JSON differ from the cache-OFF full-parse path
+        // (a byte-identity violation observed for `<li dj-id dj-key>`). `get_mut`
+        // mutates the value without touching the bucket layout. (#1970)
+        if let Some(slot) = node.attrs.get_mut("dj-id") {
+            *slot = id.clone();
+        }
+        node.djust_id = Some(id);
+    }
+    for child in &mut node.children {
+        rewalk_djust_ids(child);
+    }
+}
+
+/// The placeholder tag PREFIX (kept in sync with
+/// `djust_templates::loop_cache::LOOP_PLACEHOLDER_TAG_PREFIX`). The real per-render
+/// sentinel tag is `dj-pc-<nonce>` (#1970 security fix); djust_live composes the
+/// full tag from the render's nonce and passes it to `splice_loop_placeholders`.
+/// Defined here to avoid a djust_vdom → djust_templates dependency (which would
+/// invert the layering). Used by [`tree_contains_tag_prefix`] for the
+/// residual-placeholder validation guard.
+pub const LOOP_PLACEHOLDER_TAG_PREFIX: &str = "dj-pc";
+
+/// Does any element in `tree` have a tag starting with `prefix`? Used by the
+/// #1970 splice validation to detect a residual `dj-pc-<nonce>` placeholder
+/// (e.g. foster-parenting relocated one out of splice reach) — defense-in-depth.
+pub fn tree_contains_tag_prefix(tree: &VNode, prefix: &str) -> bool {
+    if tree.tag.starts_with(prefix) {
+        return true;
+    }
+    tree.children
+        .iter()
+        .any(|c| tree_contains_tag_prefix(c, prefix))
+}
+
+/// Decode a lowercase-hex u64 (the placeholder `h` attr). `to_base62` is NOT
+/// used for the placeholder hash (it is emitted as `{hash:x}` hex by
+/// `render_loop_placeholder`), so decode hex here.
+fn from_base62_hex(s: &str) -> Option<u64> {
+    u64::from_str_radix(s, 16).ok()
+}
+
+/// Serialize a `HashMap<String,String>` of attributes in SORTED key order so
+/// the wire format (patch JSON / msgpack) is deterministic regardless of the
+/// map's hash-bucket layout. See the `VNode::attrs` field doc (#1970).
+fn serialize_attrs_sorted<S>(
+    attrs: &HashMap<String, String>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut keys: Vec<&String> = attrs.keys().collect();
+    keys.sort();
+    let mut map = serializer.serialize_map(Some(keys.len()))?;
+    for k in keys {
+        map.serialize_entry(k, &attrs[k])?;
+    }
+    map.end()
+}
+
 /// A virtual DOM node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VNode {
     pub tag: String,
+    /// Element attributes. Serialized in SORTED key order (#1970) so the patch
+    /// wire format is DETERMINISTIC: a plain `HashMap` serializes in
+    /// hash-bucket order, which differs between two parses of identical content
+    /// (RandomState seed + insertion history) — so the parse-cache path
+    /// (#1970, which assembles a node via a different parse than the cache-OFF
+    /// full parse) could emit a patch whose attr order differed from the
+    /// cache-OFF path, a byte-identity violation. Sorting also matches
+    /// `to_html`'s already-sorted attribute output. Deserialization is the
+    /// default `HashMap` (order-insensitive on read).
+    #[serde(serialize_with = "serialize_attrs_sorted")]
     pub attrs: HashMap<String, String>,
     pub children: Vec<VNode>,
     pub text: Option<String>,

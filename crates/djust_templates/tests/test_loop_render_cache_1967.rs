@@ -739,3 +739,170 @@ fn gate_off_outer_context_subset_check_is_load_bearing() {
         "this body must be non-cacheable via the outer-context (dep-subset) gate",
     );
 }
+
+// ===========================================================================
+// #1970 — parsed-subtree cache: foster-safe gate + placeholder + manifest.
+//
+// The parse cache reuses the SAME content-hash key + the SAME two cacheability
+// gates as the render cache; these tests cover the NEW surface the parse cache
+// adds at the djust_templates layer. The end-to-end byte-identity (ON==OFF
+// through render_with_diff) + the parse-count probe live in the Python suite;
+// the splice + dj-id re-walk primitive is tested in
+// crates/djust_vdom/tests/test_loop_parse_cache_1970.rs.
+// ===========================================================================
+
+mod parse_cache_1970 {
+    use djust_templates::loop_cache::{
+        item_html_is_foster_safe, render_loop_placeholder, LoopRenderCache,
+    };
+
+    /// The foster-safe gate accepts non-table/non-select item roots so a
+    /// `<dj-pc>` placeholder emitted in their place survives html5ever.
+    #[test]
+    fn foster_safe_accepts_list_and_block_roots() {
+        for html in [
+            "<li>x</li>",
+            "<div><span>x</span></div>",
+            "<span>x</span>",
+            "<p>x</p>",
+            "<a href=\"#\">x</a>",
+            "  <li>leading whitespace ok</li>",
+            "<LI>uppercase tag ok</LI>",
+        ] {
+            assert!(
+                item_html_is_foster_safe(html),
+                "expected foster-SAFE for: {html}",
+            );
+        }
+    }
+
+    /// The gate REJECTS table/select-family roots — emitting a placeholder there
+    /// would be foster-parented out of the container (total structure loss).
+    #[test]
+    fn foster_safe_rejects_table_and_select_roots() {
+        for html in [
+            "<tr><td>x</td></tr>",
+            "<td>x</td>",
+            "<th>x</th>",
+            "<thead><tr><td>x</td></tr></thead>",
+            "<tbody><tr><td>x</td></tr></tbody>",
+            "<tfoot><tr><td>x</td></tr></tfoot>",
+            "<caption>x</caption>",
+            "<colgroup><col></colgroup>",
+            "<col>",
+            "<option>x</option>",
+            "<optgroup><option>x</option></optgroup>",
+        ] {
+            assert!(
+                !item_html_is_foster_safe(html),
+                "expected foster-UNSAFE for: {html}",
+            );
+        }
+    }
+
+    /// A `<table>` item root IS foster-safe — `<table>` is valid flow content in
+    /// any non-table container (e.g. `<div>{% for %}<table>…`), so a sibling
+    /// `<dj-pc>` survives. (Only the table-INTERIOR tags are unsafe.)
+    #[test]
+    fn foster_safe_accepts_table_root() {
+        assert!(item_html_is_foster_safe(
+            "<table><tr><td>x</td></tr></table>"
+        ));
+    }
+
+    /// An item with no leading element (pure text / leading comment) is NOT
+    /// eligible (conservative — only a clean single leading element splices).
+    #[test]
+    fn foster_safe_rejects_textual_roots() {
+        assert!(!item_html_is_foster_safe("just text"));
+        assert!(!item_html_is_foster_safe("   "));
+        assert!(!item_html_is_foster_safe(""));
+        assert!(!item_html_is_foster_safe("<!-- c --><li>x</li>"));
+    }
+
+    /// The placeholder round-trips the hash as lowercase hex and carries the
+    /// per-render nonce in the tag name: `<dj-pc-<nonce> h="<hash>">` (#1970
+    /// security: the nonce makes the sentinel unforgeable by `|safe` content).
+    #[test]
+    fn placeholder_emits_nonce_tag_and_hex_hash() {
+        // nonce 0xab, hash 0
+        assert_eq!(
+            render_loop_placeholder(0, 0xab),
+            "<dj-pc-ab h=\"0\"></dj-pc-ab>"
+        );
+        assert_eq!(
+            render_loop_placeholder(255, 0xab),
+            "<dj-pc-ab h=\"ff\"></dj-pc-ab>"
+        );
+        assert_eq!(
+            render_loop_placeholder(0xDEADBEEF, 0x1234),
+            "<dj-pc-1234 h=\"deadbeef\"></dj-pc-1234>"
+        );
+        // The composed tag carries the prefix + nonce.
+        assert_eq!(
+            djust_templates::loop_cache::placeholder_tag(0xff),
+            "dj-pc-ff"
+        );
+    }
+
+    /// SECURITY (#1970): a loop item whose rendered HTML embeds a literal
+    /// `<dj-pc ...>` (e.g. via `|safe`/`mark_safe`) is NOT parse-cache-eligible
+    /// — `item_html_is_foster_safe` rejects it so no placeholder is ever emitted
+    /// for it, and (belt-and-braces) the nonce-tagged sentinel wouldn't match it
+    /// anyway. This is the gate that defends the byte-identity guarantee against
+    /// the sentinel-collision attack.
+    #[test]
+    fn item_with_literal_sentinel_is_ineligible() {
+        assert!(!item_html_is_foster_safe(
+            "<li><dj-pc h=\"ffff\"></dj-pc>X</li>"
+        ));
+        assert!(!item_html_is_foster_safe("<div>see </dj-pc> here</div>"));
+        assert!(!item_html_is_foster_safe(
+            "<li><DJ-PC h=\"ab\"></DJ-PC></li>"
+        ));
+        // A normal item with no sentinel text stays eligible.
+        assert!(item_html_is_foster_safe("<li>normal content</li>"));
+    }
+
+    /// Parse cache get/insert + manifest recording follow the same lifecycle as
+    /// the render fragments (begin_render clears manifest + parse counters;
+    /// has_parsed/get_parsed/insert_parsed; prune retains by seen-this-render).
+    #[test]
+    fn parse_cache_get_insert_and_manifest_lifecycle() {
+        let mut c = LoopRenderCache::new(true);
+        assert!(!c.has_parsed(42));
+        assert!(c.get_parsed(42).is_none());
+
+        c.insert_parsed(42, vec![djust_vdom::VNode::element("li")]);
+        assert!(c.has_parsed(42));
+        assert_eq!(c.parse_misses(), 1);
+        let got = c.get_parsed(42).expect("hit");
+        assert_eq!(got.len(), 1);
+        assert_eq!(c.parse_hits(), 1);
+
+        // Manifest recording + take.
+        c.begin_render(); // clears manifest + parse counters
+        assert_eq!(c.manifest_len(), 0);
+        assert_eq!(c.parse_hits(), 0);
+        c.record_manifest_item(1, true, "<li>a</li>".to_string());
+        c.record_manifest_item(2, false, "<li>b</li>".to_string());
+        assert_eq!(c.manifest_len(), 2);
+        let m = c.take_manifest();
+        assert_eq!(m.len(), 2);
+        assert!(m[0].placeholder && !m[1].placeholder);
+        assert_eq!(m[1].item_html, "<li>b</li>");
+        assert_eq!(c.manifest_len(), 0, "take leaves the manifest empty");
+    }
+
+    /// Disabling the cache drops the parse cache + manifest (default-off memory
+    /// invariant, mirroring the render fragments).
+    #[test]
+    fn disable_clears_parse_cache_and_manifest() {
+        let mut c = LoopRenderCache::new(true);
+        c.insert_parsed(7, vec![djust_vdom::VNode::element("li")]);
+        c.record_manifest_item(7, true, "<li>x</li>".to_string());
+        c.set_enabled(false);
+        assert!(!c.has_parsed(7), "disable clears the parse cache");
+        assert_eq!(c.manifest_len(), 0, "disable clears the manifest");
+    }
+}
