@@ -34,6 +34,11 @@ fn parse_item(html: &str) -> Vec<VNode> {
     root.children
 }
 
+/// A fixed per-render sentinel tag for these unit tests (nonce 0x7f).
+/// Production composes this from a random nonce via
+/// `djust_templates::loop_cache::placeholder_tag`; here we pin one value.
+const SENTINEL: &str = "dj-pc-7f";
+
 // ---------------------------------------------------------------------------
 // Core: splice + re-walk reproduces a fresh full parse, byte-for-byte.
 // ---------------------------------------------------------------------------
@@ -53,9 +58,9 @@ fn splice_initial_reproduces_fresh_parse_ids() {
     subtrees.insert(3, parse_item("<li dj-key=\"3\"><span>c</span></li>"));
 
     // Reduced HTML: every item a placeholder.
-    let reduced = "<ul><dj-pc h=\"1\"></dj-pc><dj-pc h=\"2\"></dj-pc><dj-pc h=\"3\"></dj-pc></ul>";
+    let reduced = "<ul><dj-pc-7f h=\"1\"></dj-pc-7f><dj-pc-7f h=\"2\"></dj-pc-7f><dj-pc-7f h=\"3\"></dj-pc-7f></ul>";
     let mut tree = parse_html_continue(reduced).unwrap();
-    let found = splice_loop_placeholders(&mut tree, &subtrees, 0).unwrap();
+    let found = splice_loop_placeholders(&mut tree, &subtrees, 0, SENTINEL).unwrap();
     assert_eq!(found, 3, "all three placeholders replaced");
 
     let mut spliced_ids = Vec::new();
@@ -93,9 +98,9 @@ fn splice_continue_with_mixed_hit_miss_matches_fresh_continue() {
     let mut subtrees: HashMap<u64, Vec<VNode>> = HashMap::new();
     subtrees.insert(1, parse_item("<li dj-key=\"1\"><span>a</span></li>"));
     subtrees.insert(3, parse_item("<li dj-key=\"3\"><span>c</span></li>"));
-    let reduced = "<ul><dj-pc h=\"1\"></dj-pc><li dj-key=\"2\"><span>CHANGED</span></li><dj-pc h=\"3\"></dj-pc></ul>";
+    let reduced = "<ul><dj-pc-7f h=\"1\"></dj-pc-7f><li dj-key=\"2\"><span>CHANGED</span></li><dj-pc-7f h=\"3\"></dj-pc-7f></ul>";
     let mut tree = parse_html_continue(reduced).unwrap();
-    let found = splice_loop_placeholders(&mut tree, &subtrees, counter_base).unwrap();
+    let found = splice_loop_placeholders(&mut tree, &subtrees, counter_base, SENTINEL).unwrap();
     assert_eq!(found, 2, "two placeholders replaced");
 
     let mut spliced_ids = Vec::new();
@@ -144,7 +149,7 @@ fn gate_off_naive_reuse_without_rewalk_collides() {
     // re-walk still runs) and confirm ids become unique + sequential.
     set_id_counter(0);
     let subtrees: HashMap<u64, Vec<VNode>> = HashMap::new();
-    let found = splice_loop_placeholders(&mut tree, &subtrees, 0).unwrap();
+    let found = splice_loop_placeholders(&mut tree, &subtrees, 0, SENTINEL).unwrap();
     assert_eq!(found, 0, "no placeholders in this tree");
     let mut ids2 = Vec::new();
     collect_ids(&tree, &mut ids2);
@@ -165,9 +170,9 @@ fn gate_off_naive_reuse_without_rewalk_collides() {
 #[test]
 fn splice_errs_on_missing_cached_subtree() {
     let subtrees: HashMap<u64, Vec<VNode>> = HashMap::new(); // empty → every hash misses
-    let reduced = "<ul><dj-pc h=\"5\"></dj-pc></ul>";
+    let reduced = "<ul><dj-pc-7f h=\"5\"></dj-pc-7f></ul>";
     let mut tree = parse_html_continue(reduced).unwrap();
-    let res = splice_loop_placeholders(&mut tree, &subtrees, 0);
+    let res = splice_loop_placeholders(&mut tree, &subtrees, 0, SENTINEL);
     assert!(
         res.is_err(),
         "a placeholder with no cached subtree must Err"
@@ -196,4 +201,62 @@ fn attrs_serialize_in_sorted_order() {
         pos_class < pos_djid && pos_djid < pos_djkey,
         "attrs must serialize in sorted key order, got: {json}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// SECURITY (#1970, the adversarial-review 🔴): a per-render nonce makes the
+// sentinel unforgeable. A loop item rendering a LITERAL `<dj-pc h="...">`
+// (no nonce — e.g. via `|safe`) must NOT be treated as a placeholder by the
+// splice, so it is preserved (never stripped/replaced).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn literal_unnonced_dj_pc_is_not_spliced() {
+    // Reduced tree: one REAL placeholder (`dj-pc-7f`, this render's nonce) plus
+    // a sibling item containing a user's LITERAL `<dj-pc h="ffff">` (no nonce).
+    let reduced =
+        "<ul><dj-pc-7f h=\"1\"></dj-pc-7f><li dj-key=\"2\"><dj-pc h=\"ffff\"></dj-pc>X</li></ul>";
+    let mut subtrees: HashMap<u64, Vec<VNode>> = HashMap::new();
+    subtrees.insert(1, parse_item("<li dj-key=\"1\"><span>a</span></li>"));
+
+    let mut tree = parse_html_continue(reduced).unwrap();
+    let found = splice_loop_placeholders(&mut tree, &subtrees, 0, SENTINEL).unwrap();
+    // Only the NONCE-tagged sentinel was spliced; the literal user `<dj-pc>`
+    // was left untouched (found == 1, not 2).
+    assert_eq!(found, 1, "only the nonce-tagged sentinel is spliced");
+
+    // The user's literal <dj-pc> survives in the output.
+    let html = tree.to_html();
+    assert!(
+        html.contains("<dj-pc") && html.contains("h=\"ffff\""),
+        "user's literal <dj-pc h=ffff> must be PRESERVED, got: {html}"
+    );
+    // And the real placeholder was replaced by the cached item.
+    assert!(html.contains("dj-key=\"1\""), "real placeholder spliced");
+    assert!(
+        !html.contains("dj-pc-7f"),
+        "no nonce-tagged sentinel remains, got: {html}"
+    );
+}
+
+/// Gate-off (#1468) for the nonce: if the splice matched the BARE prefix
+/// (`dj-pc`) instead of the full nonce tag, the literal user `<dj-pc>` WOULD be
+/// matched — proving the nonce match is load-bearing. We simulate the
+/// vulnerable behavior by passing the bare prefix as the "sentinel" and
+/// asserting it (wrongly) matches the user content, which the real nonce path
+/// does not.
+#[test]
+fn gate_off_bare_prefix_would_match_user_content() {
+    let reduced = "<ul><li dj-key=\"2\"><dj-pc h=\"ffff\"></dj-pc>X</li></ul>";
+    let mut subtrees: HashMap<u64, Vec<VNode>> = HashMap::new();
+    subtrees.insert(0xffff, parse_item("<span>HIJACKED</span>"));
+    let mut tree = parse_html_continue(reduced).unwrap();
+    // Pass the BARE prefix "dj-pc" (the pre-nonce vulnerable behavior).
+    let found = splice_loop_placeholders(&mut tree, &subtrees, 0, "dj-pc").unwrap();
+    assert_eq!(
+        found, 1,
+        "bare-prefix match WOULD splice the user's literal <dj-pc> (the vuln the nonce fixes)"
+    );
+    // The nonce path (SENTINEL) would NOT have matched it (proven above), so the
+    // nonce is load-bearing.
 }

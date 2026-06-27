@@ -773,9 +773,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             }
                             if recorded && parse_hit {
                                 // Parse-cache HIT: emit the lightweight
-                                // placeholder; the full item HTML lives in the
-                                // manifest for reconstruction/fallback.
-                                output.push_str(&crate::loop_cache::render_loop_placeholder(hash));
+                                // placeholder tagged with THIS render's nonce
+                                // (`<dj-pc-<nonce> h=..>`) so it is unforgeable
+                                // by `|safe` item content; the full item HTML
+                                // lives in the manifest for reconstruction.
+                                let nonce =
+                                    crate::loop_cache::with_active_cache(|cache| cache.nonce())
+                                        .unwrap_or(0);
+                                output.push_str(&crate::loop_cache::render_loop_placeholder(
+                                    hash, nonce,
+                                ));
                             } else {
                                 // Parse-cache MISS (or non-eligible item): emit
                                 // the real item HTML. `render_with_diff` parses

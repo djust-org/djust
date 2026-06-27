@@ -507,7 +507,9 @@ impl RustLiveViewBackend {
         // consumer of `reduced_html`.
         let has_loop_placeholders = loop_parse_manifest.iter().any(|m| m.placeholder);
         let html = if has_loop_placeholders {
-            Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest)
+            // Match ONLY this render's nonce-bearing sentinel tag (#1970).
+            let sentinel_tag = djust_templates::loop_cache::placeholder_tag(loop_cache.nonce());
+            Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
         } else {
             reduced_html.clone()
         };
@@ -887,7 +889,9 @@ impl RustLiveViewBackend {
         // except the parse-cache splice; identity when no placeholders.
         let has_loop_placeholders = loop_parse_manifest.iter().any(|m| m.placeholder);
         let html = if has_loop_placeholders {
-            Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest)
+            // Match ONLY this render's nonce-bearing sentinel tag (#1970).
+            let sentinel_tag = djust_templates::loop_cache::placeholder_tag(loop_cache.nonce());
+            Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
         } else {
             reduced_html.clone()
         };
@@ -1200,8 +1204,12 @@ impl RustLiveViewBackend {
     fn reconstruct_full_loop_html(
         reduced_html: &str,
         manifest: &[djust_templates::loop_cache::ManifestEntry],
+        sentinel_tag: &str,
     ) -> String {
-        let tag = djust_vdom::LOOP_PLACEHOLDER_TAG_NAME;
+        // Match ONLY this render's nonce-bearing sentinel tag (#1970 security):
+        // a `|safe` item rendering a literal `<dj-pc ...>` (no nonce) is NOT
+        // matched, so it is never stripped/dropped here.
+        let tag = sentinel_tag;
         // Placeholder entries in document order.
         let mut ph_iter = manifest.iter().filter(|m| m.placeholder);
         let mut out = String::with_capacity(reduced_html.len());
@@ -1255,6 +1263,14 @@ impl RustLiveViewBackend {
         if expected == 0 {
             return None;
         }
+        // This render's nonce-bearing sentinel tag (`dj-pc-<nonce>`). 0 nonce
+        // (no render) → bail to full parse.
+        let nonce = loop_cache.nonce();
+        if nonce == 0 {
+            return None;
+        }
+        let sentinel_tag = djust_templates::loop_cache::placeholder_tag(nonce);
+
         let mut subtrees: std::collections::HashMap<u64, Vec<VNode>> =
             std::collections::HashMap::with_capacity(expected);
         for &h in &placeholder_hashes {
@@ -1271,13 +1287,19 @@ impl RustLiveViewBackend {
         // all ids from counter_base, so the parse's own ids are irrelevant.
         let mut tree = parse_html_continue(reduced_html).ok()?;
 
-        // Splice cached subtrees into the placeholders and re-walk dj-ids.
+        // Splice cached subtrees into the nonce-tagged placeholders and re-walk
+        // dj-ids.
         let found =
-            djust_vdom::splice_loop_placeholders(&mut tree, &subtrees, counter_base).ok()?;
+            djust_vdom::splice_loop_placeholders(&mut tree, &subtrees, counter_base, &sentinel_tag)
+                .ok()?;
         // Validation: every placeholder must have been found and replaced, and
-        // none may remain (defense-in-depth against foster-parenting relocation
-        // dropping/moving a placeholder so the structure silently differs).
-        if found != expected || Self::tree_has_placeholder(&tree) {
+        // no `dj-pc-*` sentinel may remain (defense-in-depth against foster-
+        // parenting relocation dropping/moving a placeholder so the structure
+        // silently differs). The prefix check also catches a stray sentinel
+        // whose nonce somehow didn't match (it never should).
+        if found != expected
+            || djust_vdom::tree_contains_tag_prefix(&tree, djust_vdom::LOOP_PLACEHOLDER_TAG_PREFIX)
+        {
             return None;
         }
 
@@ -1321,16 +1343,6 @@ impl RustLiveViewBackend {
             // won't get a parse-cache hit).
         }
         djust_vdom::set_id_counter(saved_counter);
-    }
-
-    /// True if any `<dj-pc>` placeholder element remains anywhere in `tree`
-    /// (validation guard — a surviving placeholder means the splice missed it,
-    /// e.g. foster-parenting relocated it out of reach).
-    fn tree_has_placeholder(tree: &VNode) -> bool {
-        if tree.tag == djust_vdom::LOOP_PLACEHOLDER_TAG_NAME {
-            return true;
-        }
-        tree.children.iter().any(Self::tree_has_placeholder)
     }
 }
 

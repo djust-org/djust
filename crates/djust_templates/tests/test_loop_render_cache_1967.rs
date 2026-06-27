@@ -820,16 +820,48 @@ mod parse_cache_1970 {
         assert!(!item_html_is_foster_safe("<!-- c --><li>x</li>"));
     }
 
-    /// The placeholder round-trips the hash as lowercase hex and is a
-    /// `<dj-pc>` element.
+    /// The placeholder round-trips the hash as lowercase hex and carries the
+    /// per-render nonce in the tag name: `<dj-pc-<nonce> h="<hash>">` (#1970
+    /// security: the nonce makes the sentinel unforgeable by `|safe` content).
     #[test]
-    fn placeholder_emits_hex_hash() {
-        assert_eq!(render_loop_placeholder(0), "<dj-pc h=\"0\"></dj-pc>");
-        assert_eq!(render_loop_placeholder(255), "<dj-pc h=\"ff\"></dj-pc>");
+    fn placeholder_emits_nonce_tag_and_hex_hash() {
+        // nonce 0xab, hash 0
         assert_eq!(
-            render_loop_placeholder(0xDEADBEEF),
-            "<dj-pc h=\"deadbeef\"></dj-pc>"
+            render_loop_placeholder(0, 0xab),
+            "<dj-pc-ab h=\"0\"></dj-pc-ab>"
         );
+        assert_eq!(
+            render_loop_placeholder(255, 0xab),
+            "<dj-pc-ab h=\"ff\"></dj-pc-ab>"
+        );
+        assert_eq!(
+            render_loop_placeholder(0xDEADBEEF, 0x1234),
+            "<dj-pc-1234 h=\"deadbeef\"></dj-pc-1234>"
+        );
+        // The composed tag carries the prefix + nonce.
+        assert_eq!(
+            djust_templates::loop_cache::placeholder_tag(0xff),
+            "dj-pc-ff"
+        );
+    }
+
+    /// SECURITY (#1970): a loop item whose rendered HTML embeds a literal
+    /// `<dj-pc ...>` (e.g. via `|safe`/`mark_safe`) is NOT parse-cache-eligible
+    /// — `item_html_is_foster_safe` rejects it so no placeholder is ever emitted
+    /// for it, and (belt-and-braces) the nonce-tagged sentinel wouldn't match it
+    /// anyway. This is the gate that defends the byte-identity guarantee against
+    /// the sentinel-collision attack.
+    #[test]
+    fn item_with_literal_sentinel_is_ineligible() {
+        assert!(!item_html_is_foster_safe(
+            "<li><dj-pc h=\"ffff\"></dj-pc>X</li>"
+        ));
+        assert!(!item_html_is_foster_safe("<div>see </dj-pc> here</div>"));
+        assert!(!item_html_is_foster_safe(
+            "<li><DJ-PC h=\"ab\"></DJ-PC></li>"
+        ));
+        // A normal item with no sentinel text stays eligible.
+        assert!(item_html_is_foster_safe("<li>normal content</li>"));
     }
 
     /// Parse cache get/insert + manifest recording follow the same lifecycle as

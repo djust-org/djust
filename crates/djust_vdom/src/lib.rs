@@ -222,9 +222,10 @@ pub fn splice_loop_placeholders(
     tree: &mut VNode,
     subtrees: &std::collections::HashMap<u64, Vec<VNode>>,
     counter_base: u64,
+    sentinel_tag: &str,
 ) -> std::result::Result<usize, String> {
     let mut found = 0usize;
-    splice_children_placeholders(tree, subtrees, &mut found)?;
+    splice_children_placeholders(tree, subtrees, sentinel_tag, &mut found)?;
     // Re-assign all dj-ids pre-order from the counter base.
     set_id_counter(counter_base);
     rewalk_djust_ids(tree);
@@ -238,6 +239,7 @@ pub fn splice_loop_placeholders(
 fn splice_children_placeholders(
     node: &mut VNode,
     subtrees: &std::collections::HashMap<u64, Vec<VNode>>,
+    sentinel_tag: &str,
     found: &mut usize,
 ) -> std::result::Result<(), String> {
     // First, recurse into NON-placeholder children so nested loops (if ever
@@ -246,7 +248,7 @@ fn splice_children_placeholders(
     let old_children = std::mem::take(&mut node.children);
     let mut new_children: Vec<VNode> = Vec::with_capacity(old_children.len());
     for mut child in old_children {
-        if child.tag == crate::LOOP_PLACEHOLDER_TAG_NAME {
+        if child.tag == sentinel_tag {
             let hash = child
                 .attrs
                 .get("h")
@@ -267,7 +269,7 @@ fn splice_children_placeholders(
         } else {
             // Recurse: a placeholder could be nested deeper in non-loop
             // structure in principle; handle it uniformly.
-            splice_children_placeholders(&mut child, subtrees, found)?;
+            splice_children_placeholders(&mut child, subtrees, sentinel_tag, found)?;
             new_children.push(child);
         }
     }
@@ -299,10 +301,26 @@ fn rewalk_djust_ids(node: &mut VNode) {
     }
 }
 
-/// The placeholder tag name (kept in sync with
-/// `djust_templates::loop_cache::LOOP_PLACEHOLDER_TAG`). Defined here to avoid a
-/// djust_vdom → djust_templates dependency (which would invert the layering).
-pub const LOOP_PLACEHOLDER_TAG_NAME: &str = "dj-pc";
+/// The placeholder tag PREFIX (kept in sync with
+/// `djust_templates::loop_cache::LOOP_PLACEHOLDER_TAG_PREFIX`). The real per-render
+/// sentinel tag is `dj-pc-<nonce>` (#1970 security fix); djust_live composes the
+/// full tag from the render's nonce and passes it to `splice_loop_placeholders`.
+/// Defined here to avoid a djust_vdom → djust_templates dependency (which would
+/// invert the layering). Used by [`tree_contains_tag_prefix`] for the
+/// residual-placeholder validation guard.
+pub const LOOP_PLACEHOLDER_TAG_PREFIX: &str = "dj-pc";
+
+/// Does any element in `tree` have a tag starting with `prefix`? Used by the
+/// #1970 splice validation to detect a residual `dj-pc-<nonce>` placeholder
+/// (e.g. foster-parenting relocated one out of splice reach) — defense-in-depth.
+pub fn tree_contains_tag_prefix(tree: &VNode, prefix: &str) -> bool {
+    if tree.tag.starts_with(prefix) {
+        return true;
+    }
+    tree.children
+        .iter()
+        .any(|c| tree_contains_tag_prefix(c, prefix))
+}
 
 /// Decode a lowercase-hex u64 (the placeholder `h` attr). `to_base62` is NOT
 /// used for the placeholder hash (it is emitted as `{hash:x}` hex by
