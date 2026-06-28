@@ -635,6 +635,28 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     };
                     let saved_if_loop_path = ctx.get("__djust_if_loop_path").cloned();
 
+                    // Per-item render cache (#1967). Enabled only when:
+                    //   (a) a `LoopRenderCache` is installed for this render
+                    //       (via `LoopCacheGuard`) AND it is enabled (the
+                    //       Python `loop_render_cache_enabled` flag), and
+                    //   (b) the loop body is CACHEABLE — i.e. it is NOT
+                    //       position-dependent (no `{% if %}` / `{% cycle %}` /
+                    //       nested loop / forloop reference / opaque Python tag)
+                    //       AND it reads NOTHING but the loop variable(s). A body
+                    //       that reads any OUTER-context var (`{{ prefix }}`,
+                    //       `{% with l=flag %}`, `{% firstof flag x %}`) is NOT
+                    //       cacheable: outer context is constant within a render
+                    //       but not across renders, and the cache is persistent
+                    //       across renders, so a reorder after an outer-var
+                    //       change would serve stale fragments (#1967 review 🔴).
+                    //       See `loop_cache::body_is_cacheable`.
+                    // When disabled, `loop_caching_enabled` is `false` and the
+                    // render path below is byte-identical to before #1967.
+                    let loop_caching_enabled = crate::loop_cache::with_active_cache(|cache| {
+                        cache.body_cacheable(nodes, var_names)
+                    })
+                    .unwrap_or(false);
+
                     for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
                         // Set __djust_cycle_counter for {% cycle %} tag support
                         ctx.set(
@@ -681,7 +703,96 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                 }
                             }
                         }
-                        output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
+                        if loop_caching_enabled {
+                            // Build a content hash from the loop-variable
+                            // bindings the body reads (the item value). The
+                            // body is position-INDEPENDENT (checked above), so
+                            // its output is fully determined by these bindings
+                            // plus the constant-across-iterations outer context.
+                            let bindings: Vec<(&str, &Value)> = var_names
+                                .iter()
+                                .filter_map(|name| ctx.get(name).map(|v| (name.as_str(), v)))
+                                .collect();
+                            let hash = crate::loop_cache::content_hash(&bindings);
+
+                            // Cache HIT → reuse the previously rendered
+                            // fragment (a reorder is all hits). MISS → render
+                            // via the AST and insert.
+                            let cached =
+                                crate::loop_cache::with_active_cache(|cache| cache.get(hash))
+                                    .flatten();
+                            // The item's full rendered HTML (from the render
+                            // cache on a hit, freshly rendered on a miss). This
+                            // is what the PARSE cache (#1970) records in its
+                            // per-render manifest as `item_html` — used by
+                            // `render_with_diff` both to populate the parse cache
+                            // (on a parse-miss) and to reconstruct the full HTML
+                            // for the fallback / `last_html`.
+                            let item_html = match cached {
+                                Some(html) => html,
+                                None => {
+                                    let html = render_nodes_with_loader(nodes, &ctx, loader)?;
+                                    crate::loop_cache::with_active_cache(|cache| {
+                                        cache.insert(hash, html.clone())
+                                    });
+                                    html
+                                }
+                            };
+
+                            // Parse cache (#1970): a SECOND cache keyed by the
+                            // SAME content hash, holding the item's PARSED VNode
+                            // subtree so a reorder skips html5ever-parse too. We
+                            // gate on the item's rendered root tag being
+                            // foster-parenting-SAFE (not a `<tr>`/`<option>`/…),
+                            // because the placeholder we emit (`<dj-pc>`) would
+                            // be relocated/dropped by html5ever inside a
+                            // table/select container, corrupting structure. When
+                            // eligible AND the parse cache already holds this
+                            // item's subtree, emit a tiny `<dj-pc h=..>`
+                            // PLACEHOLDER instead of the full item HTML — the
+                            // assembled string `output` becomes a REDUCED HTML
+                            // that html5ever parses cheaply; `render_with_diff`
+                            // then splices the cached subtree back in. Otherwise
+                            // emit the real item HTML (a parse MISS that
+                            // `render_with_diff` parses + caches). Either way the
+                            // manifest records the item so `render_with_diff` can
+                            // reconstruct the full HTML and validate the splice.
+                            let foster_safe =
+                                crate::loop_cache::item_html_is_foster_safe(&item_html);
+                            let parse_hit = foster_safe
+                                && crate::loop_cache::with_active_cache(|cache| {
+                                    cache.has_parsed(hash)
+                                })
+                                .unwrap_or(false);
+                            let mut recorded = false;
+                            if foster_safe {
+                                recorded = crate::loop_cache::with_active_cache(|cache| {
+                                    cache.record_manifest_item(hash, parse_hit, item_html.clone());
+                                })
+                                .is_some();
+                            }
+                            if recorded && parse_hit {
+                                // Parse-cache HIT: emit the lightweight
+                                // placeholder tagged with THIS render's nonce
+                                // (`<dj-pc-<nonce> h=..>`) so it is unforgeable
+                                // by `|safe` item content; the full item HTML
+                                // lives in the manifest for reconstruction.
+                                let nonce =
+                                    crate::loop_cache::with_active_cache(|cache| cache.nonce())
+                                        .unwrap_or(0);
+                                output.push_str(&crate::loop_cache::render_loop_placeholder(
+                                    hash, nonce,
+                                ));
+                            } else {
+                                // Parse-cache MISS (or non-eligible item): emit
+                                // the real item HTML. `render_with_diff` parses
+                                // it and (for recorded eligible items) caches the
+                                // resulting subtree.
+                                output.push_str(&item_html);
+                            }
+                        } else {
+                            output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
+                        }
                     }
 
                     // Restore outer cycle counter (for nested loops)

@@ -287,6 +287,28 @@ class RustBridgeMixin:
     # runtime change.
     _djust_template_hash_slot: str
 
+    def _apply_loop_render_cache_flag(self) -> None:
+        """Wire ``LIVEVIEW_CONFIG['loop_render_cache_enabled']`` → Rust (#1967).
+
+        Reads the (default-False) config flag and forwards it to the Rust
+        ``RustLiveView`` via ``set_loop_render_cache_enabled``. Idempotent and
+        cheap (a single bool set on the Rust side). Called on every
+        ``_rust_view`` (re)initialization — including cache HITs, where the
+        flag is not part of the serialized view state. A no-op if the Rust
+        build predates the setter (defensive ``hasattr`` guard).
+        """
+        rust_view = getattr(self, "_rust_view", None)
+        if rust_view is None or not hasattr(rust_view, "set_loop_render_cache_enabled"):
+            return
+        try:
+            from ..config import get_config
+
+            enabled = bool(get_config().get("loop_render_cache_enabled", False))
+        except Exception:  # pragma: no cover - config access is defensive
+            logger.debug("[LiveView] loop_render_cache flag read failed; defaulting OFF")
+            enabled = False
+        rust_view.set_loop_render_cache_enabled(enabled)
+
     def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""
 
@@ -373,6 +395,9 @@ class RustBridgeMixin:
                     self._rust_view = cached_view
                     # template_dirs are not serialized; restore them after cache hit
                     self._rust_view.set_template_dirs(get_template_dirs())
+                    # loop_render_cache flag is transient (not serialized);
+                    # re-apply it from config after a cache hit (#1967).
+                    self._apply_loop_render_cache_flag()
                     logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
                     backend.set(self._cache_key, cached_view)
                     return
@@ -404,6 +429,9 @@ class RustBridgeMixin:
                     self._rust_view = cached_view
                     # template_dirs are not serialized; restore them after cache hit
                     self._rust_view.set_template_dirs(get_template_dirs())
+                    # loop_render_cache flag is transient (not serialized);
+                    # re-apply it from config after a cache hit (#1967).
+                    self._apply_loop_render_cache_flag()
                     logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
                     backend.set(self._cache_key, cached_view)
                     return
@@ -428,6 +456,8 @@ class RustBridgeMixin:
 
             template_dirs = get_template_dirs()
             self._rust_view = RustLiveView(template_source, template_dirs)
+            # Apply the per-item loop render cache flag (#1967, default OFF).
+            self._apply_loop_render_cache_flag()
 
             if self._cache_key:
                 from ..state_backend import get_backend

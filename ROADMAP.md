@@ -3719,6 +3719,43 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.1.0-1 — parse-phase loop render cache (the #1967 follow-up lever) (drain bucket → ships in 1.1.0)
+
+*Goal:* Drain the one tractable open issue left after the #1967/#1969 render-cache
+arc — #1970, the **parse-phase** half of the same optimization. (Originally
+mislabeled "v1.0.8-3 / ships in 1.0.8"; 1.0.8 shipped 2026-06-23 and main now
+tracks 1.1 — this work lands in 1.1.0 via `[Unreleased]`.) The render cache
+(#1969) is Amdahl-bounded because html5ever parse + VDOM build are ~60% of
+`render_with_diff`; #1970 caches the parsed VNode subtree per item so an unchanged
+item skips BOTH render AND parse. Builds directly on
+`crates/djust_templates/src/loop_cache.rs` under the SAME `loop_render_cache_enabled`
+flag + the SAME two cacheability gates (position-independent + item-only body). The
+new hazard vs #1969 is **dj-id re-assignment**: #1969's cached fragment is pre-dj-id
+(safe), but a cached *parsed* subtree carries dj-ids assigned at a specific position
+and must be re-keyed per the item's current position so the keyed VDOM diff
+(#1678/#1682) stays correct — this is a hot-path VDOM-correctness change, NOT a
+mechanical drain. Mandatory worktree-isolated adversarial review (as #1969 — it
+caught the #1969 🔴 outer-context-staleness bug). The two `priority:low` bug-capture
+feature epics (#1561 iter C, #1562 iter B) remain held for v1.1.0 (design-gated,
+security surface — replay XSS / Redis auth / PII scrub).
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P2** | ~~cache PARSED VNode subtrees for unchanged loop items (#1970)~~ ✅ PR #1973 | Extend the #1969 per-item render cache to also cache the parsed VNode subtree (skip html5ever re-parse on reorder of unchanged items); same flag + gates; re-assign dj-ids per current position to keep the keyed diff correct. | v1.1.0 |
+
+**#1970 — parse-phase loop render cache** — #1969 added a flag-gated per-item RENDER
+cache (~1.6–1.7× render-phase on a reorder), but the render phase is only ~40% of
+`render_with_diff`; the html5ever parse + VDOM build phases are ~60% — the bigger
+lever. Cache the parsed VNode subtree per item (keyed by the same content-hash the
+#1969 render cache uses) so an unchanged item skips both render and parse. Same two
+cacheability gates; the new hazard is dj-id re-assignment on reuse. Adversarial
+hot-path review mandatory; output must stay byte-identical cache on-vs-off incl.
+dj-key reorder round-trip.
+
+---
+
 ### Milestone: v1.0.8-2 — post-prevention open-issue drain (render-path bugs + check/test hygiene) (drain bucket → ships in 1.0.8)
 
 *Goal:* Drain the five actionable open issues left after the v1.0.8-1 prevention

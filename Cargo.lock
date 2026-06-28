@@ -356,6 +356,7 @@ dependencies = [
  "criterion",
  "djust_components",
  "djust_core",
+ "djust_vdom",
  "once_cell",
  "pulldown-cmark",
  "pyo3",

@@ -138,6 +138,15 @@ class LiveViewConfig:
         # When True: non-serializable values raise TypeError with actionable error message
         # Always emits warning logs before fallback, even in non-strict mode
         "strict_serialization": False,  # Raise TypeError for non-serializable values instead of str() fallback
+        # Per-item loop render cache (#1967). When True, the Rust renderer
+        # caches each loop item's rendered fragment by a content hash and reuses
+        # it across render_with_diff() calls, turning a pure reorder of a large
+        # keyed list from O(n) re-renders into O(changed). Default OFF
+        # (split-foundation #1122) — a hot-path change that must soak. Only
+        # applies to position-INDEPENDENT loop bodies; bodies using
+        # {% if %}/{% cycle %}/nested loops/forloop are auto-excluded (correct
+        # by construction). Safe to enable for list/table-heavy views.
+        "loop_render_cache_enabled": False,
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
         # Bootstrap 4 classes (NYC Core Framework, gov sites, legacy projects)

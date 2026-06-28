@@ -21,6 +21,7 @@ use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
+use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
 use djust_templates::Template;
 use djust_vdom::{
     cache_ignore_subtree_html, diff, parse_html, parse_html_continue, reset_id_counter,
@@ -130,6 +131,16 @@ pub struct RustLiveViewBackend {
     /// Not persisted across MessagePack serialize/deserialize —
     /// Python re-populates it on each sync cycle.
     raw_py_values: Option<HashMap<String, Py<PyAny>>>,
+    /// Per-item loop render cache (#1967). PERSISTENT across
+    /// `render_with_diff` calls — a content-hash → rendered-fragment map that
+    /// lets a pure reorder of a keyed list reuse every item subtree instead of
+    /// re-rendering from the AST. Default-OFF (split-foundation #1122); enabled
+    /// via `set_loop_render_cache_enabled` wired from the Python
+    /// `LIVEVIEW_CONFIG['loop_render_cache_enabled']` flag. Installed into the
+    /// render thread-local for the duration of each render via `LoopCacheGuard`.
+    /// Transient: not part of `SerializableViewState` (rebuilt across
+    /// serialize/deserialize, like `node_html_cache`).
+    loop_render_cache: LoopRenderCache,
 }
 
 #[derive(Clone, Debug)]
@@ -171,6 +182,9 @@ impl RustLiveViewBackend {
             fragment_text_map: None,
             text_node_index: None,
             raw_py_values: None,
+            // Default-OFF (#1967 / split-foundation #1122); flipped by
+            // set_loop_render_cache_enabled from the Python config flag.
+            loop_render_cache: LoopRenderCache::new(false),
         }
     }
 
@@ -190,6 +204,47 @@ impl RustLiveViewBackend {
                 self.changed_keys = Some(keys.into_iter().collect());
             }
         }
+    }
+
+    /// Enable or disable the per-item loop render cache (#1967).
+    ///
+    /// Wired from the Python `LIVEVIEW_CONFIG['loop_render_cache_enabled']`
+    /// flag (default False). When disabled (the default), the loop-cache code
+    /// path is never taken and `render_with_diff` is byte-identical to before
+    /// this feature. When enabled, position-INDEPENDENT loop bodies reuse a
+    /// content-hashed fragment across renders (a pure reorder = O(0) re-renders).
+    fn set_loop_render_cache_enabled(&mut self, enabled: bool) {
+        self.loop_render_cache.set_enabled(enabled);
+    }
+
+    /// Whether the loop render cache is currently enabled (introspection).
+    fn loop_render_cache_enabled(&self) -> bool {
+        self.loop_render_cache.is_enabled()
+    }
+
+    /// Number of cache HITS in the most recent render (debug / tests).
+    fn loop_render_cache_hits(&self) -> u64 {
+        self.loop_render_cache.hits()
+    }
+
+    /// Number of cache MISSES (AST renders) in the most recent render
+    /// (debug / tests).
+    fn loop_render_cache_misses(&self) -> u64 {
+        self.loop_render_cache.misses()
+    }
+
+    /// PARSE-cache reuse count for the last render (#1970 probe). The number of
+    /// cached item subtrees spliced in this render. A reorder of N unchanged
+    /// foster-safe keyed items yields ~N parse hits and ~0 item re-parses.
+    fn loop_parse_cache_hits(&self) -> u64 {
+        self.loop_render_cache.parse_hits()
+    }
+
+    /// PARSE-cache miss count for the last render (#1970 probe). The number of
+    /// item subtrees parsed this render (changed/new items). A content-change of
+    /// K items yields ~K parse misses.
+    fn loop_parse_cache_misses(&self) -> u64 {
+        self.loop_render_cache.parse_misses()
     }
 
     /// Set template directories for {% include %} tag support
@@ -236,6 +291,10 @@ impl RustLiveViewBackend {
         self.last_html = None; // Invalidate text fast path cache
         self.fragment_text_map = None; // Invalidate fragment→VDOM map
         self.text_node_index = None; // Invalidate text-region fast-path index
+                                     // The loop-cache fragments AND its body-pointer-keyed position
+                                     // verdicts reference the OLD template AST — clear both (#1967), keeping
+                                     // the enabled flag.
+        self.loop_render_cache.clear();
     }
 
     /// Return the canonical 8-hex template-source hash for this view's
@@ -287,6 +346,9 @@ impl RustLiveViewBackend {
         self.last_html = None;
         self.fragment_text_map = None;
         self.text_node_index = None;
+        // Also drop the loop-item cache so a forced full render is a true
+        // uncached control (#1967) for the byte-equality harness.
+        self.loop_render_cache.clear();
     }
 
     /// Get current state
@@ -380,27 +442,77 @@ impl RustLiveViewBackend {
 
         // Track old fragments for text-fast-path comparison
         let old_node_cache = self.node_html_cache.clone();
-        let (html, changed_indices) =
+
+        // Install the persistent per-item loop render cache (#1967) for the
+        // duration of this render. We `mem::take` it out of `self` to a local
+        // so the `LoopCacheGuard` holds a stable `&mut` independent of the
+        // other `self`-field borrows the render path uses, then put it back.
+        // When the cache is disabled the guard + thread-local lookups are
+        // effectively inert (the For-node path checks `is_enabled` and skips),
+        // so this is byte-identical to the pre-#1967 path.
+        let mut loop_cache = std::mem::take(&mut self.loop_render_cache);
+        loop_cache.begin_render();
+        let render_result: Result<(String, Vec<usize>), _> = {
+            let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
             if !self.node_html_cache.is_empty() && self.changed_keys.is_some() {
                 // Partial render: only re-render nodes whose deps changed
                 let changed = self.changed_keys.take().unwrap_or_default();
-                let (html, fragments, changed_indices) = template_arc.render_with_loader_partial(
-                    &context,
-                    &loader,
-                    &changed,
-                    &self.node_html_cache,
-                )?;
-                self.node_html_cache = fragments;
-                (html, changed_indices)
+                template_arc
+                    .render_with_loader_partial(&context, &loader, &changed, &self.node_html_cache)
+                    .map(|(html, fragments, changed_indices)| {
+                        self.node_html_cache = fragments;
+                        (html, changed_indices)
+                    })
             } else {
                 // Full render: first render or no change info
                 self.changed_keys = None;
-                let (html, fragments) =
-                    template_arc.render_with_loader_collecting(&context, &loader)?;
-                self.node_html_cache = fragments;
-                (html, vec![])
-            };
+                template_arc
+                    .render_with_loader_collecting(&context, &loader)
+                    .map(|(html, fragments)| {
+                        self.node_html_cache = fragments;
+                        (html, vec![])
+                    })
+            }
+        };
+        // Prune stale entries (keep only hashes seen this render). NOTE: we do
+        // NOT put `loop_cache` back on `self` yet — the parse phase below
+        // consumes the #1970 per-render manifest and may populate the parse
+        // cache (`insert_parsed`) for freshly-parsed items, so `loop_cache`
+        // stays a live local through the parse phase and is restored afterwards.
+        loop_cache.prune();
+        // Take the per-render item manifest (#1970). Empty unless the loop
+        // render cache is enabled AND the loop body is cacheable AND items were
+        // foster-safe. Consumed by the parse-cache splice in the full-parse
+        // block below. Taken UNCONDITIONALLY here so a stale manifest can never
+        // leak into the next render regardless of which parse path fires.
+        let loop_parse_manifest = loop_cache.take_manifest();
+        let (reduced_html, changed_indices) = match render_result {
+            Ok(v) => v,
+            Err(e) => {
+                // Restore the cache before propagating so `self` is never left
+                // without its loop cache.
+                self.loop_render_cache = loop_cache;
+                return Err(e.into());
+            }
+        };
         let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
+
+        // #1970: when the parse cache emitted `<dj-pc>` placeholders for
+        // cache-HIT items, `reduced_html` is the SHORT form html5ever will
+        // parse cheaply. Reconstruct the FULL html (placeholders expanded to
+        // their item HTML, from the manifest) for every existing consumer
+        // (`last_html`, the fast paths, the full-parse fallback, `html_len`).
+        // When there were no placeholders this is a cheap identity (the reduced
+        // html IS the full html). The parse-cache splice path below is the ONLY
+        // consumer of `reduced_html`.
+        let has_loop_placeholders = loop_parse_manifest.iter().any(|m| m.placeholder);
+        let html = if has_loop_placeholders {
+            // Match ONLY this render's nonce-bearing sentinel tag (#1970).
+            let sentinel_tag = djust_templates::loop_cache::placeholder_tag(loop_cache.nonce());
+            Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
+        } else {
+            reduced_html.clone()
+        };
 
         // Phase 2: HTML parse to VDOM
         // Text-fast-path: if ALL changed fragments are plain text (no HTML tags),
@@ -544,20 +656,74 @@ impl RustLiveViewBackend {
                         djust_vdom::ensure_id_counter_at_least(max_id + 1);
                     }
                 }
-                // Full html5ever parse
-                let new_vdom = if self.last_vdom.is_some() {
-                    parse_html_continue(&html).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-                    })?
+                // The id-counter base the FULL parse would assign from: 0 for
+                // an initial `parse_html` (which resets), or the current counter
+                // value for a continuing `parse_html_continue` (already advanced
+                // past the old tree's max ids by the #1550/#1552 bump above).
+                // The #1970 splice re-walks the assembled tree from this base so
+                // its dj-ids are byte-identical to the full parse.
+                let is_continue = self.last_vdom.is_some();
+                let counter_base = if is_continue {
+                    djust_vdom::get_id_counter()
                 } else {
-                    parse_html(&html).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-                    })?
+                    0
+                };
+
+                // #1970 parse-cache splice: when the render emitted `<dj-pc>`
+                // placeholders for cache-HIT items, parse the SHORT reduced html
+                // (cheap), then splice the cached parsed subtrees back in and
+                // re-walk dj-ids. A reorder of unchanged items reduces almost
+                // the entire item markup to tiny placeholders, so html5ever
+                // parses a fraction of the bytes. Any anomaly (a cache miss for
+                // a placeholder hash, foster-parenting having relocated a
+                // placeholder so the found-count disagrees, or a residual
+                // placeholder) makes `try_parse_cache_splice` return None and we
+                // fall back to a full parse of the (full) html — always correct.
+                let mut new_vdom = if has_loop_placeholders {
+                    match Self::try_parse_cache_splice(
+                        &reduced_html,
+                        &loop_parse_manifest,
+                        &mut loop_cache,
+                        counter_base,
+                    ) {
+                        Some(v) => v,
+                        None => {
+                            // Fallback: full parse of the full html (correct,
+                            // no parse win for this render). Re-establish the
+                            // counter base the full parse expects.
+                            if is_continue {
+                                djust_vdom::set_id_counter(counter_base);
+                                parse_html_continue(&html).map_err(|e| {
+                                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                                })?
+                            } else {
+                                parse_html(&html).map_err(|e| {
+                                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                                })?
+                            }
+                        }
+                    }
+                } else {
+                    // No placeholders → ordinary full parse (byte-identical to
+                    // pre-#1970). Still populate the parse cache for eligible
+                    // items recorded in the manifest (all parse-MISSes on this
+                    // render) so a FUTURE reorder can hit. Population parses each
+                    // miss item's fragment once (the changed items only).
+                    let v = if is_continue {
+                        parse_html_continue(&html).map_err(|e| {
+                            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                        })?
+                    } else {
+                        parse_html(&html).map_err(|e| {
+                            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                        })?
+                    };
+                    Self::populate_parse_cache_from_manifest(&loop_parse_manifest, &mut loop_cache);
+                    v
                 };
                 let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
 
                 // Splice ignore subtrees
-                let mut new_vdom = new_vdom;
                 if let Some(old_vdom) = &self.last_vdom {
                     splice_ignore_subtrees(old_vdom, &mut new_vdom);
                 }
@@ -580,6 +746,12 @@ impl RustLiveViewBackend {
                 let diff_ms = t_diff_start.elapsed().as_secs_f64() * 1000.0;
                 (new_vdom, patches, parse_ms, diff_ms)
             };
+
+        // #1970: restore the loop render+parse cache to `self` so it persists to
+        // the next render (persistence is what gives a reorder its O(changed)
+        // win). The parse phase above used `loop_cache` as a live local to read
+        // the parse cache (splice) and populate it (miss items); put it back now.
+        self.loop_render_cache = loop_cache;
 
         // Phase 4: HTML serialization
         let t_serial_start = Instant::now();
@@ -672,25 +844,56 @@ impl RustLiveViewBackend {
         let t_render_start = Instant::now();
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
 
-        let html = if !self.node_html_cache.is_empty()
-            && self.changed_keys.is_some()
-            && !template_arc.uses_extends()
-        {
-            let changed = self.changed_keys.take().unwrap_or_default();
-            let (html, fragments, _changed_indices) = template_arc.render_with_loader_partial(
-                &context,
-                &loader,
-                &changed,
-                &self.node_html_cache,
-            )?;
-            self.node_html_cache = fragments;
-            html
+        // Install the persistent per-item loop render cache (#1967) for this
+        // render — same pattern as `render_with_diff` (mem::take to a local so
+        // the guard's `&mut` is independent of the other self-field borrows,
+        // prune + restore for persistence). Inert when disabled.
+        let mut loop_cache = std::mem::take(&mut self.loop_render_cache);
+        loop_cache.begin_render();
+        let html_result: Result<String, _> = {
+            let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
+            if !self.node_html_cache.is_empty()
+                && self.changed_keys.is_some()
+                && !template_arc.uses_extends()
+            {
+                let changed = self.changed_keys.take().unwrap_or_default();
+                template_arc
+                    .render_with_loader_partial(&context, &loader, &changed, &self.node_html_cache)
+                    .map(|(html, fragments, _changed_indices)| {
+                        self.node_html_cache = fragments;
+                        html
+                    })
+            } else {
+                self.changed_keys = None;
+                template_arc
+                    .render_with_loader_collecting(&context, &loader)
+                    .map(|(html, fragments)| {
+                        self.node_html_cache = fragments;
+                        html
+                    })
+            }
+        };
+        loop_cache.prune();
+        // #1970: defer the loop-cache putback (the parse phase consumes the
+        // manifest + parse cache, mirroring `render_with_diff`). Take the
+        // manifest unconditionally so it can never leak across renders.
+        let loop_parse_manifest = loop_cache.take_manifest();
+        let reduced_html = match html_result {
+            Ok(h) => h,
+            Err(e) => {
+                self.loop_render_cache = loop_cache;
+                return Err(e.into());
+            }
+        };
+        // Reconstruct the full html (placeholders expanded) for every consumer
+        // except the parse-cache splice; identity when no placeholders.
+        let has_loop_placeholders = loop_parse_manifest.iter().any(|m| m.placeholder);
+        let html = if has_loop_placeholders {
+            // Match ONLY this render's nonce-bearing sentinel tag (#1970).
+            let sentinel_tag = djust_templates::loop_cache::placeholder_tag(loop_cache.nonce());
+            Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
         } else {
-            self.changed_keys = None;
-            let (html, fragments) =
-                template_arc.render_with_loader_collecting(&context, &loader)?;
-            self.node_html_cache = fragments;
-            html
+            reduced_html.clone()
         };
         let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -708,27 +911,74 @@ impl RustLiveViewBackend {
                 djust_vdom::ensure_id_counter_at_least(max_id + 1);
             }
         }
+        let is_continue = self.last_vdom.is_some();
+        let counter_base = if is_continue {
+            djust_vdom::get_id_counter()
+        } else {
+            0
+        };
+        // #1970 parse-cache splice on the structural / full-parse paths (the
+        // text-only in-place path never sees placeholders — a reorder is
+        // structural, so it bypasses the in-place update). Helper that parses
+        // the reduced html + splices cached subtrees, with a full-parse
+        // fallback; returns None to mean "fall back".
+        let parse_full = |full_html: &str| -> PyResult<VNode> {
+            if is_continue {
+                djust_vdom::set_id_counter(counter_base);
+                parse_html_continue(full_html)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+            } else {
+                parse_html(full_html)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+            }
+        };
+        let parse_or_splice =
+            |loop_cache: &mut djust_templates::loop_cache::LoopRenderCache| -> PyResult<VNode> {
+                if has_loop_placeholders {
+                    match Self::try_parse_cache_splice(
+                        &reduced_html,
+                        &loop_parse_manifest,
+                        loop_cache,
+                        counter_base,
+                    ) {
+                        Some(v) => Ok(v),
+                        None => parse_full(&html),
+                    }
+                } else {
+                    let v = parse_full(&html)?;
+                    Self::populate_parse_cache_from_manifest(&loop_parse_manifest, loop_cache);
+                    Ok(v)
+                }
+            };
         let mut new_vdom = if let (Some(ref old_html), Some(_)) = (&self.last_html, &self.last_vdom)
         {
             let old_html = old_html.clone();
             let mut vdom = self.last_vdom.take().unwrap();
+            // Attempt the in-place text fast path on the FULL html FIRST, even
+            // when the loop emitted `<dj-pc>` placeholders (#1970): a pure
+            // content change still emits placeholders for the unchanged items,
+            // but the in-place update compares full old vs full new html and
+            // succeeds for a text-only delta — so we must take this path to stay
+            // byte-identical (same NO-patch result) with the cache-OFF render.
+            // Only a STRUCTURAL change (reorder/insert/remove) fails in-place and
+            // falls through to the parse-cache splice. Still populate the parse
+            // cache from the manifest so a future reorder hits even when this
+            // render took the in-place path.
             if try_text_only_vdom_update_inplace(&mut vdom, &old_html, &html) {
+                Self::populate_parse_cache_from_manifest(&loop_parse_manifest, &mut loop_cache);
                 vdom
             } else {
-                // Structural change — fall back to full html5ever parse.
-                // Store the old vdom back temporarily for the diff phase.
+                // Structural change (or placeholders present) — splice / full parse.
                 self.last_vdom = Some(vdom);
-                parse_html_continue(&html)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
+                parse_or_splice(&mut loop_cache)?
             }
-        } else if self.last_vdom.is_some() {
-            parse_html_continue(&html)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
         } else {
-            parse_html(&html)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
+            parse_or_splice(&mut loop_cache)?
         };
         let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
+
+        // #1970: restore the loop cache now that the parse phase is done.
+        self.loop_render_cache = loop_cache;
 
         // Splice old VDOM subtrees for dj-update="ignore" nodes
         if let Some(old_vdom) = &self.last_vdom {
@@ -861,6 +1111,9 @@ impl RustLiveViewBackend {
             fragment_text_map: None,
             text_node_index: None,
             raw_py_values: None,
+            // Transient cache — not deserialized; rebuilt fresh, default-OFF
+            // until the Python flag re-enables it post-restore (#1967).
+            loop_render_cache: LoopRenderCache::new(false),
         })
     }
 
@@ -934,6 +1187,162 @@ impl RustLiveViewBackend {
     /// Reset the view state (Rust API)
     pub fn reset_rust(&mut self) {
         self.reset()
+    }
+
+    // ---------------------------------------------------------------------
+    // #1970 parse-cache helpers (associated fns — no `self` borrow conflict
+    // with the live `loop_cache` local in `render_with_diff`).
+    // ---------------------------------------------------------------------
+
+    /// Reconstruct the FULL rendered HTML from the REDUCED html (with `<dj-pc>`
+    /// placeholders) plus the per-render manifest (which carries every eligible
+    /// item's full `item_html` in document order). Each `<dj-pc h="<hex>">…
+    /// </dj-pc>` occurrence is replaced, in document order, by the manifest's
+    /// next placeholder entry's `item_html`. Used so every existing consumer
+    /// (`last_html`, fast paths, full-parse fallback, `html_len`) sees the full
+    /// html exactly as the cache-OFF path would produce it.
+    fn reconstruct_full_loop_html(
+        reduced_html: &str,
+        manifest: &[djust_templates::loop_cache::ManifestEntry],
+        sentinel_tag: &str,
+    ) -> String {
+        // Match ONLY this render's nonce-bearing sentinel tag (#1970 security):
+        // a `|safe` item rendering a literal `<dj-pc ...>` (no nonce) is NOT
+        // matched, so it is never stripped/dropped here.
+        let tag = sentinel_tag;
+        // Placeholder entries in document order.
+        let mut ph_iter = manifest.iter().filter(|m| m.placeholder);
+        let mut out = String::with_capacity(reduced_html.len());
+        let mut rest = reduced_html;
+        let open = format!("<{tag} ");
+        let close = format!("</{tag}>");
+        while let Some(start) = rest.find(&open) {
+            // Find the end of this placeholder element: `</dj-pc>`.
+            match rest[start..].find(&close) {
+                Some(end_rel) => {
+                    let end = start + end_rel + close.len();
+                    out.push_str(&rest[..start]);
+                    if let Some(entry) = ph_iter.next() {
+                        out.push_str(&entry.item_html);
+                    }
+                    rest = &rest[end..];
+                }
+                None => {
+                    // Malformed (no close) — emit the remainder verbatim and stop.
+                    out.push_str(rest);
+                    return out;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Attempt the #1970 parse-cache splice. Parse the REDUCED html (cheap),
+    /// build the `hash -> cached subtree` map from the parse cache for every
+    /// placeholder hash, splice + re-walk dj-ids from `counter_base`, and
+    /// validate. Returns `Some(new_vdom)` on success or `None` to signal the
+    /// caller to fall back to a full parse (any cache miss for a placeholder
+    /// hash, a found-count/placeholder-count mismatch — e.g. foster-parenting
+    /// relocated a placeholder — or a residual placeholder). Also populates the
+    /// parse cache for parse-MISS items recorded in the manifest so a future
+    /// reorder hits.
+    fn try_parse_cache_splice(
+        reduced_html: &str,
+        manifest: &[djust_templates::loop_cache::ManifestEntry],
+        loop_cache: &mut djust_templates::loop_cache::LoopRenderCache,
+        counter_base: u64,
+    ) -> Option<VNode> {
+        // Build the subtree map for placeholder (parse-HIT) items.
+        let placeholder_hashes: Vec<u64> = manifest
+            .iter()
+            .filter(|m| m.placeholder)
+            .map(|m| m.hash)
+            .collect();
+        let expected = placeholder_hashes.len();
+        if expected == 0 {
+            return None;
+        }
+        // This render's nonce-bearing sentinel tag (`dj-pc-<nonce>`). 0 nonce
+        // (no render) → bail to full parse.
+        let nonce = loop_cache.nonce();
+        if nonce == 0 {
+            return None;
+        }
+        let sentinel_tag = djust_templates::loop_cache::placeholder_tag(nonce);
+
+        let mut subtrees: std::collections::HashMap<u64, Vec<VNode>> =
+            std::collections::HashMap::with_capacity(expected);
+        for &h in &placeholder_hashes {
+            // get_parsed clones the cached roots (and bumps parse_hits).
+            match loop_cache.get_parsed(h) {
+                Some(roots) => {
+                    subtrees.entry(h).or_insert(roots);
+                }
+                None => return None, // cache miss for a placeholder → fall back
+            }
+        }
+
+        // Parse the reduced html. Use continue (no reset) — the re-walk fixes
+        // all ids from counter_base, so the parse's own ids are irrelevant.
+        let mut tree = parse_html_continue(reduced_html).ok()?;
+
+        // Splice cached subtrees into the nonce-tagged placeholders and re-walk
+        // dj-ids.
+        let found =
+            djust_vdom::splice_loop_placeholders(&mut tree, &subtrees, counter_base, &sentinel_tag)
+                .ok()?;
+        // Validation: every placeholder must have been found and replaced, and
+        // no `dj-pc-*` sentinel may remain (defense-in-depth against foster-
+        // parenting relocation dropping/moving a placeholder so the structure
+        // silently differs). The prefix check also catches a stray sentinel
+        // whose nonce somehow didn't match (it never should).
+        if found != expected
+            || djust_vdom::tree_contains_tag_prefix(&tree, djust_vdom::LOOP_PLACEHOLDER_TAG_PREFIX)
+        {
+            return None;
+        }
+
+        // Populate the parse cache for parse-MISS items (changed/new items that
+        // emitted real HTML this render) so a future reorder hits.
+        Self::populate_parse_cache_from_manifest(manifest, loop_cache);
+
+        Some(tree)
+    }
+
+    /// Parse + cache the subtree for every parse-MISS item (placeholder=false)
+    /// in the manifest that is not already cached. Each item is parsed once via
+    /// a body-context fragment parse (the foster-safe gate guarantees the item
+    /// root is a non-table/non-select element, so body context reproduces the
+    /// full-parse subtree). Ids are stripped is unnecessary — the assembled
+    /// tree is always re-walked — so we cache the raw parsed roots.
+    fn populate_parse_cache_from_manifest(
+        manifest: &[djust_templates::loop_cache::ManifestEntry],
+        loop_cache: &mut djust_templates::loop_cache::LoopRenderCache,
+    ) {
+        // CRITICAL (#1970): the fragment parses below advance the SHARED
+        // thread-local id counter. Their ids are throwaway (the assembled tree
+        // is always re-walked), but if we let them advance the counter we
+        // POLLUTE the id base of the NEXT render's parse — a `parse_html_continue`
+        // continues from wherever the counter sits, so an inflated counter makes
+        // the next render's freshly-inserted items get ids HIGHER than the
+        // cache-OFF path would assign (observed: appended item id `f` vs `c`).
+        // Save + restore the counter around the population parses so they are
+        // counter-NEUTRAL.
+        let saved_counter = djust_vdom::get_id_counter();
+        for m in manifest.iter().filter(|m| !m.placeholder) {
+            if loop_cache.has_parsed(m.hash) {
+                continue;
+            }
+            // Body-context fragment parse: returns the item's root VNodes.
+            if let Ok(roots) = djust_vdom::parse_html_fragment(&m.item_html, "body") {
+                loop_cache.insert_parsed(m.hash, roots);
+            }
+            // On a fragment parse error we simply skip caching this item — the
+            // next render will try again; correctness is unaffected (it just
+            // won't get a parse-cache hit).
+        }
+        djust_vdom::set_id_counter(saved_counter);
     }
 }
 

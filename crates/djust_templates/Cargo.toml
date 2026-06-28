@@ -21,6 +21,7 @@ chrono.workspace = true
 tracing = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 djust_core = { path = "../djust_core" }
+djust_vdom = { path = "../djust_vdom" }
 djust_components = { path = "../djust_components" }
 
 [dev-dependencies]
@@ -33,4 +34,8 @@ harness = false
 
 [[bench]]
 name = "tag_registry"
+harness = false
+
+[[bench]]
+name = "loop_render_cache"
 harness = false
