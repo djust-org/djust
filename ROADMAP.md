@@ -3714,10 +3714,12 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
-### Milestone: v1.0.8-3 — parse-phase loop render cache (the #1967 follow-up lever) (drain bucket → ships in 1.0.8)
+### Milestone: v1.1.0-1 — parse-phase loop render cache (the #1967 follow-up lever) (drain bucket → ships in 1.1.0)
 
 *Goal:* Drain the one tractable open issue left after the #1967/#1969 render-cache
-arc — #1970, the **parse-phase** half of the same optimization. The render cache
+arc — #1970, the **parse-phase** half of the same optimization. (Originally
+mislabeled "v1.0.8-3 / ships in 1.0.8"; 1.0.8 shipped 2026-06-23 and main now
+tracks 1.1 — this work lands in 1.1.0 via `[Unreleased]`.) The render cache
 (#1969) is Amdahl-bounded because html5ever parse + VDOM build are ~60% of
 `render_with_diff`; #1970 caches the parsed VNode subtree per item so an unchanged
 item skips BOTH render AND parse. Builds directly on
@@ -3736,7 +3738,7 @@ security surface — replay XSS / Redis auth / PII scrub).
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P2** | cache PARSED VNode subtrees for unchanged loop items (#1970) | Extend the #1969 per-item render cache to also cache the parsed VNode subtree (skip html5ever re-parse on reorder of unchanged items); same flag + gates; re-assign dj-ids per current position to keep the keyed diff correct. | v1.0.8 |
+| **P2** | ~~cache PARSED VNode subtrees for unchanged loop items (#1970)~~ ✅ PR #1973 | Extend the #1969 per-item render cache to also cache the parsed VNode subtree (skip html5ever re-parse on reorder of unchanged items); same flag + gates; re-assign dj-ids per current position to keep the keyed diff correct. | v1.1.0 |
 
 **#1970 — parse-phase loop render cache** — #1969 added a flag-gated per-item RENDER
 cache (~1.6–1.7× render-phase on a reorder), but the render phase is only ~40% of
