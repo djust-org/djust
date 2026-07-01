@@ -24,6 +24,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import fs from 'fs';
 import { createHarnessDom } from './_significant_tree.js';
 
 const CASE_COLLIDING_HTML =
@@ -65,5 +66,37 @@ describe('harness dj-id resolution is case-sensitive (real-browser fidelity)', (
         expect(remaining, 'only the lower (dj-id="c") row must remain').toEqual([
             { id: 'c', text: 'lower' },
         ]);
+    });
+
+    it('client resolves dj-id VALUE selectors only via single-token querySelector (shim surface invariant)', () => {
+        // The shim patches `querySelector` and extracts the FIRST `[dj-id="…"]`
+        // token, matching the client's actual usage. If the client ever resolves
+        // a dj-id VALUE via `querySelectorAll`/`closest`/`matches`, or via a
+        // multi-token descendant selector, the shim would silently revert to
+        // jsdom's case-insensitive matching with NO failure signal (the concern
+        // raised in PR #1978 review). Pin the surface so such a change fails
+        // loudly HERE, prompting the shim to be extended.
+        const srcDir = './python/djust/static/djust/src';
+        const offenders = [];
+        for (const file of fs.readdirSync(srcDir)) {
+            if (!file.endsWith('.js')) continue;
+            const src = fs.readFileSync(`${srcDir}/${file}`, 'utf-8');
+            src.split('\n').forEach((line, i) => {
+                // dj-id VALUE selector reached through a non-querySelector API...
+                if (/\.(querySelectorAll|closest|matches)\([^)]*dj-id="/.test(line)) {
+                    offenders.push(`${file}:${i + 1} ${line.trim()}`);
+                }
+                // ...or two dj-id tokens in one selector (only the first is
+                // case-corrected by the shim's regex).
+                if (/querySelector\([^)]*dj-id="[^)]*dj-id="/.test(line)) {
+                    offenders.push(`${file}:${i + 1} (multi-token) ${line.trim()}`);
+                }
+            });
+        }
+        expect(
+            offenders,
+            'dj-id VALUE selectors must be single-token querySelector-only; ' +
+                'extend installCaseSensitiveDjIdResolution if this changes'
+        ).toEqual([]);
     });
 });
