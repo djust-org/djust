@@ -223,6 +223,84 @@ class ProjectListView(TenantScopedMixin, LiveView):
 The tenant field defaults to `tenant_id`; override it per view with the
 `tenant_field` class attribute.
 
+## Switching tenant at runtime (`set_tenant`) and WebSocket persistence
+
+Sometimes a user picks their tenant *after* the page has mounted — an
+organization switcher, an onboarding step, an "act as tenant" admin control.
+Use `self.set_tenant(tenant_id)` from an event handler:
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+from djust.tenants import TenantMixin
+
+class TenantSwitcherView(TenantMixin, LiveView):
+    tenant_required = False  # allow mount before a tenant is chosen — see below
+
+    @event_handler()
+    def choose_tenant(self, value: str = "", **kwargs):
+        self.set_tenant(value)      # authoritative: updates self.tenant now
+        self.projects = Project.objects.filter(tenant_id=self.tenant.id)
+```
+
+`set_tenant()`:
+
+- **Updates the in-memory view state** (`self.tenant`) immediately. This is the
+  **authoritative** source of truth for the tenant for the rest of the
+  WebSocket connection.
+- **Best-effort mirrors** the id into `request.session[TENANT_SESSION_KEY]`
+  **only when a session resolver is configured** (`TENANT_RESOLVER: 'session'`,
+  or a chained resolver that includes `'session'`). For any other resolver
+  (subdomain / path / header / custom) the session write is a **no-op** — those
+  strategies don't read the session, so writing it would be misleading.
+
+### Why the session write is only a *mirror*, not the source of truth
+
+`SessionResolver.resolve()` is **read-only** — it only *reads*
+`request.session[TENANT_SESSION_KEY]` (falling back to a JWT claim, then
+`request.user.tenant_id`). It never writes the session.
+
+Critically, a `request.session[...] = ...` write performed inside a **WebSocket
+event handler has no built-in save guarantee.** Django's `SessionMiddleware`
+persists the session when it processes the **HTTP response** — but a LiveView
+event arrives over the WebSocket, and there is no HTTP response for the
+middleware to save against. So a session write done during an event may never
+reach the session store.
+
+The robust pattern is therefore:
+
+- Keep the tenant id in **view state** (`self.tenant`, and — if you're adapting
+  an existing model FK — your own `self.<field>`) as the **authoritative** value
+  for the connection's lifetime.
+- Treat any session write as a **mirror only** — a convenience so the *next*
+  full-page (HTTP) load resolves the same tenant via the session resolver.
+  `set_tenant()` already does exactly this for you when a session resolver is
+  configured.
+
+### `TENANT_REQUIRED` runs *before* `mount()`
+
+`TenantMixin` resolves the tenant in `dispatch()` / `get()` / `post()`, **before**
+`mount()` runs. When the tenant cannot be resolved and it is required
+(`tenant_required = True` on the view, or `DJUST_CONFIG['TENANT_REQUIRED']`,
+which defaults to `True`), the mixin raises `Http404` — so the view **404s
+before `mount()` is ever called**. That means `mount()` cannot resolve a default
+tenant for a fresh session under the default configuration.
+
+If you need to mount without a pre-resolved tenant (e.g. an org switcher, or
+when you're adapting an existing tenant FK and want to resolve it yourself),
+set `tenant_required = False` on the view and resolve the tenant manually in
+`mount()` (or later, via `set_tenant()`):
+
+```python
+class OnboardingView(TenantMixin, LiveView):
+    tenant_required = False   # don't 404 before mount() when no tenant yet
+
+    def mount(self, request, **kwargs):
+        # Resolve your own default when none was found by the resolver.
+        if self.tenant is None and request.user.is_authenticated:
+            self.set_tenant(request.user.organization.slug)
+```
+
 ## State Backend Isolation
 
 ```python
