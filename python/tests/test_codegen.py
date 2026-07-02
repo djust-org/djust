@@ -85,12 +85,21 @@ def test_generate_multiple_paths():
 
 
 def test_generate_method_call():
-    """Test code generation for method calls (get_* pattern)."""
+    """Test code generation for method calls (get_* pattern).
+
+    Since ADR-024 (Decision 2) the emitted call is guarded by Django's
+    template-callable safety attributes: the method object is bound to a
+    local (`_m = obj.get_full_name`), checked for `alters_data` /
+    `do_not_call_in_templates`, and only then invoked.
+    """
     code = generate_serializer_code("User", ["get_full_name"])
 
-    # Should handle method calls with try/except
+    # Should handle method calls with try/except, behind the ADR-024 guard
     assert "try:" in code
-    assert "get_full_name()" in code
+    assert "_m = obj.get_full_name" in code
+    assert "_m()" in code
+    assert "alters_data" in code
+    assert "do_not_call_in_templates" in code
     assert "except Exception:" in code
 
 
@@ -385,9 +394,12 @@ def test_method_call_with_subtree_generates_iteration():
 
 
 def test_method_call_leaf_still_calls_method():
-    """When .all() is a leaf (no subtree), it should call the method directly."""
+    """When .all() is a leaf (no subtree), it should call the method
+    (via the ADR-024 guarded local binding)."""
     code = generate_serializer_code("Post", ["tags.all"])
-    assert ".all()" in code
+    assert "_m = obj.tags.all" in code
+    assert "_m()" in code
+    assert "alters_data" in code
     func_name = code.split("def ")[1].split("(")[0]
 
     class TagManager:

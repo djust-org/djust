@@ -140,6 +140,14 @@ class LiveViewConfig:
         # {% if %}/{% cycle %}/nested loops/forloop are auto-excluded (correct
         # by construction). Safe to enable for list/table-heavy views.
         "loop_render_cache_enabled": False,
+        # Django-parity template auto-call (ADR-024). When True (default),
+        # the Rust engine's sidecar getattr walk invokes callables exactly
+        # like Django's Variable._resolve_lookup ({{ user.get_full_name }},
+        # {{ workspace.memberships.count }}), honoring
+        # do_not_call_in_templates and refusing alters_data. False restores
+        # the pre-ADR plain-getattr behavior — a kill-switch only, not a
+        # feature toggle (candidate for removal at 2.0).
+        "template_auto_call": True,
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
         # Bootstrap 4 classes (NYC Core Framework, gov sites, legacy projects)

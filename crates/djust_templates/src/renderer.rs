@@ -389,8 +389,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
         Node::Variable(var_name, filter_specs, in_attr) => {
             // `resolve` tries the normal value-stack path first, then
             // falls back to `getattr` on any Py<PyAny> sidecar attached
-            // to the context (e.g. Django model instances).
-            let mut value = context.resolve(var_name).unwrap_or(Value::Null);
+            // to the context (e.g. Django model instances). The `?`
+            // propagates exceptions raised inside an auto-called method
+            // (ADR-024 Django parity); lookup misses stay `Ok(None)`.
+            let mut value = context.resolve(var_name)?.unwrap_or(Value::Null);
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             //
@@ -594,7 +596,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // only hits the value-stack so getattr-backed iterables
             // silently rendered as empty.
             let iterable_value = context
-                .resolve(iterable)
+                .resolve(iterable)?
                 .or_else(|| context.get(iterable).cloned())
                 .unwrap_or(Value::Null);
 

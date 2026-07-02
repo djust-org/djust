@@ -488,6 +488,13 @@ class DjangoJSONEncoder(json.JSONEncoder):
             try:
                 attr = getattr(obj, attr_name)
                 if callable(attr):
+                    # ADR-024 Decision 2 (shared auto-call guard semantics):
+                    # never call alters_data methods; leave
+                    # do_not_call_in_templates callables un-called.
+                    if getattr(attr, "alters_data", False) or getattr(
+                        attr, "do_not_call_in_templates", False
+                    ):
+                        continue
                     value = attr()
                     if isinstance(value, (str, int, float, bool, type(None))):
                         result[attr_name] = value
