@@ -547,6 +547,44 @@ class TestSidecarSerializationFloor:
         assert "f=[]" in html  # queryset-via-custom-object row floored
         assert "u=[jordan]" in html  # ...but the safe field still renders
 
+    def test_container_of_models_does_not_leak(self):
+        """#1986 re-review vector 7: a raw list/tuple of models reached via a
+        non-model intermediary. `_protect_sidecar_value` wraps a Model but not a
+        list *containing* models, so the raw models reach the Rust
+        `FromPyObject` `Vec<Value>` extraction → `__dict__` bulk-dump. Closed at
+        the conversion root: `FromPyObject` routes any raw Django model through
+        `normalize_django_value` (denylist-filtered) instead of the `__dict__`
+        dump, covering list/tuple/dict-value containers in one place."""
+        u = self._user()
+
+        class _Holder:
+            def __init__(self, users):
+                self.items = list(users)  # raw LIST of raw models
+                self.tup = tuple(users)  # raw TUPLE of raw models
+
+        class _V(LiveView):
+            template = (
+                "<div>"
+                "{% for x in h.items %}<i>lp=[{{ x.password }}] lu=[{{ x.username }}]</i>{% endfor %}"
+                "{% for x in h.tup %}<i>tp=[{{ x.password }}]</i>{% endfor %}"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._h = _Holder(type(u).objects.all())
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["h"] = self._h
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "pbkdf2" not in html, f"container of models leaked password: {html}"
+        assert "lp=[]" in html and "tp=[]" in html
+        assert "lu=[jordan]" in html  # safe field through the raw list still renders
+
     def test_proxy_unit_floor_and_delegation(self):
         """Gate-off / unit pin (#1468): the proxy IS load-bearing — it raises
         AttributeError for floor fields + sensitive methods and delegates
