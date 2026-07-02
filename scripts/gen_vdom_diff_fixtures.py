@@ -75,8 +75,8 @@ def gen_kanban_tabs_1678():
     correctly gone (regenerated for freshness in #1979).
 
     NOTE: step 2 (card move) currently captures 0 patches — an in-place mutation
-    of `columns` isn't reflected in the render; tracked separately (see #1979
-    follow-up). Kept so the freshness gate pins that state until it's fixed."""
+    of `columns` isn't reflected in the render; tracked separately at #1981.
+    Kept so the freshness gate pins that state until it's fixed."""
     c = LiveViewTestClient(KanbanTabsView)
     c.mount(active_tab=0)
     egress = c.view_instance._strip_comments_and_whitespace

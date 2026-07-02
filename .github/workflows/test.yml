@@ -149,8 +149,14 @@ jobs:
       - name: VDOM diff fixtures are fresh (#1979)
         run: |
           PYTHONPATH=. .venv/bin/python scripts/gen_vdom_diff_fixtures.py
-          if ! git diff --exit-code -- tests/js/fixtures/; then
-            echo "::error::VDOM diff fixtures are stale — run 'make gen-vdom-fixtures' and commit tests/js/fixtures/."
+          # --porcelain (not `git diff --exit-code`) so a NEW scenario's
+          # never-`git add`ed output file is caught too, not only modified
+          # tracked fixtures (#1980 review).
+          DIRTY=$(git status --porcelain -- tests/js/fixtures/)
+          if [ -n "$DIRTY" ]; then
+            echo "::error::VDOM diff fixtures are stale or uncommitted — run 'make gen-vdom-fixtures' and commit tests/js/fixtures/."
+            echo "$DIRTY"
+            git diff -- tests/js/fixtures/
             exit 1
           fi
 
