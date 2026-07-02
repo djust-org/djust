@@ -1115,3 +1115,77 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
         raise TypeError(msg)
 
     return str(value)
+
+
+# ---------------------------------------------------------------------------
+# Private-state model-reference round-trip (#1994)
+#
+# A Django model cached on a PRIVATE (``_``-prefixed) LiveView attr is persisted
+# to the session so it survives the HTTP-POST-fallback / reconnect restore path
+# (which does NOT re-run ``mount()``). The session is JSON-serialized, so a live
+# model can't be stored as-is; the old path ran ``normalize_django_value`` over
+# private state, which turned the model into the LOSSY *client* dict
+# (``{"pk", "__str__", <fields>}``) — so on restore ``self._workspace`` came back
+# a plain ``dict`` and ``self._workspace.memberships`` raised ``AttributeError``.
+#
+# Instead, encode each model as a re-hydratable REFERENCE and re-fetch it from
+# the DB on restore, so a private model attr round-trips AS A MODEL. Private
+# state is server-side view cache, not client-bound payload — the serialization
+# floor does not apply here (nothing is sent to the client).
+# ---------------------------------------------------------------------------
+
+_PRIVATE_MODEL_REF_KEY = "__djust_model_ref__"
+
+
+def encode_private_model_refs(obj: Any) -> Any:
+    """Recursively replace Django ``Model`` instances with a re-hydratable ref
+    ``{"__djust_model_ref__": "<app_label>.<model_name>", "pk": <pk>}`` (#1994).
+
+    Recurses into ``dict`` values and ``list``/``tuple`` items so a model nested
+    inside a private container is encoded too. Non-model values pass through
+    unchanged (they are handled by the existing ``normalize_django_value`` /
+    JSON session serialization).
+    """
+    if isinstance(obj, models.Model):
+        return {
+            _PRIVATE_MODEL_REF_KEY: f"{obj._meta.app_label}.{obj._meta.model_name}",
+            "pk": obj.pk,
+        }
+    if isinstance(obj, dict):
+        return {k: encode_private_model_refs(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [encode_private_model_refs(v) for v in obj]
+    return obj
+
+
+def decode_private_model_refs(obj: Any) -> Any:
+    """Inverse of :func:`encode_private_model_refs` — re-hydrate model-ref dicts
+    back to model instances via a fresh DB fetch by pk (#1994).
+
+    A ref whose row no longer exists (deleted between save and restore) or whose
+    model is gone re-hydrates to ``None`` with a warning rather than raising —
+    a stale cached model must not hard-crash a reconnect, and handler code that
+    reads it typically already guards (``self._x.attr if self._x else ...``).
+    """
+    if isinstance(obj, dict):
+        if _PRIVATE_MODEL_REF_KEY in obj and "pk" in obj:
+            return _rehydrate_private_model_ref(obj[_PRIVATE_MODEL_REF_KEY], obj["pk"])
+        return {k: decode_private_model_refs(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [decode_private_model_refs(v) for v in obj]
+    return obj
+
+
+def _rehydrate_private_model_ref(label: Any, pk: Any) -> Any:
+    from django.apps import apps
+
+    try:
+        model_cls = apps.get_model(label)
+        return model_cls.objects.get(pk=pk)
+    except Exception:
+        logger.warning(
+            "djust: could not re-hydrate private model %s(pk=%r) on state restore; setting to None",
+            label,
+            pk,
+        )
+        return None
