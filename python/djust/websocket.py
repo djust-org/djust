@@ -317,7 +317,9 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     are NOT detected. For those, call ``self.set_changed_keys('items')`` after
     the mutation to force a re-render, or assign a new value built immutably
     (which djust diffs efficiently). Setting ``self._changed_keys`` directly does
-    NOT help — the pre/post skip fires before it is consulted.
+    NOT help: it is excluded from this snapshot (``_FRAMEWORK_INTERNAL_ATTRS``),
+    so the pre/post skip still fires — the render-forcing mechanism is the
+    ``_force_full_html`` flag that ``set_changed_keys()`` sets.
     """
     # #762: Filter framework-internal attrs so change detection doesn't fire
     # on attrs like ``template_name`` / ``http_method_names`` that the user
@@ -1642,6 +1644,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception:  # noqa: BLE001
             logger.exception("Deferred-activity render failed for %s", event_name)
             return
+        # Consume the force flag (one render per set_changed_keys()/_force_full_html,
+        # #1981) — mirrors the runtime's reset in _render_and_send; without it the
+        # flag leaks and every subsequent turn force-renders.
+        if getattr(view, "_force_full_html", False):
+            view._force_full_html = False
         _render_ms = (time.perf_counter() - t0) * 1000
 
         patch_list = None
@@ -4068,8 +4075,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await sync_to_async(self.view_instance.handle_tick)()
 
                         # Skip render if tick handler didn't change any state.
+                        # Honor _force_full_html (set by set_changed_keys(), #1981)
+                        # like the event paths do (runtime.py / handle_event) — an
+                        # in-place mutation inside handle_tick is invisible to the
+                        # snapshot, so without this guard the hatch would be
+                        # silently dropped on the tick path (#1646 parallel-path).
                         post_assigns = _snapshot_assigns(self.view_instance)
-                        if pre_assigns == post_assigns:
+                        if pre_assigns == post_assigns and not getattr(
+                            self.view_instance, "_force_full_html", False
+                        ):
                             logger.debug(
                                 "[djust] Tick on %s produced no state changes, skipping render",
                                 self.view_instance.__class__.__name__,
@@ -4082,6 +4096,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         html, patches, version = await sync_to_async(
                             self.view_instance.render_with_diff
                         )()
+
+                        # Consume the force flag (one render per
+                        # set_changed_keys()/_force_full_html, #1981) — mirrors
+                        # the runtime's reset in _render_and_send.
+                        if getattr(self.view_instance, "_force_full_html", False):
+                            self.view_instance._force_full_html = False
 
                         if patches is not None:
                             if isinstance(patches, str):

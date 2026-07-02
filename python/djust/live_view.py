@@ -127,6 +127,16 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "temporary_assigns",
         "sticky",
         "sticky_id",
+        # Per-event render-control flags (#1981 / PR #1982 review). Written by
+        # ``set_changed_keys()`` / handlers and read by the event spine; they are
+        # framework signals, not user state. ``_snapshot_assigns`` has no
+        # underscore filter, so without this exclusion assigning them in a
+        # handler perturbs the pre/post fingerprint and triggers a render BY
+        # SNAPSHOT LEAK rather than by the sanctioned ``_force_full_html``
+        # mechanism (and made the "setting _changed_keys directly is
+        # ineffective" doc claim false).
+        "_changed_keys",
+        "_force_full_html",
     }
 )
 

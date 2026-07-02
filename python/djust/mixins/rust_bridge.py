@@ -578,16 +578,24 @@ class RustBridgeMixin:
 
         Args:
             keys: an attr name, or an iterable of attr names, to mark changed.
+
+        Note:
+            Distinct from the Rust-side ``RustLiveView.set_changed_keys`` (the
+            PyO3 partial-sync primitive `_sync_state_to_rust` drives internally)
+            — this Python-level method is the user-facing "force a re-render"
+            hatch and does not talk to the Rust view directly.
         """
         key_iter: Iterable[str] = (keys,) if isinstance(keys, str) else keys
         existing: Set[str] = getattr(self, "_changed_keys", None) or set()
         # Optional[...]: the attr is also cleared to None after each render sync.
         self._changed_keys: Optional[Set[str]] = existing | set(key_iter)
-        # Force the render. The pre/post assigns snapshot (runtime.py /
-        # websocket.py) can't see the in-place mutation, so the event would
-        # auto-skip BEFORE ``_changed_keys`` is ever consulted. ``_force_full_html``
-        # is the sanctioned skip bypass (honored on every skip path and reset
-        # after render — runtime.py / websocket.py).
+        # Force the render. Both flags written here are in
+        # ``_FRAMEWORK_INTERNAL_ATTRS`` and therefore EXCLUDED from the pre/post
+        # assigns snapshot — assigning them cannot perturb the fingerprint, so
+        # the in-place mutation still looks unchanged and the event would
+        # auto-skip. ``_force_full_html`` is the sanctioned skip bypass: honored
+        # on every skip path (runtime event spine, WS deferred-activity, WS tick)
+        # and consumed (reset) after the render it forces.
         self._force_full_html = True
 
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:

@@ -50,6 +50,12 @@ class _InPlaceView(_EventSpineMixin, LiveView):
         self.rows[1]["cards"].append(moved)
         self.set_changed_keys("rows")  # ...plus the escape hatch
 
+    @event_handler()
+    def move_with_raw_changed_keys(self, **kwargs):
+        moved = self.rows[0]["cards"].pop(0)  # identical in-place mutation...
+        self.rows[1]["cards"].append(moved)
+        self._changed_keys = {"rows"}  # ...raw flag only — documented as ineffective
+
 
 def _updates(transport):
     return [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
@@ -78,9 +84,37 @@ class TestSetChangedKeys1981:
         assert _noops(transport), f"expected a noop, got {transport.sent!r}"
 
     @pytest.mark.asyncio
+    async def test_raw_changed_keys_alone_is_still_skipped(self):
+        """Mechanism pin (#1982 review 🔴): ``_changed_keys`` is excluded from the
+        assigns snapshot (``_FRAMEWORK_INTERNAL_ATTRS``), so setting it DIRECTLY
+        — same in-place mutation, no ``_force_full_html`` — still auto-skips.
+        This falsification-tests the docstring claim ("setting _changed_keys
+        directly does NOT help") AND proves the with-hatch render below is
+        attributable to ``_force_full_html``, not a snapshot leak of the flag
+        itself. Gate-off: remove ``_changed_keys``/``_force_full_html`` from
+        ``_FRAMEWORK_INTERNAL_ATTRS`` → the raw flag perturbs the fingerprint →
+        this RENDERS instead of nooping → FAILS."""
+        runtime, transport = _event_runtime_with_view(_InPlaceView())
+        runtime.view_instance.count = 0
+        runtime.view_instance.rows = [{"cards": ["a"]}, {"cards": []}]
+
+        await runtime.dispatch_event(
+            {"type": "event", "event": "move_with_raw_changed_keys", "params": {}}
+        )
+
+        assert not _updates(transport), (
+            "raw _changed_keys assignment must NOT bypass the skip (it is "
+            "snapshot-excluded; only set_changed_keys()'s _force_full_html "
+            f"does), got {transport.sent!r}"
+        )
+        assert _noops(transport), f"expected a noop, got {transport.sent!r}"
+
+    @pytest.mark.asyncio
     async def test_in_place_with_hatch_renders(self):
         """``set_changed_keys`` forces the re-render the auto-skip would drop —
-        the same mutation as the gate-off test, plus the hatch, now renders."""
+        the same mutation as the gate-off test, plus the hatch, now renders.
+        Paired with ``test_raw_changed_keys_alone_is_still_skipped``, the render
+        here is isolated to the ``_force_full_html`` mechanism."""
         runtime, transport = _event_runtime_with_view(_InPlaceView())
         runtime.view_instance.count = 0
         runtime.view_instance.rows = [{"cards": ["a"]}, {"cards": []}]
