@@ -306,6 +306,7 @@ impl Context {
                 CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
                 CallOutcome::Empty => return Ok(Some(Value::Null)),
             };
+            current = self.protect_sidecar(py, current);
             for part in &parts[1..] {
                 match current.getattr(*part) {
                     Ok(next) => {
@@ -323,10 +324,47 @@ impl Context {
                     CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
                     CallOutcome::Empty => return Ok(Some(Value::Null)),
                 };
+                current = self.protect_sidecar(py, current);
             }
             // Convert the resolved attribute to Value; failure → None
             Ok(current.extract::<Value>().ok())
         })
+    }
+
+    /// Route a just-materialized attribute/call result through the Python
+    /// sidecar serialization floor (SECURE_DEFAULTS Pattern 1 / #1986).
+    ///
+    /// `djust.serialization._protect_sidecar_value` wraps a Django `Model`
+    /// in `_SidecarModelProxy` and a `Manager`/`QuerySet` in
+    /// `_SidecarQuerySetProxy` (both floor-enforcing); anything else is
+    /// returned unchanged. Applying it at THIS point — the single spot where
+    /// the walk holds a freshly-resolved value, after both `getattr` and the
+    /// auto-call — is what makes the floor hold *however* a model was reached:
+    /// a related-field getattr, an auto-called method that returns a model
+    /// (`{{ obj.get_related.password }}`), or an attribute of a non-model
+    /// intermediary object placed in the context (`{{ presenter.user.password }}`,
+    /// #1986 vector 6). Python-side proxies alone can't cover those — a raw
+    /// intermediary has no proxy `__getattr__`, and a Rust auto-call result
+    /// never re-enters Python. One chokepoint here retires the class (#1646).
+    ///
+    /// Floor enforcement is INDEPENDENT of the `auto_call` kill-switch
+    /// (`{{ p.user.password }}` leaks via pure getattr, no call), so this runs
+    /// regardless of `self.auto_call`. It is idempotent (wrapping a proxy
+    /// returns it unchanged) and fail-safe: any error returns the value
+    /// unwrapped rather than crashing the render.
+    fn protect_sidecar<'py>(
+        &self,
+        py: Python<'py>,
+        obj: pyo3::Bound<'py, pyo3::PyAny>,
+    ) -> pyo3::Bound<'py, pyo3::PyAny> {
+        match py
+            .import("djust.serialization")
+            .and_then(|m| m.getattr("_protect_sidecar_value"))
+            .and_then(|f| f.call1((obj.clone(),)))
+        {
+            Ok(wrapped) => wrapped,
+            Err(_) => obj,
+        }
     }
 
     /// Django-parity callable handling for one resolved attribute

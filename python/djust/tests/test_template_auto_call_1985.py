@@ -259,11 +259,15 @@ class TestSidecarSerializationFloor:
     (get_session_auth_hash) to the client. Both explicitly-assigned models
     and request-scoped `user` are covered by _SidecarModelProxy."""
 
-    def _user(self):
+    def _user(self, is_superuser=False):
         from django.contrib.auth.models import Group, User
 
         u = User.objects.create_user(
-            username="jordan", first_name="Jordan", last_name="Reyes", password="s3cret-pw"
+            username="jordan",
+            first_name="Jordan",
+            last_name="Reyes",
+            password="s3cret-pw",
+            is_superuser=is_superuser,
         )
         u.groups.add(Group.objects.create(name="a"), Group.objects.create(name="b"))
         return u
@@ -497,6 +501,51 @@ class TestSidecarSerializationFloor:
         html, _, _ = client.render_with_patches()  # must not crash the worker
         assert "meta=[]" in html and "tbl=[]" in html and "st=[]" in html
         assert "auth_user" not in html, f"schema disclosed via _meta: {html}"
+
+    def test_non_model_intermediary_does_not_leak(self):
+        """#1986 re-review vector 6: a non-model, non-JSON-serializable custom
+        object placed in the context — a "presenter"/view-model — that exposes
+        a raw Django model / manager / queryset must not leak floor fields
+        reached THROUGH it. `_protect_sidecar_value` returns a custom object
+        unchanged, so the Python proxies can't cover this; the Rust resolve
+        walk's `protect_sidecar` chokepoint wraps the model/manager/queryset the
+        moment it materializes (getattr OR auto-called method result)."""
+        u = self._user(is_superuser=True)
+
+        class _Presenter:
+            def __init__(self, user):
+                self.user = user  # raw Model
+                self.qs = type(user).objects.all()  # raw QuerySet
+                self.mgr = user.groups  # raw Manager
+
+            def get_user(self):  # method returning a raw Model (Rust auto-calls)
+                return self.user
+
+        class _V(LiveView):
+            template = (
+                "<div>"
+                "a=[{{ p.user.password }}] b=[{{ p.user.is_superuser }}] "
+                "c=[{{ p.get_user.password }}] d=[{{ p.mgr.first.password }}] "
+                "e=[{{ p.user._meta.db_table }}]"
+                "{% for x in p.qs %}<i>f=[{{ x.password }}] u=[{{ x.username }}]</i>{% endfor %}"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._p = _Presenter(u)
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["p"] = self._p
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "pbkdf2" not in html, f"non-model intermediary leaked password: {html}"
+        assert "b=[]" in html and "auth_user" not in html
+        assert "f=[]" in html  # queryset-via-custom-object row floored
+        assert "u=[jordan]" in html  # ...but the safe field still renders
 
     def test_proxy_unit_floor_and_delegation(self):
         """Gate-off / unit pin (#1468): the proxy IS load-bearing — it raises
