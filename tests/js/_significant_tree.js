@@ -35,6 +35,8 @@ export function createHarnessDom(initialHtml) {
         window.CSS.escape = (s) => String(s).replace(/([^\w-])/g, '\\$1');
     }
 
+    installCaseSensitiveDjIdResolution(window);
+
     const logs = [];
     window.console = {
         log: (...args) => logs.push(['log', args.join(' ')]),
@@ -46,6 +48,62 @@ export function createHarnessDom(initialHtml) {
 
     window.eval(clientCode);
     return { dom, window, logs };
+}
+
+/**
+ * Make `[dj-id="…"]` selector resolution CASE-SENSITIVE in the jsdom window, so
+ * the harness matches real-browser semantics (#1977 follow-up).
+ *
+ * djust dj-ids are base62 (`0-9a-zA-Z`) from a monotonic counter, so any render
+ * past ~38 nodes emits sibling ids that differ only by case (`c` vs `C`). The
+ * client resolves structural ops with `node.querySelector(':scope >
+ * [dj-id="C"]')` (12-vdom-patch.js). Real browsers match custom-attribute VALUES
+ * case-sensitively (`dj-id` is not in the HTML spec's ASCII-case-insensitive
+ * attribute set), so `[dj-id="C"]` never matches `dj-id="c"`. jsdom's selector
+ * engine (nwsapi) matches them case-INSENSITIVELY, so without this shim the
+ * harness resolves the wrong sibling for any fixture that crosses ~38 nodes
+ * where a structural op targets a case-colliding sibling — silently
+ * false-positing AND (worse) masking real VDOM regressions.
+ *
+ * The shim wraps `querySelector` on Element/Document/DocumentFragment and only
+ * INTERVENES when nwsapi returns a dj-id that case-folds to the requested value
+ * but isn't an exact match — then it re-resolves case-sensitively among the
+ * native (case-insensitive) candidate set. Every other selector, and every
+ * exact match, delegates to native untouched (so escaped/special-char selectors
+ * are unaffected). The client only ever uses single `[dj-id="X"]` tokens via
+ * `querySelector`, so this is the complete surface.
+ */
+function installCaseSensitiveDjIdResolution(window) {
+    const DJID = /\[dj-id="([^"]*)"\]/;
+    const protos = [
+        window.Element && window.Element.prototype,
+        window.Document && window.Document.prototype,
+        window.DocumentFragment && window.DocumentFragment.prototype,
+    ].filter(Boolean);
+
+    for (const proto of protos) {
+        const nativeQS = proto.querySelector;
+        const nativeQSA = proto.querySelectorAll;
+        proto.querySelector = function (selector) {
+            const result = nativeQS.call(this, selector);
+            const m = typeof selector === 'string' && selector.match(DJID);
+            if (!result || !m) return result;
+            const want = m[1];
+            const got = result.getAttribute('dj-id');
+            if (got === want) return result; // exact match — nothing to correct
+            // Only correct nwsapi's case-insensitivity: same value up to case,
+            // but not an exact match. Re-resolve case-sensitively among the
+            // native candidate set (a superset of the exact-case matches).
+            if (got != null && got.toLowerCase() === want.toLowerCase()) {
+                const all = nativeQSA.call(this, selector);
+                for (let i = 0; i < all.length; i++) {
+                    if (all[i].getAttribute('dj-id') === want) return all[i];
+                }
+                return null; // no exact-case sibling — the id is genuinely absent
+            }
+            return result; // difference is not a case issue — leave native as-is
+        };
+    }
 }
 
 /**
