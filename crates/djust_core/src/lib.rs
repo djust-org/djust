@@ -211,6 +211,25 @@ impl<'py> FromPyObject<'_, 'py> for Value {
         } else if let Ok(dict) = ob.extract::<HashMap<String, Value>>() {
             Ok(Value::Object(dict))
         } else {
+            // #1986: a djust sidecar proxy exposes `__djust_serialize__()`,
+            // returning a DENYLIST-FILTERED dict (via the same eager serializer
+            // the rest of djust uses). Route through it FIRST — otherwise the
+            // `__dict__` bulk-dump below (which filters only `_`-prefixed keys)
+            // would leak floor fields like `password` for any model converted
+            // to a value (queryset items in a `{% for %}`, a terminal model).
+            // Only djust proxies carry this method, so `update_state` ingestion
+            // (plain dicts/primitives) is unaffected.
+            if let Ok(serializer) = ob.getattr("__djust_serialize__") {
+                if let Ok(result) = serializer.call0() {
+                    // The hook returns a plain, denylist-filtered dict (model)
+                    // or list-of-dicts (queryset) — recurse via Value so both
+                    // shapes convert (Object / List). The result carries no
+                    // proxies, so this does not re-enter this branch.
+                    if let Ok(v) = result.extract::<Value>() {
+                        return Ok(v);
+                    }
+                }
+            }
             // For arbitrary Python objects (e.g. Django model instances), try to
             // extract public attributes from __dict__ so that template expressions
             // like `{{ obj.name }}` or `{{ obj.path }}` work without requiring

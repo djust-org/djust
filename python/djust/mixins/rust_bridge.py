@@ -1020,18 +1020,18 @@ class RustBridgeMixin:
                 # serialization floor (SECURE_DEFAULTS Pattern 1) unless raw
                 # models are wrapped — else `{{ user.password }}` /
                 # `{{ member.is_superuser }}` / `{{ user.get_session_auth_hash }}`
-                # leak to the client. Wrap every model in the sidecar (both
-                # explicitly-assigned models above AND request-scoped ones like
-                # `user` added by the general loop) in the denylist-consulting
-                # proxy, so ONE floor governs the eager and sidecar channels
-                # (#1646).
-                from django.db.models import Model as _DjModelForProxy
-
-                from ..serialization import _SidecarModelProxy
+                # (and, through managers/querysets,
+                # `{{ x.groups.first.user_set.first.password }}` /
+                # `{% for u in qs %}{{ u.password }}`) leak to the client. Wrap
+                # every sidecar value (both explicitly-assigned models above AND
+                # request-scoped ones like `user`) in the floor-enforcing proxy;
+                # `_protect_sidecar_value` is a no-op for non-model values
+                # (request/view/etc.), and the proxy protects transitively so
+                # ONE floor governs the eager and sidecar channels (#1646).
+                from ..serialization import _protect_sidecar_value
 
                 for _sk in list(sidecar.keys()):
-                    if isinstance(sidecar[_sk], _DjModelForProxy):
-                        sidecar[_sk] = _SidecarModelProxy(sidecar[_sk])
+                    sidecar[_sk] = _protect_sidecar_value(sidecar[_sk])
 
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a

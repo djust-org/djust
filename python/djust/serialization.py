@@ -587,6 +587,28 @@ class DjangoJSONEncoder(json.JSONEncoder):
 _encoder = DjangoJSONEncoder()
 
 
+def _protect_sidecar_value(value: Any) -> Any:
+    """Wrap a value reached during the template getattr sidecar walk so the
+    serialization floor keeps holding transitively (#1986 review).
+
+    - A Django ``Model`` → ``_SidecarModelProxy`` (floor-enforcing getattr +
+      a denylist-filtered ``__djust_serialize__`` for terminal conversion).
+    - A ``Manager`` / ``QuerySet`` → ``_SidecarQuerySetProxy``, so the models
+      it yields (``.first``/``.get``/``.all``, iteration) are themselves
+      protected — otherwise ``{{ x.groups.first.user_set.first.password }}``
+      or ``{% for u in qs %}{{ u.password }}{% endfor %}`` would read a raw,
+      unwrapped model and leak the floor field.
+    - Anything else → returned unchanged (no floor to enforce).
+    """
+    if isinstance(value, models.Model):
+        return _SidecarModelProxy(value)
+    from django.db.models import Manager, QuerySet
+
+    if isinstance(value, (Manager, QuerySet)):
+        return _SidecarQuerySetProxy(value)
+    return value
+
+
 class _SidecarModelProxy:
     """Denylist-consulting wrapper for a Django ``Model`` placed in the
     template getattr sidecar (ADR-024 / #1986 review).
@@ -605,15 +627,31 @@ class _SidecarModelProxy:
     and the same sensitive-method set — so ONE authority governs both the
     eager and the sidecar channel (#1646). Refused names raise
     ``AttributeError``; the Rust walk turns that into an empty render
-    (Django's ``string_if_invalid`` default). Related models reached through
-    the walk are wrapped recursively, so ``{{ member.profile.ssn }}`` is
-    protected too. Everything non-sensitive (safe fields, ``get_full_name``,
-    managers, relations) delegates transparently, so Django-parity auto-call
-    still works.
+    (Django's ``string_if_invalid`` default).
+
+    Three defenses, all needed (each closed a distinct #1986-review bypass):
+
+    1. **Field/method floor** on ``__getattr__`` — direct
+       ``{{ member.password }}`` / ``{{ member.get_session_auth_hash }}``.
+    2. **Transitive protection** of every returned value via
+       ``_protect_sidecar_value`` — a model or manager/queryset reached deeper
+       in the walk (``{{ x.groups.first.user_set.first.password }}``,
+       ``{% for u in qs %}``) is itself wrapped, so it can't leak.
+    3. **``__djust_serialize__``** returns a denylist-filtered dict
+       (``normalize_django_value``, the SAME serializer the eager path uses),
+       which the Rust ``FromPyObject`` calls instead of bulk-dumping the raw
+       model's ``__dict__`` (that dump — ``lib.rs`` — filtered only
+       ``_``-prefixed keys, so it leaked ``password`` for any model converted
+       to a value, e.g. queryset items in a ``{% for %}``).
+
+    ``_``-prefixed names are refused outright (Django-parity: template
+    resolution never touches them) — this also closes the ``{{ obj._meta }}``
+    worker segfault + ``{{ obj._meta.db_table }}`` schema disclosure. Safe
+    fields, ``get_full_name``, managers, and relations delegate transparently,
+    so Django-parity auto-call still works.
 
     Type-based field exclusion (e.g. always-drop ``BinaryField``) is a
-    separate follow-up that hardens both serialization paths — tracked apart
-    from this security fix.
+    separate follow-up (#1987) that hardens both serialization paths.
     """
 
     __slots__ = ("_obj", "_denied", "_allowed", "_optout")
@@ -627,32 +665,99 @@ class _SidecarModelProxy:
     def __getattr__(self, name: str) -> Any:
         # ``__getattr__`` fires only for names not in ``__slots__`` — i.e.
         # every attribute the template can reference on the wrapped model.
+        # Django-parity: refuse ``_``-prefixed names outright. Templates never
+        # resolve them, and allowing them lets ``{{ obj._meta }}`` segfault the
+        # worker (Options extraction) + ``{{ obj._meta.db_table }}`` disclose
+        # the schema (#1986 review). Identity keys (pk/id) are not ``_``-names.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        # Sensitive / expensive methods the eager path never emits.
+        if name in _SENSITIVE_MODEL_METHODS or name.startswith(_SENSITIVE_MODEL_METHOD_PREFIXES):
+            raise AttributeError(name)
+        # The serialization floor / allowlist — the SAME authority the eager
+        # dict uses. A floor field (or, under a per-model allowlist, any
+        # non-allowlisted name) is refused.
+        denied = object.__getattribute__(self, "_denied")
+        allowed = object.__getattribute__(self, "_allowed")
+        optout = object.__getattribute__(self, "_optout")
+        if not DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout):
+            raise AttributeError(name)
         obj = object.__getattribute__(self, "_obj")
-        if not name.startswith("_"):
-            # Sensitive / expensive methods the eager path never emits.
-            if name in _SENSITIVE_MODEL_METHODS or name.startswith(
-                _SENSITIVE_MODEL_METHOD_PREFIXES
-            ):
-                raise AttributeError(name)
-            # The serialization floor / allowlist — the SAME authority the
-            # eager dict uses. A floor field (or, under a per-model allowlist,
-            # any non-allowlisted name) is refused.
-            denied = object.__getattribute__(self, "_denied")
-            allowed = object.__getattribute__(self, "_allowed")
-            optout = object.__getattribute__(self, "_optout")
-            if not DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout):
-                raise AttributeError(name)
-        value = getattr(obj, name)
-        # Recursively protect related models reached through the walk.
-        if isinstance(value, models.Model):
-            return _SidecarModelProxy(value)
-        return value
+        return _protect_sidecar_value(getattr(obj, name))
+
+    def __djust_serialize__(self) -> Any:
+        """Denylist-filtered dict for terminal Value conversion (called by the
+        Rust ``FromPyObject``). Routes through the eager serializer so a model
+        that becomes a template value (queryset item, terminal model) is
+        floor-filtered instead of ``__dict__``-dumped."""
+        return normalize_django_value(object.__getattribute__(self, "_obj"))
 
     def __str__(self) -> str:
         # ``{{ member }}`` normally renders via the eager dict's ``__str__``
         # key; this covers the case where a proxied related model is the
         # terminal value of a walk.
         return str(object.__getattribute__(self, "_obj"))
+
+
+class _SidecarQuerySetProxy:
+    """Floor-preserving wrapper for a Django ``Manager`` / ``QuerySet`` reached
+    in the template getattr sidecar walk (#1986 review).
+
+    The models a manager/queryset produces — via an auto-called method
+    (``.first``/``.get``/``.latest``…), via a chained queryset (``.all``/
+    ``.filter``…), or via iteration in ``{% for %}`` — must be wrapped in
+    ``_SidecarModelProxy`` too, or the next segment reads a raw model and
+    leaks a floor field. Attribute access returns a protected attr (or a
+    call-wrapping proxy whose *result* is protected); iteration yields
+    protected items. Django's template-callable guards (``alters_data`` /
+    ``do_not_call_in_templates``) and the ORM-warning ``__self__`` are copied
+    onto the call wrapper so the Rust auto-call path treats it exactly like
+    the underlying bound method.
+    """
+
+    __slots__ = ("_qs",)
+
+    def __init__(self, qs: Any) -> None:
+        object.__setattr__(self, "_qs", qs)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        qs = object.__getattribute__(self, "_qs")
+        attr = getattr(qs, name)
+        if callable(attr) and not isinstance(attr, type):
+
+            def _wrapped(*args: Any, **kwargs: Any) -> Any:
+                return _protect_sidecar_value(attr(*args, **kwargs))
+
+            # Preserve the template-callable guards + ORM ``__self__`` so the
+            # Rust walk auto-calls (or refuses) the wrapper exactly as it would
+            # the bound method (e.g. ``qs.delete`` keeps ``alters_data=True``).
+            for _marker in ("alters_data", "do_not_call_in_templates", "__self__"):
+                if hasattr(attr, _marker):
+                    try:
+                        setattr(_wrapped, _marker, getattr(attr, _marker))
+                    except (AttributeError, TypeError):  # pragma: no cover - defensive
+                        pass
+            return _wrapped
+        return _protect_sidecar_value(attr)
+
+    def __iter__(self) -> Any:
+        return (_protect_sidecar_value(item) for item in object.__getattribute__(self, "_qs"))
+
+    def __len__(self) -> int:
+        return len(object.__getattribute__(self, "_qs"))
+
+    def __djust_serialize__(self) -> Any:
+        """Denylist-filtered LIST for terminal Value conversion (called by the
+        Rust ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop
+        resolves the queryset to this value; each item is floor-filtered
+        (``{{ x.name }}`` works, ``{{ x.password }}`` is empty) instead of
+        ``__dict__``-dumped."""
+        return [normalize_django_value(item) for item in object.__getattribute__(self, "_qs")]
+
+    def __str__(self) -> str:
+        return str(object.__getattribute__(self, "_qs"))
 
 
 def render_form_value(value: Any) -> Any:

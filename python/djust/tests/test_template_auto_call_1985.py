@@ -385,6 +385,86 @@ class TestSidecarSerializationFloor:
         assert "ln=[]" in html, f"configured-sensitive last_name leaked: {html}"
         assert "Jordan" in html  # first_name (not sensitive) still renders
 
+    def test_manager_traversal_does_not_leak(self):
+        """#1986 re-review 🔴: a model returned by an auto-called manager/
+        queryset method (`.first`/`.get`) must itself be floor-wrapped, or the
+        next segment reads a raw model and leaks. Transitive protection."""
+        u = self._user()
+
+        class _V(LiveView):
+            template = (
+                "<div>f=[{{ m.groups.first.user_set.first.password }}] "
+                "g=[{{ m.groups.first.user_set.get.password }}]</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._m = u
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["m"] = self._m
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "pbkdf2" not in html, f"manager-traversal leaked password: {html}"
+        assert "f=[]" in html and "g=[]" in html
+
+    def test_for_loop_iteration_floor_and_fields(self):
+        """#1986 re-review 🔴: queryset items in a `{% for %}` went through the
+        Rust `__dict__` bulk-dump (which filtered only `_`-names), leaking
+        `password`. Items must be denylist-filtered dicts: floor field empty,
+        safe field works."""
+        u = self._user()
+
+        class _V(LiveView):
+            template = (
+                "<ul>{% for x in m.groups.first.user_set.all %}"
+                "<li>pw=[{{ x.password }}] u=[{{ x.username }}]</li>"
+                "{% endfor %}</ul>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._m = u
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["m"] = self._m
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "pbkdf2" not in html, f"for-loop iteration leaked password: {html}"
+        assert "pw=[]" in html
+        assert "u=[jordan]" in html, f"for-loop lost the safe field: {html}"
+
+    def test_underscore_prefixed_refused(self):
+        """#1986 re-review 🟡: `_`-prefixed names must be refused (Django
+        parity). `{{ obj._meta }}` would otherwise segfault the worker
+        (Options extraction) and `{{ obj._meta.db_table }}` disclose schema."""
+        u = self._user()
+
+        class _V(LiveView):
+            template = (
+                "<div>meta=[{{ m._meta }}] tbl=[{{ m._meta.db_table }}] st=[{{ m._state }}]</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._m = u
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["m"] = self._m
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()  # must not crash the worker
+        assert "meta=[]" in html and "tbl=[]" in html and "st=[]" in html
+        assert "auth_user" not in html, f"schema disclosed via _meta: {html}"
+
     def test_proxy_unit_floor_and_delegation(self):
         """Gate-off / unit pin (#1468): the proxy IS load-bearing — it raises
         AttributeError for floor fields + sensitive methods and delegates
