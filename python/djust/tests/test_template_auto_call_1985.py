@@ -440,6 +440,39 @@ class TestSidecarSerializationFloor:
         assert "pw=[]" in html
         assert "u=[jordan]" in html, f"for-loop lost the safe field: {html}"
 
+    def test_values_projection_refused_no_leak(self):
+        """#1986 re-review vector 5: `.values()` / `.values_list()` yield raw
+        dict/tuple rows with no model identity — `.first`/`.get`/index/iteration
+        would each hand back an unfiltered row. Projections are refused
+        wholesale in the sidecar (empty), so no floor field leaks and no safe
+        field renders either (precompute in get_context_data instead)."""
+        u = self._user()
+
+        class _V(LiveView):
+            template = (
+                "<div>"
+                "{% for x in m.groups.first.user_set.values %}<span>vpw=[{{ x.password }}]</span>{% endfor %}"
+                "{% for x in m.groups.first.user_set.values_list %}<span>lpw=[{{ x.1 }}]</span>{% endfor %}"
+                "<b>first=[{{ m.groups.first.user_set.values.first.password }}]</b>"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._m = u
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["m"] = self._m
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "pbkdf2" not in html, f".values()/.values_list() leaked password: {html}"
+        assert "first=[]" in html  # .values.first.password refused
+        # projection refused → no <li> rows emitted at all
+        assert "vpw=" not in html and "lpw=" not in html
+
     def test_underscore_prefixed_refused(self):
         """#1986 re-review 🟡: `_`-prefixed names must be refused (Django
         parity). `{{ obj._meta }}` would otherwise segfault the worker

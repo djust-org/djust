@@ -713,15 +713,38 @@ class _SidecarQuerySetProxy:
     ``do_not_call_in_templates``) and the ORM-warning ``__self__`` are copied
     onto the call wrapper so the Rust auto-call path treats it exactly like
     the underlying bound method.
+
+    **``.values()`` / ``.values_list()`` projections are refused** (#1986
+    re-review, vector 5). Those querysets yield raw ``dict`` / ``tuple`` ROWS
+    with no model identity, so neither this proxy nor ``_SidecarModelProxy``
+    can apply the per-field floor to them — and ``.first()`` / ``.get()`` /
+    iteration / positional index would each hand back an *unfiltered* row
+    (leaking e.g. ``password`` via ``{% for x in qs.values %}{{ x.password }}``
+    or ``{{ qs.values.first.password }}``). Rather than floor-filter every row
+    escape hatch, a projection is refused wholesale in the sidecar: iteration
+    is empty, attribute access raises. This is fail-closed with **zero
+    regression** — a ``.values`` projection never rendered in the sidecar
+    auto-call walk before ADR-024 (auto-call is new), the un-called bound
+    method just stringified. Precompute projected rows in
+    ``get_context_data()``, where the eager serialization floor applies.
     """
 
-    __slots__ = ("_qs",)
+    __slots__ = ("_qs", "_is_projection")
 
     def __init__(self, qs: Any) -> None:
         object.__setattr__(self, "_qs", qs)
+        # A ``.values()`` / ``.values_list()`` queryset sets ``_fields`` (to a
+        # possibly-empty tuple); a normal queryset / manager leaves it ``None``.
+        # This is the ONLY queryset op that sets ``_fields``, so it cleanly
+        # detects the projection class we must refuse.
+        object.__setattr__(self, "_is_projection", getattr(qs, "_fields", None) is not None)
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
+            raise AttributeError(name)
+        # Refuse ALL access on a values/values_list projection — .first/.get/
+        # .aggregate/etc. each return an unfiltered raw row/scalar (vector 5).
+        if object.__getattribute__(self, "_is_projection"):
             raise AttributeError(name)
         qs = object.__getattribute__(self, "_qs")
         attr = getattr(qs, name)
@@ -743,9 +766,13 @@ class _SidecarQuerySetProxy:
         return _protect_sidecar_value(attr)
 
     def __iter__(self) -> Any:
+        if object.__getattribute__(self, "_is_projection"):
+            return iter(())  # refuse: projection rows have no per-field floor
         return (_protect_sidecar_value(item) for item in object.__getattribute__(self, "_qs"))
 
     def __len__(self) -> int:
+        if object.__getattribute__(self, "_is_projection"):
+            return 0
         return len(object.__getattribute__(self, "_qs"))
 
     def __djust_serialize__(self) -> Any:
@@ -753,7 +780,10 @@ class _SidecarQuerySetProxy:
         Rust ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop
         resolves the queryset to this value; each item is floor-filtered
         (``{{ x.name }}`` works, ``{{ x.password }}`` is empty) instead of
-        ``__dict__``-dumped."""
+        ``__dict__``-dumped. A ``.values()``/``.values_list()`` projection is
+        refused (empty) — its rows carry no per-field floor (vector 5)."""
+        if object.__getattribute__(self, "_is_projection"):
+            return []
         return [normalize_django_value(item) for item in object.__getattribute__(self, "_qs")]
 
     def __str__(self) -> str:
