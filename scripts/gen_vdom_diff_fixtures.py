@@ -26,9 +26,11 @@ pre-commit hook kept it fresh and none existed).
 Run:  make gen-vdom-fixtures      # or: .venv/bin/python scripts/gen_vdom_diff_fixtures.py
 """
 
+import atexit
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -39,6 +41,23 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo_project.settings")
 import django  # noqa: E402
 
 django.setup()
+
+# The LiveViewTestClient mount/event path persists to the session
+# (`django_session`), so the generator needs a migrated schema. Point the
+# default DB at an isolated throwaway file and migrate it HERE, so the generator
+# is self-contained: it works on a fresh CI runner (which has no migrated
+# db.sqlite3 — the #1980 CI failure) AND on a fresh dev checkout, WITHOUT
+# touching the developer's real demo db.sqlite3. `run_syncdb` is fine for this
+# test-only tool (not a deploy path, so the #1637 caveat doesn't apply).
+from django.conf import settings  # noqa: E402
+from django.core.management import call_command  # noqa: E402
+from django.db import connections  # noqa: E402
+
+_TMP_DB = tempfile.mktemp(prefix="djust_vdom_fixtures_", suffix=".sqlite3")
+settings.DATABASES["default"]["NAME"] = _TMP_DB
+connections.close_all()  # drop any connection bound to the previous NAME
+atexit.register(lambda: os.path.exists(_TMP_DB) and os.remove(_TMP_DB))
+call_command("migrate", run_syncdb=True, verbosity=0, interactive=False)
 
 # Register djust component tag handlers ({% kanban_board %}, {% empty_state %})
 # with the Rust engine — the #1678 fixture's active tab body is a nested
