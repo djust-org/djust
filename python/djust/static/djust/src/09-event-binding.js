@@ -112,10 +112,13 @@ function _normalizeKeyName(name) {
 // ============================================================================
 // Scoped Event Delegation (dj-window-*, dj-document-*)
 // ============================================================================
-// Install ONE listener per event type on window/document. When the event fires,
-// dispatch to registered declaring elements. Elements are registered by scanning
-// the DOM once at install time. Re-scanning happens on TurboNav navigation or
-// when bindLiveViewEvents() is called after DOM changes.
+// Install ONE listener per event type on window/document (one-shot). When the
+// event fires, dispatch to registered declaring elements. Declaring elements are
+// registered by _scanScopedElements(), which bindLiveViewEvents() calls on EVERY
+// invocation — so elements that enter the DOM via a later patch (e.g. inside a
+// {% if %} that becomes true), on TurboNav, or at initial mount all get picked
+// up. Only the window/document addEventListener install is one-shot (guarded by
+// _scopedDelegationInstalled); the registry scan is not.
 
 // Registry: Map<"prefix:evtType", Set<{element, attrName, handler, requiredKey}>>
 const _scopedRegistry = new Map();
@@ -197,14 +200,14 @@ function _scanScopedElements() {
 
 /**
  * Install delegated listeners on window/document for scoped events.
- * Called once — listeners dispatch to the registry.
+ * One-shot: the window/document addEventListener calls must run exactly once
+ * (window persists across patches, so re-adding would double-dispatch). The
+ * registry that these listeners dispatch to is (re)populated separately by
+ * _scanScopedElements(), which bindLiveViewEvents() calls on every invocation.
  */
 function _installScopedDelegation() {
     if (_scopedDelegationInstalled) return;
     _scopedDelegationInstalled = true;
-
-    // Scan DOM once at install time to populate the registry
-    _scanScopedElements();
 
     const scopedTargets = [
         { prefix: 'dj-window-', target: window },
@@ -1149,10 +1152,20 @@ function bindLiveViewEvents(scope) {
     // ================================================================
 
     // --- Feature 1: dj-window-* and dj-document-* event scoping ---
-    // Delegated approach: install ONE listener per event type on window/document.
-    // When the event fires, find declaring elements via querySelectorAll('[dj-window-keydown]')
-    // and dispatch to matching handlers. This avoids querySelectorAll('*') entirely.
+    // Delegated approach: install ONE listener per event type on window/document
+    // (one-shot). When the event fires, dispatch to the declaring elements held in
+    // the scoped registry. This avoids per-event querySelectorAll('*').
     _installScopedDelegation();
+
+    // Re-scan for dj-window-*/dj-document-* declaring elements on EVERY bind so
+    // that elements which entered the DOM via a later patch (e.g. inside a
+    // {% if %} that became true) register too — mirroring the per-bind rescan
+    // dj-shortcut / dj-click-away already do below. _scanScopedElements() is
+    // idempotent per-element (see its alreadyRegistered check) and also drops
+    // registry entries for elements that left the DOM, so repeated calls are
+    // safe and cheap. Without this, a dj-window-keydown.escape on patch-inserted
+    // content would silently never bind (#1996).
+    _scanScopedElements();
 
     // Sweep orphaned scoped listeners (click-away, shortcut) for elements
     // removed from DOM by conditional rendering
