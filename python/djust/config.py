@@ -148,6 +148,14 @@ class LiveViewConfig:
         # the pre-ADR plain-getattr behavior — a kill-switch only, not a
         # feature toggle (candidate for removal at 2.0).
         "template_auto_call": True,
+        # #1987: TYPE-based serialization floor (defense-in-depth over the
+        # name/method floor). A list of Django field CLASS names (matched
+        # anywhere in a field's MRO) to always exclude from client-bound
+        # serialization — e.g. ["BinaryField", "MyEncryptedField"]. BinaryField
+        # and best-effort encrypted-field types are excluded unconditionally;
+        # this adds project-specific types. FileField/ImageField are never
+        # excluded (they serialize a URL).
+        "sensitive_field_types": [],
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
         # Bootstrap 4 classes (NYC Core Framework, gov sites, legacy projects)

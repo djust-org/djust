@@ -73,6 +73,107 @@ _SENSITIVE_MODEL_METHODS = frozenset(
 )
 _SENSITIVE_MODEL_METHOD_PREFIXES = ("get_next_by_", "get_previous_by_")
 
+
+def _sensitive_field_types() -> frozenset:
+    """Configured field-CLASS names to exclude from serialization (#1987).
+
+    Reads ``LIVEVIEW_CONFIG['sensitive_field_types']`` — a list of Django field
+    class names (matched anywhere in a field's MRO). Empty by default.
+    """
+    try:
+        from .config import get_config
+
+        vals = get_config().get("sensitive_field_types", None)
+    except Exception:  # pragma: no cover - config not loaded
+        return frozenset()
+    if not vals:
+        return frozenset()
+    try:
+        return frozenset(vals)
+    except TypeError:  # pragma: no cover - misconfigured
+        return frozenset()
+
+
+# Field classes the encrypted-NAME heuristic has already logged, so the DEBUG
+# breadcrumb fires once per class rather than once per render (the eager loop
+# re-checks every field on every re-render / WebSocket event).
+_HEURISTIC_TYPE_DROP_WARNED: set = set()
+
+
+def _warn_heuristic_type_drop(field_cls: type) -> None:
+    """One-shot DEBUG breadcrumb when the #1987 encrypted-name HEURISTIC drops a
+    field type (not the unconditional ``BinaryField`` rule, not explicit
+    ``sensitive_field_types`` config). Makes a false-positive drop diagnosable
+    instead of a silent vanish (#1987 review M1)."""
+    if field_cls in _HEURISTIC_TYPE_DROP_WARNED:
+        return
+    _HEURISTIC_TYPE_DROP_WARNED.add(field_cls)
+    logger.debug(
+        "Field type %s dropped from client serialization by the #1987 "
+        "encrypted-field name heuristic (its class name contains "
+        "'encrypted'/'fernet'). If this field is NOT sensitive, add it to "
+        "LIVEVIEW_CONFIG['sensitive_field_types'] intentionally, rename the "
+        "class, or precompute a serializable value in get_context_data().",
+        field_cls.__name__,
+    )
+
+
+def _field_type_is_excluded(field: Any) -> bool:
+    """TYPE-based serialization floor (#1987) — the single authority both the
+    eager (:meth:`DjangoJSONEncoder._serialize_model_safely`) and sidecar
+    (:class:`_SidecarModelProxy`) paths call, so they can't drift (#1646).
+
+    A field is excluded when its TYPE should never reach the client regardless
+    of the field's NAME:
+
+    - ``BinaryField`` — raw bytes, never sensibly rendered to a template;
+      always dropped.
+    - Any class in ``LIVEVIEW_CONFIG['sensitive_field_types']`` (matched by
+      class name anywhere in the field's MRO).
+    - Best-effort encrypted-field detection: any MRO class whose name
+      case-INsensitively contains ``encrypted`` or ``fernet`` (django-encrypted-fields
+      / django-fernet-fields and similar) — no hard dependency; excluded
+      fail-closed. Because this heuristic can drop a field a project did NOT
+      intend as sensitive, a one-shot DEBUG breadcrumb is logged per field
+      class the FIRST time the heuristic (not the unconditional ``BinaryField``
+      rule, not explicit config) drops it, so a false-positive "field silently
+      vanished from the client" is diagnosable (#1987 review M1).
+
+    ``FileField``/``ImageField`` are explicitly NOT excluded — they serialize a
+    URL, the intended client payload.
+    """
+    from django.db import models as _m
+
+    # FileField (and its ImageField subclass) serialize a URL — never dropped.
+    if isinstance(field, _m.FileField):
+        return False
+    if isinstance(field, _m.BinaryField):
+        return True
+    mro_names = [k.__name__ for k in type(field).__mro__]
+    configured = _sensitive_field_types()
+    if configured and any(n in configured for n in mro_names):
+        return True
+    # Case-insensitive so a lowercased/oddly-cased variant can't slip the floor
+    # (#1987 review M2). Configured names above stay case-EXACT (the developer
+    # spells the class name they mean).
+    if any(("encrypted" in n.casefold() or "fernet" in n.casefold()) for n in mro_names):
+        _warn_heuristic_type_drop(type(field))
+        return True
+    return False
+
+
+def _field_type_excluded_for(model_class: Any, field_name: str) -> bool:
+    """Sidecar-path helper for the #1987 TYPE floor: resolve *field_name* on
+    *model_class* and apply :func:`_field_type_is_excluded`. Non-fields
+    (properties, methods, reverse relations that raise) are not type-excluded
+    here — the name/method floor governs those."""
+    try:
+        field = model_class._meta.get_field(field_name)
+    except Exception:
+        return False
+    return _field_type_is_excluded(field)
+
+
 # Identity keys that are ALWAYS allowed even under a per-model allowlist —
 # the client relies on these for {% if %} comparisons and __str__ display.
 _IDENTITY_KEYS = frozenset({"pk", "id", "__str__", "__model__"})
@@ -288,6 +389,12 @@ class DjangoJSONEncoder(json.JSONEncoder):
             # Sensitive-field filter (finding #19 / #1868). Identity keys always
             # pass; the floor is unconditional unless deliberately opted out.
             if not self._field_is_serializable(field_name, denied, allowed, optout):
+                continue
+
+            # TYPE-based floor (#1987): drop BinaryField / configured / encrypted
+            # field types regardless of name — the SAME authority the sidecar
+            # proxy uses, so the two paths can't drift (#1646).
+            if _field_type_is_excluded(field):
                 continue
 
             # Skip all reverse relations (ManyToOneRel, OneToOneRel, ManyToManyRel)
@@ -683,6 +790,11 @@ class _SidecarModelProxy:
         if not DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout):
             raise AttributeError(name)
         obj = object.__getattribute__(self, "_obj")
+        # TYPE-based floor (#1987): refuse BinaryField / configured / encrypted
+        # field types even when the NAME passes the denylist — same authority
+        # the eager path calls.
+        if _field_type_excluded_for(type(obj), name):
+            raise AttributeError(name)
         return _protect_sidecar_value(getattr(obj, name))
 
     def __djust_serialize__(self) -> Any:
