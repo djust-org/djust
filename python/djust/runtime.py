@@ -4526,7 +4526,21 @@ class ViewRuntime:
             return
 
         try:
-            result = await sync_to_async(callback)(*args, **kwargs)
+            # Async callbacks (from @background on an ``async def`` handler, or
+            # ``start_async`` given a coroutine function) are awaited directly on
+            # the event loop; sync callbacks are dispatched to a thread via
+            # ``sync_to_async``. This mirrors ``websocket.py:_run_async_work``
+            # (lines ~1150-1155) — without the coroutine check, an async callback
+            # hits ``sync_to_async`` and raises ``TypeError: sync_to_async can
+            # only be applied to sync functions``, silently failing every async
+            # background task on the converged WS-event path (#2001, #1646
+            # parallel-path drift vs the consumer twin).
+            if asyncio.iscoroutinefunction(callback):
+                result = await callback(*args, **kwargs)
+            else:
+                result = await sync_to_async(callback)(*args, **kwargs)
+                if inspect.iscoroutine(result):
+                    result = await result
 
             if hasattr(view, "handle_async_result"):
                 await sync_to_async(view.handle_async_result)(task_name, result=result, error=None)

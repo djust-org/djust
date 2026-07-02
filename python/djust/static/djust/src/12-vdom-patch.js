@@ -623,6 +623,34 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 let _isBroadcastUpdate = false;
 
 /**
+ * Broadcast textarea value-sync (#1601) with per-field opt-out (#1991).
+ *
+ * After a broadcast (``push_to_view``) patch lands, a shared/collaborative
+ * ``<textarea>``'s ``.value`` must be synced from its (server-updated)
+ * ``.textContent`` so a peer's edit shows — VDOM patches update
+ * ``textContent`` directly, and ``.value`` diverges from ``.textContent``
+ * once the user has typed. But a textarea marked ``dj-update="ignore"`` is
+ * declared client-owned: an unrelated broadcast (e.g. a peer's message in a
+ * different conversation) must NOT wipe its unsent draft.
+ *
+ * Both broadcast-sweep call sites route through here so the opt-out lives in
+ * exactly one place (parallel-path-drift cure, #1646):
+ *   - this module's ``preserveFormValues`` innerHTML-replacement path
+ *   - ``02-response-handler.js``'s ``applyPatches`` broadcast path
+ *
+ * @param {Element|null} root - The LiveView root (or container) to sweep.
+ */
+function syncBroadcastTextareas(root) {
+    if (!root) return;
+    root.querySelectorAll('textarea').forEach(el => {
+        // dj-update="ignore" — client-owned; a broadcast must never
+        // overwrite this field's value (#1991).
+        if (el.getAttribute('dj-update') === 'ignore') return;
+        el.value = el.textContent || '';
+    });
+}
+
+/**
  * Preserve form values across innerHTML replacement.
  *
  * innerHTML destroys the DOM, creating new elements. For the focused
@@ -637,12 +665,11 @@ function preserveFormValues(container, updateFn) {
     let saved = null;
 
     // Skip saving focused element for broadcast (remote) updates —
-    // the server content from another user should take effect.
+    // the server content from another user should take effect. Fields
+    // opting out via dj-update="ignore" are skipped by the sweep (#1991).
     if (_isBroadcastUpdate) {
         updateFn();
-        container.querySelectorAll('textarea').forEach(el => {
-            el.value = el.textContent || '';
-        });
+        syncBroadcastTextareas(container);
         return;
     }
 
@@ -943,9 +970,18 @@ function morphElement(existing, desired) {
     // --- Form element value sync ---
     const isFocused = document.activeElement === existing;
     // Skip value sync for focused inputs to preserve what the user is typing,
-    // UNLESS the input's identity changed (different name = different field).
+    // UNLESS the input's identity changed (different name = different field)
+    // OR the field opts in to server-authoritative values via dj-force-value
+    // (#1990). The force check is lazy — it only runs when we would otherwise
+    // skip (focused, non-broadcast, same name), keeping the hot path cheap —
+    // and applies EXACTLY when the attribute is explicitly present, so the
+    // default focused-field behavior is unchanged for every other field.
+    // Enables an Enter-to-send composer (no blur) to be cleared/overwritten
+    // by its handler while still focused. Covers INPUT/SELECT/TEXTAREA alike.
     const nameChanged = existing.getAttribute('name') !== desired.getAttribute('name');
-    const skipValue = isFocused && !_isBroadcastUpdate && !nameChanged;
+    const skipValue = isFocused && !_isBroadcastUpdate && !nameChanged
+        && !existing.hasAttribute('dj-force-value')
+        && !desired.hasAttribute('dj-force-value');
 
     if (existing.tagName === 'INPUT' && !skipValue) {
         if (existing.type === 'checkbox' || existing.type === 'radio') {
@@ -1553,6 +1589,7 @@ window.djust._getNodeByPath = getNodeByPath;
 window.djust._isDjIfComment = isDjIfComment;
 window.djust.createNodeFromVNode = createNodeFromVNode;
 window.djust.preserveFormValues = preserveFormValues;
+window.djust.syncBroadcastTextareas = syncBroadcastTextareas;
 window.djust.saveFocusState = saveFocusState;
 window.djust.restoreFocusState = restoreFocusState;
 window.djust.morphChildren = morphChildren;
