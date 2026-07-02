@@ -71,24 +71,36 @@ class TestNestedDictListResolve:
 
     def test_dict_key_wins_over_attribute(self):
         """Django order is item-access FIRST: a dict whose key shadows a real
-        attribute name (`items`) resolves the key, not the method."""
+        attribute name (`items`) resolves the key, not the method. Routed
+        through a custom object (`w.payload.items`) so the dict is reached as a
+        mid-path intermediate on the SIDECAR walk (#1997) — a dict placed
+        directly in context resolves via the already-dict-aware eager
+        `Context::get` path and would not exercise this change."""
+
+        class _Wrap:
+            def __init__(self):
+                self.payload = {"items": "DICT-ITEMS-VALUE"}
 
         class _D(LiveView):
             def mount(self, request, **kwargs):
-                self._d = {"items": "DICT-ITEMS-VALUE"}
+                self._w = _Wrap()
 
             def get_context_data(self, **kwargs):
                 ctx = super().get_context_data(**kwargs)
-                ctx["d"] = self._d
+                ctx["w"] = self._w
                 return ctx
 
-        _D.template = "<div>[{{ d.items }}]</div>"
+        _D.template = "<div>[{{ w.payload.items }}]</div>"
         client = LiveViewTestClient(_D)
         client.mount()
         html, _, _ = client.render_with_patches()
-        # dict item access wins → the value, NOT the bound `dict.items` method
-        assert "DICT-ITEMS-VALUE" in html
-        assert "built-in method" not in html and "bound method" not in html
+        # Item access wins → the bare value `[DICT-ITEMS-VALUE]`. Under
+        # getattr-first the `dict.items` method is auto-called and renders as
+        # `dict_items([('items', 'DICT-ITEMS-VALUE')])` — whose repr also
+        # contains the value substring, so assert on the EXACT bracketed value
+        # and the absence of `dict_items` to stay gate-off-sensitive (#1468).
+        assert "[DICT-ITEMS-VALUE]" in html
+        assert "dict_items" not in html and "bound method" not in html
 
 
 @pytest.mark.django_db
