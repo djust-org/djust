@@ -19,6 +19,69 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-5 — post-ADR-024 open-issue drain (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-02) of the 19-issue backlog accumulated after the
+ADR-024 template-auto-call arc (#1985/#1986). The two `priority:low` bug-capture
+feature tracks (#1561 iter-B replay viewer, #1562 iter-C Redis/CLI/PII) are
+deliberately NOT in this bucket — deferred feature work, not backlog. Three
+issues (#1987, #1994, #1997) sit in the serialization / template-getattr-walk
+area hardened in #1986 and are led first while that context is fresh.
+
+Clusters: **serialization/template-walk** (#1987, #1994, #1997) ·
+**VDOM/dj-virtual** (#1977, #1988, #1989, #1996) · **forms/broadcast**
+(#1990, #1991) · **state** (#1992) · **config/deps** (#1993, #1995) ·
+**events/DX** (#1999) · **markdown** (#1998) · **docs/demo**
+(#2000, #2001, #2002, #2003, #2004).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | VDOM stale baseline after state-restore (#1977) | stale `last_vdom` after state-restore/reconnect → SetText patches land on `#text` (recovery path) | v1.1.0 |
+| **P1** | field-TYPE serialization exclusion (#1987) | always-drop `BinaryField` + encrypted-field types on BOTH serialization paths (#1986 follow-up) | v1.1.0 |
+| **P1** | dj-virtual shell/spacer layout contract (#1988) | flex crushes the spacer; the never-removed shell double-counts `scrollHeight` | v1.1.0 |
+| **P1** | dj-virtual vs server re-renders / stream ops (#1989) | new/changed items silently leak outside the shell or revert entirely | v1.1.0 |
+| **P1** | broadcast textarea-value sweep opt-out (#1991) | broadcast sweep has no per-field opt-out, overwrites unrelated drafts | v1.1.0 |
+| **P1** | DJUST_CONFIG vs LIVEVIEW_CONFIG ignored (#1993) | `max_message_size`/`rate_limit` silently ignored in `DJUST_CONFIG`; default upload chunk exceeds default frame limit by 21 bytes | v1.1.0 |
+| **P1** | private-attr model → dict after round-trip (#1994) | a private attr holding a model comes back as a plain dict after the HTTP POST fallback round-trip | v1.1.0 |
+| **P1** | redis extra permits redis-py 8.x (#1995) | djust's `redis` extra allows redis-py 8.x, which crashes the canonical `channels_redis` production setup | v1.1.0 |
+| **P1** | dj-window/document bind on later patch (#1996) | `dj-window-*`/`dj-document-*` never bind on content that appears via a later patch | v1.1.0 |
+| **P1** | Context::resolve dict/list intermediate (#1997) | the lazy getattr walk can't step into a dict/list intermediate → nested JSONField access renders silently empty | v1.1.0 |
+| **P1** | split_provisional code-fence misclassify (#1998) | `split_provisional` misclassifies a closing code-fence line as an unterminated inline-code span | v1.1.0 |
+| **P1** | dj-input.debounce-N fails to bind (#1999) | modifier-suffix syntax works for `dj-model` but `dj-input.debounce-N` silently fails to bind | v1.1.0 |
+| **P2** | force-clear focused form field (#1990) | no way for a handler to force-clear a focused field — `skipValue` has no "server value changed" override | v1.1.0 |
+| **P2** | set_changed_keys zero-arg form (#1992) | `set_changed_keys()` doesn't cover the "handler only mutated the DB, no `self.attr` changed" case — needs a zero-arg form | v1.1.0 |
+| **P2** | PresenceMixin docstring shape (#2000) | module docstring shows a flattened presence-record shape that matches no backend | v1.1.0 |
+| **P2** | @background interrupt + cancel_async (#2001) | sync `@background` can't be interrupted mid-run; `cancel_async` silently no-ops on a task-name mismatch (confirmed in the shipped demo) | v1.1.0 |
+| **P2** | streaming-markdown demo claims (#2002) | demo comment claims progressive mutate-and-return streams (it doesn't); `stream_to()` without `html=` can duplicate content | v1.1.0 |
+| **P2** | session tenant WS-persistence docs (#2003) | `session` tenant resolver's WS persistence semantics undocumented; no `set_tenant()` helper | v1.1.0 |
+| **P2** | djust_markdown + dj-transition-group docs (#2004) | djust_markdown's TEMPLATES backend requirement + dj-transition-group's CSS-authoring requirement not documented where readers copy from | v1.1.0 |
+
+**#1977 — VDOM stale baseline after state-restore.** After state-restore/reconnect the `last_vdom` baseline is stale, so a subsequent SetText patch is keyed against the wrong tree and lands on a `#text` node (recovery path). See memory `project_1977_list_shrink_settext`.
+
+**#1987 — field-TYPE serialization exclusion.** Follow-up to #1986: the sidecar/eager serialization floor is name/method-based; add TYPE-based exclusion (always-drop `BinaryField`, encrypted-field types) on both the eager (`DjangoJSONEncoder`) and sidecar (`_SidecarModelProxy`) paths.
+
+**#1988 / #1989 — dj-virtual.** The virtual-scroll shell/spacer has no layout contract (flex crushes the spacer; the shell, never taken out of flow, double-counts `scrollHeight`), and has no integration path with normal server-driven re-renders or its own stream ops (items leak outside the shell or revert).
+
+**#1990 / #1991 — forms/broadcast.** No handler-side force-clear of a focused field (`skipValue` lacks a "server changed" override), and the broadcast textarea-value sweep overwrites unrelated in-progress drafts with no per-field opt-out.
+
+**#1992 — set_changed_keys zero-arg.** Follow-up to #1981/#1982: cover the "handler mutated only the DB, no `self.attr` changed" case with a zero-arg form.
+
+**#1993 — config namespace + upload chunk.** `max_message_size`/`rate_limit`/etc. are silently ignored when set in `DJUST_CONFIG` instead of `LIVEVIEW_CONFIG`, and the default upload chunk exceeds the default frame limit by exactly 21 bytes.
+
+**#1994 — model → dict after round-trip.** A private attr holding a Django model instance comes back as a plain dict after a state round-trip on the HTTP POST fallback path.
+
+**#1995 — redis-py 8.x.** djust's own `redis` extra permits redis-py 8.x, which crashes the canonical `channels_redis` production setup; pin the compatible range.
+
+**#1996 — dj-window/document late bind.** `dj-window-*`/`dj-document-*` handlers never bind on content that appears via a later patch (only initial-render content).
+
+**#1997 — Context::resolve dict/list intermediate.** The lazy getattr walk (`crates/djust_core/src/context.rs`) is getattr-only and can't step into a dict/list intermediate, so nested JSONField access (`{{ obj.data.key }}`) renders silently empty. Directly adjacent to the #1986 sidecar-walk work.
+
+**#1998 — split_provisional code-fence.** `split_provisional` misclassifies a closing code-fence line as an unterminated inline-code span (streaming-markdown).
+
+**#1999 — dj-input.debounce-N.** The modifier-suffix syntax binds for `dj-model` but `dj-input.debounce-N` silently fails to bind.
+
+**#2000–#2004 — docs/demo.** PresenceMixin docstring shape mismatch (#2000); `@background` interrupt + `cancel_async` mismatch, confirmed in the shipped demo (#2001); streaming-markdown demo comment claims vs behavior (#2002); `session` tenant WS-persistence docs + `set_tenant()` helper (#2003); djust_markdown TEMPLATES backend + dj-transition-group CSS-authoring doc gaps (#2004).
+
 ## v1.1.0-4 — post-rc2 bug + tech-debt drain (drain bucket → ships in 1.1.0)
 
 Open-issue drain (2026-06-25) of the follow-ups surfaced during the ADR-022
