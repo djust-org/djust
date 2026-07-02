@@ -51,6 +51,16 @@ The first argument is a context variable containing Markdown source. The tag
 renders it to sanitised HTML. The rendered output is already safe to embed
 directly — no `|safe` needed, no double-escape.
 
+> **Requires the djust template backend.** `{% djust_markdown %}` is registered
+> only with djust's Rust template engine (via `register_tag_handler`), **not**
+> Django's stock template backend. A project whose `TEMPLATES` setting uses only
+> `django.template.backends.django.DjangoTemplates` (e.g. one created with
+> `django-admin startproject` rather than the djust scaffold) raises
+> `TemplateSyntaxError: Invalid block tag 'djust_markdown'` on the initial GET —
+> even with `{% load live_tags %}` at the top. Ensure `DjustTemplateBackend` is
+> configured in `TEMPLATES` (the `djust`-scaffolded settings do this for you).
+> See the [installation guide](/quickstart/) for the backend configuration.
+
 ### Keyword arguments
 
 All arguments are optional booleans:

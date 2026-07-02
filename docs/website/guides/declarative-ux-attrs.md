@@ -253,6 +253,14 @@ This attribute does not introduce a new animation runner. It wires the existing 
 
 New `<li>` children animate in via `dj-transition`. Children removed by a VDOM patch animate out via `dj-remove` (the deferral hook is already wired in `12-vdom-patch.js`).
 
+> **You author the CSS.** Like `dj-transition`, `dj-transition-group` only
+> orchestrates *class application* — it ships no CSS. The class names above
+> (`opacity-0`, `transition-opacity-300`, `opacity-100`, `fade-in`, `fade-out`,
+> …) must be defined by your stylesheet or a class-based CSS framework
+> (Tailwind's `transition-*`/`duration-*`, Bootstrap's `fade`/`show`, or
+> hand-rolled rules). Copying an example without defining those classes produces
+> no animation and no error — the enter/leave just happens instantly.
+
 ### Short form — pipe-separated halves
 
 ```html
