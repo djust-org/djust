@@ -272,11 +272,34 @@ class LiveViewConfig:
         try:
             from django.conf import settings
 
-            if hasattr(settings, "LIVEVIEW_CONFIG"):
-                self._config.update(settings.LIVEVIEW_CONFIG)
-            # Top-level djust-specific settings — convenience aliases
-            # for the nested ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` dicts.
-            # Added for discoverability of operator-facing toggles.
+            live_cfg = getattr(settings, "LIVEVIEW_CONFIG", None) or {}
+            if live_cfg:
+                self._config.update(live_cfg)
+            # #1993: also honor LiveView runtime keys set in the similarly-named
+            # ``DJUST_CONFIG`` dict as a fallback. The two dicts are defined in
+            # the same module and easy to confuse — ``DJUST_CONFIG`` already
+            # backs tenancy/presence/state-backend/suppress_checks — so a
+            # ``max_message_size`` / ``rate_limit`` / ``event_security`` set
+            # there was a SILENT no-op (this method only read ``LIVEVIEW_CONFIG``).
+            # Adopt only keys that are genuine LiveView config keys (present in
+            # the defaults) so unrelated tenancy/presence keys aren't pulled in;
+            # ``LIVEVIEW_CONFIG`` WINS on a collision (it is the documented home),
+            # and each adopted key logs a debug breadcrumb naming where it came
+            # from, surfacing the ambiguity rather than resolving it silently.
+            djust_cfg = getattr(settings, "DJUST_CONFIG", None)
+            if isinstance(djust_cfg, dict):
+                for key, value in djust_cfg.items():
+                    if key in self._defaults and key not in live_cfg:
+                        self._config[key] = value
+                        logger.debug(
+                            "djust: applied LiveView config key %r from "
+                            "DJUST_CONFIG (its documented home is LIVEVIEW_CONFIG)",
+                            key,
+                        )
+            # Top-level flat ``DJUST_*`` settings — convenience aliases for a few
+            # specific nested keys, for discoverability of operator-facing
+            # toggles. (The nested ``DJUST_CONFIG`` *dict* is handled just above,
+            # #1993 — these are the separate flat scalars.)
             if hasattr(settings, "DJUST_WS_COMPRESSION"):
                 self._config["websocket_compression"] = bool(settings.DJUST_WS_COMPRESSION)
             # Service-worker advanced features (v0.6.0) — top-level aliases

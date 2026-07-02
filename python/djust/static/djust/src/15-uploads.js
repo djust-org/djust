@@ -18,7 +18,14 @@
     const FRAME_COMPLETE = 0x02;
     const FRAME_CANCEL   = 0x03;
 
-    const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
+    // Each chunk is sent as a binary frame with a 21-byte header prepended
+    // (1 type + 16 upload-ref UUID + 4 chunk index — see buildFrame). The
+    // default PAYLOAD must stay under the default max_message_size (65536), or
+    // a brand-new project using only default settings fails uploads with
+    // "Message too large (65557 bytes)" — exactly 64*1024 + 21 (#1993). 63 KiB
+    // leaves comfortable headroom: 63*1024 + 21 = 64533 < 65536.
+    const FRAME_HEADER_BYTES = 21; // keep in sync with buildFrame()
+    const DEFAULT_CHUNK_SIZE = 63 * 1024; // 64512 B payload + 21 B header < 65536
 
     // Active uploads: ref -> { file, config, chunkIndex, resolve, reject }
     const activeUploads = new Map();
@@ -200,14 +207,14 @@
      */
     function buildFrame(frameType, refBytes, payload, chunkIndex) {
         if (frameType === FRAME_CHUNK && payload) {
-            const header = new Uint8Array(21); // 1 + 16 + 4
+            const header = new Uint8Array(FRAME_HEADER_BYTES); // 1 + 16 + 4
             header[0] = frameType;
             header.set(refBytes, 1);
             const view = new DataView(header.buffer);
             view.setUint32(17, chunkIndex, false); // big-endian
-            const frame = new Uint8Array(21 + payload.byteLength);
+            const frame = new Uint8Array(FRAME_HEADER_BYTES + payload.byteLength);
             frame.set(header);
-            frame.set(new Uint8Array(payload), 21);
+            frame.set(new Uint8Array(payload), FRAME_HEADER_BYTES);
             return frame.buffer;
         } else {
             // COMPLETE or CANCEL: just type + ref
