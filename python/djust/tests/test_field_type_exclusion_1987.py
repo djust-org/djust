@@ -139,3 +139,34 @@ class TestSidecarPath:
     def test_sidecar_allows_plain_charfield(self):
         proxy = _protect_sidecar_value(_inst())
         assert getattr(proxy, "name") == "visible"
+
+
+class TestHeuristicRefinements:
+    """#1987 review M1/M2 — case-insensitive heuristic + one-shot breadcrumb."""
+
+    def test_lowercase_encrypted_name_excluded(self):
+        # M2: case-insensitive — a lowercased/oddly-cased variant must not slip.
+        lowered = type("encryptedloweredfield", (models.CharField,), {"__module__": __name__})
+        assert _field_type_is_excluded(lowered(max_length=10, default="")) is True
+
+    def test_fernet_name_excluded(self):
+        fernet = type("FernetTextField", (models.TextField,), {"__module__": __name__})
+        assert _field_type_is_excluded(fernet(default="")) is True
+
+    def test_decrypted_name_not_a_false_positive(self):
+        # "decrypted" does not contain "encrypted" — must NOT be dropped.
+        dec = type("DecryptedViewField", (models.CharField,), {"__module__": __name__})
+        assert _field_type_is_excluded(dec(max_length=10, default="")) is False
+
+    def test_heuristic_drop_logs_once_and_only_for_the_heuristic(self):
+        from djust.serialization import _HEURISTIC_TYPE_DROP_WARNED
+
+        enc = type("EncryptedOnceField", (models.CharField,), {"__module__": __name__})
+        _HEURISTIC_TYPE_DROP_WARNED.discard(enc)
+        assert _field_type_is_excluded(enc(max_length=10, default="")) is True
+        # M1: the heuristic recorded a one-shot breadcrumb for this class.
+        assert enc in _HEURISTIC_TYPE_DROP_WARNED
+        # The unconditional BinaryField rule must NOT touch the heuristic set.
+        before = set(_HEURISTIC_TYPE_DROP_WARNED)
+        assert _field_type_is_excluded(_fields()["blob"]) is True
+        assert set(_HEURISTIC_TYPE_DROP_WARNED) == before

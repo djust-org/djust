@@ -94,6 +94,30 @@ def _sensitive_field_types() -> frozenset:
         return frozenset()
 
 
+# Field classes the encrypted-NAME heuristic has already logged, so the DEBUG
+# breadcrumb fires once per class rather than once per render (the eager loop
+# re-checks every field on every re-render / WebSocket event).
+_HEURISTIC_TYPE_DROP_WARNED: set = set()
+
+
+def _warn_heuristic_type_drop(field_cls: type) -> None:
+    """One-shot DEBUG breadcrumb when the #1987 encrypted-name HEURISTIC drops a
+    field type (not the unconditional ``BinaryField`` rule, not explicit
+    ``sensitive_field_types`` config). Makes a false-positive drop diagnosable
+    instead of a silent vanish (#1987 review M1)."""
+    if field_cls in _HEURISTIC_TYPE_DROP_WARNED:
+        return
+    _HEURISTIC_TYPE_DROP_WARNED.add(field_cls)
+    logger.debug(
+        "Field type %s dropped from client serialization by the #1987 "
+        "encrypted-field name heuristic (its class name contains "
+        "'encrypted'/'fernet'). If this field is NOT sensitive, add it to "
+        "LIVEVIEW_CONFIG['sensitive_field_types'] intentionally, rename the "
+        "class, or precompute a serializable value in get_context_data().",
+        field_cls.__name__,
+    )
+
+
 def _field_type_is_excluded(field: Any) -> bool:
     """TYPE-based serialization floor (#1987) — the single authority both the
     eager (:meth:`DjangoJSONEncoder._serialize_model_safely`) and sidecar
@@ -106,9 +130,14 @@ def _field_type_is_excluded(field: Any) -> bool:
       always dropped.
     - Any class in ``LIVEVIEW_CONFIG['sensitive_field_types']`` (matched by
       class name anywhere in the field's MRO).
-    - Best-effort encrypted-field detection: any MRO class whose name contains
-      ``Encrypted`` or ``Fernet`` (django-encrypted-fields / django-fernet-fields
-      and similar) — no hard dependency; excluded fail-closed.
+    - Best-effort encrypted-field detection: any MRO class whose name
+      case-INsensitively contains ``encrypted`` or ``fernet`` (django-encrypted-fields
+      / django-fernet-fields and similar) — no hard dependency; excluded
+      fail-closed. Because this heuristic can drop a field a project did NOT
+      intend as sensitive, a one-shot DEBUG breadcrumb is logged per field
+      class the FIRST time the heuristic (not the unconditional ``BinaryField``
+      rule, not explicit config) drops it, so a false-positive "field silently
+      vanished from the client" is diagnosable (#1987 review M1).
 
     ``FileField``/``ImageField`` are explicitly NOT excluded — they serialize a
     URL, the intended client payload.
@@ -124,7 +153,13 @@ def _field_type_is_excluded(field: Any) -> bool:
     configured = _sensitive_field_types()
     if configured and any(n in configured for n in mro_names):
         return True
-    return any(("Encrypted" in n or "Fernet" in n) for n in mro_names)
+    # Case-insensitive so a lowercased/oddly-cased variant can't slip the floor
+    # (#1987 review M2). Configured names above stay case-EXACT (the developer
+    # spells the class name they mean).
+    if any(("encrypted" in n.casefold() or "fernet" in n.casefold()) for n in mro_names):
+        _warn_heuristic_type_drop(type(field))
+        return True
+    return False
 
 
 def _field_type_excluded_for(model_class: Any, field_name: str) -> bool:
