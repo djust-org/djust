@@ -95,14 +95,20 @@ serialization-floor concern, not an auto-call one.
 > **Security addendum (#1986).** Auto-calling live sidecar objects surfaced
 > that the getattr walk also *bypassed the serialization floor*
 > (SECURE_DEFAULTS Pattern 1) — a defense-in-depth denylist leak, not
-> introduced by auto-call but exposed by it. The fix wraps every
-> model/manager/queryset entering the sidecar in floor-enforcing proxies
-> (`_SidecarModelProxy`/`_SidecarQuerySetProxy`, `serialization.py`) and adds a
-> single `protect_sidecar` chokepoint in this resolve walk that routes every
-> just-materialized value (after `getattr` AND the auto-call) through
-> `_protect_sidecar_value`, so a model is floor-wrapped however it was reached.
-> The floor is independent of the `template_auto_call` kill-switch. See
-> `docs/SECURE_DEFAULTS.md` Pattern 1 and the CHANGELOG `### Security` entry.
+> introduced by auto-call but exposed by it. It had **two mechanisms** (a
+> floor field read off a raw model during the walk; a raw model
+> `__dict__`-dumped during value conversion), so the fix is **two structural
+> chokepoints** plus the sidecar proxies
+> (`_SidecarModelProxy`/`_SidecarQuerySetProxy`, `serialization.py`, which also
+> refuse `.values()`/`.values_list()` projections): (1) a `protect_sidecar`
+> chokepoint in this resolve walk routes every just-materialized value (after
+> `getattr` AND the auto-call) through `_protect_sidecar_value`, floor-wrapping
+> a model however it was reached; (2) `FromPyObject for Value`
+> (`crates/djust_core/src/lib.rs`) routes any raw Django model through
+> `normalize_django_value` instead of the `__dict__` dump, covering models
+> reached via a list/tuple/dict container. The floor is independent of the
+> `template_auto_call` kill-switch. See `docs/SECURE_DEFAULTS.md` Pattern 1 and
+> the CHANGELOG `### Security` entry.
 
 The GIL is already held in this block (`Python::attach`); the added hot-path
 cost is one `is_callable()` check per segment, on the sidecar path only. The

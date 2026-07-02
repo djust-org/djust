@@ -31,32 +31,42 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > eager serialization dict, the Rust template engine has a *lazy* fallback: for
 > a `{{ obj.attr }}` path not in the eager dict, it `getattr`-walks the live
 > model instance (reverse relations, managers, methods — ADR-024). That walk
-> would bypass this floor on SIX paths — direct field, manager/queryset
-> traversal (`{{ x.mgr.first.password }}`), `{% for %}` iteration (the Rust
-> `FromPyObject` `__dict__` bulk-dump), `_`-prefixed access (`{{ obj._meta }}`,
-> which also segfaulted the worker), `.values()`/`.values_list()`
-> projections (raw dict/tuple rows with no per-field floor), and a non-model
-> intermediary object (`{{ presenter.user.password }}`, or a model **method**
-> returning a model whose Rust-auto-called result never re-enters a Python
-> proxy). So every model/manager/queryset entering the sidecar is wrapped in
-> `_SidecarModelProxy` / `_SidecarQuerySetProxy` (`serialization.py`), which
-> **transitively** protect everything they return (`_protect_sidecar_value`),
-> refuse the SAME floor fields (via `_field_is_serializable`) and the SAME
-> sensitive methods (`_SENSITIVE_MODEL_METHODS`, shared with
-> `_add_safe_model_methods` so the two paths can't drift, #1646), refuse
-> `_`-prefixed names (Django parity), expose a `__djust_serialize__` hook
-> so model→value conversion routes through the denylist serializer instead of
-> the `__dict__` dump, and **refuse `.values()`/`.values_list()` projections
-> wholesale** (their rows have no model identity to floor; precompute in
-> `get_context_data()` instead). The Python proxies can't cover a *raw*
-> intermediary (no proxy `__getattr__`) or a Rust-auto-called method result,
-> so the Rust resolve walk (`crates/djust_core/src/context.rs`) has a single
-> `protect_sidecar` chokepoint that routes every just-materialized value —
-> after `getattr` AND the auto-call — through `_protect_sidecar_value`, floor-
-> wrapping a model/manager/queryset **however it was reached**. A refused name
-> raises `AttributeError` → empty render. The floor is **not** gated on the
-> `template_auto_call` kill-switch. Field-TYPE exclusion (always-drop
-> `BinaryField`) is tracked as a follow-up
+> would bypass this floor via **two mechanisms** — a floor field read off a
+> raw model during the getattr walk, and a raw model `__dict__`-dumped during
+> value conversion — reachable on SEVEN surface paths (direct field;
+> manager/queryset traversal `{{ x.mgr.first.password }}`; `{% for %}`
+> iteration; `_`-prefixed access `{{ obj._meta }}`, which also segfaulted the
+> worker; `.values()`/`.values_list()` projections; a non-model intermediary
+> object `{{ presenter.user.password }}` / a model **method** returning a
+> model; and a raw `list`/`tuple` of models via an intermediary). The fix is
+> **two structural chokepoints** (one per mechanism, #1646), plus the sidecar
+> proxies:
+>
+> - **Proxies** — every model/manager/queryset entering the sidecar is wrapped
+>   in `_SidecarModelProxy` / `_SidecarQuerySetProxy` (`serialization.py`),
+>   which **transitively** protect everything they return
+>   (`_protect_sidecar_value`), refuse the SAME floor fields (via
+>   `_field_is_serializable`) and the SAME sensitive methods
+>   (`_SENSITIVE_MODEL_METHODS`, shared with `_add_safe_model_methods` so the
+>   two paths can't drift), refuse `_`-prefixed names (Django parity), and
+>   **refuse `.values()`/`.values_list()` projections wholesale** (their rows
+>   have no model identity to floor; precompute in `get_context_data()`).
+> - **Chokepoint 1 (getattr walk)** — the Rust resolve walk
+>   (`crates/djust_core/src/context.rs`) routes every just-materialized value —
+>   after `getattr` AND the auto-call — through `_protect_sidecar_value`, so a
+>   model is floor-wrapped **however it was reached** (a raw intermediary
+>   object, a Rust-auto-called method result). Python proxies alone can't cover
+>   those.
+> - **Chokepoint 2 (value-conversion root)** — `FromPyObject for Value`
+>   (`crates/djust_core/src/lib.rs`) routes **any** raw Django model through
+>   `normalize_django_value` (denylist serializer) instead of the `__dict__`
+>   bulk-dump, so a raw model reaching a `Value` via a list/tuple/dict
+>   container is floor-filtered too. A djust proxy's `__djust_serialize__` hook
+>   is preferred first.
+>
+> A refused name raises `AttributeError` → empty render. The floor is **not**
+> gated on the `template_auto_call` kill-switch. Field-TYPE exclusion
+> (always-drop `BinaryField`) is tracked as a follow-up
 > ([#1987](https://github.com/djust-org/djust/issues/1987)).
 
 **Canonical site.**
