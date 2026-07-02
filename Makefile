@@ -162,6 +162,10 @@ check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries match manifes
 check-bundle-init-order: ## Static check: declared-late/used-early let/const across bundle concat (closes #1372)
 	@node scripts/check-bundle-init-order.mjs
 
+.PHONY: gen-vdom-fixtures
+gen-vdom-fixtures: ## Regenerate client-faithful VDOM diff fixtures (CI gates freshness — closes #1979)
+	@$(PYTHON) scripts/gen_vdom_diff_fixtures.py
+
 .PHONY: test
 test: ## Run all tests (Python + JavaScript + Rust) in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"

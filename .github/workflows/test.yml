@@ -141,6 +141,19 @@ jobs:
       - name: Install test tools
         run: uv pip install pytest-xdist mypy
 
+      # Freshness gate for the client-faithful VDOM diff fixtures (#1979): the
+      # committed JSON must equal a fresh regen, or the harness pins stale patch
+      # output (as it did before #1979). Deterministic generator + this job
+      # already uses demo_project.settings, so a diff here is a genuine
+      # stale-fixture signal, not env drift.
+      - name: VDOM diff fixtures are fresh (#1979)
+        run: |
+          PYTHONPATH=. .venv/bin/python scripts/gen_vdom_diff_fixtures.py
+          if ! git diff --exit-code -- tests/js/fixtures/; then
+            echo "::error::VDOM diff fixtures are stale — run 'make gen-vdom-fixtures' and commit tests/js/fixtures/."
+            exit 1
+          fi
+
       - name: Run Python tests (parallel with pytest-xdist)
         run: |
           PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -v -n auto

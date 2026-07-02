@@ -14,10 +14,16 @@ capturing — exactly as production would send to the client:
                          equal after applying the patches.
 
 Output is committed JSON so the JS test has no Python/Rust dependency at run
-time. Regeneration is idempotent (deterministic dj-ids); a pre-commit hook
-re-runs this and ``git add``s the result so fixtures can't go stale.
+time. Regeneration is idempotent (deterministic dj-ids), so the committed
+fixtures must match a fresh regen exactly. Freshness is enforced by CI: the
+``python-tests`` job in ``.github/workflows/test.yml`` re-runs this generator
+and fails on any diff under ``tests/js/fixtures/`` (#1979). When a differ /
+template / component / fixture-view change alters the captured patch stream,
+regenerate and commit the result — otherwise the guard would keep pinning stale
+patch output (as happened before #1979, when this docstring wrongly claimed a
+pre-commit hook kept it fresh and none existed).
 
-Run:  .venv/bin/python scripts/gen_vdom_diff_fixtures.py
+Run:  make gen-vdom-fixtures      # or: .venv/bin/python scripts/gen_vdom_diff_fixtures.py
 """
 
 import json
@@ -57,8 +63,20 @@ def _patch_type_counts(patches):
 
 def gen_kanban_tabs_1678():
     """#1678: 8 sibling {% if active_tab==N %} blocks; mount tab0, switch to the
-    kanban tab (tab 3) — which emits MoveSubtree for the shifted later blocks —
-    then move a card across columns (the positional count-badge SetText)."""
+    kanban tab (tab 3), then move a card across columns.
+
+    The guarded core is the tab switch: it tears down tab0's body and inserts
+    tab3's NESTED-conditional kanban body (`RemoveChild` + `InsertSubtree`), the
+    marker-preservation + nested-InsertSubtree path that was the actual #1678
+    kanban `html_recovery` bug. It no longer emits `MoveSubtree` — since #1826
+    (`bd1c1f53`) the move decision keys on RELATIVE (non-boundary-sibling)
+    position, and the adjacent tab blocks keep their relative order across a
+    switch, so the earlier absolute-offset MoveSubtrees were spurious and are
+    correctly gone (regenerated for freshness in #1979).
+
+    NOTE: step 2 (card move) currently captures 0 patches — an in-place mutation
+    of `columns` isn't reflected in the render; tracked separately (see #1979
+    follow-up). Kept so the freshness gate pins that state until it's fixed."""
     c = LiveViewTestClient(KanbanTabsView)
     c.mount(active_tab=0)
     egress = c.view_instance._strip_comments_and_whitespace
@@ -88,7 +106,8 @@ def gen_kanban_tabs_1678():
         "scenario": "kanban_tabs_1678",
         "description": (
             "8-tab dashboard, tab 3 keyed kanban. Mount tab0 -> switch to tab3 "
-            "(MoveSubtree for shifted blocks) -> cross-column card move."
+            "(RemoveChild tab0 body + InsertSubtree tab3's nested-conditional "
+            "kanban body; no MoveSubtree since #1826) -> cross-column card move."
         ),
         "root_selector": ".tabs-content",
         "initial_html": initial_html,
