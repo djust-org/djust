@@ -1016,6 +1016,22 @@ class RustBridgeMixin:
                 # getattr walk. Explicit sidecar entries above take precedence.
                 for _raw_key, _raw_val in _raw_models_for_sidecar.items():
                     sidecar.setdefault(_raw_key, _raw_val)
+                # #1986 (ADR-024 review): the Rust getattr walk bypasses the
+                # serialization floor (SECURE_DEFAULTS Pattern 1) unless raw
+                # models are wrapped — else `{{ user.password }}` /
+                # `{{ member.is_superuser }}` / `{{ user.get_session_auth_hash }}`
+                # leak to the client. Wrap every model in the sidecar (both
+                # explicitly-assigned models above AND request-scoped ones like
+                # `user` added by the general loop) in the denylist-consulting
+                # proxy, so ONE floor governs the eager and sidecar channels
+                # (#1646).
+                from django.db.models import Model as _DjModelForProxy
+
+                from ..serialization import _SidecarModelProxy
+
+                for _sk in list(sidecar.keys()):
+                    if isinstance(sidecar[_sk], _DjModelForProxy):
+                        sidecar[_sk] = _SidecarModelProxy(sidecar[_sk])
 
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a

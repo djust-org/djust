@@ -55,6 +55,24 @@ HAS_ORJSON = importlib.util.find_spec("orjson") is not None
 # #19 as leaked to the browser via ``self.user = request.user``.
 _ALWAYS_EXCLUDED_FIELDS = frozenset({"password", "is_superuser", "is_staff"})
 
+# Sensitive / expensive model METHODS that eager serialization never emits
+# (``_add_safe_model_methods``) — and that the template sidecar proxy
+# (``_SidecarModelProxy``, #1986) must also refuse, so the serialization floor
+# holds on the lazy getattr path too. ``get_session_auth_hash`` leaks a
+# session-security value; the ``get_*_permissions`` family and the
+# ``get_next_by_``/``get_previous_by_`` prefixes cause N+1 queries. Shared by
+# both the eager and sidecar paths so the two can't drift (#1646).
+_SENSITIVE_MODEL_METHODS = frozenset(
+    {
+        "get_all_permissions",
+        "get_user_permissions",
+        "get_group_permissions",
+        "get_session_auth_hash",
+        "get_deferred_fields",
+    }
+)
+_SENSITIVE_MODEL_METHOD_PREFIXES = ("get_next_by_", "get_previous_by_")
+
 # Identity keys that are ALWAYS allowed even under a per-model allowlist —
 # the client relies on these for {% if %} comparisons and __str__ display.
 _IDENTITY_KEYS = frozenset({"pk", "id", "__str__", "__model__"})
@@ -448,17 +466,11 @@ class DjangoJSONEncoder(json.JSONEncoder):
         get_previous_by_updated_at() which execute expensive cursor queries.
         We only want explicitly defined methods like get_full_name().
         """
-        # Skip Django's auto-generated methods that cause N+1 queries
-        SKIP_PREFIXES = ("get_next_by_", "get_previous_by_")
-
-        # Known problematic methods
-        SKIP_METHODS = {
-            "get_all_permissions",
-            "get_user_permissions",
-            "get_group_permissions",
-            "get_session_auth_hash",
-            "get_deferred_fields",
-        }
+        # Skip Django's auto-generated N+1 methods + known-sensitive ones.
+        # Shared with the template sidecar proxy so the two paths can't drift
+        # (#1646 / #1986).
+        SKIP_PREFIXES = _SENSITIVE_MODEL_METHOD_PREFIXES
+        SKIP_METHODS = _SENSITIVE_MODEL_METHODS
 
         model_class = obj.__class__
 
@@ -573,6 +585,74 @@ class DjangoJSONEncoder(json.JSONEncoder):
 # obj._djust_prop_cache -- dict writes are atomic under CPython's GIL but
 # this is not truly thread-safe under free-threaded builds).
 _encoder = DjangoJSONEncoder()
+
+
+class _SidecarModelProxy:
+    """Denylist-consulting wrapper for a Django ``Model`` placed in the
+    template getattr sidecar (ADR-024 / #1986 review).
+
+    The Rust template engine's sidecar walk resolves ``{{ obj.attr }}`` by raw
+    ``getattr`` on live model instances — the fallback that lets reverse
+    relations, managers, and methods the eager dict can't hold still render.
+    Without this wrapper that walk **bypasses the serialization floor**
+    (``_ALWAYS_EXCLUDED_FIELDS`` / ``DJUST_SENSITIVE_FIELDS`` / per-model
+    ``djust_exclude_fields``, SECURE_DEFAULTS Pattern 1), leaking
+    ``password`` / ``is_superuser`` / ``get_session_auth_hash`` to the client
+    (both for explicitly-assigned models and request-scoped ``user``).
+
+    The proxy refuses exactly what the eager path (``DjangoJSONEncoder``)
+    refuses — the same field floor/allowlist via ``_field_is_serializable``
+    and the same sensitive-method set — so ONE authority governs both the
+    eager and the sidecar channel (#1646). Refused names raise
+    ``AttributeError``; the Rust walk turns that into an empty render
+    (Django's ``string_if_invalid`` default). Related models reached through
+    the walk are wrapped recursively, so ``{{ member.profile.ssn }}`` is
+    protected too. Everything non-sensitive (safe fields, ``get_full_name``,
+    managers, relations) delegates transparently, so Django-parity auto-call
+    still works.
+
+    Type-based field exclusion (e.g. always-drop ``BinaryField``) is a
+    separate follow-up that hardens both serialization paths — tracked apart
+    from this security fix.
+    """
+
+    __slots__ = ("_obj", "_denied", "_allowed", "_optout")
+
+    def __init__(self, obj: "models.Model") -> None:
+        object.__setattr__(self, "_obj", obj)
+        object.__setattr__(self, "_denied", DjangoJSONEncoder._get_denied_fields(obj))
+        object.__setattr__(self, "_allowed", DjangoJSONEncoder._get_allowlist_fields(obj))
+        object.__setattr__(self, "_optout", DjangoJSONEncoder._get_sensitive_optout_fields(obj))
+
+    def __getattr__(self, name: str) -> Any:
+        # ``__getattr__`` fires only for names not in ``__slots__`` — i.e.
+        # every attribute the template can reference on the wrapped model.
+        obj = object.__getattribute__(self, "_obj")
+        if not name.startswith("_"):
+            # Sensitive / expensive methods the eager path never emits.
+            if name in _SENSITIVE_MODEL_METHODS or name.startswith(
+                _SENSITIVE_MODEL_METHOD_PREFIXES
+            ):
+                raise AttributeError(name)
+            # The serialization floor / allowlist — the SAME authority the
+            # eager dict uses. A floor field (or, under a per-model allowlist,
+            # any non-allowlisted name) is refused.
+            denied = object.__getattribute__(self, "_denied")
+            allowed = object.__getattribute__(self, "_allowed")
+            optout = object.__getattribute__(self, "_optout")
+            if not DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout):
+                raise AttributeError(name)
+        value = getattr(obj, name)
+        # Recursively protect related models reached through the walk.
+        if isinstance(value, models.Model):
+            return _SidecarModelProxy(value)
+        return value
+
+    def __str__(self) -> str:
+        # ``{{ member }}`` normally renders via the eager dict's ``__str__``
+        # key; this covers the case where a proxied related model is the
+        # terminal value of a walk.
+        return str(object.__getattribute__(self, "_obj"))
 
 
 def render_form_value(value: Any) -> Any:

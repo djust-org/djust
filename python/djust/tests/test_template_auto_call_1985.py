@@ -252,6 +252,158 @@ class TestReportedSymptoms:
 
 
 @pytest.mark.django_db
+class TestSidecarSerializationFloor:
+    """#1986 review — the sidecar getattr walk must honor the serialization
+    floor (SECURE_DEFAULTS Pattern 1), or auto-call/raw-model access leaks
+    denylisted fields (password, is_superuser) and sensitive methods
+    (get_session_auth_hash) to the client. Both explicitly-assigned models
+    and request-scoped `user` are covered by _SidecarModelProxy."""
+
+    def _user(self):
+        from django.contrib.auth.models import Group, User
+
+        u = User.objects.create_user(
+            username="jordan", first_name="Jordan", last_name="Reyes", password="s3cret-pw"
+        )
+        u.groups.add(Group.objects.create(name="a"), Group.objects.create(name="b"))
+        return u
+
+    def test_explicit_model_floor_fields_do_not_leak(self):
+        u = self._user()
+
+        class _V(LiveView):
+            template = (
+                "<div>pw=[{{ m.password }}] su=[{{ m.is_superuser }}] "
+                "st=[{{ m.is_staff }}] sess=[{{ m.get_session_auth_hash }}]</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._m = u
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["m"] = self._m
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "pbkdf2" not in html, f"password hash leaked: {html}"
+        assert "pw=[]" in html and "su=[]" in html and "st=[]" in html
+        assert "sess=[]" in html, f"session-auth hash leaked: {html}"
+
+    def test_request_scoped_user_floor_fields_do_not_leak(self):
+        """The pre-existing request-scoped leak (`{{ user.password }}`) is
+        closed by the same proxy — request-scoped `user` is wrapped too."""
+        u = self._user()
+
+        class _V(LiveView):
+            template = "<div>pw=[{{ user.password }}] su=[{{ user.is_superuser }}]</div>"
+
+            def mount(self, request, **kwargs):
+                pass
+
+            def get_context_data(self, **kwargs):
+                return super().get_context_data(**kwargs)
+
+        client = LiveViewTestClient(_V)
+        client.user = u
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "pbkdf2" not in html, f"request-scoped password leaked: {html}"
+        assert "pw=[]" in html and "su=[]" in html
+
+    def test_floor_holds_with_kill_switch_off(self):
+        """The floor is NOT gated on template_auto_call — flipping the
+        kill-switch off must not re-open the field leak (the #1986 review
+        confirmed the retention was ungated)."""
+        u = self._user()
+
+        class _V(LiveView):
+            template = "<div>pw=[{{ m.password }}]</div>"
+
+            def mount(self, request, **kwargs):
+                self._m = u
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["m"] = self._m
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        client.render_with_patches()  # lazy _rust_view init
+        client.view_instance._rust_view.set_template_auto_call(False)
+        html, _, _ = client.render_with_patches()
+        assert "pbkdf2" not in html, f"kill-switch-off leaked password: {html}"
+
+    def test_legit_methods_and_managers_still_work(self):
+        """The proxy must NOT over-block: safe fields, get_* methods, and
+        managers still resolve (the ADR-024 feature)."""
+        u = self._user()
+
+        class _V(LiveView):
+            template = (
+                "<div>n=[{{ m.get_full_name }}] g=[{{ m.groups.count }}] u=[{{ m.username }}]</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._m = u
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["m"] = self._m
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "Jordan Reyes" in html
+        assert "g=[2]" in html
+        assert "jordan" in html
+
+    def test_custom_sensitive_field_refused(self, settings):
+        """A DJUST_SENSITIVE_FIELDS-configured field is refused by the same
+        authority (not just the built-in floor)."""
+        settings.DJUST_SENSITIVE_FIELDS = ["last_name"]
+        u = self._user()
+
+        class _V(LiveView):
+            template = "<div>ln=[{{ m.last_name }}] fn=[{{ m.first_name }}]</div>"
+
+            def mount(self, request, **kwargs):
+                self._m = u
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["m"] = self._m
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert "ln=[]" in html, f"configured-sensitive last_name leaked: {html}"
+        assert "Jordan" in html  # first_name (not sensitive) still renders
+
+    def test_proxy_unit_floor_and_delegation(self):
+        """Gate-off / unit pin (#1468): the proxy IS load-bearing — it raises
+        AttributeError for floor fields + sensitive methods and delegates
+        everything else. This fails if the proxy stops enforcing the floor."""
+        from djust.serialization import _SidecarModelProxy
+
+        u = self._user()
+        proxy = _SidecarModelProxy(u)
+
+        for refused in ("password", "is_superuser", "is_staff", "get_session_auth_hash"):
+            with pytest.raises(AttributeError):
+                getattr(proxy, refused)
+
+        assert proxy.username == "jordan"  # safe field delegates
+        assert callable(proxy.get_full_name)  # method delegates (callable)
+        assert proxy.get_full_name() == "Jordan Reyes"
+
+
+@pytest.mark.django_db
 class TestEagerSiteGuards:
     """ADR-024 Decision 2 — the pre-existing eager auto-call sites share the
     same alters_data / do_not_call_in_templates guards (#1104: N sites, N
