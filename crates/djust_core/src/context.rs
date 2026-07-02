@@ -308,15 +308,32 @@ impl Context {
             };
             current = self.protect_sidecar(py, current);
             for part in &parts[1..] {
-                match current.getattr(*part) {
-                    Ok(next) => {
-                        current = next;
+                // Django `Variable._resolve_lookup` order at EVERY segment:
+                // (1) mapping/dict item access, (2) attribute, (3) integer
+                // list-index. The pre-#1997 walk did (2) only, so a dict/list
+                // intermediate — e.g. a model's `JSONField` value reached mid-
+                // path (`{{ block.content.text }}`) — resolved to empty because
+                // `getattr(dict, "text")` raises `AttributeError`. Mirroring
+                // Django's order fixes nested JSONField/dict/list access.
+                // The #1986 proxies (`_SidecarModelProxy`/`_SidecarQuerySetProxy`)
+                // implement no `__getitem__`, so item access on them falls
+                // through to `getattr` and the serialization floor still governs
+                // — this does not open a floor bypass.
+                let next = current
+                    .get_item(*part)
+                    .or_else(|_| current.getattr(*part))
+                    .or_else(|e| match part.parse::<usize>() {
+                        Ok(idx) => current.get_item(idx),
+                        Err(_) => Err(e),
+                    });
+                match next {
+                    Ok(n) => {
+                        current = n;
                     }
                     Err(_) => {
-                        // Swallow AttributeError (and anything else
-                        // raised by custom descriptors) — invalid
-                        // template paths render as empty, matching
-                        // Django's default.
+                        // Swallow the lookup failure — invalid template paths
+                        // render as empty, matching Django's default
+                        // (`string_if_invalid` = "").
                         return Ok(None);
                     }
                 }
