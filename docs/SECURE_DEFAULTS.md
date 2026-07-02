@@ -72,10 +72,12 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > dropped regardless of its name, via the single shared authority
 > `_field_type_is_excluded` (called by BOTH the eager loop and the sidecar
 > proxy, so they can't drift — #1646): `BinaryField` always; best-effort
-> encrypted-field types (an MRO class name containing `Encrypted`/`Fernet`, for
-> django-encrypted-fields / django-fernet-fields — no hard dependency, excluded
-> fail-closed); and any class named in `LIVEVIEW_CONFIG['sensitive_field_types']`
-> (a project-configurable list, empty by default). `FileField`/`ImageField` are
+> encrypted-field types (an MRO class name **case-insensitively** containing
+> `encrypted`/`fernet`, for django-encrypted-fields / django-fernet-fields — no
+> hard dependency, excluded fail-closed, with a one-shot DEBUG breadcrumb per
+> class so a heuristic false-positive is diagnosable); and any class named in
+> `LIVEVIEW_CONFIG['sensitive_field_types']` (a project-configurable list, empty
+> by default; case-exact). `FileField`/`ImageField` are
 > explicitly **NOT** excluded — they serialize a URL, the intended payload
 > ([#1987](https://github.com/djust-org/djust/issues/1987)).
 
