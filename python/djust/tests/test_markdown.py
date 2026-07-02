@@ -81,3 +81,17 @@ def test_completed_line_renders_strong():
     # The provisional splitter must NOT steal the completed line.
     out = render_markdown("Hello **word**\n")
     assert "<strong>word</strong>" in out
+
+
+def test_complete_fence_no_trailing_newline_renders_code_1998():
+    # #1998: a code-only artifact (a complete fenced block, no surrounding prose,
+    # no trailing newline) used to render the CLOSING ``` as an escaped
+    # provisional paragraph (`<p class="djust-md-provisional">```</p>`) instead
+    # of completing the code block — because the lone ``` has 3 backticks (odd)
+    # and the provisional splitter mistook it for an unterminated inline-code
+    # span. The whole block must render as code.
+    out = render_markdown("```python\ndef greet():\n    pass\n```")
+    assert "djust-md-provisional" not in out
+    assert "<pre>" in out and "<code" in out
+    assert "language-python" in out
+    assert "def greet():" in out
