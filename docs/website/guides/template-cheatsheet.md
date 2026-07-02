@@ -539,6 +539,31 @@ djust.hooks.chart = {
 | `{% dj_activity "name" visible=expr eager=expr %}...{% enddj_activity %}` | Pre-rendered hidden panel with preserved local state (React 19.2 parity). See [Activity guide](activity.md). |
 | `{% djust_markdown expr [kwargs] %}` | Render Markdown to sanitised HTML in the Rust parser — raw HTML and `javascript:` URLs are neutralised; trailing-line provisional wrap makes streaming LLM output flicker-free. See [Streaming Markdown guide](streaming-markdown.md). |
 
+### Callables are auto-called (Django parity)
+
+Variable resolution calls callables with no arguments, exactly like
+Django's engine (ADR-024):
+
+```django
+{{ user.get_full_name }}              {# calls get_full_name() #}
+{{ workspace.memberships.count }}     {# calls the manager method #}
+{{ obj.get_settings.theme }}          {# mid-path calls work too #}
+```
+
+Django's safety attributes are honored: a callable with
+`do_not_call_in_templates = True` is used as-is (Model classes, `Choices`
+enums), and one with `alters_data = True` is **never called** — the
+expression renders empty (so `{{ user.delete }}` cannot destroy data).
+Set `alters_data = True` on your own mutating model methods, as in Django.
+
+**LiveView performance note**: djust re-renders on every WebSocket
+event, so `{{ qs.count }}` in a template is a DB query *per event* —
+not once per request like classic Django. For hot views, precompute in
+`get_context_data()` (djust warns once per path in `DEBUG` when a
+template auto-calls an ORM method). Kill-switch:
+`LIVEVIEW_CONFIG["template_auto_call"] = False` restores the old
+no-call behavior.
+
 ### Comparison operators inside `{% if %}`
 
 The Rust template engine accepts the full set of Python comparison

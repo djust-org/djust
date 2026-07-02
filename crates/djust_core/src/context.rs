@@ -3,7 +3,8 @@
 use crate::Value;
 use ahash::{AHashMap, AHashSet};
 use pyo3::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
 
 /// A context for template rendering, similar to Django's Context
 ///
@@ -11,7 +12,7 @@ use std::collections::HashMap;
 /// sidecar map of raw Python objects (e.g. Django model instances) for
 /// `getattr`-style fallback lookups when a nested key like
 /// `user.username` cannot be resolved through the normal value stack.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Context {
     stack: Vec<AHashMap<String, Value>>,
     /// Keys marked as safe (skip auto-escaping), like Django's SafeData
@@ -29,6 +30,19 @@ pub struct Context {
     /// Wrapping in `Arc` lets `Context::clone` stay GIL-free — the
     /// sidecar is logically immutable after construction.
     raw_py_objects: Option<std::sync::Arc<HashMap<String, Py<PyAny>>>>,
+    /// Django-parity auto-call of callables during sidecar `getattr`
+    /// resolution (ADR-024). Default `true`; the Python side wires
+    /// `LIVEVIEW_CONFIG["template_auto_call"]` through
+    /// `RustLiveView::set_template_auto_call` (mirroring the #1967
+    /// `loop_render_cache_enabled` flag plumbing). `false` restores the
+    /// pre-ADR plain-getattr walk (kill-switch).
+    auto_call: bool,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Clone for Context {
@@ -40,8 +54,22 @@ impl Clone for Context {
             // Arc::clone is cheap and does not require the GIL —
             // the contained `Py<PyAny>` refcount is not touched.
             raw_py_objects: self.raw_py_objects.clone(),
+            auto_call: self.auto_call,
         }
     }
+}
+
+/// Outcome of the Django-parity callable handling for one resolved
+/// attribute (ADR-024, mirrors `Variable._resolve_lookup`).
+enum CallOutcome<'py> {
+    /// Not callable / `do_not_call_in_templates` / auto-call disabled —
+    /// keep the object as-is and continue the walk.
+    AsIs(pyo3::Bound<'py, pyo3::PyAny>),
+    /// The callable was invoked; continue the walk with its result.
+    Called(pyo3::Bound<'py, pyo3::PyAny>),
+    /// `alters_data` refusal or an args-required callable — the whole
+    /// expression resolves to empty (Django's `string_if_invalid`).
+    Empty,
 }
 
 impl Context {
@@ -51,6 +79,7 @@ impl Context {
             safe_keys: AHashSet::new(),
             loop_mappings: AHashMap::new(),
             raw_py_objects: None,
+            auto_call: true,
         }
     }
 
@@ -64,7 +93,15 @@ impl Context {
             safe_keys: AHashSet::new(),
             loop_mappings: AHashMap::new(),
             raw_py_objects: None,
+            auto_call: true,
         }
+    }
+
+    /// Enable/disable Django-parity auto-call in the sidecar walk
+    /// (ADR-024 kill-switch; wired from
+    /// `LIVEVIEW_CONFIG["template_auto_call"]`).
+    pub fn set_auto_call(&mut self, enabled: bool) {
+        self.auto_call = enabled;
     }
 
     /// Attach a map of raw Python objects for `getattr`-fallback
@@ -228,21 +265,48 @@ impl Context {
     ///   continue the walk; intermediate `dict`/`list` return values
     ///   are honoured as if they were regular `Value`s.
     /// - Any exception raised by `getattr` (AttributeError, property
-    ///   raise, etc.) is caught and returned as `None`. This mirrors
+    ///   raise, etc.) is caught and resolved as `None`. This mirrors
     ///   Django's documented "template string if invalid" behaviour
     ///   (defaults to "") — a malformed template never crashes the
     ///   render.
-    pub fn resolve(&self, key: &str) -> Option<Value> {
+    /// - **Auto-call (ADR-024, Django parity)**: after the root bind
+    ///   and after every `getattr` segment, a callable is invoked with
+    ///   no arguments — exactly `django.template.base.Variable._resolve_lookup`:
+    ///   `do_not_call_in_templates` → use the object as-is;
+    ///   `alters_data` → the expression resolves empty (never called);
+    ///   a `TypeError` from the call runs the `inspect.signature(...).bind()`
+    ///   probe — args-required (or unsignaturable) → empty, otherwise the
+    ///   original `TypeError` propagates; any other exception raised by the
+    ///   called method propagates as a render error.
+    ///
+    /// Errors: `Err` is returned only for exceptions raised *inside an
+    /// auto-called method* (Django propagates those); lookup failures
+    /// stay `Ok(None)` as before.
+    pub fn resolve(&self, key: &str) -> crate::Result<Option<Value>> {
         if let Some(v) = self.get(key) {
-            return Some(v.clone());
+            return Ok(Some(v.clone()));
         }
-        let raw = self.raw_py_objects.as_deref()?;
+        let Some(raw) = self.raw_py_objects.as_deref() else {
+            return Ok(None);
+        };
         let parts: Vec<&str> = key.split('.').collect();
-        let first = *parts.first()?;
-        let obj = raw.get(first)?;
+        let Some(first) = parts.first().copied() else {
+            return Ok(None);
+        };
+        let Some(obj) = raw.get(first) else {
+            return Ok(None);
+        };
 
-        Python::attach(|py| -> Option<Value> {
+        Python::attach(|py| -> crate::Result<Option<Value>> {
             let mut current: pyo3::Bound<'_, pyo3::PyAny> = obj.bind(py).clone();
+            // Django auto-calls the value at EVERY lookup step, including
+            // the root bit ({{ some_callable }}) and mid-path
+            // ({{ obj.get_settings.theme }}).
+            current = match self.maybe_call(py, current, key)? {
+                CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
+                CallOutcome::Empty => return Ok(Some(Value::Null)),
+            };
+            current = self.protect_sidecar(py, current);
             for part in &parts[1..] {
                 match current.getattr(*part) {
                     Ok(next) => {
@@ -253,13 +317,100 @@ impl Context {
                         // raised by custom descriptors) — invalid
                         // template paths render as empty, matching
                         // Django's default.
-                        return None;
+                        return Ok(None);
                     }
                 }
+                current = match self.maybe_call(py, current, key)? {
+                    CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
+                    CallOutcome::Empty => return Ok(Some(Value::Null)),
+                };
+                current = self.protect_sidecar(py, current);
             }
             // Convert the resolved attribute to Value; failure → None
-            current.extract::<Value>().ok()
+            Ok(current.extract::<Value>().ok())
         })
+    }
+
+    /// Route a just-materialized attribute/call result through the Python
+    /// sidecar serialization floor (SECURE_DEFAULTS Pattern 1 / #1986).
+    ///
+    /// `djust.serialization._protect_sidecar_value` wraps a Django `Model`
+    /// in `_SidecarModelProxy` and a `Manager`/`QuerySet` in
+    /// `_SidecarQuerySetProxy` (both floor-enforcing); anything else is
+    /// returned unchanged. Applying it at THIS point — the single spot where
+    /// the walk holds a freshly-resolved value, after both `getattr` and the
+    /// auto-call — is what makes the floor hold *however* a model was reached:
+    /// a related-field getattr, an auto-called method that returns a model
+    /// (`{{ obj.get_related.password }}`), or an attribute of a non-model
+    /// intermediary object placed in the context (`{{ presenter.user.password }}`,
+    /// #1986 vector 6). Python-side proxies alone can't cover those — a raw
+    /// intermediary has no proxy `__getattr__`, and a Rust auto-call result
+    /// never re-enters Python. One chokepoint here retires the class (#1646).
+    ///
+    /// Floor enforcement is INDEPENDENT of the `auto_call` kill-switch
+    /// (`{{ p.user.password }}` leaks via pure getattr, no call), so this runs
+    /// regardless of `self.auto_call`. It is idempotent (wrapping a proxy
+    /// returns it unchanged) and fail-safe: any error returns the value
+    /// unwrapped rather than crashing the render.
+    fn protect_sidecar<'py>(
+        &self,
+        py: Python<'py>,
+        obj: pyo3::Bound<'py, pyo3::PyAny>,
+    ) -> pyo3::Bound<'py, pyo3::PyAny> {
+        match py
+            .import("djust.serialization")
+            .and_then(|m| m.getattr("_protect_sidecar_value"))
+            .and_then(|f| f.call1((obj.clone(),)))
+        {
+            Ok(wrapped) => wrapped,
+            Err(_) => obj,
+        }
+    }
+
+    /// Django-parity callable handling for one resolved attribute
+    /// (ADR-024; mirrors `Variable._resolve_lookup`'s callable block).
+    /// `path` is the full dotted expression, used only for the
+    /// debug-mode ORM-call warning.
+    fn maybe_call<'py>(
+        &self,
+        py: Python<'py>,
+        obj: pyo3::Bound<'py, pyo3::PyAny>,
+        path: &str,
+    ) -> crate::Result<CallOutcome<'py>> {
+        // Kill-switch OFF restores the pre-ADR plain-getattr walk: no
+        // guard checks, no calls.
+        if !self.auto_call || !obj.is_callable() {
+            return Ok(CallOutcome::AsIs(obj));
+        }
+        // `do_not_call_in_templates` → use as-is (Model classes,
+        // enums.Choices set this).
+        if attr_is_truthy(&obj, "do_not_call_in_templates") {
+            return Ok(CallOutcome::AsIs(obj));
+        }
+        // `alters_data` → refuse: never call, expression renders empty
+        // (Django stamps Model.save/delete, QuerySet.delete/update, …).
+        if attr_is_truthy(&obj, "alters_data") {
+            return Ok(CallOutcome::Empty);
+        }
+        warn_once_on_orm_autocall(py, &obj, path);
+        match obj.call0() {
+            Ok(result) => Ok(CallOutcome::Called(result)),
+            Err(err) if err.is_instance_of::<pyo3::exceptions::PyTypeError>(py) => {
+                // Django's probe: TypeError from the call is "invalid"
+                // (empty) when the callable actually REQUIRES arguments
+                // (or has no introspectable signature); a TypeError
+                // raised INSIDE a zero-arg method is a real bug and
+                // propagates.
+                if callable_requires_arguments(py, &obj) {
+                    Ok(CallOutcome::Empty)
+                } else {
+                    Err(err.into())
+                }
+            }
+            // Any other exception raised by the method propagates as a
+            // render error, matching Django.
+            Err(err) => Err(err.into()),
+        }
     }
 
     /// Convert the entire context to a flattened HashMap.
@@ -276,6 +427,99 @@ impl Context {
         }
         result
     }
+}
+
+/// Truthiness of an optional attribute (`getattr(obj, name, False)` +
+/// `bool(...)`). Missing attribute or a raising descriptor counts as
+/// falsy — matching Django's `getattr(current, "...", False)` reads.
+fn attr_is_truthy(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> bool {
+    obj.getattr(name)
+        .ok()
+        .and_then(|v| v.is_truthy().ok())
+        .unwrap_or(false)
+}
+
+/// Django's args-required probe, run only on the cold `TypeError` path:
+/// `inspect.signature(obj).bind()` — bind raising `TypeError` means the
+/// callable genuinely requires arguments (→ expression is "invalid",
+/// renders empty); `inspect.signature` itself failing (unsignaturable
+/// builtin) is treated the same. A successful zero-arg bind means the
+/// `TypeError` came from INSIDE the method and must propagate.
+fn callable_requires_arguments(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> bool {
+    let probe = || -> PyResult<bool> {
+        let inspect = py.import("inspect")?;
+        let signature = inspect.call_method1("signature", (obj,))?;
+        Ok(signature.call_method0("bind").is_err())
+    };
+    // No signature found (ValueError on some builtins) → Django's
+    // `string_if_invalid` branch → treat as args-required (empty).
+    probe().unwrap_or(true)
+}
+
+/// Debug-only, one-shot-per-dotted-path warning when an auto-called
+/// callable is bound to a Django `Manager`/`QuerySet` (ADR-024
+/// observability rider): in a LiveView the template re-renders on every
+/// WebSocket event, so `{{ workspace.memberships.count }}` is a DB
+/// query per event. Best-effort — never fails or blocks the render.
+fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>, path: &str) {
+    // One-shot per dotted path per process: the set-membership check runs
+    // FIRST so already-warned paths cost a single HashSet lookup.
+    static WARNED_PATHS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let warned = WARNED_PATHS.get_or_init(|| Mutex::new(HashSet::new()));
+    {
+        let Ok(guard) = warned.lock() else { return };
+        if guard.contains(path) {
+            return; // already warned for this path
+        }
+    }
+    // Only bound methods whose __self__ is a Manager/QuerySet.
+    let Ok(receiver) = obj.getattr("__self__") else {
+        return;
+    };
+    let is_orm = py
+        .import("django.db.models")
+        .and_then(|m| {
+            let manager = m.getattr("Manager")?;
+            let queryset = m.getattr("QuerySet")?;
+            Ok(receiver.is_instance(&manager)? || receiver.is_instance(&queryset)?)
+        })
+        .unwrap_or(false);
+    if !is_orm {
+        return;
+    }
+    // Read settings.DEBUG live (deliberately not cached, so
+    // `override_settings(DEBUG=...)` stays honest). Under DEBUG=False this
+    // re-runs on every render of a not-yet-warned ORM path — one settings
+    // getattr chain, trivial next to the ORM query the auto-call performs.
+    let debug = py
+        .import("django.conf")
+        .and_then(|m| m.getattr("settings"))
+        .and_then(|s| s.getattr("DEBUG"))
+        .ok()
+        .and_then(|d| d.is_truthy().ok())
+        .unwrap_or(false);
+    if !debug {
+        return;
+    }
+    {
+        let Ok(mut guard) = warned.lock() else { return };
+        if !guard.insert(path.to_string()) {
+            return; // raced with another render thread — already warned
+        }
+    }
+    let _ = py.import("logging").and_then(|logging| {
+        let logger = logging.call_method1("getLogger", ("djust.templates",))?;
+        logger.call_method1(
+            "warning",
+            (
+                "[djust] Template path '%s' auto-calls an ORM method — this runs on \
+                 EVERY re-render (each WebSocket event). Consider precomputing it in \
+                 get_context_data() if this view re-renders frequently. (ADR-024)",
+                path,
+            ),
+        )?;
+        Ok(())
+    });
 }
 
 #[cfg(test)]

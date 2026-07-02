@@ -55,6 +55,24 @@ HAS_ORJSON = importlib.util.find_spec("orjson") is not None
 # #19 as leaked to the browser via ``self.user = request.user``.
 _ALWAYS_EXCLUDED_FIELDS = frozenset({"password", "is_superuser", "is_staff"})
 
+# Sensitive / expensive model METHODS that eager serialization never emits
+# (``_add_safe_model_methods``) — and that the template sidecar proxy
+# (``_SidecarModelProxy``, #1986) must also refuse, so the serialization floor
+# holds on the lazy getattr path too. ``get_session_auth_hash`` leaks a
+# session-security value; the ``get_*_permissions`` family and the
+# ``get_next_by_``/``get_previous_by_`` prefixes cause N+1 queries. Shared by
+# both the eager and sidecar paths so the two can't drift (#1646).
+_SENSITIVE_MODEL_METHODS = frozenset(
+    {
+        "get_all_permissions",
+        "get_user_permissions",
+        "get_group_permissions",
+        "get_session_auth_hash",
+        "get_deferred_fields",
+    }
+)
+_SENSITIVE_MODEL_METHOD_PREFIXES = ("get_next_by_", "get_previous_by_")
+
 # Identity keys that are ALWAYS allowed even under a per-model allowlist —
 # the client relies on these for {% if %} comparisons and __str__ display.
 _IDENTITY_KEYS = frozenset({"pk", "id", "__str__", "__model__"})
@@ -448,17 +466,11 @@ class DjangoJSONEncoder(json.JSONEncoder):
         get_previous_by_updated_at() which execute expensive cursor queries.
         We only want explicitly defined methods like get_full_name().
         """
-        # Skip Django's auto-generated methods that cause N+1 queries
-        SKIP_PREFIXES = ("get_next_by_", "get_previous_by_")
-
-        # Known problematic methods
-        SKIP_METHODS = {
-            "get_all_permissions",
-            "get_user_permissions",
-            "get_group_permissions",
-            "get_session_auth_hash",
-            "get_deferred_fields",
-        }
+        # Skip Django's auto-generated N+1 methods + known-sensitive ones.
+        # Shared with the template sidecar proxy so the two paths can't drift
+        # (#1646 / #1986).
+        SKIP_PREFIXES = _SENSITIVE_MODEL_METHOD_PREFIXES
+        SKIP_METHODS = _SENSITIVE_MODEL_METHODS
 
         model_class = obj.__class__
 
@@ -488,6 +500,13 @@ class DjangoJSONEncoder(json.JSONEncoder):
             try:
                 attr = getattr(obj, attr_name)
                 if callable(attr):
+                    # ADR-024 Decision 2 (shared auto-call guard semantics):
+                    # never call alters_data methods; leave
+                    # do_not_call_in_templates callables un-called.
+                    if getattr(attr, "alters_data", False) or getattr(
+                        attr, "do_not_call_in_templates", False
+                    ):
+                        continue
                     value = attr()
                     if isinstance(value, (str, int, float, bool, type(None))):
                         result[attr_name] = value
@@ -566,6 +585,209 @@ class DjangoJSONEncoder(json.JSONEncoder):
 # obj._djust_prop_cache -- dict writes are atomic under CPython's GIL but
 # this is not truly thread-safe under free-threaded builds).
 _encoder = DjangoJSONEncoder()
+
+
+def _protect_sidecar_value(value: Any) -> Any:
+    """Wrap a value reached during the template getattr sidecar walk so the
+    serialization floor keeps holding transitively (#1986 review).
+
+    - A Django ``Model`` → ``_SidecarModelProxy`` (floor-enforcing getattr +
+      a denylist-filtered ``__djust_serialize__`` for terminal conversion).
+    - A ``Manager`` / ``QuerySet`` → ``_SidecarQuerySetProxy``, so the models
+      it yields (``.first``/``.get``/``.all``, iteration) are themselves
+      protected — otherwise ``{{ x.groups.first.user_set.first.password }}``
+      or ``{% for u in qs %}{{ u.password }}{% endfor %}`` would read a raw,
+      unwrapped model and leak the floor field.
+    - Anything else → returned unchanged (no floor to enforce).
+    """
+    if isinstance(value, models.Model):
+        return _SidecarModelProxy(value)
+    from django.db.models import Manager, QuerySet
+
+    if isinstance(value, (Manager, QuerySet)):
+        return _SidecarQuerySetProxy(value)
+    return value
+
+
+class _SidecarModelProxy:
+    """Denylist-consulting wrapper for a Django ``Model`` placed in the
+    template getattr sidecar (ADR-024 / #1986 review).
+
+    The Rust template engine's sidecar walk resolves ``{{ obj.attr }}`` by raw
+    ``getattr`` on live model instances — the fallback that lets reverse
+    relations, managers, and methods the eager dict can't hold still render.
+    Without this wrapper that walk **bypasses the serialization floor**
+    (``_ALWAYS_EXCLUDED_FIELDS`` / ``DJUST_SENSITIVE_FIELDS`` / per-model
+    ``djust_exclude_fields``, SECURE_DEFAULTS Pattern 1), leaking
+    ``password`` / ``is_superuser`` / ``get_session_auth_hash`` to the client
+    (both for explicitly-assigned models and request-scoped ``user``).
+
+    The proxy refuses exactly what the eager path (``DjangoJSONEncoder``)
+    refuses — the same field floor/allowlist via ``_field_is_serializable``
+    and the same sensitive-method set — so ONE authority governs both the
+    eager and the sidecar channel (#1646). Refused names raise
+    ``AttributeError``; the Rust walk turns that into an empty render
+    (Django's ``string_if_invalid`` default).
+
+    Three defenses, all needed (each closed a distinct #1986-review bypass):
+
+    1. **Field/method floor** on ``__getattr__`` — direct
+       ``{{ member.password }}`` / ``{{ member.get_session_auth_hash }}``.
+    2. **Transitive protection** of every returned value via
+       ``_protect_sidecar_value`` — a model or manager/queryset reached deeper
+       in the walk (``{{ x.groups.first.user_set.first.password }}``,
+       ``{% for u in qs %}``) is itself wrapped, so it can't leak.
+    3. **``__djust_serialize__``** returns a denylist-filtered dict
+       (``normalize_django_value``, the SAME serializer the eager path uses),
+       which the Rust ``FromPyObject`` calls instead of bulk-dumping the raw
+       model's ``__dict__`` (that dump — ``lib.rs`` — filtered only
+       ``_``-prefixed keys, so it leaked ``password`` for any model converted
+       to a value, e.g. queryset items in a ``{% for %}``).
+
+    ``_``-prefixed names are refused outright (Django-parity: template
+    resolution never touches them) — this also closes the ``{{ obj._meta }}``
+    worker segfault + ``{{ obj._meta.db_table }}`` schema disclosure. Safe
+    fields, ``get_full_name``, managers, and relations delegate transparently,
+    so Django-parity auto-call still works.
+
+    Type-based field exclusion (e.g. always-drop ``BinaryField``) is a
+    separate follow-up (#1987) that hardens both serialization paths.
+    """
+
+    __slots__ = ("_obj", "_denied", "_allowed", "_optout")
+
+    def __init__(self, obj: "models.Model") -> None:
+        object.__setattr__(self, "_obj", obj)
+        object.__setattr__(self, "_denied", DjangoJSONEncoder._get_denied_fields(obj))
+        object.__setattr__(self, "_allowed", DjangoJSONEncoder._get_allowlist_fields(obj))
+        object.__setattr__(self, "_optout", DjangoJSONEncoder._get_sensitive_optout_fields(obj))
+
+    def __getattr__(self, name: str) -> Any:
+        # ``__getattr__`` fires only for names not in ``__slots__`` — i.e.
+        # every attribute the template can reference on the wrapped model.
+        # Django-parity: refuse ``_``-prefixed names outright. Templates never
+        # resolve them, and allowing them lets ``{{ obj._meta }}`` segfault the
+        # worker (Options extraction) + ``{{ obj._meta.db_table }}`` disclose
+        # the schema (#1986 review). Identity keys (pk/id) are not ``_``-names.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        # Sensitive / expensive methods the eager path never emits.
+        if name in _SENSITIVE_MODEL_METHODS or name.startswith(_SENSITIVE_MODEL_METHOD_PREFIXES):
+            raise AttributeError(name)
+        # The serialization floor / allowlist — the SAME authority the eager
+        # dict uses. A floor field (or, under a per-model allowlist, any
+        # non-allowlisted name) is refused.
+        denied = object.__getattribute__(self, "_denied")
+        allowed = object.__getattribute__(self, "_allowed")
+        optout = object.__getattribute__(self, "_optout")
+        if not DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout):
+            raise AttributeError(name)
+        obj = object.__getattribute__(self, "_obj")
+        return _protect_sidecar_value(getattr(obj, name))
+
+    def __djust_serialize__(self) -> Any:
+        """Denylist-filtered dict for terminal Value conversion (called by the
+        Rust ``FromPyObject``). Routes through the eager serializer so a model
+        that becomes a template value (queryset item, terminal model) is
+        floor-filtered instead of ``__dict__``-dumped."""
+        return normalize_django_value(object.__getattribute__(self, "_obj"))
+
+    def __str__(self) -> str:
+        # ``{{ member }}`` normally renders via the eager dict's ``__str__``
+        # key; this covers the case where a proxied related model is the
+        # terminal value of a walk.
+        return str(object.__getattribute__(self, "_obj"))
+
+
+class _SidecarQuerySetProxy:
+    """Floor-preserving wrapper for a Django ``Manager`` / ``QuerySet`` reached
+    in the template getattr sidecar walk (#1986 review).
+
+    The models a manager/queryset produces — via an auto-called method
+    (``.first``/``.get``/``.latest``…), via a chained queryset (``.all``/
+    ``.filter``…), or via iteration in ``{% for %}`` — must be wrapped in
+    ``_SidecarModelProxy`` too, or the next segment reads a raw model and
+    leaks a floor field. Attribute access returns a protected attr (or a
+    call-wrapping proxy whose *result* is protected); iteration yields
+    protected items. Django's template-callable guards (``alters_data`` /
+    ``do_not_call_in_templates``) and the ORM-warning ``__self__`` are copied
+    onto the call wrapper so the Rust auto-call path treats it exactly like
+    the underlying bound method.
+
+    **``.values()`` / ``.values_list()`` projections are refused** (#1986
+    re-review, vector 5). Those querysets yield raw ``dict`` / ``tuple`` ROWS
+    with no model identity, so neither this proxy nor ``_SidecarModelProxy``
+    can apply the per-field floor to them — and ``.first()`` / ``.get()`` /
+    iteration / positional index would each hand back an *unfiltered* row
+    (leaking e.g. ``password`` via ``{% for x in qs.values %}{{ x.password }}``
+    or ``{{ qs.values.first.password }}``). Rather than floor-filter every row
+    escape hatch, a projection is refused wholesale in the sidecar: iteration
+    is empty, attribute access raises. This is fail-closed with **zero
+    regression** — a ``.values`` projection never rendered in the sidecar
+    auto-call walk before ADR-024 (auto-call is new), the un-called bound
+    method just stringified. Precompute projected rows in
+    ``get_context_data()``, where the eager serialization floor applies.
+    """
+
+    __slots__ = ("_qs", "_is_projection")
+
+    def __init__(self, qs: Any) -> None:
+        object.__setattr__(self, "_qs", qs)
+        # A ``.values()`` / ``.values_list()`` queryset sets ``_fields`` (to a
+        # possibly-empty tuple); a normal queryset / manager leaves it ``None``.
+        # This is the ONLY queryset op that sets ``_fields``, so it cleanly
+        # detects the projection class we must refuse.
+        object.__setattr__(self, "_is_projection", getattr(qs, "_fields", None) is not None)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        # Refuse ALL access on a values/values_list projection — .first/.get/
+        # .aggregate/etc. each return an unfiltered raw row/scalar (vector 5).
+        if object.__getattribute__(self, "_is_projection"):
+            raise AttributeError(name)
+        qs = object.__getattribute__(self, "_qs")
+        attr = getattr(qs, name)
+        if callable(attr) and not isinstance(attr, type):
+
+            def _wrapped(*args: Any, **kwargs: Any) -> Any:
+                return _protect_sidecar_value(attr(*args, **kwargs))
+
+            # Preserve the template-callable guards + ORM ``__self__`` so the
+            # Rust walk auto-calls (or refuses) the wrapper exactly as it would
+            # the bound method (e.g. ``qs.delete`` keeps ``alters_data=True``).
+            for _marker in ("alters_data", "do_not_call_in_templates", "__self__"):
+                if hasattr(attr, _marker):
+                    try:
+                        setattr(_wrapped, _marker, getattr(attr, _marker))
+                    except (AttributeError, TypeError):  # pragma: no cover - defensive
+                        pass
+            return _wrapped
+        return _protect_sidecar_value(attr)
+
+    def __iter__(self) -> Any:
+        if object.__getattribute__(self, "_is_projection"):
+            return iter(())  # refuse: projection rows have no per-field floor
+        return (_protect_sidecar_value(item) for item in object.__getattribute__(self, "_qs"))
+
+    def __len__(self) -> int:
+        if object.__getattribute__(self, "_is_projection"):
+            return 0
+        return len(object.__getattribute__(self, "_qs"))
+
+    def __djust_serialize__(self) -> Any:
+        """Denylist-filtered LIST for terminal Value conversion (called by the
+        Rust ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop
+        resolves the queryset to this value; each item is floor-filtered
+        (``{{ x.name }}`` works, ``{{ x.password }}`` is empty) instead of
+        ``__dict__``-dumped. A ``.values()``/``.values_list()`` projection is
+        refused (empty) — its rows carry no per-field floor (vector 5)."""
+        if object.__getattribute__(self, "_is_projection"):
+            return []
+        return [normalize_django_value(item) for item in object.__getattribute__(self, "_qs")]
+
+    def __str__(self) -> str:
+        return str(object.__getattribute__(self, "_qs"))
 
 
 def render_form_value(value: Any) -> Any:
