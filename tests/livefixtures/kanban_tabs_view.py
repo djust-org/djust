@@ -139,19 +139,35 @@ class KanbanTabsView(LiveView):
         self.active_tab = int(tab)
 
     def move_card(self, card_id, to_column, to_index=0):
-        """Move a card to ``to_column`` at ``to_index`` (cross-column move)."""
+        """Move a card to ``to_column`` at ``to_index`` (cross-column move).
+
+        Uses an IMMUTABLE update — new column dicts + new ``cards`` lists — so
+        djust's change detection sees the change and emits a targeted VDOM diff.
+        An in-place mutation (``col["cards"].pop()/insert()``) would share the
+        previous render's objects and produce ZERO patches (the deliberate
+        no-deepcopy trade-off; #1981). When in-place is unavoidable, call
+        ``self.set_changed_keys("columns")`` instead — see
+        ``docs/website/guides/state-primitives.md``.
+        """
         to_index = int(to_index)
+        # Remove the card by building NEW cards lists (no in-place pop).
         moved = None
+        stripped = []
         for col in self.columns:
-            for i, card in enumerate(col["cards"]):
+            new_cards = []
+            for card in col["cards"]:
                 if card["id"] == card_id:
-                    moved = col["cards"].pop(i)
-                    break
-            if moved:
-                break
+                    moved = card
+                else:
+                    new_cards.append(card)
+            stripped.append({**col, "cards": new_cards})
         if moved is None:
             return
-        for col in self.columns:
-            if col["id"] == to_column:
-                col["cards"].insert(min(to_index, len(col["cards"])), moved)
-                break
+        # Insert into the target column, again building a NEW cards list, and
+        # reassign ``self.columns`` to a NEW list (immutable update).
+        self.columns = [
+            {**col, "cards": col["cards"][:to_index] + [moved] + col["cards"][to_index:]}
+            if col["id"] == to_column
+            else col
+            for col in stripped
+        ]

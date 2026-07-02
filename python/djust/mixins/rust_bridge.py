@@ -4,7 +4,7 @@ RustBridgeMixin - Rust backend integration for LiveView.
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Union
 from urllib.parse import parse_qs, urlencode
 
 from ..security import sanitize_for_log
@@ -545,6 +545,50 @@ class RustBridgeMixin:
         deps = _cached_extract_template_variables(template_content)
         self._template_deps = deps
         return deps
+
+    def set_changed_keys(self, keys: Union[str, Iterable[str]]) -> None:
+        """Mark one or more public attrs as changed, forcing a re-render.
+
+        djust's auto change-detection uses a fast identity + shallow-fingerprint
+        snapshot (``_snapshot_assigns``) that deliberately does NOT deep-copy
+        state (~100x faster). The trade-off is that an *in-place* mutation of a
+        nested container — e.g. ``self.rows[0]["done"] = True`` or
+        ``self.columns[0]["cards"].append(card)`` — shares the same object with
+        the previous snapshot, so it is invisible to change detection and
+        produces no re-render. See the "Nested state" note in
+        ``docs/website/guides/state-primitives.md``.
+
+        Call this from an event handler AFTER such a mutation to force a
+        re-render::
+
+            def toggle(self, i: int):
+                self.rows[i]["done"] = not self.rows[i]["done"]  # in-place
+                self.set_changed_keys("rows")
+
+        Because the previous state is aliased (the snapshot shares the mutated
+        object), djust cannot compute a *targeted* VDOM diff for the changed
+        subtree, so this forces a full re-render of the view. When a targeted
+        diff matters (large views, hot paths), prefer building a NEW value
+        immutably instead — djust diffs that efficiently::
+
+            self.rows = [
+                {**r, "done": not r["done"]} if j == i else r
+                for j, r in enumerate(self.rows)
+            ]
+
+        Args:
+            keys: an attr name, or an iterable of attr names, to mark changed.
+        """
+        key_iter: Iterable[str] = (keys,) if isinstance(keys, str) else keys
+        existing: Set[str] = getattr(self, "_changed_keys", None) or set()
+        # Optional[...]: the attr is also cleared to None after each render sync.
+        self._changed_keys: Optional[Set[str]] = existing | set(key_iter)
+        # Force the render. The pre/post assigns snapshot (runtime.py /
+        # websocket.py) can't see the in-place mutation, so the event would
+        # auto-skip BEFORE ``_changed_keys`` is ever consulted. ``_force_full_html``
+        # is the sanctioned skip bypass (honored on every skip path and reset
+        # after render — runtime.py / websocket.py).
+        self._force_full_html = True
 
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.

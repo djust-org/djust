@@ -95,9 +95,10 @@ def gen_kanban_tabs_1678():
     switch, so the earlier absolute-offset MoveSubtrees were spurious and are
     correctly gone (regenerated for freshness in #1979).
 
-    NOTE: step 2 (card move) currently captures 0 patches — an in-place mutation
-    of `columns` isn't reflected in the render; tracked separately at #1981.
-    Kept so the freshness gate pins that state until it's fixed."""
+    Step 2 (cross-column card move) emits a real targeted diff (RemoveChild +
+    InsertChild + count-badge SetText): `move_card` does an IMMUTABLE update so
+    change detection fires. (#1981 fixed this — an earlier in-place mutation
+    captured 0 patches, a vacuous guard.)"""
     c = LiveViewTestClient(KanbanTabsView)
     c.mount(active_tab=0)
     egress = c.view_instance._strip_comments_and_whitespace

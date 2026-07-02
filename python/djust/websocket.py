@@ -313,9 +313,11 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     common in-place mutations without the cost of copy.deepcopy().
 
     This is ~100x faster than deep copy for views with many attributes.
-    Trade-off: deep nested mutations (e.g., items[0]['name'] = 'x')
-    are NOT detected. For those, use self._changed_keys or @event_handler
-    which explicitly marks state as dirty.
+    Trade-off: deep nested in-place mutations (e.g., items[0]['name'] = 'x')
+    are NOT detected. For those, call ``self.set_changed_keys('items')`` after
+    the mutation to force a re-render, or assign a new value built immutably
+    (which djust diffs efficiently). Setting ``self._changed_keys`` directly does
+    NOT help — the pre/post skip fires before it is consulted.
     """
     # #762: Filter framework-internal attrs so change detection doesn't fire
     # on attrs like ``template_name`` / ``http_method_names`` that the user
