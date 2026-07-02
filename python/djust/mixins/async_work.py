@@ -104,14 +104,32 @@ class AsyncWorkMixin:
         If the task is already running, it will be marked as cancelled so
         the re-render is skipped when it completes.
 
+        Two important limitations:
+
+        * **``name`` must match the name the task was scheduled under.** For
+          ``start_async(cb, name="x")`` that is ``"x"``; for a bare
+          ``@background`` handler it defaults to the handler's ``__name__``.
+          A name that matches no scheduled/running task is a **silent no-op**
+          — nothing is cancelled and nothing is raised. Pass the same string
+          to ``start_async(name=...)`` and ``cancel_async(...)`` so they can
+          never drift.
+        * **It cannot interrupt a synchronous task that is already running.**
+          A sync callback runs in a ``sync_to_async`` thread-pool slot and
+          Python threads are not preemptible, so ``cancel_async`` can only
+          drop a *not-yet-started* task or suppress a running one's final
+          re-render — it cannot stop the loop body. To make generation
+          interruptible, use an ``async def`` handler and check a flag between
+          ``await``\\ s (the event loop can then dispatch the cancelling event
+          mid-run).
+
         Args:
-            name: The name of the task to cancel.
+            name: The name of the task to cancel (must match ``start_async``).
 
         Example::
 
             @event_handler
             def cancel_export(self, **kwargs):
-                self.cancel_async("export")
+                self.cancel_async("export")  # matches start_async(name="export")
                 self.exporting = False
                 self.status = "Cancelled"
         """
