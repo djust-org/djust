@@ -302,6 +302,38 @@ client-supplied keys.
 
 ---
 
+## 5. Template auto-call guards (`alters_data` / `do_not_call_in_templates`)
+
+**The default**: template variable resolution auto-calls no-argument callables
+(Django parity, ADR-024) — but a callable with `alters_data = True` is **never
+invoked** (the expression renders empty), and one with
+`do_not_call_in_templates = True` is used as-is. Every auto-call site shares
+these guards: the Rust sidecar resolution walk
+(`crates/djust_core/src/context.rs::maybe_call`), the JIT serializer's
+generated code (`python/djust/optimization/codegen.py`), and eager model
+serialization (`python/djust/serialization.py::_add_safe_model_methods`).
+
+**Why it matters**: without the `alters_data` refusal, a template typo like
+`{{ user.delete }}` or `{{ qs.update }}` would execute a destructive ORM
+operation on first render. Django stamps `alters_data = True` on
+`Model.save`/`Model.delete`, `QuerySet.delete`/`update`/etc.; djust honors the
+same attribute.
+
+**Your responsibility**: stamp `alters_data = True` on any custom model/helper
+method that mutates state, exactly as you would in classic Django:
+
+```python
+class Invoice(models.Model):
+    def cancel(self):
+        ...
+    cancel.alters_data = True   # {{ invoice.cancel }} renders empty, never runs
+```
+
+Regression tests: `python/djust/tests/test_template_auto_call_1985.py`
+(side-effect sentinels prove the guarded callables are not executed).
+
+---
+
 ## How to make a NEW feature secure-by-default
 
 When you add a feature that emits data, accepts client-echoed state, exposes an
