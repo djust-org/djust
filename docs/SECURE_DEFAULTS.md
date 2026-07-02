@@ -65,8 +65,18 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   is preferred first.
 >
 > A refused name raises `AttributeError` → empty render. The floor is **not**
-> gated on the `template_auto_call` kill-switch. Field-TYPE exclusion
-> (always-drop `BinaryField`) is tracked as a follow-up
+> gated on the `template_auto_call` kill-switch.
+>
+> **The TYPE floor (#1987) — a name-independent second axis.** Besides the
+> name/method floor above, a field whose *type* should never reach the client is
+> dropped regardless of its name, via the single shared authority
+> `_field_type_is_excluded` (called by BOTH the eager loop and the sidecar
+> proxy, so they can't drift — #1646): `BinaryField` always; best-effort
+> encrypted-field types (an MRO class name containing `Encrypted`/`Fernet`, for
+> django-encrypted-fields / django-fernet-fields — no hard dependency, excluded
+> fail-closed); and any class named in `LIVEVIEW_CONFIG['sensitive_field_types']`
+> (a project-configurable list, empty by default). `FileField`/`ImageField` are
+> explicitly **NOT** excluded — they serialize a URL, the intended payload
 > ([#1987](https://github.com/djust-org/djust/issues/1987)).
 
 **Canonical site.**
@@ -107,6 +117,14 @@ flag, a PII column — because serialization defaulted to *allow everything*.
      floor-cleared) fields — a field passes iff it is in the allowlist (or was
      explicitly opted in via `optout`).
   4. Otherwise the field is serialized.
+- `_field_type_is_excluded(field)` + `_field_type_excluded_for(model_class, name)`
+  (the #1987 **TYPE floor**) — the single authority the eager loop
+  (`_serialize_model_safely`, checked right after `_field_is_serializable`) and
+  the sidecar proxy (`_SidecarModelProxy.__getattr__`) both call, so the two
+  paths can't drift (#1646). Drops `BinaryField` unconditionally, any type in
+  `LIVEVIEW_CONFIG['sensitive_field_types']`, and best-effort encrypted-field
+  types (MRO class name contains `Encrypted`/`Fernet`); never
+  `FileField`/`ImageField` (they serialize a URL).
 
 > [!IMPORTANT]
 > **The floor is now an unconditional invariant (#1868).** A per-model
