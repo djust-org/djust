@@ -87,6 +87,12 @@ await self.stream_to("messages", target="#message-list")
 await self.stream_to("output", html="<p>Processing...</p>")
 ```
 
+> **Prefer passing `html=` for a single element.** The no-`html=` form
+> re-renders the **entire** template and regex-extracts the target element —
+> convenient, but it does a full render per call and is easy to double-write
+> against the main diff. If you already have the fragment (e.g. from
+> `render_markdown(...)`), pass it as `html=`.
+
 ### `stream_insert(stream_name, html, at="append", target=None)`
 
 Insert HTML into a stream container without replacing existing content.
@@ -132,7 +138,20 @@ await self.stream_delete("messages", "#msg-42")
 
 <!-- Each update replaces content -->
 <div dj-stream="status" dj-stream-mode="replace"></div>
+
+<!-- A target the handler ALSO re-renders (via djust_markdown, {{ var }}, etc.)
+     should carry dj-update="ignore" so the main diff leaves it to the stream ops -->
+<article dj-stream="reply" dj-update="ignore">{% djust_markdown reply %}</article>
 ```
+
+> **Exclude a streamed target from the main diff with `dj-update="ignore"`.**
+> If the same element is both a `dj-stream` target *and* ordinary diffed
+> content (e.g. it wraps `{% djust_markdown var %}` or `{{ var }}`), the
+> handler's event-completion `render_with_diff()` will re-write the region the
+> stream ops just wrote — the client receives the content twice through two
+> paths in close succession (visible duplicate/flicker). Add `dj-update="ignore"`
+> to the target (checked client-side in `12-vdom-patch.js`) so the stream ops
+> are authoritative for that region.
 
 ## Client-Side Events
 
@@ -208,3 +227,5 @@ class AIChat(LiveView):  # streaming is built in — no StreamingMixin needed
 - Use `stream_text()` for plain text (LLM tokens) and `stream_insert()` when you need HTML structure (log lines, chat bubbles).
 - Apply `overflow-y: auto` with a `max-height` on stream containers for auto-scroll behavior.
 - You do not need to throttle on the server side -- the client batches rapid updates to ~60fps automatically.
+- Mark a `dj-stream` target `dj-update="ignore"` when the handler also re-renders it, so the main diff and the stream ops don't both write the same region (see [Template Directives](#template-directives)).
+- Streaming needs an `async def` handler with explicit `stream_*` calls. Mutating a public attribute in a `@background` loop does **not** stream — the client only sees the result after the whole callback returns — and a *sync* `@background` loop cannot be interrupted mid-run (use `async def` so a sibling "Stop" event can flip a flag between `await`s).
