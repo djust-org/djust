@@ -572,7 +572,7 @@ class RustBridgeMixin:
         self._template_deps = deps
         return deps
 
-    def set_changed_keys(self, keys: Union[str, Iterable[str]]) -> None:
+    def set_changed_keys(self, keys: Union[str, Iterable[str], None] = None) -> None:
         """Mark one or more public attrs as changed, forcing a re-render.
 
         djust's auto change-detection uses a fast identity + shallow-fingerprint
@@ -602,8 +602,23 @@ class RustBridgeMixin:
                 for j, r in enumerate(self.rows)
             ]
 
+        Zero-arg form (#1992): call ``set_changed_keys()`` with NO arguments
+        when a handler changed only EXTERNAL state (a DB row, a cache) and
+        touched no public ``self.*`` attribute, but ``get_context_data()`` will
+        return different HTML on the next render (it re-queries the DB). Auto
+        change-detection sees no changed attr and would auto-skip the event; the
+        zero-arg form forces a full re-render without naming a key::
+
+            def switch_branch(self, message_id, child_id):
+                msg = Message.objects.get(id=message_id)
+                msg.active_child_id = child_id
+                msg.save(update_fields=["active_child_id"])  # DB only, no self.*
+                self.set_changed_keys()                       # force the re-render
+
         Args:
             keys: an attr name, or an iterable of attr names, to mark changed.
+                Omit entirely (``None``) for the zero-arg force-render form above
+                — a DB/external-only change with no changed public attr.
 
         Note:
             Distinct from the Rust-side ``RustLiveView.set_changed_keys`` (the
@@ -611,6 +626,14 @@ class RustBridgeMixin:
             — this Python-level method is the user-facing "force a re-render"
             hatch and does not talk to the Rust view directly.
         """
+        if keys is None:
+            # Zero-arg form (#1992): the handler changed only EXTERNAL state (a
+            # DB row, a cache) with no public ``self.*`` change, but
+            # ``get_context_data()`` will render different HTML next time. Force
+            # a full re-render without naming a key — ``_force_full_html`` below
+            # is the actual bypass; there is no key to add to ``_changed_keys``.
+            self._force_full_html = True
+            return
         key_iter: Iterable[str] = (keys,) if isinstance(keys, str) else keys
         existing: Set[str] = getattr(self, "_changed_keys", None) or set()
         # Optional[...]: the attr is also cleared to None after each render sync.
