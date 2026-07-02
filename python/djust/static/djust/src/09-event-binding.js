@@ -1279,6 +1279,69 @@ function bindLiveViewEvents(scope) {
             handleEvent(handlerName, params);
         });
     }
+
+    // #1999: surface unrecognized `.modifier` suffixes (debug-mode only).
+    _warnUnrecognizedDjModifiers(root);
+}
+
+/**
+ * #1999: Warn (debug-mode only) when the `.lazy` / `.debounce-N` in-name
+ * modifier — which ONLY `dj-model` understands — is mis-applied to another
+ * directive.
+ *
+ * `dj-model` parses its own attribute NAME for `.lazy` / `.debounce-N`
+ * (`20-model-binding.js` `_parseModelAttr`). Every other directive —
+ * `dj-input`, `dj-change`, `dj-click`, … — controls throttling via the
+ * SEPARATE standalone `dj-debounce="N"` attribute and does NOT parse any
+ * in-name modifier. Because a dot is a legal attribute-name character,
+ * `dj-input.debounce-200` reads as a single LITERAL attribute that no
+ * `[dj-input]` selector matches — so the directive silently never binds (no
+ * handler, no event, no error). That's the canonical trap, made worse by
+ * `dj-model.debounce-300` working exactly that way.
+ *
+ * This targets ONLY the `.lazy` / `.debounce` modifiers on non-`model`
+ * directives — it deliberately does NOT touch other legitimate dotted
+ * conventions (`dj-keydown.enter`, `dj-window-keydown.escape`,
+ * `dj-loading.class` / `.show` / `.hide` / `.disable` / `.for`), which are
+ * real key / loading-state modifiers, not this mistake.
+ *
+ * Skipped entirely outside debug mode (zero production cost).
+ *
+ * @param {ParentNode} scope - Root to scan (defaults to document).
+ */
+function _warnUnrecognizedDjModifiers(scope) {
+    if (!globalThis.djustDebug) return;
+    // A `.lazy` / `.debounce[-N]` in-name modifier on some `dj-<name>` directive.
+    // Group 1 is the directive base name; only `dj-model` legitimately uses it.
+    // Prefix-matched (no trailing `-\d+` capture) to keep the regex star-height 1
+    // — a nested `(-\d+)?` trips security/detect-unsafe-regex on the built bundle.
+    const MODEL_MODIFIER = /^(dj-[a-z][\w-]*)\.(lazy|debounce)/;
+    const root = scope || document;
+    const els = root.querySelectorAll('*');
+    for (let i = 0; i < els.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const attrs = els[i].attributes;
+        for (let j = 0; j < attrs.length; j++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const name = attrs[j].name;
+            const m = MODEL_MODIFIER.exec(name);
+            if (!m || m[1] === 'dj-model') continue;
+            const base = m[1];
+            console.warn(
+                '[LiveView] Unrecognized modifier suffix on attribute "' +
+                    name +
+                    '": the `.lazy` / `.debounce-N` in-name modifier is only ' +
+                    'supported on `dj-model`, so `' +
+                    name +
+                    '` is a literal attribute that never binds (no handler ' +
+                    'attaches). For `' +
+                    base +
+                    '`, use the standalone form instead — e.g. `' +
+                    base +
+                    '="handler" dj-debounce="200"`. See the model-binding / dj-input guide.'
+            );
+        }
+    }
 }
 
 /**
