@@ -31,13 +31,20 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > eager serialization dict, the Rust template engine has a *lazy* fallback: for
 > a `{{ obj.attr }}` path not in the eager dict, it `getattr`-walks the live
 > model instance (reverse relations, managers, methods — ADR-024). That walk
-> would bypass this floor, so every model entering the sidecar is wrapped in
-> `_SidecarModelProxy` (`serialization.py`), which refuses the SAME floor
-> fields (via `_field_is_serializable`) and the SAME sensitive methods
-> (`_SENSITIVE_MODEL_METHODS` — `get_session_auth_hash`, the permission
-> getters — shared with `_add_safe_model_methods` so the two paths can't
-> drift, #1646). A refused name raises `AttributeError` → empty render. The
-> floor is **not** gated on the `template_auto_call` kill-switch. Field-TYPE
+> would bypass this floor on FOUR paths — direct field, manager/queryset
+> traversal (`{{ x.mgr.first.password }}`), `{% for %}` iteration (the Rust
+> `FromPyObject` `__dict__` bulk-dump), and `_`-prefixed access
+> (`{{ obj._meta }}`, which also segfaulted the worker). So every
+> model/manager/queryset entering the sidecar is wrapped in
+> `_SidecarModelProxy` / `_SidecarQuerySetProxy` (`serialization.py`), which
+> **transitively** protect everything they return (`_protect_sidecar_value`),
+> refuse the SAME floor fields (via `_field_is_serializable`) and the SAME
+> sensitive methods (`_SENSITIVE_MODEL_METHODS`, shared with
+> `_add_safe_model_methods` so the two paths can't drift, #1646), refuse
+> `_`-prefixed names (Django parity), and expose a `__djust_serialize__` hook
+> so model→value conversion routes through the denylist serializer instead of
+> the `__dict__` dump. A refused name raises `AttributeError` → empty render.
+> The floor is **not** gated on the `template_auto_call` kill-switch. Field-TYPE
 > exclusion (always-drop `BinaryField`) is tracked as a follow-up
 > ([#1987](https://github.com/djust-org/djust/issues/1987)).
 
