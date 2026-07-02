@@ -157,7 +157,11 @@ CHANNEL_LAYERS = {
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        # Read the DB path the host injects at runtime, falling back to a local
+        # file for development. A PaaS app rootfs is typically read-only, so a
+        # sqlite file under BASE_DIR would 500 on the first write; hosts such as
+        # djustlive mount a writable path and export it as DJUST_SQLITE_PATH.
+        "NAME": os.environ.get("DJUST_SQLITE_PATH") or (BASE_DIR / "db.sqlite3"),
     }
 }
 
