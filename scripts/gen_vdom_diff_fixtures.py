@@ -29,6 +29,7 @@ Run:  make gen-vdom-fixtures      # or: .venv/bin/python scripts/gen_vdom_diff_f
 import atexit
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -53,10 +54,11 @@ from django.conf import settings  # noqa: E402
 from django.core.management import call_command  # noqa: E402
 from django.db import connections  # noqa: E402
 
-_TMP_DB = tempfile.mktemp(prefix="djust_vdom_fixtures_", suffix=".sqlite3")
-settings.DATABASES["default"]["NAME"] = _TMP_DB
+# mkdtemp gives a secure 0700 dir we own (no filename-generation race), removed on exit.
+_TMP_DB_DIR = tempfile.mkdtemp(prefix="djust_vdom_fixtures_")
+settings.DATABASES["default"]["NAME"] = os.path.join(_TMP_DB_DIR, "fixtures.sqlite3")
 connections.close_all()  # drop any connection bound to the previous NAME
-atexit.register(lambda: os.path.exists(_TMP_DB) and os.remove(_TMP_DB))
+atexit.register(lambda: shutil.rmtree(_TMP_DB_DIR, ignore_errors=True))
 call_command("migrate", run_syncdb=True, verbosity=0, interactive=False)
 
 # Register djust component tag handlers ({% kanban_board %}, {% empty_state %})
