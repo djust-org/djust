@@ -26,6 +26,21 @@ named symbol; the symbol name is the load-bearing reference.
 serialization, state snapshot) and leaks a sensitive field — `password`, an auth
 flag, a PII column — because serialization defaulted to *allow everything*.
 
+> [!IMPORTANT]
+> **The floor governs the template getattr sidecar too (#1986).** Besides the
+> eager serialization dict, the Rust template engine has a *lazy* fallback: for
+> a `{{ obj.attr }}` path not in the eager dict, it `getattr`-walks the live
+> model instance (reverse relations, managers, methods — ADR-024). That walk
+> would bypass this floor, so every model entering the sidecar is wrapped in
+> `_SidecarModelProxy` (`serialization.py`), which refuses the SAME floor
+> fields (via `_field_is_serializable`) and the SAME sensitive methods
+> (`_SENSITIVE_MODEL_METHODS` — `get_session_auth_hash`, the permission
+> getters — shared with `_add_safe_model_methods` so the two paths can't
+> drift, #1646). A refused name raises `AttributeError` → empty render. The
+> floor is **not** gated on the `template_auto_call` kill-switch. Field-TYPE
+> exclusion (always-drop `BinaryField`) is tracked as a follow-up
+> ([#1987](https://github.com/djust-org/djust/issues/1987)).
+
 **Canonical site.**
 `python/djust/serialization.py`:
 
