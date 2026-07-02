@@ -45,6 +45,24 @@ Optional:
 3. On `scroll` (RAF-batched — one update per frame, 60fps-aligned), djust computes `visibleStart`/`visibleEnd` and re-attaches the slice into the shell. Element identity is preserved, so `dj-hook` mounts stay stable across scrolls.
 4. VDOM morphs that re-render the container call `djust.refreshVirtualList(container)` via `reinitAfterDOMUpdate`.
 
+### Layout contract
+
+`dj-virtual` sets its own CSS on the injected wrapper elements — you should not need to add any:
+
+- The **shell** is `position: absolute; top/left/right: 0` — taken fully out of flow so **only the spacer** contributes to `container.scrollHeight`. (A `position: relative` shell double-counts its own rendered rows against the spacer and leaves dead space past the last item.)
+- The **spacer** is `flex-shrink: 0` so its explicit `height` is honored even when the container is a `display: flex` item — a flex item's default `flex-shrink: 1` otherwise crushes it to `offsetHeight: 0` and the list silently never scrolls.
+
+Because the shell is absolutely positioned, the container is made a positioned ancestor (`position: relative` if it was `static`). One host-page caveat: if your container is itself a flex item relying on `align-items: stretch` for its cross-axis size, note that after this change the only remaining in-flow child is the 1px-wide spacer — give the container an explicit width/height (or `flex-shrink: 0` / `min-height: 0`) rather than relying on stretch from its virtualized content.
+
+### Server-driven re-renders & live data
+
+`dj-virtual` is **self-healing** across server-driven re-renders (djust ≥ 1.1.0-5). The server always renders the full `{% for %}` list (it has no notion of client-side virtualization), so a re-render can replace the container's children back to the raw list, or append a new row outside the shell. djust now reconciles both automatically after every VDOM morph:
+
+- **Full re-render** (the container's children reverted to the raw list): the managed shell/spacer are detected as clobbered and the container is transparently re-virtualized against the fresh children — no manual `teardownVirtualList` + re-init needed.
+- **Appended row** (e.g. a new chat message landing outside the wrapper): the loose element is absorbed into the item pool (at the tail) so it renders inside the shell and receives subsequent patches, instead of leaking as a stray sibling.
+
+Scope note: absorb is **append-only** (a new row lands at the tail — correct for chat/feeds). Keyed mid-list inserts, removals, and finalize-patch landing for an item scrolled OUT of the current window need differ-level `dj-virtual` awareness — tracked in the follow-up to this work. For explicit control you can still set `container.__djVirtualItems` to an array of `HTMLElement` before `refreshVirtualList` to replace the pool wholesale.
+
 ### Limitations (v0.5.0)
 
 - **Fixed height only.** Variable-height items (text wrapping, collapsible rows) are planned for v0.5.1 via `ResizeObserver`. For now, set `white-space: nowrap; overflow: hidden; text-overflow: ellipsis;` on cells to force a single line.

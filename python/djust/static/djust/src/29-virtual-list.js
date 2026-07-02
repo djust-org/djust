@@ -103,15 +103,35 @@
 
         // Inner shell that actually holds the visible slice. A spacer sibling
         // forces the container scroll height to the virtual length.
+        //
+        // Layout contract (#1988): the shell is taken OUT of flow with
+        // `position: absolute` (top/left/right: 0) so ONLY the spacer
+        // contributes to `container.scrollHeight`. `position: relative` +
+        // `transform` does NOT remove the shell from flow (transforms are a
+        // paint-time effect per spec), so the shell's own rendered rows would
+        // double-count against the spacer and leave dead space past the last
+        // item. The container is made a positioned ancestor below (L121-123),
+        // so the absolute shell anchors to the container and translateY()
+        // still positions the visible slice; because it lives inside the
+        // scroll container it scrolls with the content as expected.
         const shell = document.createElement('div');
         shell.setAttribute('data-dj-virtual-shell', '');
-        shell.style.position = 'relative';
+        shell.style.position = 'absolute';
+        shell.style.top = '0';
+        shell.style.left = '0';
+        shell.style.right = '0';
         shell.style.willChange = 'transform';
         shell.style.transform = 'translateY(0px)';
 
+        // The spacer alone defines the scrollable length. `flex-shrink: 0`
+        // (#1988) keeps its explicit `style.height` honored inside a
+        // `display: flex` container — a flex item's default `flex-shrink: 1`
+        // otherwise crushes it to `offsetHeight: 0` once its height exceeds
+        // the flex container's available space, silently killing the scroll.
         const spacer = document.createElement('div');
         spacer.setAttribute('data-dj-virtual-spacer', '');
         spacer.style.width = '1px';
+        spacer.style.flexShrink = '0';
         spacer.style.pointerEvents = 'none';
         spacer.style.visibility = 'hidden';
 
@@ -387,19 +407,103 @@
         state.visibleEnd = end;
     }
 
+    // Is the container's managed shell/spacer still the pair this state owns
+    // and still attached? (#1989 symptom 1) A server-driven re-render
+    // (morphdom / VDOM patch) has no notion of client-side virtualization —
+    // it diffs against the raw server `{% for %}` list and can replace the
+    // container's children back to that list, DETACHING the shell/spacer or
+    // REPURPOSING them into ordinary rows (stripping the marker attributes).
+    // Either way the tracked state is stale and the container must be
+    // re-initialised from its current (server-authored) children. The WeakMap
+    // key (the container element) is unchanged across this, so the plain
+    // "already tracked → skip" guard would leave it permanently
+    // un-virtualized.
+    function structureIntact(container, state) {
+        return (
+            state.shell.parentNode === container &&
+            state.shell.getAttribute('data-dj-virtual-shell') !== null &&
+            state.spacer.parentNode === container &&
+            state.spacer.getAttribute('data-dj-virtual-spacer') !== null
+        );
+    }
+
+    // Drop observers/listeners and the STATE entry WITHOUT restoring the item
+    // pool. Used when a server re-render has ALREADY replaced the container's
+    // children with the authoritative list, so setup() can re-snapshot them
+    // fresh. (teardownVirtualList, by contrast, restores the virtualized item
+    // pool — that's the "dj-virtual attribute removed" case.)
+    function detachState(container, state) {
+        container.removeEventListener('scroll', state.onScroll);
+        if (state.resizeObserver) state.resizeObserver.disconnect();
+        if (state.itemObserver) state.itemObserver.disconnect();
+        STATE.delete(container);
+    }
+
+    // Absorb "loose" element children a server re-render appended OUTSIDE the
+    // shell/spacer wrapper (#1989 symptom 2 — e.g. a stream-appended chat
+    // row) into the item pool, so they render INSIDE the shell and receive
+    // subsequent patches instead of leaking as stray siblings whose finalize
+    // patch never lands. Loose = any element child that is neither the shell
+    // nor the spacer. Appended in document order (append-only assumption; a
+    // mid-list server insert would land at the tail — strictly better than
+    // leaking, and honestly noted in the guide). Returns whether anything was
+    // absorbed.
+    function absorbLooseChildren(container, state) {
+        const loose = [];
+        for (const node of Array.from(container.children)) {
+            if (node === state.shell || node === state.spacer) continue;
+            if (node.nodeType !== 1) continue;
+            loose.push(node);
+        }
+        if (loose.length === 0) return false;
+        for (const node of loose) {
+            // De-parent: render() re-attaches the visible slice into the
+            // shell. Off-window items stay detached, held only in state.items.
+            if (node.parentNode === container) container.removeChild(node);
+            state.items.push(node);
+        }
+        // New items invalidate the current window so render() re-slices.
+        state.visibleStart = -1;
+        state.visibleEnd = -1;
+        if (state.mode === 'variable') {
+            state.offsets = null;
+        }
+        return true;
+    }
+
     function initVirtualLists(root) {
         const scope = root || document;
         const containers = scope.querySelectorAll
             ? scope.querySelectorAll('[dj-virtual]')
             : [];
         containers.forEach(container => {
-            if (!STATE.has(container)) setup(container);
+            const state = STATE.get(container);
+            if (!state) {
+                setup(container);
+            } else if (!structureIntact(container, state)) {
+                // #1989 symptom 1: a server re-render clobbered the managed
+                // structure back to the raw list. Detach the stale state and
+                // re-run setup against the fresh children instead of no-oping.
+                detachState(container, state);
+                setup(container);
+            }
         });
     }
 
     function refreshVirtualList(container) {
         const state = STATE.get(container);
         if (!state) return;
+
+        // #1989 symptom 1: self-heal if a server re-render clobbered the
+        // managed structure (idempotent with initVirtualLists' own check —
+        // whichever runs first heals; the other becomes a no-op). This keeps
+        // refreshVirtualList robust regardless of call order.
+        if (!structureIntact(container, state)) {
+            detachState(container, state);
+            setup(container);
+            return;
+        }
+
         // Re-snapshot: after VDOM morph, the shell holds only the visible
         // slice. The full data source is whatever is currently in the shell
         // plus any new children added outside of virtualization. We support
@@ -431,6 +535,11 @@
                 state.offsets = null;
                 state.nodeToIndex = new WeakMap();
             }
+        } else {
+            // No explicit replacement pool: auto-derive from the container's
+            // real children so stream-appended rows (#1989 symptom 2) get
+            // absorbed into the shell instead of leaking as stray siblings.
+            absorbLooseChildren(container, state);
         }
         render(state);
     }
@@ -438,9 +547,7 @@
     function teardownVirtualList(container) {
         const state = STATE.get(container);
         if (!state) return;
-        container.removeEventListener('scroll', state.onScroll);
-        if (state.resizeObserver) state.resizeObserver.disconnect();
-        if (state.itemObserver) state.itemObserver.disconnect();
+        detachState(container, state);
         // Restore the pre-virtualization children and remove the shell/spacer.
         // Without this, removing `dj-virtual` from a live container leaves
         // the injected wrapper elements in place and shows only the
@@ -455,7 +562,7 @@
                 console.warn('[dj-virtual] teardown restore failed', e);
             }
         }
-        STATE.delete(container);
+        // STATE entry already dropped by detachState() above.
     }
 
     window.djust = window.djust || {};
