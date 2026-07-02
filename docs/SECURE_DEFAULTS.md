@@ -31,12 +31,14 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > eager serialization dict, the Rust template engine has a *lazy* fallback: for
 > a `{{ obj.attr }}` path not in the eager dict, it `getattr`-walks the live
 > model instance (reverse relations, managers, methods — ADR-024). That walk
-> would bypass this floor on FIVE paths — direct field, manager/queryset
+> would bypass this floor on SIX paths — direct field, manager/queryset
 > traversal (`{{ x.mgr.first.password }}`), `{% for %}` iteration (the Rust
 > `FromPyObject` `__dict__` bulk-dump), `_`-prefixed access (`{{ obj._meta }}`,
-> which also segfaulted the worker), and `.values()`/`.values_list()`
-> projections (raw dict/tuple rows with no per-field floor). So every
-> model/manager/queryset entering the sidecar is wrapped in
+> which also segfaulted the worker), `.values()`/`.values_list()`
+> projections (raw dict/tuple rows with no per-field floor), and a non-model
+> intermediary object (`{{ presenter.user.password }}`, or a model **method**
+> returning a model whose Rust-auto-called result never re-enters a Python
+> proxy). So every model/manager/queryset entering the sidecar is wrapped in
 > `_SidecarModelProxy` / `_SidecarQuerySetProxy` (`serialization.py`), which
 > **transitively** protect everything they return (`_protect_sidecar_value`),
 > refuse the SAME floor fields (via `_field_is_serializable`) and the SAME
@@ -46,9 +48,15 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > so model→value conversion routes through the denylist serializer instead of
 > the `__dict__` dump, and **refuse `.values()`/`.values_list()` projections
 > wholesale** (their rows have no model identity to floor; precompute in
-> `get_context_data()` instead). A refused name raises `AttributeError` → empty
-> render. The floor is **not** gated on the `template_auto_call` kill-switch.
-> Field-TYPE exclusion (always-drop `BinaryField`) is tracked as a follow-up
+> `get_context_data()` instead). The Python proxies can't cover a *raw*
+> intermediary (no proxy `__getattr__`) or a Rust-auto-called method result,
+> so the Rust resolve walk (`crates/djust_core/src/context.rs`) has a single
+> `protect_sidecar` chokepoint that routes every just-materialized value —
+> after `getattr` AND the auto-call — through `_protect_sidecar_value`, floor-
+> wrapping a model/manager/queryset **however it was reached**. A refused name
+> raises `AttributeError` → empty render. The floor is **not** gated on the
+> `template_auto_call` kill-switch. Field-TYPE exclusion (always-drop
+> `BinaryField`) is tracked as a follow-up
 > ([#1987](https://github.com/djust-org/djust/issues/1987)).
 
 **Canonical site.**

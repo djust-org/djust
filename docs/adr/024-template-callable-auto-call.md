@@ -84,11 +84,25 @@ must call `get_settings()` mid-walk), if the object `is_callable()`:
 | `call0()` raises `TypeError` | probe `inspect.signature(obj).bind()`: bind **fails** (callable needs args) → `Value::Null`; bind **succeeds** (the `TypeError` came from inside the method) → propagate | Django's exact distinction; the probe runs only on the cold error path |
 | `call0()` raises anything else | propagate | djust's existing render-error path handles it, as Django propagates |
 
-The call result feeds the existing `current.extract::<Value>()` conversion
-unchanged. The shared `FromPyObject for Value` catch-all
-(`crates/djust_core/src/lib.rs:235`) is **not** modified — it also serves
-`update_state` ingestion, and auto-calling there would change eager-channel
-semantics.
+The call result feeds the existing `current.extract::<Value>()` conversion.
+The shared `FromPyObject for Value` catch-all
+(`crates/djust_core/src/lib.rs`) gains **no auto-call** (that would change
+eager-channel `update_state` semantics); the #1986 security hardening added
+only a `__djust_serialize__` branch there (a djust sidecar proxy converts via
+its own denylist-filtered dict, ahead of the `__dict__` bulk-dump) — a
+serialization-floor concern, not an auto-call one.
+
+> **Security addendum (#1986).** Auto-calling live sidecar objects surfaced
+> that the getattr walk also *bypassed the serialization floor*
+> (SECURE_DEFAULTS Pattern 1) — a defense-in-depth denylist leak, not
+> introduced by auto-call but exposed by it. The fix wraps every
+> model/manager/queryset entering the sidecar in floor-enforcing proxies
+> (`_SidecarModelProxy`/`_SidecarQuerySetProxy`, `serialization.py`) and adds a
+> single `protect_sidecar` chokepoint in this resolve walk that routes every
+> just-materialized value (after `getattr` AND the auto-call) through
+> `_protect_sidecar_value`, so a model is floor-wrapped however it was reached.
+> The floor is independent of the `template_auto_call` kill-switch. See
+> `docs/SECURE_DEFAULTS.md` Pattern 1 and the CHANGELOG `### Security` entry.
 
 The GIL is already held in this block (`Python::attach`); the added hot-path
 cost is one `is_callable()` check per segment, on the sidecar path only. The
