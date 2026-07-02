@@ -13,7 +13,11 @@ from django.utils.decorators import classonlymethod
 from django.views import View
 
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
-from .serialization import DjangoJSONEncoder  # noqa: F401
+from .serialization import (  # noqa: F401
+    DjangoJSONEncoder,
+    decode_private_model_refs,
+    encode_private_model_refs,
+)
 from .session_utils import (  # noqa: F401
     DEFAULT_SESSION_TTL,
     cleanup_expired_sessions,
@@ -750,6 +754,11 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
             # Skip callables (bound methods, lambdas stored as attrs)
             if callable(value):
                 continue
+            # #1994: encode Django models to a re-hydratable ref so a private
+            # model attr survives the session round-trip AS A MODEL (re-fetched
+            # on restore) instead of the lossy client dict normalize_django_value
+            # would otherwise produce. No-op for non-model values.
+            value = encode_private_model_refs(value)
             # Attempt serialization — skip if not possible
             try:
                 json.dumps(value, cls=DjangoJSONEncoder)
@@ -770,6 +779,9 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
         for key, value in private_state.items():
             if key.startswith("_") and key not in framework and key not in meta_attrs:
+                # #1994: re-hydrate model refs back to model instances (fresh DB
+                # fetch) so a private model attr comes back a MODEL, not a dict.
+                value = decode_private_model_refs(value)
                 setattr(self, key, value)
                 # Track restored attrs as user-defined so they persist
                 # through subsequent save cycles.
