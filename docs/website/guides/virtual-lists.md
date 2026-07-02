@@ -57,6 +57,32 @@ issue #951).
 - **Variable**: user-generated or dynamic content. Chat messages, markdown-rendered posts,
   cards with variable internal layout.
 
+## Live-changing data (server-driven re-renders)
+
+`dj-virtual` works with a live, `{% for %}`-driven list that changes via normal server
+re-renders — not just on first paint (djust ≥ 1.1.0-5). After every VDOM morph djust
+reconciles the container automatically:
+
+- If a re-render reverted the container to the raw server list, the shell/spacer are
+  re-established transparently (no manual teardown + re-init).
+- If a re-render appended a new row outside the wrapper (e.g. a streamed chat message), the
+  row is absorbed into the virtual item pool at the tail so it renders inside the shell.
+
+The absorb is **append-only** — a new row lands at the end. Keyed mid-list inserts/removals and
+finalize-patch landing for an item scrolled out of the current window are deferred to
+differ-level `dj-virtual` awareness (tracked as a follow-up). For explicit control, set
+`container.__djVirtualItems` to an array of `HTMLElement` before `djust.refreshVirtualList(container)`
+to replace the pool wholesale.
+
+## Layout contract
+
+The injected wrapper carries its own CSS — no host CSS is required. The **shell** is
+`position: absolute; top/left/right: 0` (out of flow, so only the spacer defines scroll
+height), and the **spacer** is `flex-shrink: 0` (so its height survives a `display: flex`
+container). If your container is itself a stretch-sized flex item, give it an explicit
+size rather than relying on `align-items: stretch` from its virtualized content — the only
+in-flow child after virtualization is the 1px spacer.
+
 ## See also
 
 - `dj-infinite-scroll` — pagination trigger on scroll-near-bottom
