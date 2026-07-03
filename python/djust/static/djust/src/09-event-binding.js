@@ -112,10 +112,13 @@ function _normalizeKeyName(name) {
 // ============================================================================
 // Scoped Event Delegation (dj-window-*, dj-document-*)
 // ============================================================================
-// Install ONE listener per event type on window/document. When the event fires,
-// dispatch to registered declaring elements. Elements are registered by scanning
-// the DOM once at install time. Re-scanning happens on TurboNav navigation or
-// when bindLiveViewEvents() is called after DOM changes.
+// Install ONE listener per event type on window/document (one-shot). When the
+// event fires, dispatch to registered declaring elements. Declaring elements are
+// registered by _scanScopedElements(), which bindLiveViewEvents() calls on EVERY
+// invocation — so elements that enter the DOM via a later patch (e.g. inside a
+// {% if %} that becomes true), on TurboNav, or at initial mount all get picked
+// up. Only the window/document addEventListener install is one-shot (guarded by
+// _scopedDelegationInstalled); the registry scan is not.
 
 // Registry: Map<"prefix:evtType", Set<{element, attrName, handler, requiredKey}>>
 const _scopedRegistry = new Map();
@@ -197,14 +200,14 @@ function _scanScopedElements() {
 
 /**
  * Install delegated listeners on window/document for scoped events.
- * Called once — listeners dispatch to the registry.
+ * One-shot: the window/document addEventListener calls must run exactly once
+ * (window persists across patches, so re-adding would double-dispatch). The
+ * registry that these listeners dispatch to is (re)populated separately by
+ * _scanScopedElements(), which bindLiveViewEvents() calls on every invocation.
  */
 function _installScopedDelegation() {
     if (_scopedDelegationInstalled) return;
     _scopedDelegationInstalled = true;
-
-    // Scan DOM once at install time to populate the registry
-    _scanScopedElements();
 
     const scopedTargets = [
         { prefix: 'dj-window-', target: window },
@@ -1149,10 +1152,20 @@ function bindLiveViewEvents(scope) {
     // ================================================================
 
     // --- Feature 1: dj-window-* and dj-document-* event scoping ---
-    // Delegated approach: install ONE listener per event type on window/document.
-    // When the event fires, find declaring elements via querySelectorAll('[dj-window-keydown]')
-    // and dispatch to matching handlers. This avoids querySelectorAll('*') entirely.
+    // Delegated approach: install ONE listener per event type on window/document
+    // (one-shot). When the event fires, dispatch to the declaring elements held in
+    // the scoped registry. This avoids per-event querySelectorAll('*').
     _installScopedDelegation();
+
+    // Re-scan for dj-window-*/dj-document-* declaring elements on EVERY bind so
+    // that elements which entered the DOM via a later patch (e.g. inside a
+    // {% if %} that became true) register too — mirroring the per-bind rescan
+    // dj-shortcut / dj-click-away already do below. _scanScopedElements() is
+    // idempotent per-element (see its alreadyRegistered check) and also drops
+    // registry entries for elements that left the DOM, so repeated calls are
+    // safe and cheap. Without this, a dj-window-keydown.escape on patch-inserted
+    // content would silently never bind (#1996).
+    _scanScopedElements();
 
     // Sweep orphaned scoped listeners (click-away, shortcut) for elements
     // removed from DOM by conditional rendering
@@ -1278,6 +1291,69 @@ function bindLiveViewEvents(scope) {
 
             handleEvent(handlerName, params);
         });
+    }
+
+    // #1999: surface unrecognized `.modifier` suffixes (debug-mode only).
+    _warnUnrecognizedDjModifiers(root);
+}
+
+/**
+ * #1999: Warn (debug-mode only) when the `.lazy` / `.debounce-N` in-name
+ * modifier — which ONLY `dj-model` understands — is mis-applied to another
+ * directive.
+ *
+ * `dj-model` parses its own attribute NAME for `.lazy` / `.debounce-N`
+ * (`20-model-binding.js` `_parseModelAttr`). Every other directive —
+ * `dj-input`, `dj-change`, `dj-click`, … — controls throttling via the
+ * SEPARATE standalone `dj-debounce="N"` attribute and does NOT parse any
+ * in-name modifier. Because a dot is a legal attribute-name character,
+ * `dj-input.debounce-200` reads as a single LITERAL attribute that no
+ * `[dj-input]` selector matches — so the directive silently never binds (no
+ * handler, no event, no error). That's the canonical trap, made worse by
+ * `dj-model.debounce-300` working exactly that way.
+ *
+ * This targets ONLY the `.lazy` / `.debounce` modifiers on non-`model`
+ * directives — it deliberately does NOT touch other legitimate dotted
+ * conventions (`dj-keydown.enter`, `dj-window-keydown.escape`,
+ * `dj-loading.class` / `.show` / `.hide` / `.disable` / `.for`), which are
+ * real key / loading-state modifiers, not this mistake.
+ *
+ * Skipped entirely outside debug mode (zero production cost).
+ *
+ * @param {ParentNode} scope - Root to scan (defaults to document).
+ */
+function _warnUnrecognizedDjModifiers(scope) {
+    if (!globalThis.djustDebug) return;
+    // A `.lazy` / `.debounce[-N]` in-name modifier on some `dj-<name>` directive.
+    // Group 1 is the directive base name; only `dj-model` legitimately uses it.
+    // Prefix-matched (no trailing `-\d+` capture) to keep the regex star-height 1
+    // — a nested `(-\d+)?` trips security/detect-unsafe-regex on the built bundle.
+    const MODEL_MODIFIER = /^(dj-[a-z][\w-]*)\.(lazy|debounce)/;
+    const root = scope || document;
+    const els = root.querySelectorAll('*');
+    for (let i = 0; i < els.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const attrs = els[i].attributes;
+        for (let j = 0; j < attrs.length; j++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const name = attrs[j].name;
+            const m = MODEL_MODIFIER.exec(name);
+            if (!m || m[1] === 'dj-model') continue;
+            const base = m[1];
+            console.warn(
+                '[LiveView] Unrecognized modifier suffix on attribute "' +
+                    name +
+                    '": the `.lazy` / `.debounce-N` in-name modifier is only ' +
+                    'supported on `dj-model`, so `' +
+                    name +
+                    '` is a literal attribute that never binds (no handler ' +
+                    'attaches). For `' +
+                    base +
+                    '`, use the standalone form instead — e.g. `' +
+                    base +
+                    '="handler" dj-debounce="200"`. See the model-binding / dj-input guide.'
+            );
+        }
     }
 }
 

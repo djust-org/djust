@@ -29,8 +29,12 @@
         {% endif %}
     </div>
 
-    <!-- The rendered Markdown. This is the only place {% djust_markdown %} is needed. -->
-    <article class="prose max-w-none border rounded p-4 bg-white min-h-[200px]">
+    <!-- The rendered Markdown. This is the only place {% djust_markdown %} is needed.
+         dj-stream="md_stream" marks it as the stream target the view pushes tokens to;
+         dj-update="ignore" excludes it from the main dj-root VDOM diff so the streamed
+         content and the event-completion render never both write this region. -->
+    <article dj-stream="md_stream" dj-update="ignore"
+             class="prose max-w-none border rounded p-4 bg-white min-h-[200px]">
         {% djust_markdown llm_output %}
     </article>
 

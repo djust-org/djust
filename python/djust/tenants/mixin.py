@@ -93,6 +93,91 @@ class TenantMixin:
         self._tenant = value
         self._tenant_resolved = True
 
+    def set_tenant(self, tenant_id: Any) -> TenantInfo:
+        """
+        Set the current tenant for this view (e.g. from a WebSocket event handler).
+
+        Updates the in-memory tenant view state (``self.tenant`` / ``self._tenant``)
+        and, **only when a** :class:`~djust.tenants.resolvers.SessionResolver` **is the
+        configured resolver**, best-effort mirrors the tenant id into
+        ``request.session[TENANT_SESSION_KEY]``. For any other resolver
+        (subdomain / path / header / custom) the session write is a no-op.
+
+        WebSocket persistence semantics (important):
+            The **view-state** update (``self.tenant``) is the *authoritative*
+            source of truth for the current tenant across the WebSocket
+            lifecycle. The session write is only a best-effort **mirror**: over
+            a WebSocket event there is no HTTP response for Django's
+            ``SessionMiddleware`` to save against, so the write is not
+            guaranteed to be persisted to the session store. Keep the tenant id
+            in view state (``self.tenant`` and, if you adapt an existing FK,
+            your own ``self.<field>``) as the source of truth; treat the session
+            write as a convenience so the *next* full-page (HTTP) load resolves
+            the same tenant via the session resolver.
+
+        Args:
+            tenant_id: The tenant identifier (coerced to ``str`` to match the
+                resolver behaviour) or an existing
+                :class:`~djust.tenants.resolvers.TenantInfo` instance.
+
+        Returns:
+            The :class:`~djust.tenants.resolvers.TenantInfo` now set on this view.
+        """
+        tenant = (
+            tenant_id if isinstance(tenant_id, TenantInfo) else TenantInfo(tenant_id=str(tenant_id))
+        )
+
+        # Authoritative: update in-memory view state. The property setter also
+        # marks the tenant as resolved so _ensure_tenant() won't overwrite it.
+        self.tenant = tenant
+
+        # Best-effort mirror into the session, ONLY for a session-based resolver.
+        self._mirror_tenant_to_session(tenant)
+
+        return tenant
+
+    def _mirror_tenant_to_session(self, tenant: TenantInfo) -> None:
+        """
+        Best-effort mirror of the tenant id into ``request.session``.
+
+        No-op (logged at debug) when there is no request/session available, or
+        when the configured resolver is not session-based. This is a *mirror*,
+        not the WS-lifecycle source of truth — see :meth:`set_tenant`.
+        """
+        request = getattr(self, "request", None)
+        session = getattr(request, "session", None)
+        if session is None:
+            logger.debug("set_tenant: no request.session available; skipping session mirror")
+            return
+
+        if not self._session_resolver_configured():
+            logger.debug(
+                "set_tenant: configured resolver is not session-based; skipping session mirror"
+            )
+            return
+
+        from ..config import get_djust_config
+
+        session_key = get_djust_config().get("TENANT_SESSION_KEY", "tenant_id")
+        session[session_key] = tenant.id
+        logger.debug(
+            "set_tenant: mirrored tenant %s into session key %s (best-effort, not authoritative)",
+            tenant.id,
+            session_key,
+        )
+
+    @staticmethod
+    def _session_resolver_configured() -> bool:
+        """Return True if the configured resolver is (or chains) a SessionResolver."""
+        from .resolvers import ChainedResolver, SessionResolver, get_tenant_resolver
+
+        resolver = get_tenant_resolver()
+        if isinstance(resolver, SessionResolver):
+            return True
+        if isinstance(resolver, ChainedResolver):
+            return any(isinstance(r, SessionResolver) for r in resolver.resolvers)
+        return False
+
     def resolve_tenant(self, request: "HttpRequest") -> Optional[TenantInfo]:
         """
         Resolve tenant from the request.

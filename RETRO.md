@@ -356,6 +356,61 @@ issue or be explicitly closed with a reason.
 | 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Closed | **Resolved (PR for #1869):** `playwright-tests` was `success` on the last 3 runner runs (precondition met per #1534), so `test_browser_smoke.py` was carved into its own BLOCKING `browser-smoke` CI job (no `continue-on-error`, mirrors the `demo-checks` pattern #1708/#1713) and wired into the `test-summary` AND-condition; the rest of the playwright suite stays non-blocking (the full suite can be flaky). #1848 was code-fixed by PR #1871 (re-execute classic `<script>` on the #1610 mount morph), so the inline-script known-xfail was flipped to a HARD regression assertion. |
 | 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Closed | **Resolved in v1.1.0-1 (PR #1881):** channel-layer isolation (`backends.clear()`) + deterministic ping/pong openness probe (replaced the wall-clock `receive_nothing`); the systemic test-isolation fixture (#1884) retired the shared-process-global flaky class. |
 | 316 | Propagate the "cap concurrent worktree implementer agents at ~3" rule into the pipeline-run / pipeline-drain skill prompts | v1.1.0-4 retro | — | OUT-OF-REPO | Skill prompts live in `~/.claude/skills/{pipeline-run,pipeline-drain}/SKILL.md` (gitignored, not in this repo). In-repo half DONE: CLAUDE.md "Process canonicalizations from v1.1.0-4 retro arc" rule 2. Trigger: 5 concurrent worktree fixers tripped a transient server-side throttle; ≤3 concurrent prevents it, serial resumption recovers cleanly. |
+| 317 | Transport-parity test for the async-work dispatch path (runtime `_execute_async_task` vs consumer `_run_async_work`) — the #2016 `sync_to_async`/coroutine drift had no guard | PR #2016 / v1.1.0-5 retro | #2020 | Open | #1646 twin: the ADR-022 runtime convergence dropped the `iscoroutinefunction` branch the consumer had, silently breaking async `@background` on the live path. Fix mirrored the twin (+ defensive `inspect.iscoroutine(result)`); the parity test (ideally a shared `_dispatch_async_callback` helper both paths call, pinned by a sync+async round-trip) is the structural cure. |
+| 318 | dj-virtual deeper server-side reconcile — automatic `stream_append`→`__djVirtualItems` wiring, VDOM-differ `dj-virtual` awareness (keyed mid-list inserts/removals), out-of-window finalize-patch landing, + a `djustDebug` warning | PR #2018 / v1.1.0-5 retro | #2017 | Open | Deferred from #1988/#1989 per #1079 scope discipline; the client-side self-heal (`structureIntact`/`absorbLooseChildren`) + CSS layout contract shipped in #2018. Also carries the manual real-browser pixel-verification JSDOM couldn't cover. |
+| 319 | Codify the CHANGELOG-union local-sync step (`git merge origin/main` before GitHub-merge; rebuild bundles from merged src when they conflict) into the pipeline-drain skill | v1.1.0-5 retro | — | OUT-OF-REPO | `CHANGELOG merge=union` is a LOCAL git driver; GitHub's merge button doesn't apply it, so every multi-PR drain re-hits a silent CHANGELOG conflict (checks green, button shows "conflicting"). pipeline-drain skill is gitignored (`~/.claude/skills/`). In-repo-adjacent: memory `reference_changelog_union_vs_github_merge` saved. |
+
+## v1.1.0-5 — downstream-gotcha open-issue drain (PRs #2005–#2019)
+
+**Date**: 2026-07-02
+**Scope**: Drained all 18 open issues (#1987–#2004), most sourced from a downstream project's `DJUST_LESSONS` field-notes log (copy-from-and-it-breaks docs, silent client-side no-ops, and a private-state round-trip bug). 14 PRs closing 18 issues; 6 processed inline (config/serialization/state/markdown), 8 via worktree-isolated subagents (tenant helper, demo streaming, dj-window rescan, form-value preservation, dj-virtual robustness). 1 code follow-up filed (#2017) + 1 process follow-up (#2020).
+**Tests at close**: 8608 baseline + ~70 new (13 tenant, 12 private-model+config, 6 demo-stream, 5 dj-window, 11 form-value, 5 dj-virtual, 7 dj-input-warn, markdown/upload/config units) — full suite green at each merge.
+
+### What We Learned
+
+**1. Fixing a shipped demo surfaced a live framework bug — async `@background` was silently broken on the converged runtime path (a #1646 twin).**
+PR #2016 (#2001/#2002) set out to make the markdown-stream demo genuinely stream, which required an `async def` handler via `start_async`. That exposed `runtime.py:ViewRuntime._execute_async_task` unconditionally doing `await sync_to_async(callback)(...)` — which raises `TypeError` for an async callback — so async `@background`/`start_async(coroutine_fn)` silently failed on the **ADR-022-converged WS-event path** (the live path post-convergence). The consumer twin `websocket.py:_run_async_work` already had the `asyncio.iscoroutinefunction` branch; the runtime convergence dropped it. This is the #1646 parallel-path-drift class recurring yet again — and it had no parity test to catch the drop.
+**Action taken**: Open — tracked in Action Tracker #317 (GitHub #2020).
+
+**2. `dj-virtual` server-render integration was split into a client-side self-heal (shipped) and a deeper Python-side reconcile (deferred), per scope discipline.**
+PRs #2018 (#1988/#1989) fully fixed the layout contract (shell out of flow, spacer `flex-shrink:0`) and a client-side self-heal (`structureIntact()` re-virtualizes after a morph clobbers the shell/spacer; `absorbLooseChildren()` folds stream-appended rows). The deeper architectural work — automatic `stream_append`→`__djVirtualItems` wiring, VDOM-differ `dj-virtual` awareness for keyed mid-list inserts/removals, out-of-window finalize-patch landing — was honestly deferred rather than shipping a half-working partial (#1079).
+**Action taken**: Open — tracked in Action Tracker #318 (GitHub #2017).
+
+**3. `CHANGELOG merge=union` is a LOCAL git driver — GitHub's merge button doesn't apply it, so every multi-PR drain re-hits a CHANGELOG conflict.**
+All 14 PRs append to `### Fixed`; after the first merged, each subsequent PR needed a local `git merge origin/main` (union auto-resolves) + push before GitHub would merge it. The failure mode is silent (the merge button shows "conflicting" with all checks green). Cost one merge failure early before the local-sync step became routine. For the two bundle-touching PRs (#2018, #2019) the union-sync also conflicted on the generated bundles, resolved by rebuilding from merged source.
+**Action taken**: Open — tracked in Action Tracker #319 (OUT-OF-REPO — pipeline-drain skill step).
+
+### Insights
+
+- **The worktree-subagent drain pattern (5 subagents, 8 PRs, ≤3 concurrent per #1961) held up well** — every subagent caught a real cited-path drift symptom-up (issue line numbers had shifted; `morphNode`→`morphElement`; `_run_async_work`→`ViewRuntime._execute_async_task`; reinit site 1519 not 1456). Reinforces the Bug-report-triage "trust the symptom, not the cited path" rule and #1516 env-premise verification (the pyproject `pythonpath` is `[".", "examples/demo_project"]`, not `python` — subagents corrected by prepending `PYTHONPATH=<worktree>/python`).
+- **"Generic" checks need a grep-first reality check (#168/#1143).** #1999's issue proposed warning on "any dotted `dj-` attribute," but grepping surfaced legit dotted conventions (`dj-keydown.enter`, `dj-window-keydown.escape`, `dj-loading.class/.show/.hide/.disable/.for`). The warning was tightened to key on the `.lazy`/`.debounce` *modifier* on non-`dj-model` directives — the issue author's mental model of "the convention" was incomplete.
+- **The #1646 structural cure was applied correctly three times** (a positive counterweight to finding 1): #1994 centralized model-ref encode/decode in the two shared `_get_private_state`/`_restore_private_state` funnels (all 5 persist + 3 restore paths inherit it); #1996 moved the scoped-element rescan into `bindLiveViewEvents` (every path) while keeping the listener install one-shot; #1990/#1991 routed both broadcast sweeps through one `syncBroadcastTextareas` helper.
+- **Reused existing vocabulary rather than inventing** — #1991 reused `dj-update="ignore"` (the sweeps just weren't honoring it — a real consistency gap); #2003's `set_tenant` mirrors into the session only for a session resolver; #1990 added the minimal opposite-polarity `dj-force-value`.
+- **Reproduction fidelity held** (#1849/#1650): demo-stream tests drove a real `WebsocketCommunicator` + runtime path (not a proxy); dj-virtual tests pinned the CSS contract + reconcile behavior (JSDOM has no layout engine) with the pixel-verification honestly flagged as a manual follow-up. Every fix carried a gate-off sentinel (#1468).
+
+### Review Stats
+
+| Metric | Value |
+|--------|-------|
+| PRs merged | 14 (#2005–#2019) |
+| Issues closed | 18 (#1987–#2004) |
+| Follow-ups filed | 2 (#2017 code, #2020 process) |
+| New tests | ~70 (all gate-off verified) |
+| Framework bugs found while draining docs/demo issues | 1 (async `@background` on the converged path, #2016) |
+| 🔴 findings at review | 0 (subagent PRs reviewed read-only via `gh pr diff` / `git diff`, avoiding the #1804 core.bare hazard) |
+| Client JS budget deltas | #1999 +315 B, #1996 −25 B, #1990/#1991 +52 B, #1988/#1989 +231 B (all < 2 KB/module) |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no new canon this milestone — findings reinforce existing rules (#1646, #168/#1143, #1079, #1849/#1650, #1516, #1961, #1468, #1804).
+**Memory**: saved `reference_changelog_union_vs_github_merge` (the local-union-vs-GitHub-merge drain gotcha, finding 3).
+**Action Tracker**: rows 317–319 added.
+
+### Open Items
+
+- [ ] #317 — transport-parity test for the async-work dispatch path (GitHub #2020)
+- [ ] #318 — dj-virtual deeper server-side reconcile (GitHub #2017)
+- [ ] #319 — codify the CHANGELOG-union local-sync step in the pipeline-drain skill (OUT-OF-REPO; memory saved in-repo-adjacent)
 
 ## v1.1.0-4 — post-convergence open-issue drain (PRs #1961–#1965)
 

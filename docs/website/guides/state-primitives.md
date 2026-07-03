@@ -50,7 +50,10 @@ differs OR its shallow fingerprint (id + length + sampled keys —
 matching the `_snapshot_assigns` semantics used elsewhere in djust)
 differs. Mutating an item in place (`self.items[0]["qty"] = 2`) without
 reassigning the list won't invalidate — assign a new list, or
-recompute manually.
+recompute manually. The same in-place-mutation caveat applies to
+**re-rendering in general**: an in-place nested mutation produces no
+patches. Assign a new value, or call `self.set_changed_keys("items")`
+to force a re-render — see the State Management API reference.
 
 **Skip the cache.** Use plain `@computed` (no args) when the
 computation is cheap enough that property semantics are fine — every

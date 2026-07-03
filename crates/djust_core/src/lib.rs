@@ -211,6 +211,50 @@ impl<'py> FromPyObject<'_, 'py> for Value {
         } else if let Ok(dict) = ob.extract::<HashMap<String, Value>>() {
             Ok(Value::Object(dict))
         } else {
+            // #1986: a djust sidecar proxy exposes `__djust_serialize__()`,
+            // returning a DENYLIST-FILTERED dict (via the same eager serializer
+            // the rest of djust uses). Route through it FIRST — otherwise the
+            // `__dict__` bulk-dump below (which filters only `_`-prefixed keys)
+            // would leak floor fields like `password` for any model converted
+            // to a value (queryset items in a `{% for %}`, a terminal model).
+            // Only djust proxies carry this method, so `update_state` ingestion
+            // (plain dicts/primitives) is unaffected.
+            if let Ok(serializer) = ob.getattr("__djust_serialize__") {
+                if let Ok(result) = serializer.call0() {
+                    // The hook returns a plain, denylist-filtered dict (model)
+                    // or list-of-dicts (queryset) — recurse via Value so both
+                    // shapes convert (Object / List). The result carries no
+                    // proxies, so this does not re-enter this branch.
+                    if let Ok(v) = result.extract::<Value>() {
+                        return Ok(v);
+                    }
+                }
+            }
+            // #1986 (vector 7): a RAW Django model reaching Value conversion —
+            // e.g. an element of a raw list/tuple/dict the getattr walk never
+            // wrapped (`{% for x in presenter.items %}{{ x.password }}`) — must
+            // ALSO route through the denylist serializer, NOT the `__dict__`
+            // bulk-dump below (which filters only `_`-prefixed keys and so
+            // leaks `password`). Detect a model via
+            // `isinstance(django.db.models.Model)` and hand it to the same
+            // `normalize_django_value` the eager path uses. `update_state`
+            // ingestion passes pre-normalized dicts, so no raw model reaches
+            // here on that path; the import is a cached sys.modules lookup.
+            if let Ok(models_mod) = ob.py().import("django.db.models") {
+                if let Ok(model_cls) = models_mod.getattr("Model") {
+                    if ob.is_instance(&model_cls).unwrap_or(false) {
+                        if let Ok(v) = ob
+                            .py()
+                            .import("djust.serialization")
+                            .and_then(|m| m.getattr("normalize_django_value"))
+                            .and_then(|f| f.call1((ob.to_owned(),)))
+                            .and_then(|r| r.extract::<Value>())
+                        {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
             // For arbitrary Python objects (e.g. Django model instances), try to
             // extract public attributes from __dict__ so that template expressions
             // like `{{ obj.name }}` or `{{ obj.path }}` work without requiring

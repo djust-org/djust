@@ -396,13 +396,11 @@ async function handleServerResponse(data, eventName, triggerElement) {
             // VDOM patches update textContent directly (not via innerHTML),
             // so preserveFormValues never runs. Textarea .value is separate
             // from .textContent after initial render — must sync explicitly.
+            // Routed through the shared sweep so the dj-update="ignore"
+            // per-field opt-out (#1991) is honored here too (parallel-path
+            // #1646 — the helper lives once, in 12-vdom-patch.js).
             if (data.broadcast) {
-                const root = getLiveViewRoot();
-                if (root) {
-                    root.querySelectorAll('textarea').forEach(el => {
-                        el.value = el.textContent || '';
-                    });
-                }
+                syncBroadcastTextareas(getLiveViewRoot());
             }
 
             if (success === false) {
@@ -3617,10 +3615,13 @@ function _normalizeKeyName(name) {
 // ============================================================================
 // Scoped Event Delegation (dj-window-*, dj-document-*)
 // ============================================================================
-// Install ONE listener per event type on window/document. When the event fires,
-// dispatch to registered declaring elements. Elements are registered by scanning
-// the DOM once at install time. Re-scanning happens on TurboNav navigation or
-// when bindLiveViewEvents() is called after DOM changes.
+// Install ONE listener per event type on window/document (one-shot). When the
+// event fires, dispatch to registered declaring elements. Declaring elements are
+// registered by _scanScopedElements(), which bindLiveViewEvents() calls on EVERY
+// invocation — so elements that enter the DOM via a later patch (e.g. inside a
+// {% if %} that becomes true), on TurboNav, or at initial mount all get picked
+// up. Only the window/document addEventListener install is one-shot (guarded by
+// _scopedDelegationInstalled); the registry scan is not.
 
 // Registry: Map<"prefix:evtType", Set<{element, attrName, handler, requiredKey}>>
 const _scopedRegistry = new Map();
@@ -3702,14 +3703,14 @@ function _scanScopedElements() {
 
 /**
  * Install delegated listeners on window/document for scoped events.
- * Called once — listeners dispatch to the registry.
+ * One-shot: the window/document addEventListener calls must run exactly once
+ * (window persists across patches, so re-adding would double-dispatch). The
+ * registry that these listeners dispatch to is (re)populated separately by
+ * _scanScopedElements(), which bindLiveViewEvents() calls on every invocation.
  */
 function _installScopedDelegation() {
     if (_scopedDelegationInstalled) return;
     _scopedDelegationInstalled = true;
-
-    // Scan DOM once at install time to populate the registry
-    _scanScopedElements();
 
     const scopedTargets = [
         { prefix: 'dj-window-', target: window },
@@ -4654,10 +4655,20 @@ function bindLiveViewEvents(scope) {
     // ================================================================
 
     // --- Feature 1: dj-window-* and dj-document-* event scoping ---
-    // Delegated approach: install ONE listener per event type on window/document.
-    // When the event fires, find declaring elements via querySelectorAll('[dj-window-keydown]')
-    // and dispatch to matching handlers. This avoids querySelectorAll('*') entirely.
+    // Delegated approach: install ONE listener per event type on window/document
+    // (one-shot). When the event fires, dispatch to the declaring elements held in
+    // the scoped registry. This avoids per-event querySelectorAll('*').
     _installScopedDelegation();
+
+    // Re-scan for dj-window-*/dj-document-* declaring elements on EVERY bind so
+    // that elements which entered the DOM via a later patch (e.g. inside a
+    // {% if %} that became true) register too — mirroring the per-bind rescan
+    // dj-shortcut / dj-click-away already do below. _scanScopedElements() is
+    // idempotent per-element (see its alreadyRegistered check) and also drops
+    // registry entries for elements that left the DOM, so repeated calls are
+    // safe and cheap. Without this, a dj-window-keydown.escape on patch-inserted
+    // content would silently never bind (#1996).
+    _scanScopedElements();
 
     // Sweep orphaned scoped listeners (click-away, shortcut) for elements
     // removed from DOM by conditional rendering
@@ -4783,6 +4794,69 @@ function bindLiveViewEvents(scope) {
 
             handleEvent(handlerName, params);
         });
+    }
+
+    // #1999: surface unrecognized `.modifier` suffixes (debug-mode only).
+    _warnUnrecognizedDjModifiers(root);
+}
+
+/**
+ * #1999: Warn (debug-mode only) when the `.lazy` / `.debounce-N` in-name
+ * modifier — which ONLY `dj-model` understands — is mis-applied to another
+ * directive.
+ *
+ * `dj-model` parses its own attribute NAME for `.lazy` / `.debounce-N`
+ * (`20-model-binding.js` `_parseModelAttr`). Every other directive —
+ * `dj-input`, `dj-change`, `dj-click`, … — controls throttling via the
+ * SEPARATE standalone `dj-debounce="N"` attribute and does NOT parse any
+ * in-name modifier. Because a dot is a legal attribute-name character,
+ * `dj-input.debounce-200` reads as a single LITERAL attribute that no
+ * `[dj-input]` selector matches — so the directive silently never binds (no
+ * handler, no event, no error). That's the canonical trap, made worse by
+ * `dj-model.debounce-300` working exactly that way.
+ *
+ * This targets ONLY the `.lazy` / `.debounce` modifiers on non-`model`
+ * directives — it deliberately does NOT touch other legitimate dotted
+ * conventions (`dj-keydown.enter`, `dj-window-keydown.escape`,
+ * `dj-loading.class` / `.show` / `.hide` / `.disable` / `.for`), which are
+ * real key / loading-state modifiers, not this mistake.
+ *
+ * Skipped entirely outside debug mode (zero production cost).
+ *
+ * @param {ParentNode} scope - Root to scan (defaults to document).
+ */
+function _warnUnrecognizedDjModifiers(scope) {
+    if (!globalThis.djustDebug) return;
+    // A `.lazy` / `.debounce[-N]` in-name modifier on some `dj-<name>` directive.
+    // Group 1 is the directive base name; only `dj-model` legitimately uses it.
+    // Prefix-matched (no trailing `-\d+` capture) to keep the regex star-height 1
+    // — a nested `(-\d+)?` trips security/detect-unsafe-regex on the built bundle.
+    const MODEL_MODIFIER = /^(dj-[a-z][\w-]*)\.(lazy|debounce)/;
+    const root = scope || document;
+    const els = root.querySelectorAll('*');
+    for (let i = 0; i < els.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const attrs = els[i].attributes;
+        for (let j = 0; j < attrs.length; j++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const name = attrs[j].name;
+            const m = MODEL_MODIFIER.exec(name);
+            if (!m || m[1] === 'dj-model') continue;
+            const base = m[1];
+            console.warn(
+                '[LiveView] Unrecognized modifier suffix on attribute "' +
+                    name +
+                    '": the `.lazy` / `.debounce-N` in-name modifier is only ' +
+                    'supported on `dj-model`, so `' +
+                    name +
+                    '` is a literal attribute that never binds (no handler ' +
+                    'attaches). For `' +
+                    base +
+                    '`, use the standalone form instead — e.g. `' +
+                    base +
+                    '="handler" dj-debounce="200"`. See the model-binding / dj-input guide.'
+            );
+        }
     }
 }
 
@@ -6220,6 +6294,34 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 let _isBroadcastUpdate = false;
 
 /**
+ * Broadcast textarea value-sync (#1601) with per-field opt-out (#1991).
+ *
+ * After a broadcast (``push_to_view``) patch lands, a shared/collaborative
+ * ``<textarea>``'s ``.value`` must be synced from its (server-updated)
+ * ``.textContent`` so a peer's edit shows — VDOM patches update
+ * ``textContent`` directly, and ``.value`` diverges from ``.textContent``
+ * once the user has typed. But a textarea marked ``dj-update="ignore"`` is
+ * declared client-owned: an unrelated broadcast (e.g. a peer's message in a
+ * different conversation) must NOT wipe its unsent draft.
+ *
+ * Both broadcast-sweep call sites route through here so the opt-out lives in
+ * exactly one place (parallel-path-drift cure, #1646):
+ *   - this module's ``preserveFormValues`` innerHTML-replacement path
+ *   - ``02-response-handler.js``'s ``applyPatches`` broadcast path
+ *
+ * @param {Element|null} root - The LiveView root (or container) to sweep.
+ */
+function syncBroadcastTextareas(root) {
+    if (!root) return;
+    root.querySelectorAll('textarea').forEach(el => {
+        // dj-update="ignore" — client-owned; a broadcast must never
+        // overwrite this field's value (#1991).
+        if (el.getAttribute('dj-update') === 'ignore') return;
+        el.value = el.textContent || '';
+    });
+}
+
+/**
  * Preserve form values across innerHTML replacement.
  *
  * innerHTML destroys the DOM, creating new elements. For the focused
@@ -6234,12 +6336,11 @@ function preserveFormValues(container, updateFn) {
     let saved = null;
 
     // Skip saving focused element for broadcast (remote) updates —
-    // the server content from another user should take effect.
+    // the server content from another user should take effect. Fields
+    // opting out via dj-update="ignore" are skipped by the sweep (#1991).
     if (_isBroadcastUpdate) {
         updateFn();
-        container.querySelectorAll('textarea').forEach(el => {
-            el.value = el.textContent || '';
-        });
+        syncBroadcastTextareas(container);
         return;
     }
 
@@ -6540,9 +6641,18 @@ function morphElement(existing, desired) {
     // --- Form element value sync ---
     const isFocused = document.activeElement === existing;
     // Skip value sync for focused inputs to preserve what the user is typing,
-    // UNLESS the input's identity changed (different name = different field).
+    // UNLESS the input's identity changed (different name = different field)
+    // OR the field opts in to server-authoritative values via dj-force-value
+    // (#1990). The force check is lazy — it only runs when we would otherwise
+    // skip (focused, non-broadcast, same name), keeping the hot path cheap —
+    // and applies EXACTLY when the attribute is explicitly present, so the
+    // default focused-field behavior is unchanged for every other field.
+    // Enables an Enter-to-send composer (no blur) to be cleared/overwritten
+    // by its handler while still focused. Covers INPUT/SELECT/TEXTAREA alike.
     const nameChanged = existing.getAttribute('name') !== desired.getAttribute('name');
-    const skipValue = isFocused && !_isBroadcastUpdate && !nameChanged;
+    const skipValue = isFocused && !_isBroadcastUpdate && !nameChanged
+        && !existing.hasAttribute('dj-force-value')
+        && !desired.hasAttribute('dj-force-value');
 
     if (existing.tagName === 'INPUT' && !skipValue) {
         if (existing.type === 'checkbox' || existing.type === 'radio') {
@@ -7150,6 +7260,7 @@ window.djust._getNodeByPath = getNodeByPath;
 window.djust._isDjIfComment = isDjIfComment;
 window.djust.createNodeFromVNode = createNodeFromVNode;
 window.djust.preserveFormValues = preserveFormValues;
+window.djust.syncBroadcastTextareas = syncBroadcastTextareas;
 window.djust.saveFocusState = saveFocusState;
 window.djust.restoreFocusState = restoreFocusState;
 window.djust.morphChildren = morphChildren;
@@ -8403,7 +8514,14 @@ if (document.readyState === 'loading') {
     const FRAME_COMPLETE = 0x02;
     const FRAME_CANCEL   = 0x03;
 
-    const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
+    // Each chunk is sent as a binary frame with a 21-byte header prepended
+    // (1 type + 16 upload-ref UUID + 4 chunk index — see buildFrame). The
+    // default PAYLOAD must stay under the default max_message_size (65536), or
+    // a brand-new project using only default settings fails uploads with
+    // "Message too large (65557 bytes)" — exactly 64*1024 + 21 (#1993). 63 KiB
+    // leaves comfortable headroom: 63*1024 + 21 = 64533 < 65536.
+    const FRAME_HEADER_BYTES = 21; // keep in sync with buildFrame()
+    const DEFAULT_CHUNK_SIZE = 63 * 1024; // 64512 B payload + 21 B header < 65536
 
     // Active uploads: ref -> { file, config, chunkIndex, resolve, reject }
     const activeUploads = new Map();
@@ -8585,14 +8703,14 @@ if (document.readyState === 'loading') {
      */
     function buildFrame(frameType, refBytes, payload, chunkIndex) {
         if (frameType === FRAME_CHUNK && payload) {
-            const header = new Uint8Array(21); // 1 + 16 + 4
+            const header = new Uint8Array(FRAME_HEADER_BYTES); // 1 + 16 + 4
             header[0] = frameType;
             header.set(refBytes, 1);
             const view = new DataView(header.buffer);
             view.setUint32(17, chunkIndex, false); // big-endian
-            const frame = new Uint8Array(21 + payload.byteLength);
+            const frame = new Uint8Array(FRAME_HEADER_BYTES + payload.byteLength);
             frame.set(header);
-            frame.set(new Uint8Array(payload), 21);
+            frame.set(new Uint8Array(payload), FRAME_HEADER_BYTES);
             return frame.buffer;
         } else {
             // COMPLETE or CANCEL: just type + ref
@@ -12185,15 +12303,35 @@ window.djust.bindModelElements = bindModelElements;
 
         // Inner shell that actually holds the visible slice. A spacer sibling
         // forces the container scroll height to the virtual length.
+        //
+        // Layout contract (#1988): the shell is taken OUT of flow with
+        // `position: absolute` (top/left/right: 0) so ONLY the spacer
+        // contributes to `container.scrollHeight`. `position: relative` +
+        // `transform` does NOT remove the shell from flow (transforms are a
+        // paint-time effect per spec), so the shell's own rendered rows would
+        // double-count against the spacer and leave dead space past the last
+        // item. The container is made a positioned ancestor below (L121-123),
+        // so the absolute shell anchors to the container and translateY()
+        // still positions the visible slice; because it lives inside the
+        // scroll container it scrolls with the content as expected.
         const shell = document.createElement('div');
         shell.setAttribute('data-dj-virtual-shell', '');
-        shell.style.position = 'relative';
+        shell.style.position = 'absolute';
+        shell.style.top = '0';
+        shell.style.left = '0';
+        shell.style.right = '0';
         shell.style.willChange = 'transform';
         shell.style.transform = 'translateY(0px)';
 
+        // The spacer alone defines the scrollable length. `flex-shrink: 0`
+        // (#1988) keeps its explicit `style.height` honored inside a
+        // `display: flex` container — a flex item's default `flex-shrink: 1`
+        // otherwise crushes it to `offsetHeight: 0` once its height exceeds
+        // the flex container's available space, silently killing the scroll.
         const spacer = document.createElement('div');
         spacer.setAttribute('data-dj-virtual-spacer', '');
         spacer.style.width = '1px';
+        spacer.style.flexShrink = '0';
         spacer.style.pointerEvents = 'none';
         spacer.style.visibility = 'hidden';
 
@@ -12469,19 +12607,103 @@ window.djust.bindModelElements = bindModelElements;
         state.visibleEnd = end;
     }
 
+    // Is the container's managed shell/spacer still the pair this state owns
+    // and still attached? (#1989 symptom 1) A server-driven re-render
+    // (morphdom / VDOM patch) has no notion of client-side virtualization —
+    // it diffs against the raw server `{% for %}` list and can replace the
+    // container's children back to that list, DETACHING the shell/spacer or
+    // REPURPOSING them into ordinary rows (stripping the marker attributes).
+    // Either way the tracked state is stale and the container must be
+    // re-initialised from its current (server-authored) children. The WeakMap
+    // key (the container element) is unchanged across this, so the plain
+    // "already tracked → skip" guard would leave it permanently
+    // un-virtualized.
+    function structureIntact(container, state) {
+        return (
+            state.shell.parentNode === container &&
+            state.shell.getAttribute('data-dj-virtual-shell') !== null &&
+            state.spacer.parentNode === container &&
+            state.spacer.getAttribute('data-dj-virtual-spacer') !== null
+        );
+    }
+
+    // Drop observers/listeners and the STATE entry WITHOUT restoring the item
+    // pool. Used when a server re-render has ALREADY replaced the container's
+    // children with the authoritative list, so setup() can re-snapshot them
+    // fresh. (teardownVirtualList, by contrast, restores the virtualized item
+    // pool — that's the "dj-virtual attribute removed" case.)
+    function detachState(container, state) {
+        container.removeEventListener('scroll', state.onScroll);
+        if (state.resizeObserver) state.resizeObserver.disconnect();
+        if (state.itemObserver) state.itemObserver.disconnect();
+        STATE.delete(container);
+    }
+
+    // Absorb "loose" element children a server re-render appended OUTSIDE the
+    // shell/spacer wrapper (#1989 symptom 2 — e.g. a stream-appended chat
+    // row) into the item pool, so they render INSIDE the shell and receive
+    // subsequent patches instead of leaking as stray siblings whose finalize
+    // patch never lands. Loose = any element child that is neither the shell
+    // nor the spacer. Appended in document order (append-only assumption; a
+    // mid-list server insert would land at the tail — strictly better than
+    // leaking, and honestly noted in the guide). Returns whether anything was
+    // absorbed.
+    function absorbLooseChildren(container, state) {
+        const loose = [];
+        for (const node of Array.from(container.children)) {
+            if (node === state.shell || node === state.spacer) continue;
+            if (node.nodeType !== 1) continue;
+            loose.push(node);
+        }
+        if (loose.length === 0) return false;
+        for (const node of loose) {
+            // De-parent: render() re-attaches the visible slice into the
+            // shell. Off-window items stay detached, held only in state.items.
+            if (node.parentNode === container) container.removeChild(node);
+            state.items.push(node);
+        }
+        // New items invalidate the current window so render() re-slices.
+        state.visibleStart = -1;
+        state.visibleEnd = -1;
+        if (state.mode === 'variable') {
+            state.offsets = null;
+        }
+        return true;
+    }
+
     function initVirtualLists(root) {
         const scope = root || document;
         const containers = scope.querySelectorAll
             ? scope.querySelectorAll('[dj-virtual]')
             : [];
         containers.forEach(container => {
-            if (!STATE.has(container)) setup(container);
+            const state = STATE.get(container);
+            if (!state) {
+                setup(container);
+            } else if (!structureIntact(container, state)) {
+                // #1989 symptom 1: a server re-render clobbered the managed
+                // structure back to the raw list. Detach the stale state and
+                // re-run setup against the fresh children instead of no-oping.
+                detachState(container, state);
+                setup(container);
+            }
         });
     }
 
     function refreshVirtualList(container) {
         const state = STATE.get(container);
         if (!state) return;
+
+        // #1989 symptom 1: self-heal if a server re-render clobbered the
+        // managed structure (idempotent with initVirtualLists' own check —
+        // whichever runs first heals; the other becomes a no-op). This keeps
+        // refreshVirtualList robust regardless of call order.
+        if (!structureIntact(container, state)) {
+            detachState(container, state);
+            setup(container);
+            return;
+        }
+
         // Re-snapshot: after VDOM morph, the shell holds only the visible
         // slice. The full data source is whatever is currently in the shell
         // plus any new children added outside of virtualization. We support
@@ -12513,6 +12735,11 @@ window.djust.bindModelElements = bindModelElements;
                 state.offsets = null;
                 state.nodeToIndex = new WeakMap();
             }
+        } else {
+            // No explicit replacement pool: auto-derive from the container's
+            // real children so stream-appended rows (#1989 symptom 2) get
+            // absorbed into the shell instead of leaking as stray siblings.
+            absorbLooseChildren(container, state);
         }
         render(state);
     }
@@ -12520,9 +12747,7 @@ window.djust.bindModelElements = bindModelElements;
     function teardownVirtualList(container) {
         const state = STATE.get(container);
         if (!state) return;
-        container.removeEventListener('scroll', state.onScroll);
-        if (state.resizeObserver) state.resizeObserver.disconnect();
-        if (state.itemObserver) state.itemObserver.disconnect();
+        detachState(container, state);
         // Restore the pre-virtualization children and remove the shell/spacer.
         // Without this, removing `dj-virtual` from a live container leaves
         // the injected wrapper elements in place and shows only the
@@ -12537,7 +12762,7 @@ window.djust.bindModelElements = bindModelElements;
                 console.warn('[dj-virtual] teardown restore failed', e);
             }
         }
-        STATE.delete(container);
+        // STATE entry already dropped by detachState() above.
     }
 
     window.djust = window.djust || {};

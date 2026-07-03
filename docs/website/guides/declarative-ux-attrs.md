@@ -10,6 +10,7 @@ Small declarative HTML attributes that replace custom `dj-hook` code every produ
 - [`dj-transition-group`](#dj-transition-group) — enter/leave animations for every child of a list container
 - [`dj-flip`](#dj-flip) — smooth transform animation when keyed children reorder
 - [`{% djust_skeleton %}`](#-djust_skeleton---template-tag) — shimmer placeholder blocks for loading states
+- [`dj-force-value`](#dj-force-value--broadcast-value-preservation) — apply the server value to a field even while it is focused
 
 ---
 
@@ -252,6 +253,14 @@ This attribute does not introduce a new animation runner. It wires the existing 
 ```
 
 New `<li>` children animate in via `dj-transition`. Children removed by a VDOM patch animate out via `dj-remove` (the deferral hook is already wired in `12-vdom-patch.js`).
+
+> **You author the CSS.** Like `dj-transition`, `dj-transition-group` only
+> orchestrates *class application* — it ships no CSS. The class names above
+> (`opacity-0`, `transition-opacity-300`, `opacity-100`, `fade-in`, `fade-out`,
+> …) must be defined by your stylesheet or a class-based CSS framework
+> (Tailwind's `transition-*`/`duration-*`, Bootstrap's `fade`/`show`, or
+> hand-rolled rules). Copying an example without defining those classes produces
+> no animation and no error — the enter/leave just happens instantly.
 
 ### Short form — pipe-separated halves
 
@@ -651,6 +660,83 @@ family still works alongside it.
 `self.trigger_submit()` in `python/djust/mixins/push_events.py`.
 11 JSDOM tests in `tests/js/form_polish.test.js`, 4 Python tests
 covering the push-event shape.
+
+---
+
+## `dj-force-value` & broadcast value preservation
+
+Two attributes control whether a field's displayed value is overwritten when
+the server re-renders — one an **opt-in**, one an **opt-out**. They exist
+because djust deliberately protects what a user is typing: by default a
+**focused** field is never overwritten by a patch, and a broadcast
+(`push_to_view`) explicitly *does* overwrite textareas so a collaborator's
+edit shows. Both defaults are occasionally wrong; these attributes flip them
+per field.
+
+### `dj-force-value` — apply the server value even while focused (opt-in)
+
+By default, `morphElement` skips the value sync for a **focused** input,
+select, or textarea (so a patch can't clobber mid-keystroke) unless the
+field's `name` changed. That means a handler that clears a *still-focused*
+field can't take effect — the classic case is an Enter-to-send composer,
+where pressing Enter never blurs the textarea:
+
+```python
+class ChatView(LiveView):
+    @event_handler
+    def send(self, value: str = "", **kwargs):
+        self._post(value)
+        self.composer = ""   # cleared server-side…
+```
+
+```html
+<!-- …but the focused textarea keeps the sent text without this attribute -->
+<textarea name="composer" dj-force-value
+          dj-keydown="send.enter">{{ composer }}</textarea>
+```
+
+`dj-force-value` opts that field **in** to server-authoritative value syncing:
+the server's value is applied even while the field is focused. It is
+conservative and precise — the override fires **only** when the attribute is
+explicitly present, so every other focused field keeps its typing-protection.
+The check is lazy (evaluated only when the field would otherwise be skipped),
+so it costs nothing on the hot path. Works on `<input>`, `<select>`, and
+`<textarea>` alike.
+
+Use it for: send/clear composers, clear-search buttons, apply-a-suggestion —
+any handler that legitimately owns a focused field's value. (The older
+interim recipe — bumping a `dj-key` nonce to force a node *replacement* —
+still works but sidesteps the morph entirely; `dj-force-value` is the direct
+signal.)
+
+### `dj-update="ignore"` — shield a field from the broadcast sweep (opt-out)
+
+When a broadcast patch lands, djust syncs every `<textarea>` in the LiveView
+root from its (server-updated) `textContent`, so a shared/collaborative
+textarea picks up a peer's edit (this is the fix for #1601). That sweep is
+intentionally broad, which means an **unrelated** draft can be wiped when a
+broadcast about something else arrives (e.g. a peer's message in a different
+conversation clearing your half-typed reply).
+
+Mark a client-owned textarea with `dj-update="ignore"` and the broadcast
+sweep **skips it** — its value is yours, never overwritten by a remote patch:
+
+```html
+<textarea name="composer" dj-update="ignore">{{ composer }}</textarea>
+```
+
+This reuses the existing `dj-update="ignore"` convention (already meaning
+"this element is user-edited, don't update it" for the per-node morph path),
+now honored by both broadcast-sweep call sites too.
+
+### Scope
+
+`morphElement` (`dj-force-value`) and the shared `syncBroadcastTextareas`
+helper (`dj-update="ignore"` opt-out) in
+`python/djust/static/djust/src/12-vdom-patch.js`, plus the broadcast call site
+in `02-response-handler.js`. 11 JSDOM cases in
+`tests/js/form_value_preservation_1990_1991.test.js`. Shipped in v1.1.0-5
+(#1990, #1991).
 
 ---
 

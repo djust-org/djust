@@ -51,6 +51,16 @@ The first argument is a context variable containing Markdown source. The tag
 renders it to sanitised HTML. The rendered output is already safe to embed
 directly — no `|safe` needed, no double-escape.
 
+> **Requires the djust template backend.** `{% djust_markdown %}` is registered
+> only with djust's Rust template engine (via `register_tag_handler`), **not**
+> Django's stock template backend. A project whose `TEMPLATES` setting uses only
+> `django.template.backends.django.DjangoTemplates` (e.g. one created with
+> `django-admin startproject` rather than the djust scaffold) raises
+> `TemplateSyntaxError: Invalid block tag 'djust_markdown'` on the initial GET —
+> even with `{% load live_tags %}` at the top. Ensure `DjustTemplateBackend` is
+> configured in `TEMPLATES` (the `djust`-scaffolded settings do this for you).
+> See the [installation guide](/quickstart/) for the backend configuration.
+
 ### Keyword arguments
 
 All arguments are optional booleans:
@@ -133,15 +143,29 @@ bounded by the same infrastructure that bounds the rest of your app.
 
 ## Example: streaming LLM reply
 
-Here's a minimal LiveView that simulates an LLM streaming one character at
-a time:
+Streaming Markdown to the client requires **explicit** `stream_*` calls per
+chunk — exactly like [the streaming guide's Quick Start](streaming.md#quick-start).
+Plain attribute mutation in a loop does **not** stream: background work runs
+via `_run_async_work`, which awaits the whole callback and only re-renders
+*after* it returns, so `self.llm_output += ch` in a loop reveals the entire
+reply in a single frame at the end — the UI sits empty for the whole
+generation, then flashes the full text.
+
+Push each token to the client yourself with `await self.stream_to(...)`. The
+handler is `async def` for two reasons: (1) so it can `await` the stream ops
+mid-loop, and (2) so it yields control between tokens, letting a sibling
+`reset`/"Stop" event dispatch on the event loop and flip `self.streaming =
+False` mid-stream. A *sync* `@background` loop cannot be interrupted — it holds
+a `sync_to_async` thread-pool slot and the stop handler queues behind it.
 
 ```python
-from djust import LiveView
-from djust.decorators import background, event_handler
+from djust import LiveView, render_markdown
+from djust.decorators import event_handler
 
 
 REPLY = "# Hi\n\nHere is a **bold** reply.\n"
+
+_STREAM = "reply"  # matches dj-stream="reply" in the template
 
 
 class ChatView(LiveView):
@@ -153,29 +177,75 @@ class ChatView(LiveView):
 
     @event_handler
     def start(self, **kwargs):
+        if self.streaming:
+            return
+        self.llm_output = ""
         self.streaming = True
-        self._stream()
+        # Explicit task name so reset()'s cancel_async("reply") matches it.
+        # (cancel_async against a name that was never registered is a silent
+        # no-op — it neither raises nor warns.)
+        self.start_async(self._stream, name=_STREAM)
 
-    @background
-    def _stream(self):
-        import time
-        for ch in REPLY:
-            self.llm_output += ch
-            time.sleep(0.025)
-        self.streaming = False
+    @event_handler
+    def reset(self, **kwargs):
+        self.cancel_async(_STREAM)   # name MUST match start_async(name=...)
+        self.streaming = False       # the async loop yields, sees this, stops
+        self.llm_output = ""
+
+    async def _stream(self):
+        import asyncio
+
+        await self.stream_start(_STREAM)
+        try:
+            for ch in REPLY:
+                if not self.streaming:
+                    break
+                self.llm_output += ch
+                # render_markdown is the same Rust renderer {% djust_markdown %}
+                # uses; provisional=True keeps the trailing partial line escaped.
+                await self.stream_to(
+                    _STREAM,
+                    html=render_markdown(self.llm_output, provisional=True),
+                )
+                await asyncio.sleep(0.025)
+            self.streaming = False
+        finally:
+            # Settle the target once (drop the provisional split); because the
+            # target is dj-update="ignore" the main render never writes it, so
+            # this stream op is what settles — or, after a reset, clears — it.
+            await self.stream_to(
+                _STREAM,
+                html=render_markdown(self.llm_output, provisional=False),
+            )
+            await self.stream_done(_STREAM)
 ```
 
 ```django
 {# chat.html #}
-<article>
+{# dj-stream marks the target the view streams into; dj-update="ignore"
+   excludes it from the main dj-root VDOM diff so the stream ops and the
+   event-completion render don't both write this region (see the note below). #}
+<article dj-stream="reply" dj-update="ignore">
     {% djust_markdown llm_output %}
 </article>
 
 <button dj-click="start">Send</button>
+<button dj-click="reset">Stop</button>
 ```
 
+> **Mark a streamed target `dj-update="ignore"`.** A `dj-stream` target that
+> `stream_to`/`stream_text` writes to should also carry `dj-update="ignore"`
+> (or otherwise be excluded from the main diff). Otherwise the handler's
+> event-completion `render_with_diff()` re-renders the same region the stream
+> ops just wrote, and the client can receive the content twice through two
+> code paths in close succession — visible duplicate/flicker. This is
+> especially true when calling `stream_to(name, target=...)` **without**
+> `html=`: that form re-renders the *entire* template and regex-extracts the
+> target, so it is easy to double-write. Passing `html=` (as above) sends
+> exactly one element and avoids the full-template re-render.
+
 A live version is registered at `/demos/markdown-stream/` in the demo
-project.
+project (`examples/demo_project/djust_demos/views/markdown_stream_demo.py`).
 
 ## Calling the renderer from Python
 
@@ -217,5 +287,9 @@ These are intentional — they'll be reconsidered in later releases:
 ## Related
 
 - [Template cheat sheet](template-cheatsheet.md) — full tag index.
-- [Background work & loading states](loading-states.md) — streaming LLM
-  output typically runs via `start_async` or `@background`.
+- [Streaming & real-time partial updates](streaming.md) — the full
+  `stream_*` API and the `dj-stream` directive the example above uses.
+- [Background work & loading states](loading-states.md) — the async
+  `start_async` / `@background` background-work model. Note: background work
+  alone does not stream; you still push each chunk with an explicit
+  `stream_*` call (see the example above).

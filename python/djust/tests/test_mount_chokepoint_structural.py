@@ -203,9 +203,11 @@ _SETATTR_WHITELIST = {
     # Line numbers shifted +11 in ADR-022 Iter 3 Phase 3.1 (#1913) when
     # ``_mounted_from_restore`` was added before the ``_framework_attrs`` snapshot
     # in ``LiveView.__init__``; shifted +8 again in ADR-023 M2 when type
-    # annotations were added to live_view.py (optional-import block grew).
-    ("live_view.py", 1203),
-    ("live_view.py", 1205),
+    # annotations were added to live_view.py (optional-import block grew);
+    # shifted +10 in #1981 (PR #1982) when ``_changed_keys``/``_force_full_html``
+    # were added to ``_FRAMEWORK_INTERNAL_ATTRS`` (comment block grew).
+    ("live_view.py", 1213),
+    ("live_view.py", 1215),
 }
 
 

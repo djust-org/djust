@@ -256,9 +256,14 @@ pub fn apply_custom_filter(
                 )
             }
             Some(s) => {
-                // Bare identifier — try context resolution first.
+                // Bare identifier — try context resolution first. An
+                // exception raised inside an auto-called method (ADR-024)
+                // surfaces as a filter error rather than being swallowed.
                 if let Some(ctx) = context {
-                    if let Some(resolved) = ctx.resolve(s) {
+                    if let Some(resolved) = ctx
+                        .resolve(s)
+                        .map_err(|e| format!("Failed to resolve filter arg '{s}': {e}"))?
+                    {
                         Some(
                             resolved
                                 .into_pyobject(py)

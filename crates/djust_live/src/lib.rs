@@ -141,6 +141,14 @@ pub struct RustLiveViewBackend {
     /// Transient: not part of `SerializableViewState` (rebuilt across
     /// serialize/deserialize, like `node_html_cache`).
     loop_render_cache: LoopRenderCache,
+    /// Django-parity auto-call of callables in the sidecar getattr walk
+    /// (ADR-024). Default ON; wired from
+    /// `LIVEVIEW_CONFIG['template_auto_call']` via `set_template_auto_call`
+    /// (mirrors the #1967 loop-cache flag plumbing). Stamped onto the
+    /// `Context` at every render that attaches `raw_py_values`. Transient:
+    /// not part of `SerializableViewState` — Python re-wires it on each
+    /// view (re)initialization.
+    template_auto_call: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -185,6 +193,9 @@ impl RustLiveViewBackend {
             // Default-OFF (#1967 / split-foundation #1122); flipped by
             // set_loop_render_cache_enabled from the Python config flag.
             loop_render_cache: LoopRenderCache::new(false),
+            // Default-ON (ADR-024, Django parity); the Python config
+            // kill-switch flips it via set_template_auto_call.
+            template_auto_call: true,
         }
     }
 
@@ -220,6 +231,20 @@ impl RustLiveViewBackend {
     /// Whether the loop render cache is currently enabled (introspection).
     fn loop_render_cache_enabled(&self) -> bool {
         self.loop_render_cache.is_enabled()
+    }
+
+    /// Enable or disable Django-parity template auto-call (ADR-024).
+    ///
+    /// Wired from the Python `LIVEVIEW_CONFIG['template_auto_call']` flag
+    /// (default True — kill-switch only). When disabled, the sidecar
+    /// getattr walk never invokes callables, restoring pre-ADR behavior.
+    fn set_template_auto_call(&mut self, enabled: bool) {
+        self.template_auto_call = enabled;
+    }
+
+    /// Whether template auto-call is currently enabled (introspection).
+    fn template_auto_call_enabled(&self) -> bool {
+        self.template_auto_call
     }
 
     /// Number of cache HITS in the most recent render (debug / tests).
@@ -391,6 +416,9 @@ impl RustLiveViewBackend {
                     .collect()
             });
             context.set_raw_py_objects(cloned);
+            // ADR-024: stamp the auto-call kill-switch onto this render's
+            // context (only meaningful when a sidecar is attached).
+            context.set_auto_call(self.template_auto_call);
         }
 
         // Use template loader for {% include %} support
@@ -429,6 +457,9 @@ impl RustLiveViewBackend {
                     .collect()
             });
             context.set_raw_py_objects(cloned);
+            // ADR-024: stamp the auto-call kill-switch onto this render's
+            // context (only meaningful when a sidecar is attached).
+            context.set_auto_call(self.template_auto_call);
         }
 
         // Phase 1: Template render (partial if cache available)
@@ -838,6 +869,9 @@ impl RustLiveViewBackend {
                     .collect()
             });
             context.set_raw_py_objects(cloned);
+            // ADR-024: stamp the auto-call kill-switch onto this render's
+            // context (only meaningful when a sidecar is attached).
+            context.set_auto_call(self.template_auto_call);
         }
 
         // Phase 1: Template render (partial if cache available)
@@ -1114,6 +1148,9 @@ impl RustLiveViewBackend {
             // Transient cache — not deserialized; rebuilt fresh, default-OFF
             // until the Python flag re-enables it post-restore (#1967).
             loop_render_cache: LoopRenderCache::new(false),
+            // Transient (ADR-024): default-ON; the Python flag re-wires it
+            // on view (re)initialization post-restore, like the loop cache.
+            template_auto_call: true,
         })
     }
 

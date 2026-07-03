@@ -16,12 +16,15 @@ Example usage:
 
         def get_context_data(self):
             ctx = super().get_context_data()
-            ctx["presences"] = self.list_presences()  # [{"id": ..., "name": ..., "color": ...}]
+            # Each record is {"id": ..., "joined_at": ..., "meta": {...}} — the
+            # caller-supplied meta (name/color/avatar/...) is nested under "meta",
+            # NOT flattened onto the record.
+            ctx["presences"] = self.list_presences()
             ctx["presence_count"] = self.presence_count()
             return ctx
 
         def handle_presence_join(self, presence):
-            self.push_event("flash", {"message": f"{presence['name']} joined"})
+            self.push_event("flash", {"message": f"{presence['meta']['name']} joined"})
 
         def handle_presence_leave(self, presence):
             pass
@@ -31,9 +34,17 @@ Template usage:
     <div class="presence-bar">
       {{ presence_count }} users online
       {% for p in presences %}
-        <span class="avatar" style="background: {{ p.color }}">{{ p.name.0 }}</span>
+        <span class="avatar" style="background: {{ p.meta.color }}">{{ p.meta.name.0 }}</span>
       {% endfor %}
     </div>
+
+Presence-record shape (every backend):
+
+    {"id": <user_id>, "joined_at": <epoch>, "meta": {<caller-supplied dict>}}
+
+The caller-supplied ``meta`` (passed to ``track_presence(meta=...)``) is nested
+under the ``"meta"`` key — access it as ``p.meta.name`` / ``p["meta"]["name"]``,
+never ``p.name``.
 """
 
 import logging

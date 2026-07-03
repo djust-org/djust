@@ -96,6 +96,27 @@ Debounce by N milliseconds. The update fires only after the user stops typing.
 <input type="text" dj-model.debounce-500="address">
 ```
 
+> **The `.debounce-N` / `.lazy` in-name modifier is `dj-model`-only.** Only
+> `dj-model` parses these suffixes from the attribute *name*. Event directives —
+> `dj-input`, `dj-change`, `dj-click`, … — do **not**; they debounce via the
+> separate standalone [`dj-debounce`](declarative-ux-attrs.md) attribute. Because
+> a dot is a legal attribute-name character, `dj-input.debounce-200` is parsed as
+> one literal attribute that no `[dj-input]` selector matches, so the input
+> **silently never binds** (no handler, no event, no error). Spell a debounced
+> live input the two-attribute way instead:
+>
+> ```html
+> <!-- dj-model: in-name modifier -->
+> <input dj-model.debounce-200="query">
+>
+> <!-- dj-input (and dj-click / dj-change / …): standalone dj-debounce -->
+> <input dj-input="search" dj-debounce="200">
+> ```
+>
+> In debug mode (`window.djustDebug = true`) djust logs a `console.warn` when it
+> sees a `.debounce` / `.lazy` suffix on a non-`dj-model` directive, so the trap
+> is no longer silent.
+
 ## Supported Input Types
 
 | Input Type | Value Sent | Notes |
