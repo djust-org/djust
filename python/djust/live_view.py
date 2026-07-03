@@ -793,7 +793,62 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # STATE SNAPSHOT — v0.6.0 back-navigation restoration (opt-in)
     # ============================================================================
 
-    def _capture_snapshot_state(self) -> Dict[str, Any]:
+    @staticmethod
+    def _reject_orm_value_in_state_persistence(key: str, value: Any) -> bool:
+        """Guard for the back-navigation state-SIGNING path only (``strict=True``
+        callers of ``_capture_snapshot_state`` — currently just ``runtime.py``'s
+        ``state_snapshot_signed`` mount emission).
+
+        Unlike :meth:`_is_serializable` (used by the rendering JIT pipeline's
+        ``get_state()``, which intentionally lets Django ``Model``/``QuerySet``
+        values through — the JIT context builder knows how to render them),
+        this guard runs only for the CLIENT-SIGNED public-state persistence
+        path. There, ``DjangoJSONEncoder`` *also* knows how to serialize a
+        ``Model`` (via ``_serialize_model_safely``), so an ORM object silently
+        succeeds the ``json.dumps`` round-trip and comes back as a lossy,
+        disconnected ``dict`` on restore — not the model. A handler that later
+        calls a model method on it (``self.user.get_full_name()``) breaks with
+        a confusing ``AttributeError`` far from the actual mistake.
+
+        Deliberately NOT applied to non-strict callers (e.g. the dev-only
+        time-travel debug capture in ``time_travel.py``, which also calls
+        ``_capture_snapshot_state`` to record ``state_before``/``state_after``
+        for the replay ring buffer) — that path already accepts a lossy,
+        disconnected snapshot by design (see the round-trip comment below) and
+        raising there would break time-travel for any view holding ordinary
+        ORM state, which is not the bug this guard targets.
+
+        Returns True (and raises/warns) when ``value`` is a Django
+        ``Model``/``QuerySet`` — the caller should skip persisting ``key``.
+        Returns False for everything else, including when Django's ORM isn't
+        importable.
+        """
+        try:
+            from django.db import models
+            from django.db.models import QuerySet
+        except ImportError:
+            return False  # Django ORM not available; nothing to guard against
+
+        if not isinstance(value, (models.Model, QuerySet)):
+            return False
+
+        from django.conf import settings
+
+        value_type = type(value).__name__
+        msg = (
+            f"Non-persistable value in LiveView state: '{key}' ({value_type}) "
+            f"can't survive state persistence (the enable_state_snapshot "
+            f"back-navigation round-trip) — Django ORM objects are re-fetched "
+            f"per-request, not carried across a client-signed snapshot. Store "
+            f"the pk and refetch in the handler instead, e.g. "
+            f"`self.{key}_id = {key}.pk` rather than `self.{key} = {key}`."
+        )
+        if getattr(settings, "DEBUG", False):
+            raise TypeError(msg)
+        logger.warning(msg)
+        return True
+
+    def _capture_snapshot_state(self, *, strict: bool = False) -> Dict[str, Any]:
         """Return a JSON-serializable snapshot of public view state.
 
         Filters out private (``_``-prefixed) attributes, framework-internal
@@ -819,6 +874,16 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         The server never calls this directly — it's primarily exposed for
         testing and observability. Restoration uses
         :meth:`_restore_snapshot`.
+
+        Args:
+            strict: When True, reject (DEBUG: raise / prod: warn+skip) any
+                Django ``Model``/``QuerySet`` found on public state —
+                see :meth:`_reject_orm_value_in_state_persistence`. Only the
+                real back-navigation state-signing caller
+                (``runtime.py``'s ``state_snapshot_signed`` mount emission)
+                passes ``strict=True``; the dev-only time-travel debug
+                capture (``time_travel.py``) intentionally leaves this False
+                to preserve its existing lossy-snapshot-by-design behavior.
         """
         result: Dict[str, Any] = {}
         for key, value in self.__dict__.items():
@@ -827,6 +892,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
             if key in _FRAMEWORK_INTERNAL_ATTRS:
                 continue
             if callable(value):
+                continue
+            if strict and self._reject_orm_value_in_state_persistence(key, value):
                 continue
             try:
                 # json.dumps serves as the serializability check; the

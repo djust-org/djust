@@ -2510,7 +2510,12 @@ class ViewRuntime:
             if state_master_on and getattr(view_instance, "enable_state_snapshot", False):
                 snapshot_fn = getattr(view_instance, "_capture_snapshot_state", None)
                 if callable(snapshot_fn):
-                    public_state = await sync_to_async(snapshot_fn)()
+                    # strict=True: this is the real client-signed persistence
+                    # path — reject (not silently dict-ify) any ORM object on
+                    # public state so a back-navigation restore can't hand a
+                    # handler a plain dict where it expects a Model. See
+                    # LiveView._reject_orm_value_in_state_persistence.
+                    public_state = await sync_to_async(snapshot_fn)(strict=True)
                     if isinstance(public_state, dict) and public_state:
                         from .security import sign_snapshot
 
