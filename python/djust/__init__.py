@@ -75,7 +75,7 @@ except ImportError:
     # Rust components not yet built - this is optional
     rust_components = None  # noqa: F841 — accessed as djust.rust_components by user code
 
-__version__ = "1.1.0rc4"
+__version__ = "1.1.0rc5"
 
 
 def enable_hot_reload():

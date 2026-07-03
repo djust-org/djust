@@ -1,7 +1,7 @@
 # ADR-024: Template callable auto-call — Django parity in the sidecar resolution walk
 
-**Status**: Accepted — 2026-07-02
-**Shipped in**: the #1985 implementation PR (v1.1.0 cycle)
+**Status**: Accepted — shipped 2026-07-02 in v1.1.0rc5 (#1985 implementation PR #1986)
+**Shipped in**: v1.1.0rc5
 **Relates to**: [ADR-022](022-v1.1-code-quality-single-path-convergence.md) (single-path convergence — this is the same parallel-path-drift class, #1646, at the template-resolution axis)
 
 ## Context
