@@ -565,6 +565,15 @@ endif
 	@# Verify lockfile self-entries are in sync (closes #1498)
 	@$(PYTHON) scripts/check-lockfile-versions.py || \
 		{ echo "$(RED)ERROR: lockfile self-entries stale — run 'make version VERSION=$(VERSION)'$(NC)"; exit 1; }
+	@# Verify this version hasn't already been released, locally or on origin (v1.1.0rc4 incident, retro v1.1.0rc5)
+	@if git rev-parse "v$(VERSION)" >/dev/null 2>&1; then \
+		echo "$(RED)ERROR: tag v$(VERSION) already exists LOCALLY — this version was likely already released. Verify branch/tag topology before proceeding.$(NC)"; \
+		exit 1; \
+	fi
+	@if git ls-remote --tags origin "refs/tags/v$(VERSION)" 2>/dev/null | grep -q .; then \
+		echo "$(RED)ERROR: tag v$(VERSION) already exists on origin — this version was likely already released from a different branch. Verify branch/tag topology before proceeding.$(NC)"; \
+		exit 1; \
+	fi
 	@# Create and push tag
 	@git tag -a v$(VERSION) -m "Release v$(VERSION)"
 	@git push origin v$(VERSION)
@@ -596,3 +605,13 @@ endif
 	else \
 		echo "$(YELLOW)Pre-release:$(NC) no (stable)"; \
 	fi
+	@echo ""
+	@if git rev-parse "v$(VERSION)" >/dev/null 2>&1; then \
+		echo "$(RED)ERROR: tag v$(VERSION) already exists LOCALLY (v1.1.0rc4 incident, retro v1.1.0rc5) — this version was likely already released. Verify branch/tag topology before proceeding.$(NC)"; \
+		exit 1; \
+	fi
+	@if git ls-remote --tags origin "refs/tags/v$(VERSION)" 2>/dev/null | grep -q .; then \
+		echo "$(RED)ERROR: tag v$(VERSION) already exists on origin (v1.1.0rc4 incident, retro v1.1.0rc5) — this version was likely already released from a different branch. Verify branch/tag topology before proceeding.$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)No existing v$(VERSION) tag found locally or on origin.$(NC)"

@@ -359,6 +359,53 @@ issue or be explicitly closed with a reason.
 | 317 | Transport-parity test for the async-work dispatch path (runtime `_execute_async_task` vs consumer `_run_async_work`) — the #2016 `sync_to_async`/coroutine drift had no guard | PR #2016 / v1.1.0-5 retro | #2020 | Open | #1646 twin: the ADR-022 runtime convergence dropped the `iscoroutinefunction` branch the consumer had, silently breaking async `@background` on the live path. Fix mirrored the twin (+ defensive `inspect.iscoroutine(result)`); the parity test (ideally a shared `_dispatch_async_callback` helper both paths call, pinned by a sync+async round-trip) is the structural cure. |
 | 318 | dj-virtual deeper server-side reconcile — automatic `stream_append`→`__djVirtualItems` wiring, VDOM-differ `dj-virtual` awareness (keyed mid-list inserts/removals), out-of-window finalize-patch landing, + a `djustDebug` warning | PR #2018 / v1.1.0-5 retro | #2017 | Open | Deferred from #1988/#1989 per #1079 scope discipline; the client-side self-heal (`structureIntact`/`absorbLooseChildren`) + CSS layout contract shipped in #2018. Also carries the manual real-browser pixel-verification JSDOM couldn't cover. |
 | 319 | Codify the CHANGELOG-union local-sync step (`git merge origin/main` before GitHub-merge; rebuild bundles from merged src when they conflict) into the pipeline-drain skill | v1.1.0-5 retro | — | OUT-OF-REPO | `CHANGELOG merge=union` is a LOCAL git driver; GitHub's merge button doesn't apply it, so every multi-PR drain re-hits a silent CHANGELOG conflict (checks green, button shows "conflicting"). pipeline-drain skill is gitignored (`~/.claude/skills/`). In-repo-adjacent: memory `reference_changelog_union_vs_github_merge` saved. |
+| 320 | `djust-release` SKILL.md needs a "which branch is the release-of-record" pre-flight when multiple long-lived release branches exist | v1.1.0rc5 retro | #2027 | Open | In-repo half DONE: `make release`/`make release-dry-run` now hard-fail if the target tag already exists locally or on origin (Makefile). Skill-prompt half is out-of-repo (gitignored `.claude/skills/djust-release/SKILL.md`). Trigger: `/djust-release 1.1.0rc4` ran against `main`, which had been reverted to 1.0.8 post-#1974/#1975 while the real v1.1 line + the already-tagged/PyPI-live rc4 lived on a separate `1.1` branch. |
+| 321 | Automated pre-commit/CI check pinning already-tagged CHANGELOG.md sections against their tagged content | v1.1.0rc5 retro | #2028 | Open | A git merge of a release-cutting branch (renamed `Unreleased`→`vX`) with a still-accumulating branch (`main`) silently misattributed ~150 lines of new content into the already-tagged `[1.1.0rc4]` section with ZERO merge conflicts. Full test suite stayed green throughout — no existing check (`check-changelog-test-counts.py`, `check-adr-status`) catches an already-tagged section changing. Fixed manually this time by reconstructing from both pre-merge sources; see CLAUDE.md "Process canonicalizations from the v1.1.0rc5 retro". |
+
+## v1.1.0rc5 — main/1.1 branch consolidation + release cut (PR #2026)
+
+**Date**: 2026-07-03
+**Scope**: What started as a routine `/djust-release 1.1.0rc4` invocation surfaced that `v1.1.0rc4` had already shipped (tagged, GitHub-released, live on PyPI) from a separate `1.1` branch — `main` had been reverted to 1.0.8 after an earlier bad-merge incident (#1974/#1975) and never re-absorbed the real v1.1 line (LVN native-renderer, `auto_navigate`, ADR-021/022/023 convergence). Per the user's explicit branch-strategy call ("all work is now 1.1 except bug/security fixes for 1.0 ... tracking 1.1 on main and 1.0 on its own branch"), consolidated `1.1` into `main` via reviewed PR #2026 (39 files, +1795/−62, full CI green including a confirmed-flaky `dj_transition.test.js` rerun), then cut v1.1.0rc5 from `main`. Also committed a pre-existing uncommitted scaffold fix (`DJUST_SQLITE_PATH`) that was blocking a clean working tree, and deleted the now-fully-merged `1.1` branch + PR #2026's feature branch after confirming ancestry.
+**Tests at close**: 4746 Python + 1778 JS + all Rust crates green (post-merge, pre-tag); full suite re-ran clean on both the version-bump push and the final tag push.
+
+### What We Learned
+
+**1. A release skill's default assumptions must be verified against actual tag/branch topology before executing.**
+`/djust-release 1.1.0rc4` proceeded on `main`'s implicit assumption (current branch is the release line, target VERSION hasn't shipped) — neither held. Manual investigation, not a documented pre-flight step, caught it before any damage.
+
+**Action taken**: `diff` — `make release`/`make release-dry-run` (`Makefile`) now `git rev-parse`/`git ls-remote --tags origin` the target version and hard-fail if it already exists, empirically verified against both an already-tagged version (fails) and an unreleased one (passes). Remaining out-of-repo skill-prompt half tracked in Action Tracker #320 (GitHub #2027). See CLAUDE.md "Process canonicalizations from the v1.1.0rc5 retro".
+
+**2. A git 3-way merge of CHANGELOG.md across a release-boundary-diverged branch pair can silently misattribute new content into an already-tagged, already-released section.**
+The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut rc4; `main` kept accumulating under the still-named `## [Unreleased]`. The merge reported zero conflicts, but git's diff3 had no semantic anchor distinguishing the two — `main`'s ~150 new lines landed inside `[1.1.0rc4]`'s body, retroactively (and falsely) claiming unshipped work had gone out in an already-released version. No existing automated check catches this; the full test suite stayed green throughout.
+
+**Action taken**: `diff` — CLAUDE.md now documents the failure mode + the reconstruction recipe (take each branch's original pre-merge section verbatim; hand-assemble rather than trust the auto-merge). `tracker_row` — Action Tracker #321 (GitHub #2028) tracks the durable automated-check follow-up.
+
+### Insights
+
+- Stopping to ask the user twice (AskUserQuestion) before proceeding on a genuinely ambiguous branch-topology question — rather than guessing from repo archaeology alone — is what caught this before it became a second #1974/#1975-class incident. Validates the existing "verify environment premises" canon (#1516) rather than requiring a new rule; the new lesson is narrowly that a *release skill's own pre-flight* should encode the check, not rely on the operator's ad hoc curiosity.
+- The high-stakes merge (PR #2026) was correctly routed through a real PR with full CI + an explicit user go-ahead, rather than another direct-push bypass — validates the existing admin-bypass discipline (v1.0.7-3/-4 arc) rather than needing reinforcement.
+- Two direct pushes to `main` (a pending scaffold fix, the version-bump commit) landed via admin bypass of the PR-required rule; both were transparently flagged to the user in the moment, matching existing canon. No new rule needed — this is the canon working as intended for low-risk, already-reviewed-in-substance changes.
+- `origin/1.0` (the dedicated backport branch going forward) was fully merged into `main` / an ancestor with zero unique commits at consolidation time — a clean starting point for the new "main=1.1, 1.0=backports" split, not something requiring cleanup.
+
+### Review Stats
+
+| Metric | PR #2026 | Total |
+|--------|----------|-------|
+| Files changed | 39 | 39 |
+| Lines +/− | 1795/62 | 1795/62 |
+| CI checks | 15 (1 flaky rerun) | 15 |
+| New tracker rows filed | 2 (#320, #321) | 2 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Added "Process canonicalizations from the v1.1.0rc5 retro (main/1.1 branch consolidation)" section (2 rules).
+**Makefile**: `release` + `release-dry-run` targets gained an already-tagged-version guard (local + origin tag existence check).
+**Action Tracker**: Rows #320, #321 added; GitHub issues #2027, #2028 filed.
+
+### Open Items
+
+- [ ] `djust-release` SKILL.md branch-of-record pre-flight — tracked in Action Tracker #320 (GitHub #2027)
+- [ ] Automated CHANGELOG already-tagged-section pinning check — tracked in Action Tracker #321 (GitHub #2028)
 
 ## v1.1.0-5 — downstream-gotcha open-issue drain (PRs #2005–#2019)
 
