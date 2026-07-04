@@ -19,6 +19,23 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-8 — custom-tag arg double-resolution + CI-gate promotion drain (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-04) of what surfaced after the v1.1.0-7 drain: a
+production-found **correctness bug** in the Rust↔Python custom-tag argument
+bridge (#2037 — `{% djust_markdown %}` corrupts a per-`{% for %}`/`{% include
+... with %}`-scoped dict-field value into a Python-tuple-repr), plus the CI-gate
+promotion the v1.1.0-7 retro deferred (#2034 — promote the `python/djust/tests/`
+soak step to a blocking gate now that it has run green on a `main` push-CI run,
+satisfying the #1534 soak-first precondition). Deferred and NOT in this bucket:
+#2017 (large dj-virtual server-side-reconcile enhancement), #1561/#1562
+(`priority:low` bug-capture feature tracks).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | `{% djust_markdown %}` corrupts a loop/include-scoped dict-field value (#2037) | Rust resolves a bare-name custom-tag arg (`block.text`) to its **value** string and passes it to Python; `TagHandler._resolve_arg` then re-interprets that already-resolved value as a template token — any value containing `=` is tuple-split (`str((k,v))` = the observed `('...', '...')` repr), any dotted value re-resolved. Root cause reproduced deterministically (no streaming/loop-cache needed). Fix = token-guard `_resolve_arg`'s kwarg-split + dotted-lookup so a non-token (Rust-resolved) value is returned verbatim | v1.1.0 |
+| **P2** | promote `python/djust/tests/` CI soak → blocking gate (#2034) | the v1.1.0-7 `#2032` soak step (`continue-on-error: true`) ran green on the `main` push-CI run at `72d78601`, satisfying the #1534 soak-first precondition; flip it to a gating step in `test.yml` (into the `test-summary` AND-condition per #1713) + add `python/djust/tests/` to the pre-push hook | v1.1.0 |
+
 ## v1.1.0-7 — post-rc6 live-verify drain (drain bucket → ships in 1.1.0) ✅
 
 **Complete (2026-07-04)** — both issues closed: #2033 (PR #2036), #2032 (PR #2035). Follow-up #2034 filed (promote the CI soak to a blocking gate). Retro: RETRO.md §v1.1.0-7.
