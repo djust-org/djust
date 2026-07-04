@@ -40,9 +40,23 @@ compatibility with Django's URL resolution and static file handling.
 """
 
 import logging
+import re
 from typing import Any, Callable, Dict, List, Type
 
 logger = logging.getLogger(__name__)
+
+# A template-tag argument, as produced by the template tokenizer, is a
+# whitespace-delimited token: a bare dotted-identifier path (``block.text``),
+# a ``key=value`` kwarg (``tables=False``), a quoted literal, or an int. The
+# Rust custom-tag dispatch, however, *pre-resolves* bare-name variable args to
+# their VALUE before handing them to the Python handler (renderer.rs
+# ``Node::CustomTag``). A resolved value (e.g. Markdown source text) is NOT a
+# token, and re-running the kwarg-split / dotted-lookup heuristics on it
+# corrupts any value containing ``=`` (tuple-split → ``str((k, v))`` repr) or a
+# leading dotted segment that happens to match a context key (#2037). These
+# patterns gate the heuristics so a non-token value is returned verbatim.
+_KWARG_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*=")  # ``key=`` — identifier then '='
+_VAR_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*(\.\w+)*$")  # dotted-identifier path
 
 # Track registered handlers for debugging
 _registered_handlers: Dict[str, "TagHandler"] = {}
@@ -121,12 +135,22 @@ class TagHandler:
         if arg.lstrip("-").isdigit():
             return int(arg)
 
-        # Named parameters: key=value
-        if "=" in arg:
+        # Named parameters: key=value — only when the arg is syntactically a
+        # kwarg TOKEN (bare identifier immediately followed by '='). A value
+        # that merely CONTAINS '=' (e.g. Rust-resolved Markdown source text
+        # "x = y") must not be tuple-split (#2037 double-resolution).
+        if _KWARG_TOKEN_RE.match(arg):
             key, value = arg.split("=", 1)
             return (key.strip(), self._resolve_arg(value, context))
 
-        # Context variable (may be dot-separated like post.slug)
+        # Context variable (dot-separated like post.slug) — only when the arg
+        # is a bare dotted-identifier TOKEN. A non-token string (whitespace,
+        # markup, newlines) is a value the Rust dispatch already resolved; it
+        # is returned verbatim rather than re-resolved against the context
+        # (which would corrupt values whose first segment matches a key).
+        if not _VAR_TOKEN_RE.match(arg):
+            return arg
+
         parts = arg.split(".")
         result = context.get(parts[0])
 

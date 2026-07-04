@@ -95,6 +95,13 @@ class MarkdownTagHandler(TagHandler):
             return str(escape("" if src_fallback is None else str(src_fallback)))
 
         src_raw = self._resolve_arg(args[0], context)
+        if isinstance(src_raw, tuple):
+            # The source is a positional argument, never a kwarg. If
+            # ``_resolve_arg`` still returned a (key, value) tuple, the resolved
+            # value was shaped like ``key=value`` (no whitespace) and got
+            # mistaken for a kwarg; use the raw resolved arg string so the
+            # source is never a Python-tuple-repr (#2037 defence-in-depth).
+            src_raw = args[0]
         src = "" if src_raw is None else str(src_raw)
 
         kwargs: Dict[str, bool] = dict(_DEFAULTS)
