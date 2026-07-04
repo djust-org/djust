@@ -198,16 +198,21 @@ _VIEW_TARGET_NAMES = {"view", "view_instance", "component"}
 _SETATTR_WHITELIST = {
     # live_view.py function-view decorator: applies the DEVELOPER's own returned
     # state dict onto a locally-constructed DynamicLiveView. The keys come from the
-    # app author's function return value, not from a client frame — so they don't
-    # need safe_setattr's client-key guard. Two adjacent lines (callable vs not).
+    # app author's function return value (``result = func(request, ...)`` →
+    # ``for key, value in result.items(): setattr(view, key, value)``), NOT from a
+    # client frame — so they don't need safe_setattr's client-key guard. Two
+    # adjacent lines (callable vs not).
     # Line numbers shifted +11 in ADR-022 Iter 3 Phase 3.1 (#1913) when
     # ``_mounted_from_restore`` was added before the ``_framework_attrs`` snapshot
     # in ``LiveView.__init__``; shifted +8 again in ADR-023 M2 when type
     # annotations were added to live_view.py (optional-import block grew);
     # shifted +10 in #1981 (PR #1982) when ``_changed_keys``/``_force_full_html``
-    # were added to ``_FRAMEWORK_INTERNAL_ATTRS`` (comment block grew).
-    ("live_view.py", 1213),
-    ("live_view.py", 1215),
+    # were added to ``_FRAMEWORK_INTERNAL_ATTRS`` (comment block grew);
+    # shifted +12 (1213/1215 → 1225/1227) by later live_view.py growth, re-verified
+    # sanctioned in #2032 (v1.1.0-7): the sites are still the DynamicLiveView
+    # developer-dict application, not a new client-controlled setattr.
+    ("live_view.py", 1225),
+    ("live_view.py", 1227),
 }
 
 
