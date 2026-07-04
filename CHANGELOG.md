@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Converged the WebSocket and runtime async-callback dispatch onto one shared helper (#2020).** #2016 fixed a #1646 parallel-path drift — an async `@background` handler silently failed on the converged runtime path because `ViewRuntime._execute_async_task` routed every callback through `sync_to_async` (raising `TypeError: sync_to_async can only be applied to sync functions`) while the WS consumer's `_run_async_work` awaited async callbacks directly — but it fixed it by *copying* the coroutine-dispatch branch, leaving two identical copies primed to re-drift. This extracts the dispatch into one `run_async_callback` in `mixins/async_work.py` that both transports now delegate to, so the sync/async handling can never diverge again. New `test_async_dispatch_parity_2020.py`: 4 behavioral cases over the shared helper (including the async-def gate-off sentinel) + 3 structural pins asserting both paths call the helper, neither keeps its own `iscoroutinefunction(callback)` branch, and the helper is the single definition in the package.
+
 ## [1.1.0rc5] - 2026-07-03
 
 ### Security
