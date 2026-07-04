@@ -152,6 +152,18 @@ repos:
         files: ^CHANGELOG\.md$
         pass_filenames: false
 
+      # Pin already-shipped CHANGELOG sections against the newest release tag —
+      # a stray branch merge must never silently rewrite shipped history (the
+      # v1.1.0rc5 consolidation incident). See
+      # scripts/check-changelog-tagged-sections.py and
+      # tests/test_changelog_tagged_sections.py. Closes #2028.
+      - id: check-changelog-tagged-sections
+        name: check CHANGELOG shipped-section pins (#2028)
+        entry: python scripts/check-changelog-tagged-sections.py
+        language: python
+        files: ^CHANGELOG\.md$
+        pass_filenames: false
+
   # ADR status/version-line consistency — catches the drift class #1492
   # reconciled by hand (Accepted ADR still has a `Target version:` line).
   # See scripts/check-adr-status.py and tests/test_check_adr_status.py.

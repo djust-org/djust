@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CI: `check-changelog-tagged-sections` pins already-shipped CHANGELOG sections against the newest release tag (#2028).** A 3-way merge of `CHANGELOG.md` across branches that diverged around a release cut can silently rewrite an already-shipped `## [X.Y.Z]` section with ZERO conflicts — git's diff3 has no notion that a version heading is immutable. The v1.1.0rc5 consolidation incident moved ~150 lines of unreleased content into the already-tagged `[1.1.0rc4]` body, falsely claiming unshipped work had gone out; neither `check-changelog-test-counts` nor `check-adr-status` catches it (both check the diff's own claims, not whether a shipped section changed at all). New pre-commit hook `scripts/check-changelog-tagged-sections.py` finds the newest release (top-most `## [X.Y.Z]` section whose `vX.Y.Z` tag exists) and asserts every section below it is byte-identical to that tag's frozen snapshot. Pinning against the *newest* tag (not each section's own tag) is required because this repo's rolling-rc sections keep accumulating entries after their own rc tag — a section is frozen once *superseded*, not at its own tag. Dogfooded clean against 119 shipped sections; empirical canary (#1459) confirms it catches a spurious injection into `[1.1.0rc4]`. 3 new cases in `tests/test_changelog_tagged_sections.py` (gate-off sentinel + non-tautology guard).
+
 ## [1.1.0rc5] - 2026-07-03
 
 ### Security
