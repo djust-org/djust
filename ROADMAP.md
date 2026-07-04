@@ -19,6 +19,23 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-6 — retro-tail + carryover drain (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-03) of what remained after the v1.1.0-5 backlog drain:
+one **carryover** (#1977, the hard Rust VDOM-differ misroute that self-heals via
+`html_recovery` — listed in v1.1.0-5 but not completed) plus two **retro-tail**
+tech-debt items surfaced by the v1.1.0-5 and v1.1.0rc5 retros (#2020, #2028).
+Deferred and NOT in this bucket: #2017 (large dj-virtual server-side-reconcile
+enhancement, deferred per #1079), #1561/#1562 (`priority:low` bug-capture
+feature tracks). #2027 was closed-without-code (its in-repo `make release`
+pre-flight already shipped; remainder is out-of-repo skill-prompt).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | VDOM stale baseline / list-shrink SetText misroute (#1977) | when a `{% for %}` list shrinks to a differently-shaped subset, `diff_html` emits `SetText` patches whose paths address the wrong (sometimes `#text`) node → 2/220 fail → full recovery-morph round-trip + flicker | v1.1.0 |
+| **P2** | async-work dispatch transport-parity test (#2020) | the #2016 `sync_to_async`/coroutine drift (async `@background` silently broken on the converged runtime path) had no parity guard; add a structural test (ideally a shared `_dispatch_async_callback` both paths call) | v1.1.0 |
+| **P2** | pin already-tagged CHANGELOG sections (#2028) | a pre-commit/CI check that every `## [X.Y.Z]` section whose `vX.Y.Z` tag exists is byte-identical to `git show vX.Y.Z:CHANGELOG.md` — catches a re-merge silently rewriting a shipped section | v1.1.0 |
+
 ## v1.1.0-5 — post-ADR-024 open-issue drain (drain bucket → ships in 1.1.0)
 
 Open-issue drain (2026-07-02) of the 19-issue backlog accumulated after the
