@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0rc6] - 2026-07-03
+
 ### Fixed
 
 - **VDOM stale-baseline reload on reconnect/state-restore (#1977).** After a
@@ -26,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a fresh mount still renders a normal VDOM patch (no perf regression). Regression
   coverage: 3 cases in `python/djust/tests/test_stale_baseline_restore_1977.py`.
 - **Converged the WebSocket and runtime async-callback dispatch onto one shared helper (#2020).** #2016 fixed a #1646 parallel-path drift — an async `@background` handler silently failed on the converged runtime path because `ViewRuntime._execute_async_task` routed every callback through `sync_to_async` (raising `TypeError: sync_to_async can only be applied to sync functions`) while the WS consumer's `_run_async_work` awaited async callbacks directly — but it fixed it by *copying* the coroutine-dispatch branch, leaving two identical copies primed to re-drift. This extracts the dispatch into one `run_async_callback` in `mixins/async_work.py` that both transports now delegate to, so the sync/async handling can never diverge again. New `test_async_dispatch_parity_2020.py`: 4 behavioral cases over the shared helper (including the async-def gate-off sentinel) + 3 structural pins asserting both paths call the helper, neither keeps its own `iscoroutinefunction(callback)` branch, and the helper is the single definition in the package.
+
 ### Added
 
 - **CI: `check-changelog-tagged-sections` pins already-shipped CHANGELOG sections against the newest release tag (#2028).** A 3-way merge of `CHANGELOG.md` across branches that diverged around a release cut can silently rewrite an already-shipped `## [X.Y.Z]` section with ZERO conflicts — git's diff3 has no notion that a version heading is immutable. The v1.1.0rc5 consolidation incident moved ~150 lines of unreleased content into the already-tagged `[1.1.0rc4]` body, falsely claiming unshipped work had gone out; neither `check-changelog-test-counts` nor `check-adr-status` catches it (both check the diff's own claims, not whether a shipped section changed at all). New pre-commit hook `scripts/check-changelog-tagged-sections.py` finds the newest release (top-most `## [X.Y.Z]` section whose `vX.Y.Z` tag exists) and asserts every section below it is byte-identical to that tag's frozen snapshot. Pinning against the *newest* tag (not each section's own tag) is required because this repo's rolling-rc sections keep accumulating entries after their own rc tag — a section is frozen once *superseded*, not at its own tag. Dogfooded clean against 119 shipped sections; empirical canary (#1459) confirms it catches a spurious injection into `[1.1.0rc4]`. 3 new cases in `tests/test_changelog_tagged_sections.py` (gate-off sentinel + non-tautology guard).
