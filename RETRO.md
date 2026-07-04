@@ -356,11 +356,12 @@ issue or be explicitly closed with a reason.
 | 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Closed | **Resolved (PR for #1869):** `playwright-tests` was `success` on the last 3 runner runs (precondition met per #1534), so `test_browser_smoke.py` was carved into its own BLOCKING `browser-smoke` CI job (no `continue-on-error`, mirrors the `demo-checks` pattern #1708/#1713) and wired into the `test-summary` AND-condition; the rest of the playwright suite stays non-blocking (the full suite can be flaky). #1848 was code-fixed by PR #1871 (re-execute classic `<script>` on the #1610 mount morph), so the inline-script known-xfail was flipped to a HARD regression assertion. |
 | 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Closed | **Resolved in v1.1.0-1 (PR #1881):** channel-layer isolation (`backends.clear()`) + deterministic ping/pong openness probe (replaced the wall-clock `receive_nothing`); the systemic test-isolation fixture (#1884) retired the shared-process-global flaky class. |
 | 316 | Propagate the "cap concurrent worktree implementer agents at ~3" rule into the pipeline-run / pipeline-drain skill prompts | v1.1.0-4 retro | — | OUT-OF-REPO | Skill prompts live in `~/.claude/skills/{pipeline-run,pipeline-drain}/SKILL.md` (gitignored, not in this repo). In-repo half DONE: CLAUDE.md "Process canonicalizations from v1.1.0-4 retro arc" rule 2. Trigger: 5 concurrent worktree fixers tripped a transient server-side throttle; ≤3 concurrent prevents it, serial resumption recovers cleanly. |
-| 317 | Transport-parity test for the async-work dispatch path (runtime `_execute_async_task` vs consumer `_run_async_work`) — the #2016 `sync_to_async`/coroutine drift had no guard | PR #2016 / v1.1.0-5 retro | #2020 | Open | #1646 twin: the ADR-022 runtime convergence dropped the `iscoroutinefunction` branch the consumer had, silently breaking async `@background` on the live path. Fix mirrored the twin (+ defensive `inspect.iscoroutine(result)`); the parity test (ideally a shared `_dispatch_async_callback` helper both paths call, pinned by a sync+async round-trip) is the structural cure. |
+| 317 | Transport-parity test for the async-work dispatch path (runtime `_execute_async_task` vs consumer `_run_async_work`) — the #2016 `sync_to_async`/coroutine drift had no guard | PR #2016 / v1.1.0-5 retro | #2020 | Closed | Resolved v1.1.0-6 (PR #2030): the structural cure shipped — one `run_async_callback` in `mixins/async_work.py` both transports delegate to, pinned by 3 structural parity tests (both call it; neither keeps its own `iscoroutinefunction(callback)` branch; single definition) + 4 behavioral (gate-off #1468 = the async-def-through-`sync_to_async` `TypeError`). |
 | 318 | dj-virtual deeper server-side reconcile — automatic `stream_append`→`__djVirtualItems` wiring, VDOM-differ `dj-virtual` awareness (keyed mid-list inserts/removals), out-of-window finalize-patch landing, + a `djustDebug` warning | PR #2018 / v1.1.0-5 retro | #2017 | Open | Deferred from #1988/#1989 per #1079 scope discipline; the client-side self-heal (`structureIntact`/`absorbLooseChildren`) + CSS layout contract shipped in #2018. Also carries the manual real-browser pixel-verification JSDOM couldn't cover. |
 | 319 | Codify the CHANGELOG-union local-sync step (`git merge origin/main` before GitHub-merge; rebuild bundles from merged src when they conflict) into the pipeline-drain skill | v1.1.0-5 retro | — | OUT-OF-REPO | `CHANGELOG merge=union` is a LOCAL git driver; GitHub's merge button doesn't apply it, so every multi-PR drain re-hits a silent CHANGELOG conflict (checks green, button shows "conflicting"). pipeline-drain skill is gitignored (`~/.claude/skills/`). In-repo-adjacent: memory `reference_changelog_union_vs_github_merge` saved. |
-| 320 | `djust-release` SKILL.md needs a "which branch is the release-of-record" pre-flight when multiple long-lived release branches exist | v1.1.0rc5 retro | #2027 | Open | In-repo half DONE: `make release`/`make release-dry-run` now hard-fail if the target tag already exists locally or on origin (Makefile). Skill-prompt half is out-of-repo (gitignored `.claude/skills/djust-release/SKILL.md`). Trigger: `/djust-release 1.1.0rc4` ran against `main`, which had been reverted to 1.0.8 post-#1974/#1975 while the real v1.1 line + the already-tagged/PyPI-live rc4 lived on a separate `1.1` branch. |
-| 321 | Automated pre-commit/CI check pinning already-tagged CHANGELOG.md sections against their tagged content | v1.1.0rc5 retro | #2028 | Open | A git merge of a release-cutting branch (renamed `Unreleased`→`vX`) with a still-accumulating branch (`main`) silently misattributed ~150 lines of new content into the already-tagged `[1.1.0rc4]` section with ZERO merge conflicts. Full test suite stayed green throughout — no existing check (`check-changelog-test-counts.py`, `check-adr-status`) catches an already-tagged section changing. Fixed manually this time by reconstructing from both pre-merge sources; see CLAUDE.md "Process canonicalizations from the v1.1.0rc5 retro". |
+| 320 | `djust-release` SKILL.md needs a "which branch is the release-of-record" pre-flight when multiple long-lived release branches exist | v1.1.0rc5 retro | #2027 | OUT-OF-REPO | In-repo half DONE + GitHub #2027 CLOSED v1.1.0-6: `make release`/`make release-dry-run` hard-fail if the target tag already exists locally or on origin (Makefile). Remaining skill-prompt half is out-of-repo (gitignored `.claude/skills/djust-release/SKILL.md`). Trigger: `/djust-release 1.1.0rc4` ran against `main`, which had been reverted to 1.0.8 post-#1974/#1975 while the real v1.1 line + the already-tagged/PyPI-live rc4 lived on a separate `1.1` branch. |
+| 321 | Automated pre-commit/CI check pinning already-tagged CHANGELOG.md sections against their tagged content | v1.1.0rc5 retro | #2028 | Closed | Resolved v1.1.0-6 (PR #2029): `scripts/check-changelog-tagged-sections.py` pins every shipped section against the *newest* release tag's snapshot (dogfood #1060 showed pinning against each section's OWN tag floods false positives — rolling-rc sections keep accumulating post-tag; a section is frozen once *superseded*). Wired as a pre-commit hook; empirical canary (#1459) is a permanent test. 119 sections pin clean against v1.1.0rc5. |
+| 322 | CI Python job omits `python/djust/tests/` — a large suite (incl. the RED `TestSetattrChokepoint` CWE-915 guard, and this-repo's #2020/#1977 tests) is un-gated | PR #2031 / v1.1.0-6 retro | #2032 | Open | `.github/workflows/test.yml:165` runs `pytest tests/ python/tests/` — explicit paths override `pyproject.toml` `testpaths` (which lists `python/djust/tests`); pre-push has the same omission. Surfaced by the #1977 subagent's sweep: 8803 passed / 2 failed, the only 2 being stale line-pins in the setattr chokepoint on `main`. Cheap to close (deliberate `_SETATTR_WHITELIST` update + add the dir to CI, `continue-on-error` first per #1534). |
 
 ## v1.1.0rc5 — main/1.1 branch consolidation + release cut (PR #2026)
 
@@ -404,8 +405,61 @@ The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut r
 
 ### Open Items
 
-- [ ] `djust-release` SKILL.md branch-of-record pre-flight — tracked in Action Tracker #320 (GitHub #2027)
-- [ ] Automated CHANGELOG already-tagged-section pinning check — tracked in Action Tracker #321 (GitHub #2028)
+- [x] `djust-release` SKILL.md branch-of-record pre-flight — tracked in Action Tracker #320 (GitHub #2027) — in-repo half + GitHub #2027 resolved in v1.1.0-6; skill-prompt half now OUT-OF-REPO
+- [x] Automated CHANGELOG already-tagged-section pinning check — tracked in Action Tracker #321 (GitHub #2028) — resolved in v1.1.0-6 (PR #2029)
+
+## v1.1.0-6 — retro-tail + carryover drain (PRs #2029/#2030/#2031)
+
+**Date**: 2026-07-03
+**Scope**: Drained the tail left after v1.1.0-5: one carryover bug (#1977, the hard VDOM misroute that self-heals) plus two retro-tail tech-debt items (#2020 async parity, #2028 CHANGELOG pin). 3 PRs, 3 issues closed; #2027 closed-without-code (in-repo half already shipped). 2 contained items done inline; the one hard fix (#1977, Python-only once the differ was cleared) done via a worktree-isolated subagent. 1 follow-up filed (#2032). Deferred and untouched: #2017 (large dj-virtual enhancement), #1561/#1562 (`priority:low` feature tracks).
+**Tests at close**: 3 new suites (`test_changelog_tagged_sections.py` ×3, `test_async_dispatch_parity_2020.py` ×7, `test_stale_baseline_restore_1977.py` ×3).
+
+### What We Learned
+
+**1. CI's Python job silently omits `python/djust/tests/`.** The #1977 subagent's broader sweep surfaced that `.github/workflows/test.yml:165` runs `pytest tests/ python/tests/` — explicit paths that OVERRIDE `pyproject.toml`'s `testpaths` (which DOES list `python/djust/tests`). So a large suite — V008 checks, mount-chokepoint structural pins, #1466/#1552 restore tests, and this milestone's own #2020/#1977 tests — is not CI-gated (nor pre-push-gated, same omission). Concrete symptom it was hiding: `test_mount_chokepoint_structural.py::TestSetattrChokepoint` (a CWE-915 `safe_setattr` mass-assignment guard) is RED on `main` — a sanctioned setattr site moved off the whitelist's pinned `live_view.py:1213/1215` and nothing caught it. The sweep was 8803 passed / 2 failed (only these 2), so the gap is cheap to close (deliberate whitelist update + add the dir to CI per the #1534 new-CI-job soak rule).
+
+**Action taken**: Open — tracked in Action Tracker #322 (GitHub #2032).
+
+**2. Dogfooding a tag-pin check before wiring exposed the rolling-rc CHANGELOG invariant.** #2028 asked for "pin each `## [X.Y.Z]` section against its `vX.Y.Z` tag." The first implementation did exactly that — and a dogfood run (#1060) flooded 100+ false positives, because this repo's rolling-rc sections keep accumulating entries *after* their own rc tag (e.g. `[1.0.0rc12]` gained a dozen fixes post-`v1.0.0rc12`). The correct invariant is "a section is frozen once *superseded*, not at its own tag" → pin every section against the *newest* release tag's snapshot (0-mismatch on the real tree, 119 sections). Dogfooding a tooling check against the real repo before wiring is what turned a subtly-wrong design into a correct one.
+
+**Action taken**: Closed — shipped `scripts/check-changelog-tagged-sections.py` (newest-tag-snapshot design) in PR #2029.
+
+**3. A fix-by-copying-the-branch is a latent re-drift; converge structurally (#1646).** #2016 (v1.1.0-5) fixed the async-`@background` breakage on the converged runtime path by *copying* the consumer's `iscoroutinefunction(callback)` branch into `ViewRuntime._execute_async_task` — leaving two byte-identical copies primed to re-diverge on the next edit. #2020's cure was structural: extract one `run_async_callback` in `mixins/async_work.py` that both transports delegate to, pinned by 3 structural tests (both paths call it, neither keeps its own dispatch branch, it's the single definition). This is the #1646 discipline applied to a *fix's own* residue — a copy-paste fix is a finding, not a resolution.
+
+**Action taken**: Closed — shipped `run_async_callback` shared helper in PR #2030.
+
+**4. Symptom-up triage: the cited path (differ) was clean; the real cause was the reconnect baseline seam.** #1977's title blamed `diff_html` misrouting `SetText`. A prior-session 18-shape faithful search + the maintainer's bit-exact Chromium repro had already *retracted* that framing — the differ is clean; the real cause is that on WS reconnect/state-restore the fresh view's Rust diff baseline is primed from a render that doesn't match the client's live (restored) DOM, so the first post-restore event diffs against a stale baseline and lands `SetText` on a `#text` node. Trusting the symptom (bit-exact console) over the cited path meant a one-guard Python fix (`_force_full_html` on restore mounts) and zero Rust churn. Render-timing was *traced* (the flag survives the skipped resume mount frame, consumed by the first event), and each restore seam was decided explicitly (#1646).
+
+**Action taken**: Closed — shipped `_force_full_html`-on-restore in PR #2031; reinforces the Bug-report-triage canon.
+
+### Insights
+
+- **Prior-session memory made the hard issue tractable.** The `project_1977_list_shrink_settext` memory (the 18-shape faithful search found no differ repro; maintainer retracted) + the maintainer's follow-up bit-exact repro converged on the real cause without re-running the expensive search. The memory saved the drain from chasing a retracted differ hypothesis.
+- **Right-sized delegation.** The two contained tech-debt items (a check script, a helper extraction) were done inline where context was cheap; only the one genuinely-hard fix (#1977 — multi-seam restore + reconnect-faithful test) went to a worktree-isolated subagent with a prescriptive symptom-up brief. It caught the CI-coverage gap the inline path would have missed.
+- **The empirical canary (#1459) as a permanent test.** #2028's check ships with a test that injects a spurious bullet into a shipped section and asserts the check flags it — the tooling-PR canary, locked in so a future refactor can't silently defang the check.
+- **CHANGELOG union-merge recurred every PR** (already tracked OUT-OF-REPO #319): each of the 3 PRs needed a local `git merge origin/main` before GitHub would merge the shared `[Unreleased]` block. The `merge=union` driver is local-only; GitHub's button doesn't apply it.
+
+### Review Stats
+
+| Metric | PR #2029 | PR #2030 | PR #2031 | Total |
+|--------|----------|----------|----------|-------|
+| Issues closed | 1 (#2028) | 1 (#2020) | 1 (#1977) | 3 |
+| Tests added | 3 | 7 | 3 | 13 |
+| Gate-off sentinel (#1468) | ✓ | ✓ | ✓ | 3/3 |
+| CI failures | 0 | 0 | 0 | 0 |
+| Follow-ups filed | — | — | #2032 | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no new canon this milestone — findings 2-4 reinforce existing canon (#1060 dogfood, #1646 structural cure, Bug-report-triage). Finding 1 is a repo-config gap tracked as #2032.
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none (the CHANGELOG-union + concurrent-worktree-cap skill propagations remain OUT-OF-REPO — tracker rows #316/#319).
+
+### Open Items
+
+- [ ] CI Python job omits `python/djust/tests/` (hides a RED security-structural test) — tracked in Action Tracker #322 (GitHub #2032)
+- [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried from v1.1.0-5
 
 ## v1.1.0-5 — downstream-gotcha open-issue drain (PRs #2005–#2019)
 
@@ -455,7 +509,7 @@ All 14 PRs append to `### Fixed`; after the first merged, each subsequent PR nee
 
 ### Open Items
 
-- [ ] #317 — transport-parity test for the async-work dispatch path (GitHub #2020)
+- [x] #317 — transport-parity test for the async-work dispatch path (GitHub #2020) — resolved in v1.1.0-6 (PR #2030, shared `run_async_callback` helper)
 - [ ] #318 — dj-virtual deeper server-side reconcile (GitHub #2017)
 - [ ] #319 — codify the CHANGELOG-union local-sync step in the pipeline-drain skill (OUT-OF-REPO; memory saved in-repo-adjacent)
 

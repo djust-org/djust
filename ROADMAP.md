@@ -19,7 +19,9 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
-## v1.1.0-6 — retro-tail + carryover drain (drain bucket → ships in 1.1.0)
+## v1.1.0-6 — retro-tail + carryover drain (drain bucket → ships in 1.1.0) ✅
+
+**Complete (2026-07-03)** — all 3 issues closed: #1977 (PR #2031), #2020 (PR #2030), #2028 (PR #2029); #2027 closed-without-code. Follow-up #2032 filed (CI omits `python/djust/tests/`). Retro: RETRO.md §v1.1.0-6.
 
 Open-issue drain (2026-07-03) of what remained after the v1.1.0-5 backlog drain:
 one **carryover** (#1977, the hard Rust VDOM-differ misroute that self-heals via
