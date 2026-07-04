@@ -1138,21 +1138,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         error = None
 
         try:
-            # Async callbacks (from @background on async def handlers)
-            # are called directly on the event loop. Sync callbacks are
-            # dispatched to a thread via sync_to_async. The legacy
-            # inspect.iscoroutine fallback handles callbacks created
-            # before the @background decorator gained native async
-            # detection (v0.4.2+).
-            import asyncio as _asyncio
-            import inspect
+            # Dispatch through the ONE shared helper so the sync/async handling
+            # can never drift from the runtime twin (#2020, #2016 / #1646). It
+            # awaits an async callback directly and thread-dispatches a sync one
+            # (with the legacy coroutine-return unwrap for pre-v0.4.2 callbacks).
+            from .mixins.async_work import run_async_callback
 
-            if _asyncio.iscoroutinefunction(callback):
-                result = await callback(*args, **kwargs)
-            else:
-                result = await sync_to_async(callback)(*args, **kwargs)
-                if inspect.iscoroutine(result):
-                    result = await result
+            result = await run_async_callback(callback, args, kwargs)
 
             # Teardown identity-guard (#1940, #245/#1198 commit-or-rollback /
             # identity-guard class). The callback above is the FIRST await in

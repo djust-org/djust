@@ -22,11 +22,52 @@ and sends updated patches to the client.
                 self.error = str(error)
 """
 
+import asyncio
 import inspect
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from asgiref.sync import sync_to_async
+
 logger = logging.getLogger(__name__)
+
+
+async def run_async_callback(
+    callback: Callable[..., Any],
+    args: Any = (),
+    kwargs: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Run one ``start_async`` / ``@background`` callback across the sync/async
+    divide and return its result.
+
+    THE single source of truth for how a background callback is dispatched, so
+    the two transport paths can never drift on it (#2020, the #2016 / #1646
+    parallel-path twin):
+
+    - ``LiveViewConsumer._run_async_work`` (WebSocket) —
+      ``python/djust/websocket.py``
+    - ``ViewRuntime._execute_async_task`` (SSE + ``url_change``, and WS after
+      the ADR-022 flip) — ``python/djust/runtime.py``
+
+    Dispatch rules:
+
+    - A coroutine FUNCTION (an ``async def`` handler under ``@background``, or a
+      coroutine function passed to ``start_async``) is awaited directly on the
+      event loop. Routing it through ``sync_to_async`` raises
+      ``TypeError: sync_to_async can only be applied to sync functions`` — the
+      exact #2001 failure that silently broke every async background task on the
+      converged runtime path before #2016.
+    - A sync callable is dispatched to a worker thread via ``sync_to_async``. If
+      that sync callable itself returns a coroutine (a sync function that
+      returned ``some_async()`` without awaiting it), the coroutine is awaited
+      too — preserving the pre-v0.4.2 ``@background`` contract.
+    """
+    if asyncio.iscoroutinefunction(callback):
+        return await callback(*args, **(kwargs or {}))
+    result = await sync_to_async(callback)(*args, **(kwargs or {}))
+    if inspect.iscoroutine(result):
+        result = await result
+    return result
 
 
 class AsyncWorkMixin:
