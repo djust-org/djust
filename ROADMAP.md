@@ -19,7 +19,9 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
-## v1.1.0-7 — post-rc6 live-verify drain (drain bucket → ships in 1.1.0)
+## v1.1.0-7 — post-rc6 live-verify drain (drain bucket → ships in 1.1.0) ✅
+
+**Complete (2026-07-04)** — both issues closed: #2033 (PR #2036), #2032 (PR #2035). Follow-up #2034 filed (promote the CI soak to a blocking gate). Retro: RETRO.md §v1.1.0-7.
 
 Open-issue drain (2026-07-04) of what surfaced after cutting 1.1.0rc6: a
 dj-virtual client-state teardown regression found live-verifying the #1988/#1989

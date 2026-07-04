@@ -361,7 +361,8 @@ issue or be explicitly closed with a reason.
 | 319 | Codify the CHANGELOG-union local-sync step (`git merge origin/main` before GitHub-merge; rebuild bundles from merged src when they conflict) into the pipeline-drain skill | v1.1.0-5 retro | — | OUT-OF-REPO | `CHANGELOG merge=union` is a LOCAL git driver; GitHub's merge button doesn't apply it, so every multi-PR drain re-hits a silent CHANGELOG conflict (checks green, button shows "conflicting"). pipeline-drain skill is gitignored (`~/.claude/skills/`). In-repo-adjacent: memory `reference_changelog_union_vs_github_merge` saved. |
 | 320 | `djust-release` SKILL.md needs a "which branch is the release-of-record" pre-flight when multiple long-lived release branches exist | v1.1.0rc5 retro | #2027 | OUT-OF-REPO | In-repo half DONE + GitHub #2027 CLOSED v1.1.0-6: `make release`/`make release-dry-run` hard-fail if the target tag already exists locally or on origin (Makefile). Remaining skill-prompt half is out-of-repo (gitignored `.claude/skills/djust-release/SKILL.md`). Trigger: `/djust-release 1.1.0rc4` ran against `main`, which had been reverted to 1.0.8 post-#1974/#1975 while the real v1.1 line + the already-tagged/PyPI-live rc4 lived on a separate `1.1` branch. |
 | 321 | Automated pre-commit/CI check pinning already-tagged CHANGELOG.md sections against their tagged content | v1.1.0rc5 retro | #2028 | Closed | Resolved v1.1.0-6 (PR #2029): `scripts/check-changelog-tagged-sections.py` pins every shipped section against the *newest* release tag's snapshot (dogfood #1060 showed pinning against each section's OWN tag floods false positives — rolling-rc sections keep accumulating post-tag; a section is frozen once *superseded*). Wired as a pre-commit hook; empirical canary (#1459) is a permanent test. 119 sections pin clean against v1.1.0rc5. |
-| 322 | CI Python job omits `python/djust/tests/` — a large suite (incl. the RED `TestSetattrChokepoint` CWE-915 guard, and this-repo's #2020/#1977 tests) is un-gated | PR #2031 / v1.1.0-6 retro | #2032 | Open | `.github/workflows/test.yml:165` runs `pytest tests/ python/tests/` — explicit paths override `pyproject.toml` `testpaths` (which lists `python/djust/tests`); pre-push has the same omission. Surfaced by the #1977 subagent's sweep: 8803 passed / 2 failed, the only 2 being stale line-pins in the setattr chokepoint on `main`. Cheap to close (deliberate `_SETATTR_WHITELIST` update + add the dir to CI, `continue-on-error` first per #1534). |
+| 322 | CI Python job omits `python/djust/tests/` — a large suite (incl. the RED `TestSetattrChokepoint` CWE-915 guard, and this-repo's #2020/#1977 tests) is un-gated | PR #2031 / v1.1.0-6 retro | #2032 | Closed | Resolved v1.1.0-7 (PR #2035): deliberately re-verified + fixed the stale `_SETATTR_WHITELIST` pins (1213/1215 → 1225/1227, confirmed still the sanctioned DynamicLiveView developer-dict application, not a new client-controlled setattr), and added `python/djust/tests/` to CI as a `continue-on-error` soak step (green on first runner run). Blocking-gate promotion split to #323 (#2034). |
+| 323 | Promote the `python/djust/tests/` CI soak step to a blocking gate + add the dir to the pre-push hook | PR #2035 / v1.1.0-7 retro | #2034 | Open | #2032 added the dir to CI as `continue-on-error` per #1534 (a CI surface the dev machine can't fully mirror — `-n auto` xdist over ~4000 newly-covered tests). It ran GREEN on its first runner run (evidence noted on #2034), so removing `continue-on-error` (or folding into the gating `pytest tests/ python/tests/` command) + adding `python/djust/tests/` to the pre-push `pytest` hook is now low-risk. Do it once the soak has also shown green on a `main` push-CI run. |
 
 ## v1.1.0rc5 — main/1.1 branch consolidation + release cut (PR #2026)
 
@@ -407,6 +408,58 @@ The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut r
 
 - [x] `djust-release` SKILL.md branch-of-record pre-flight — tracked in Action Tracker #320 (GitHub #2027) — in-repo half + GitHub #2027 resolved in v1.1.0-6; skill-prompt half now OUT-OF-REPO
 - [x] Automated CHANGELOG already-tagged-section pinning check — tracked in Action Tracker #321 (GitHub #2028) — resolved in v1.1.0-6 (PR #2029)
+
+## v1.1.0-7 — post-rc6 live-verify drain (PRs #2035/#2036)
+
+**Date**: 2026-07-04
+**Scope**: Drained what surfaced right after cutting 1.1.0rc6: a dj-virtual client-state teardown regression found live-verifying the #1988/#1989 fix on the freshly-cut rc6 (#2033), and the CI-coverage gap the v1.1.0-6 drain had filed (#2032). 2 PRs, 2 issues closed; #2033 (JS bug) done by a worktree-isolated subagent, #2032 (security-guard + CI config) done inline. 1 follow-up filed (#2034). Deferred and untouched: #2017 (large dj-virtual server-side-reconcile enhancement), #1561/#1562 (`priority:low` feature tracks).
+**Tests at close**: 2 new suites — `tests/js/dj-virtual-teardown-2033.test.js` (3) + the re-greened `TestSetattrChokepoint` (14 in-file).
+
+### What We Learned
+
+**1. Live-verifying a freshly-cut release is its own test harness — new-in-release regressions surface there, not in the suite.** #2033 was found by exercising the *previous* drain's #1988/#1989 fix against the just-published 1.1.0rc6 in a real browser. The bug was a new-in-rc6 interaction: the #1988/#1989 auto-`absorbLooseChildren` self-heal (a genuine improvement for same-thread re-renders) had **no signal** to distinguish "same list, more items" from "an entirely different view reusing the same DOM node" under SPA nav — so it merged cross-view content into one pool. The unit suite couldn't see it (it needs the reconnect/SPA-nav sequence across real navigations); the release *was* the harness. Reinforces the browser-test-downstream-interactive-paths rule (#1849) — applied to the framework's own dogfood on each RC.
+
+**Action taken**: Closed — #2033 fixed in PR #2036.
+
+**2. WeakMap-keyed client state needs a discoverable teardown anchor + an explicit identity signal.** The `dj-virtual` state map is keyed by container-node identity and is not iterable, so "find containers that lost the attribute and tear them down" had no direct path — which is exactly why no teardown ever ran on attribute removal. The fix supplies both halves: an **identity signal** (`identityChanged()` — snapshot `dj-virtual` value + `dj-id` at init; `getAttribute` returns null on removal so attr-loss is covered) that makes `structureIntact()` fail closed, and a **discoverable anchor** (`reapStaleVirtualLists()` scans the never-removed `[data-dj-virtual-shell]` marker → `parentNode`) so stale containers can be reaped without iterating the map. Generalizable to any WeakMap-keyed DOM-lifecycle state: pair an identity snapshot with a DOM-queryable marker for teardown discovery.
+
+**Action taken**: Closed — shipped `identityChanged()` + `reapStaleVirtualLists()` marker-scan in PR #2036.
+
+**3. A security-guard whitelist drift needs deliberate re-verification, not a mechanical line bump.** #2032's `TestSetattrChokepoint` (a CWE-915 mass-assignment guard) was RED because a sanctioned `setattr` site drifted off its pinned `live_view.py:1213/1215`. The tempting fix is to bump the numbers to `1225/1227` and move on — but the whole *point* of the guard is that a moved `setattr(view, <non-literal key>, …)` might be a *new, unsanctioned* client-controlled write. I traced the moved sites and confirmed they're the same `DynamicLiveView` function-view-decorator applying the developer's own returned dict (`result = func(request, …)`), not a client frame — then recorded the re-verification in the whitelist comment for the next drifter. A pinned-line security assertion going RED is a prompt to re-audit, not to re-pin.
+
+**Action taken**: Closed — re-verified the moved sites are sanctioned + fixed in PR #2035.
+
+**4. Closing a coverage gap safely = soak-first, then promote (#1534).** #2032 also revealed that CI's Python job ran `pytest tests/ python/tests/` (explicit paths overriding pyproject `testpaths`), so `python/djust/tests/` — a ~4000-test suite — ran in neither CI nor the pre-push hook. Rather than fold it straight into the gating command (untested `-n auto` xdist behavior over a big newly-covered surface), it shipped as a `continue-on-error` soak step — and ran **green on its first runner run**, which de-risks the promotion. The promotion to a blocking gate + pre-push coverage is the deliberate second step.
+
+**Action taken**: Open — tracked in Action Tracker #323 (GitHub #2034).
+
+### Insights
+
+- **The drain is self-feeding.** This bucket's two issues both came *from the previous cycle*: #2032 was filed by the v1.1.0-6 #1977 subagent's sweep, and #2033 was found live-verifying v1.1.0-6's own dj-virtual work on the release it produced. Draining begets follow-ups; cutting a release begets regressions to verify.
+- **Right-sized delegation held again.** The self-contained JS bug (#2033) went to a worktree-isolated subagent with a symptom-up brief; the security-sensitive + CI-config change (#2032) stayed inline for direct control of the whitelist re-verification. Both patterns from the v1.1.0-5/-6 drains repeated cleanly.
+- **The #1534 soak paid off with zero drama** — the soak step was green on the first runner run, so the caution cost nothing and the promotion (#2034) is now low-risk. The rule earns its keep even when the feared flakiness doesn't materialize.
+
+### Review Stats
+
+| Metric | PR #2035 | PR #2036 | Total |
+|--------|----------|----------|-------|
+| Issues closed | 1 (#2032) | 1 (#2033) | 2 |
+| Tests added | 0 (re-greened 2) | 3 | 3 (+2 re-greened) |
+| Gate-off sentinel (#1468) | ✓ | ✓ | 2/2 |
+| CI failures | 0 | 0 | 0 |
+| Follow-ups filed | #2034 | — | 1 |
+| Bundle delta (gzipped) | — | +212 B | +212 B |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no new canon — findings 1-3 reinforce existing canon (#1849 browser-verify, WeakMap/teardown is a code pattern, #1197/#1516 verify-don't-assume applied to a security whitelist). Finding 4 is a CI-config change tracked as #2034.
+**CI**: `.github/workflows/test.yml` gained a `continue-on-error` `python/djust/tests/` soak step (#2032).
+**Checklist / Pipeline template / Skills**: none.
+
+### Open Items
+
+- [ ] Promote the `python/djust/tests/` CI soak step to a blocking gate + add to the pre-push hook — tracked in Action Tracker #323 (GitHub #2034)
+- [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried forward
 
 ## v1.1.0-6 — retro-tail + carryover drain (PRs #2029/#2030/#2031)
 
@@ -458,7 +511,7 @@ The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut r
 
 ### Open Items
 
-- [ ] CI Python job omits `python/djust/tests/` (hides a RED security-structural test) — tracked in Action Tracker #322 (GitHub #2032)
+- [x] CI Python job omits `python/djust/tests/` (hides a RED security-structural test) — tracked in Action Tracker #322 (GitHub #2032) — resolved in v1.1.0-7 (PR #2035); gate-promotion follow-up #323 (#2034)
 - [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried from v1.1.0-5
 
 ## v1.1.0-5 — downstream-gotcha open-issue drain (PRs #2005–#2019)
