@@ -218,7 +218,10 @@ repos:
       # compiled `.so` so `import djust._rust` keeps working. See #1810.
       - id: pytest
         name: pytest
-        entry: bash -c 'WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath)"; PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ -q'
+        # #2034 — include python/djust/tests/ so the pre-push suite matches the
+        # (now-blocking) CI Python job; the explicit paths override pyproject's
+        # testpaths, which is how this dir was historically absent from both.
+        entry: bash -c 'WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath)"; PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ python/djust/tests/ -q'
         language: system
         types: [python]
         pass_filenames: false
