@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **VDOM stale-baseline reload on reconnect/state-restore (#1977).** After a
+  WebSocket reconnect / state-restore between events (laptop sleep, network
+  blip, server restart), `ViewRuntime.dispatch_mount` created a fresh view whose
+  Rust diff baseline was primed from a render that did not match the client's
+  pre-disconnect live DOM. The first post-restore event was then diffed against
+  that stale baseline, landing `SetText` patches on the wrong node (often a bare
+  `#text` node) — `2/N patches failed` → an `html_recovery` reload/flicker. The
+  restore mount now sets `view._force_full_html = True`, so the first
+  post-restore render emits a full `html_update` frame: the client morphs
+  wholesale and the Rust baseline is re-primed to the live DOM, so no
+  stale-baseline diff can reach the client. One guard at the converged
+  `mounted_from_restore` seam covers both restore mechanisms (session-saved-state
+  + signed-snapshot HMAC) and all transports (WS `handle_mount` is a thin shim to
+  `dispatch_mount`; SSE + runtime use it directly). Scoped to the restore path —
+  a fresh mount still renders a normal VDOM patch (no perf regression). Regression
+  coverage: 3 cases in `python/djust/tests/test_stale_baseline_restore_1977.py`.
 - **Converged the WebSocket and runtime async-callback dispatch onto one shared helper (#2020).** #2016 fixed a #1646 parallel-path drift — an async `@background` handler silently failed on the converged runtime path because `ViewRuntime._execute_async_task` routed every callback through `sync_to_async` (raising `TypeError: sync_to_async can only be applied to sync functions`) while the WS consumer's `_run_async_work` awaited async callbacks directly — but it fixed it by *copying* the coroutine-dispatch branch, leaving two identical copies primed to re-drift. This extracts the dispatch into one `run_async_callback` in `mixins/async_work.py` that both transports now delegate to, so the sync/async handling can never diverge again. New `test_async_dispatch_parity_2020.py`: 4 behavioral cases over the shared helper (including the async-def gate-off sentinel) + 3 structural pins asserting both paths call the helper, neither keeps its own `iscoroutinefunction(callback)` branch, and the helper is the single definition in the package.
 ### Added
 
