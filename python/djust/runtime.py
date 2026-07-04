@@ -2228,6 +2228,42 @@ class ViewRuntime:
         # (skip_html_for_resume) — Phase 3.0 wired the read; this sets it.
         view_instance._mounted_from_restore = mounted_from_restore
 
+        # #1977 — re-sync the diff baseline to the client's LIVE DOM on a
+        # reconnect / state-restore mount. On a resume the fresh view's Rust diff
+        # baseline is primed from a render that does NOT match the client's
+        # pre-disconnect DOM (which already reflects the restored/filtered state);
+        # diffing the FIRST post-restore EVENT against that stale baseline lands
+        # SetText patches on the wrong node (often a bare ``#text`` node) →
+        # ``2/N patches failed`` → an ``html_recovery`` reload/flicker. Forcing the
+        # first post-restore render to emit a FULL-HTML frame makes the client
+        # morph wholesale and re-primes the Rust baseline to the live DOM, so no
+        # stale-baseline diff can ever reach the client.
+        #
+        # RENDER-TIMING (traced, load-bearing): the mount-time ``render_with_diff``
+        # (~line 2375 / for actor mounts the actor render) READS ``_force_full_html``
+        # but never RESETS it — every reset lives in the transport-level EVENT /
+        # url_change dispatch (``_render_and_send`` runtime.py:4093-4094,
+        # ``dispatch_url_change`` runtime.py:3725-3726, and the WS twins
+        # websocket.py:1650-1651 / 4115-4116). On a resume the mount HTML is
+        # dropped (``skip_html_for_resume`` = ``mounted_from_restore and
+        # has_prerendered``), so the flag SURVIVES the mount frame and is consumed
+        # by the FIRST post-restore event render — which discards patches and sends
+        # a full ``html_update``. The flag is snapshot-excluded
+        # (``_FRAMEWORK_INTERNAL_ATTRS``, live_view.py:143) so it never leaks into a
+        # saved snapshot.
+        #
+        # Parallel-path (#1646): this ONE guard covers BOTH restore mechanisms —
+        # session-saved-state (~2104) and signed-snapshot HMAC (~2154) — because
+        # both funnel to ``mounted_from_restore`` here; and — since WS
+        # ``handle_mount`` is a thin shim to ``dispatch_mount`` (websocket.py:2209)
+        # — it covers WS + SSE + runtime. The HTTP GET path renders the full page
+        # and primes its baseline against the same served state (request.py:276-282,
+        # no cross-event stale baseline); the HTTP POST fallback re-restores +
+        # re-renders atomically in each stateless request — neither has a persistent
+        # mount baseline that a later event diffs against, so neither needs this.
+        if mounted_from_restore:
+            view_instance._force_full_html = True
+
         if not mounted_from_restore:
             try:
                 await sync_to_async(view_instance.mount)(request, **mount_kwargs)
