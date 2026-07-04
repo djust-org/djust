@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VDOM stale-baseline reload on reconnect/state-restore (#1977).** After a
+  WebSocket reconnect / state-restore between events (laptop sleep, network
+  blip, server restart), `ViewRuntime.dispatch_mount` created a fresh view whose
+  Rust diff baseline was primed from a render that did not match the client's
+  pre-disconnect live DOM. The first post-restore event was then diffed against
+  that stale baseline, landing `SetText` patches on the wrong node (often a bare
+  `#text` node) — `2/N patches failed` → an `html_recovery` reload/flicker. The
+  restore mount now sets `view._force_full_html = True`, so the first
+  post-restore render emits a full `html_update` frame: the client morphs
+  wholesale and the Rust baseline is re-primed to the live DOM, so no
+  stale-baseline diff can reach the client. One guard at the converged
+  `mounted_from_restore` seam covers both restore mechanisms (session-saved-state
+  + signed-snapshot HMAC) and all transports (WS `handle_mount` is a thin shim to
+  `dispatch_mount`; SSE + runtime use it directly). Scoped to the restore path —
+  a fresh mount still renders a normal VDOM patch (no perf regression). Regression
+  coverage: 3 cases in `python/djust/tests/test_stale_baseline_restore_1977.py`.
+
 ## [1.1.0rc5] - 2026-07-03
 
 ### Security
