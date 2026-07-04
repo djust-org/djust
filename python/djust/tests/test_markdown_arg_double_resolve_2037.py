@@ -94,6 +94,17 @@ class TestMarkdownHandlerResolvedSource:
         # Heading rendered as markdown, not literal '##' inside a tuple repr.
         assert "<h2" in out
 
+    def test_source_shaped_like_kwarg_uses_tuple_fallback(self):
+        """Residual case for the markdown defence-in-depth branch: a resolved
+        value with NO leading whitespace shaped like ``key=value`` still matches
+        the kwarg-token regex, so `_resolve_arg` returns a tuple. The positional
+        source must NOT become a Python-tuple-repr — `markdown.py`'s
+        ``isinstance(src_raw, tuple)`` fallback uses the raw source string."""
+        src = "y=mx+b is the line equation"
+        out = MarkdownTagHandler().render([src], {})
+        assert "', '" not in out and "('" not in out, f"tuple-repr leaked: {out!r}"
+        assert "mx+b is the line equation" in out
+
 
 # --- Integration level: the real Rust render path (reproduction fidelity) ------
 
