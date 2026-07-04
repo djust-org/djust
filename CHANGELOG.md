@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **dj-virtual overlapping/garbled content after SPA navigation (#2033).**
+  SPA-style navigation (same page, no reload) can reuse the SAME physical
+  `[dj-virtual]` container node across a view/data-source change instead of
+  remounting. Client virtualization state lives in a `WeakMap` keyed on the
+  container node's identity, and the never-removed shell/spacer survive the
+  server morph, so nothing tore the old virtualization down: viewing a
+  virtualized thread then navigating to a small non-virtualized thread left a
+  leftover row from the previous thread rendered at the shell's stale
+  `translateY`, overlapping the new view's real rows (a full page reload fixed
+  it). Three client gaps closed in `29-virtual-list.js`: `structureIntact()`
+  now fails closed on identity change (dj-virtual removed / value changed /
+  dj-id changed) so a repurposed container is never treated as still
+  virtualized; a new `reapStaleVirtualLists()` discovers tracked containers via
+  the never-removed `data-dj-virtual-shell` marker (the `WeakMap` isn't
+  iterable) and tears down any whose identity changed — WITHOUT restoring the
+  old item pool (the morph already authored the new content), re-virtualizing
+  fresh if the container still carries `dj-virtual`; and `absorbLooseChildren()`
+  no longer accumulates loose children across an identity change, so the
+  previous thread's rows and the new thread's rows can't merge into one pool.
+  The normal same-thread self-heal (#1988/#1989 absorb path) is unchanged — the
+  fix is scoped to the identity-CHANGE case. Regression coverage: 3 cases in
+  `tests/js/dj-virtual-teardown-2033.test.js` (attr-loss teardown, dj-id-change
+  re-virtualize-fresh with no cross-source merge, and a same-thread absorb
+  regression guard), with a gate-off sentinel that turns the two
+  identity-change cases RED when the teardown is disabled.
+
 ## [1.1.0rc6] - 2026-07-03
 
 ### Fixed
