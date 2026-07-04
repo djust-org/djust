@@ -19,6 +19,21 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-7 — post-rc6 live-verify drain (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-04) of what surfaced after cutting 1.1.0rc6: a
+dj-virtual client-state teardown regression found live-verifying the #1988/#1989
+fix on rc6 (#2033), plus the CI-coverage gap the v1.1.0-6 drain filed (#2032 —
+CI omits `python/djust/tests/`, hiding a RED CWE-915 setattr-chokepoint guard).
+Deferred and NOT in this bucket: #2017 (large dj-virtual server-side-reconcile
+enhancement, the architectural sibling of #2033), #1561/#1562 (`priority:low`
+bug-capture feature tracks).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | dj-virtual client state has no attribute-driven teardown (#2033) | SPA-nav reusing a container across a view-identity change leaves stale `dj-virtual` state in the `WeakMap`; `structureIntact()` never checks the attr is still present and `absorbLooseChildren()` `push()`es cross-view content into one pool → overlapping/garbled rows. Wire `teardownVirtualList()` on attr-loss + stop cross-source accumulation | v1.1.0 |
+| **P2** | CI omits `python/djust/tests/` — hides a RED security-structural test (#2032) | `.github/workflows/test.yml:165` runs `pytest tests/ python/tests/` (overrides `testpaths`); the `TestSetattrChokepoint` CWE-915 guard is RED on `main` (stale `_SETATTR_WHITELIST` line-pins). Deliberate whitelist update + add the dir to CI (`continue-on-error` first per #1534) | v1.1.0 |
+
 ## v1.1.0-6 — retro-tail + carryover drain (drain bucket → ships in 1.1.0) ✅
 
 **Complete (2026-07-03)** — all 3 issues closed: #1977 (PR #2031), #2020 (PR #2030), #2028 (PR #2029); #2027 closed-without-code. Follow-up #2032 filed (CI omits `python/djust/tests/`). Retro: RETRO.md §v1.1.0-6.
