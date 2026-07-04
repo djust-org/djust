@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`{% djust_markdown %}` (and any custom tag) corrupted a loop/include-scoped dict-field value into a Python-tuple-repr (#2037).** The Rust custom-tag dispatch pre-resolves a bare-name argument (`block.text`) to its *value* string before handing it to the Python handler; `TagHandler._resolve_arg` then re-interpreted that already-resolved value as a template token — any value containing `=` was tuple-split, so the markdown source rendered as a literal `('...', '...')` repr (observed in a production chat app on a per-`{% for %}`/`{% include ... with %}`-scoped `block.text` whose text contained `=`); a dotted value could likewise be re-resolved against the context. `_resolve_arg` now token-guards its kwarg-split and dotted-lookup heuristics, so a non-token (Rust-resolved) value is returned verbatim; the markdown handler additionally falls back to the raw source string if a positional source ever resolves to a tuple. Root cause reproduced deterministically at the unit, handler, and real Rust-render levels — the report's streaming/loop-cache hypothesis was a red herring. New cases in `TestResolveArgNoDoubleResolution`, `TestMarkdownHandlerResolvedSource`, and `TestRealPathLoopScopedMarkdown`.
+
 - **dj-virtual overlapping/garbled content after SPA navigation (#2033).**
   SPA-style navigation (same page, no reload) can reuse the SAME physical
   `[dj-virtual]` container node across a view/data-source change instead of
