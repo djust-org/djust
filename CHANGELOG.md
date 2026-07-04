@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-virtualize-fresh with no cross-source merge, and a same-thread absorb
   regression guard), with a gate-off sentinel that turns the two
   identity-change cases RED when the teardown is disabled.
+### Changed
+
+- **CI now covers `python/djust/tests/`, and the stale setattr-chokepoint security guard is green again (#2032).** The gating Python job ran `pytest tests/ python/tests/` — explicit paths that override pyproject's `testpaths` — so a large suite (V008 checks, mount-chokepoint structural pins, restore tests) ran in neither CI nor the pre-push hook. As a result the `TestSetattrChokepoint` CWE-915 mass-assignment guard had been RED on `main` undetected (a sanctioned `DynamicLiveView` function-view-decorator `setattr` site drifted off the whitelist's pinned line numbers). The whitelist is re-verified and corrected, and `python/djust/tests/` is added to CI as a non-gating soak step (`continue-on-error`, per the #1534 green-on-runner-first rule); promotion to a blocking gate + pre-push coverage is tracked in #2034. No runtime/behavior change.
 
 ## [1.1.0rc6] - 2026-07-03
 

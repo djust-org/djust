@@ -164,6 +164,21 @@ jobs:
         run: |
           PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -v -n auto
 
+      # #2032 — python/djust/tests/ was historically absent from the gating
+      # Python step: the explicit `tests/ python/tests/` paths override
+      # pyproject's `testpaths` (which DOES list python/djust/tests), so a large
+      # suite (V008 checks, mount-chokepoint structural pins, restore tests) ran
+      # in NEITHER CI nor the pre-push hook — and a RED TestSetattrChokepoint
+      # CWE-915 guard sat undetected on main. This runs it as a SOAK step
+      # (continue-on-error) per the #1534 rule: a CI surface the dev machine
+      # can't fully mirror (-n auto xdist over ~4000 newly-covered tests) ships
+      # non-gating until proven green on the runner. Promotion to a blocking
+      # gate + pre-push coverage is tracked in #2034.
+      - name: Run djust-package tests (python/djust/tests, soak — #2032)
+        continue-on-error: true
+        run: |
+          PYTHONPATH=. .venv/bin/python -m pytest python/djust/tests/ -v -n auto
+
       - name: Run Python linter
         run: uv run ruff check python/
 
