@@ -164,18 +164,19 @@ jobs:
         run: |
           PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -v -n auto
 
-      # #2032 — python/djust/tests/ was historically absent from the gating
-      # Python step: the explicit `tests/ python/tests/` paths override
+      # #2032 / #2034 — python/djust/tests/ was historically absent from the
+      # gating Python step: the explicit `tests/ python/tests/` paths override
       # pyproject's `testpaths` (which DOES list python/djust/tests), so a large
       # suite (V008 checks, mount-chokepoint structural pins, restore tests) ran
       # in NEITHER CI nor the pre-push hook — and a RED TestSetattrChokepoint
-      # CWE-915 guard sat undetected on main. This runs it as a SOAK step
-      # (continue-on-error) per the #1534 rule: a CI surface the dev machine
-      # can't fully mirror (-n auto xdist over ~4000 newly-covered tests) ships
-      # non-gating until proven green on the runner. Promotion to a blocking
-      # gate + pre-push coverage is tracked in #2034.
-      - name: Run djust-package tests (python/djust/tests, soak — #2032)
-        continue-on-error: true
+      # CWE-915 guard sat undetected on main. It first shipped as a #1534 SOAK
+      # step (continue-on-error) and ran GREEN on the main push-CI run at
+      # 72d78601, satisfying the "green-on-runner-first" precondition. It is now
+      # a BLOCKING step (#2034): a failure here fails python-tests → fails the
+      # test-summary AND-gate (per the #1713 promote-into-the-AND-condition
+      # rule). The matching pre-push hook coverage is added in
+      # .pre-commit-config.yaml's pytest hook.
+      - name: Run djust-package tests (python/djust/tests — #2032/#2034)
         run: |
           PYTHONPATH=. .venv/bin/python -m pytest python/djust/tests/ -v -n auto
 
