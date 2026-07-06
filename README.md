@@ -70,11 +70,11 @@ everything click.
 ### Template Anatomy
 
 ```html
-{% load djust_tags %}
+{% load live_tags %}
 <!DOCTYPE html>
 <html>
 <head>
-    {% djust_scripts %}              {# Loads the client runtime #}
+    {% djust_client_config %}        {# Emits client config meta tags; djust auto-injects the client runtime #}
 </head>
 <body dj-view="{{ dj_view_id }}">   {# Identifies the WebSocket session #}
     <div dj-root>                    {# Reactive boundary — only this is diffed #}
@@ -88,7 +88,7 @@ everything click.
 
 | Attribute | Where | Purpose |
 |---|---|---|
-| `{% djust_scripts %}` | `<head>` | Injects client JavaScript |
+| `{% djust_client_config %}` | `<head>` | Emits client config meta tags; djust auto-injects the ~5KB client runtime into every LiveView response — no manual `<script>` tag needed |
 | `dj-view="{{ dj_view_id }}"` | `<body>` | Connects page to WebSocket session |
 | `dj-root` | Inner `<div>` | Marks the reactive region; only HTML inside is diffed and patched |
 
@@ -232,12 +232,12 @@ class CounterView(LiveView):
 `myapp/templates/counter.html`:
 
 ```html
-{% load djust_tags %}
+{% load live_tags %}
 <!DOCTYPE html>
 <html>
 <head>
     <title>Counter</title>
-    {% djust_scripts %}
+    {% djust_client_config %}
 </head>
 <body dj-view="{{ dj_view_id }}">
     <div dj-root>

@@ -67,7 +67,7 @@ def get_context_data(self, **kwargs):
 ```html
 <head>
     <title>{{ page_title }}</title>
-    {% djust_scripts %}
+    {% djust_client_config %}
 </head>
 ```
 
@@ -106,7 +106,7 @@ For the initial page load, include standard `<meta>` tags in your template as us
     <title>{{ page_title }}</title>
     <meta name="description" content="{{ page_description }}">
     <meta property="og:title" content="{{ page_title }}">
-    {% djust_scripts %}
+    {% djust_client_config %}
 </head>
 ```
 

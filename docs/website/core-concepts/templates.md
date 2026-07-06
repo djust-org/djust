@@ -10,8 +10,8 @@ Every LiveView template needs two things:
 <!DOCTYPE html>
 <html>
 <head>
-    {% load djust_tags %}
-    {% djust_scripts %}   {# Loads the ~5KB client JS #}
+    {% load live_tags %}
+    {% djust_client_config %}   {# Emits client config meta tags; djust auto-injects the ~5KB client JS #}
 </head>
 <body dj-view="{{ dj_view_id }}">   {# Connects page to WebSocket session #}
     <div dj-root>                    {# Reactive region — only this is patched #}
@@ -22,7 +22,7 @@ Every LiveView template needs two things:
 </html>
 ```
 
-- `{% djust_scripts %}` — injects the client JavaScript
+- `{% djust_client_config %}` — emits client config meta tags; djust auto-injects the client JavaScript into every LiveView response (no manual `<script>` tag needed)
 - `dj-view="{{ dj_view_id }}"` — on `<body>`, binds the page to the session (use the context variable `dj_view_id`)
 - `dj-root` — marks the reactive subtree; only HTML inside this element is diffed and patched
 

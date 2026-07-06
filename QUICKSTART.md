@@ -99,8 +99,8 @@ class CounterView(LiveView):
 <html>
 <head>
     <title>Counter</title>
-    {% load djust_tags %}
-    {% djust_scripts %}
+    {% load live_tags %}
+    {% djust_client_config %}
 </head>
 <body dj-view="{{ dj_view_id }}">
     <div dj-root>

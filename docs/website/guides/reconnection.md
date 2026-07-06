@@ -161,9 +161,9 @@ Form recovery and backoff with jitter work identically over the SSE (Server-Sent
 ## Example: Full Reconnection-Resilient Form
 
 ```html
-{% load djust_tags %}
+{% load live_tags %}
 <html>
-<head>{% djust_scripts %}</head>
+<head>{% djust_client_config %}</head>
 <body dj-view="{{ dj_view_id }}">
   <div dj-root>
     <form dj-submit="save_form">
