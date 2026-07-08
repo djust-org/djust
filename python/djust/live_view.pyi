@@ -23,6 +23,12 @@ from .session_utils import Stream
 # islands importing it resolve against this stub.
 _FRAMEWORK_INTERNAL_ATTRS: frozenset[str]
 
+# Raised (DEBUG only) when a Django Model/QuerySet is found on public
+# LiveView state during client-signed persistence capture. Declared here
+# so strict islands importing it (e.g. runtime.py) resolve against this
+# stub instead of getting an attr-defined error.
+class NonPersistableStateError(TypeError): ...
+
 class LiveView(
     StreamsMixin,
     StreamingMixin,
