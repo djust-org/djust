@@ -177,12 +177,17 @@ class AssignTagHandler(TagHandler):
     nodes that follow the tag. This mirrors Django tags like
     ``{% regroup ... as var %}`` and ``{% with ... %}``.
 
-    Assign handlers receive the **raw** (unresolved) tag args and
-    resolve them against the supplied context themselves via
-    :meth:`TagHandler._resolve_arg`. Keeping args raw preserves source
-    variable *names* (e.g. the list in ``{% regroup cities by ... %}``)
-    and avoids resolving attribute-name operands (the ``by <attr>``
-    token) as if they were context variables.
+    Arg resolution happens **in the Rust engine before ``render`` is
+    called**: ``render_nodes_with_loader`` applies ``resolve_tag_arg`` to
+    *every* arg (``renderer.rs`` — the assign-tag branches at ``:167``,
+    ``:277``, ``:349``, ``:1220``), JSON-encoding structured (list/object)
+    values so a source list arrives as a JSON string. Handlers therefore
+    receive **already-resolved** args, not raw tokens. One consequence:
+    an ``<attr>`` operand whose name collides with a context key is
+    resolved to that key's value rather than staying a literal attribute
+    name (Django, by contrast, never resolves the attr against the outer
+    context) — see :class:`~djust.template_tags.regroup.RegroupTagHandler`
+    for how that edge is detected and surfaced.
     """
 
     def render(self, args: List[str], context: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[override]

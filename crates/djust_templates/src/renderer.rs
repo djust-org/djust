@@ -158,10 +158,14 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
 
         match node {
             Node::AssignTag { name, args } => {
-                // Resolve variable references in args using the same
-                // JSON-aware semantics as `Node::CustomTag`, so
-                // structured (list/object) values survive as JSON for
-                // the handler instead of collapsing to "[List]".
+                // Resolve variable references in args, mirroring only the
+                // JSON *encoding* of `Node::CustomTag` (structured
+                // list/object values survive as JSON instead of collapsing
+                // to "[List]"). NB: the *resolution mechanism* is not
+                // identical — `CustomTag` uses `get_value` (filter-aware,
+                // e.g. `x|upper`), whereas `resolve_tag_arg` uses plain
+                // `context.get` (no filter support), consistent with
+                // regroup's documented "no filter expressions" limitation.
                 let resolved_args: Vec<String> = args
                     .iter()
                     .map(|arg| resolve_tag_arg(arg, active_ctx))
@@ -1181,6 +1185,12 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             }
                         }
                     } else {
+                        // NB: this inline resolver is NOT JSON-aware — a
+                        // list/object arg collapses to the opaque "[List]" /
+                        // "[Object]" placeholder here, unlike `CustomTag` and
+                        // `AssignTag` which route through `value_to_arg_string`.
+                        // Un-updated parallel path; retiring the collapse
+                        // class via one shared helper is tracked in #2042.
                         match context.get(arg_trimmed) {
                             Some(resolved) => resolved.to_string(),
                             None => arg.clone(),

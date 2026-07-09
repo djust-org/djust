@@ -23,20 +23,39 @@ Known limitations vs. Django:
 * The ``<expr>`` source must resolve to a JSON-encodable sequence
   (django-normalised context values always are). Filter expressions on
   the source (``cities|dictsort:"country"``) are not supported.
-* Because djust resolves *all* assign-tag args against the context, a
-  top-level context variable whose name exactly matches the ``<attr>``
-  token will shadow the per-item lookup. Avoid naming context keys after
-  a regroup attribute (Django never resolves the attribute against the
-  outer context, so this is a djust-specific edge).
+* **WARNING — attribute-name shadowing.** The Rust engine resolves
+  *every* assign-tag arg against the context before the handler runs, so
+  a top-level context variable whose name exactly matches the ``<attr>``
+  token shadows the per-item lookup: ``args[2]`` then arrives as that
+  variable's *value* instead of the literal attribute name, and the
+  grouping is silently wrong. djust auto-exposes public view attributes
+  to the template context, so a collision with a common attribute name
+  (``country``, ``category``, ``type``, ...) is plausible in real apps.
+  The handler emits a ``logger.warning`` when the resolved ``<attr>``
+  isn't a bare (dotted) identifier — the strongest signal we have from
+  the post-resolution vantage point. Avoid naming context keys after a
+  regroup attribute (Django never resolves the attribute against the
+  outer context, so this is a djust-specific edge). The durable fix
+  (pass the ``by``/``<attr>``/``as`` operands to the handler unresolved)
+  is tracked in #2041.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import re
 from itertools import groupby
 from typing import Any, Dict, List
 
 from . import AssignTagHandler, register_assign
+
+logger = logging.getLogger(__name__)
+
+# A bare dotted identifier: ``country`` or ``author.team``. The ``<attr>``
+# operand should always match this; anything else means a context key
+# shadowed the attribute name (see the module docstring WARNING).
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
 @register_assign("regroup")
@@ -52,6 +71,20 @@ class RegroupTagHandler(AssignTagHandler):
             return {}
 
         expr, attr, var_name = args[0], args[2], args[4]
+
+        # If the resolved <attr> operand isn't a bare identifier, a
+        # context key most likely shadowed the attribute name (djust
+        # resolves all assign-tag args before we run). The grouping would
+        # be silently wrong, so surface it loudly. See module docstring
+        # + #2041 for the durable fix.
+        if not _IDENTIFIER_RE.match(attr):
+            logger.warning(
+                "regroup: attr operand %r resolved to a non-identifier; a "
+                "context key may be shadowing the attribute name, producing "
+                "an incorrect grouping (see #2041)",
+                attr,
+            )
+
         items = self._decode_source(expr, context)
 
         groups = [

@@ -230,3 +230,57 @@ def test_handler_matches_django_regroup_grouper_values():
         {"cities": data},
     )
     assert rust_out == django_out == "India,USA,India,"
+
+
+def test_handler_warns_when_attr_operand_is_shadowed(caplog):
+    """A non-identifier ``<attr>`` (a shadowing context key resolved the
+    attr name to a value) emits an actionable warning.
+
+    The Rust engine resolves all assign-tag args before the handler runs,
+    so a context key named after the ``<attr>`` token arrives as that
+    key's *value*. We can't recover the intended attribute name from that
+    vantage point, but a value that isn't a bare identifier is the signal
+    to warn (see the module docstring + #2041).
+    """
+    import logging
+
+    from djust.template_tags.regroup import RegroupTagHandler
+
+    handler = RegroupTagHandler()
+    # ``args[2]`` is what a shadowed attr resolves to — a value, not a name.
+    shadowed_args = ["cities", "by", "United States", "as", "gl"]
+    context = {"cities": [{"name": "NYC", "country": "USA"}]}
+
+    with caplog.at_level(logging.WARNING, logger="djust.template_tags.regroup"):
+        handler.render(shadowed_args, context)
+
+    assert any(
+        "resolved to a non-identifier" in rec.message and "United States" in rec.message
+        for rec in caplog.records
+    ), "expected a shadowing warning for a non-identifier attr operand"
+
+
+def test_handler_does_not_warn_for_normal_identifier_attr(caplog):
+    """A well-formed bare/dotted ``<attr>`` never triggers the shadow warning.
+
+    Gate for the warning above: without this, a warning on every render
+    would pass the positive test tautologically.
+    """
+    import logging
+
+    from djust.template_tags.regroup import RegroupTagHandler
+
+    handler = RegroupTagHandler()
+    context = {
+        "cities": [
+            {"name": "Mumbai", "author": {"team": "A"}},
+            {"name": "Delhi", "author": {"team": "A"}},
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="djust.template_tags.regroup"):
+        handler.render(["cities", "by", "author.team", "as", "gl"], context)
+
+    assert not any("resolved to a non-identifier" in rec.message for rec in caplog.records), (
+        "dotted identifier attr must not trigger the shadow warning"
+    )
