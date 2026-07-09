@@ -167,6 +167,73 @@ class TagHandler:
         return result if result is not None else arg
 
 
+class AssignTagHandler(TagHandler):
+    """
+    Base class for *assign* (context-mutating) template tag handlers.
+
+    Unlike :class:`TagHandler` (which emits an HTML string), an assign
+    tag handler mutates the template context: its ``render`` returns a
+    ``dict`` whose keys become context variables visible to the sibling
+    nodes that follow the tag. This mirrors Django tags like
+    ``{% regroup ... as var %}`` and ``{% with ... %}``.
+
+    Arg resolution happens **in the Rust engine before ``render`` is
+    called**: ``render_nodes_with_loader`` applies ``resolve_tag_arg`` to
+    *every* arg (``renderer.rs`` — the assign-tag branches at ``:167``,
+    ``:277``, ``:349``, ``:1220``), JSON-encoding structured (list/object)
+    values so a source list arrives as a JSON string. Handlers therefore
+    receive **already-resolved** args, not raw tokens. One consequence:
+    an ``<attr>`` operand whose name collides with a context key is
+    resolved to that key's value rather than staying a literal attribute
+    name (Django, by contrast, never resolves the attr against the outer
+    context) — see :class:`~djust.template_tags.regroup.RegroupTagHandler`
+    for how that edge is detected and surfaced.
+    """
+
+    def render(self, args: List[str], context: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[override]
+        """Return a mapping of context updates to merge for later siblings."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement render(args, context) -> dict"
+        )
+
+
+def register_assign(name: str) -> Callable[[Type[AssignTagHandler]], Type[AssignTagHandler]]:
+    """
+    Decorator to register an *assign* (context-mutating) tag handler.
+
+    The handler is instantiated and registered with the Rust template
+    engine via ``register_assign_tag_handler`` when the decorated class
+    is defined. Its ``render(args, context)`` must return a
+    ``dict[str, Any]`` of context updates (or ``None`` for a no-op).
+
+    Parameters
+    ----------
+    name : str
+        The tag name (e.g., "regroup").
+    """
+
+    def decorator(handler_class: Type[AssignTagHandler]) -> Type[AssignTagHandler]:
+        try:
+            from djust._rust import register_assign_tag_handler
+
+            handler = handler_class()
+            register_assign_tag_handler(name, handler)
+            _registered_handlers[name] = handler
+            logger.debug("Registered assign tag handler: %s", name)
+        except ImportError as e:
+            logger.warning(
+                "Could not register assign tag handler '%s': Rust extension not available (%s)",
+                name,
+                e,
+            )
+        except Exception as e:
+            logger.error("Failed to register assign tag handler '%s': %s", name, e)
+
+        return handler_class
+
+    return decorator
+
+
 def register(name: str) -> Callable[[Type[TagHandler]], Type[TagHandler]]:
     """
     Decorator to register a tag handler class.
@@ -256,8 +323,37 @@ def _register_builtins() -> None:
         from . import markdown  # noqa: F401
         from . import client_config  # noqa: F401
         from . import live_render  # noqa: F401  # #1145
+        from . import regroup  # noqa: F401  # Django {% regroup %} parity
     except ImportError as e:
         logger.debug("Could not import built-in handlers: %s", e)
+
+
+def reregister_builtins() -> None:
+    """Re-assert the built-in ``djust.template_tags`` handlers with the Rust
+    registry (idempotent).
+
+    ``@register`` / ``@register_assign`` run once, on first import. The
+    Rust tag/assign registries are process-global and shared across an
+    xdist worker, so a test that calls ``clear_tag_handlers()`` /
+    ``clear_assign_tag_handlers()`` leaves the built-ins (``url``,
+    ``static``, ``regroup`` …) gone for the rest of the worker. This
+    re-registers every already-instantiated built-in handler from
+    ``_registered_handlers`` to its correct registry, mirroring the
+    theme/component ``register_with_rust_engine`` restore path (#1928).
+    No-op without the Rust extension.
+    """
+    try:
+        from djust._rust import register_assign_tag_handler, register_tag_handler
+    except ImportError:
+        return
+    for name, handler in list(_registered_handlers.items()):
+        try:
+            if isinstance(handler, AssignTagHandler):
+                register_assign_tag_handler(name, handler)
+            else:
+                register_tag_handler(name, handler)
+        except Exception as e:  # noqa: BLE001 — restore must never break a test
+            logger.debug("Could not re-register built-in tag handler '%s': %s", name, e)
 
 
 # Register on module load

@@ -72,6 +72,13 @@ Globals reset (and why):
   same class #1771 patched only in ``tests/unit/test_tag_registry.py`` — the
   twin polluter in ``tests/benchmarks/test_tag_registry.py`` (parallel-path
   drift, #1646) is covered here for the whole worker.
+- **Built-in template-tag handlers** (``djust.template_tags`` ``url`` /
+  ``static`` / ``regroup`` …) — same #1928 class as the app-registered
+  handlers above, but for the built-ins registered at ``djust`` import via
+  ``@register`` / ``@register_assign`` (which also run only once per
+  process). A ``clear_tag_handlers()`` / ``clear_assign_tag_handlers()``
+  polluter wipes them for the rest of the worker; re-asserting them via
+  ``reregister_builtins()`` restores them before each test.
 
 Explicitly NOT reset (would be too aggressive / not a leak):
 
@@ -207,6 +214,30 @@ def _reset_rust_tag_handlers() -> None:
             pass
 
 
+def _reset_builtin_template_tags() -> None:
+    """Re-assert the ``djust.template_tags`` built-in handlers (#1928 class).
+
+    Sibling to ``_reset_rust_tag_handlers`` for the built-in ``url`` /
+    ``static`` / ``regroup`` … handlers registered at ``djust`` import via
+    ``@register`` / ``@register_assign``. Those run only ONCE per process,
+    so a test that calls ``clear_tag_handlers()`` /
+    ``clear_assign_tag_handlers()`` (the unit tag-registry / assign-tag
+    suites) leaves them gone for the rest of the worker — e.g. the
+    ``{% regroup %}`` assign handler, unregistered, would then render as an
+    unsupported tag. Re-registering BEFORE each test restores them no
+    matter which polluter ran. Idempotent and no-op without the Rust
+    extension, so it is cheap.
+    """
+    try:
+        from djust.template_tags import reregister_builtins
+    except Exception:  # noqa: BLE001 — template_tags is optional; never break the fixture.
+        return
+    try:
+        reregister_builtins()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def reset_djust_globals() -> None:
     """Reset every leak-prone djust process-global. Call BEFORE each test.
 
@@ -220,6 +251,7 @@ def reset_djust_globals() -> None:
     _reset_route_map_cache()
     _reset_id_counters()
     _reset_rust_tag_handlers()
+    _reset_builtin_template_tags()
 
 
 __all__ = ["reset_djust_globals"]
