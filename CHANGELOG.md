@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0rc7] - 2026-07-10
+
 ### Added
 
 - **Django `{% regroup %}` support in the Rust template engine (#2023).** `{% regroup <expr> by <attr> as <var> %}` now regroups a flat sequence into `[{"grouper": key, "list": [...]}, ...]`, matching Django's `RegroupNode` consecutive-grouping semantics (input order preserved, never pre-sorted). Implemented as a built-in *assign* tag handler (`RegroupTagHandler`) plus a JSON-aware `resolve_tag_arg` in `renderer.rs` that brings the assign-tag arg path to parity with `CustomTag` (structured list/object args are JSON-encoded instead of collapsing to the opaque `[List]`/`[Object]` placeholder). `<attr>` supports dotted paths (`author.team`). Known limitations vs. Django (documented on `RegroupTagHandler`): filter expressions on the source (`cities|dictsort:"country"`) are unsupported. (A context key whose name matched the `<attr>` token could originally shadow the per-item lookup; that footgun's durable fix — passing the keyword/name operands unresolved — landed in #2041, see below.) Regression coverage in `test_regroup_tag.py` drives the real Rust engine via both `render_template` and `RustLiveView.render_with_diff` with a Django-parity anchor.
