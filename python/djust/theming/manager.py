@@ -10,6 +10,7 @@ from typing import Any, Literal
 from django.conf import settings
 from django.http import HttpRequest
 
+from .._log_utils import sanitize_for_log
 from ._types import ThemePreset
 
 # Theme config reader lives in the leaf ._config module so registry.py and
@@ -325,10 +326,10 @@ class ThemeManager:
             logger.debug(
                 "Cookies (ns=%r): theme=%s, preset=%s, pack=%s, layout=%s",
                 ns,
-                theme,
-                preset,
-                pack,
-                layout,
+                sanitize_for_log(theme),
+                sanitize_for_log(preset),
+                sanitize_for_log(pack),
+                sanitize_for_log(layout),
             )
         elif self.request:
             logger.debug("Cookies skipped — LIVEVIEW_CONFIG.theme.enable_client_override=False")
@@ -345,9 +346,9 @@ class ThemeManager:
 
         logger.debug(
             "Resolved before validation: theme=%s, preset=%s, pack=%s, mode=%s",
-            theme,
-            preset,
-            pack,
+            sanitize_for_log(theme),
+            sanitize_for_log(preset),
+            sanitize_for_log(pack),
             mode,
         )
 
