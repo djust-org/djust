@@ -139,6 +139,50 @@ Clicking the button adds `highlight` to the `.title` inside the same card — no
 
 ---
 
+## Custom commands
+
+The eleven built-ins cover the common cases; `JS.ext` opens the command set
+for anything else — scroll, clipboard, a third-party library call. Register
+the implementation once in your own static JS, then chain it from Python
+like a built-in:
+
+```javascript
+// static/app.js — loaded normally (no build step, CSP-safe: no eval)
+window.djust.commands.register('scroll_to', (targets, args) => {
+    targets.forEach(el =>
+        el.scrollIntoView({ behavior: args.smooth ? 'smooth' : 'auto' })
+    );
+});
+```
+
+```python
+# views.py
+self.jump = JS.ext.scroll_to(to="#top", smooth=True).add_class("flash", to="#header")
+```
+
+```html
+<button dj-click="{{ jump }}">Back to top</button>
+```
+
+The implementation receives `(targets, args, originEl)`: `targets` is the
+resolved element list (the same `to=` / `inner=` / `closest=` rules as
+built-ins — omit all three and it's the element that fired the event), and a
+returned Promise is awaited before the next op in the chain runs.
+
+Rules worth knowing:
+
+- **Names are namespaced.** Ops serialize as `ext.scroll_to`, so a future
+  djust built-in can never collide with your command. Registering a name
+  that *is* a built-in (`register('show', …)`) throws immediately.
+- **Typos fail loud in dev.** Invoking an unregistered command shows the
+  DEBUG error overlay with a did-you-mean suggestion (and `console.error`
+  in production). Built-in typos on the Python side still raise
+  `AttributeError` at mount — `JS.ext` does not loosen the built-in surface.
+- **JS-side chains** use the explicit form: `djust.js.ext('scroll_to', {to: '#top'})`
+  or mid-chain `this.js().hide('#m').ext('scroll_to', {to: '#top'}).exec(this.el)`.
+
+---
+
 ## Command reference
 
 ### `show(selector=None, *, inner=None, closest=None, display=None, transition=None, time=None)`
