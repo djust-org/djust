@@ -10631,6 +10631,51 @@ function _createHookInstance(hookDef, el) {
             : null;
     };
 
+    // Typed values (ADR-025): dj-hook-value-<kebab> attributes exposed as
+    // this.values.<camelCase>. JSON-first coercion with raw-string fallback;
+    // a literal string that looks like JSON is written JSON-quoted
+    // (dj-hook-value-code='"007"'). LIVE reads: each access re-reads the
+    // element's CURRENT attribute, so after a server morph updates
+    // attributes, updated() sees fresh values with no staleness machinery.
+    // Read-only in v1 — write the attribute server-side instead.
+    function _valueAttrName(prop) {
+        return 'dj-hook-value-' + prop.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+    }
+    instance.values = new Proxy({}, {
+        get(_t, prop) {
+            if (typeof prop !== 'string') return undefined;
+            const raw = el.getAttribute(_valueAttrName(prop));
+            if (raw === null) return undefined;
+            try {
+                return JSON.parse(raw);
+            } catch (_err) {
+                return raw;
+            }
+        },
+        set(_t, prop) {
+            throw new TypeError(
+                `[dj-hook] this.values.${String(prop)} is read-only (ADR-025); ` +
+                'update the dj-hook-value-* attribute server-side instead'
+            );
+        },
+        has(_t, prop) {
+            return typeof prop === 'string' && el.hasAttribute(_valueAttrName(prop));
+        },
+    });
+
+    // Scoped targets (ADR-025): descendants marked dj-hook-target="name".
+    // Live subtree queries; nested hooks are NOT excluded in v1 (documented).
+    function _targetSelector(name) {
+        const esc = (window.CSS && window.CSS.escape) ? window.CSS.escape(name) : name;
+        return `[dj-hook-target="${esc}"]`;
+    }
+    instance.target = function(name) {
+        return el.querySelector(_targetSelector(name));
+    };
+    instance.targets = function(name) {
+        return Array.from(el.querySelectorAll(_targetSelector(name)));
+    };
+
     return instance;
 }
 
