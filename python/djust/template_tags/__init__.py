@@ -41,7 +41,7 @@ compatibility with Django's URL resolution and static file handling.
 
 import logging
 import re
-from typing import Any, Callable, Dict, List, Type
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Type
 
 logger = logging.getLogger(__name__)
 
@@ -177,18 +177,38 @@ class AssignTagHandler(TagHandler):
     nodes that follow the tag. This mirrors Django tags like
     ``{% regroup ... as var %}`` and ``{% with ... %}``.
 
+    Operand-resolution contract (``RESOLVE_ARG_POSITIONS``)
+    ------------------------------------------------------
     Arg resolution happens **in the Rust engine before ``render`` is
-    called**: ``render_nodes_with_loader`` applies ``resolve_tag_arg`` to
-    *every* arg (``renderer.rs`` — the assign-tag branches at ``:167``,
-    ``:277``, ``:349``, ``:1220``), JSON-encoding structured (list/object)
-    values so a source list arrives as a JSON string. Handlers therefore
-    receive **already-resolved** args, not raw tokens. One consequence:
-    an ``<attr>`` operand whose name collides with a context key is
-    resolved to that key's value rather than staying a literal attribute
-    name (Django, by contrast, never resolves the attr against the outer
-    context) — see :class:`~djust.template_tags.regroup.RegroupTagHandler`
-    for how that edge is detected and surfaced.
+    called**: the assign-tag dispatch (``renderer.rs`` —
+    ``resolve_assign_tag_args``, the single entry point shared by all four
+    dispatch sites) resolves selected args via ``resolve_tag_arg``,
+    JSON-encoding structured (list/object) values so a source list arrives
+    as a JSON string.
+
+    Which positions get resolved is governed by the class attribute
+    :attr:`RESOLVE_ARG_POSITIONS`:
+
+    * ``None`` (the default) — resolve **every** arg against the context,
+      the historical behavior, kept for any handler that doesn't opt in.
+    * a ``set[int]`` of 0-based positions — resolve **only** those
+      positions; every other arg is passed through as a **literal token**.
+
+    Passing keyword/name operands unresolved matches Django, which never
+    resolves an assign tag's ``by`` / ``<attr>`` / ``as`` / ``<var>``
+    operands against the outer context — only the source expression. This
+    closes the operand-shadowing footgun (#2041): before it, a context key
+    named like the ``<attr>`` token (djust auto-exposes public view attrs)
+    shadowed the per-item lookup, silently corrupting the grouping. See
+    :class:`~djust.template_tags.regroup.RegroupTagHandler`, which declares
+    ``RESOLVE_ARG_POSITIONS = {0}`` (resolve only the source expression).
     """
+
+    #: 0-based arg positions the Rust engine should resolve against the
+    #: render context before calling ``render``; the rest arrive as literal
+    #: tokens. ``None`` = resolve every arg (default). Read once at
+    #: registration time by ``register_assign_tag_handler`` (#2041).
+    RESOLVE_ARG_POSITIONS: ClassVar[Optional[Set[int]]] = None
 
     def render(self, args: List[str], context: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[override]
         """Return a mapping of context updates to merge for later siblings."""

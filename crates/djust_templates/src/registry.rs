@@ -26,7 +26,7 @@
 
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 /// Global registry mapping tag names to Python handler objects.
@@ -51,12 +51,29 @@ type BlockHandlerEntry = (String, Py<PyAny>);
 static BLOCK_TAG_HANDLERS: Lazy<RwLock<HashMap<String, BlockHandlerEntry>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
+/// A registered assign-tag handler plus its arg-resolution policy.
+///
+/// `resolve_positions` records which arg positions the renderer should
+/// resolve against the render context before invoking the handler
+/// (#2041). `None` = resolve *every* arg (the historical default, kept
+/// for any handler that does not opt in). `Some(set)` = resolve only the
+/// listed 0-based positions and pass the rest as literal tokens — this is
+/// how `{% regroup %}` keeps its `by`/`<attr>`/`as`/`<var>` keyword and
+/// name operands UNRESOLVED (Django parity), so a context key named like
+/// the `<attr>` token can no longer shadow the per-item lookup. Sourced
+/// from the handler's optional `RESOLVE_ARG_POSITIONS` Python attribute at
+/// registration time.
+struct AssignHandlerEntry {
+    handler: Py<PyAny>,
+    resolve_positions: Option<HashSet<usize>>,
+}
+
 /// Global registry for assign tag handlers (context-mutating tags).
 ///
 /// Handlers implement `render(args, context) -> dict[str, Any]`. The
 /// returned dict is merged into the template context for siblings
 /// following the tag in the same render iteration.
-static ASSIGN_TAG_HANDLERS: Lazy<RwLock<HashMap<String, Py<PyAny>>>> =
+static ASSIGN_TAG_HANDLERS: Lazy<RwLock<HashMap<String, AssignHandlerEntry>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Register a Python tag handler for a custom template tag.
@@ -493,6 +510,12 @@ pub fn call_handler_with_py_sidecar(
 /// method that returns a `dict[str, Any]`. Non-dict return values
 /// are treated as an empty dict (no-op) and logged by the caller.
 ///
+/// An optional `RESOLVE_ARG_POSITIONS` attribute on the handler (a
+/// `set[int]`, or `None`) declares which arg positions the renderer
+/// should resolve against the context; the rest are passed as literal
+/// tokens (#2041). Absent / `None` = resolve every arg (historical
+/// default).
+///
 /// # Arguments
 ///
 /// * `name` - Tag name (e.g., "assign_slot")
@@ -510,11 +533,33 @@ pub fn register_assign_tag_handler(
         ));
     }
 
+    // Read the handler's opt-in arg-resolution policy (#2041). A missing
+    // attribute OR an explicit `None` means "resolve every arg" (the
+    // historical default); a `set[int]` restricts resolution to those
+    // positions so keyword/name operands stay literal.
+    let resolve_positions: Option<HashSet<usize>> =
+        if handler_ref.hasattr("RESOLVE_ARG_POSITIONS")? {
+            let attr = handler_ref.getattr("RESOLVE_ARG_POSITIONS")?;
+            if attr.is_none() {
+                None
+            } else {
+                Some(attr.extract::<HashSet<usize>>()?)
+            }
+        } else {
+            None
+        };
+
     let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    registry.insert(name, handler);
+    registry.insert(
+        name,
+        AssignHandlerEntry {
+            handler,
+            resolve_positions,
+        },
+    );
     Ok(())
 }
 
@@ -552,6 +597,22 @@ pub fn assign_handler_exists(name: &str) -> bool {
         .read()
         .map(|registry| registry.contains_key(name))
         .unwrap_or(false)
+}
+
+/// Internal Rust API — the arg positions the renderer should resolve for
+/// this assign tag (#2041).
+///
+/// Returns `Some(set)` only when the registered handler declared a
+/// `RESOLVE_ARG_POSITIONS` set; the renderer then resolves ONLY those
+/// 0-based positions and passes the rest as literal tokens. Returns
+/// `None` when the handler declared no policy (or is not registered), in
+/// which case the renderer resolves every arg — the historical default.
+pub fn assign_handler_resolve_positions(name: &str) -> Option<HashSet<usize>> {
+    ASSIGN_TAG_HANDLERS.read().ok().and_then(|registry| {
+        registry
+            .get(name)
+            .and_then(|entry| entry.resolve_positions.clone())
+    })
 }
 
 /// Call a registered Python assign-tag handler with args and context.
@@ -592,10 +653,10 @@ pub fn call_assign_handler_with_py_sidecar(
         let registry = ASSIGN_TAG_HANDLERS
             .read()
             .map_err(|e| format!("Registry lock error: {e}"))?;
-        let handler_ref = registry
+        let entry = registry
             .get(name)
             .ok_or_else(|| format!("No assign handler registered for tag: {name}"))?;
-        Python::attach(|py| handler_ref.clone_ref(py))
+        Python::attach(|py| entry.handler.clone_ref(py))
     };
 
     Python::attach(|py| {

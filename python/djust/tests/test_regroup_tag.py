@@ -132,6 +132,66 @@ def test_regroup_missing_source_variable_is_safe():
     assert out == ""
 
 
+def test_regroup_attr_operand_is_not_shadowed_by_context_key():
+    """A top-level context key named after the ``<attr>`` must NOT shadow
+    the per-item lookup (#2041 — the durable operand-shadow fix).
+
+    Django never resolves ``<attr>`` against the outer context. Before
+    #2041 the Rust engine resolved *every* assign-tag arg, so a context
+    key named ``country`` (auto-exposed public view attrs make this
+    plausible) shadowed ``args[2]``: it arrived as that key's *value*
+    (``"usa"``) instead of the literal attribute name ``country``. Each
+    city dict then had no ``"usa"`` key, so every row collapsed into ONE
+    bogus group keyed on ``None`` — silently wrong grouping.
+
+    Note: ``"usa"`` is itself a bare identifier, so the #2023
+    ``logger.warning`` mitigation (fired only for *non*-identifier
+    resolved attrs) never caught this shape. The durable fix passes the
+    keyword/name operands unresolved, so the shadow is impossible.
+    """
+    ctx = {
+        # Same name as the ``<attr>`` operand — the shadow trigger.
+        "country": "usa",
+        "cities": [
+            {"name": "Mumbai", "country": "India"},
+            {"name": "Calcutta", "country": "India"},
+            {"name": "New York", "country": "USA"},
+            {"name": "Chicago", "country": "USA"},
+        ],
+    }
+    out = render_template(TEMPLATE, ctx)
+    # Grouping keys must be the per-item country values, NOT one bogus
+    # group keyed off the shadow value.
+    assert out == "India[Mumbai,Calcutta,]USA[New York,Chicago,]"
+
+
+def test_regroup_dotted_attr_operand_is_not_shadowed_by_context_key():
+    """Dotted ``by author.team`` still resolves as a literal per-item path
+    even when a context key named ``author`` exists (#2041).
+
+    Guards that the operand-unresolved fix does not break dotted-path
+    grouping: ``author.team`` must be traversed against each item, not
+    resolved against the outer ``author`` context key.
+    """
+    template = (
+        "{% regroup posts by author.team as teams %}"
+        "{% for group in teams %}"
+        "{{ group.grouper }}({% for p in group.list %}{{ p.title }} {% endfor %})"
+        "{% endfor %}"
+    )
+    ctx = {
+        # A shadowing top-level ``author`` key.
+        "author": {"team": "ShadowTeam"},
+        "posts": [
+            {"title": "A", "author": {"team": "Platform"}},
+            {"title": "B", "author": {"team": "Platform"}},
+            {"title": "C", "author": {"team": "Growth"}},
+        ],
+    }
+    out = render_template(template, ctx)
+    assert out == "Platform(A B )Growth(C )"
+
+
 # ---------------------------------------------------------------------------
 # LiveView diff path (render_with_diff)
 # ---------------------------------------------------------------------------
@@ -232,55 +292,16 @@ def test_handler_matches_django_regroup_grouper_values():
     assert rust_out == django_out == "India,USA,India,"
 
 
-def test_handler_warns_when_attr_operand_is_shadowed(caplog):
-    """A non-identifier ``<attr>`` (a shadowing context key resolved the
-    attr name to a value) emits an actionable warning.
+def test_regroup_handler_declares_resolve_only_source():
+    """The handler opts into literal keyword/name operands (#2041).
 
-    The Rust engine resolves all assign-tag args before the handler runs,
-    so a context key named after the ``<attr>`` token arrives as that
-    key's *value*. We can't recover the intended attribute name from that
-    vantage point, but a value that isn't a bare identifier is the signal
-    to warn (see the module docstring + #2041).
+    ``RESOLVE_ARG_POSITIONS = {0}`` is the contract the Rust engine reads
+    at registration time to resolve ONLY the source expression and pass
+    ``by`` / ``<attr>`` / ``as`` / ``<var>`` through as literal tokens.
+    Pinning it here couples the declaration to the operand-shadow fix: an
+    accidental widening (e.g. back to ``None`` = resolve-all) reopens the
+    shadowing bug the end-to-end tests above guard.
     """
-    import logging
-
     from djust.template_tags.regroup import RegroupTagHandler
 
-    handler = RegroupTagHandler()
-    # ``args[2]`` is what a shadowed attr resolves to — a value, not a name.
-    shadowed_args = ["cities", "by", "United States", "as", "gl"]
-    context = {"cities": [{"name": "NYC", "country": "USA"}]}
-
-    with caplog.at_level(logging.WARNING, logger="djust.template_tags.regroup"):
-        handler.render(shadowed_args, context)
-
-    assert any(
-        "resolved to a non-identifier" in rec.message and "United States" in rec.message
-        for rec in caplog.records
-    ), "expected a shadowing warning for a non-identifier attr operand"
-
-
-def test_handler_does_not_warn_for_normal_identifier_attr(caplog):
-    """A well-formed bare/dotted ``<attr>`` never triggers the shadow warning.
-
-    Gate for the warning above: without this, a warning on every render
-    would pass the positive test tautologically.
-    """
-    import logging
-
-    from djust.template_tags.regroup import RegroupTagHandler
-
-    handler = RegroupTagHandler()
-    context = {
-        "cities": [
-            {"name": "Mumbai", "author": {"team": "A"}},
-            {"name": "Delhi", "author": {"team": "A"}},
-        ]
-    }
-
-    with caplog.at_level(logging.WARNING, logger="djust.template_tags.regroup"):
-        handler.render(["cities", "by", "author.team", "as", "gl"], context)
-
-    assert not any("resolved to a non-identifier" in rec.message for rec in caplog.records), (
-        "dotted identifier attr must not trigger the shadow warning"
-    )
+    assert RegroupTagHandler.RESOLVE_ARG_POSITIONS == {0}

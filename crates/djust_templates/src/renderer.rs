@@ -166,10 +166,9 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
                 // e.g. `x|upper`), whereas `resolve_tag_arg` uses plain
                 // `context.get` (no filter support), consistent with
                 // regroup's documented "no filter expressions" limitation.
-                let resolved_args: Vec<String> = args
-                    .iter()
-                    .map(|arg| resolve_tag_arg(arg, active_ctx))
-                    .collect();
+                // Keyword/name operands the handler declares literal
+                // (RESOLVE_ARG_POSITIONS) are passed raw (#2041).
+                let resolved_args = resolve_assign_tag_args(name, args, active_ctx);
                 let context_map = active_ctx.to_hashmap();
                 // Forward the raw-Python sidecar so assign handlers
                 // can reach Python-only context (request, view) the
@@ -276,6 +275,46 @@ fn resolve_tag_arg(arg: &str, context: &Context) -> String {
     }
 }
 
+/// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared
+/// `RESOLVE_ARG_POSITIONS` policy (#2041).
+///
+/// Django never resolves an assign tag's keyword/name operands (e.g.
+/// `{% regroup <source> by <attr> as <var> %}`'s `by` / `<attr>` / `as` /
+/// `<var>`) against the outer context — only the source *expression*. The
+/// Rust engine historically resolved *every* arg via [`resolve_tag_arg`],
+/// so a context variable named like the `<attr>` token (djust auto-exposes
+/// public view attrs) shadowed the per-item lookup: `<attr>` arrived as
+/// that variable's value instead of the literal attribute name, and the
+/// grouping was silently wrong.
+///
+/// A handler opts into literal operands by declaring a
+/// `RESOLVE_ARG_POSITIONS` set (`{0}` for `regroup` — resolve only the
+/// source). Positions in the set are resolved via [`resolve_tag_arg`]
+/// (JSON-encoding structured values); every other position is passed
+/// through as a raw token. When the handler declares no policy the set is
+/// `None` and every arg is resolved — the historical default, unchanged
+/// for any future assign tag that doesn't opt in.
+///
+/// This is the single arg-resolution entry point for ALL FOUR assign-tag
+/// dispatch sites (`render_nodes_with_loader`, `render_nodes_collecting`,
+/// `render_nodes_partial`, and the individual `render_node_with_loader`
+/// arm) — the #1646 parallel-path cure, so the operand-mask can never drift
+/// between them.
+fn resolve_assign_tag_args(name: &str, args: &[String], context: &Context) -> Vec<String> {
+    let resolve_positions = crate::registry::assign_handler_resolve_positions(name);
+    args.iter()
+        .enumerate()
+        .map(|(i, arg)| match &resolve_positions {
+            // Handler opted into literal operands and this position is NOT
+            // one it wants resolved: pass the raw token (Django parity —
+            // no context shadowing possible).
+            Some(positions) if !positions.contains(&i) => arg.clone(),
+            // Declared-to-resolve position, or no policy (resolve all).
+            _ => resolve_tag_arg(arg, context),
+        })
+        .collect()
+}
+
 /// Render all nodes and return full HTML plus per-node fragments.
 ///
 /// Used on the first render to populate the per-node HTML cache.
@@ -298,11 +337,9 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
 
         let frag = match node {
             Node::AssignTag { name, args } => {
-                // Resolve args (JSON-aware) as in render_nodes_with_loader.
-                let resolved_args: Vec<String> = args
-                    .iter()
-                    .map(|arg| resolve_tag_arg(arg, active_ctx))
-                    .collect();
+                // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
+                // as in render_nodes_with_loader (#2041).
+                let resolved_args = resolve_assign_tag_args(name, args, active_ctx);
                 let context_map = active_ctx.to_hashmap();
                 // Forward raw-Python sidecar (#1167).
                 let raw_py = active_ctx.raw_py_objects();
@@ -370,11 +407,9 @@ pub fn render_nodes_partial<L: TemplateLoader>(
         if needs_render {
             let html = match node {
                 Node::AssignTag { name, args } => {
-                    // Resolve args (JSON-aware) as in render_nodes_with_loader.
-                    let resolved_args: Vec<String> = args
-                        .iter()
-                        .map(|arg| resolve_tag_arg(arg, active_ctx))
-                        .collect();
+                    // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
+                    // as in render_nodes_with_loader (#2041).
+                    let resolved_args = resolve_assign_tag_args(name, args, active_ctx);
                     let context_map = active_ctx.to_hashmap();
                     // Forward raw-Python sidecar (#1167).
                     let raw_py = active_ctx.raw_py_objects();
@@ -1224,11 +1259,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // result — there's no way to propagate context mutations
             // without a sibling to pass them to. Emits empty string.
             //
-            // Resolve args (JSON-aware) as in render_nodes_with_loader.
-            let resolved_args: Vec<String> = args
-                .iter()
-                .map(|arg| resolve_tag_arg(arg, context))
-                .collect();
+            // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
+            // as in render_nodes_with_loader (#2041).
+            let resolved_args = resolve_assign_tag_args(name, args, context);
             let context_map = context.to_hashmap();
             // Forward raw-Python sidecar (#1167).
             let raw_py = context.raw_py_objects();
