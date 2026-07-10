@@ -210,9 +210,22 @@ _SETATTR_WHITELIST = {
     # were added to ``_FRAMEWORK_INTERNAL_ATTRS`` (comment block grew);
     # shifted +12 (1213/1215 → 1225/1227) by later live_view.py growth, re-verified
     # sanctioned in #2032 (v1.1.0-7): the sites are still the DynamicLiveView
-    # developer-dict application, not a new client-controlled setattr.
-    ("live_view.py", 1225),
-    ("live_view.py", 1227),
+    # developer-dict application, not a new client-controlled setattr;
+    # shifted +67 (1225/1227 → 1292/1294) when the
+    # ``_reject_orm_value_in_state_persistence`` guard + docstring (PR #2022,
+    # state-snapshot-persistence ORM early-validation) were added ahead of the
+    # state-snapshot section — re-derived against the rebased live_view.py and
+    # re-verified sanctioned: still the DynamicLiveView developer-dict
+    # application (class at line 1277, ``result = func(request, ...)`` at 1288),
+    # not a new client-controlled setattr;
+    # shifted +24 (1292/1294 → 1316/1318) by the PR #2022 review fix: the
+    # ``NonPersistableStateError`` class (+ guard/docstring growth) was added
+    # to live_view.py ahead of the LiveView class so the runtime's #1788
+    # fail-soft wrapper can re-raise the deliberate DEBUG rejection —
+    # re-verified sanctioned: still the same two DynamicLiveView
+    # developer-dict setattr lines, not a new client-controlled setattr.
+    ("live_view.py", 1316),
+    ("live_view.py", 1318),
 }
 
 
