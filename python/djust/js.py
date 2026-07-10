@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from django.utils.safestring import mark_safe
 
@@ -368,8 +368,8 @@ class _JSExt:
     def __init__(self, chain: JSChain):
         self._chain = chain
 
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("_") or not name.isidentifier():
+    def __getattr__(self, name: str) -> Callable[..., JSChain]:
+        if name.startswith("_") or not name.isidentifier() or not name.islower():
             raise AttributeError(
                 f"JS.ext has no attribute {name!r} (custom command names must "
                 "be public snake_case identifiers)"

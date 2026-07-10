@@ -93,6 +93,18 @@ class TestExtGuards:
         }
         assert factory_methods == set(_BUILTIN_OPS)
 
+    def test_camel_case_name_raises(self):
+        """snake_case is enforced — a camelCase name would create ops the
+        client can never satisfy (review finding: collision asymmetry)."""
+        with pytest.raises(AttributeError, match="snake_case"):
+            JS.ext.scrollTo  # noqa: B018
+
+    def test_camelcase_builtin_alias_raises(self):
+        """The client blocks registering camelCase aliases (addClass etc.);
+        the Python builder must not construct those unsatisfiable ops."""
+        with pytest.raises(AttributeError):
+            JS.ext.addClass  # noqa: B018
+
 
 class TestExtTemplateInterpolation:
     def test_str_matches_to_json(self):
