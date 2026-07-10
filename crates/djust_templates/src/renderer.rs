@@ -206,28 +206,51 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
     Ok(output)
 }
 
+/// Serialize a resolved template-tag argument [`Value`] to the string a
+/// Python tag handler receives.
+///
+/// Scalars (`String`, `Integer`, `Float`, `Bool`, …) inline via
+/// [`Value`]'s `Display`. **Lists and objects are JSON-encoded** so the
+/// handler can recover the structured payload — a plain `to_string()`
+/// would emit the opaque `"[List]"` / `"[Object]"` placeholder and lose
+/// the data.
+///
+/// This is the single source of truth for arg encoding across ALL THREE
+/// tag-dispatch paths — [`Node::CustomTag`], [`Node::AssignTag`] (via
+/// [`resolve_tag_arg`]), and [`Node::BlockCustomTag`] (also via
+/// [`resolve_tag_arg`]). Hoisted from two inline copies (one in
+/// `resolve_tag_arg`, one in the `CustomTag` arm) plus a third path that
+/// silently did NOT encode (`BlockCustomTag`) to retire the
+/// `[List]`/`[Object]`-collapse parallel-path-drift class (CLAUDE.md
+/// #1646, issue #2042).
+fn value_to_arg_string(v: &Value) -> String {
+    match v {
+        Value::List(_) | Value::Object(_) => {
+            serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
+        }
+        _ => v.to_string(),
+    }
+}
+
 /// Resolve an assign-tag argument against the render context.
 ///
 /// - Quoted string literals are returned unchanged.
 /// - `key=value` pairs resolve `value` against the context.
 /// - Bare names present in the context inline their value; **lists and
-///   objects are JSON-encoded** so the Python handler can recover the
-///   structured data — a plain `to_string()` would emit the opaque
-///   `"[List]"` / `"[Object]"` placeholder and lose the payload. This is
-///   what lets built-in handlers like `regroup` receive the source list.
+///   objects are JSON-encoded** (via [`value_to_arg_string`]) so the
+///   Python handler can recover the structured data — a plain
+///   `to_string()` would emit the opaque `"[List]"` / `"[Object]"`
+///   placeholder and lose the payload. This is what lets built-in
+///   handlers like `regroup` receive the source list.
 /// - Names **not** in the context are returned unchanged (kept literal),
 ///   so keyword operands such as regroup's `by` / `as` tokens and bare
 ///   attribute names survive rather than collapsing to an empty string.
+///
+/// Shared by the [`Node::AssignTag`] and [`Node::BlockCustomTag`]
+/// dispatch paths (both use plain context lookup). [`Node::CustomTag`]
+/// keeps its own filter-aware `get_value` resolver but shares the same
+/// [`value_to_arg_string`] encoding.
 fn resolve_tag_arg(arg: &str, context: &Context) -> String {
-    fn value_to_arg_string(v: &Value) -> String {
-        match v {
-            Value::List(_) | Value::Object(_) => {
-                serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
-            }
-            _ => v.to_string(),
-        }
-    }
-
     let arg_trimmed = arg.trim();
     if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
         || (arg_trimmed.starts_with('\'') && arg_trimmed.ends_with('\''))
@@ -1162,41 +1185,18 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Render children first to get block content
             let content = render_nodes_with_loader(children, context, loader)?;
 
-            // Resolve variable references in args (same as CustomTag below)
+            // Resolve variable references in args through the SAME shared
+            // helper as `Node::AssignTag`. This inline resolver used to be a
+            // hand-copied twin of `resolve_tag_arg` that (crucially) skipped
+            // the JSON encoding, so a list/object arg collapsed to the opaque
+            // "[List]" / "[Object]" placeholder. Routing through
+            // `resolve_tag_arg` (which encodes via `value_to_arg_string`)
+            // retires that parallel-path-drift class (CLAUDE.md #1646, #2042):
+            // block handlers now receive the structured payload like the
+            // CustomTag and AssignTag paths already do.
             let resolved_args: Vec<String> = args
                 .iter()
-                .map(|arg| {
-                    let arg_trimmed = arg.trim();
-                    if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
-                        || (arg_trimmed.starts_with('\'') && arg_trimmed.ends_with('\''))
-                    {
-                        arg.clone()
-                    } else if let Some(eq_pos) = arg.find('=') {
-                        let key = &arg[..eq_pos];
-                        let value = arg[eq_pos + 1..].trim();
-                        if (value.starts_with('"') && value.ends_with('"'))
-                            || (value.starts_with('\'') && value.ends_with('\''))
-                        {
-                            arg.clone()
-                        } else {
-                            match context.get(value) {
-                                Some(resolved) => format!("{}={}", key, resolved),
-                                None => arg.clone(),
-                            }
-                        }
-                    } else {
-                        // NB: this inline resolver is NOT JSON-aware — a
-                        // list/object arg collapses to the opaque "[List]" /
-                        // "[Object]" placeholder here, unlike `CustomTag` and
-                        // `AssignTag` which route through `value_to_arg_string`.
-                        // Un-updated parallel path; retiring the collapse
-                        // class via one shared helper is tracked in #2042.
-                        match context.get(arg_trimmed) {
-                            Some(resolved) => resolved.to_string(),
-                            None => arg.clone(),
-                        }
-                    }
-                })
+                .map(|arg| resolve_tag_arg(arg, context))
                 .collect();
 
             let context_map = context.to_hashmap();
@@ -1258,16 +1258,12 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // the value.  For lists and objects we serialize to JSON so the
             // Python handler can recover the structured data from the arg
             // string (plain `.to_string()` would produce the opaque
-            // placeholders "[List]" / "[Object]").
-            fn value_to_arg_string(v: &Value) -> String {
-                match v {
-                    Value::List(_) | Value::Object(_) => {
-                        serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
-                    }
-                    _ => v.to_string(),
-                }
-            }
-
+            // placeholders "[List]" / "[Object]"). The JSON encoding is the
+            // shared module-level `value_to_arg_string` — the single source
+            // of truth for all three tag-dispatch paths (#1646, #2042). This
+            // path keeps its own filter-aware `get_value` resolver (e.g.
+            // `x|upper`), unlike the plain-context-lookup `resolve_tag_arg`
+            // shared by AssignTag / BlockCustomTag.
             let resolved_args: Vec<String> = args
                 .iter()
                 .map(|arg| {
@@ -3312,6 +3308,79 @@ mod tests {
         assert_eq!(Value::Integer(42).to_string(), "42");
         assert_eq!(Value::Bool(true).to_string(), "true");
         assert_eq!(Value::String("hello".to_string()).to_string(), "hello");
+    }
+
+    // ---- #2042: shared arg-encoding helper contract -----------------------
+    // These pin the shared `value_to_arg_string` / `resolve_tag_arg` helpers
+    // that ALL THREE tag-dispatch paths (CustomTag, AssignTag, BlockCustomTag)
+    // now route through. `resolve_tag_arg` is the exact function the AssignTag
+    // and BlockCustomTag arms invoke, so these unit tests exercise that path's
+    // resolution logic directly (Python-free). The end-to-end BlockCustomTag
+    // dispatch is covered in tests/test_block_custom_tag_arg_json_2042.rs.
+
+    fn obj_ctx() -> Context {
+        let mut ctx = Context::new();
+        ctx.set(
+            "items".to_string(),
+            Value::List(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
+        );
+        let mut obj = std::collections::HashMap::new();
+        obj.insert("key".to_string(), Value::String("val".to_string()));
+        ctx.set("obj".to_string(), Value::Object(obj));
+        ctx.set("count".to_string(), Value::Integer(42));
+        ctx.set("name".to_string(), Value::String("hello".to_string()));
+        ctx
+    }
+
+    #[test]
+    fn value_to_arg_string_encodes_structured_but_not_scalars() {
+        // The single source of truth for arg encoding: list/object -> JSON,
+        // scalars -> Display.
+        let list = Value::List(vec![Value::Integer(1), Value::Integer(2)]);
+        assert_eq!(value_to_arg_string(&list), "[1,2]");
+        let mut map = std::collections::HashMap::new();
+        map.insert("key".to_string(), Value::String("val".to_string()));
+        assert_eq!(value_to_arg_string(&Value::Object(map)), r#"{"key":"val"}"#);
+        assert_eq!(value_to_arg_string(&Value::Integer(42)), "42");
+        assert_eq!(value_to_arg_string(&Value::Bool(true)), "true");
+        assert_eq!(value_to_arg_string(&Value::String("hi".to_string())), "hi");
+    }
+
+    #[test]
+    fn resolve_tag_arg_json_encodes_list_and_object() {
+        let ctx = obj_ctx();
+        // Bare list / object names JSON-encode (not "[List]" / "[Object]").
+        assert_eq!(resolve_tag_arg("items", &ctx), "[1,2,3]");
+        assert_eq!(resolve_tag_arg("obj", &ctx), r#"{"key":"val"}"#);
+    }
+
+    #[test]
+    fn resolve_tag_arg_scalars_unchanged() {
+        let ctx = obj_ctx();
+        assert_eq!(resolve_tag_arg("count", &ctx), "42");
+        assert_eq!(resolve_tag_arg("name", &ctx), "hello");
+    }
+
+    #[test]
+    fn resolve_tag_arg_kwarg_value_json_encoded() {
+        let ctx = obj_ctx();
+        assert_eq!(resolve_tag_arg("rows=items", &ctx), "rows=[1,2,3]");
+        // Scalar key=value stays Display-formatted.
+        assert_eq!(resolve_tag_arg("n=count", &ctx), "n=42");
+    }
+
+    #[test]
+    fn resolve_tag_arg_unknown_name_and_quoted_literal_kept() {
+        let ctx = obj_ctx();
+        // Keyword operand not in context (regroup `by` / `as`) stays literal.
+        assert_eq!(resolve_tag_arg("by", &ctx), "by");
+        // Quoted string literal is passed through unchanged.
+        assert_eq!(resolve_tag_arg("'grouper'", &ctx), "'grouper'");
+        assert_eq!(resolve_tag_arg("\"grouper\"", &ctx), "\"grouper\"");
     }
 
     #[test]
