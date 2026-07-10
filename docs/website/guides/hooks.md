@@ -229,6 +229,82 @@ this.handleEvent('highlight', (payload) => {
 });
 ```
 
+## Typed values & targets
+
+Passing data to a hook used to mean raw `dataset` strings and hand-rolled
+parsing. `dj-hook-value-*` attributes are exposed on the instance as
+`this.values.*` with JSON-first coercion:
+
+```html
+<canvas dj-hook="Chart"
+        dj-hook-value-points="[1,2,3]"
+        dj-hook-value-animated="true"
+        dj-hook-value-title="Sales"></canvas>
+```
+
+```javascript
+window.djust.hooks = {
+    Chart: {
+        mounted() {
+            this.values.points     // [1, 2, 3]  — Array
+            this.values.animated   // true       — Boolean
+            this.values.title      // "Sales"    — string (JSON.parse failed → raw)
+            renderChart(this.el, this.values);
+        },
+        updated() {
+            // values are LIVE: after a server re-render changes the
+            // attributes, reads here see the fresh values automatically.
+            renderChart(this.el, this.values);
+        },
+    },
+};
+```
+
+The coercion rule: try `JSON.parse`, fall back to the raw string. A literal
+string that *looks* like JSON must be JSON-quoted:
+`dj-hook-value-code='"007"'` → `"007"` (not the number 7). Attribute names
+are kebab-case, property names camelCase
+(`dj-hook-value-points-per-page` → `this.values.pointsPerPage`). `this.values`
+is read-only — update the attribute server-side and let the morph carry it.
+
+Named descendants use `dj-hook-target`:
+
+```html
+<div dj-hook="Player">
+    <video dj-hook-target="video"></video>
+    <button dj-hook-target="mute">🔇</button>
+</div>
+```
+
+```javascript
+this.target('video')   // first match (Element or null)
+this.targets('mute')   // all matches (Element[])
+```
+
+Lookups are live subtree queries scoped to `this.el`. Note: descendants of a
+*nested* hook are not excluded in v1 — prefer unique target names when
+nesting hooks.
+
+## TypeScript & editor support
+
+djust ships ambient type declarations for the public `window.djust` surface
+(hooks, JS command chains, `commands.register`). Point your editor at them —
+no build step needed:
+
+```json
+// jsconfig.json
+{
+    "compilerOptions": { "checkJs": true },
+    "include": ["static/**/*.js", "./typings/djust.d.ts"]
+}
+```
+
+Locate (or copy) the shipped file with:
+
+```bash
+python -c "import djust, pathlib; print(pathlib.Path(djust.__file__).parent / 'static/djust/djust.d.ts')"
+```
+
 ## Example: Chart.js Integration
 
 ```python
