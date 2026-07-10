@@ -6,7 +6,8 @@
  * Internal underscore-prefixed members are deliberately not declared.
  *
  * Usage (no build step required — editors pick this up for autocomplete):
- *   Add this file's path to your tsconfig.json or jsconfig.json.
+ *   Enable "checkJs": true in your compilerOptions.
+ *   Add this file's path and your static JavaScript directory to the include array in tsconfig.json or jsconfig.json.
  *   Locate the installed path with:
  *   python -c "import djust, pathlib; print(pathlib.Path(djust.__file__).parent / 'static/djust/djust.d.ts')"
  */
@@ -130,6 +131,7 @@ declare global {
     interface DjustHookDefinition {
         mounted?(this: DjustHookInstance & Record<string, unknown>): void | Promise<void>;
         updated?(this: DjustHookInstance & Record<string, unknown>): void | Promise<void>;
+        beforeUpdate?(this: DjustHookInstance & Record<string, unknown>): void | Promise<void>;
         destroyed?(this: DjustHookInstance & Record<string, unknown>): void | Promise<void>;
         disconnected?(this: DjustHookInstance & Record<string, unknown>): void | Promise<void>;
         reconnected?(this: DjustHookInstance & Record<string, unknown>): void | Promise<void>;
