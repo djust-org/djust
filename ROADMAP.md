@@ -19,6 +19,22 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-9 — regroup review follow-ups: template-engine arg-resolution hardening (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-09) of the two follow-ups filed from the PR #2023
+(`{% regroup %}`) code review: unify the three tag-dispatch arg-resolution paths
+through one shared helper (#2042, the #1646 parallel-path cure), and the durable
+fix for the assign-tag operand-shadowing footgun the regroup mitigation only
+warns about (#2041). Both scoped to the Rust template engine's assign-tag arg
+path (`crates/djust_templates/src/renderer.rs`); sequenced #2042 → #2041.
+Deferred and NOT in this bucket: #2017 (dj-virtual server-side reconcile
+enhancement), #1561/#1562 (`priority:low` bug-capture feature tracks).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P2** | route CustomTag/AssignTag/BlockCustomTag arg resolution through one shared `value_to_arg_string` (#2042) | `renderer.rs` has three tag-dispatch arg-resolution branches; only CustomTag + AssignTag (post-#2023) JSON-encode list/object args, while BlockCustomTag (`~:1178-1193`) still collapses them to the opaque `[List]`/`[Object]`. Extract one shared `value_to_arg_string` and route all three through it (#1646 cure) + a BlockCustomTag list-arg test | v1.1.0 |
+| **P1** | pass regroup `by`/`<attr>`/`as` operands unresolved to assign-tag handlers (#2041) | Rust `resolve_tag_arg` resolves *every* assign-tag arg against the context, so a context key named like the `<attr>` token shadows the per-item lookup → silently wrong grouping; #2023 only added a `logger.warning`. Durable fix: pass the keyword/name operands unresolved | v1.1.0 |
+
 ## v1.1.0-8 — custom-tag arg double-resolution + CI-gate promotion drain (drain bucket → ships in 1.1.0) ✅
 
 **Complete (2026-07-04)** — both issues closed: #2037 (PR #2038), #2034 (PR #2039). 0 follow-ups. Retro: RETRO.md §v1.1.0-8.
