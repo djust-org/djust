@@ -298,6 +298,26 @@ class JSChain:
         return self._append("push", args)
 
     # ------------------------------------------------------------------
+    # Custom commands (ADR-025)
+    # ------------------------------------------------------------------
+
+    @property
+    def ext(self) -> "_JSExt":
+        """Dynamic factory for user-registered custom commands (ADR-025).
+
+        ``chain.ext.scroll_to(to="#top", smooth=True)`` appends the op
+        ``["ext.scroll_to", {"to": "#top", "smooth": true}]``. The command
+        implementation is registered client-side via
+        ``window.djust.commands.register('scroll_to', fn)``; an op whose
+        name was never registered fails on first invocation with a DEBUG
+        error overlay (and ``console.error`` in production).
+
+        Built-in names are blocked (``JS.ext.show`` raises
+        ``AttributeError``) — use the strictly-typed built-in instead.
+        """
+        return _JSExt(self)
+
+    # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
 
@@ -333,6 +353,46 @@ class JSChain:
         from .security import escape_json_for_script
 
         return str(mark_safe(escape_json_for_script(self.to_json())))
+
+
+class _JSExt:
+    """Attribute-dynamic builder for ``ext.*`` custom command ops (ADR-025).
+
+    Any snake_case attribute access returns a builder that appends
+    ``["ext.<name>", args]`` to the underlying chain. Target kwargs
+    (``to`` / ``inner`` / ``closest``) get the same exclusivity validation
+    as built-ins; all other keyword arguments pass through as op args and
+    must be JSON-serializable (validated at ``to_json()`` time).
+    """
+
+    def __init__(self, chain: JSChain):
+        self._chain = chain
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_") or not name.isidentifier():
+            raise AttributeError(
+                f"JS.ext has no attribute {name!r} (custom command names must "
+                "be public snake_case identifiers)"
+            )
+        if name in _BUILTIN_OPS:
+            raise AttributeError(
+                f"JS.ext.{name} is not available — use JS.{name}() (built-in "
+                "commands are not routable through the ext registry)"
+            )
+        chain = self._chain
+
+        def _builder(
+            to: Optional[str] = None,
+            *,
+            inner: Optional[str] = None,
+            closest: Optional[str] = None,
+            **params: Any,
+        ) -> JSChain:
+            args = _normalise_target(to=to, inner=inner, closest=closest)
+            args.update(params)
+            return chain._append(f"ext.{name}", args)
+
+        return _builder
 
 
 class _JSFactory:
@@ -381,6 +441,32 @@ class _JSFactory:
 
     def push(self, *args: Any, **kwargs: Any) -> JSChain:
         return JSChain().push(*args, **kwargs)
+
+    @property
+    def ext(self) -> _JSExt:
+        """Start a chain with a custom command: ``JS.ext.scroll_to(to="#top")``."""
+        return _JSExt(JSChain())
+
+
+#: The 11 built-in op names (Phoenix LiveView 1.0 parity). Kept as an explicit
+#: literal so `_JSExt` can veto them without introspecting `_JSFactory` (the
+#: factory now also carries the non-op `ext` property); a test pins that this
+#: set matches `_JSFactory`'s public methods.
+_BUILTIN_OPS = frozenset(
+    {
+        "show",
+        "hide",
+        "toggle",
+        "add_class",
+        "remove_class",
+        "transition",
+        "set_attr",
+        "remove_attr",
+        "focus",
+        "dispatch",
+        "push",
+    }
+)
 
 
 JS = _JSFactory()
