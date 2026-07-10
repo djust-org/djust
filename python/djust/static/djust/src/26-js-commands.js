@@ -203,6 +203,87 @@
     };
 
     // ------------------------------------------------------------------------
+    // User-registered custom commands (ADR-025)
+    // ------------------------------------------------------------------------
+
+    const EXT_REGISTRY = new Map();
+
+    function registerCommand(name, fn) {
+        if (typeof name !== 'string' || !name) {
+            throw new Error('[js-commands] register(): name must be a non-empty string');
+        }
+        if (name.includes('.')) {
+            throw new Error(`[js-commands] register('${name}'): names must not contain "."`);
+        }
+        if (typeof fn !== 'function') {
+            throw new Error(`[js-commands] register('${name}'): implementation must be a function`);
+        }
+        if (Object.prototype.hasOwnProperty.call(COMMAND_TABLE, name)) {
+            // Loud upgrade failure by design (ADR-025): if djust later promotes
+            // a name to built-in, this register() call starts throwing at page
+            // load — never a silent behavior change.
+            throw new Error(`[js-commands] register('${name}'): collides with a djust built-in command`);
+        }
+        if (EXT_REGISTRY.has(name) && globalThis.djustDebug) {
+            console.warn('[js-commands] register(%s): overwriting earlier registration', name);
+        }
+        EXT_REGISTRY.set(name, fn);
+    }
+
+    /** Smallest-edit-distance registered name within distance 2, or null. */
+    function _didYouMean(name) {
+        let best = null;
+        let bestD = 3;
+        for (const cand of EXT_REGISTRY.keys()) {
+            const d = _editDistance(name, cand);
+            if (d < bestD) { bestD = d; best = cand; }
+        }
+        return best;
+    }
+
+    function _editDistance(a, b) {
+        if (Math.abs(a.length - b.length) > 2) return 3; // early out, cap at 3
+        const prev = new Array(b.length + 1);
+        // eslint-disable-next-line security/detect-object-injection -- j is a bounded loop counter, not user-controlled data.
+        for (let j = 0; j <= b.length; j++) prev[j] = j;
+        for (let i = 1; i <= a.length; i++) {
+            let diag = prev[0];
+            prev[0] = i;
+            for (let j = 1; j <= b.length; j++) {
+                // eslint-disable-next-line security/detect-object-injection -- see above
+                const tmp = prev[j];
+                // eslint-disable-next-line security/detect-object-injection -- see above
+                prev[j] = Math.min(
+                    // eslint-disable-next-line security/detect-object-injection -- see above
+                    prev[j] + 1,
+                    prev[j - 1] + 1,
+                    diag + (a[i - 1] === b[j - 1] ? 0 : 1)
+                );
+                diag = tmp;
+            }
+        }
+        return prev[b.length];
+    }
+
+    function _reportUnknownExt(name) {
+        const suggestion = _didYouMean(name);
+        const msg =
+            `Unknown custom JS command "${name}" — no ` +
+            `window.djust.commands.register('${name}', fn) has run.` +
+            (suggestion ? ` Did you mean "${suggestion}"?` : '');
+        // %s parameterization: `name` originates from a DOM attribute (#1124).
+        console.error('[js-commands] %s', msg);
+        if (window.DEBUG_MODE) {
+            window.dispatchEvent(new CustomEvent('djust:error', {
+                detail: {
+                    error: msg,
+                    hint: 'Register the command in your static JS before it is invoked. See docs/website/guides/js-commands.md#custom-commands (ADR-025).',
+                },
+            }));
+        }
+    }
+
+    // ------------------------------------------------------------------------
     // Chain execution
     // ------------------------------------------------------------------------
 
@@ -218,6 +299,22 @@
             // eslint-disable-next-line security/detect-object-injection
             const fn = COMMAND_TABLE[opName];
             if (!fn) {
+                if (typeof opName === 'string' && opName.startsWith('ext.')) {
+                    const extName = opName.slice(4);
+                    const extFn = EXT_REGISTRY.get(extName);
+                    if (!extFn) {
+                        _reportUnknownExt(extName);
+                        continue;
+                    }
+                    try {
+                        // Custom-command contract (ADR-025):
+                        // fn(targets, args, originEl), await handles sync+async.
+                        await extFn(resolveTargets(args || {}, originEl), args || {}, originEl);
+                    } catch (err) {
+                        console.error('[js-commands] ext command %s failed:', extName, err);
+                    }
+                    continue;
+                }
                 if (globalThis.djustDebug) console.log('[js-commands] unknown op', opName);
                 continue;
             }
@@ -335,6 +432,10 @@
         return _chainAdd(this, 'push', args);
     };
 
+    JSChain.prototype.ext = function(name, options) {
+        return _chainAdd(this, 'ext.' + name, Object.assign({}, options || {}));
+    };
+
     /**
      * Run the chain against ``originEl`` (or the document body if omitted).
      * Returns a promise that resolves when every op is complete — relevant
@@ -366,6 +467,7 @@
         focus: function(selector, options) { return new JSChain().focus(selector, options); },
         dispatch: function(event, options) { return new JSChain().dispatch(event, options); },
         push: function(event, options) { return new JSChain().push(event, options); },
+        ext: function(name, options) { return new JSChain().ext(name, options); },
 
         // Internal hooks used by the event-binding layer:
         _executeOps: executeOps,
@@ -375,4 +477,10 @@
     };
 
     window.djust.js = factory;
+
+    window.djust.commands = {
+        register: registerCommand,
+        // Exposed for the debug panel and tests; not a public API.
+        _registry: EXT_REGISTRY,
+    };
 })();
