@@ -356,6 +356,268 @@ issue or be explicitly closed with a reason.
 | 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Closed | **Resolved (PR for #1869):** `playwright-tests` was `success` on the last 3 runner runs (precondition met per #1534), so `test_browser_smoke.py` was carved into its own BLOCKING `browser-smoke` CI job (no `continue-on-error`, mirrors the `demo-checks` pattern #1708/#1713) and wired into the `test-summary` AND-condition; the rest of the playwright suite stays non-blocking (the full suite can be flaky). #1848 was code-fixed by PR #1871 (re-execute classic `<script>` on the #1610 mount morph), so the inline-script known-xfail was flipped to a HARD regression assertion. |
 | 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Closed | **Resolved in v1.1.0-1 (PR #1881):** channel-layer isolation (`backends.clear()`) + deterministic ping/pong openness probe (replaced the wall-clock `receive_nothing`); the systemic test-isolation fixture (#1884) retired the shared-process-global flaky class. |
 | 316 | Propagate the "cap concurrent worktree implementer agents at ~3" rule into the pipeline-run / pipeline-drain skill prompts | v1.1.0-4 retro | — | OUT-OF-REPO | Skill prompts live in `~/.claude/skills/{pipeline-run,pipeline-drain}/SKILL.md` (gitignored, not in this repo). In-repo half DONE: CLAUDE.md "Process canonicalizations from v1.1.0-4 retro arc" rule 2. Trigger: 5 concurrent worktree fixers tripped a transient server-side throttle; ≤3 concurrent prevents it, serial resumption recovers cleanly. |
+| 317 | Transport-parity test for the async-work dispatch path (runtime `_execute_async_task` vs consumer `_run_async_work`) — the #2016 `sync_to_async`/coroutine drift had no guard | PR #2016 / v1.1.0-5 retro | #2020 | Closed | Resolved v1.1.0-6 (PR #2030): the structural cure shipped — one `run_async_callback` in `mixins/async_work.py` both transports delegate to, pinned by 3 structural parity tests (both call it; neither keeps its own `iscoroutinefunction(callback)` branch; single definition) + 4 behavioral (gate-off #1468 = the async-def-through-`sync_to_async` `TypeError`). |
+| 318 | dj-virtual deeper server-side reconcile — automatic `stream_append`→`__djVirtualItems` wiring, VDOM-differ `dj-virtual` awareness (keyed mid-list inserts/removals), out-of-window finalize-patch landing, + a `djustDebug` warning | PR #2018 / v1.1.0-5 retro | #2017 | Open | Deferred from #1988/#1989 per #1079 scope discipline; the client-side self-heal (`structureIntact`/`absorbLooseChildren`) + CSS layout contract shipped in #2018. Also carries the manual real-browser pixel-verification JSDOM couldn't cover. |
+| 319 | Codify the CHANGELOG-union local-sync step (`git merge origin/main` before GitHub-merge; rebuild bundles from merged src when they conflict) into the pipeline-drain skill | v1.1.0-5 retro | — | OUT-OF-REPO | `CHANGELOG merge=union` is a LOCAL git driver; GitHub's merge button doesn't apply it, so every multi-PR drain re-hits a silent CHANGELOG conflict (checks green, button shows "conflicting"). pipeline-drain skill is gitignored (`~/.claude/skills/`). In-repo-adjacent: memory `reference_changelog_union_vs_github_merge` saved. |
+| 320 | `djust-release` SKILL.md needs a "which branch is the release-of-record" pre-flight when multiple long-lived release branches exist | v1.1.0rc5 retro | #2027 | OUT-OF-REPO | In-repo half DONE + GitHub #2027 CLOSED v1.1.0-6: `make release`/`make release-dry-run` hard-fail if the target tag already exists locally or on origin (Makefile). Remaining skill-prompt half is out-of-repo (gitignored `.claude/skills/djust-release/SKILL.md`). Trigger: `/djust-release 1.1.0rc4` ran against `main`, which had been reverted to 1.0.8 post-#1974/#1975 while the real v1.1 line + the already-tagged/PyPI-live rc4 lived on a separate `1.1` branch. |
+| 321 | Automated pre-commit/CI check pinning already-tagged CHANGELOG.md sections against their tagged content | v1.1.0rc5 retro | #2028 | Closed | Resolved v1.1.0-6 (PR #2029): `scripts/check-changelog-tagged-sections.py` pins every shipped section against the *newest* release tag's snapshot (dogfood #1060 showed pinning against each section's OWN tag floods false positives — rolling-rc sections keep accumulating post-tag; a section is frozen once *superseded*). Wired as a pre-commit hook; empirical canary (#1459) is a permanent test. 119 sections pin clean against v1.1.0rc5. |
+| 322 | CI Python job omits `python/djust/tests/` — a large suite (incl. the RED `TestSetattrChokepoint` CWE-915 guard, and this-repo's #2020/#1977 tests) is un-gated | PR #2031 / v1.1.0-6 retro | #2032 | Closed | Resolved v1.1.0-7 (PR #2035): deliberately re-verified + fixed the stale `_SETATTR_WHITELIST` pins (1213/1215 → 1225/1227, confirmed still the sanctioned DynamicLiveView developer-dict application, not a new client-controlled setattr), and added `python/djust/tests/` to CI as a `continue-on-error` soak step (green on first runner run). Blocking-gate promotion split to #323 (#2034). |
+| 323 | Promote the `python/djust/tests/` CI soak step to a blocking gate + add the dir to the pre-push hook | PR #2035 / v1.1.0-7 retro | #2034 | Closed | Resolved v1.1.0-8 (PR #2039): the soak ran green on the `main` push-CI run at `72d78601` (the awaited precondition), so `continue-on-error` was removed — the step now runs inside `python-tests`, which is in the `test-summary` AND-condition (#1713), so a failure gates the merge; `python/djust/tests/` added to the pre-push `pytest` hook too. Self-validated: PR #2039's own `python-tests (py3.12)` was the first run with the gate live and passed (empirical canary #1459). |
+
+## v1.1.0rc5 — main/1.1 branch consolidation + release cut (PR #2026)
+
+**Date**: 2026-07-03
+**Scope**: What started as a routine `/djust-release 1.1.0rc4` invocation surfaced that `v1.1.0rc4` had already shipped (tagged, GitHub-released, live on PyPI) from a separate `1.1` branch — `main` had been reverted to 1.0.8 after an earlier bad-merge incident (#1974/#1975) and never re-absorbed the real v1.1 line (LVN native-renderer, `auto_navigate`, ADR-021/022/023 convergence). Per the user's explicit branch-strategy call ("all work is now 1.1 except bug/security fixes for 1.0 ... tracking 1.1 on main and 1.0 on its own branch"), consolidated `1.1` into `main` via reviewed PR #2026 (39 files, +1795/−62, full CI green including a confirmed-flaky `dj_transition.test.js` rerun), then cut v1.1.0rc5 from `main`. Also committed a pre-existing uncommitted scaffold fix (`DJUST_SQLITE_PATH`) that was blocking a clean working tree, and deleted the now-fully-merged `1.1` branch + PR #2026's feature branch after confirming ancestry.
+**Tests at close**: 4746 Python + 1778 JS + all Rust crates green (post-merge, pre-tag); full suite re-ran clean on both the version-bump push and the final tag push.
+
+### What We Learned
+
+**1. A release skill's default assumptions must be verified against actual tag/branch topology before executing.**
+`/djust-release 1.1.0rc4` proceeded on `main`'s implicit assumption (current branch is the release line, target VERSION hasn't shipped) — neither held. Manual investigation, not a documented pre-flight step, caught it before any damage.
+
+**Action taken**: `diff` — `make release`/`make release-dry-run` (`Makefile`) now `git rev-parse`/`git ls-remote --tags origin` the target version and hard-fail if it already exists, empirically verified against both an already-tagged version (fails) and an unreleased one (passes). Remaining out-of-repo skill-prompt half tracked in Action Tracker #320 (GitHub #2027). See CLAUDE.md "Process canonicalizations from the v1.1.0rc5 retro".
+
+**2. A git 3-way merge of CHANGELOG.md across a release-boundary-diverged branch pair can silently misattribute new content into an already-tagged, already-released section.**
+The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut rc4; `main` kept accumulating under the still-named `## [Unreleased]`. The merge reported zero conflicts, but git's diff3 had no semantic anchor distinguishing the two — `main`'s ~150 new lines landed inside `[1.1.0rc4]`'s body, retroactively (and falsely) claiming unshipped work had gone out in an already-released version. No existing automated check catches this; the full test suite stayed green throughout.
+
+**Action taken**: `diff` — CLAUDE.md now documents the failure mode + the reconstruction recipe (take each branch's original pre-merge section verbatim; hand-assemble rather than trust the auto-merge). `tracker_row` — Action Tracker #321 (GitHub #2028) tracks the durable automated-check follow-up.
+
+### Insights
+
+- Stopping to ask the user twice (AskUserQuestion) before proceeding on a genuinely ambiguous branch-topology question — rather than guessing from repo archaeology alone — is what caught this before it became a second #1974/#1975-class incident. Validates the existing "verify environment premises" canon (#1516) rather than requiring a new rule; the new lesson is narrowly that a *release skill's own pre-flight* should encode the check, not rely on the operator's ad hoc curiosity.
+- The high-stakes merge (PR #2026) was correctly routed through a real PR with full CI + an explicit user go-ahead, rather than another direct-push bypass — validates the existing admin-bypass discipline (v1.0.7-3/-4 arc) rather than needing reinforcement.
+- Two direct pushes to `main` (a pending scaffold fix, the version-bump commit) landed via admin bypass of the PR-required rule; both were transparently flagged to the user in the moment, matching existing canon. No new rule needed — this is the canon working as intended for low-risk, already-reviewed-in-substance changes.
+- `origin/1.0` (the dedicated backport branch going forward) was fully merged into `main` / an ancestor with zero unique commits at consolidation time — a clean starting point for the new "main=1.1, 1.0=backports" split, not something requiring cleanup.
+
+### Review Stats
+
+| Metric | PR #2026 | Total |
+|--------|----------|-------|
+| Files changed | 39 | 39 |
+| Lines +/− | 1795/62 | 1795/62 |
+| CI checks | 15 (1 flaky rerun) | 15 |
+| New tracker rows filed | 2 (#320, #321) | 2 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Added "Process canonicalizations from the v1.1.0rc5 retro (main/1.1 branch consolidation)" section (2 rules).
+**Makefile**: `release` + `release-dry-run` targets gained an already-tagged-version guard (local + origin tag existence check).
+**Action Tracker**: Rows #320, #321 added; GitHub issues #2027, #2028 filed.
+
+### Open Items
+
+- [x] `djust-release` SKILL.md branch-of-record pre-flight — tracked in Action Tracker #320 (GitHub #2027) — in-repo half + GitHub #2027 resolved in v1.1.0-6; skill-prompt half now OUT-OF-REPO
+- [x] Automated CHANGELOG already-tagged-section pinning check — tracked in Action Tracker #321 (GitHub #2028) — resolved in v1.1.0-6 (PR #2029)
+
+## v1.1.0-8 — custom-tag arg double-resolution + CI-gate promotion drain (PRs #2038/#2039)
+
+**Date**: 2026-07-04
+**Scope**: Drained a production-found correctness bug in the Rust↔Python custom-tag argument bridge (#2037 — `{% djust_markdown %}` corrupting a per-`{% for %}`/`{% include ... with %}`-scoped dict-field value into a Python-tuple-repr, found live in a downstream chat app on 1.1.0rc6), and the CI-gate promotion the v1.1.0-7 retro deferred (#2034 — the `python/djust/tests/` soak → blocking gate, now that its precondition was met). 2 PRs, 2 issues closed; #2037 (framework correctness, security-adjacent shared helper) done inline with an independent worktree-less adversarial review, #2034 (CI config) done inline. 0 follow-ups. Deferred and untouched: #2017 (large dj-virtual server-side-reconcile enhancement), #1561/#1562 (`priority:low` feature tracks).
+**Tests at close**: 1 new suite — `python/djust/tests/test_markdown_arg_double_resolve_2037.py` (11: unit + handler + real-Rust-render levels).
+
+### What We Learned
+
+**1. Distrust the reporter's cited *cause*, not just the cited *path* — symptom-up triage collapsed a "streaming/loop-cache" theory to a synchronous one-render bug.** #2037's (thorough, grep-verified) report hypothesized the trigger was djust's per-loop HTML render cache accumulating state across a real `is_streaming: True→False` WebSocket transition — its own `LiveViewTestClient.render(engine="rust")` test did *not* reproduce it, which pushed the theory toward streaming. Tracing the tuple-repr (`('...', '...')`) backwards through the bridge found the real cause: the Rust `Node::CustomTag` dispatch *pre-resolves* a bare-name arg (`block.text`) to its **value** string, and `TagHandler._resolve_arg` then re-interpreted that already-resolved value as a template token — any value containing `=` was tuple-split. It reproduced with a single synchronous render (no streaming, no loop cache, no WebSocket). The report's own test missed it only because it used a top-level model object (which Rust can't resolve → passes the literal token → Python resolves correctly), not a loop-scoped plain dict (which Rust resolves → passes the value → Python double-resolves). Extends the Bug-report triage canon along the mechanism axis: the cited *environment cause* is as untrustworthy as the cited *code path*.
+
+**Action taken**: Closed — #2037 fixed in PR #2038.
+
+**2. The #1646 cure landed at the shared chokepoint — one guard, six custom tags, no latent twin.** `_resolve_arg` is the single Rust→Python argument re-resolver behind `url`/`static`/`live_render`/`flash`/`pwa`/`djust_markdown`. The fix token-guards it (kwarg-split fires only for `^[A-Za-z_]\w*=`; dotted-lookup only for a bare dotted-identifier path; anything else — a Rust-resolved value with whitespace/markup — is returned verbatim). The adversarial review confirmed there's no parallel Django-templatetag markdown twin and no other value re-resolution site, so the single-chokepoint fix is genuinely complete. The one residual (a resolved value shaped `ident=value` with no whitespace) is closed for the reported sink by a defence-in-depth tuple-fallback in `markdown.py` — the reviewer caught that this branch had zero coverage and a gate-off-verified test was added.
+
+**Action taken**: Closed — shipped the `_resolve_arg` token-guard + markdown fallback in PR #2038.
+
+**3. The #1534 soak→promote lifecycle closed cleanly and the promotion self-validated.** #2034 removed `continue-on-error` from the `python/djust/tests/` step (promoting it into the `python-tests` job, which is in the `test-summary` AND-condition per #1713) and added the dir to the pre-push hook. The precondition was real, not assumed: the soak ran green on the `main` push-CI run at `72d78601`. And the promotion validated itself — PR #2039's own `python-tests (py3.12)` was the first run with the gate *live*, and it passed; so did #2038's, which added a new file to the now-gated dir. A gate that passes its own first gated run is the cleanest possible empirical canary (#1459).
+
+**Action taken**: Closed — #2034 shipped in PR #2039; Action Tracker #323 closed.
+
+**4. Gate off a *committed* change with a direct edit + `git checkout HEAD`, never `git stash push -- <path>`.** While gate-off-verifying the review-nit test, `git stash push -- markdown.py` was used to "remove the fix" — but the fix was already *committed*, so the stash saved nothing, and the follow-up `git stash pop` silently popped an ancient unrelated deep-list `stash@{0}` (a months-old WIP), polluting 4 files with a ROADMAP.md conflict. Recovery was clean (only the test file was legitimately dirty; the old stash was *kept*, not lost, because the conflicting pop aborted). The correct way to gate off a committed change is a direct edit (`if False and …`) + `git checkout HEAD -- <path>` to restore. Reinforces the draft-preservation git-hazard note (bare `git stash pop` grabs the deep-list top) and the #292 unstaged-work discipline.
+
+**Action taken**: `note` — captured in the draft-preservation memory + this retro; no code deliverable (workflow discipline).
+
+### Insights
+
+- **The drain is still self-feeding, but the source shifted from framework to downstream.** v1.1.0-7's issues came from the previous *drain*; v1.1.0-8's #2037 came from a downstream **production** app running the release the pipeline cut. The dogfood loop now reaches past the framework's own suite into real consumer traffic — which is exactly where a common Django idiom (`{% for %}` + `{% include with %}` + a custom tag) surfaced a corruption no in-repo test exercised.
+- **Right-sized review depth over right-sized delegation.** Both issues were done inline (neither warranted a worktree implementer), but the security-adjacent shared-helper change (#2037, feeds an unescaped-HTML markdown sink) got an independent adversarial review that earned its keep — it found the untested fallback branch. The CI-config change (#2034) got inline review only. Match review depth to blast radius, not to who typed the code.
+- **A green pre-push/CI is not a green *dev* environment, and vice versa** — but here the layered gates aligned: local `-n auto` (4066 passed), the branch's own pre-push, and CI's newly-blocking gate all agreed. The soak-first caution (#1534) again cost nothing.
+
+### Review Stats
+
+| Metric | PR #2038 | PR #2039 | Total |
+|--------|----------|----------|-------|
+| Issues closed | 1 (#2037) | 1 (#2034) | 2 |
+| Tests added | 11 | 0 (CI config) | 11 |
+| Gate-off sentinel (#1468) | ✓ (4 RED) | n/a (config) | ✓ |
+| Adversarial review | ✓ (found 1 nit, fixed) | inline | 1 |
+| CI failures | 0 | 0 | 0 |
+| Follow-ups filed | — | — | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no new canon — finding 1 extends the existing Bug-report triage canon (mechanism axis, already noted in the v1.1.0-4 / production-incident rules); finding 2 reinforces #1646; finding 3 reinforces #1534/#1713/#1459. Finding 4 is a workflow-tooling note (memory), not framework canon.
+**CI**: `.github/workflows/test.yml` `python/djust/tests/` step promoted to blocking; `.pre-commit-config.yaml` pre-push `pytest` hook gained the dir (#2034).
+**Memory**: `feedback_draft_preservation_git_hazards` updated with the gate-off-a-committed-change rule (finding 4).
+**Checklist / Pipeline template / Skills**: none.
+
+### Open Items
+
+- [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried forward
+- [ ] bug-capture iter B/C (`priority:low`) — GitHub #1562/#1561, carried forward
+
+## v1.1.0-7 — post-rc6 live-verify drain (PRs #2035/#2036)
+
+**Date**: 2026-07-04
+**Scope**: Drained what surfaced right after cutting 1.1.0rc6: a dj-virtual client-state teardown regression found live-verifying the #1988/#1989 fix on the freshly-cut rc6 (#2033), and the CI-coverage gap the v1.1.0-6 drain had filed (#2032). 2 PRs, 2 issues closed; #2033 (JS bug) done by a worktree-isolated subagent, #2032 (security-guard + CI config) done inline. 1 follow-up filed (#2034). Deferred and untouched: #2017 (large dj-virtual server-side-reconcile enhancement), #1561/#1562 (`priority:low` feature tracks).
+**Tests at close**: 2 new suites — `tests/js/dj-virtual-teardown-2033.test.js` (3) + the re-greened `TestSetattrChokepoint` (14 in-file).
+
+### What We Learned
+
+**1. Live-verifying a freshly-cut release is its own test harness — new-in-release regressions surface there, not in the suite.** #2033 was found by exercising the *previous* drain's #1988/#1989 fix against the just-published 1.1.0rc6 in a real browser. The bug was a new-in-rc6 interaction: the #1988/#1989 auto-`absorbLooseChildren` self-heal (a genuine improvement for same-thread re-renders) had **no signal** to distinguish "same list, more items" from "an entirely different view reusing the same DOM node" under SPA nav — so it merged cross-view content into one pool. The unit suite couldn't see it (it needs the reconnect/SPA-nav sequence across real navigations); the release *was* the harness. Reinforces the browser-test-downstream-interactive-paths rule (#1849) — applied to the framework's own dogfood on each RC.
+
+**Action taken**: Closed — #2033 fixed in PR #2036.
+
+**2. WeakMap-keyed client state needs a discoverable teardown anchor + an explicit identity signal.** The `dj-virtual` state map is keyed by container-node identity and is not iterable, so "find containers that lost the attribute and tear them down" had no direct path — which is exactly why no teardown ever ran on attribute removal. The fix supplies both halves: an **identity signal** (`identityChanged()` — snapshot `dj-virtual` value + `dj-id` at init; `getAttribute` returns null on removal so attr-loss is covered) that makes `structureIntact()` fail closed, and a **discoverable anchor** (`reapStaleVirtualLists()` scans the never-removed `[data-dj-virtual-shell]` marker → `parentNode`) so stale containers can be reaped without iterating the map. Generalizable to any WeakMap-keyed DOM-lifecycle state: pair an identity snapshot with a DOM-queryable marker for teardown discovery.
+
+**Action taken**: Closed — shipped `identityChanged()` + `reapStaleVirtualLists()` marker-scan in PR #2036.
+
+**3. A security-guard whitelist drift needs deliberate re-verification, not a mechanical line bump.** #2032's `TestSetattrChokepoint` (a CWE-915 mass-assignment guard) was RED because a sanctioned `setattr` site drifted off its pinned `live_view.py:1213/1215`. The tempting fix is to bump the numbers to `1225/1227` and move on — but the whole *point* of the guard is that a moved `setattr(view, <non-literal key>, …)` might be a *new, unsanctioned* client-controlled write. I traced the moved sites and confirmed they're the same `DynamicLiveView` function-view-decorator applying the developer's own returned dict (`result = func(request, …)`), not a client frame — then recorded the re-verification in the whitelist comment for the next drifter. A pinned-line security assertion going RED is a prompt to re-audit, not to re-pin.
+
+**Action taken**: Closed — re-verified the moved sites are sanctioned + fixed in PR #2035.
+
+**4. Closing a coverage gap safely = soak-first, then promote (#1534).** #2032 also revealed that CI's Python job ran `pytest tests/ python/tests/` (explicit paths overriding pyproject `testpaths`), so `python/djust/tests/` — a ~4000-test suite — ran in neither CI nor the pre-push hook. Rather than fold it straight into the gating command (untested `-n auto` xdist behavior over a big newly-covered surface), it shipped as a `continue-on-error` soak step — and ran **green on its first runner run**, which de-risks the promotion. The promotion to a blocking gate + pre-push coverage is the deliberate second step.
+
+**Action taken**: Open — tracked in Action Tracker #323 (GitHub #2034).
+
+### Insights
+
+- **The drain is self-feeding.** This bucket's two issues both came *from the previous cycle*: #2032 was filed by the v1.1.0-6 #1977 subagent's sweep, and #2033 was found live-verifying v1.1.0-6's own dj-virtual work on the release it produced. Draining begets follow-ups; cutting a release begets regressions to verify.
+- **Right-sized delegation held again.** The self-contained JS bug (#2033) went to a worktree-isolated subagent with a symptom-up brief; the security-sensitive + CI-config change (#2032) stayed inline for direct control of the whitelist re-verification. Both patterns from the v1.1.0-5/-6 drains repeated cleanly.
+- **The #1534 soak paid off with zero drama** — the soak step was green on the first runner run, so the caution cost nothing and the promotion (#2034) is now low-risk. The rule earns its keep even when the feared flakiness doesn't materialize.
+
+### Review Stats
+
+| Metric | PR #2035 | PR #2036 | Total |
+|--------|----------|----------|-------|
+| Issues closed | 1 (#2032) | 1 (#2033) | 2 |
+| Tests added | 0 (re-greened 2) | 3 | 3 (+2 re-greened) |
+| Gate-off sentinel (#1468) | ✓ | ✓ | 2/2 |
+| CI failures | 0 | 0 | 0 |
+| Follow-ups filed | #2034 | — | 1 |
+| Bundle delta (gzipped) | — | +212 B | +212 B |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no new canon — findings 1-3 reinforce existing canon (#1849 browser-verify, WeakMap/teardown is a code pattern, #1197/#1516 verify-don't-assume applied to a security whitelist). Finding 4 is a CI-config change tracked as #2034.
+**CI**: `.github/workflows/test.yml` gained a `continue-on-error` `python/djust/tests/` soak step (#2032).
+**Checklist / Pipeline template / Skills**: none.
+
+### Open Items
+
+- [x] Promote the `python/djust/tests/` CI soak step to a blocking gate + add to the pre-push hook — tracked in Action Tracker #323 (GitHub #2034) — resolved in v1.1.0-8 (PR #2039)
+- [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried forward
+
+## v1.1.0-6 — retro-tail + carryover drain (PRs #2029/#2030/#2031)
+
+**Date**: 2026-07-03
+**Scope**: Drained the tail left after v1.1.0-5: one carryover bug (#1977, the hard VDOM misroute that self-heals) plus two retro-tail tech-debt items (#2020 async parity, #2028 CHANGELOG pin). 3 PRs, 3 issues closed; #2027 closed-without-code (in-repo half already shipped). 2 contained items done inline; the one hard fix (#1977, Python-only once the differ was cleared) done via a worktree-isolated subagent. 1 follow-up filed (#2032). Deferred and untouched: #2017 (large dj-virtual enhancement), #1561/#1562 (`priority:low` feature tracks).
+**Tests at close**: 3 new suites (`test_changelog_tagged_sections.py` ×3, `test_async_dispatch_parity_2020.py` ×7, `test_stale_baseline_restore_1977.py` ×3).
+
+### What We Learned
+
+**1. CI's Python job silently omits `python/djust/tests/`.** The #1977 subagent's broader sweep surfaced that `.github/workflows/test.yml:165` runs `pytest tests/ python/tests/` — explicit paths that OVERRIDE `pyproject.toml`'s `testpaths` (which DOES list `python/djust/tests`). So a large suite — V008 checks, mount-chokepoint structural pins, #1466/#1552 restore tests, and this milestone's own #2020/#1977 tests — is not CI-gated (nor pre-push-gated, same omission). Concrete symptom it was hiding: `test_mount_chokepoint_structural.py::TestSetattrChokepoint` (a CWE-915 `safe_setattr` mass-assignment guard) is RED on `main` — a sanctioned setattr site moved off the whitelist's pinned `live_view.py:1213/1215` and nothing caught it. The sweep was 8803 passed / 2 failed (only these 2), so the gap is cheap to close (deliberate whitelist update + add the dir to CI per the #1534 new-CI-job soak rule).
+
+**Action taken**: Open — tracked in Action Tracker #322 (GitHub #2032).
+
+**2. Dogfooding a tag-pin check before wiring exposed the rolling-rc CHANGELOG invariant.** #2028 asked for "pin each `## [X.Y.Z]` section against its `vX.Y.Z` tag." The first implementation did exactly that — and a dogfood run (#1060) flooded 100+ false positives, because this repo's rolling-rc sections keep accumulating entries *after* their own rc tag (e.g. `[1.0.0rc12]` gained a dozen fixes post-`v1.0.0rc12`). The correct invariant is "a section is frozen once *superseded*, not at its own tag" → pin every section against the *newest* release tag's snapshot (0-mismatch on the real tree, 119 sections). Dogfooding a tooling check against the real repo before wiring is what turned a subtly-wrong design into a correct one.
+
+**Action taken**: Closed — shipped `scripts/check-changelog-tagged-sections.py` (newest-tag-snapshot design) in PR #2029.
+
+**3. A fix-by-copying-the-branch is a latent re-drift; converge structurally (#1646).** #2016 (v1.1.0-5) fixed the async-`@background` breakage on the converged runtime path by *copying* the consumer's `iscoroutinefunction(callback)` branch into `ViewRuntime._execute_async_task` — leaving two byte-identical copies primed to re-diverge on the next edit. #2020's cure was structural: extract one `run_async_callback` in `mixins/async_work.py` that both transports delegate to, pinned by 3 structural tests (both paths call it, neither keeps its own dispatch branch, it's the single definition). This is the #1646 discipline applied to a *fix's own* residue — a copy-paste fix is a finding, not a resolution.
+
+**Action taken**: Closed — shipped `run_async_callback` shared helper in PR #2030.
+
+**4. Symptom-up triage: the cited path (differ) was clean; the real cause was the reconnect baseline seam.** #1977's title blamed `diff_html` misrouting `SetText`. A prior-session 18-shape faithful search + the maintainer's bit-exact Chromium repro had already *retracted* that framing — the differ is clean; the real cause is that on WS reconnect/state-restore the fresh view's Rust diff baseline is primed from a render that doesn't match the client's live (restored) DOM, so the first post-restore event diffs against a stale baseline and lands `SetText` on a `#text` node. Trusting the symptom (bit-exact console) over the cited path meant a one-guard Python fix (`_force_full_html` on restore mounts) and zero Rust churn. Render-timing was *traced* (the flag survives the skipped resume mount frame, consumed by the first event), and each restore seam was decided explicitly (#1646).
+
+**Action taken**: Closed — shipped `_force_full_html`-on-restore in PR #2031; reinforces the Bug-report-triage canon.
+
+### Insights
+
+- **Prior-session memory made the hard issue tractable.** The `project_1977_list_shrink_settext` memory (the 18-shape faithful search found no differ repro; maintainer retracted) + the maintainer's follow-up bit-exact repro converged on the real cause without re-running the expensive search. The memory saved the drain from chasing a retracted differ hypothesis.
+- **Right-sized delegation.** The two contained tech-debt items (a check script, a helper extraction) were done inline where context was cheap; only the one genuinely-hard fix (#1977 — multi-seam restore + reconnect-faithful test) went to a worktree-isolated subagent with a prescriptive symptom-up brief. It caught the CI-coverage gap the inline path would have missed.
+- **The empirical canary (#1459) as a permanent test.** #2028's check ships with a test that injects a spurious bullet into a shipped section and asserts the check flags it — the tooling-PR canary, locked in so a future refactor can't silently defang the check.
+- **CHANGELOG union-merge recurred every PR** (already tracked OUT-OF-REPO #319): each of the 3 PRs needed a local `git merge origin/main` before GitHub would merge the shared `[Unreleased]` block. The `merge=union` driver is local-only; GitHub's button doesn't apply it.
+
+### Review Stats
+
+| Metric | PR #2029 | PR #2030 | PR #2031 | Total |
+|--------|----------|----------|----------|-------|
+| Issues closed | 1 (#2028) | 1 (#2020) | 1 (#1977) | 3 |
+| Tests added | 3 | 7 | 3 | 13 |
+| Gate-off sentinel (#1468) | ✓ | ✓ | ✓ | 3/3 |
+| CI failures | 0 | 0 | 0 | 0 |
+| Follow-ups filed | — | — | #2032 | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no new canon this milestone — findings 2-4 reinforce existing canon (#1060 dogfood, #1646 structural cure, Bug-report-triage). Finding 1 is a repo-config gap tracked as #2032.
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none (the CHANGELOG-union + concurrent-worktree-cap skill propagations remain OUT-OF-REPO — tracker rows #316/#319).
+
+### Open Items
+
+- [x] CI Python job omits `python/djust/tests/` (hides a RED security-structural test) — tracked in Action Tracker #322 (GitHub #2032) — resolved in v1.1.0-7 (PR #2035); gate-promotion follow-up #323 (#2034)
+- [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried from v1.1.0-5
+
+## v1.1.0-5 — downstream-gotcha open-issue drain (PRs #2005–#2019)
+
+**Date**: 2026-07-02
+**Scope**: Drained all 18 open issues (#1987–#2004), most sourced from a downstream project's `DJUST_LESSONS` field-notes log (copy-from-and-it-breaks docs, silent client-side no-ops, and a private-state round-trip bug). 14 PRs closing 18 issues; 6 processed inline (config/serialization/state/markdown), 8 via worktree-isolated subagents (tenant helper, demo streaming, dj-window rescan, form-value preservation, dj-virtual robustness). 1 code follow-up filed (#2017) + 1 process follow-up (#2020).
+**Tests at close**: 8608 baseline + ~70 new (13 tenant, 12 private-model+config, 6 demo-stream, 5 dj-window, 11 form-value, 5 dj-virtual, 7 dj-input-warn, markdown/upload/config units) — full suite green at each merge.
+
+### What We Learned
+
+**1. Fixing a shipped demo surfaced a live framework bug — async `@background` was silently broken on the converged runtime path (a #1646 twin).**
+PR #2016 (#2001/#2002) set out to make the markdown-stream demo genuinely stream, which required an `async def` handler via `start_async`. That exposed `runtime.py:ViewRuntime._execute_async_task` unconditionally doing `await sync_to_async(callback)(...)` — which raises `TypeError` for an async callback — so async `@background`/`start_async(coroutine_fn)` silently failed on the **ADR-022-converged WS-event path** (the live path post-convergence). The consumer twin `websocket.py:_run_async_work` already had the `asyncio.iscoroutinefunction` branch; the runtime convergence dropped it. This is the #1646 parallel-path-drift class recurring yet again — and it had no parity test to catch the drop.
+**Action taken**: Open — tracked in Action Tracker #317 (GitHub #2020).
+
+**2. `dj-virtual` server-render integration was split into a client-side self-heal (shipped) and a deeper Python-side reconcile (deferred), per scope discipline.**
+PRs #2018 (#1988/#1989) fully fixed the layout contract (shell out of flow, spacer `flex-shrink:0`) and a client-side self-heal (`structureIntact()` re-virtualizes after a morph clobbers the shell/spacer; `absorbLooseChildren()` folds stream-appended rows). The deeper architectural work — automatic `stream_append`→`__djVirtualItems` wiring, VDOM-differ `dj-virtual` awareness for keyed mid-list inserts/removals, out-of-window finalize-patch landing — was honestly deferred rather than shipping a half-working partial (#1079).
+**Action taken**: Open — tracked in Action Tracker #318 (GitHub #2017).
+
+**3. `CHANGELOG merge=union` is a LOCAL git driver — GitHub's merge button doesn't apply it, so every multi-PR drain re-hits a CHANGELOG conflict.**
+All 14 PRs append to `### Fixed`; after the first merged, each subsequent PR needed a local `git merge origin/main` (union auto-resolves) + push before GitHub would merge it. The failure mode is silent (the merge button shows "conflicting" with all checks green). Cost one merge failure early before the local-sync step became routine. For the two bundle-touching PRs (#2018, #2019) the union-sync also conflicted on the generated bundles, resolved by rebuilding from merged source.
+**Action taken**: Open — tracked in Action Tracker #319 (OUT-OF-REPO — pipeline-drain skill step).
+
+### Insights
+
+- **The worktree-subagent drain pattern (5 subagents, 8 PRs, ≤3 concurrent per #1961) held up well** — every subagent caught a real cited-path drift symptom-up (issue line numbers had shifted; `morphNode`→`morphElement`; `_run_async_work`→`ViewRuntime._execute_async_task`; reinit site 1519 not 1456). Reinforces the Bug-report-triage "trust the symptom, not the cited path" rule and #1516 env-premise verification (the pyproject `pythonpath` is `[".", "examples/demo_project"]`, not `python` — subagents corrected by prepending `PYTHONPATH=<worktree>/python`).
+- **"Generic" checks need a grep-first reality check (#168/#1143).** #1999's issue proposed warning on "any dotted `dj-` attribute," but grepping surfaced legit dotted conventions (`dj-keydown.enter`, `dj-window-keydown.escape`, `dj-loading.class/.show/.hide/.disable/.for`). The warning was tightened to key on the `.lazy`/`.debounce` *modifier* on non-`dj-model` directives — the issue author's mental model of "the convention" was incomplete.
+- **The #1646 structural cure was applied correctly three times** (a positive counterweight to finding 1): #1994 centralized model-ref encode/decode in the two shared `_get_private_state`/`_restore_private_state` funnels (all 5 persist + 3 restore paths inherit it); #1996 moved the scoped-element rescan into `bindLiveViewEvents` (every path) while keeping the listener install one-shot; #1990/#1991 routed both broadcast sweeps through one `syncBroadcastTextareas` helper.
+- **Reused existing vocabulary rather than inventing** — #1991 reused `dj-update="ignore"` (the sweeps just weren't honoring it — a real consistency gap); #2003's `set_tenant` mirrors into the session only for a session resolver; #1990 added the minimal opposite-polarity `dj-force-value`.
+- **Reproduction fidelity held** (#1849/#1650): demo-stream tests drove a real `WebsocketCommunicator` + runtime path (not a proxy); dj-virtual tests pinned the CSS contract + reconcile behavior (JSDOM has no layout engine) with the pixel-verification honestly flagged as a manual follow-up. Every fix carried a gate-off sentinel (#1468).
+
+### Review Stats
+
+| Metric | Value |
+|--------|-------|
+| PRs merged | 14 (#2005–#2019) |
+| Issues closed | 18 (#1987–#2004) |
+| Follow-ups filed | 2 (#2017 code, #2020 process) |
+| New tests | ~70 (all gate-off verified) |
+| Framework bugs found while draining docs/demo issues | 1 (async `@background` on the converged path, #2016) |
+| 🔴 findings at review | 0 (subagent PRs reviewed read-only via `gh pr diff` / `git diff`, avoiding the #1804 core.bare hazard) |
+| Client JS budget deltas | #1999 +315 B, #1996 −25 B, #1990/#1991 +52 B, #1988/#1989 +231 B (all < 2 KB/module) |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no new canon this milestone — findings reinforce existing rules (#1646, #168/#1143, #1079, #1849/#1650, #1516, #1961, #1468, #1804).
+**Memory**: saved `reference_changelog_union_vs_github_merge` (the local-union-vs-GitHub-merge drain gotcha, finding 3).
+**Action Tracker**: rows 317–319 added.
+
+### Open Items
+
+- [x] #317 — transport-parity test for the async-work dispatch path (GitHub #2020) — resolved in v1.1.0-6 (PR #2030, shared `run_async_callback` helper)
+- [ ] #318 — dj-virtual deeper server-side reconcile (GitHub #2017)
+- [ ] #319 — codify the CHANGELOG-union local-sync step in the pipeline-drain skill (OUT-OF-REPO; memory saved in-repo-adjacent)
 
 ## v1.1.0-4 — post-convergence open-issue drain (PRs #1961–#1965)
 

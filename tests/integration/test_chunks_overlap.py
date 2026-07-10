@@ -17,7 +17,6 @@ import asyncio
 import gc
 import time
 import warnings
-from typing import List
 
 import pytest
 

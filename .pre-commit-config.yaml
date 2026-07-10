@@ -152,6 +152,18 @@ repos:
         files: ^CHANGELOG\.md$
         pass_filenames: false
 
+      # Pin already-shipped CHANGELOG sections against the newest release tag —
+      # a stray branch merge must never silently rewrite shipped history (the
+      # v1.1.0rc5 consolidation incident). See
+      # scripts/check-changelog-tagged-sections.py and
+      # tests/test_changelog_tagged_sections.py. Closes #2028.
+      - id: check-changelog-tagged-sections
+        name: check CHANGELOG shipped-section pins (#2028)
+        entry: python scripts/check-changelog-tagged-sections.py
+        language: python
+        files: ^CHANGELOG\.md$
+        pass_filenames: false
+
   # ADR status/version-line consistency — catches the drift class #1492
   # reconciled by hand (Accepted ADR still has a `Target version:` line).
   # See scripts/check-adr-status.py and tests/test_check_adr_status.py.
@@ -206,7 +218,10 @@ repos:
       # compiled `.so` so `import djust._rust` keeps working. See #1810.
       - id: pytest
         name: pytest
-        entry: bash -c 'WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath)"; PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ -q'
+        # #2034 — include python/djust/tests/ so the pre-push suite matches the
+        # (now-blocking) CI Python job; the explicit paths override pyproject's
+        # testpaths, which is how this dir was historically absent from both.
+        entry: bash -c 'WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath)"; PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ python/djust/tests/ -q'
         language: system
         types: [python]
         pass_filenames: false

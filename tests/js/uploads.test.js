@@ -217,4 +217,25 @@ describe('uploads', () => {
             expect(window.djust.uploads.activeUploads).toBeDefined();
         });
     });
+
+    describe('default chunk size fits under the default frame limit (#1993)', () => {
+        it('DEFAULT_CHUNK_SIZE payload + frame header stays under max_message_size (65536)', () => {
+            const src = fs.readFileSync('./python/djust/static/djust/src/15-uploads.js', 'utf-8');
+            const chunkMatch = src.match(/const DEFAULT_CHUNK_SIZE = ([0-9]+)\s*\*\s*([0-9]+)/);
+            const headerMatch = src.match(/const FRAME_HEADER_BYTES = ([0-9]+)/);
+            expect(chunkMatch).toBeTruthy();
+            expect(headerMatch).toBeTruthy();
+            const chunk = parseInt(chunkMatch[1], 10) * parseInt(chunkMatch[2], 10);
+            const header = parseInt(headerMatch[1], 10);
+            // config.py `max_message_size` default (checked server-side in websocket.py).
+            const DEFAULT_MAX_MESSAGE_SIZE = 65536;
+            // The bug: 64*1024 + 21 = 65557 > 65536 → "Message too large (65557 bytes)"
+            // on a brand-new project using only default settings.
+            expect(chunk + header).toBeLessThanOrEqual(DEFAULT_MAX_MESSAGE_SIZE);
+            // FRAME_HEADER_BYTES must match the real buildFrame header (1 + 16 + 4)
+            // and be the value buildFrame actually allocates the header with.
+            expect(header).toBe(21);
+            expect(src).toContain('new Uint8Array(FRAME_HEADER_BYTES)');
+        });
+    });
 });

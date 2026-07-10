@@ -1172,19 +1172,32 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             )
         self._sync_done_this_cycle = False  # Reset for next cycle
 
+        # ADR-019: dispatch through the renderer abstraction. ViewRuntime
+        # binds ``_djust_renderer`` to the view after mount when the
+        # handshake selected a non-HTML renderer (LVN-I PR-3 / runtime.py).
+        # Default fallback is a fresh HtmlRenderer per render — byte-
+        # identical to the pre-LVN behavior.
+        from ..renderers import HtmlRenderer
+
         # #1784: register self as the active parent view for the duration of
-        # the Rust diff render. ``RequestMixin.get`` calls this AFTER
+        # the diff render. ``RequestMixin.get`` calls this AFTER
         # ``render_full_template`` to establish the VDOM baseline, and the Rust
         # ``render_with_diff()`` re-runs any embedded ``{% live_render %}`` tag
         # against a JSON-serialized context that cannot carry the live parent
         # view — same gap ``render_full_template`` guards (parallel-path-drift,
         # per CLAUDE.md). The context manager save/restores so the WS path
         # (which already carries a real ``view``) is unaffected and the
-        # thread-local never leaks.
+        # thread-local never leaks. The guard wraps the renderer-abstraction
+        # call (ADR-019) so it applies to HtmlRenderer and any future renderer.
         from ..templatetags.live_tags import active_parent_view
 
+        renderer = getattr(self, "_djust_renderer", None) or HtmlRenderer(self)
         with active_parent_view(self):
-            result = self._rust_view.render_with_diff()
+            result = renderer.render_with_diff(
+                request=None,
+                extract_liveview_root=False,
+                preloaded_context=None,
+            )
         html, patches_json, version = result
 
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915

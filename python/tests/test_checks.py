@@ -3740,6 +3740,7 @@ class TestT011UnsupportedTemplateTags:
                     {% spaceless %}<p> </p>{% endspaceless %}
                     {% cycle "a" "b" "c" %}
                     {% now "Y-m-d" %}
+                    {% regroup items by category as grouped %}
                 </div>
                 """
             )
@@ -3766,7 +3767,7 @@ class TestT011UnsupportedTemplateTags:
                 """\
                 {# noqa: T011 #}
                 <div dj-view="myapp.views.MyView">
-                    {% regroup items by category as grouped %}
+                    {% resetcycle %}
                 </div>
                 """
             )
@@ -3792,7 +3793,7 @@ class TestT011UnsupportedTemplateTags:
             textwrap.dedent(
                 """\
                 <div dj-view="myapp.views.MyView">
-                    {% regroup items by category as grouped %}
+                    {% resetcycle %}
                     {% lorem 3 p %}
                     {% debug %}
                 </div>

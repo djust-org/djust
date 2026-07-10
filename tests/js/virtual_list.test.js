@@ -16,7 +16,15 @@ function createDom(innerHtml) {
     ${innerHtml}
   </div>
 </body>
-</html>`, { runScripts: 'dangerously', pretendToBeVisual: true });
+</html>`, {
+        runScripts: 'dangerously',
+        pretendToBeVisual: true,
+        // A concrete origin so window.localStorage is available — the client's
+        // binding MutationObserver touches it when a brand-new element is
+        // appended into dj-root (the #1989 stream-append path). JSDOM's
+        // default about:blank is an opaque origin and throws on access.
+        url: 'http://localhost/',
+    });
 
     // Stub WebSocket so djustInit doesn't blow up.
     class MockWebSocket {
@@ -501,5 +509,148 @@ describe('dj-virtual', () => {
         container.__djVirtualItems = [byKey.z, byKey.x, byKey.y];
         dom.window.djust.refreshVirtualList(container);
         expect(spacer.style.height).toBe('175px');
+    });
+
+    // -----------------------------------------------------------------
+    // #1988 — shell/spacer layout contract (out-of-flow shell, flex-safe
+    // spacer). NOTE: JSDOM has no layout engine (offsetHeight/scrollHeight/
+    // getBoundingClientRect all return 0), so we assert the CSS *contract*
+    // the fix sets — not computed pixels. Real-browser pixel verification
+    // (scrollHeight == spacer height; spacer.offsetHeight > 0 under
+    // display:flex) is a recommended manual follow-up.
+    // -----------------------------------------------------------------
+
+    it('shell is taken out of flow and spacer survives a flex parent (#1988)', () => {
+        const dom = createDom(makeListHtml(100));
+        const container = setupContainer(dom);
+        const shell = container.querySelector('[data-dj-virtual-shell]');
+        const spacer = container.querySelector('[data-dj-virtual-spacer]');
+
+        // Shell: absolute + top/left/right:0 removes it from flow so ONLY the
+        // spacer contributes to container.scrollHeight (no double-count).
+        expect(shell.style.position).toBe('absolute');
+        expect(shell.style.top).toBe('0px');
+        expect(shell.style.left).toBe('0px');
+        expect(shell.style.right).toBe('0px');
+        // translateY windowing preserved.
+        expect(shell.style.transform).toBe('translateY(0px)');
+
+        // Spacer: flex-shrink:0 keeps its explicit height honored inside a
+        // display:flex container (default flex-shrink:1 otherwise crushes it
+        // to offsetHeight:0 and the list never scrolls).
+        expect(spacer.style.flexShrink).toBe('0');
+        expect(spacer.style.width).toBe('1px');
+    });
+
+    // -----------------------------------------------------------------
+    // #1989 — self-healing integration with server-driven re-renders.
+    // -----------------------------------------------------------------
+
+    function rawRows(count, opts = {}) {
+        // The raw {% for %} list a server re-render restores — no shell/spacer
+        // wrapper, just the item elements as direct children.
+        const start = opts.start ?? 0;
+        const rows = [];
+        for (let i = start; i < start + count; i++) {
+            rows.push(`<div class="row" data-i="${i}">Row ${i}</div>`);
+        }
+        return rows.join('');
+    }
+
+    it('re-initializes after a server re-render clobbers the shell/spacer (#1989 symptom 1)', () => {
+        const dom = createDom(makeListHtml(20));
+        const container = setupContainer(dom, { clientHeight: 100 });
+        const originalShell = container.querySelector('[data-dj-virtual-shell]');
+        expect(originalShell).not.toBeNull();
+
+        // Simulate a server re-render: the keyed VDOM diff replaces the
+        // container's children back to the raw {% for %} list (Python has no
+        // notion of client-side virtualization). This detaches the managed
+        // shell/spacer — the WeakMap identity of the container is unchanged.
+        container.innerHTML = rawRows(20);
+        expect(container.querySelector('[data-dj-virtual-shell]')).toBeNull();
+
+        // The framework's post-morph reconcile (mirrors 09-event-binding.js:
+        // initVirtualLists(scope) then refreshVirtualList per [dj-virtual]).
+        dom.window.djust.initVirtualLists(dom.window.document);
+        dom.window.djust.refreshVirtualList(container);
+
+        // Self-healed: a NEW shell/spacer are re-established (not a permanent
+        // no-op) and the fresh list is windowed inside the shell again.
+        const healedShell = container.querySelector('[data-dj-virtual-shell]');
+        expect(healedShell).not.toBeNull();
+        expect(healedShell).not.toBe(originalShell);
+        expect(container.querySelector('[data-dj-virtual-spacer]')).not.toBeNull();
+        expect(healedShell.children.length).toBeGreaterThan(0);
+        // No raw rows leaked as direct children outside the wrapper.
+        const looseAfter = Array.from(container.children).filter(
+            (c) => !c.hasAttribute('data-dj-virtual-shell') &&
+                   !c.hasAttribute('data-dj-virtual-spacer')
+        );
+        expect(looseAfter.length).toBe(0);
+    });
+
+    it('refreshVirtualList alone self-heals a clobbered container (#1989 symptom 1, order-independent)', () => {
+        // Robustness: even if refreshVirtualList runs WITHOUT a preceding
+        // initVirtualLists (call-order independence), it must detect the
+        // clobber and re-establish structure instead of rendering into a
+        // detached shell.
+        const dom = createDom(makeListHtml(20));
+        const container = setupContainer(dom, { clientHeight: 100 });
+        container.innerHTML = rawRows(20);
+        dom.window.djust.refreshVirtualList(container);
+        expect(container.querySelector('[data-dj-virtual-shell]')).not.toBeNull();
+        expect(container.querySelector('[data-dj-virtual-spacer]')).not.toBeNull();
+    });
+
+    it('absorbs a loose stream-appended child into the shell (#1989 symptom 2)', () => {
+        // Short list, big viewport → every item renders inside the shell.
+        const dom = createDom(makeListHtml(3));
+        const container = setupContainer(dom, { clientHeight: 400 });
+        const shell = container.querySelector('[data-dj-virtual-shell]');
+        const spacer = container.querySelector('[data-dj-virtual-spacer]');
+        expect(shell.children.length).toBe(3);
+
+        // Simulate a single new row appended by a server re-render OUTSIDE the
+        // shell/spacer wrapper (the partial-leak symptom).
+        const newRow = dom.window.document.createElement('div');
+        newRow.className = 'row';
+        newRow.setAttribute('data-i', 'new');
+        newRow.textContent = 'Row new';
+        container.appendChild(newRow);
+        // Precondition: it's a loose direct child right now.
+        const looseBefore = Array.from(container.children).filter(
+            (c) => c !== shell && c !== spacer
+        );
+        expect(looseBefore).toContain(newRow);
+
+        // Post-morph reconcile absorbs it into the item pool.
+        dom.window.djust.refreshVirtualList(container);
+
+        // No longer a loose direct child — it lives inside the shell now.
+        const looseAfter = Array.from(container.children).filter(
+            (c) => c !== shell && c !== spacer
+        );
+        expect(looseAfter.length).toBe(0);
+        expect(shell.querySelector('[data-i="new"]')).not.toBeNull();
+        expect(shell.children.length).toBe(4);
+        // Absorbed row is the same element reference (patches still resolve).
+        expect(shell.querySelector('[data-i="new"]')).toBe(newRow);
+    });
+
+    it('refresh with no changes leaves an intact list untouched (#1989 regression)', () => {
+        // absorbLooseChildren runs on every refresh — verify the no-loose,
+        // no-replacement path is a clean no-op (no stray de-parenting).
+        const dom = createDom(makeListHtml(50));
+        const container = setupContainer(dom, { clientHeight: 100 });
+        const shell = container.querySelector('[data-dj-virtual-shell]');
+        const before = shell.children.length;
+        dom.window.djust.refreshVirtualList(container);
+        expect(shell.children.length).toBe(before);
+        const loose = Array.from(container.children).filter(
+            (c) => !c.hasAttribute('data-dj-virtual-shell') &&
+                   !c.hasAttribute('data-dj-virtual-spacer')
+        );
+        expect(loose.length).toBe(0);
     });
 });

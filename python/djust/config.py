@@ -83,15 +83,22 @@ class LiveViewConfig:
         # This is also readable from settings.DJUST_CONFIG["hook_namespacing"]
         # via the template tag (kept here for discoverability / system-check tooling).
         "hook_namespacing": "lax",
-        # Automatic SPA navigation (#1734, ADR-021 Stage 2). When True,
+        # Automatic SPA navigation (#1734, ADR-021). When True,
         # {% djust_client_config %} emits a <meta name="djust-auto-navigate">
-        # flag and the client installs ONE delegated click listener that
-        # SPA-navigates plain <a href> links whose path resolves in the
-        # (auth-filtered, #1758) route map — Turbo-Drive-style, no djust
-        # attributes needed. Default OFF: opt in only after reading the
-        # opt-out matrix (modifier/middle-click, target/download, external,
-        # hash-only, data-no-navigate). Non-LiveView links full-reload as usual.
-        "auto_navigate": False,
+        # flag (and auto-emits the route map, #1733) and the client installs ONE
+        # delegated click listener that SPA-navigates plain <a href> links whose
+        # path resolves in the (auth-filtered, #1758) route map — Turbo-Drive-
+        # style, no djust attributes needed.
+        #
+        # Default ON as of v1.1 (ADR-021 Stage 3): native dj-navigate is djust's
+        # canonical SPA-navigation model, so it is the zero-config default. It
+        # degrades gracefully — links whose path does NOT resolve in the route
+        # map (external, non-LiveView, etc.) full-reload exactly as before, and
+        # the opt-out matrix still applies (modifier/middle-click, target/
+        # download, hash-only, data-no-navigate). Opt OUT with
+        # ``LIVEVIEW_CONFIG["auto_navigate"] = False`` (e.g. apps that wire their
+        # own external TurboNav). On 1.0.x this defaulted OFF (opt-in).
+        "auto_navigate": True,
         # Re-check auth on every WS event (#1777, threat model T3, defense-in-depth).
         # Auth normally runs only at mount; with this OFF (default) an
         # authenticated user who logs out / loses a permission mid-session keeps
@@ -140,6 +147,22 @@ class LiveViewConfig:
         # {% if %}/{% cycle %}/nested loops/forloop are auto-excluded (correct
         # by construction). Safe to enable for list/table-heavy views.
         "loop_render_cache_enabled": False,
+        # Django-parity template auto-call (ADR-024). When True (default),
+        # the Rust engine's sidecar getattr walk invokes callables exactly
+        # like Django's Variable._resolve_lookup ({{ user.get_full_name }},
+        # {{ workspace.memberships.count }}), honoring
+        # do_not_call_in_templates and refusing alters_data. False restores
+        # the pre-ADR plain-getattr behavior — a kill-switch only, not a
+        # feature toggle (candidate for removal at 2.0).
+        "template_auto_call": True,
+        # #1987: TYPE-based serialization floor (defense-in-depth over the
+        # name/method floor). A list of Django field CLASS names (matched
+        # anywhere in a field's MRO) to always exclude from client-bound
+        # serialization — e.g. ["BinaryField", "MyEncryptedField"]. BinaryField
+        # and best-effort encrypted-field types are excluded unconditionally;
+        # this adds project-specific types. FileField/ImageField are never
+        # excluded (they serialize a URL).
+        "sensitive_field_types": [],
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
         # Bootstrap 4 classes (NYC Core Framework, gov sites, legacy projects)
@@ -256,11 +279,34 @@ class LiveViewConfig:
         try:
             from django.conf import settings
 
-            if hasattr(settings, "LIVEVIEW_CONFIG"):
-                self._config.update(settings.LIVEVIEW_CONFIG)
-            # Top-level djust-specific settings — convenience aliases
-            # for the nested ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` dicts.
-            # Added for discoverability of operator-facing toggles.
+            live_cfg = getattr(settings, "LIVEVIEW_CONFIG", None) or {}
+            if live_cfg:
+                self._config.update(live_cfg)
+            # #1993: also honor LiveView runtime keys set in the similarly-named
+            # ``DJUST_CONFIG`` dict as a fallback. The two dicts are defined in
+            # the same module and easy to confuse — ``DJUST_CONFIG`` already
+            # backs tenancy/presence/state-backend/suppress_checks — so a
+            # ``max_message_size`` / ``rate_limit`` / ``event_security`` set
+            # there was a SILENT no-op (this method only read ``LIVEVIEW_CONFIG``).
+            # Adopt only keys that are genuine LiveView config keys (present in
+            # the defaults) so unrelated tenancy/presence keys aren't pulled in;
+            # ``LIVEVIEW_CONFIG`` WINS on a collision (it is the documented home),
+            # and each adopted key logs a debug breadcrumb naming where it came
+            # from, surfacing the ambiguity rather than resolving it silently.
+            djust_cfg = getattr(settings, "DJUST_CONFIG", None)
+            if isinstance(djust_cfg, dict):
+                for key, value in djust_cfg.items():
+                    if key in self._defaults and key not in live_cfg:
+                        self._config[key] = value
+                        logger.debug(
+                            "djust: applied LiveView config key %r from "
+                            "DJUST_CONFIG (its documented home is LIVEVIEW_CONFIG)",
+                            key,
+                        )
+            # Top-level flat ``DJUST_*`` settings — convenience aliases for a few
+            # specific nested keys, for discoverability of operator-facing
+            # toggles. (The nested ``DJUST_CONFIG`` *dict* is handled just above,
+            # #1993 — these are the separate flat scalars.)
             if hasattr(settings, "DJUST_WS_COMPRESSION"):
                 self._config["websocket_compression"] = bool(settings.DJUST_WS_COMPRESSION)
             # Service-worker advanced features (v0.6.0) — top-level aliases

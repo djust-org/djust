@@ -22,11 +22,52 @@ and sends updated patches to the client.
                 self.error = str(error)
 """
 
+import asyncio
 import inspect
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from asgiref.sync import sync_to_async
+
 logger = logging.getLogger(__name__)
+
+
+async def run_async_callback(
+    callback: Callable[..., Any],
+    args: Any = (),
+    kwargs: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Run one ``start_async`` / ``@background`` callback across the sync/async
+    divide and return its result.
+
+    THE single source of truth for how a background callback is dispatched, so
+    the two transport paths can never drift on it (#2020, the #2016 / #1646
+    parallel-path twin):
+
+    - ``LiveViewConsumer._run_async_work`` (WebSocket) —
+      ``python/djust/websocket.py``
+    - ``ViewRuntime._execute_async_task`` (SSE + ``url_change``, and WS after
+      the ADR-022 flip) — ``python/djust/runtime.py``
+
+    Dispatch rules:
+
+    - A coroutine FUNCTION (an ``async def`` handler under ``@background``, or a
+      coroutine function passed to ``start_async``) is awaited directly on the
+      event loop. Routing it through ``sync_to_async`` raises
+      ``TypeError: sync_to_async can only be applied to sync functions`` — the
+      exact #2001 failure that silently broke every async background task on the
+      converged runtime path before #2016.
+    - A sync callable is dispatched to a worker thread via ``sync_to_async``. If
+      that sync callable itself returns a coroutine (a sync function that
+      returned ``some_async()`` without awaiting it), the coroutine is awaited
+      too — preserving the pre-v0.4.2 ``@background`` contract.
+    """
+    if asyncio.iscoroutinefunction(callback):
+        return await callback(*args, **(kwargs or {}))
+    result = await sync_to_async(callback)(*args, **(kwargs or {}))
+    if inspect.iscoroutine(result):
+        result = await result
+    return result
 
 
 class AsyncWorkMixin:
@@ -104,14 +145,32 @@ class AsyncWorkMixin:
         If the task is already running, it will be marked as cancelled so
         the re-render is skipped when it completes.
 
+        Two important limitations:
+
+        * **``name`` must match the name the task was scheduled under.** For
+          ``start_async(cb, name="x")`` that is ``"x"``; for a bare
+          ``@background`` handler it defaults to the handler's ``__name__``.
+          A name that matches no scheduled/running task is a **silent no-op**
+          — nothing is cancelled and nothing is raised. Pass the same string
+          to ``start_async(name=...)`` and ``cancel_async(...)`` so they can
+          never drift.
+        * **It cannot interrupt a synchronous task that is already running.**
+          A sync callback runs in a ``sync_to_async`` thread-pool slot and
+          Python threads are not preemptible, so ``cancel_async`` can only
+          drop a *not-yet-started* task or suppress a running one's final
+          re-render — it cannot stop the loop body. To make generation
+          interruptible, use an ``async def`` handler and check a flag between
+          ``await``\\ s (the event loop can then dispatch the cancelling event
+          mid-run).
+
         Args:
-            name: The name of the task to cancel.
+            name: The name of the task to cancel (must match ``start_async``).
 
         Example::
 
             @event_handler
             def cancel_export(self, **kwargs):
-                self.cancel_async("export")
+                self.cancel_async("export")  # matches start_async(name="export")
                 self.exporting = False
                 self.status = "Cancelled"
         """

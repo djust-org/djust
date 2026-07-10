@@ -313,9 +313,13 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     common in-place mutations without the cost of copy.deepcopy().
 
     This is ~100x faster than deep copy for views with many attributes.
-    Trade-off: deep nested mutations (e.g., items[0]['name'] = 'x')
-    are NOT detected. For those, use self._changed_keys or @event_handler
-    which explicitly marks state as dirty.
+    Trade-off: deep nested in-place mutations (e.g., items[0]['name'] = 'x')
+    are NOT detected. For those, call ``self.set_changed_keys('items')`` after
+    the mutation to force a re-render, or assign a new value built immutably
+    (which djust diffs efficiently). Setting ``self._changed_keys`` directly does
+    NOT help: it is excluded from this snapshot (``_FRAMEWORK_INTERNAL_ATTRS``),
+    so the pre/post skip still fires — the render-forcing mechanism is the
+    ``_force_full_html`` flag that ``set_changed_keys()`` sets.
     """
     # #762: Filter framework-internal attrs so change detection doesn't fire
     # on attrs like ``template_name`` / ``http_method_names`` that the user
@@ -1134,21 +1138,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         error = None
 
         try:
-            # Async callbacks (from @background on async def handlers)
-            # are called directly on the event loop. Sync callbacks are
-            # dispatched to a thread via sync_to_async. The legacy
-            # inspect.iscoroutine fallback handles callbacks created
-            # before the @background decorator gained native async
-            # detection (v0.4.2+).
-            import asyncio as _asyncio
-            import inspect
+            # Dispatch through the ONE shared helper so the sync/async handling
+            # can never drift from the runtime twin (#2020, #2016 / #1646). It
+            # awaits an async callback directly and thread-dispatches a sync one
+            # (with the legacy coroutine-return unwrap for pre-v0.4.2 callbacks).
+            from .mixins.async_work import run_async_callback
 
-            if _asyncio.iscoroutinefunction(callback):
-                result = await callback(*args, **kwargs)
-            else:
-                result = await sync_to_async(callback)(*args, **kwargs)
-                if inspect.iscoroutine(result):
-                    result = await result
+            result = await run_async_callback(callback, args, kwargs)
 
             # Teardown identity-guard (#1940, #245/#1198 commit-or-rollback /
             # identity-guard class). The callback above is the FIRST await in
@@ -1640,6 +1636,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception:  # noqa: BLE001
             logger.exception("Deferred-activity render failed for %s", event_name)
             return
+        # Consume the force flag (one render per set_changed_keys()/_force_full_html,
+        # #1981) — mirrors the runtime's reset in _render_and_send; without it the
+        # flag leaks and every subsequent turn force-renders.
+        if getattr(view, "_force_full_html", False):
+            view._force_full_html = False
         _render_ms = (time.perf_counter() - t0) * 1000
 
         patch_list = None
@@ -2894,12 +2895,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         verbs through the runtime.
         """
         if getattr(self, "_runtime", None) is None:
+            from .renderers import get_renderer_factory
             from .runtime import WSConsumerTransport, ViewRuntime
+
+            # ADR-019 LVN-I PR-3: handshake selects renderer factory by
+            # ``?platform=html|swiftui|compose``. Unknown / missing values
+            # return None → runtime defaults to HtmlRenderer at dispatch.
+            # ``scope["query_string"]`` is bytes per ASGI spec.
+            from urllib.parse import parse_qs
+
+            qs = parse_qs(self.scope.get("query_string", b"").decode("utf-8", errors="ignore"))
+            platform = (qs.get("platform") or [None])[0]
+            renderer_factory = get_renderer_factory(platform)
 
             self._runtime = ViewRuntime(
                 WSConsumerTransport(self),
                 scope=self.scope,
                 rate_limiter=self._rate_limiter,
+                renderer_factory=renderer_factory,
             )
         return self._runtime
 
@@ -4066,8 +4079,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await sync_to_async(self.view_instance.handle_tick)()
 
                         # Skip render if tick handler didn't change any state.
+                        # Honor _force_full_html (set by set_changed_keys(), #1981)
+                        # like the event paths do (runtime.py / handle_event) — an
+                        # in-place mutation inside handle_tick is invisible to the
+                        # snapshot, so without this guard the hatch would be
+                        # silently dropped on the tick path (#1646 parallel-path).
                         post_assigns = _snapshot_assigns(self.view_instance)
-                        if pre_assigns == post_assigns:
+                        if pre_assigns == post_assigns and not getattr(
+                            self.view_instance, "_force_full_html", False
+                        ):
                             logger.debug(
                                 "[djust] Tick on %s produced no state changes, skipping render",
                                 self.view_instance.__class__.__name__,
@@ -4080,6 +4100,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         html, patches, version = await sync_to_async(
                             self.view_instance.render_with_diff
                         )()
+
+                        # Consume the force flag (one render per
+                        # set_changed_keys()/_force_full_html, #1981) — mirrors
+                        # the runtime's reset in _render_and_send.
+                        if getattr(self.view_instance, "_force_full_html", False):
+                            self.view_instance._force_full_html = False
 
                         if patches is not None:
                             if isinstance(patches, str):

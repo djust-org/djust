@@ -4,7 +4,7 @@ RustBridgeMixin - Rust backend integration for LiveView.
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Union
 from urllib.parse import parse_qs, urlencode
 
 from ..security import sanitize_for_log
@@ -309,6 +309,29 @@ class RustBridgeMixin:
             enabled = False
         rust_view.set_loop_render_cache_enabled(enabled)
 
+    def _apply_template_auto_call_flag(self) -> None:
+        """Wire ``LIVEVIEW_CONFIG['template_auto_call']`` → Rust (ADR-024).
+
+        Reads the (default-True) kill-switch and forwards it to the Rust
+        ``RustLiveView`` via ``set_template_auto_call``. Mirrors the #1967
+        ``_apply_loop_render_cache_flag`` plumbing: idempotent, cheap (one
+        bool set), called on every ``_rust_view`` (re)initialization —
+        including cache HITs and msgpack restores, where the flag is not
+        part of the serialized view state. A no-op if the Rust build
+        predates the setter (defensive ``hasattr`` guard).
+        """
+        rust_view = getattr(self, "_rust_view", None)
+        if rust_view is None or not hasattr(rust_view, "set_template_auto_call"):
+            return
+        try:
+            from ..config import get_config
+
+            enabled = bool(get_config().get("template_auto_call", True))
+        except Exception:  # pragma: no cover - config access is defensive
+            logger.debug("[LiveView] template_auto_call flag read failed; defaulting ON")
+            enabled = True
+        rust_view.set_template_auto_call(enabled)
+
     def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""
 
@@ -398,6 +421,7 @@ class RustBridgeMixin:
                     # loop_render_cache flag is transient (not serialized);
                     # re-apply it from config after a cache hit (#1967).
                     self._apply_loop_render_cache_flag()
+                    self._apply_template_auto_call_flag()
                     logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
                     backend.set(self._cache_key, cached_view)
                     return
@@ -432,6 +456,7 @@ class RustBridgeMixin:
                     # loop_render_cache flag is transient (not serialized);
                     # re-apply it from config after a cache hit (#1967).
                     self._apply_loop_render_cache_flag()
+                    self._apply_template_auto_call_flag()
                     logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
                     backend.set(self._cache_key, cached_view)
                     return
@@ -458,6 +483,7 @@ class RustBridgeMixin:
             self._rust_view = RustLiveView(template_source, template_dirs)
             # Apply the per-item loop render cache flag (#1967, default OFF).
             self._apply_loop_render_cache_flag()
+            self._apply_template_auto_call_flag()
 
             if self._cache_key:
                 from ..state_backend import get_backend
@@ -546,6 +572,81 @@ class RustBridgeMixin:
         self._template_deps = deps
         return deps
 
+    def set_changed_keys(self, keys: Union[str, Iterable[str], None] = None) -> None:
+        """Mark one or more public attrs as changed, forcing a re-render.
+
+        djust's auto change-detection uses a fast identity + shallow-fingerprint
+        snapshot (``_snapshot_assigns``) that deliberately does NOT deep-copy
+        state (~100x faster). The trade-off is that an *in-place* mutation of a
+        nested container — e.g. ``self.rows[0]["done"] = True`` or
+        ``self.columns[0]["cards"].append(card)`` — shares the same object with
+        the previous snapshot, so it is invisible to change detection and
+        produces no re-render. See the "Nested state" note in
+        ``docs/website/guides/state-primitives.md``.
+
+        Call this from an event handler AFTER such a mutation to force a
+        re-render::
+
+            def toggle(self, i: int):
+                self.rows[i]["done"] = not self.rows[i]["done"]  # in-place
+                self.set_changed_keys("rows")
+
+        Because the previous state is aliased (the snapshot shares the mutated
+        object), djust cannot compute a *targeted* VDOM diff for the changed
+        subtree, so this forces a full re-render of the view. When a targeted
+        diff matters (large views, hot paths), prefer building a NEW value
+        immutably instead — djust diffs that efficiently::
+
+            self.rows = [
+                {**r, "done": not r["done"]} if j == i else r
+                for j, r in enumerate(self.rows)
+            ]
+
+        Zero-arg form (#1992): call ``set_changed_keys()`` with NO arguments
+        when a handler changed only EXTERNAL state (a DB row, a cache) and
+        touched no public ``self.*`` attribute, but ``get_context_data()`` will
+        return different HTML on the next render (it re-queries the DB). Auto
+        change-detection sees no changed attr and would auto-skip the event; the
+        zero-arg form forces a full re-render without naming a key::
+
+            def switch_branch(self, message_id, child_id):
+                msg = Message.objects.get(id=message_id)
+                msg.active_child_id = child_id
+                msg.save(update_fields=["active_child_id"])  # DB only, no self.*
+                self.set_changed_keys()                       # force the re-render
+
+        Args:
+            keys: an attr name, or an iterable of attr names, to mark changed.
+                Omit entirely (``None``) for the zero-arg force-render form above
+                — a DB/external-only change with no changed public attr.
+
+        Note:
+            Distinct from the Rust-side ``RustLiveView.set_changed_keys`` (the
+            PyO3 partial-sync primitive `_sync_state_to_rust` drives internally)
+            — this Python-level method is the user-facing "force a re-render"
+            hatch and does not talk to the Rust view directly.
+        """
+        if keys is None:
+            # Zero-arg form (#1992): the handler changed only EXTERNAL state (a
+            # DB row, a cache) with no public ``self.*`` change, but
+            # ``get_context_data()`` will render different HTML next time. Force
+            # a full re-render without naming a key — ``_force_full_html`` below
+            # is the actual bypass; there is no key to add to ``_changed_keys``.
+            self._force_full_html = True
+            return
+        key_iter: Iterable[str] = (keys,) if isinstance(keys, str) else keys
+        existing: Set[str] = getattr(self, "_changed_keys", None) or set()
+        # Optional[...]: the attr is also cleared to None after each render sync.
+        self._changed_keys: Optional[Set[str]] = existing | set(key_iter)
+        # Force the render. Both flags written here are in
+        # ``_FRAMEWORK_INTERNAL_ATTRS`` and therefore EXCLUDED from the pre/post
+        # assigns snapshot — assigning them cannot perturb the fingerprint, so
+        # the in-place mutation still looks unchanged and the event would
+        # auto-skip. ``_force_full_html`` is the sanctioned skip bypass: honored
+        # on every skip path (runtime event spine, WS deferred-activity, WS tick)
+        # and consumed (reset) after the render it forces.
+        self._force_full_html = True
+
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.
 
@@ -586,6 +687,20 @@ class RustBridgeMixin:
             #                                   longer escapes)
             #   4. ``list[list[Model]]``      → recurse with depth bound
             #                                   (#1207 — nested grouping shape)
+            # ADR-024: capture RAW Model instances BEFORE the normalize loop
+            # replaces them with serialized dicts. The eager dict stays the
+            # fast path (and wins every hit), but reverse relations, managers
+            # and non-``get_``-prefixed methods are absent from the dict —
+            # resolvable only via the sidecar getattr walk
+            # ({{ workspace.memberships.count }}, the #1985 symptom). Without
+            # this, only request-scoped models (excluded from normalize) ever
+            # reached the sidecar.
+            from django.db.models import Model as _DjModel
+
+            _raw_models_for_sidecar = {
+                _key: _val for _key, _val in full_context.items() if isinstance(_val, _DjModel)
+            }
+
             for _key, _val in list(full_context.items()):
                 _normalized = _normalize_db_values(_val)
                 if _normalized is not _val:
@@ -917,6 +1032,29 @@ class RustBridgeMixin:
                     if isinstance(_raw_val, forms.BaseForm):
                         continue
                     sidecar[_raw_key] = _raw_val
+                # ADR-024: models captured before the normalize loop replaced
+                # them with dicts. The eager dict wins every direct hit; the
+                # raw model serves only nested paths the dict lacks (reverse
+                # relations / managers / non-get_ methods) via the sidecar
+                # getattr walk. Explicit sidecar entries above take precedence.
+                for _raw_key, _raw_val in _raw_models_for_sidecar.items():
+                    sidecar.setdefault(_raw_key, _raw_val)
+                # #1986 (ADR-024 review): the Rust getattr walk bypasses the
+                # serialization floor (SECURE_DEFAULTS Pattern 1) unless raw
+                # models are wrapped — else `{{ user.password }}` /
+                # `{{ member.is_superuser }}` / `{{ user.get_session_auth_hash }}`
+                # (and, through managers/querysets,
+                # `{{ x.groups.first.user_set.first.password }}` /
+                # `{% for u in qs %}{{ u.password }}`) leak to the client. Wrap
+                # every sidecar value (both explicitly-assigned models above AND
+                # request-scoped ones like `user`) in the floor-enforcing proxy;
+                # `_protect_sidecar_value` is a no-op for non-model values
+                # (request/view/etc.), and the proxy protects transitively so
+                # ONE floor governs the eager and sidecar channels (#1646).
+                from ..serialization import _protect_sidecar_value
+
+                for _sk in list(sidecar.keys()):
+                    sidecar[_sk] = _protect_sidecar_value(sidecar[_sk])
 
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a

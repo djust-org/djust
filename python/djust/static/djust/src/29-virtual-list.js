@@ -96,22 +96,47 @@
         const keyAttrRaw = container.getAttribute('dj-virtual-key-attr');
         const keyAttr = keyAttrRaw == null ? DEFAULT_KEY_ATTR : keyAttrRaw;
 
-        // Snapshot the pre-rendered children as the full item pool.
+        // Snapshot the pre-rendered children as the full item pool. Exclude
+        // any stray shell/spacer markers (#2033): if a previous virtualization
+        // was torn down but a marker element lingered, it must NEVER enter the
+        // item pool and be rendered as a data row.
         const originalChildren = Array.from(container.children).filter(
-            el => el.nodeType === 1
+            el => el.nodeType === 1 &&
+                !el.hasAttribute('data-dj-virtual-shell') &&
+                !el.hasAttribute('data-dj-virtual-spacer')
         );
 
         // Inner shell that actually holds the visible slice. A spacer sibling
         // forces the container scroll height to the virtual length.
+        //
+        // Layout contract (#1988): the shell is taken OUT of flow with
+        // `position: absolute` (top/left/right: 0) so ONLY the spacer
+        // contributes to `container.scrollHeight`. `position: relative` +
+        // `transform` does NOT remove the shell from flow (transforms are a
+        // paint-time effect per spec), so the shell's own rendered rows would
+        // double-count against the spacer and leave dead space past the last
+        // item. The container is made a positioned ancestor below (L121-123),
+        // so the absolute shell anchors to the container and translateY()
+        // still positions the visible slice; because it lives inside the
+        // scroll container it scrolls with the content as expected.
         const shell = document.createElement('div');
         shell.setAttribute('data-dj-virtual-shell', '');
-        shell.style.position = 'relative';
+        shell.style.position = 'absolute';
+        shell.style.top = '0';
+        shell.style.left = '0';
+        shell.style.right = '0';
         shell.style.willChange = 'transform';
         shell.style.transform = 'translateY(0px)';
 
+        // The spacer alone defines the scrollable length. `flex-shrink: 0`
+        // (#1988) keeps its explicit `style.height` honored inside a
+        // `display: flex` container — a flex item's default `flex-shrink: 1`
+        // otherwise crushes it to `offsetHeight: 0` once its height exceeds
+        // the flex container's available space, silently killing the scroll.
         const spacer = document.createElement('div');
         spacer.setAttribute('data-dj-virtual-spacer', '');
         spacer.style.width = '1px';
+        spacer.style.flexShrink = '0';
         spacer.style.pointerEvents = 'none';
         spacer.style.visibility = 'hidden';
 
@@ -126,6 +151,13 @@
             container,
             shell,
             spacer,
+            // Identity of the view/data-source this virtualization belongs to
+            // (#2033). Captured at setup so a later SPA-nav that repurposes the
+            // SAME physical container for a DIFFERENT view (dj-virtual removed,
+            // its source-var value changed, or the host view's dj-id changed)
+            // can be detected and torn down instead of leaking stale rows.
+            virtualValue: container.getAttribute('dj-virtual'),
+            viewId: container.getAttribute('dj-id'),
             mode: fixedItemHeight ? 'fixed' : 'variable',
             itemHeight: fixedItemHeight,       // fixed mode only
             estimatedHeight,                   // variable mode fallback
@@ -387,19 +419,207 @@
         state.visibleEnd = end;
     }
 
+    // Is the container's managed shell/spacer still the pair this state owns
+    // and still attached? (#1989 symptom 1) A server-driven re-render
+    // (morphdom / VDOM patch) has no notion of client-side virtualization —
+    // it diffs against the raw server `{% for %}` list and can replace the
+    // container's children back to that list, DETACHING the shell/spacer or
+    // REPURPOSING them into ordinary rows (stripping the marker attributes).
+    // Either way the tracked state is stale and the container must be
+    // re-initialised from its current (server-authored) children. The WeakMap
+    // key (the container element) is unchanged across this, so the plain
+    // "already tracked → skip" guard would leave it permanently
+    // un-virtualized.
+    function structureIntact(container, state) {
+        // #2033: a repurposed container (dj-virtual removed, its source-var
+        // value changed, or the host view's dj-id changed across SPA nav) is
+        // NEVER "intact" — the same-node reuse path must not treat it as still
+        // virtualized against the OLD view. Fail closed BEFORE the shell/spacer
+        // checks so the caller re-establishes (or tears down) rather than
+        // rendering the old pool into a stale shell.
+        if (identityChanged(container, state)) return false;
+        return (
+            state.shell.parentNode === container &&
+            state.shell.getAttribute('data-dj-virtual-shell') !== null &&
+            state.spacer.parentNode === container &&
+            state.spacer.getAttribute('data-dj-virtual-spacer') !== null
+        );
+    }
+
+    // Has the container been repurposed for a DIFFERENT view / data source
+    // since setup() captured its identity? (#2033) SPA-style navigation can
+    // reuse the SAME physical container node across a view change instead of
+    // remounting; nothing else tears the virtualization down. Any of:
+    //   - dj-virtual attribute removed (the new view isn't virtualized), OR
+    //   - dj-virtual value changed to a different source-var name, OR
+    //   - the host view's dj-id changed (server stamps dj-id by template
+    //     position, so it is stable across same-view re-renders and only
+    //     differs across an actual view swap).
+    // getAttribute() returns null for a removed attribute, so the value/id
+    // comparisons cover the "removed" case too.
+    function identityChanged(container, state) {
+        return (
+            container.getAttribute('dj-virtual') !== state.virtualValue ||
+            container.getAttribute('dj-id') !== state.viewId
+        );
+    }
+
+    // Drop observers/listeners and the STATE entry WITHOUT restoring the item
+    // pool. Used when a server re-render has ALREADY replaced the container's
+    // children with the authoritative list, so setup() can re-snapshot them
+    // fresh. (teardownVirtualList, by contrast, restores the virtualized item
+    // pool — that's the "dj-virtual attribute removed" case.)
+    function detachState(container, state) {
+        container.removeEventListener('scroll', state.onScroll);
+        if (state.resizeObserver) state.resizeObserver.disconnect();
+        if (state.itemObserver) state.itemObserver.disconnect();
+        STATE.delete(container);
+    }
+
+    // Tear down a virtualization whose container was REPURPOSED for a different
+    // view / data source across SPA navigation (#2033). Unlike
+    // teardownVirtualList (author removed dj-virtual on an otherwise-unchanged
+    // list → restore the full item pool), the server morph has ALREADY
+    // authored the new view's content into the container, so we must NOT
+    // restore the old item pool — that would re-inject the previous thread's
+    // rows over the new view. We only strip the stale shell/spacer (which carry
+    // the leaked, mis-offset old rows) and drop the STATE entry. Whatever the
+    // morph left as loose children (the new view) is preserved; if the
+    // container still carries dj-virtual, the caller re-runs setup() to
+    // re-virtualize the NEW content fresh.
+    function detachStaleState(container, state) {
+        detachState(container, state);
+        if (state.shell && state.shell.parentNode === container) {
+            container.removeChild(state.shell);
+        }
+        if (state.spacer && state.spacer.parentNode === container) {
+            container.removeChild(state.spacer);
+        }
+    }
+
+    // Scan `scope` for tracked-but-now-stale containers and tear them down
+    // (#2033). The WeakMap keyed on the container node is NOT iterable, so we
+    // discover tracked containers via the never-removed shell marker
+    // (data-dj-virtual-shell) and re-check the PARENT container's live identity
+    // against what setup() captured. Containers that lost dj-virtual are NOT in
+    // the [dj-virtual] selector reinitAfterDOMUpdate iterates, so this marker
+    // scan is the ONLY path that reaps them.
+    function reapStaleVirtualLists(scope) {
+        if (!scope || !scope.querySelectorAll) return;
+        scope.querySelectorAll('[data-dj-virtual-shell]').forEach((shell) => {
+            const container = shell.parentNode;
+            if (!container || container.nodeType !== 1) return;
+            const state = STATE.get(container);
+            // Only reap containers we actually track whose shell is the one we
+            // own (avoid touching a foreign/duplicated marker).
+            if (!state || state.shell !== shell) return;
+            if (identityChanged(container, state)) {
+                detachStaleState(container, state);
+            }
+        });
+    }
+
+    // Absorb "loose" element children a server re-render appended OUTSIDE the
+    // shell/spacer wrapper (#1989 symptom 2 — e.g. a stream-appended chat
+    // row) into the item pool, so they render INSIDE the shell and receive
+    // subsequent patches instead of leaking as stray siblings whose finalize
+    // patch never lands. Loose = any element child that is neither the shell
+    // nor the spacer. Appended in document order (append-only assumption; a
+    // mid-list server insert would land at the tail — strictly better than
+    // leaking, and honestly noted in the guide). Returns whether anything was
+    // absorbed.
+    function absorbLooseChildren(container, state) {
+        // #2033: never merge content across an identity change. If the
+        // container was repurposed for a different view/data-source, the
+        // previous thread's rows and the new thread's rows must NOT land in one
+        // pool (they would window/render together at the same offset). The
+        // callers reap stale containers before reaching here; this guard is
+        // defensive so a cross-source pool merge can't happen even if absorb is
+        // reached on a stale container.
+        if (identityChanged(container, state)) return false;
+        const loose = [];
+        for (const node of Array.from(container.children)) {
+            if (node === state.shell || node === state.spacer) continue;
+            if (node.nodeType !== 1) continue;
+            // Never absorb a stray shell/spacer marker as a data row.
+            if (node.hasAttribute('data-dj-virtual-shell') ||
+                node.hasAttribute('data-dj-virtual-spacer')) continue;
+            loose.push(node);
+        }
+        if (loose.length === 0) return false;
+        for (const node of loose) {
+            // De-parent: render() re-attaches the visible slice into the
+            // shell. Off-window items stay detached, held only in state.items.
+            if (node.parentNode === container) container.removeChild(node);
+            state.items.push(node);
+        }
+        // New items invalidate the current window so render() re-slices.
+        state.visibleStart = -1;
+        state.visibleEnd = -1;
+        if (state.mode === 'variable') {
+            state.offsets = null;
+        }
+        return true;
+    }
+
     function initVirtualLists(root) {
         const scope = root || document;
+        // #2033: FIRST reap containers tracked in STATE that have lost
+        // dj-virtual or changed view identity across SPA navigation. These are
+        // invisible to the [dj-virtual] selector below (an attr-loss container
+        // no longer matches it), so the shell-marker scan is the only way to
+        // tear their stale shell/spacer/state down. Reaping first also means a
+        // still-virtualized-but-repurposed container (source value/dj-id
+        // changed) falls into the `!state` → setup() branch below and is
+        // re-virtualized fresh against the NEW content.
+        reapStaleVirtualLists(scope);
         const containers = scope.querySelectorAll
             ? scope.querySelectorAll('[dj-virtual]')
             : [];
         containers.forEach(container => {
-            if (!STATE.has(container)) setup(container);
+            const state = STATE.get(container);
+            if (!state) {
+                setup(container);
+            } else if (!structureIntact(container, state)) {
+                // #1989 symptom 1: a server re-render clobbered the managed
+                // structure back to the raw list. Detach the stale state and
+                // re-run setup against the fresh children instead of no-oping.
+                detachState(container, state);
+                setup(container);
+            }
         });
     }
 
     function refreshVirtualList(container) {
         const state = STATE.get(container);
         if (!state) return;
+
+        // #2033: the container was repurposed for a different view / data
+        // source (dj-virtual removed, its source value changed, or the host
+        // view's dj-id changed). Tear the stale virtualization down WITHOUT
+        // restoring the old pool — the server morph already authored the new
+        // view's content. If the container still carries dj-virtual, re-setup
+        // fresh against that new content; otherwise it falls back to plain
+        // (non-virtualized) rendering. Checked BEFORE the structure/self-heal
+        // path so a repurposed container never re-snapshots the old rows.
+        if (identityChanged(container, state)) {
+            detachStaleState(container, state);
+            if (container.getAttribute('dj-virtual') != null) {
+                setup(container);
+            }
+            return;
+        }
+
+        // #1989 symptom 1: self-heal if a server re-render clobbered the
+        // managed structure (idempotent with initVirtualLists' own check —
+        // whichever runs first heals; the other becomes a no-op). This keeps
+        // refreshVirtualList robust regardless of call order.
+        if (!structureIntact(container, state)) {
+            detachState(container, state);
+            setup(container);
+            return;
+        }
+
         // Re-snapshot: after VDOM morph, the shell holds only the visible
         // slice. The full data source is whatever is currently in the shell
         // plus any new children added outside of virtualization. We support
@@ -431,6 +651,11 @@
                 state.offsets = null;
                 state.nodeToIndex = new WeakMap();
             }
+        } else {
+            // No explicit replacement pool: auto-derive from the container's
+            // real children so stream-appended rows (#1989 symptom 2) get
+            // absorbed into the shell instead of leaking as stray siblings.
+            absorbLooseChildren(container, state);
         }
         render(state);
     }
@@ -438,9 +663,7 @@
     function teardownVirtualList(container) {
         const state = STATE.get(container);
         if (!state) return;
-        container.removeEventListener('scroll', state.onScroll);
-        if (state.resizeObserver) state.resizeObserver.disconnect();
-        if (state.itemObserver) state.itemObserver.disconnect();
+        detachState(container, state);
         // Restore the pre-virtualization children and remove the shell/spacer.
         // Without this, removing `dj-virtual` from a live container leaves
         // the injected wrapper elements in place and shows only the
@@ -455,7 +678,7 @@
                 console.warn('[dj-virtual] teardown restore failed', e);
             }
         }
-        STATE.delete(container);
+        // STATE entry already dropped by detachState() above.
     }
 
     window.djust = window.djust || {};

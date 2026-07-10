@@ -196,12 +196,20 @@ def _generate_nested_access(
         else:
             # Leaf node - direct assignment
             if root_attr.startswith("get_"):
-                # Method call
-                lines.append(f"{ind}    try:")
-                lines.append(f"{ind}        {result_var}['{root_attr}'] = {obj_access}()")
-                lines.append(f"{ind}    except Exception:")
+                # Method call. Guarded by Django's template-callable safety
+                # attributes (ADR-024 Decision 2 — every auto-call site shares
+                # one guard semantics): alters_data methods are never called,
+                # do_not_call_in_templates callables are left un-called.
+                lines.append(f"{ind}    _m = {obj_access}")
                 lines.append(
-                    f"{ind}        _logger.debug('Method %s() failed during serialization', '{root_attr}')"
+                    f"{ind}    if not getattr(_m, 'alters_data', False) "
+                    f"and not getattr(_m, 'do_not_call_in_templates', False):"
+                )
+                lines.append(f"{ind}        try:")
+                lines.append(f"{ind}            {result_var}['{root_attr}'] = _m()")
+                lines.append(f"{ind}        except Exception:")
+                lines.append(
+                    f"{ind}            _logger.debug('Method %s() failed during serialization', '{root_attr}')"
                 )
             else:
                 # Direct attribute
@@ -313,12 +321,18 @@ def _generate_nested_access(
             dict_path_full = _build_dict_path(result_var, new_path[:-1])
 
             if attr_name.startswith("get_") or attr_name in ("all", "count", "exists"):
-                # Method call (includes Django manager/queryset methods)
-                lines.append(f"{ind}    try:")
-                lines.append(f"{ind}        {dict_path_full}['{attr_name}'] = {obj_access}()")
-                lines.append(f"{ind}    except Exception:")
+                # Method call (includes Django manager/queryset methods).
+                # Same ADR-024 guard semantics as the root-attr site above.
+                lines.append(f"{ind}    _m = {obj_access}")
                 lines.append(
-                    f"{ind}        _logger.debug('Method %s() failed during serialization', '{attr_name}')"
+                    f"{ind}    if not getattr(_m, 'alters_data', False) "
+                    f"and not getattr(_m, 'do_not_call_in_templates', False):"
+                )
+                lines.append(f"{ind}        try:")
+                lines.append(f"{ind}            {dict_path_full}['{attr_name}'] = _m()")
+                lines.append(f"{ind}        except Exception:")
+                lines.append(
+                    f"{ind}            _logger.debug('Method %s() failed during serialization', '{attr_name}')"
                 )
             else:
                 # Direct attribute

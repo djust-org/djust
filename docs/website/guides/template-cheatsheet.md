@@ -16,11 +16,11 @@ Quick reference for every directive, attribute, and Django tag used in djust tem
 Every LiveView template needs these two things:
 
 ```html
-{% load djust_tags %}
+{% load live_tags %}
 <!DOCTYPE html>
 <html>
 <head>
-    {% djust_scripts %}   {# Loads ~5KB client JavaScript #}
+    {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~5KB client JavaScript #}
 </head>
 <body dj-view="{{ dj_view_id }}">   {# Binds page to WebSocket session #}
     <div dj-root>                    {# Reactive region — only this is diffed/patched #}
@@ -33,8 +33,8 @@ Every LiveView template needs these two things:
 
 | Attribute / Tag | Required | Description |
 |---|---|---|
-| `{% load djust_tags %}` | Yes | Load djust template tag library |
-| `{% djust_scripts %}` | Yes | Injects client JavaScript (~5KB) |
+| `{% load live_tags %}` | Yes | Load djust template tag library |
+| `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~5KB) into every LiveView response |
 | `dj-view="{{ dj_view_id }}"` | Yes | On `<body>` — identifies the WebSocket session |
 | `dj-root` | Yes | Marks the reactive subtree — only HTML inside is diffed |
 
@@ -538,6 +538,31 @@ djust.hooks.chart = {
 | `{% with var=value %}` | Local variable assignment |
 | `{% dj_activity "name" visible=expr eager=expr %}...{% enddj_activity %}` | Pre-rendered hidden panel with preserved local state (React 19.2 parity). See [Activity guide](activity.md). |
 | `{% djust_markdown expr [kwargs] %}` | Render Markdown to sanitised HTML in the Rust parser — raw HTML and `javascript:` URLs are neutralised; trailing-line provisional wrap makes streaming LLM output flicker-free. See [Streaming Markdown guide](streaming-markdown.md). |
+
+### Callables are auto-called (Django parity)
+
+Variable resolution calls callables with no arguments, exactly like
+Django's engine (ADR-024):
+
+```django
+{{ user.get_full_name }}              {# calls get_full_name() #}
+{{ workspace.memberships.count }}     {# calls the manager method #}
+{{ obj.get_settings.theme }}          {# mid-path calls work too #}
+```
+
+Django's safety attributes are honored: a callable with
+`do_not_call_in_templates = True` is used as-is (Model classes, `Choices`
+enums), and one with `alters_data = True` is **never called** — the
+expression renders empty (so `{{ user.delete }}` cannot destroy data).
+Set `alters_data = True` on your own mutating model methods, as in Django.
+
+**LiveView performance note**: djust re-renders on every WebSocket
+event, so `{{ qs.count }}` in a template is a DB query *per event* —
+not once per request like classic Django. For hot views, precompute in
+`get_context_data()` (djust warns once per path in `DEBUG` when a
+template auto-calls an ORM method). Kill-switch:
+`LIVEVIEW_CONFIG["template_auto_call"] = False` restores the old
+no-call behavior.
 
 ### Comparison operators inside `{% if %}`
 

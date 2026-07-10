@@ -144,6 +144,26 @@
                                 <path d="M5 2V1H11V2M2 2H14M3 2V14H13V2M6 5V11M10 5V11" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
+                        <div class="djust-dock-controls" role="group" aria-label="Dock position">
+                            <button class="djust-btn-dock" data-dock="left" title="Dock to left">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <rect x="1.5" y="2.5" width="13" height="11" rx="1"/>
+                                    <rect x="1.5" y="2.5" width="5" height="11" rx="1" fill="currentColor" stroke="none"/>
+                                </svg>
+                            </button>
+                            <button class="djust-btn-dock" data-dock="bottom" title="Dock to bottom">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <rect x="1.5" y="2.5" width="13" height="11" rx="1"/>
+                                    <rect x="1.5" y="8.5" width="13" height="5" rx="1" fill="currentColor" stroke="none"/>
+                                </svg>
+                            </button>
+                            <button class="djust-btn-dock" data-dock="right" title="Dock to right">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <rect x="1.5" y="2.5" width="13" height="11" rx="1"/>
+                                    <rect x="9.5" y="2.5" width="5" height="11" rx="1" fill="currentColor" stroke="none"/>
+                                </svg>
+                            </button>
+                        </div>
                         <button class="djust-btn-settings" title="Settings">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
                                 <circle cx="8" cy="8" r="2"/>
@@ -283,6 +303,57 @@
                 .djust-panel-controls button:active {
                     background: rgba(148, 163, 184, 0.15);
                     transform: scale(0.95);
+                }
+
+                .djust-dock-controls {
+                    display: flex;
+                    align-items: center;
+                    gap: 2px;
+                    padding: 0 4px;
+                    border-left: 1px solid rgba(148, 163, 184, 0.2);
+                    border-right: 1px solid rgba(148, 163, 184, 0.2);
+                }
+
+                .djust-panel-controls button.djust-btn-dock.active {
+                    color: #E57324;
+                    background: rgba(229, 115, 36, 0.1);
+                    border-color: rgba(229, 115, 36, 0.3);
+                }
+
+                .djust-resize-handle {
+                    position: absolute;
+                    z-index: 10;
+                    background: transparent;
+                    transition: background 0.15s ease;
+                }
+
+                .djust-resize-handle:hover,
+                .djust-resize-handle.dragging {
+                    background: rgba(229, 115, 36, 0.5);
+                }
+
+                .djust-resize-handle.djust-resize-ns {
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    height: 6px;
+                    cursor: ns-resize;
+                }
+
+                .djust-resize-handle.djust-resize-ew-left {
+                    left: 0;
+                    top: 0;
+                    bottom: 0;
+                    width: 6px;
+                    cursor: ew-resize;
+                }
+
+                .djust-resize-handle.djust-resize-ew-right {
+                    right: 0;
+                    top: 0;
+                    bottom: 0;
+                    width: 6px;
+                    cursor: ew-resize;
                 }
 
                 .djust-panel-controls button.djust-btn-close:hover {

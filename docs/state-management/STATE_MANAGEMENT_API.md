@@ -1443,6 +1443,49 @@ class UploadView(LiveView):
 
 ## Advanced Topics
 
+### In-place mutation & `self.set_changed_keys()`
+
+djust's change detection uses a fast identity + shallow-fingerprint snapshot
+that deliberately does **not** deep-copy your state (~100× faster than
+`copy.deepcopy`). The trade-off, à la Phoenix LiveView's immutable assigns: an
+**in-place mutation of a nested container is not detected** and renders nothing.
+
+```python
+# ❌ No re-render — the nested list is mutated in place, so the snapshot
+#    (which shares the same object) sees no change:
+def add_tag(self, tag):
+    self.rows[0]["tags"].append(tag)      # 0 patches
+```
+
+Two fixes:
+
+**1. Immutable update (preferred — targeted VDOM diff).** Build a new value.
+djust diffs it efficiently and patches only what changed:
+
+```python
+def add_tag(self, tag):
+    self.rows = [
+        {**r, "tags": r["tags"] + [tag]} if i == 0 else r
+        for i, r in enumerate(self.rows)
+    ]
+```
+
+**2. `self.set_changed_keys(keys)` (escape hatch — forces a re-render).** When
+an immutable rebuild is impractical, mark the keys changed after mutating:
+
+```python
+def add_tag(self, tag):
+    self.rows[0]["tags"].append(tag)      # in-place
+    self.set_changed_keys("rows")         # force a re-render
+```
+
+`set_changed_keys` accepts a single attr name or an iterable, and calls
+accumulate within an event. Because the previous state is aliased, djust cannot
+compute a *targeted* diff for the mutated subtree, so this forces a **full
+re-render** of the view — prefer the immutable update on hot paths / large
+views. (djust also emits a one-time warning when it detects a container it
+cannot fingerprint, pointing you here.)
+
 ### Combining Decorators
 
 Decorators can be combined for powerful effects. Order matters!

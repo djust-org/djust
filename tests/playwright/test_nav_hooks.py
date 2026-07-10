@@ -162,9 +162,7 @@ async def test_nav_hooks():
                 timeout=8000,
             )
         except Exception:
-            failures.append(
-                "#1733/#1738: timed out waiting for Page B SPA nav and hook mount"
-            )
+            failures.append("#1733/#1738: timed out waiting for Page B SPA nav and hook mount")
 
         path_after = await page.evaluate("() => window.location.pathname")
         sentinel_after = await page.evaluate("() => window.__nav_sentinel")

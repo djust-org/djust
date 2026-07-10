@@ -138,4 +138,3 @@ def test_a031_silent_when_middleware_present():
 @override_settings(DEBUG=False, MIDDLEWARE=[], ROOT_URLCONF=_OBS_URLCONF)
 def test_a031_silent_when_debug_off():
     assert _run_a031() == []
-

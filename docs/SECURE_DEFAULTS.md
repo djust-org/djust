@@ -26,6 +26,61 @@ named symbol; the symbol name is the load-bearing reference.
 serialization, state snapshot) and leaks a sensitive field — `password`, an auth
 flag, a PII column — because serialization defaulted to *allow everything*.
 
+> [!IMPORTANT]
+> **The floor governs the template getattr sidecar too (#1986).** Besides the
+> eager serialization dict, the Rust template engine has a *lazy* fallback: for
+> a `{{ obj.attr }}` path not in the eager dict, it `getattr`-walks the live
+> model instance (reverse relations, managers, methods — ADR-024). That walk
+> would bypass this floor via **two mechanisms** — a floor field read off a
+> raw model during the getattr walk, and a raw model `__dict__`-dumped during
+> value conversion — reachable on SEVEN surface paths (direct field;
+> manager/queryset traversal `{{ x.mgr.first.password }}`; `{% for %}`
+> iteration; `_`-prefixed access `{{ obj._meta }}`, which also segfaulted the
+> worker; `.values()`/`.values_list()` projections; a non-model intermediary
+> object `{{ presenter.user.password }}` / a model **method** returning a
+> model; and a raw `list`/`tuple` of models via an intermediary). The fix is
+> **two structural chokepoints** (one per mechanism, #1646), plus the sidecar
+> proxies:
+>
+> - **Proxies** — every model/manager/queryset entering the sidecar is wrapped
+>   in `_SidecarModelProxy` / `_SidecarQuerySetProxy` (`serialization.py`),
+>   which **transitively** protect everything they return
+>   (`_protect_sidecar_value`), refuse the SAME floor fields (via
+>   `_field_is_serializable`) and the SAME sensitive methods
+>   (`_SENSITIVE_MODEL_METHODS`, shared with `_add_safe_model_methods` so the
+>   two paths can't drift), refuse `_`-prefixed names (Django parity), and
+>   **refuse `.values()`/`.values_list()` projections wholesale** (their rows
+>   have no model identity to floor; precompute in `get_context_data()`).
+> - **Chokepoint 1 (getattr walk)** — the Rust resolve walk
+>   (`crates/djust_core/src/context.rs`) routes every just-materialized value —
+>   after `getattr` AND the auto-call — through `_protect_sidecar_value`, so a
+>   model is floor-wrapped **however it was reached** (a raw intermediary
+>   object, a Rust-auto-called method result). Python proxies alone can't cover
+>   those.
+> - **Chokepoint 2 (value-conversion root)** — `FromPyObject for Value`
+>   (`crates/djust_core/src/lib.rs`) routes **any** raw Django model through
+>   `normalize_django_value` (denylist serializer) instead of the `__dict__`
+>   bulk-dump, so a raw model reaching a `Value` via a list/tuple/dict
+>   container is floor-filtered too. A djust proxy's `__djust_serialize__` hook
+>   is preferred first.
+>
+> A refused name raises `AttributeError` → empty render. The floor is **not**
+> gated on the `template_auto_call` kill-switch.
+>
+> **The TYPE floor (#1987) — a name-independent second axis.** Besides the
+> name/method floor above, a field whose *type* should never reach the client is
+> dropped regardless of its name, via the single shared authority
+> `_field_type_is_excluded` (called by BOTH the eager loop and the sidecar
+> proxy, so they can't drift — #1646): `BinaryField` always; best-effort
+> encrypted-field types (an MRO class name **case-insensitively** containing
+> `encrypted`/`fernet`, for django-encrypted-fields / django-fernet-fields — no
+> hard dependency, excluded fail-closed, with a one-shot DEBUG breadcrumb per
+> class so a heuristic false-positive is diagnosable); and any class named in
+> `LIVEVIEW_CONFIG['sensitive_field_types']` (a project-configurable list, empty
+> by default; case-exact). `FileField`/`ImageField` are
+> explicitly **NOT** excluded — they serialize a URL, the intended payload
+> ([#1987](https://github.com/djust-org/djust/issues/1987)).
+
 **Canonical site.**
 `python/djust/serialization.py`:
 
@@ -64,6 +119,14 @@ flag, a PII column — because serialization defaulted to *allow everything*.
      floor-cleared) fields — a field passes iff it is in the allowlist (or was
      explicitly opted in via `optout`).
   4. Otherwise the field is serialized.
+- `_field_type_is_excluded(field)` + `_field_type_excluded_for(model_class, name)`
+  (the #1987 **TYPE floor**) — the single authority the eager loop
+  (`_serialize_model_safely`, checked right after `_field_is_serializable`) and
+  the sidecar proxy (`_SidecarModelProxy.__getattr__`) both call, so the two
+  paths can't drift (#1646). Drops `BinaryField` unconditionally, any type in
+  `LIVEVIEW_CONFIG['sensitive_field_types']`, and best-effort encrypted-field
+  types (MRO class name contains `Encrypted`/`Fernet`); never
+  `FileField`/`ImageField` (they serialize a URL).
 
 > [!IMPORTANT]
 > **The floor is now an unconditional invariant (#1868).** A per-model
@@ -299,6 +362,38 @@ for key, value in client_supplied_dict.items():
 Only pass `allow_private=True` when the keys come from a **trusted, server-side**
 source (e.g. the framework's own session-backed private-state dict) — never for
 client-supplied keys.
+
+---
+
+## 5. Template auto-call guards (`alters_data` / `do_not_call_in_templates`)
+
+**The default**: template variable resolution auto-calls no-argument callables
+(Django parity, ADR-024) — but a callable with `alters_data = True` is **never
+invoked** (the expression renders empty), and one with
+`do_not_call_in_templates = True` is used as-is. Every auto-call site shares
+these guards: the Rust sidecar resolution walk
+(`crates/djust_core/src/context.rs::maybe_call`), the JIT serializer's
+generated code (`python/djust/optimization/codegen.py`), and eager model
+serialization (`python/djust/serialization.py::_add_safe_model_methods`).
+
+**Why it matters**: without the `alters_data` refusal, a template typo like
+`{{ user.delete }}` or `{{ qs.update }}` would execute a destructive ORM
+operation on first render. Django stamps `alters_data = True` on
+`Model.save`/`Model.delete`, `QuerySet.delete`/`update`/etc.; djust honors the
+same attribute.
+
+**Your responsibility**: stamp `alters_data = True` on any custom model/helper
+method that mutates state, exactly as you would in classic Django:
+
+```python
+class Invoice(models.Model):
+    def cancel(self):
+        ...
+    cancel.alters_data = True   # {{ invoice.cancel }} renders empty, never runs
+```
+
+Regression tests: `python/djust/tests/test_template_auto_call_1985.py`
+(side-effect sentinels prove the guarded callables are not executed).
 
 ---
 

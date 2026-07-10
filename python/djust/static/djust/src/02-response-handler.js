@@ -113,13 +113,11 @@ async function handleServerResponse(data, eventName, triggerElement) {
             // VDOM patches update textContent directly (not via innerHTML),
             // so preserveFormValues never runs. Textarea .value is separate
             // from .textContent after initial render — must sync explicitly.
+            // Routed through the shared sweep so the dj-update="ignore"
+            // per-field opt-out (#1991) is honored here too (parallel-path
+            // #1646 — the helper lives once, in 12-vdom-patch.js).
             if (data.broadcast) {
-                const root = getLiveViewRoot();
-                if (root) {
-                    root.querySelectorAll('textarea').forEach(el => {
-                        el.value = el.textContent || '';
-                    });
-                }
+                syncBroadcastTextareas(getLiveViewRoot());
             }
 
             if (success === false) {

@@ -239,6 +239,26 @@ class SessionResolver(TenantResolver):
             'TENANT_SESSION_KEY': 'tenant_id',  # Session key
             'TENANT_JWT_CLAIM': 'tenant_id',  # JWT claim name (if using JWT)
         }
+
+    Persistence semantics (read this before switching tenant over a WebSocket):
+
+    * **Resolution is read-only.** ``resolve()`` only *reads*
+      ``request.session[TENANT_SESSION_KEY]`` (falling back to a JWT claim,
+      then ``request.user.tenant_id``). It never writes the session — nothing
+      here mutates or saves it.
+    * **A WS-handler** ``request.session[...] = ...`` **write has no built-in
+      save guarantee.** Django's ``SessionMiddleware`` persists the session when
+      it processes the *HTTP response*. A LiveView event arrives over the
+      WebSocket, so there is no HTTP response for the middleware to save
+      against, and a write done inside an event handler may never reach the
+      session store.
+    * **Robust pattern:** keep the tenant id in **view state** (``self.tenant``,
+      set via :meth:`TenantMixin.set_tenant <djust.tenants.mixin.TenantMixin.set_tenant>`,
+      and/or your own ``self.<field>``) as the *authoritative* value for the
+      connection's lifetime, and treat any session write as a **mirror** only —
+      a convenience so the next full-page (HTTP) load resolves the same tenant.
+      ``TenantMixin.set_tenant()`` implements exactly this: it updates view state
+      and best-effort mirrors into the session when this resolver is configured.
     """
 
     def resolve(self, request: "HttpRequest") -> Optional[TenantInfo]:

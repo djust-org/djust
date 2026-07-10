@@ -127,6 +127,16 @@ pub(crate) fn split_provisional(src: &str) -> (&str, &str) {
     }
     let last_nl = src.rfind('\n').map(|i| i + 1).unwrap_or(0);
     let trailing = &src[last_nl..];
+    // A trailing line that is itself a code-fence delimiter (```) completes a
+    // BALANCED fence — `inside_unclosed_fence` already returned false above, so
+    // the ``` count is even, making this trailing ``` a CLOSING marker, not an
+    // unterminated inline-code span. Without this guard `looks_unterminated`
+    // counts its 3 backticks as odd and wrongly splits the closing fence off,
+    // re-rendering it as a provisional `<p>```</p>` (#1998). Keep the whole
+    // block stable.
+    if trailing.trim_start().starts_with("```") {
+        return (src, "");
+    }
     if looks_unterminated(trailing) {
         (&src[..last_nl], trailing)
     } else {
@@ -573,6 +583,50 @@ mod tests {
         assert_eq!(split_provisional("ok"), ("ok", ""));
         // Empty.
         assert_eq!(split_provisional(""), ("", ""));
+    }
+
+    #[test]
+    fn test_split_provisional_closing_fence_not_split_1998() {
+        // #1998: a COMPLETE fenced block with no trailing newline. The closing
+        // ``` line has 3 backticks (odd) and pre-fix `looks_unterminated` wrongly
+        // treated it as an unterminated inline-code span and split it off. The
+        // fences are balanced (even count), so the trailing ``` is a CLOSING
+        // marker — the whole block must stay stable.
+        let src = "```python\ndef greet():\n    pass\n```";
+        assert_eq!(split_provisional(src), (src, ""));
+        // A lone closing fence after content, no trailing newline.
+        assert_eq!(split_provisional("```\ncode\n```"), ("```\ncode\n```", ""));
+        // Still correctly provisional while the fence is genuinely OPEN
+        // (odd count) — no regression to the streaming case.
+        let (stable, tail) = split_provisional("```python\ndef greet():");
+        assert_eq!(stable, "```python\ndef greet():");
+        assert_eq!(tail, "");
+    }
+
+    #[test]
+    fn test_provisional_complete_fence_no_trailing_newline_renders_code_1998() {
+        // The end-to-end symptom: `{% djust_markdown %}` on a code-only artifact
+        // (a complete fence, no surrounding prose, no trailing newline) used to
+        // render the closing ``` as an escaped provisional paragraph instead of
+        // completing the code block.
+        let src = "```python\ndef greet():\n    pass\n```";
+        let out = render_markdown(src, RenderOpts::default()); // provisional=true
+        assert!(
+            !out.contains("djust-md-provisional"),
+            "the closing fence must not become a provisional paragraph (got: {out})"
+        );
+        assert!(
+            out.contains("<pre>") && out.contains("<code"),
+            "the whole block must render as a code block (got: {out})"
+        );
+        assert!(
+            out.contains("language-python"),
+            "the info string must survive (got: {out})"
+        );
+        assert!(
+            !out.contains("<p>"),
+            "no stray paragraph should be emitted (got: {out})"
+        );
     }
 
     #[test]

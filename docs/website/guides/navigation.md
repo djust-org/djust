@@ -177,18 +177,27 @@ your own rule on top.
 > a [client hook](hooks#integrating-third-party-libraries-chartjs-maps-editors)
 > registered once in your base template, not an inline `<script>`.
 
-### `auto_navigate` — automatic link interception (opt-in)
+### `auto_navigate` — automatic link interception (default ON in v1.1)
 
 With `dj-navigate` you annotate each link. **`auto_navigate`** goes one step
 further: a single delegated click listener SPA-navigates **plain `<a href>`
 links** — no djust attribute needed — whenever the link's path resolves in the
-route map. It is **off by default**; enable it in settings:
+route map.
+
+**As of v1.1 this is ON by default** — native `dj-navigate` is djust's canonical
+SPA-navigation model, so plain in-app links are SPA-navigated with zero config
+(the route map is auto-emitted). It degrades gracefully (see the fall-through
+list below), so existing apps keep working. To **opt out** (e.g. you wire your
+own external TurboNav), set it to `False`:
 
 ```python
-LIVEVIEW_CONFIG = {"auto_navigate": True}
+LIVEVIEW_CONFIG = {"auto_navigate": False}
 ```
 
-When enabled, `{% djust_client_config %}` emits a small opt-in flag and the
+> On djust **1.0.x** this was opt-in (`auto_navigate` defaulted to `False`); set
+> it to `True` there to get the same behavior.
+
+`{% djust_client_config %}` emits a small flag and the
 client intercepts in-app navigations automatically. It is deliberately
 conservative — a link **falls through to a normal browser navigation** (no
 interception) whenever any of these hold:

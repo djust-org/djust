@@ -116,79 +116,106 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            // Ensure the label exists
+            // PRs from forks get a read-only GITHUB_TOKEN on `pull_request`
+            // events regardless of the `permissions:` block above (a hard
+            // GitHub security restriction). Labeling is best-effort — warn
+            // and move on for that expected 403 instead of failing the job;
+            // rethrow anything else so real bugs still surface.
             try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: 'security-review'
-              });
-            } catch (e) {
-              if (e.status === 404) {
-                await github.rest.issues.createLabel({
+              // Ensure the label exists
+              try {
+                await github.rest.issues.getLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  name: 'security-review',
-                  color: 'd93f0b',
-                  description: 'PR touches security-sensitive code and needs additional review'
+                  name: 'security-review'
                 });
+              } catch (e) {
+                if (e.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: 'security-review',
+                    color: 'd93f0b',
+                    description: 'PR touches security-sensitive code and needs additional review'
+                  });
+                } else {
+                  throw e;
+                }
+              }
+
+              // Add the label to the PR
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['security-review']
+              });
+            } catch (e) {
+              if (e.status === 403) {
+                core.warning(`Could not add security-review label (likely a fork PR with a read-only token): ${e.message}`);
+              } else {
+                throw e;
               }
             }
-
-            // Add the label to the PR
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              labels: ['security-review']
-            });
 
       - name: Post review reminder comment
         if: steps.hotspots.outputs.found == 'true'
         uses: actions/github-script@v9
         with:
           script: |
-            const categories = `${{ steps.hotspots.outputs.categories }}`;
-            const marker = '<!-- security-hotspot-check -->';
+            // See the "Add security-review label" step above: fork PRs get a
+            // read-only GITHUB_TOKEN on `pull_request` events, so the write
+            // calls below (createComment/updateComment) are expected to 403
+            // there. Warn and move on rather than failing the job.
+            try {
+              const categories = `${{ steps.hotspots.outputs.categories }}`;
+              const marker = '<!-- security-hotspot-check -->';
 
-            // Check if we already posted a comment (avoid duplicates on push events)
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            const existing = comments.find(c => c.body.includes(marker));
-
-            const body = `${marker}
-            ## Security Review Required
-
-            This PR modifies security-sensitive files. Please ensure the following areas receive additional review:
-
-            ${categories}
-
-            ### Review Checklist
-
-            - [ ] Changes do not introduce XSS vulnerabilities (no \`mark_safe(f'...')\`)
-            - [ ] Authentication/authorization checks are not weakened
-            - [ ] Input validation is maintained or improved
-            - [ ] No secrets or sensitive data exposed in state
-            - [ ] Existing security tests still pass
-            - [ ] New security tests added for changed behavior
-
-            See [SECURITY_GUIDELINES.md](../blob/main/docs/SECURITY_GUIDELINES.md) for full security review criteria.`;
-
-            if (existing) {
-              await github.rest.issues.updateComment({
+              // Check if we already posted a comment (avoid duplicates on push events)
+              const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                comment_id: existing.id,
-                body: body
+                issue_number: context.issue.number
               });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: body
-              });
+              const existing = comments.find(c => c.body.includes(marker));
+
+              const body = `${marker}
+              ## Security Review Required
+
+              This PR modifies security-sensitive files. Please ensure the following areas receive additional review:
+
+              ${categories}
+
+              ### Review Checklist
+
+              - [ ] Changes do not introduce XSS vulnerabilities (no \`mark_safe(f'...')\`)
+              - [ ] Authentication/authorization checks are not weakened
+              - [ ] Input validation is maintained or improved
+              - [ ] No secrets or sensitive data exposed in state
+              - [ ] Existing security tests still pass
+              - [ ] New security tests added for changed behavior
+
+              See [SECURITY_GUIDELINES.md](../blob/main/docs/SECURITY_GUIDELINES.md) for full security review criteria.`;
+
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body: body
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: body
+                });
+              }
+            } catch (e) {
+              if (e.status === 403) {
+                core.warning(`Could not post security review reminder comment (likely a fork PR with a read-only token): ${e.message}`);
+              } else {
+                throw e;
+              }
             }

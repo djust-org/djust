@@ -123,7 +123,7 @@ This means complex re-renders that change one row in a 1000-row table only trans
 djust enforces strict security by default:
 
 - **Whitelisted handlers only** — only methods decorated with `@event_handler()` can be called by clients. Calling any other method name over WebSocket returns an error.
-- **CSRF protection** — WebSocket connections require a valid CSRF token (included automatically by `{% djust_scripts %}`)
+- **CSRF protection** — WebSocket connections require a valid CSRF token; the client reads it automatically from the `csrftoken` cookie (or a `{% csrf_token %}` hidden input if one is present in the page) — no djust template tag is needed to provide it
 - **Auth integration** — use `LoginRequiredMixin` or `@permission_required` exactly as in standard Django views
 
 ## Next Steps

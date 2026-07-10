@@ -1784,6 +1784,7 @@ class ViewRuntime:
         *,
         scope: Optional[Dict[str, Any]] = None,
         rate_limiter: Optional[ConnectionRateLimiter] = None,
+        renderer_factory: Optional[Any] = None,
     ) -> None:
         self.transport = transport
         self.view_instance: Optional[Any] = None
@@ -1798,6 +1799,13 @@ class ViewRuntime:
         # runtime-local lock would be a different object and could not serialize
         # against those (#560). The transport borrows the consumer's existing lock
         # via ``transport.event_context(view)`` (ADR-022 Iter 2 Phase 2.3a, #1899).
+        # ADR-019 LVN-I PR-2: Renderer factory plumbed through. Stored
+        # for PR-3 (handshake) to set based on ``?platform=`` selection;
+        # ``None`` means "use the default ``HtmlRenderer``" which the
+        # dispatch site (``TemplateMixin.render_with_diff``) already
+        # constructs inline. Type kept ``Any`` to avoid circular import
+        # with ``djust.renderers``; runtime use-site will cast.
+        self.renderer_factory = renderer_factory
 
     # ------------------------------------------------------------------ #
     # Public properties
@@ -1949,6 +1957,13 @@ class ViewRuntime:
                 return
 
         self.view_instance = view_instance
+
+        # ADR-019 LVN-I: if the handshake selected a renderer (factory
+        # passed in via __init__), bind it to the view so
+        # TemplateMixin.render_with_diff can dispatch through it
+        # instead of always constructing HtmlRenderer inline.
+        if self.renderer_factory is not None:
+            view_instance._djust_renderer = self.renderer_factory(view_instance)
 
         # Stash the client-supplied dotted view path from the mount frame so the
         # transport hook (WS ``on_view_mounted``) can derive the server-push channel
@@ -2213,6 +2228,42 @@ class ViewRuntime:
         # (skip_html_for_resume) — Phase 3.0 wired the read; this sets it.
         view_instance._mounted_from_restore = mounted_from_restore
 
+        # #1977 — re-sync the diff baseline to the client's LIVE DOM on a
+        # reconnect / state-restore mount. On a resume the fresh view's Rust diff
+        # baseline is primed from a render that does NOT match the client's
+        # pre-disconnect DOM (which already reflects the restored/filtered state);
+        # diffing the FIRST post-restore EVENT against that stale baseline lands
+        # SetText patches on the wrong node (often a bare ``#text`` node) →
+        # ``2/N patches failed`` → an ``html_recovery`` reload/flicker. Forcing the
+        # first post-restore render to emit a FULL-HTML frame makes the client
+        # morph wholesale and re-primes the Rust baseline to the live DOM, so no
+        # stale-baseline diff can ever reach the client.
+        #
+        # RENDER-TIMING (traced, load-bearing): the mount-time ``render_with_diff``
+        # (~line 2375 / for actor mounts the actor render) READS ``_force_full_html``
+        # but never RESETS it — every reset lives in the transport-level EVENT /
+        # url_change dispatch (``_render_and_send`` runtime.py:4093-4094,
+        # ``dispatch_url_change`` runtime.py:3725-3726, and the WS twins
+        # websocket.py:1650-1651 / 4115-4116). On a resume the mount HTML is
+        # dropped (``skip_html_for_resume`` = ``mounted_from_restore and
+        # has_prerendered``), so the flag SURVIVES the mount frame and is consumed
+        # by the FIRST post-restore event render — which discards patches and sends
+        # a full ``html_update``. The flag is snapshot-excluded
+        # (``_FRAMEWORK_INTERNAL_ATTRS``, live_view.py:143) so it never leaks into a
+        # saved snapshot.
+        #
+        # Parallel-path (#1646): this ONE guard covers BOTH restore mechanisms —
+        # session-saved-state (~2104) and signed-snapshot HMAC (~2154) — because
+        # both funnel to ``mounted_from_restore`` here; and — since WS
+        # ``handle_mount`` is a thin shim to ``dispatch_mount`` (websocket.py:2209)
+        # — it covers WS + SSE + runtime. The HTTP GET path renders the full page
+        # and primes its baseline against the same served state (request.py:276-282,
+        # no cross-event stale baseline); the HTTP POST fallback re-restores +
+        # re-renders atomically in each stateless request — neither has a persistent
+        # mount baseline that a later event diffs against, so neither needs this.
+        if mounted_from_restore:
+            view_instance._force_full_html = True
+
         if not mounted_from_restore:
             try:
                 await sync_to_async(view_instance.mount)(request, **mount_kwargs)
@@ -2353,7 +2404,13 @@ class ViewRuntime:
                     await sync_to_async(view_instance._initialize_rust_view)(request)
                 if hasattr(view_instance, "_sync_state_to_rust"):
                     await sync_to_async(view_instance._sync_state_to_rust)()
-                html, _patches, rust_version = await sync_to_async(view_instance.render_with_diff)()
+                # ADR-019 LVN: capture patches (was discarded as ``_patches``) — for
+                # native renderers (NativeRenderer) ``html`` is empty and the wire
+                # payload is the patch list, shipped on the mount frame below so the
+                # native client can bootstrap its widget tree on connect.
+                html, render_patches, rust_version = await sync_to_async(
+                    view_instance.render_with_diff
+                )()
                 if hasattr(view_instance, "_strip_comments_and_whitespace"):
                     html = await sync_to_async(view_instance._strip_comments_and_whitespace)(html)
                 if hasattr(view_instance, "_extract_liveview_content"):
@@ -2425,6 +2482,18 @@ class ViewRuntime:
                 sanitize_for_log(view_path),
             )
 
+        # ADR-019 LVN: for native renderers (NativeRenderer), ``html`` is empty and
+        # the wire payload is patches. Ship them in the mount frame so the native
+        # client can bootstrap its widget tree on connect (the browser/HTML path
+        # needs ``html`` only — patches arrive on subsequent updates). ``render_patches``
+        # was captured at the render call above; the actor branch does not set it, so
+        # read it via ``locals()`` and only attach when a non-HTML renderer is bound
+        # and patches are present + non-empty.
+        if getattr(view_instance, "_djust_renderer", None) is not None and locals().get(
+            "render_patches"
+        ):
+            mount_msg["patches"] = locals()["render_patches"]
+
         # state_snapshot_signed EMIT (ADR-022 Iter 3 Phase 3.1, WS
         # websocket.py:2754-2792). When the view opts in (``enable_state_snapshot``)
         # AND the master switch is on, ship the SIGNED public-state blob on the
@@ -2441,7 +2510,12 @@ class ViewRuntime:
             if state_master_on and getattr(view_instance, "enable_state_snapshot", False):
                 snapshot_fn = getattr(view_instance, "_capture_snapshot_state", None)
                 if callable(snapshot_fn):
-                    public_state = await sync_to_async(snapshot_fn)()
+                    # strict=True: this is the real client-signed persistence
+                    # path — reject (not silently dict-ify) any ORM object on
+                    # public state so a back-navigation restore can't hand a
+                    # handler a plain dict where it expects a Model. See
+                    # LiveView._reject_orm_value_in_state_persistence.
+                    public_state = await sync_to_async(snapshot_fn)(strict=True)
                     if isinstance(public_state, dict) and public_state:
                         from .security import sign_snapshot
 
@@ -2453,7 +2527,18 @@ class ViewRuntime:
                         mount_msg["state_snapshot_signed"] = sign_snapshot(
                             state_json, view_path, session_key
                         )
-        except Exception:  # noqa: BLE001 — snapshot emission must never break mount
+        except Exception as snapshot_exc:  # noqa: BLE001 — snapshot emission must never break mount
+            from .live_view import NonPersistableStateError
+
+            if isinstance(snapshot_exc, NonPersistableStateError):
+                # DELIBERATE DEBUG-only rejection from
+                # LiveView._reject_orm_value_in_state_persistence — the guard
+                # exists to fail the mount loudly in development, so it must
+                # NOT be downgraded to a log line by the fail-soft posture
+                # below (which remains for UNEXPECTED emission errors).
+                # Production never raises this (the guard warns + skips
+                # there), so this re-raise is DEBUG-only by construction.
+                raise
             logger.exception(
                 "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
                 sanitize_for_log(view_path),
@@ -4526,7 +4611,16 @@ class ViewRuntime:
             return
 
         try:
-            result = await sync_to_async(callback)(*args, **kwargs)
+            # Dispatch through the ONE shared helper so the sync/async handling
+            # can never drift from the consumer twin (#2020, #2016 / #1646).
+            # Without the coroutine check the helper encapsulates, an async
+            # callback would hit ``sync_to_async`` and raise ``TypeError:
+            # sync_to_async can only be applied to sync functions``, silently
+            # failing every async background task on the converged WS-event path
+            # (#2001, the parallel-path drift vs ``websocket.py:_run_async_work``).
+            from .mixins.async_work import run_async_callback
+
+            result = await run_async_callback(callback, args, kwargs)
 
             if hasattr(view, "handle_async_result"):
                 await sync_to_async(view.handle_async_result)(task_name, result=result, error=None)

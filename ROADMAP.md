@@ -19,6 +19,140 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-9 — regroup review follow-ups: template-engine arg-resolution hardening (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-09) of the two follow-ups filed from the PR #2023
+(`{% regroup %}`) code review: unify the three tag-dispatch arg-resolution paths
+through one shared helper (#2042, the #1646 parallel-path cure), and the durable
+fix for the assign-tag operand-shadowing footgun the regroup mitigation only
+warns about (#2041). Both scoped to the Rust template engine's assign-tag arg
+path (`crates/djust_templates/src/renderer.rs`); sequenced #2042 → #2041.
+Deferred and NOT in this bucket: #2017 (dj-virtual server-side reconcile
+enhancement), #1561/#1562 (`priority:low` bug-capture feature tracks).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P2** | route CustomTag/AssignTag/BlockCustomTag arg resolution through one shared `value_to_arg_string` (#2042) | `renderer.rs` has three tag-dispatch arg-resolution branches; only CustomTag + AssignTag (post-#2023) JSON-encode list/object args, while BlockCustomTag (`~:1178-1193`) still collapses them to the opaque `[List]`/`[Object]`. Extract one shared `value_to_arg_string` and route all three through it (#1646 cure) + a BlockCustomTag list-arg test | v1.1.0 |
+| **P1** | pass regroup `by`/`<attr>`/`as` operands unresolved to assign-tag handlers (#2041) | Rust `resolve_tag_arg` resolves *every* assign-tag arg against the context, so a context key named like the `<attr>` token shadows the per-item lookup → silently wrong grouping; #2023 only added a `logger.warning`. Durable fix: pass the keyword/name operands unresolved | v1.1.0 |
+
+## v1.1.0-8 — custom-tag arg double-resolution + CI-gate promotion drain (drain bucket → ships in 1.1.0) ✅
+
+**Complete (2026-07-04)** — both issues closed: #2037 (PR #2038), #2034 (PR #2039). 0 follow-ups. Retro: RETRO.md §v1.1.0-8.
+
+Open-issue drain (2026-07-04) of what surfaced after the v1.1.0-7 drain: a
+production-found **correctness bug** in the Rust↔Python custom-tag argument
+bridge (#2037 — `{% djust_markdown %}` corrupts a per-`{% for %}`/`{% include
+... with %}`-scoped dict-field value into a Python-tuple-repr), plus the CI-gate
+promotion the v1.1.0-7 retro deferred (#2034 — promote the `python/djust/tests/`
+soak step to a blocking gate now that it has run green on a `main` push-CI run,
+satisfying the #1534 soak-first precondition). Deferred and NOT in this bucket:
+#2017 (large dj-virtual server-side-reconcile enhancement), #1561/#1562
+(`priority:low` bug-capture feature tracks).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | `{% djust_markdown %}` corrupts a loop/include-scoped dict-field value (#2037) | Rust resolves a bare-name custom-tag arg (`block.text`) to its **value** string and passes it to Python; `TagHandler._resolve_arg` then re-interprets that already-resolved value as a template token — any value containing `=` is tuple-split (`str((k,v))` = the observed `('...', '...')` repr), any dotted value re-resolved. Root cause reproduced deterministically (no streaming/loop-cache needed). Fix = token-guard `_resolve_arg`'s kwarg-split + dotted-lookup so a non-token (Rust-resolved) value is returned verbatim | v1.1.0 |
+| **P2** | promote `python/djust/tests/` CI soak → blocking gate (#2034) | the v1.1.0-7 `#2032` soak step (`continue-on-error: true`) ran green on the `main` push-CI run at `72d78601`, satisfying the #1534 soak-first precondition; flip it to a gating step in `test.yml` (into the `test-summary` AND-condition per #1713) + add `python/djust/tests/` to the pre-push hook | v1.1.0 |
+
+## v1.1.0-7 — post-rc6 live-verify drain (drain bucket → ships in 1.1.0) ✅
+
+**Complete (2026-07-04)** — both issues closed: #2033 (PR #2036), #2032 (PR #2035). Follow-up #2034 filed (promote the CI soak to a blocking gate). Retro: RETRO.md §v1.1.0-7.
+
+Open-issue drain (2026-07-04) of what surfaced after cutting 1.1.0rc6: a
+dj-virtual client-state teardown regression found live-verifying the #1988/#1989
+fix on rc6 (#2033), plus the CI-coverage gap the v1.1.0-6 drain filed (#2032 —
+CI omits `python/djust/tests/`, hiding a RED CWE-915 setattr-chokepoint guard).
+Deferred and NOT in this bucket: #2017 (large dj-virtual server-side-reconcile
+enhancement, the architectural sibling of #2033), #1561/#1562 (`priority:low`
+bug-capture feature tracks).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | dj-virtual client state has no attribute-driven teardown (#2033) | SPA-nav reusing a container across a view-identity change leaves stale `dj-virtual` state in the `WeakMap`; `structureIntact()` never checks the attr is still present and `absorbLooseChildren()` `push()`es cross-view content into one pool → overlapping/garbled rows. Wire `teardownVirtualList()` on attr-loss + stop cross-source accumulation | v1.1.0 |
+| **P2** | CI omits `python/djust/tests/` — hides a RED security-structural test (#2032) | `.github/workflows/test.yml:165` runs `pytest tests/ python/tests/` (overrides `testpaths`); the `TestSetattrChokepoint` CWE-915 guard is RED on `main` (stale `_SETATTR_WHITELIST` line-pins). Deliberate whitelist update + add the dir to CI (`continue-on-error` first per #1534) | v1.1.0 |
+
+## v1.1.0-6 — retro-tail + carryover drain (drain bucket → ships in 1.1.0) ✅
+
+**Complete (2026-07-03)** — all 3 issues closed: #1977 (PR #2031), #2020 (PR #2030), #2028 (PR #2029); #2027 closed-without-code. Follow-up #2032 filed (CI omits `python/djust/tests/`). Retro: RETRO.md §v1.1.0-6.
+
+Open-issue drain (2026-07-03) of what remained after the v1.1.0-5 backlog drain:
+one **carryover** (#1977, the hard Rust VDOM-differ misroute that self-heals via
+`html_recovery` — listed in v1.1.0-5 but not completed) plus two **retro-tail**
+tech-debt items surfaced by the v1.1.0-5 and v1.1.0rc5 retros (#2020, #2028).
+Deferred and NOT in this bucket: #2017 (large dj-virtual server-side-reconcile
+enhancement, deferred per #1079), #1561/#1562 (`priority:low` bug-capture
+feature tracks). #2027 was closed-without-code (its in-repo `make release`
+pre-flight already shipped; remainder is out-of-repo skill-prompt).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | VDOM stale baseline / list-shrink SetText misroute (#1977) | when a `{% for %}` list shrinks to a differently-shaped subset, `diff_html` emits `SetText` patches whose paths address the wrong (sometimes `#text`) node → 2/220 fail → full recovery-morph round-trip + flicker | v1.1.0 |
+| **P2** | async-work dispatch transport-parity test (#2020) | the #2016 `sync_to_async`/coroutine drift (async `@background` silently broken on the converged runtime path) had no parity guard; add a structural test (ideally a shared `_dispatch_async_callback` both paths call) | v1.1.0 |
+| **P2** | pin already-tagged CHANGELOG sections (#2028) | a pre-commit/CI check that every `## [X.Y.Z]` section whose `vX.Y.Z` tag exists is byte-identical to `git show vX.Y.Z:CHANGELOG.md` — catches a re-merge silently rewriting a shipped section | v1.1.0 |
+
+## v1.1.0-5 — post-ADR-024 open-issue drain (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-02) of the 19-issue backlog accumulated after the
+ADR-024 template-auto-call arc (#1985/#1986). The two `priority:low` bug-capture
+feature tracks (#1561 iter-B replay viewer, #1562 iter-C Redis/CLI/PII) are
+deliberately NOT in this bucket — deferred feature work, not backlog. Three
+issues (#1987, #1994, #1997) sit in the serialization / template-getattr-walk
+area hardened in #1986 and are led first while that context is fresh.
+
+Clusters: **serialization/template-walk** (#1987, #1994, #1997) ·
+**VDOM/dj-virtual** (#1977, #1988, #1989, #1996) · **forms/broadcast**
+(#1990, #1991) · **state** (#1992) · **config/deps** (#1993, #1995) ·
+**events/DX** (#1999) · **markdown** (#1998) · **docs/demo**
+(#2000, #2001, #2002, #2003, #2004).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | VDOM stale baseline after state-restore (#1977) | stale `last_vdom` after state-restore/reconnect → SetText patches land on `#text` (recovery path) | v1.1.0 |
+| **P1** | field-TYPE serialization exclusion (#1987) | always-drop `BinaryField` + encrypted-field types on BOTH serialization paths (#1986 follow-up) | v1.1.0 |
+| **P1** | dj-virtual shell/spacer layout contract (#1988) | flex crushes the spacer; the never-removed shell double-counts `scrollHeight` | v1.1.0 |
+| **P1** | dj-virtual vs server re-renders / stream ops (#1989) | new/changed items silently leak outside the shell or revert entirely | v1.1.0 |
+| **P1** | broadcast textarea-value sweep opt-out (#1991) | broadcast sweep has no per-field opt-out, overwrites unrelated drafts | v1.1.0 |
+| **P1** | DJUST_CONFIG vs LIVEVIEW_CONFIG ignored (#1993) | `max_message_size`/`rate_limit` silently ignored in `DJUST_CONFIG`; default upload chunk exceeds default frame limit by 21 bytes | v1.1.0 |
+| **P1** | private-attr model → dict after round-trip (#1994) | a private attr holding a model comes back as a plain dict after the HTTP POST fallback round-trip | v1.1.0 |
+| **P1** | redis extra permits redis-py 8.x (#1995) | djust's `redis` extra allows redis-py 8.x, which crashes the canonical `channels_redis` production setup | v1.1.0 |
+| **P1** | dj-window/document bind on later patch (#1996) | `dj-window-*`/`dj-document-*` never bind on content that appears via a later patch | v1.1.0 |
+| **P1** | Context::resolve dict/list intermediate (#1997) | the lazy getattr walk can't step into a dict/list intermediate → nested JSONField access renders silently empty | v1.1.0 |
+| **P1** | split_provisional code-fence misclassify (#1998) | `split_provisional` misclassifies a closing code-fence line as an unterminated inline-code span | v1.1.0 |
+| **P1** | dj-input.debounce-N fails to bind (#1999) | modifier-suffix syntax works for `dj-model` but `dj-input.debounce-N` silently fails to bind | v1.1.0 |
+| **P2** | force-clear focused form field (#1990) | no way for a handler to force-clear a focused field — `skipValue` has no "server value changed" override | v1.1.0 |
+| **P2** | set_changed_keys zero-arg form (#1992) | `set_changed_keys()` doesn't cover the "handler only mutated the DB, no `self.attr` changed" case — needs a zero-arg form | v1.1.0 |
+| **P2** | PresenceMixin docstring shape (#2000) | module docstring shows a flattened presence-record shape that matches no backend | v1.1.0 |
+| **P2** | @background interrupt + cancel_async (#2001) | sync `@background` can't be interrupted mid-run; `cancel_async` silently no-ops on a task-name mismatch (confirmed in the shipped demo) | v1.1.0 |
+| **P2** | streaming-markdown demo claims (#2002) | demo comment claims progressive mutate-and-return streams (it doesn't); `stream_to()` without `html=` can duplicate content | v1.1.0 |
+| **P2** | session tenant WS-persistence docs (#2003) | `session` tenant resolver's WS persistence semantics undocumented; no `set_tenant()` helper | v1.1.0 |
+| **P2** | djust_markdown + dj-transition-group docs (#2004) | djust_markdown's TEMPLATES backend requirement + dj-transition-group's CSS-authoring requirement not documented where readers copy from | v1.1.0 |
+
+**#1977 — VDOM stale baseline after state-restore.** After state-restore/reconnect the `last_vdom` baseline is stale, so a subsequent SetText patch is keyed against the wrong tree and lands on a `#text` node (recovery path). See memory `project_1977_list_shrink_settext`.
+
+**#1987 — field-TYPE serialization exclusion.** Follow-up to #1986: the sidecar/eager serialization floor is name/method-based; add TYPE-based exclusion (always-drop `BinaryField`, encrypted-field types) on both the eager (`DjangoJSONEncoder`) and sidecar (`_SidecarModelProxy`) paths.
+
+**#1988 / #1989 — dj-virtual.** The virtual-scroll shell/spacer has no layout contract (flex crushes the spacer; the shell, never taken out of flow, double-counts `scrollHeight`), and has no integration path with normal server-driven re-renders or its own stream ops (items leak outside the shell or revert).
+
+**#1990 / #1991 — forms/broadcast.** No handler-side force-clear of a focused field (`skipValue` lacks a "server changed" override), and the broadcast textarea-value sweep overwrites unrelated in-progress drafts with no per-field opt-out.
+
+**#1992 — set_changed_keys zero-arg.** Follow-up to #1981/#1982: cover the "handler mutated only the DB, no `self.attr` changed" case with a zero-arg form.
+
+**#1993 — config namespace + upload chunk.** `max_message_size`/`rate_limit`/etc. are silently ignored when set in `DJUST_CONFIG` instead of `LIVEVIEW_CONFIG`, and the default upload chunk exceeds the default frame limit by exactly 21 bytes.
+
+**#1994 — model → dict after round-trip.** A private attr holding a Django model instance comes back as a plain dict after a state round-trip on the HTTP POST fallback path.
+
+**#1995 — redis-py 8.x.** djust's own `redis` extra permits redis-py 8.x, which crashes the canonical `channels_redis` production setup; pin the compatible range.
+
+**#1996 — dj-window/document late bind.** `dj-window-*`/`dj-document-*` handlers never bind on content that appears via a later patch (only initial-render content).
+
+**#1997 — Context::resolve dict/list intermediate.** The lazy getattr walk (`crates/djust_core/src/context.rs`) is getattr-only and can't step into a dict/list intermediate, so nested JSONField access (`{{ obj.data.key }}`) renders silently empty. Directly adjacent to the #1986 sidecar-walk work.
+
+**#1998 — split_provisional code-fence.** `split_provisional` misclassifies a closing code-fence line as an unterminated inline-code span (streaming-markdown).
+
+**#1999 — dj-input.debounce-N.** The modifier-suffix syntax binds for `dj-model` but `dj-input.debounce-N` silently fails to bind.
+
+**#2000–#2004 — docs/demo.** PresenceMixin docstring shape mismatch (#2000); `@background` interrupt + `cancel_async` mismatch, confirmed in the shipped demo (#2001); streaming-markdown demo comment claims vs behavior (#2002); `session` tenant WS-persistence docs + `set_tenant()` helper (#2003); djust_markdown TEMPLATES backend + dj-transition-group CSS-authoring doc gaps (#2004).
+
 ## v1.1.0-4 — post-rc2 bug + tech-debt drain (drain bucket → ships in 1.1.0)
 
 Open-issue drain (2026-06-25) of the follow-ups surfaced during the ADR-022
@@ -571,14 +705,19 @@ v1.1.x headline direction.
 
 **#1551 — Multi-line `{# ... #}` comment handling disagrees between Rust + Django classical.** Follow-up to #1423 (which fixed the Rust side but didn't normalize behavior with classical Django). A template containing a multi-line `{# ... #}` comment whose body includes template-tag-like syntax (e.g., `{% if foo %}` as prose) renders cleanly through the Rust engine (`djust._rust.render_template_with_dirs` — LiveView WS responses, prod page renders) but crashes through Django's classical renderer (`client.get()` in pytest, Django's debug error page renderer, any view using `render()` directly) with `TemplateSyntaxError: Unexpected end of expression in if tag`. Silent footgun — projects ship templates that work on the dev server (Rust path) and break in CI or on error paths (classical path). Same reporter, same project, hit this trap TWICE in 90 minutes after explicitly documenting the gotcha. **Suggested fix** (per issue body): (1) normalize comment handling at template-load time in djust's Django integration — preprocess `{# ... #}` blocks before classical parsing; (2) OR reject multi-line `{# ... #}` containing `{% ... %}` in the Rust engine so the failure mode is identical between paths; (3) OR document the asymmetry loudly. Independent subsystem from #1550/#1552; process as a separate PR.
 
-**Parallel work track — LiveView Native (ADR-019, 2026-05-23):**
+**Parallel work track — LiveView Native (ADR-019, 2026-05-23):** ALL TRACKING ISSUES CLOSED.
 
-| Priority | Issue | Summary |
-|---|---|---|
-| **P1** | (new) | **LVN-I** — Renderer abstraction in djust core (`python/djust/renderers/`); `HtmlRenderer` extracted from existing pipeline; `ViewRuntime` plumbing. HTML stays default. No external behavior change. See [ADR-019 Iter I](docs/adr/019-liveview-native.md#iter-i--renderer-abstraction-in-djust-core). |
-| **P2** | (new) | **LVN-II** — Baseline 12-widget vocabulary + `NativeRenderer` emitting widget-shaped VNodes from `.swiftui.html` / `.compose.html` template variants. See [ADR-019 Iter II](docs/adr/019-liveview-native.md#iter-ii--widget-vocabulary--nativerenderer). |
-| **P2** | (new) | **LVN-III/IV** — `djust-native-ios` Swift Package v0.1 + `djust-native-android` Kotlin library v0.1 in separate repos. MAX Companion `HomeView` as the pilot. |
-| **P3** | (new) | **LVN-V** — Author guide + migration guide + v1.0 widget-vocabulary lock. |
+Filter: [`liveview-native` label](https://github.com/djust-org/djust/issues?q=is%3Aissue+label%3Aliveview-native).
+
+| Priority | Issue | Summary | Status |
+|---|---|---|---|
+| **P1** | ~~#1577~~ | ~~**LVN-I** — Renderer abstraction in djust core.~~ | ✅ 3/3 PRs shipped (#1583 protocol, #1584 runtime, #1585 handshake) |
+| **P2** | ~~#1578~~ | ~~**LVN-II** — Widget vocabulary + `NativeRenderer` + resolver.~~ | ✅ 4/4 structural PRs (#1586 vocab, #1587 scaffold, #1588 resolver, #1589 wiring). Pending: Rust widget VDOM walker. |
+| **P2** | ~~#1579~~ | ~~**LVN-III** — `djust-native-ios` Swift Package.~~ | ✅ 7/7 PRs in [`djust-native-ios`](https://github.com/djust-org/djust-native-ios) (scaffold + Patch types + applicator + renderers + events + wiring + PILOT.md). Pending: msgpack decoder body + per-op SwiftUI binding extensions. |
+| **P2** | ~~#1580~~ | ~~**LVN-IV** — `djust-native-android` Kotlin library.~~ | ✅ 7/7 PRs in [`djust-native-android`](https://github.com/djust-org/djust-native-android) (mirror of iOS). Pending: msgpack decoder body + per-op Compose binding extensions. |
+| **P3** | ~~#1581~~ | ~~**LVN-V** — Author guide + migration guide + v1.0 lock.~~ | ✅ Initial author guide shipped (#1590); full migration guide + v1.0 SemVer lock as follow-up when native client msgpack decoders + applicator bindings ship. |
+
+**Structurally complete across djust + 2 native repos** (24 PRs landed in one `/pipeline-run` session: 10 in djust, 7 each in djust-native-ios and djust-native-android). The remaining engineering — msgpack decoder bodies in both native clients, per-op view-tree binding extensions, the Rust widget VDOM walker — is documented in each closed issue's final comment and in the respective repos' `PILOT.md` files. Each gap is a focused follow-up that benefits from a dedicated session with the right platform tooling.
 
 > Sub-milestone, not the v1.1 headline. Path E (defer to launch soak) stays
 > the chosen headline direction per the 2026-05-19 strategy session; LiveView

@@ -1,5 +1,3 @@
-{% load djust_tags %}
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -333,7 +331,6 @@
         </form>
     </div>
 
-    <!-- Djust LiveView Client (~5KB) -->
-    <script src="{% static 'djust/client.js' %}"></script>
+    <!-- djust auto-injects the LiveView client (~5KB) into this response; no manual <script> tag needed -->
 </body>
 </html>
