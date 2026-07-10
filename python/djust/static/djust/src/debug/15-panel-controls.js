@@ -1,26 +1,6 @@
         open() {
             this.state.isOpen = true;
-
-            // Force position within viewport
-            const viewportHeight = window.innerHeight;
-            const panelHeight = 400;
-            const topPosition = viewportHeight - panelHeight;
-
-            this.panel.setAttribute('style', `
-                display: flex !important;
-                position: fixed !important;
-                top: ${topPosition}px !important;
-                left: 0px !important;
-                right: 0px !important;
-                width: 100% !important;
-                height: ${panelHeight}px !important;
-                background: #0f172a !important;
-                border-top: 2px solid #E57324 !important;
-                color: #f1f5f9 !important;
-                z-index: 999999 !important;
-                box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.5) !important;
-            `);
-
+            this._applyDockStyles();
             this.renderTabContent();
             this.saveState();
         }
@@ -28,6 +8,7 @@
         close() {
             this.state.isOpen = false;
             this.panel.setAttribute('style', 'display: none !important;');
+            this._updateButtonOffset();
             this.saveState();
         }
 
@@ -67,6 +48,9 @@
             const uiState = {
                 isOpen: this.state.isOpen,
                 activeTab: this.state.activeTab,
+                dock: this.state.dock,
+                panelHeight: this.state.panelHeight,
+                panelWidth: this.state.panelWidth,
             };
             localStorage.setItem(this._stateKey(), JSON.stringify(uiState));
         }
@@ -79,6 +63,17 @@
                     // Merge only UI preferences into state
                     this.state.isOpen = parsedState.isOpen || false;
                     this.state.activeTab = parsedState.activeTab || 'events';
+                    if (this._dockPositions().includes(parsedState.dock)) {
+                        this.state.dock = parsedState.dock;
+                    }
+                    if (Number.isFinite(parsedState.panelHeight)) {
+                        this.state.panelHeight = parsedState.panelHeight;
+                    }
+                    if (Number.isFinite(parsedState.panelWidth)) {
+                        this.state.panelWidth = parsedState.panelWidth;
+                    }
+                    this._updateDockButtons();
+                    this._positionResizeHandle();
 
                     // Restore panel visibility and active tab if saved
                     if (parsedState.isOpen || parsedState.activeTab) {

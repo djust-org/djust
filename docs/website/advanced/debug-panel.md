@@ -9,7 +9,7 @@ description: "Built-in developer debug panel for real-time event inspection, VDO
 
 # Debug Panel
 
-The djust Developer Debug Panel provides real-time introspection into your LiveView application. Monitor events, inspect VDOM patches, view state variables, and debug WebSocket messages -- all from a panel docked to the bottom of your page.
+The djust Developer Debug Panel provides real-time introspection into your LiveView application. Monitor events, inspect VDOM patches, view state variables, and debug WebSocket messages -- all from a panel docked to an edge of your page.
 
 ## Enabling the Debug Panel
 
@@ -28,7 +28,25 @@ The panel only appears when `DEBUG = True`. Never deploy to production with DEBU
 - **Keyboard shortcut**: `Ctrl+Shift+D` (Windows/Linux) or `Cmd+Shift+D` (Mac)
 - **Floating button**: Click the bug icon in the bottom-right corner
 
-The panel docks to the bottom of the viewport at 350px height, with a vertical tab sidebar on the left.
+By default the panel docks to the bottom of the viewport at 400px height, with a vertical tab sidebar on the left.
+
+## Panel Position & Size
+
+A full-width bottom dock can cover bottom-anchored app UI -- a chat input, sticky footer, or bottom navigation. The panel is dockable and resizable so it can stay open next to that UI instead of on top of it:
+
+- **Dock position**: The three dock buttons in the panel header switch between **bottom** (default, full width), **left**, and **right** (full height side panels). Docking to a side keeps the bottom of your page visible and interactive -- useful when developing chat-style views.
+- **Resize**: Drag the panel's inner edge (top edge for the bottom dock, the page-facing edge for side docks) to resize it. Size is clamped to sane bounds (min 160px height / 320px width, max 90% of the viewport).
+- **Persistence**: Dock position and size persist per view via `localStorage`, alongside the existing open/active-tab state.
+
+The floating toggle button automatically moves out from under the open panel and returns to the bottom-right corner when the panel closes.
+
+You can also set the initial dock programmatically:
+
+```javascript
+new DjustDebugPanel({ position: 'right' });  // 'bottom' | 'left' | 'right'
+// or at runtime:
+window.djustDebugPanel.setDock('right');
+```
 
 ## Event Handlers Tab
 

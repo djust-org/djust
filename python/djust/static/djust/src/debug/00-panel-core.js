@@ -33,6 +33,13 @@
                 isOpen: false,
                 activeTab: 'events',
                 searchQuery: '',
+                // Dockable panel (fixes the full-width bottom dock covering
+                // bottom-anchored app UI, e.g. a chat input)
+                dock: ['bottom', 'left', 'right'].includes(this.config.position)
+                    ? this.config.position
+                    : 'bottom',
+                panelHeight: 400,
+                panelWidth: 480,
                 filters: {
                     types: [],
                     severity: 'all',
@@ -71,6 +78,7 @@
             this.createPanel();
             this.registerTabs();
             this.attachEventListeners();
+            this._initDockUI();
             this.hookIntoLiveView();
             this.loadState();
 

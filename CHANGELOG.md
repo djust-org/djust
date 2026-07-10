@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Django `{% regroup %}` support in the Rust template engine (#2023).** `{% regroup <expr> by <attr> as <var> %}` now regroups a flat sequence into `[{"grouper": key, "list": [...]}, ...]`, matching Django's `RegroupNode` consecutive-grouping semantics (input order preserved, never pre-sorted). Implemented as a built-in *assign* tag handler (`RegroupTagHandler`) plus a JSON-aware `resolve_tag_arg` in `renderer.rs` that brings the assign-tag arg path to parity with `CustomTag` (structured list/object args are JSON-encoded instead of collapsing to the opaque `[List]`/`[Object]` placeholder). `<attr>` supports dotted paths (`author.team`). Known limitations vs. Django (documented on `RegroupTagHandler`): filter expressions on the source (`cities|dictsort:"country"`) are unsupported, and a context key whose name matches the `<attr>` token shadows the per-item lookup — the handler now emits a `logger.warning` when the resolved attr isn't a bare identifier (see #2041 for the durable fix). Regression coverage in `test_regroup_tag.py` drives the real Rust engine via both `render_template` and `RustLiveView.render_with_diff` with a Django-parity anchor.
+- **Debug panel is now dockable (bottom/left/right) and resizable.** The dev
+  toolbar was a hardcoded full-width 400px bottom dock, which permanently
+  covered bottom-anchored app UI — a chat input, sticky footer, or bottom
+  nav — while open. New dock buttons in the panel header switch between
+  bottom (default), left, and right edge docking (side docks are full-height
+  panels that leave the bottom of the page visible); a drag handle on the
+  panel's inner edge resizes it (clamped to 160px–90vh height /
+  320px–90vw width); dock position and size persist per view via the
+  existing `localStorage` UI-state path, with validation on load. The
+  floating toggle button moves out from under the open panel and returns to
+  its corner on close. `DjustDebugPanel`'s previously-dead `config.position`
+  now seeds the initial dock, and `setDock('bottom'|'left'|'right')` is
+  available at runtime. New cases in `tests/js/debug_panel_dock.test.js`.
 
 ### Fixed
 
