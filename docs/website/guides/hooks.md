@@ -229,6 +229,157 @@ this.handleEvent('highlight', (payload) => {
 });
 ```
 
+## Typed values & targets
+
+Passing data to a hook used to mean raw `dataset` strings and hand-rolled
+parsing. `dj-hook-value-*` attributes are exposed on the instance as
+`this.values.*` with JSON-first coercion:
+
+```html
+<canvas dj-hook="Chart"
+        dj-hook-value-points="[1,2,3]"
+        dj-hook-value-animated="true"
+        dj-hook-value-title="Sales"></canvas>
+```
+
+```javascript
+window.djust.hooks = {
+    Chart: {
+        mounted() {
+            this.values.points     // [1, 2, 3]  — Array
+            this.values.animated   // true       — Boolean
+            this.values.title      // "Sales"    — string (JSON.parse failed → raw)
+            renderChart(this.el, this.values);
+        },
+        updated() {
+            // values are LIVE: after a server re-render changes the
+            // attributes, reads here see the fresh values automatically.
+            renderChart(this.el, this.values);
+        },
+    },
+};
+```
+
+The coercion rule: try `JSON.parse`, fall back to the raw string. A literal
+string that *looks* like JSON must be JSON-quoted:
+`dj-hook-value-code='"007"'` → `"007"` (not the number 7). Attribute names
+are kebab-case, property names camelCase
+(`dj-hook-value-points-per-page` → `this.values.pointsPerPage`). `this.values`
+is read-only — update the attribute server-side and let the morph carry it.
+Access values by name only — the object is not enumerable (`Object.keys(this.values)`/spread return nothing in v1).
+
+Named descendants use `dj-hook-target`:
+
+```html
+<div dj-hook="Player">
+    <video dj-hook-target="video"></video>
+    <button dj-hook-target="mute">🔇</button>
+</div>
+```
+
+```javascript
+this.target('video')   // first match (Element or null)
+this.targets('mute')   // all matches (Element[])
+```
+
+Lookups are live subtree queries scoped to `this.el`. Note: descendants of a
+*nested* hook are not excluded in v1 — prefer unique target names when
+nesting hooks.
+
+### Before / after
+
+What the same hook looked like on raw `dataset` strings, and with typed
+values + targets:
+
+```javascript
+// BEFORE: every hook re-invented this
+mounted() {
+    const points = JSON.parse(this.el.dataset.points || "[]");
+    const animated = this.el.dataset.animated === "true";
+    const canvas = this.el.querySelector("#chart-canvas-" + this.el.id); // unique IDs…
+}
+
+// AFTER
+mounted() {
+    new Chart(this.target('canvas'), {
+        data: this.values.points,                     // [1,2,3] — real Array
+        options: {animation: this.values.animated},   // real Boolean
+    });
+}
+```
+
+### Recipe: live values make `updated()` trivial
+
+```python
+# server: any handler that changes the data
+@event_handler()
+def set_period(self, value: str = "", **kwargs):
+    self.points_json = json.dumps(self.compute(value))
+```
+
+```javascript
+updated() {
+    // the morph already updated the attribute; this.values reads it LIVE
+    this.chart.data.datasets[0].data = this.values.points;
+    this.chart.update();
+}
+```
+
+No snapshotting, no staleness — the values object reads the current DOM
+attribute on every access.
+
+### Recipe: a countdown that survives re-renders
+
+```html
+<div dj-hook="Countdown" dj-hook-value-deadline='"2026-08-01T00:00:00Z"'>
+    <span dj-hook-target="display"></span>
+</div>
+```
+
+```javascript
+window.djust.hooks.Countdown = {
+    mounted() {
+        this.timer = setInterval(() => {
+            const left = new Date(this.values.deadline) - Date.now();
+            this.target('display').textContent = formatDuration(left);
+        }, 1000);
+    },
+    destroyed() { clearInterval(this.timer); },
+};
+```
+
+The server moves the deadline → the morph updates the attribute → the next
+tick reads the new value. Nothing else to wire. (Note the JSON-quoted
+attribute value — an ISO timestamp parses as a plain string either way, but
+quoting makes the intent explicit.)
+
+To *drive* a hook-owned library instance from Python between renders —
+"jump to line 42", "highlight the Q3 data point" — pair hooks with
+[custom JS commands](js-commands#custom-commands): the hook owns the
+instance, a registered command manipulates it, and the server binds the
+chain to any event attribute.
+
+## TypeScript & editor support
+
+djust ships ambient type declarations for the public `window.djust` surface
+(hook lifecycle + `this` context — including `values` / `target()` /
+`targets()` — transports, uploads, streaming, model binding, and
+`commands.register`). Point your editor at them — no build step needed:
+
+```json
+// jsconfig.json
+{
+    "compilerOptions": { "checkJs": true },
+    "include": ["static/**/*.js", "./typings/djust.d.ts"]
+}
+```
+
+Locate (or copy) the shipped file with:
+
+```bash
+python -c "import djust, pathlib; print(pathlib.Path(djust.__file__).parent / 'static/djust/djust.d.ts')"
+```
+
 ## Example: Chart.js Integration
 
 ```python

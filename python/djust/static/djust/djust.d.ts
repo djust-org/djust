@@ -4,6 +4,8 @@
  * Provides type declarations for the djust client-side JavaScript API:
  *   - window.djust namespace
  *   - dj-hook lifecycle interface
+ *   - Hook typed values (dj-hook-value-*) & scoped targets (dj-hook-target)
+ *   - Custom JS Commands registration (JS.ext)
  *   - Transport classes (WebSocket and SSE)
  *   - dj-model binding types
  *   - Streaming API types
@@ -66,6 +68,39 @@ interface DjustHookContext {
    * @param callback - Called when the server pushes this event.
    */
   handleEvent(eventName: string, callback: (payload: unknown) => void): void;
+
+  /**
+   * Typed values sourced from `dj-hook-value-*` attributes on `el` (ADR-025).
+   *
+   * Each key is the camelCase form of the attribute's kebab-case suffix
+   * (e.g. `dj-hook-value-max-count` → `this.values.maxCount`). Values are
+   * JSON-first coerced (numbers, booleans, objects/arrays) with a
+   * raw-string fallback. Reads are LIVE — each access re-reads the
+   * element's current attribute, so `updated()` always sees fresh values
+   * with no staleness tracking. Read-only: assigning a property throws
+   * `TypeError`; update the attribute server-side instead.
+   * Named-key reads only — the object is not enumerable in v1
+   * (`Object.keys()` / spread / `JSON.stringify()` yield `{}`).
+   */
+  readonly values: Readonly<Record<string, unknown>>;
+
+  /**
+   * Find the first descendant of `el` marked `dj-hook-target="name"`
+   * (ADR-025). A live subtree query, re-run on every call.
+   *
+   * @param name - The `dj-hook-target` attribute value to match.
+   * @returns The matching element, or null if none found.
+   */
+  target(name: string): Element | null;
+
+  /**
+   * Find all descendants of `el` marked `dj-hook-target="name"` (ADR-025).
+   * A live subtree query, re-run on every call.
+   *
+   * @param name - The `dj-hook-target` attribute value to match.
+   * @returns All matching elements (empty array if none found).
+   */
+  targets(name: string): Element[];
 }
 
 /**
@@ -639,6 +674,33 @@ interface Djust {
      * @param args - Tuple of [CSS selector, focus options].
      */
     processFocus(args: [selector: string, options?: FocusOptions]): void;
+  };
+
+  // -------------------------------------------------------------------------
+  // Custom JS Commands (ADR-025)
+  // -------------------------------------------------------------------------
+
+  /** Custom JS Commands registry, exposed as `window.djust.commands`. */
+  commands: {
+    /**
+     * Register a custom `JS.ext("name")` command implementation, invoked
+     * when a `[[...]]` JS Command chain executes an `ext.<name>` op.
+     *
+     * @param name - Command name. Must not contain "." and must not
+     *   collide with a djust built-in command name (throws otherwise).
+     * @param fn - Called with the resolved target elements, the raw args
+     *   object passed to `.ext(name, args)`, and the element that
+     *   triggered the command (or null). May return a Promise; the
+     *   chain awaits it before continuing to the next op.
+     */
+    register(
+      name: string,
+      fn: (
+        targets: Element[],
+        args: Record<string, unknown>,
+        originEl: Element | null
+      ) => void | Promise<void>
+    ): void;
   };
 
   // -------------------------------------------------------------------------

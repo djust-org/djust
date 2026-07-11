@@ -6,6 +6,8 @@ These tests verify:
 - All public API surfaces are typed (interfaces, classes, events)
 - The file is structurally valid TypeScript (balanced braces, no obvious syntax errors)
 - Edge cases: null types, optional parameters, union types
+- ADR-025 grafts: dj-hook typed values (`this.values`), scoped targets
+  (`this.target()` / `this.targets()`), and `window.djust.commands.register`
 
 Run with:
     pytest python/tests/test_typescript_definitions.py -v
@@ -25,9 +27,9 @@ DTS_PATH = (
 @pytest.fixture(scope="module")
 def dts_content():
     """Read and return the .d.ts file content."""
-    assert (
-        DTS_PATH.exists()
-    ), f"djust.d.ts not found at {DTS_PATH}. Run the implementation step to create it."
+    assert DTS_PATH.exists(), (
+        f"djust.d.ts not found at {DTS_PATH}. Run the implementation step to create it."
+    )
     return DTS_PATH.read_text()
 
 
@@ -55,17 +57,17 @@ def test_djust_hook_context_interface(dts_content):
     # Must have el: Element
     assert re.search(r"el\s*:\s*Element", dts_content), "DjustHookContext must have el: Element"
     # Must have viewName: string
-    assert re.search(
-        r"viewName\s*:\s*string", dts_content
-    ), "DjustHookContext must have viewName: string"
+    assert re.search(r"viewName\s*:\s*string", dts_content), (
+        "DjustHookContext must have viewName: string"
+    )
     # Must have pushEvent method
-    assert re.search(
-        r"pushEvent\s*\(", dts_content
-    ), "DjustHookContext must have pushEvent() method"
+    assert re.search(r"pushEvent\s*\(", dts_content), (
+        "DjustHookContext must have pushEvent() method"
+    )
     # Must have handleEvent method
-    assert re.search(
-        r"handleEvent\s*\(", dts_content
-    ), "DjustHookContext must have handleEvent() method"
+    assert re.search(r"handleEvent\s*\(", dts_content), (
+        "DjustHookContext must have handleEvent() method"
+    )
 
 
 def test_djust_hook_interface_lifecycle(dts_content):
@@ -79,9 +81,9 @@ def test_djust_hook_interface_lifecycle(dts_content):
         "disconnected",
         "reconnected",
     ):
-        assert re.search(
-            rf"\b{callback}\b", dts_content
-        ), f"DjustHook missing lifecycle callback: {callback}"
+        assert re.search(rf"\b{callback}\b", dts_content), (
+            f"DjustHook missing lifecycle callback: {callback}"
+        )
 
 
 def test_djust_hook_map_type(dts_content):
@@ -123,9 +125,9 @@ def test_websocket_stats_type(dts_content):
 def test_upload_progress_event_type(dts_content):
     """Upload progress custom event detail must be typed."""
     # Either a CustomEvent type or an interface for the detail
-    assert re.search(
-        r"upload.*progress|DjustUpload", dts_content, re.IGNORECASE
-    ), "Missing upload progress type declarations"
+    assert re.search(r"upload.*progress|DjustUpload", dts_content, re.IGNORECASE), (
+        "Missing upload progress type declarations"
+    )
     # ref field
     assert re.search(r"\bref\b\s*:", dts_content), "Upload type missing 'ref' field"
     # progress field (numeric percentage)
@@ -134,9 +136,9 @@ def test_upload_progress_event_type(dts_content):
 
 def test_upload_config_type(dts_content):
     """Upload config must be typed."""
-    assert re.search(
-        r"DjustUpload|upload_config|UploadConfig", dts_content, re.IGNORECASE
-    ), "Missing upload config type"
+    assert re.search(r"DjustUpload|upload_config|UploadConfig", dts_content, re.IGNORECASE), (
+        "Missing upload config type"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +148,9 @@ def test_upload_config_type(dts_content):
 
 def test_stream_operation_type(dts_content):
     """Stream operation type must cover all ops: append, prepend, replace, delete, text, error."""
-    assert re.search(
-        r"DjustStream|stream.*op|StreamOp", dts_content, re.IGNORECASE
-    ), "Missing stream operation type"
+    assert re.search(r"DjustStream|stream.*op|StreamOp", dts_content, re.IGNORECASE), (
+        "Missing stream operation type"
+    )
     for op in ("append", "prepend", "replace", "delete"):
         assert op in dts_content, f"Stream operation '{op}' not represented in types"
 
@@ -166,12 +168,12 @@ def test_stream_message_type(dts_content):
 
 def test_djust_namespace_declared(dts_content):
     """window.djust must be typed via interface Window extension."""
-    assert re.search(
-        r"interface\s+Window", dts_content
-    ), "Missing 'interface Window' extension for window.djust"
-    assert re.search(
-        r"djust\s*:\s*Djust", dts_content
-    ), "Window interface must have 'djust: Djust' property"
+    assert re.search(r"interface\s+Window", dts_content), (
+        "Missing 'interface Window' extension for window.djust"
+    )
+    assert re.search(r"djust\s*:\s*Djust", dts_content), (
+        "Window interface must have 'djust: Djust' property"
+    )
 
 
 def test_djust_interface_core_props(dts_content):
@@ -228,9 +230,9 @@ def test_djust_interface_model_binding(dts_content):
 
 def test_declare_global_block(dts_content):
     """File must use declare global {} to extend Window without a module."""
-    assert (
-        "declare global" in dts_content
-    ), "Missing 'declare global' block — required to extend Window as an ambient file"
+    assert "declare global" in dts_content, (
+        "Missing 'declare global' block — required to extend Window as an ambient file"
+    )
 
 
 def test_djust_debug_global(dts_content):
@@ -240,9 +242,9 @@ def test_djust_debug_global(dts_content):
 
 def test_djust_hooks_compat_alias(dts_content):
     """window.DjustHooks (Phoenix-compat alias) must be typed."""
-    assert (
-        "DjustHooks" in dts_content
-    ), "Missing DjustHooks window property (Phoenix LiveView-compatible hook registration)"
+    assert "DjustHooks" in dts_content, (
+        "Missing DjustHooks window property (Phoenix LiveView-compatible hook registration)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,13 +265,13 @@ def test_live_view_instance_nullable(dts_content):
 def test_optional_parameters(dts_content):
     """Key methods must use optional parameters where appropriate."""
     # mountHooks(root?: Element) - root is optional
-    assert re.search(
-        r"mountHooks\s*\(\s*root\s*\?", dts_content
-    ), "mountHooks root parameter should be optional"
+    assert re.search(r"mountHooks\s*\(\s*root\s*\?", dts_content), (
+        "mountHooks root parameter should be optional"
+    )
     # handleEvent params should be optional
-    assert re.search(
-        r"handleEvent\s*\([^)]*\?", dts_content
-    ), "handleEvent should have at least one optional parameter"
+    assert re.search(r"handleEvent\s*\([^)]*\?", dts_content), (
+        "handleEvent should have at least one optional parameter"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -281,24 +283,24 @@ def test_balanced_braces(dts_content):
     """The file must have balanced curly braces."""
     open_count = dts_content.count("{")
     close_count = dts_content.count("}")
-    assert (
-        open_count == close_count
-    ), f"Unbalanced braces in djust.d.ts: {open_count} '{{' vs {close_count} '}}'"
+    assert open_count == close_count, (
+        f"Unbalanced braces in djust.d.ts: {open_count} '{{' vs {close_count} '}}'"
+    )
 
 
 def test_no_bare_javascript_syntax(dts_content):
     """The file must not contain function bodies (only declarations)."""
     # A .d.ts should not have function bodies with actual code
-    assert (
-        "this.ws = " not in dts_content
-    ), "djust.d.ts contains implementation code (this.ws = ...) — should be declarations only"
+    assert "this.ws = " not in dts_content, (
+        "djust.d.ts contains implementation code (this.ws = ...) — should be declarations only"
+    )
     # console.log should not appear outside of JSDoc comment blocks
     # Strip JSDoc/line comments and check the remaining code
     code_only = re.sub(r"/\*.*?\*/", "", dts_content, flags=re.DOTALL)  # strip block comments
     code_only = re.sub(r"//[^\n]*", "", code_only)  # strip line comments
-    assert (
-        "console.log" not in code_only
-    ), "djust.d.ts contains console.log outside of comments — should be declarations only"
+    assert "console.log" not in code_only, (
+        "djust.d.ts contains console.log outside of comments — should be declarations only"
+    )
 
 
 def test_export_empty_for_ambient_module(dts_content):
@@ -313,3 +315,44 @@ def test_export_empty_for_ambient_module(dts_content):
     # Both patterns are acceptable.
     has_declare_global = "declare global" in dts_content
     assert has_declare_global, "File must use declare global for ambient Window extension"
+
+
+# ---------------------------------------------------------------------------
+# 10. ADR-025: dj-hook typed values & scoped targets
+# ---------------------------------------------------------------------------
+
+
+def test_hook_context_values_prop(dts_content):
+    """DjustHookContext must declare a read-only `values` property (ADR-025)."""
+    assert re.search(r"readonly\s+values\s*:\s*Readonly<Record<string,\s*unknown>>", dts_content), (
+        "DjustHookContext must have readonly values: Readonly<Record<string, unknown>>"
+    )
+
+
+def test_hook_context_target_methods(dts_content):
+    """DjustHookContext must declare target()/targets() scoped lookups (ADR-025)."""
+    assert re.search(
+        r"target\s*\(\s*name\s*:\s*string\s*\)\s*:\s*Element\s*\|\s*null", dts_content
+    ), "DjustHookContext must have target(name: string): Element | null"
+    assert re.search(
+        r"targets\s*\(\s*name\s*:\s*string\s*\)\s*:\s*Element\s*\[\s*\]", dts_content
+    ), "DjustHookContext must have targets(name: string): Element[]"
+
+
+def test_djust_interface_commands(dts_content):
+    """Djust interface must expose a `commands` registry with `register(` (ADR-025)."""
+    assert re.search(r"commands\s*:\s*\{", dts_content), "Djust interface missing commands property"
+    assert re.search(r"register\s*\(", dts_content), "Djust.commands missing register() method"
+
+
+def test_commands_register_signature(dts_content):
+    """commands.register() callback must carry targets/args/originEl (ADR-025)."""
+    assert re.search(r"targets\s*:\s*Element\s*\[\s*\]", dts_content), (
+        "commands.register callback missing targets: Element[]"
+    )
+    assert re.search(r"args\s*:\s*Record<string,\s*unknown>", dts_content), (
+        "commands.register callback missing args: Record<string, unknown>"
+    )
+    assert re.search(r"originEl\s*:\s*Element\s*\|\s*null", dts_content), (
+        "commands.register callback missing originEl: Element | null"
+    )
