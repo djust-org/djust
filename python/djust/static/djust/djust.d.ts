@@ -79,6 +79,8 @@ interface DjustHookContext {
    * element's current attribute, so `updated()` always sees fresh values
    * with no staleness tracking. Read-only: assigning a property throws
    * `TypeError`; update the attribute server-side instead.
+   * Named-key reads only — the object is not enumerable in v1
+   * (`Object.keys()` / spread / `JSON.stringify()` yield `{}`).
    */
   readonly values: Readonly<Record<string, unknown>>;
 

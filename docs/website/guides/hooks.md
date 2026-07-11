@@ -266,6 +266,7 @@ string that *looks* like JSON must be JSON-quoted:
 are kebab-case, property names camelCase
 (`dj-hook-value-points-per-page` → `this.values.pointsPerPage`). `this.values`
 is read-only — update the attribute server-side and let the morph carry it.
+Access values by name only — the object is not enumerable (`Object.keys(this.values)`/spread return nothing in v1).
 
 Named descendants use `dj-hook-target`:
 

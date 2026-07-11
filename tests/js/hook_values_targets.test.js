@@ -8,7 +8,7 @@
  * - target()/targets(): subtree-scoped lookup by dj-hook-target
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
