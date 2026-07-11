@@ -288,8 +288,9 @@ nesting hooks.
 ## TypeScript & editor support
 
 djust ships ambient type declarations for the public `window.djust` surface
-(hooks, JS command chains, `commands.register`). Point your editor at them —
-no build step needed:
+(hook lifecycle + `this` context — including `values` / `target()` /
+`targets()` — transports, uploads, streaming, model binding, and
+`commands.register`). Point your editor at them — no build step needed:
 
 ```json
 // jsconfig.json
