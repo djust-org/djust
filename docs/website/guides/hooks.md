@@ -286,6 +286,79 @@ Lookups are live subtree queries scoped to `this.el`. Note: descendants of a
 *nested* hook are not excluded in v1 — prefer unique target names when
 nesting hooks.
 
+### Before / after
+
+What the same hook looked like on raw `dataset` strings, and with typed
+values + targets:
+
+```javascript
+// BEFORE: every hook re-invented this
+mounted() {
+    const points = JSON.parse(this.el.dataset.points || "[]");
+    const animated = this.el.dataset.animated === "true";
+    const canvas = this.el.querySelector("#chart-canvas-" + this.el.id); // unique IDs…
+}
+
+// AFTER
+mounted() {
+    new Chart(this.target('canvas'), {
+        data: this.values.points,                     // [1,2,3] — real Array
+        options: {animation: this.values.animated},   // real Boolean
+    });
+}
+```
+
+### Recipe: live values make `updated()` trivial
+
+```python
+# server: any handler that changes the data
+@event_handler()
+def set_period(self, value: str = "", **kwargs):
+    self.points_json = json.dumps(self.compute(value))
+```
+
+```javascript
+updated() {
+    // the morph already updated the attribute; this.values reads it LIVE
+    this.chart.data.datasets[0].data = this.values.points;
+    this.chart.update();
+}
+```
+
+No snapshotting, no staleness — the values object reads the current DOM
+attribute on every access.
+
+### Recipe: a countdown that survives re-renders
+
+```html
+<div dj-hook="Countdown" dj-hook-value-deadline='"2026-08-01T00:00:00Z"'>
+    <span dj-hook-target="display"></span>
+</div>
+```
+
+```javascript
+window.djust.hooks.Countdown = {
+    mounted() {
+        this.timer = setInterval(() => {
+            const left = new Date(this.values.deadline) - Date.now();
+            this.target('display').textContent = formatDuration(left);
+        }, 1000);
+    },
+    destroyed() { clearInterval(this.timer); },
+};
+```
+
+The server moves the deadline → the morph updates the attribute → the next
+tick reads the new value. Nothing else to wire. (Note the JSON-quoted
+attribute value — an ISO timestamp parses as a plain string either way, but
+quoting makes the intent explicit.)
+
+To *drive* a hook-owned library instance from Python between renders —
+"jump to line 42", "highlight the Q3 data point" — pair hooks with
+[custom JS commands](js-commands#custom-commands): the hook owns the
+instance, a registered command manipulates it, and the server binds the
+chain to any event attribute.
+
 ## TypeScript & editor support
 
 djust ships ambient type declarations for the public `window.djust` surface

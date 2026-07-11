@@ -181,6 +181,94 @@ Rules worth knowing:
 - **JS-side chains** use the explicit form: `djust.js.ext('scroll_to', {to: '#top'})`
   or mid-chain `this.js().hide('#m').ext('scroll_to', {to: '#top'}).exec(this.el)`.
 
+### Recipes
+
+#### Copy-to-clipboard with instant feedback
+
+```javascript
+// static/app.js — registered once
+window.djust.commands.register('clipboard_copy', (targets, args) => {
+    navigator.clipboard.writeText(args.text);
+});
+```
+
+```python
+# views.py — chain it with built-ins
+self.copy_link = (JS.ext.clipboard_copy(text=self.share_url)
+                    .add_class("copied")
+                    .transition("pulse", time=400))
+```
+
+```html
+<button dj-click="{{ copy_link }}">Copy link</button>
+```
+
+Click → text copied, button pulses — zero server involvement. Before custom
+commands, this was a full `dj-hook` with lifecycle ceremony.
+
+#### Optimistic UI: mix client ops with a server push
+
+```python
+# Close the modal INSTANTLY, celebrate, then tell the server — one attribute
+self.place_order = (JS.hide("#checkout-modal")
+                      .ext.confetti(particles=80)
+                      .push("submit_order", value={"cart_id": self.cart_id}))
+```
+
+The modal disappears at click-time latency; `push` rides the normal event
+pipeline, so debouncing, rate limiting, and the WebSocket/HTTP fallback all
+apply unchanged.
+
+#### Async commands are awaited in chain order
+
+```javascript
+window.djust.commands.register('fade_out', (targets) =>
+    Promise.all(targets.map(el =>
+        el.animate({opacity: [1, 0]}, 250).finished))
+);
+```
+
+```python
+# The fade COMPLETES before the row is hidden and the server is told
+self.dismiss = (JS.ext.fade_out(closest=".notification")
+                  .hide(closest=".notification")
+                  .push("mark_read"))
+```
+
+A command that returns a Promise holds the rest of the chain until it
+resolves. And because the targeting is `closest=`, this same button works in
+every notification — no per-row IDs.
+
+#### Drive a third-party library from Python
+
+```javascript
+window.djust.commands.register('chart_focus', (targets, args) => {
+    targets.forEach(el => {
+        const chart = Chart.getChart(el);
+        chart.setActiveElements([{datasetIndex: 0, index: args.index}]);
+        chart.update();
+    });
+});
+```
+
+```python
+# A "Show me Q3" button highlights the chart point — no re-render
+self.focus_q3 = JS.ext.chart_focus(to="#sales-chart", index=2)
+```
+
+The chart instance itself stays owned by a
+[`dj-hook`](hooks#typed-values--targets) (with `dj-update="ignore"` keeping
+the morph out of its DOM); the command is how Python *drives* it between
+renders. Composed further:
+
+```python
+# CodeMirror "jump to error": cursor move + panel highlight + focus,
+# expressed as one chainable, template-bindable value
+self.jump_to_error = (JS.ext.editor_goto(to="#code-editor", line=self.error_line)
+                        .add_class("has-error", to="#editor-panel")
+                        .focus("#code-editor"))
+```
+
 ---
 
 ## Command reference
