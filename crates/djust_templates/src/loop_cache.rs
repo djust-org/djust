@@ -12,8 +12,8 @@
 //! # Design
 //!
 //! A **persistent** content-hash → rendered-fragment cache that lives on the
-//! `RustLiveView` backend across `render_with_diff` calls. On render, hash each
-//! item's loop-variable bindings; a cache HIT reuses the previously rendered
+//! `RustLiveView` backend across `render_with_diff` calls. On render, hash the
+//! For-node body identity plus each item's loop-variable bindings (#2067); a cache HIT reuses the previously rendered
 //! fragment, a MISS renders via the AST and inserts it. A reorder = all hits
 //! (content unchanged), a content-change of item K = K misses, an append = only
 //! the new item misses.
@@ -69,8 +69,9 @@ use std::hash::{Hash, Hasher};
 
 /// Persistent per-item loop render cache.
 ///
-/// Keyed by a content hash of the loop-variable bindings the body reads (the
-/// item value). The map persists across `render_with_diff` calls (it is a
+/// Keyed by a content hash of the For-node body identity (#2067) plus the
+/// loop-variable bindings the body reads (the item value) — each `{% for %}`
+/// owns its keyspace. The map persists across `render_with_diff` calls (it is a
 /// field on `RustLiveView`), which is what gives a pure reorder its O(changed)
 /// win. After each render, [`LoopRenderCache::prune`] retains only the hashes
 /// seen this render so the cache size tracks the current item count.
