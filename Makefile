@@ -162,6 +162,10 @@ check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries match manifes
 check-bundle-init-order: ## Static check: declared-late/used-early let/const across bundle concat (closes #1372)
 	@node scripts/check-bundle-init-order.mjs
 
+.PHONY: doctor
+doctor: ## Dev-environment self-diagnosis: venv/pth/stale-.so/embedded-PyO3/node/hooks/git-config (closes #2061)
+	@bash scripts/doctor.sh
+
 .PHONY: gen-vdom-fixtures
 gen-vdom-fixtures: ## Regenerate client-faithful VDOM diff fixtures (CI gates freshness — closes #1979)
 	@$(PYTHON) scripts/gen_vdom_diff_fixtures.py
