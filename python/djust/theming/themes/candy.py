@@ -179,7 +179,9 @@ ANIMATION = AnimationStyle(
     hover_effect="scale",  # Scale up on hover
     hover_scale=1.05,  # Noticeable bounce
     hover_translate_y="-2px",
-    click_effect="scale",
+    click_effect="pulse",  # #2057: "scale" was undocumented+unconsumed (silent
+    # no-op); "pulse" is the nearest consumed click_effect — its keyframe is
+    # itself a scale(1) -> scale(0.95) -> scale(1) press animation.
     loading_style="bounce",
     transition_style="bouncy",
     duration_fast="0.15s",

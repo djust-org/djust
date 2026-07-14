@@ -184,7 +184,10 @@ ANIMATION = AnimationStyle(
 
 INTERACTION = InteractionStyle(
     name="mission_control",
-    button_hover="color",
+    button_hover="darken",  # 2057: was "color" (undocumented, unconsumed by
+    # pack_css_generator.py's button_hover dispatch — lift/scale/glow/darken
+    # only; silent no-op). "darken" is the nearest consumed effect for a
+    # color-shift-on-hover intent (filter: brightness(0.9), no motion).
     link_hover="underline",
     card_hover="border",
     focus_style="ring",

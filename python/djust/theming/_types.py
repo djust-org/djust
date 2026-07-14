@@ -20,7 +20,34 @@ Only stdlib imports are allowed so the dependency graph stays acyclic.
 """
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import FrozenSet, Tuple
+
+
+def _check_vocab(
+    class_name: str,
+    instance_name: "str | None",
+    field_name: str,
+    value: str,
+    valid: "FrozenSet[str]",
+) -> None:
+    """Raise ValueError if ``value`` is outside the field's documented vocabulary.
+
+    Called from ``__post_init__`` on the design-system style dataclasses below to
+    turn a silent CSS-generator no-op (e.g. ``card_hover="glow"`` — compiled,
+    tested green, rendered nothing because no generator branch matched it; see
+    PR #2056 / issue #2057) into an authoring-time error naming the field, the
+    bad value, and the full valid set.
+
+    ``instance_name`` is the owning instance's ``name`` field for dataclasses
+    that have one (most style dataclasses do); pass ``None`` for leaf value
+    types without a ``name`` field (e.g. ``SurfaceTreatment``).
+    """
+    if value not in valid:
+        where = f"(name={instance_name!r})" if instance_name is not None else ""
+        raise ValueError(
+            f"{class_name}{where}.{field_name}={value!r} is not a "
+            f"recognized value. Valid values: {sorted(valid)}"
+        )
 
 
 # =============================================================================
@@ -172,6 +199,9 @@ class ThemeTokens:
     surface_3: ColorScale
 
 
+VALID_SURFACE_TREATMENT_STYLES: "FrozenSet[str]" = frozenset({"glass", "gradient", "noise"})
+
+
 @dataclass
 class SurfaceTreatment:
     """Surface styling treatments for glass panels, gradients, and noise effects."""
@@ -191,6 +221,14 @@ class SurfaceTreatment:
 
     # Noise surface properties
     noise_opacity: float = 0.03
+
+    def __post_init__(self) -> None:
+        # SurfaceTreatment has no ``name`` field of its own (it's a leaf value
+        # nested under ThemePreset.surface).
+        _check_vocab("SurfaceTreatment", None, "style", self.style, VALID_SURFACE_TREATMENT_STYLES)
+
+
+VALID_THEME_PRESET_DEFAULT_MODES: "FrozenSet[str]" = frozenset({"light", "dark"})
 
 
 @dataclass
@@ -225,6 +263,15 @@ class ThemePreset:
     # Surface treatment for glass panels, gradients, etc.
     surface: SurfaceTreatment | None = None
 
+    def __post_init__(self) -> None:
+        _check_vocab(
+            "ThemePreset",
+            self.name,
+            "default_mode",
+            self.default_mode,
+            VALID_THEME_PRESET_DEFAULT_MODES,
+        )
+
 
 # =============================================================================
 # Design-system types (previously in theme_packs.py, first definition block)
@@ -237,8 +284,9 @@ class TypographyStyle:
 
     name: str
 
-    # Font families
-    heading_font: str = "system-ui"  # "system-ui", "serif", "mono", "display"
+    # Font families — free-form CSS font-family value/stack (not an enum;
+    # e.g. '"Inter", system-ui, sans-serif'). NOT validated at construction.
+    heading_font: str = "system-ui"
     body_font: str = "system-ui"
 
     # Scale and sizing
@@ -262,6 +310,9 @@ class TypographyStyle:
     badge_radius: str = "9999px"  # Badge border-radius (pill by default)
 
 
+VALID_LAYOUT_SHAPES: "FrozenSet[str]" = frozenset({"sharp", "rounded", "pill", "organic"})
+
+
 @dataclass
 class LayoutStyle:
     """Layout and spacing configuration."""
@@ -277,10 +328,11 @@ class LayoutStyle:
     border_radius_md: str = "0.5rem"
     border_radius_lg: str = "1rem"
 
-    # Component shapes
+    # Component shapes — consumed via a shape_map in pack_css_generator.py
+    # (`_generate_layout_css`) and design_system_css.py.
     button_shape: str = "rounded"  # "sharp", "rounded", "pill", "organic"
-    card_shape: str = "rounded"
-    input_shape: str = "rounded"
+    card_shape: str = "rounded"  # "sharp", "rounded", "pill", "organic"
+    input_shape: str = "rounded"  # "sharp", "rounded", "pill", "organic"
 
     # Grid and layout
     container_width: str = "1200px"
@@ -299,6 +351,27 @@ class LayoutStyle:
     hero_line_height: str = "1.1"
     hero_max_width: str = "64rem"  # Content width within hero
 
+    def __post_init__(self) -> None:
+        _check_vocab(
+            "LayoutStyle", self.name, "button_shape", self.button_shape, VALID_LAYOUT_SHAPES
+        )
+        _check_vocab("LayoutStyle", self.name, "card_shape", self.card_shape, VALID_LAYOUT_SHAPES)
+        _check_vocab("LayoutStyle", self.name, "input_shape", self.input_shape, VALID_LAYOUT_SHAPES)
+
+
+VALID_SURFACE_BORDER_STYLES: "FrozenSet[str]" = frozenset({"solid", "dashed", "dotted", "none"})
+# "textured" IS legitimately in use (theme_packs.py's registered DESIGN_RETRO
+# design system) even though no CSS generator currently dispatches on it —
+# same status as "neumorphic"/PatternStyle.surface_style below: implemented-
+# nowhere-yet but a real, shipped, non-typo value, so it stays valid rather
+# than being treated as dead. "noise" is a second real value (4 built-in
+# `themes/*.py` files: paper grain, CRT scanline, handmade texture) that was
+# undocumented before #2057 — added here alongside "textured", not instead
+# of it.
+VALID_SURFACE_TREATMENTS: "FrozenSet[str]" = frozenset(
+    {"flat", "glass", "gradient", "noise", "textured"}
+)
+
 
 @dataclass
 class SurfaceStyle:
@@ -316,9 +389,32 @@ class SurfaceStyle:
     border_style: str = "solid"  # "solid", "dashed", "dotted", "none"
 
     # Background treatments
-    surface_treatment: str = "flat"  # "flat", "glass", "textured", "gradient"
+    surface_treatment: str = "flat"  # "flat", "glass", "gradient", "noise", "textured"
     backdrop_blur: str = "0px"
     noise_opacity: float = 0.0
+
+    def __post_init__(self) -> None:
+        _check_vocab(
+            "SurfaceStyle",
+            self.name,
+            "border_style",
+            self.border_style,
+            VALID_SURFACE_BORDER_STYLES,
+        )
+        _check_vocab(
+            "SurfaceStyle",
+            self.name,
+            "surface_treatment",
+            self.surface_treatment,
+            VALID_SURFACE_TREATMENTS,
+        )
+
+
+# "duotone" was documented but never consumed by pack_css_generator.py's
+# icon.style dispatch (`_generate_icon_css`) and never used by a built-in
+# theme — dropped at #2057 (same silent-no-op class as card_hover="glow").
+VALID_ICON_STYLES: "FrozenSet[str]" = frozenset({"outlined", "filled", "rounded", "sharp"})
+VALID_ICON_WEIGHTS: "FrozenSet[str]" = frozenset({"thin", "regular", "bold"})
 
 
 @dataclass
@@ -326,13 +422,36 @@ class IconStyle:
     """Icon styling configuration."""
 
     name: str
-    style: str  # "outlined", "filled", "rounded", "sharp", "duotone"
+    style: str  # "outlined", "filled", "rounded", "sharp"
     weight: str  # "thin", "regular", "bold"
     size_scale: float = 1.0  # Multiplier for icon sizes
 
     # CSS properties
     stroke_width: str = "2"
     corner_rounding: str = "0"  # For rounded style
+
+    def __post_init__(self) -> None:
+        _check_vocab("IconStyle", self.name, "style", self.style, VALID_ICON_STYLES)
+        _check_vocab("IconStyle", self.name, "weight", self.weight, VALID_ICON_WEIGHTS)
+
+
+VALID_ANIMATION_ENTRANCE_EFFECTS: "FrozenSet[str]" = frozenset(
+    {"fade", "slide", "scale", "bounce", "none"}
+)
+# exit_effect mirrors entrance_effect's vocabulary (symmetric animation pair);
+# not yet dispatched by any CSS generator, but real built-in themes set both
+# fields from the same conceptual palette.
+VALID_ANIMATION_EXIT_EFFECTS: "FrozenSet[str]" = VALID_ANIMATION_ENTRANCE_EFFECTS
+VALID_ANIMATION_HOVER_EFFECTS: "FrozenSet[str]" = frozenset({"lift", "scale", "glow", "none"})
+VALID_ANIMATION_CLICK_EFFECTS: "FrozenSet[str]" = frozenset({"ripple", "pulse", "bounce", "none"})
+# "bounce" (candy.py) was in real use but undocumented — added at #2057.
+VALID_ANIMATION_LOADING_STYLES: "FrozenSet[str]" = frozenset(
+    {"spinner", "skeleton", "progress", "pulse", "bounce"}
+)
+# "gentle" (notion.py) was in real use but undocumented — added at #2057.
+VALID_ANIMATION_TRANSITION_STYLES: "FrozenSet[str]" = frozenset(
+    {"smooth", "snappy", "bouncy", "instant", "gentle"}
+)
 
 
 @dataclass
@@ -343,7 +462,7 @@ class AnimationStyle:
 
     # Entrance/Exit
     entrance_effect: str = "fade"  # "fade", "slide", "scale", "bounce", "none"
-    exit_effect: str = "fade"
+    exit_effect: str = "fade"  # "fade", "slide", "scale", "bounce", "none"
 
     # Hover behaviors
     hover_effect: str = "lift"  # "lift", "scale", "glow", "none"
@@ -354,14 +473,80 @@ class AnimationStyle:
     click_effect: str = "ripple"  # "ripple", "pulse", "bounce", "none"
 
     # Loading states
-    loading_style: str = "spinner"  # "spinner", "skeleton", "progress", "pulse"
+    loading_style: str = "spinner"  # "spinner", "skeleton", "progress", "pulse", "bounce"
 
     # Transition characteristics
-    transition_style: str = "smooth"  # "smooth", "snappy", "bouncy", "instant"
+    transition_style: str = "smooth"  # "smooth", "snappy", "bouncy", "instant", "gentle"
     duration_fast: str = "0.15s"
     duration_normal: str = "0.3s"
     duration_slow: str = "0.5s"
     easing: str = "cubic-bezier(0.4, 0, 0.2, 1)"
+
+    def __post_init__(self) -> None:
+        _check_vocab(
+            "AnimationStyle",
+            self.name,
+            "entrance_effect",
+            self.entrance_effect,
+            VALID_ANIMATION_ENTRANCE_EFFECTS,
+        )
+        _check_vocab(
+            "AnimationStyle",
+            self.name,
+            "exit_effect",
+            self.exit_effect,
+            VALID_ANIMATION_EXIT_EFFECTS,
+        )
+        _check_vocab(
+            "AnimationStyle",
+            self.name,
+            "hover_effect",
+            self.hover_effect,
+            VALID_ANIMATION_HOVER_EFFECTS,
+        )
+        _check_vocab(
+            "AnimationStyle",
+            self.name,
+            "click_effect",
+            self.click_effect,
+            VALID_ANIMATION_CLICK_EFFECTS,
+        )
+        _check_vocab(
+            "AnimationStyle",
+            self.name,
+            "loading_style",
+            self.loading_style,
+            VALID_ANIMATION_LOADING_STYLES,
+        )
+        _check_vocab(
+            "AnimationStyle",
+            self.name,
+            "transition_style",
+            self.transition_style,
+            VALID_ANIMATION_TRANSITION_STYLES,
+        )
+
+
+# "color" was documented for link_hover only, but 9 built-in themes set
+# button_hover="color" — undocumented AND unconsumed by pack_css_generator.py's
+# button_hover dispatch (lift/scale/glow/darken only), a silent no-op on all 9.
+# Fixed at #2057 by remapping those themes to "darken" (nearest consumed
+# effect); see PR body for the theme list. NOT adding "color" here — it would
+# perpetuate the same silent-no-op class this issue exists to catch.
+VALID_INTERACTION_BUTTON_HOVERS: "FrozenSet[str]" = frozenset(
+    {"lift", "scale", "glow", "darken", "none"}
+)
+VALID_INTERACTION_LINK_HOVERS: "FrozenSet[str]" = frozenset(
+    {"underline", "color", "background", "none"}
+)
+VALID_INTERACTION_CARD_HOVERS: "FrozenSet[str]" = frozenset(
+    {"lift", "scale", "border", "shadow", "none"}
+)
+VALID_INTERACTION_BUTTON_CLICKS: "FrozenSet[str]" = frozenset({"scale", "ripple", "pulse", "none"})
+VALID_INTERACTION_FOCUS_STYLES: "FrozenSet[str]" = frozenset(
+    {"ring", "outline", "glow", "underline"}
+)
+VALID_INTERACTION_CURSOR_STYLES: "FrozenSet[str]" = frozenset({"pointer", "default", "custom"})
 
 
 @dataclass
@@ -395,6 +580,50 @@ class InteractionStyle:
     # Cursor
     cursor_style: str = "pointer"  # "pointer", "default", "custom"
 
+    def __post_init__(self) -> None:
+        _check_vocab(
+            "InteractionStyle",
+            self.name,
+            "button_hover",
+            self.button_hover,
+            VALID_INTERACTION_BUTTON_HOVERS,
+        )
+        _check_vocab(
+            "InteractionStyle",
+            self.name,
+            "link_hover",
+            self.link_hover,
+            VALID_INTERACTION_LINK_HOVERS,
+        )
+        _check_vocab(
+            "InteractionStyle",
+            self.name,
+            "card_hover",
+            self.card_hover,
+            VALID_INTERACTION_CARD_HOVERS,
+        )
+        _check_vocab(
+            "InteractionStyle",
+            self.name,
+            "button_click",
+            self.button_click,
+            VALID_INTERACTION_BUTTON_CLICKS,
+        )
+        _check_vocab(
+            "InteractionStyle",
+            self.name,
+            "focus_style",
+            self.focus_style,
+            VALID_INTERACTION_FOCUS_STYLES,
+        )
+        _check_vocab(
+            "InteractionStyle",
+            self.name,
+            "cursor_style",
+            self.cursor_style,
+            VALID_INTERACTION_CURSOR_STYLES,
+        )
+
 
 @dataclass
 class DesignSystem:
@@ -423,6 +652,19 @@ class DesignSystem:
 # =============================================================================
 
 
+# "geometric" was documented but never consumed by pack_css_generator.py's
+# background_pattern dispatch (`_generate_pattern_css`) and never used by a
+# built-in theme — dropped at #2057 (same silent-no-op class as
+# card_hover="glow").
+VALID_PATTERN_BACKGROUND_PATTERNS: "FrozenSet[str]" = frozenset(
+    {"dots", "grid", "noise", "gradient", "none"}
+)
+# "elevated" was documented but never consumed and never used — dropped at
+# #2057. "neumorphic" IS dispatched (`_generate_pattern_css`) though no
+# built-in theme currently uses it; kept as a real, implemented option.
+VALID_PATTERN_SURFACE_STYLES: "FrozenSet[str]" = frozenset({"flat", "glass", "neumorphic"})
+
+
 @dataclass
 class PatternStyle:
     """Background patterns and textures."""
@@ -430,18 +672,39 @@ class PatternStyle:
     name: str
 
     # Pattern types
-    background_pattern: str = "none"  # "dots", "grid", "noise", "gradient", "geometric", "none"
+    background_pattern: str = "none"  # "dots", "grid", "noise", "gradient", "none"
     pattern_opacity: float = 0.05
     pattern_scale: str = "1rem"
 
     # Surface treatment
-    surface_style: str = "flat"  # "flat", "glass", "neumorphic", "elevated"
+    surface_style: str = "flat"  # "flat", "glass", "neumorphic"
 
     # Blur/frosting for glassmorphism
     backdrop_blur: str = "0px"
 
     # Noise for texture
     noise_intensity: float = 0.0
+
+    def __post_init__(self) -> None:
+        _check_vocab(
+            "PatternStyle",
+            self.name,
+            "background_pattern",
+            self.background_pattern,
+            VALID_PATTERN_BACKGROUND_PATTERNS,
+        )
+        _check_vocab(
+            "PatternStyle",
+            self.name,
+            "surface_style",
+            self.surface_style,
+            VALID_PATTERN_SURFACE_STYLES,
+        )
+
+
+VALID_ILLUSTRATION_IMAGE_FILTERS: "FrozenSet[str]" = frozenset(
+    {"none", "grayscale", "sepia", "vibrant", "duotone"}
+)
 
 
 @dataclass
@@ -450,7 +713,10 @@ class IllustrationStyle:
 
     name: str
 
-    # Illustration style
+    # Illustration style — free-form CSS class-name suffix
+    # (`.illustration-{illustration_type}`), not dispatched/validated; any
+    # string is a syntactically valid (if unstyled) class name. NOT an
+    # enumerated-choice field in the #2057 sense.
     illustration_type: str = (
         "flat"  # "flat", "isometric", "3d", "line-art", "hand-drawn", "abstract"
     )
@@ -459,8 +725,18 @@ class IllustrationStyle:
     image_border_radius: str = "0.5rem"
     image_filter: str = "none"  # "none", "grayscale", "sepia", "vibrant", "duotone"
 
-    # Aspect ratios preference
-    preferred_aspect: str = "16:9"  # "1:1", "16:9", "4:3", "3:4"
+    # Aspect ratios preference — free-form CSS aspect-ratio value (e.g.
+    # "16:9"), not an enum. NOT validated at construction.
+    preferred_aspect: str = "16:9"
+
+    def __post_init__(self) -> None:
+        _check_vocab(
+            "IllustrationStyle",
+            self.name,
+            "image_filter",
+            self.image_filter,
+            VALID_ILLUSTRATION_IMAGE_FILTERS,
+        )
 
 
 @dataclass
@@ -510,4 +786,28 @@ __all__ = [
     "PatternStyle",
     "IllustrationStyle",
     "ThemePack",
+    # Style-vocabulary frozensets (#2057) — single source of truth per field,
+    # enforced in each dataclass's __post_init__.
+    "VALID_SURFACE_TREATMENT_STYLES",
+    "VALID_THEME_PRESET_DEFAULT_MODES",
+    "VALID_LAYOUT_SHAPES",
+    "VALID_SURFACE_BORDER_STYLES",
+    "VALID_SURFACE_TREATMENTS",
+    "VALID_ICON_STYLES",
+    "VALID_ICON_WEIGHTS",
+    "VALID_ANIMATION_ENTRANCE_EFFECTS",
+    "VALID_ANIMATION_EXIT_EFFECTS",
+    "VALID_ANIMATION_HOVER_EFFECTS",
+    "VALID_ANIMATION_CLICK_EFFECTS",
+    "VALID_ANIMATION_LOADING_STYLES",
+    "VALID_ANIMATION_TRANSITION_STYLES",
+    "VALID_INTERACTION_BUTTON_HOVERS",
+    "VALID_INTERACTION_LINK_HOVERS",
+    "VALID_INTERACTION_CARD_HOVERS",
+    "VALID_INTERACTION_BUTTON_CLICKS",
+    "VALID_INTERACTION_FOCUS_STYLES",
+    "VALID_INTERACTION_CURSOR_STYLES",
+    "VALID_PATTERN_BACKGROUND_PATTERNS",
+    "VALID_PATTERN_SURFACE_STYLES",
+    "VALID_ILLUSTRATION_IMAGE_FILTERS",
 ]

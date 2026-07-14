@@ -189,7 +189,10 @@ ANIMATION = AnimationStyle(
 
 INTERACTION = InteractionStyle(
     name="magazine",
-    button_hover="color",  # Subtle color shift only
+    button_hover="darken",  # 2057: was "color" (undocumented, unconsumed by
+    # pack_css_generator.py's button_hover dispatch — lift/scale/glow/darken
+    # only; silent no-op). "darken" is the nearest consumed effect for a
+    # color-shift-on-hover intent (filter: brightness(0.9), no motion).
     link_hover="color",
     card_hover="none",  # No card hover effects
     focus_style="ring",

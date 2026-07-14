@@ -190,7 +190,10 @@ ANIMATION = AnimationStyle(
 
 INTERACTION = InteractionStyle(
     name="retro_computing",
-    button_hover="color",  # Instant color swap
+    button_hover="darken",  # 2057: was "color" (undocumented, unconsumed by
+    # pack_css_generator.py's button_hover dispatch — lift/scale/glow/darken
+    # only; silent no-op). "darken" is the nearest consumed effect for a
+    # color-shift-on-hover intent (filter: brightness(0.9), no motion).
     link_hover="color",
     card_hover="none",
     focus_style="outline",  # Outline focus (retro)
