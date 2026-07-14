@@ -1,6 +1,7 @@
 # ADR-025: JS extension sockets — `JS.ext.*` custom commands + hardened `dj-hook` values/targets
 
-**Status**: Proposed
+**Status**: Accepted — shipped 2026-07-11 in v1.1.0rc8 (Feature B PR #2051, Feature D PR #2052)
+**Shipped in**: v1.1.0rc8
 **Date**: 2026-07-10
 **Deciders**: Project maintainers
 **Related**:
@@ -49,10 +50,14 @@ self.jump = JS.ext.scroll_to(to="#top", smooth=True).add_class("flash")
 ```
 
 Built-ins are untouched: `JS.shwo()` still raises `AttributeError` at mount
-with a real traceback. The `.pyi` declares `ext` as a dedicated factory type
-whose `__getattr__` returns `Callable[..., JSChain]` — the mypy "any attribute
-is valid" hole is confined to `ext.*`; the 11 built-ins stay strictly typed
-(ADR-023 posture preserved).
+with a real traceback. Inline type annotations (as shipped — `js.py` has no
+`.pyi` stub) declare `ext` as a dedicated factory type whose `__getattr__`
+returns `Callable[..., JSChain]` — the mypy "any attribute is valid" hole is
+confined to `ext.*`; the 11 built-ins stay strictly typed (ADR-023 posture
+preserved). Shipped with a rider the review added: names under `ext` are
+enforced lowercase snake_case, since a camelCase name (`JS.ext.addClass`)
+would collide with the client registry's built-in-alias block and be
+permanently unregistrable.
 
 **Templates.** Unchanged. Custom ops ride the same interpolation as built-ins
 (`dj-click="{{ jump }}"`, or inline `dj-click="{{ JS.ext.confetti() }}"`) on
@@ -144,13 +149,16 @@ matches), queried live within `this.el`'s subtree. Nested hooks are not
 excluded from the query scope in v1 (documented caveat, Stimulus-style
 scoping deferred).
 
-**TypeScript definitions.** A hand-maintained `djust.d.ts` is added to the
-wheel's static dir (`python/djust/static/djust/djust.d.ts`) covering the
-public `window.djust` surface: the hook definition shape (lifecycle methods,
-`this.el/values/target/targets/pushEvent/handleEvent/js`), `commands.register`,
-and the JS chain builder. Users reference it from `jsconfig.json`/`tsconfig.json`
-or a `/// <reference path>` — no build step required to benefit (editors and
-AI assistants pick it up for autocomplete/checking).
+**TypeScript definitions.** The wheel's static dir **already shipped** a
+comprehensive `djust.d.ts` (`python/djust/static/djust/djust.d.ts`, pinned by
+`python/tests/test_typescript_definitions.py` since #540) — a fact this ADR
+originally missed, asserting the file as new; the first implementation pass
+replaced it wholesale and the content pins caught it. As shipped, the existing
+file GAINS the new surfaces as purely-additive grafts in its own naming
+(`DjustHookContext.values`/`target()`/`targets()` + `Djust.commands.register`),
+with 4 new content pins covering the grafts. Users reference it from
+`jsconfig.json`/`tsconfig.json` (`"checkJs": true`) — no build step required
+(editors and AI assistants pick it up for autocomplete/checking).
 
 ## Build vs. integrate an existing library
 

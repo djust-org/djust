@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0rc8] - 2026-07-14
+
 ### Added
 
 - **Custom JS commands — `JS.ext.*` opens the command set (ADR-025).** The eleven built-in JS commands were a closed table; user code had no way to add `scroll_to`, `clipboard_copy`, or a wrapper around a third-party library action short of writing a full `dj-hook`. `window.djust.commands.register(name, fn)` (client, CSP-safe, no eval) + `JS.ext.<name>(...)` (Python, fully dynamic, chainable with built-ins) close the gap. Ops serialize with an `ext.` wire prefix, so custom names are structurally collision-proof against future built-ins, and built-ins keep their strict surface (`JS.shwo` still raises `AttributeError` at mount; `register('show', ...)` throws). Unknown custom ops fail loud: DEBUG error overlay with a did-you-mean suggestion, `console.error` in production. Custom implementations get the same `to`/`inner`/`closest` target resolution as built-ins and may be async (awaited in chain order). Tests: `python/djust/tests/test_js_ext_commands.py` (wire-format pins per #1448) + `tests/js/js_ext_commands.test.js` (registry rules, dispatch, async ordering, real-DOM click integration); both gate-off verified. Bundle delta: 736 B gzipped.
