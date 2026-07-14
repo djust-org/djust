@@ -91,6 +91,14 @@
                 // for the current URL (same-origin, trusted). No user input
                 // reaches this point.
                 placeholder.innerHTML = html;
+                // #2058: this docblock already documents that inline
+                // <script> tags inside <main> will NOT execute (standard
+                // innerHTML behavior — the #1848 trap). Give that documented
+                // limitation a loud DEBUG-mode console.error instead of
+                // relying on the reader having found this comment.
+                if (window.djust && typeof window.djust._warnDeadScripts === 'function') {
+                    window.djust._warnDeadScripts(placeholder);
+                }
                 // Re-run djust's DOM-update hook: binds dj-hook elements,
                 // extracts colocated <script type="djust/hook"> definitions,
                 // and primes dj-virtual / dj-viewport observers in the swapped

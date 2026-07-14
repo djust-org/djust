@@ -64,6 +64,14 @@ function _applyLayout(payload) {
     const newBody = newDoc.body;
     if (newBody) {
         document.body.replaceWith(newBody);
+        // #2058: newBody comes from DOMParser().parseFromString(), which —
+        // like innerHTML / morphChildren — never executes <script> it
+        // contains (same #1848 trap). The "Known limitations" docblock above
+        // already warns heads/scripts aren't merged; back it with a loud
+        // DEBUG-mode console.error.
+        if (window.djust && typeof window.djust._warnDeadScripts === 'function') {
+            window.djust._warnDeadScripts(document.body);
+        }
     }
     document.dispatchEvent(new CustomEvent('djust:layout-changed', {
         detail: { path: payload.path || null },

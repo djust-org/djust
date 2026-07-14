@@ -758,6 +758,67 @@ function _runInsertedScripts(container) {
     }
 }
 
+/**
+ * #2058 (durable #1848 follow-up): DEBUG-mode-only loud detector for classic
+ * <script> elements that a DOM morph/patch/innerHTML operation just put into
+ * (or is about to put into) the live tree but that the browser will NEVER
+ * execute — the #1848 trap ("reload works, navigation doesn't"). Call this
+ * immediately after (or, for a not-yet-attached DocumentFragment, right
+ * before) any operation that inserts server-authored HTML via `innerHTML`,
+ * `morphChildren` (clone+insert), or a `<template>`-parsed fragment — all
+ * three are inert-by-spec for `<script>` per the HTML Standard's "prepare
+ * the script element" algorithm.
+ *
+ * Exclusions (deliberately NOT warned):
+ *  - Scripts already re-executed by `_runInsertedScripts()` — marked
+ *    `data-djust-script-ran` (the mount / `live_redirect` re-execution path
+ *    documented above, #1635/#1650 lineage).
+ *  - `type="djust/hook"` colocated-hook payload scripts — extracted (never
+ *    meant to run as a script) by `extractColocatedHooks()` in
+ *    32-colocated-hooks.js.
+ *  - Any other non-classic `type` (`application/json`, `importmap`,
+ *    `speculationrules`, `module`, etc.) — data/config scripts, or a script
+ *    kind djust does not claim to handle at all, out of scope here.
+ *
+ * No-op (zero cost) unless `window.DEBUG_MODE` is true — production builds
+ * pay nothing but the guard check.
+ *
+ * @param {Element|DocumentFragment|null} root - the just-mutated subtree.
+ */
+function _warnDeadScripts(root) {
+    if (!window.DEBUG_MODE) return;
+    if (!root || typeof root.querySelectorAll !== 'function') return;
+    let scripts;
+    try {
+        scripts = root.querySelectorAll('script');
+    } catch (_err) {
+        return;
+    }
+    for (const el of scripts) {
+        // Already re-executed by _runInsertedScripts — not dead.
+        if (el.hasAttribute('data-djust-script-ran')) continue;
+        const type = (el.getAttribute('type') || '').trim().toLowerCase();
+        const isClassic = type === ''
+            || type === 'text/javascript'
+            || type === 'application/javascript'
+            || type === 'application/ecmascript'
+            || type === 'text/ecmascript';
+        // Non-classic types (djust/hook, application/json, importmap, ...)
+        // are never expected to auto-execute — not our concern here.
+        if (!isClassic) continue;
+        const label = el.getAttribute('src')
+            || (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60)
+            || '(empty inline script)';
+        console.error(
+            '[djust] <script> inserted by a DOM morph/patch will NOT execute (%s). ' +
+            'Browsers treat innerHTML/morph-inserted <script> tags as inert. ' +
+            'Move this JS into a {% colocated_hook %} or a block rendered outside ' +
+            'dj-root. See hooks.md ("inline scripts don\'t run after a morph") / #1848.',
+            label
+        );
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -1150,6 +1211,12 @@ class LiveViewWebSocket {
                             // Re-run classic page scripts inside the dj-root so
                             // their addEventListener / init runs on mount.
                             _runInsertedScripts(_morphContainer);
+                            // #2058: defense-in-depth — anything
+                            // _runInsertedScripts() didn't re-execute (should
+                            // be nothing for classic scripts) gets a loud
+                            // DEBUG-mode warning instead of silently staying
+                            // dead.
+                            _warnDeadScripts(_morphContainer);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found
@@ -1245,6 +1312,9 @@ class LiveViewWebSocket {
                         // Re-run classic page scripts inside the dj-root so
                         // inline page JS behaves the same as on the morph path.
                         _runInsertedScripts(container);
+                        // #2058: same defense-in-depth warning as the
+                        // pre-rendered/morph branch above.
+                        _warnDeadScripts(container);
                         // Post-mount sticky reattach (Phase B). No-op
                         // when stickyStash is empty.
                         if (window.djust.stickyPreserve && window.djust.stickyPreserve.reattachStickyAfterMount) {
@@ -1299,6 +1369,12 @@ class LiveViewWebSocket {
                     if (typeof entry.html === 'string') {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = entry.html;
+                        // #2058: unlike the single-view mount branches above,
+                        // mount_batch does NOT call _runInsertedScripts() —
+                        // a classic <script> in a lazily-hydrated batched
+                        // view is silently dead exactly like #1848. Loud
+                        // DEBUG-mode warning until/unless that gap is closed.
+                        _warnDeadScripts(container);
                     }
                     if (typeof entry.version === 'number') {
                         // eslint-disable-next-line security/detect-object-injection
@@ -1439,6 +1515,11 @@ class LiveViewWebSocket {
                 }
                 const newRoot = doc.querySelector('[dj-root]') || doc.body;
                 morphChildren(liveviewRoot, newRoot);
+                // #2058: html_recovery morphs the same way the #1610 mount
+                // path does, but never calls _runInsertedScripts() — a
+                // classic <script> re-created by this morph is silently
+                // dead exactly like #1848. Loud DEBUG-mode warning.
+                _warnDeadScripts(liveviewRoot);
                 clientVdomVersion = data.version;
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
@@ -1925,6 +2006,11 @@ class LiveViewWebSocket {
         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
         _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
+        // #2058: embedded-view (LiveComponent) updates morph the same way
+        // the #1610 mount path does, but never call _runInsertedScripts() —
+        // a classic <script> re-created by this morph is silently dead
+        // exactly like #1848. Loud DEBUG-mode warning.
+        _warnDeadScripts(container);
         if (globalThis.djustDebug) console.log('[LiveView] Updated embedded view: %s', String(viewId));
 
         // Re-bind events within the updated container
@@ -2034,6 +2120,9 @@ window.djust.LiveViewWebSocket = LiveViewWebSocket;
 // #1848: exposed so the mount handler (and tests) can re-execute classic
 // inline <script> inside the morphed/innerHTML'd dj-root.
 window.djust._runInsertedScripts = _runInsertedScripts;
+// #2058: exposed so every insertion path (and tests) can warn about a
+// classic <script> a morph/patch left dead.
+window.djust._warnDeadScripts = _warnDeadScripts;
 // Backward compatibility
 window.LiveViewWebSocket = LiveViewWebSocket;
 
@@ -2247,6 +2336,11 @@ class LiveViewSSE {
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             container.innerHTML = data.html;
+                            // #2058: the SSE mount path never calls
+                            // _runInsertedScripts() (WS-only fix) — a classic
+                            // <script> is silently dead here exactly like
+                            // #1848. Loud DEBUG-mode warning.
+                            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(container);
                         }
                         reinitAfterDOMUpdate();
                         // Set mount ready flag so dj-mounted handlers only fire
@@ -7156,6 +7250,13 @@ function applyInsertSubtree(patch, rootEl = null) {
         return false;
     }
     const fragment = _parseSubtreeHtml(patch.html);
+    // #2058: scan BEFORE insertion — a DocumentFragment's children move out
+    // of it (and it becomes empty) once inserted, so this is the only point
+    // that can see what was in the fragment. A classic <script> inside an
+    // InsertSubtree payload (e.g. a {% if %} block that toggled on) is
+    // parsed via <template>.innerHTML (see _parseSubtreeHtml above) and is
+    // therefore inert-by-spec exactly like #1848 — loud DEBUG-mode warning.
+    if (typeof _warnDeadScripts === 'function') _warnDeadScripts(fragment);
     // Determine insert position: index counted against significant
     // children (matches InsertChild semantics).
     const children = getSignificantChildren(parent);
@@ -9607,12 +9708,18 @@ function _applyStreamOp(op, streamName) {
         case 'replace':
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             el.innerHTML = op.html || '';
+            // #2058: streaming HTML ops (LLM chat / live feeds) go through
+            // innerHTML — a classic <script> in the streamed HTML is
+            // silently dead exactly like #1848. Loud DEBUG-mode warning.
+            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(el);
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
             break;
 
         case 'append': {
             const frag = _htmlToFragment(op.html);
+            // #2058: scan BEFORE appendChild empties the fragment.
+            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(frag);
             el.appendChild(frag);
             _autoScroll(el);
             _removeStreamError(el);
@@ -9622,6 +9729,8 @@ function _applyStreamOp(op, streamName) {
 
         case 'prepend': {
             const frag = _htmlToFragment(op.html);
+            // #2058: scan BEFORE insertBefore empties the fragment.
+            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(frag);
             el.insertBefore(frag, el.firstChild);
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'prepend', stream: streamName });
@@ -13453,6 +13562,14 @@ window.djust.bindModelElements = bindModelElements;
                 // for the current URL (same-origin, trusted). No user input
                 // reaches this point.
                 placeholder.innerHTML = html;
+                // #2058: this docblock already documents that inline
+                // <script> tags inside <main> will NOT execute (standard
+                // innerHTML behavior — the #1848 trap). Give that documented
+                // limitation a loud DEBUG-mode console.error instead of
+                // relying on the reader having found this comment.
+                if (window.djust && typeof window.djust._warnDeadScripts === 'function') {
+                    window.djust._warnDeadScripts(placeholder);
+                }
                 // Re-run djust's DOM-update hook: binds dj-hook elements,
                 // extracts colocated <script type="djust/hook"> definitions,
                 // and primes dj-virtual / dj-viewport observers in the swapped
@@ -14730,6 +14847,14 @@ function _applyLayout(payload) {
     const newBody = newDoc.body;
     if (newBody) {
         document.body.replaceWith(newBody);
+        // #2058: newBody comes from DOMParser().parseFromString(), which —
+        // like innerHTML / morphChildren — never executes <script> it
+        // contains (same #1848 trap). The "Known limitations" docblock above
+        // already warns heads/scripts aren't merged; back it with a loud
+        // DEBUG-mode console.error.
+        if (window.djust && typeof window.djust._warnDeadScripts === 'function') {
+            window.djust._warnDeadScripts(document.body);
+        }
     }
     document.dispatchEvent(new CustomEvent('djust:layout-changed', {
         detail: { path: payload.path || null },
@@ -16608,18 +16733,33 @@ globalThis.djust.djTransitionGroup = {
     }
   }
 
+  // #2058: scan a not-yet-attached clone for classic <script> tags before
+  // it's spliced into the live DOM. `<template>` content is inert-by-spec
+  // (see the module docblock above), and cloneNode() does not change that —
+  // a <script> inside a lazy-render chunk is silently dead exactly like
+  // #1848. Loud DEBUG-mode warning.
+  function _warnDeadScriptsInClone(node) {
+    if (window.djust && typeof window.djust._warnDeadScripts === 'function') {
+      window.djust._warnDeadScripts(node);
+    }
+  }
+
   function _replaceSlot(slot, tpl, status) {
     if (status === 'ok') {
       // tpl.content is a DocumentFragment; cloneNode keeps the template
       // intact for double-fire idempotency.
-      slot.replaceWith(tpl.content.cloneNode(true));
+      const clone = tpl.content.cloneNode(true);
+      _warnDeadScriptsInClone(clone);
+      slot.replaceWith(clone);
     } else {
       // error / timeout — wrap in <dj-error aria-live="polite"> so
       // screen readers announce. Custom element name is treated as
       // HTMLUnknownElement which is fine for layout-only purposes.
       const err = document.createElement('dj-error');
       err.setAttribute('aria-live', 'polite');
-      err.appendChild(tpl.content.cloneNode(true));
+      const clone = tpl.content.cloneNode(true);
+      _warnDeadScriptsInClone(clone);
+      err.appendChild(clone);
       slot.replaceWith(err);
     }
     tpl.remove();
