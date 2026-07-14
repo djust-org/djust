@@ -19,6 +19,26 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-10 — brainstorm shortlist drain: silent-failure hardening + DX (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-14) of the top-priority items from
+`docs/internal/IMPROVEMENT_BRAINSTORM-2026-07.md` (shortlist items 1–3 and
+5–7), filed as #2057–#2062. Theme: converting documented silent-failure
+classes into loud errors (vocab validation, script-morph detection, WS-parity
+check, WCAG floor) plus two DX/perf wins (make doctor, loop-cache
+graduation). Deferred and NOT in this bucket: #2063 (dj-chart adapter pilot —
+own milestone), #2064 (surface manifest — cross-repo), plus the pre-existing
+#2017/#1561/#1562/#2053/#2054/#2055 backlog.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | validate design-system style vocabulary at registration (#2057) | `card_hover="glow"` compiled + tested green while a silent no-op on its seam (PR #2056 review catch); enforce documented per-field vocab via `VALID_*` frozensets in `_types.py` — all 68 built-ins must pass (dogfood #1060) | v1.1.0 |
+| **P1** | loud detection of non-executed `<script>` inserted by the mount morph (#2058) | the #1848 "reload works, navigation doesn't" trap stays silent; DEBUG-mode console.error when the morph inserts a classic script it won't execute (+ system check if a reliable template heuristic exists) | v1.1.0 |
+| **P1** | system check for HTTP-only mixin overrides on LiveViews (#2059) | `dispatch()`/`get()`/`post()` overrides silently skipped on WS mounts (TenantMixin class — top downstream footgun); MRO-walking V-check with the canonical fix in the hint | v1.1.0 |
+| **P2** | extend the WCAG contrast gate to all built-in presets (#2060) | 5/68 presets gated today; report → documented exemptions → parametrized gate over every registered preset | v1.1.0 |
+| **P2** | `make doctor` dev-environment self-diagnosis (#2061) | three local-env incidents in one week (djust.pth clobber, PyO3 bootstrap, pyo3-ffi compile SIGABRT) while CI stayed green; check pth/import/.so-staleness/PyO3-smoke/node_modules/hooks with one-line remedies | v1.1.0 |
+| **P2** | graduate loop render+parse cache to default-ON (#2062) | #1967/#1969/#1970 soaked flag-OFF since rc5 with byte-identity proven; flip default (flag becomes opt-OUT), re-run identity suite + benchmarks + sentinel gate-offs at flip time | v1.1.0 |
+
 ## v1.1.0-9 — regroup review follow-ups: template-engine arg-resolution hardening (drain bucket → ships in 1.1.0)
 
 Open-issue drain (2026-07-09) of the two follow-ups filed from the PR #2023
