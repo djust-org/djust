@@ -88,6 +88,11 @@ from .themes.tailwind import PRESET as TAILWIND_THEME  # noqa: E402
 from .themes.supabase import PRESET as SUPABASE_THEME  # noqa: E402
 from .themes.raycast import PRESET as RAYCAST_THEME  # noqa: E402
 from .themes.adaptive import PRESET as ADAPTIVE_THEME  # noqa: E402
+from .themes.sakura import PRESET as SAKURA_THEME  # noqa: E402
+from .themes.obsidian import PRESET as OBSIDIAN_THEME  # noqa: E402
+from .themes.dune import PRESET as DUNE_THEME  # noqa: E402
+from .themes.mission_control import PRESET as MISSION_CONTROL_THEME  # noqa: E402
+from .themes.art_nouveau import PRESET as ART_NOUVEAU_THEME  # noqa: E402
 
 
 # =============================================================================
@@ -158,6 +163,11 @@ THEME_PRESETS: dict[str, ThemePreset] = {
     "supabase": SUPABASE_THEME,
     "raycast": RAYCAST_THEME,
     "adaptive": ADAPTIVE_THEME,
+    "sakura": SAKURA_THEME,
+    "obsidian": OBSIDIAN_THEME,
+    "dune": DUNE_THEME,
+    "mission_control": MISSION_CONTROL_THEME,
+    "art_nouveau": ART_NOUVEAU_THEME,
 }
 
 
@@ -229,4 +239,9 @@ __all__ = [
     "SUPABASE_THEME",
     "RAYCAST_THEME",
     "ADAPTIVE_THEME",
+    "SAKURA_THEME",
+    "OBSIDIAN_THEME",
+    "DUNE_THEME",
+    "MISSION_CONTROL_THEME",
+    "ART_NOUVEAU_THEME",
 ]
