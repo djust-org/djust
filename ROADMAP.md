@@ -21,6 +21,19 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 ## v1.1.0-10 — brainstorm shortlist drain: silent-failure hardening + DX (drain bucket → ships in 1.1.0)
 
+**5/6 complete (2026-07-14)** — #2057 (PR #2068), #2058 (PR #2071), #2059
+(PR #2066), #2060 (PR #2069), #2061 (PR #2065) all merged, main CI green
+after each. **#2062 BLOCKED**: the mandated flip-time full-suite run surfaced
+a real pre-existing silent-corruption bug in the loop cache (#2067,
+priority:high — global fragment map lacks per-For-node identity; sibling
+loops sharing a loop-var name over equal-content items cross-render). Stays
+default-OFF until #2067 is fixed; the soak-then-flip gate did exactly its
+job. Drain side-findings filed: #2067, #2070 (S004 duplicate check ID).
+Note: GitHub Actions stopped creating check suites for branch/PR events
+mid-drain (main-push runs unaffected) — PRs merged on independent local
+validation per the 1.0.7 Actions-unavailable protocol, each confirmed by the
+main-push CI run post-merge.
+
 Open-issue drain (2026-07-14) of the top-priority items from
 `docs/internal/IMPROVEMENT_BRAINSTORM-2026-07.md` (shortlist items 1–3 and
 5–7), filed as #2057–#2062. Theme: converting documented silent-failure
@@ -32,12 +45,12 @@ own milestone), #2064 (surface manifest — cross-repo), plus the pre-existing
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P1** | validate design-system style vocabulary at registration (#2057) | `card_hover="glow"` compiled + tested green while a silent no-op on its seam (PR #2056 review catch); enforce documented per-field vocab via `VALID_*` frozensets in `_types.py` — all 68 built-ins must pass (dogfood #1060) | v1.1.0 |
-| **P1** | loud detection of non-executed `<script>` inserted by the mount morph (#2058) | the #1848 "reload works, navigation doesn't" trap stays silent; DEBUG-mode console.error when the morph inserts a classic script it won't execute (+ system check if a reliable template heuristic exists) | v1.1.0 |
-| **P1** | system check for HTTP-only mixin overrides on LiveViews (#2059) | `dispatch()`/`get()`/`post()` overrides silently skipped on WS mounts (TenantMixin class — top downstream footgun); MRO-walking V-check with the canonical fix in the hint | v1.1.0 |
-| **P2** | extend the WCAG contrast gate to all built-in presets (#2060) | 5/68 presets gated today; report → documented exemptions → parametrized gate over every registered preset | v1.1.0 |
-| **P2** | `make doctor` dev-environment self-diagnosis (#2061) | three local-env incidents in one week (djust.pth clobber, PyO3 bootstrap, pyo3-ffi compile SIGABRT) while CI stayed green; check pth/import/.so-staleness/PyO3-smoke/node_modules/hooks with one-line remedies | v1.1.0 |
-| **P2** | graduate loop render+parse cache to default-ON (#2062) | #1967/#1969/#1970 soaked flag-OFF since rc5 with byte-identity proven; flip default (flag becomes opt-OUT), re-run identity suite + benchmarks + sentinel gate-offs at flip time | v1.1.0 |
+| **P1** | ~~validate design-system style vocabulary at registration (#2057)~~ ✅ PR #2068 | `card_hover="glow"` compiled + tested green while a silent no-op on its seam (PR #2056 review catch); enforced via `VALID_*` frozensets in `_types.py`; dogfood fixed 10 pre-existing silent-no-op values across built-ins | v1.1.0 |
+| **P1** | ~~loud detection of non-executed `<script>` inserted by morph/patch (#2058)~~ ✅ PR #2071 | DEBUG-mode console.error on every insertion path (9 covered, 3 pre-existing gaps found); system-check half investigated + skipped with reasons | v1.1.0 |
+| **P1** | ~~system check for HTTP-only mixin overrides on LiveViews (#2059)~~ ✅ PR #2066 | `djust.V013` MRO-walking warning with canonical fix in the hint; demo dogfood zero-warnings | v1.1.0 |
+| **P2** | ~~extend the WCAG contrast gate to all built-in presets (#2060)~~ ✅ PR #2069 | all 68 presets gated; 197 documented exemptions (58/68 presets had failures; 57 pairs <3.0 = palette-fix follow-up candidates) with a stale-exemption anti-rot check | v1.1.0 |
+| **P2** | ~~`make doctor` dev-environment self-diagnosis (#2061)~~ ✅ PR #2065 | 7 checks with one-line remedies; caught the live rustc/LLVM mismatch on the dev machine during its own build | v1.1.0 |
+| **P2** | graduate loop render+parse cache to default-ON (#2062) — **BLOCKED on #2067** | flip-time full-suite gate surfaced cross-loop fragment corruption in the cache (same-var-name sibling loops); fix #2067 (Rust, needs toolchain repair or CI-validated authoring), add the sibling-loop case to the correctness matrix, then flip | v1.1.0 |
 
 ## v1.1.0-9 — regroup review follow-ups: template-engine arg-resolution hardening (drain bucket → ships in 1.1.0)
 
