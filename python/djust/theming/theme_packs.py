@@ -1080,6 +1080,17 @@ def _ensure_theme_imports() -> None:
     from .themes.supabase import PACK as _PACK_SUPABASE, DESIGN_SYSTEM as _DESIGN_SUPABASE
     from .themes.raycast import PACK as _PACK_RAYCAST, DESIGN_SYSTEM as _DESIGN_RAYCAST
     from .themes.adaptive import PACK as _PACK_ADAPTIVE, DESIGN_SYSTEM as _DESIGN_ADAPTIVE
+    from .themes.sakura import PACK as _PACK_SAKURA, DESIGN_SYSTEM as _DESIGN_SAKURA
+    from .themes.obsidian import PACK as _PACK_OBSIDIAN, DESIGN_SYSTEM as _DESIGN_OBSIDIAN
+    from .themes.dune import PACK as _PACK_DUNE, DESIGN_SYSTEM as _DESIGN_DUNE
+    from .themes.mission_control import (
+        PACK as _PACK_MISSION_CONTROL,
+        DESIGN_SYSTEM as _DESIGN_MISSION_CONTROL,
+    )
+    from .themes.art_nouveau import (
+        PACK as _PACK_ART_NOUVEAU,
+        DESIGN_SYSTEM as _DESIGN_ART_NOUVEAU,
+    )
 
     THEME_PACKS.update(
         {
@@ -1146,6 +1157,11 @@ def _ensure_theme_imports() -> None:
             "supabase": _PACK_SUPABASE,
             "raycast": _PACK_RAYCAST,
             "adaptive": _PACK_ADAPTIVE,
+            "sakura": _PACK_SAKURA,
+            "obsidian": _PACK_OBSIDIAN,
+            "dune": _PACK_DUNE,
+            "mission_control": _PACK_MISSION_CONTROL,
+            "art_nouveau": _PACK_ART_NOUVEAU,
         }
     )
 
@@ -1211,6 +1227,11 @@ def _ensure_theme_imports() -> None:
     DESIGN_SYSTEMS["supabase"] = _DESIGN_SUPABASE
     DESIGN_SYSTEMS["raycast"] = _DESIGN_RAYCAST
     DESIGN_SYSTEMS["adaptive"] = _DESIGN_ADAPTIVE
+    DESIGN_SYSTEMS["sakura"] = _DESIGN_SAKURA
+    DESIGN_SYSTEMS["obsidian"] = _DESIGN_OBSIDIAN
+    DESIGN_SYSTEMS["dune"] = _DESIGN_DUNE
+    DESIGN_SYSTEMS["mission_control"] = _DESIGN_MISSION_CONTROL
+    DESIGN_SYSTEMS["art_nouveau"] = _DESIGN_ART_NOUVEAU
 
 
 def get_theme_pack(name: str) -> Optional[ThemePack]:

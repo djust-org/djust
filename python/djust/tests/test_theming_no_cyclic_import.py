@@ -123,7 +123,9 @@ class TestThemingNoCyclicImport:
         assert ORANGE_THEME.name == "orange"
         assert PURPLE_THEME.name == "purple"
         assert ROSE_THEME.name == "rose"
-        assert len(THEME_PRESETS) == 63
+        # 63 through v1.1.0rc7 + the 5 v1.1 additions (sakura, obsidian,
+        # dune, mission_control, art_nouveau).
+        assert len(THEME_PRESETS) == 68
 
     def test_get_preset_still_resolves_via_registry_first(self):
         """The cycle-break must preserve get_preset's resolution order:
