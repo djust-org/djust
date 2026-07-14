@@ -474,6 +474,89 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                             )
                         )
 
+        # V013 -- HTTP-only dispatch()/get()/post() overrides never run on
+        # WebSocket mounts (#2059). The WS mount path calls
+        # ``view_instance.mount(request, **kwargs)`` directly
+        # (``runtime.py`` ``dispatch_mount``, ~line 2269) -- it never calls
+        # ``dispatch()``/``get()``/``post()``. An ancestor in the MRO (the
+        # view class itself, or an earlier mixin) that overrides one of
+        # these to do real work -- tenant resolution, rate limiting, custom
+        # auth, request-scoped setup -- silently never runs for a
+        # WS-mounted view. Downstream symptom pattern (djust-monitor, USAI
+        # build, DJUST_LESSONS): `self._tenant = None` in handlers, empty
+        # querysets, writes that no-op.
+        #
+        # Excluded ancestors (module-prefix check, mirrors the existing
+        # "skip djust's own internal classes" convention at the top of this
+        # loop):
+        # - "django." -- covers django.views.generic.base.View's harmless
+        #   base dispatch() AND django.contrib.auth.mixins.{AccessMixin,
+        #   LoginRequiredMixin,PermissionRequiredMixin,UserPassesTestMixin},
+        #   which djust.auth.core._check_django_access_mixins already
+        #   enforces on the WS/SSE mount path via isinstance() checks -- NOT
+        #   HTTP-only despite overriding dispatch().
+        # - "djust."/"djust_" -- djust's own mixins are already
+        #   WS-reconciled (e.g. djust.tenants.mixin.TenantMixin overrides
+        #   dispatch/get/post for pure-HTTP Django parity, but
+        #   djust.auth.core.run_pre_mount_auth independently calls its
+        #   _ensure_tenant() hook on every live mount path). As with the
+        #   ``cls`` skip above, djust's own test/example fixtures are still
+        #   inspected (dogfooding) -- only djust's real production modules
+        #   are exempted.
+        for ancestor in cls.__mro__:
+            if ancestor is object:
+                continue
+            amod = getattr(ancestor, "__module__", "") or ""
+            if amod.startswith("django."):
+                continue
+            if amod.startswith("djust.") or amod.startswith("djust_"):
+                if "test" not in amod and "example" not in amod:
+                    continue
+
+            overridden = [h for h in ("dispatch", "get", "post") if h in ancestor.__dict__]
+            if overridden and not _is_check_suppressed("djust.V013"):
+                ancestor_label = "%s.%s" % (
+                    amod,
+                    getattr(ancestor, "__qualname__", ancestor.__name__),
+                )
+                methods_str = "/".join("%s()" % h for h in overridden)
+
+                ancestor_file = ""
+                ancestor_line = None
+                try:
+                    ancestor_file = inspect.getfile(ancestor)
+                    ancestor_line = inspect.getsourcelines(ancestor)[1]
+                except (OSError, TypeError):
+                    pass  # Source introspection may fail for built-in or C-extension classes
+
+                errors.append(
+                    DjustWarning(
+                        "%s: %s overrides %s, which will NOT run on a "
+                        "WebSocket mount (the WS path calls mount() "
+                        "directly, never dispatch()/get()/post())."
+                        % (cls_label, ancestor_label, methods_str),
+                        hint=(
+                            "Move this setup into mount(self, request, "
+                            "**kwargs) so it runs on every transport. For "
+                            "auth/tenant-family logic specifically, see "
+                            "djust.auth.core.run_pre_mount_auth -- the "
+                            "canonical pre-mount hook every live mount path "
+                            "already calls. Mark abstract base classes with "
+                            "`abstract = True` to skip this check, or "
+                            "suppress globally with "
+                            "DJUST_CONFIG = {'suppress_checks': ['V013']}."
+                        ),
+                        id="djust.V013",
+                        fix_hint=(
+                            "Move the logic from `%s` on `%s` into "
+                            "`mount(self, request, **kwargs)` on `%s`."
+                            % (methods_str, ancestor_label, cls.__qualname__)
+                        ),
+                        file_path=ancestor_file,
+                        line_number=ancestor_line,
+                    )
+                )
+
     # V010 -- TutorialMixin listed after LiveView in MRO (#691)
     _check_tutorial_mixin_mro(errors, LiveView)
 
