@@ -1,6 +1,6 @@
 # djust System Checks Reference
 
-Quick reference for all 41 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 42 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 Run checks with: `python manage.py check --deploy` or `python manage.py djust_check`
 
@@ -27,6 +27,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V007 | LiveView | Warning | Event handler missing **kwargs |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
+| V013 | LiveView | Warning | HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -264,6 +265,15 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **False positives**: none on normal page views — only `sticky = True` views are inspected. A `dj-view` appearing only inside a `{% comment %}` block (e.g. documenting the wrapper) is ignored (comments are stripped before scanning).
 - **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['V012']}`
 - Added in v1.0.5-3 (#1803)
+
+### V013 — HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount
+- **Severity**: Warning
+- **Method**: Runtime (walks every registered `LiveView`'s `__mro__`)
+- **What it detects**: An ancestor class in a `LiveView`'s MRO — the view class itself, or an earlier mixin — defines `dispatch()`, `get()`, or `post()` in its own `__dict__`. The WebSocket mount path calls `view_instance.mount(request, **kwargs)` directly; it never calls `dispatch()`/`get()`/`post()`. Any setup logic hooked there (tenant resolution, rate limiting, custom auth, request-scoped state) silently never runs for a WS-mounted view. Downstream symptom pattern: `self._tenant = None` in handlers, empty querysets, writes that no-op.
+- **Fix**: move the setup logic into `mount(self, request, **kwargs)` so it runs on every transport. For auth/tenant-family logic specifically, see `djust.auth.core.run_pre_mount_auth` — the canonical pre-mount hook every live mount path (WebSocket, SSE, runtime) already calls.
+- **False positives**: none expected on ordinary user mixins. Ancestors in `django.*` (e.g. `django.views.generic.base.View`, and `django.contrib.auth.mixins.{AccessMixin,LoginRequiredMixin,PermissionRequiredMixin,UserPassesTestMixin}` — already enforced on the WS/SSE mount path via `isinstance()` in `djust.auth.core._check_django_access_mixins`) and `djust.*` (djust's own mixins, e.g. `djust.tenants.mixin.TenantMixin`, which is independently reconciled with the WS path via `run_pre_mount_auth`'s `_ensure_tenant()` hook) are excluded.
+- **Suppression**: `abstract = True` on the LiveView class, `DJUST_CONFIG = {'suppress_checks': ['V013']}`, or `SILENCED_SYSTEM_CHECKS = ["djust.V013"]`
+- Added in v1.1.0 (#2059)
 
 ---
 

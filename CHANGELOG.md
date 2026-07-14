@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **New system check `djust.V013` — HTTP-only `dispatch()`/`get()`/`post()` overrides on a LiveView silently never run on a WebSocket mount (#2059).** The WS mount path calls `view_instance.mount(request, **kwargs)` directly (`runtime.py`'s `dispatch_mount`) — it never calls `dispatch()`/`get()`/`post()`. A mixin (or the view class itself) that hooks one of these to do real HTTP-only work — tenant resolution, rate limiting, custom auth, request-scoped setup — silently never runs for a WS-mounted view. This is the most-documented downstream footgun (djust-monitor, USAI build, DJUST_LESSONS): `self._tenant = None` in handlers, empty querysets, writes that no-op. The check walks every registered LiveView's `__mro__` (mirroring `check_liveviews`'s existing `_walk_subclasses(LiveView)` + `_routed_liveview_classes()` union, `python/djust/checks/components.py`) and flags any non-`django.*`/non-`djust.*` ancestor defining one of the three methods in its own `__dict__`, with a hint pointing at `mount()` and, for auth/tenant-family logic, `djust.auth.core.run_pre_mount_auth`. `django.contrib.auth.mixins` classes are excluded (already enforced on the WS/SSE mount path via `isinstance()` checks) and so is djust's own `djust.tenants.mixin.TenantMixin` (already WS-reconciled via `run_pre_mount_auth`'s `_ensure_tenant()` hook) — both false-positive traps verified empirically. Dogfooded against `examples/demo_project` with zero warnings (#1060) — see `python/djust/tests/test_check_ws_parity_2059.py` (5 cases: dispatch-overriding-mixin trigger, clean-view negative, djust-internal-TenantMixin exclusion, gate-off suppression proof, subprocess-isolated demo-project dogfood pin). Documented in `docs/system-checks.md`.
+
 ## [1.1.0rc8] - 2026-07-14
 
 ### Added
