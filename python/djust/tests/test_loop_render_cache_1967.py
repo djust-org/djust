@@ -63,10 +63,13 @@ class TestLoopRenderCacheDefaults:
         lv = RustLiveView(PLAIN_SRC)
         assert lv.loop_render_cache_enabled() is False
 
-    def test_config_default_is_false(self):
+    def test_config_default_is_true(self):
+        """Default flipped ON in #2062 after soaking flag-OFF since v1.1.0rc5
+        (byte-identity proven; #2067 cross-loop keyspace fix landed first).
+        The flag remains an explicit opt-OUT."""
         from djust.config import get_config
 
-        assert get_config().get("loop_render_cache_enabled", "MISSING") is False
+        assert get_config().get("loop_render_cache_enabled", "MISSING") is True
 
     def test_enable_disable_round_trip(self):
         lv = RustLiveView(PLAIN_SRC)

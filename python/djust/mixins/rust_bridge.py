@@ -290,7 +290,8 @@ class RustBridgeMixin:
     def _apply_loop_render_cache_flag(self) -> None:
         """Wire ``LIVEVIEW_CONFIG['loop_render_cache_enabled']`` → Rust (#1967).
 
-        Reads the (default-False) config flag and forwards it to the Rust
+        Reads the config flag (default-True since #2062; explicit False is
+        the opt-out kill-switch) and forwards it to the Rust
         ``RustLiveView`` via ``set_loop_render_cache_enabled``. Idempotent and
         cheap (a single bool set on the Rust side). Called on every
         ``_rust_view`` (re)initialization — including cache HITs, where the

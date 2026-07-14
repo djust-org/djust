@@ -138,15 +138,18 @@ class LiveViewConfig:
         # When True: non-serializable values raise TypeError with actionable error message
         # Always emits warning logs before fallback, even in non-strict mode
         "strict_serialization": False,  # Raise TypeError for non-serializable values instead of str() fallback
-        # Per-item loop render cache (#1967). When True, the Rust renderer
-        # caches each loop item's rendered fragment by a content hash and reuses
-        # it across render_with_diff() calls, turning a pure reorder of a large
-        # keyed list from O(n) re-renders into O(changed). Default OFF
-        # (split-foundation #1122) — a hot-path change that must soak. Only
-        # applies to position-INDEPENDENT loop bodies; bodies using
-        # {% if %}/{% cycle %}/nested loops/forloop are auto-excluded (correct
-        # by construction). Safe to enable for list/table-heavy views.
-        "loop_render_cache_enabled": False,
+        # Per-item loop render cache (#1967/#1969/#1970). When True, the Rust
+        # renderer caches each loop item's rendered fragment (and parsed VNode
+        # subtree) by a content hash and reuses them across render_with_diff()
+        # calls, turning a pure reorder of a large keyed list from O(n)
+        # re-renders into O(changed). Default ON since #2062 (graduated after
+        # soaking flag-OFF from v1.1.0rc5, with byte-identity ON==OFF proven
+        # across the template matrix and the #2067 cross-loop keyspace fix
+        # landed first). Set False to opt OUT (kill-switch). Only applies to
+        # position-INDEPENDENT loop bodies that read nothing but the loop
+        # variable; bodies using {% if %}/{% cycle %}/nested loops/forloop or
+        # outer-context reads are auto-excluded (correct by construction).
+        "loop_render_cache_enabled": True,
         # Django-parity template auto-call (ADR-024). When True (default),
         # the Rust engine's sidecar getattr walk invokes callables exactly
         # like Django's Variable._resolve_lookup ({{ user.get_full_name }},
