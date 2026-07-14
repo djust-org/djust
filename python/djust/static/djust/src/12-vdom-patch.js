@@ -1485,6 +1485,13 @@ function applyInsertSubtree(patch, rootEl = null) {
         return false;
     }
     const fragment = _parseSubtreeHtml(patch.html);
+    // #2058: scan BEFORE insertion — a DocumentFragment's children move out
+    // of it (and it becomes empty) once inserted, so this is the only point
+    // that can see what was in the fragment. A classic <script> inside an
+    // InsertSubtree payload (e.g. a {% if %} block that toggled on) is
+    // parsed via <template>.innerHTML (see _parseSubtreeHtml above) and is
+    // therefore inert-by-spec exactly like #1848 — loud DEBUG-mode warning.
+    if (typeof _warnDeadScripts === 'function') _warnDeadScripts(fragment);
     // Determine insert position: index counted against significant
     // children (matches InsertChild semantics).
     const children = getSignificantChildren(parent);

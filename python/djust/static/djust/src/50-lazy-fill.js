@@ -38,18 +38,33 @@
     }
   }
 
+  // #2058: scan a not-yet-attached clone for classic <script> tags before
+  // it's spliced into the live DOM. `<template>` content is inert-by-spec
+  // (see the module docblock above), and cloneNode() does not change that —
+  // a <script> inside a lazy-render chunk is silently dead exactly like
+  // #1848. Loud DEBUG-mode warning.
+  function _warnDeadScriptsInClone(node) {
+    if (window.djust && typeof window.djust._warnDeadScripts === 'function') {
+      window.djust._warnDeadScripts(node);
+    }
+  }
+
   function _replaceSlot(slot, tpl, status) {
     if (status === 'ok') {
       // tpl.content is a DocumentFragment; cloneNode keeps the template
       // intact for double-fire idempotency.
-      slot.replaceWith(tpl.content.cloneNode(true));
+      const clone = tpl.content.cloneNode(true);
+      _warnDeadScriptsInClone(clone);
+      slot.replaceWith(clone);
     } else {
       // error / timeout — wrap in <dj-error aria-live="polite"> so
       // screen readers announce. Custom element name is treated as
       // HTMLUnknownElement which is fine for layout-only purposes.
       const err = document.createElement('dj-error');
       err.setAttribute('aria-live', 'polite');
-      err.appendChild(tpl.content.cloneNode(true));
+      const clone = tpl.content.cloneNode(true);
+      _warnDeadScriptsInClone(clone);
+      err.appendChild(clone);
       slot.replaceWith(err);
     }
     tpl.remove();

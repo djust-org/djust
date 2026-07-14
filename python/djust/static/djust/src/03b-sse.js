@@ -201,6 +201,11 @@ class LiveViewSSE {
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             container.innerHTML = data.html;
+                            // #2058: the SSE mount path never calls
+                            // _runInsertedScripts() (WS-only fix) — a classic
+                            // <script> is silently dead here exactly like
+                            // #1848. Loud DEBUG-mode warning.
+                            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(container);
                         }
                         reinitAfterDOMUpdate();
                         // Set mount ready flag so dj-mounted handlers only fire
