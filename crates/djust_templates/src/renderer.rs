@@ -794,7 +794,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                 .iter()
                                 .filter_map(|name| ctx.get(name).map(|v| (name.as_str(), v)))
                                 .collect();
-                            let hash = crate::loop_cache::content_hash(&bindings);
+                            // Fold the For-node body identity into the key so
+                            // sibling loops sharing a loop-var name over
+                            // equal-content items can't cross-render (#2067).
+                            let hash = crate::loop_cache::content_hash(
+                                (nodes.as_ptr() as usize, nodes.len()),
+                                &bindings,
+                            );
 
                             // Cache HIT → reuse the previously rendered
                             // fragment (a reorder is all hits). MISS → render

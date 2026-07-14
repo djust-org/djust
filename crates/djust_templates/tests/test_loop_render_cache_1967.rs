@@ -61,6 +61,28 @@ fn render_cached(
     html
 }
 
+/// Like [`render_cached`] but with a caller-held `Template`, mirroring
+/// production: `RustLiveView` renders the SAME cached template across renders
+/// (`LoopRenderCache::clear()` runs on template change). Required for
+/// cross-render hit/miss assertions since #2067 folded the For-node body
+/// identity into the content hash — a re-parse is a new identity/keyspace.
+fn render_cached_t(
+    tmpl: &Template,
+    var: &str,
+    items_value: &Value,
+    cache: &mut LoopRenderCache,
+) -> String {
+    cache.begin_render();
+    let html = {
+        let _guard = LoopCacheGuard::install(cache);
+        let mut ctx = Context::new();
+        ctx.set(var.to_string(), items_value.clone());
+        tmpl.render(&ctx).expect("render")
+    };
+    cache.prune();
+    html
+}
+
 // ---------------------------------------------------------------------------
 // Battery: cache-ENABLED output must be BYTE-IDENTICAL to cache-DISABLED, for
 // every template × every operation.
@@ -178,6 +200,7 @@ fn tuple_unpacking_byte_identical() {
 #[test]
 fn reorder_of_plain_list_is_all_hits() {
     let src = "<ul>{% for x in xs %}<li>{{ x.name }}</li>{% endfor %}</ul>";
+    let tmpl = Template::new(src).unwrap();
     let initial = items(&[("1", "alpha"), ("2", "bravo"), ("3", "charlie")]);
     let reordered = items(&[("3", "charlie"), ("1", "alpha"), ("2", "bravo")]);
 
@@ -187,7 +210,6 @@ fn reorder_of_plain_list_is_all_hits() {
     cache.begin_render();
     {
         let _g = LoopCacheGuard::install(&mut cache);
-        let tmpl = Template::new(src).unwrap();
         let mut ctx = Context::new();
         ctx.set("xs".into(), initial.clone());
         let _ = tmpl.render(&ctx).unwrap();
@@ -200,7 +222,6 @@ fn reorder_of_plain_list_is_all_hits() {
     cache.begin_render();
     {
         let _g = LoopCacheGuard::install(&mut cache);
-        let tmpl = Template::new(src).unwrap();
         let mut ctx = Context::new();
         ctx.set("xs".into(), reordered.clone());
         let _ = tmpl.render(&ctx).unwrap();
@@ -220,16 +241,16 @@ fn reorder_of_plain_list_is_all_hits() {
 #[test]
 fn content_change_of_one_item_is_one_miss() {
     let src = "<ul>{% for x in xs %}<li>{{ x.name }}</li>{% endfor %}</ul>";
+    let tmpl = Template::new(src).unwrap();
     let initial = items(&[("1", "alpha"), ("2", "bravo"), ("3", "charlie")]);
     let changed = items(&[("1", "alpha"), ("2", "CHANGED"), ("3", "charlie")]);
 
     let mut cache = LoopRenderCache::new(true);
-    let _ = render_cached(src, "xs", &initial, &mut cache);
+    let _ = render_cached_t(&tmpl, "xs", &initial, &mut cache);
 
     cache.begin_render();
     {
         let _g = LoopCacheGuard::install(&mut cache);
-        let tmpl = Template::new(src).unwrap();
         let mut ctx = Context::new();
         ctx.set("xs".into(), changed.clone());
         let _ = tmpl.render(&ctx).unwrap();
@@ -241,16 +262,16 @@ fn content_change_of_one_item_is_one_miss() {
 #[test]
 fn append_only_misses_the_new_item() {
     let src = "<ul>{% for x in xs %}<li>{{ x.name }}</li>{% endfor %}</ul>";
+    let tmpl = Template::new(src).unwrap();
     let initial = items(&[("1", "alpha"), ("2", "bravo")]);
     let appended = items(&[("1", "alpha"), ("2", "bravo"), ("3", "charlie")]);
 
     let mut cache = LoopRenderCache::new(true);
-    let _ = render_cached(src, "xs", &initial, &mut cache);
+    let _ = render_cached_t(&tmpl, "xs", &initial, &mut cache);
 
     cache.begin_render();
     {
         let _g = LoopCacheGuard::install(&mut cache);
-        let tmpl = Template::new(src).unwrap();
         let mut ctx = Context::new();
         ctx.set("xs".into(), appended.clone());
         let _ = tmpl.render(&ctx).unwrap();
@@ -396,16 +417,16 @@ fn for_body(src: &str) -> Vec<djust_templates::parser::Node> {
 #[test]
 fn gate_off_persistence_is_load_bearing() {
     let src = "<ul>{% for x in xs %}<li>{{ x.name }}</li>{% endfor %}</ul>";
+    let tmpl = Template::new(src).unwrap();
     let initial = items(&[("1", "alpha"), ("2", "bravo"), ("3", "charlie")]);
     let reordered = items(&[("3", "charlie"), ("1", "alpha"), ("2", "bravo")]);
 
     // PERSISTENT cache (correct design): reorder = 3 hits.
     let mut persistent = LoopRenderCache::new(true);
-    let _ = render_cached(src, "xs", &initial, &mut persistent);
+    let _ = render_cached_t(&tmpl, "xs", &initial, &mut persistent);
     persistent.begin_render();
     {
         let _g = LoopCacheGuard::install(&mut persistent);
-        let tmpl = Template::new(src).unwrap();
         let mut ctx = Context::new();
         ctx.set("xs".into(), reordered.clone());
         let _ = tmpl.render(&ctx).unwrap();
@@ -423,7 +444,6 @@ fn gate_off_persistence_is_load_bearing() {
     per_render.begin_render();
     {
         let _g = LoopCacheGuard::install(&mut per_render);
-        let tmpl = Template::new(src).unwrap();
         let mut ctx = Context::new();
         ctx.set("xs".into(), reordered.clone());
         let _ = tmpl.render(&ctx).unwrap();
@@ -464,16 +484,29 @@ fn content_hash_is_stable_and_distinguishing() {
     let a2 = obj(&[("id", "1"), ("name", "alpha")]);
     let b = obj(&[("id", "1"), ("name", "bravo")]);
 
-    let ha = content_hash(&[("x", &a)]);
-    let ha2 = content_hash(&[("x", &a2)]);
-    let hb = content_hash(&[("x", &b)]);
+    // A fixed synthetic body identity (#2067 folded body identity into the
+    // key; same identity here isolates the name/value distinguishing checks).
+    let body = (0xDEAD_BEEFusize, 3usize);
+
+    let ha = content_hash(body, &[("x", &a)]);
+    let ha2 = content_hash(body, &[("x", &a2)]);
+    let hb = content_hash(body, &[("x", &b)]);
 
     assert_eq!(ha, ha2, "identical content must hash identically");
     assert_ne!(ha, hb, "different content must hash differently");
 
     // Variable name participates in the hash (no cross-loop collision).
-    let hy = content_hash(&[("y", &a)]);
+    let hy = content_hash(body, &[("y", &a)]);
     assert_ne!(ha, hy, "different var name must hash differently");
+
+    // The For-node body identity participates too (#2067): the same
+    // (var, value) bindings under a DIFFERENT body must not collide.
+    let other_body = (0xFEED_FACEusize, 3usize);
+    let ha_other = content_hash(other_body, &[("x", &a)]);
+    assert_ne!(
+        ha, ha_other,
+        "different body identity must hash differently"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -654,6 +687,7 @@ fn outer_context_body_never_hits_cache() {
 fn item_only_body_still_caches_and_reorder_hits() {
     // A body reading only `x.name` (root `x` == the loop var) is cacheable.
     let src = "<ul>{% for x in xs %}<li>{{ x.name }}</li>{% endfor %}</ul>";
+    let tmpl = Template::new(src).unwrap();
     let body = for_body(src);
     assert!(
         body_is_cacheable(&body, &["x".to_string()]),
@@ -664,11 +698,10 @@ fn item_only_body_still_caches_and_reorder_hits() {
     let reordered = items(&[("3", "charlie"), ("1", "alpha"), ("2", "bravo")]);
 
     let mut cache = LoopRenderCache::new(true);
-    let _ = render_cached(src, "xs", &initial, &mut cache);
+    let _ = render_cached_t(&tmpl, "xs", &initial, &mut cache);
     cache.begin_render();
     {
         let _g = LoopCacheGuard::install(&mut cache);
-        let tmpl = Template::new(src).unwrap();
         let mut ctx = Context::new();
         ctx.set("xs".into(), reordered.clone());
         let _ = tmpl.render(&ctx).unwrap();
