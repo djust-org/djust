@@ -402,21 +402,33 @@ pub fn body_is_cacheable(nodes: &[Node], var_names: &[String]) -> bool {
         .all(|root| loop_vars.contains(root.as_str()))
 }
 
-/// Build a content hash from the loop-variable bindings the body reads.
+/// Build a content hash from the For-node body identity plus the
+/// loop-variable bindings the body reads.
 ///
 /// Hashes the variable name(s) and the item value(s) bound for this iteration.
 /// This is only called for CACHEABLE bodies (see [`body_is_cacheable`]), which
 /// read NOTHING but the loop variable(s) — so the loop bindings fully determine
-/// the body's output. (A body reading outer context is non-cacheable and never
-/// reaches this path.) We also fold in the variable
+/// the body's output *for a given body*. We also fold in the variable
 /// NAMES so two loops over different vars don't collide.
+///
+/// `body_identity` is the For-node body slice's `(ptr, len)` identity — the
+/// same stable identity [`LoopRenderCache::body_cacheable`] memoizes on
+/// (immutable AST held by a cached `Template`; [`LoopRenderCache::clear`]
+/// drops every entry on template change, so a re-parse can never serve stale
+/// fragments through a reused allocation). Folding it in isolates each
+/// For-node's keyspace: the `fragments`/`parsed` maps span EVERY `{% for %}`
+/// in the view, and without it two sibling loops reusing the same loop-var
+/// name over equal-content items collided and cross-rendered each other's
+/// fragments (#2067).
 ///
 /// `bindings` is the list of `(var_name, value)` pairs set for this iteration
 /// (one for `{% for x in xs %}`, several for tuple unpacking).
-pub fn content_hash(bindings: &[(&str, &djust_core::Value)]) -> u64 {
+pub fn content_hash(body_identity: (usize, usize), bindings: &[(&str, &djust_core::Value)]) -> u64 {
     let mut hasher = DefaultHasher::new();
     // Domain separator so an empty binding list still hashes distinctly.
-    "djust_loop_item_v1".hash(&mut hasher);
+    // (v2: #2067 folded the For-node body identity into the key.)
+    "djust_loop_item_v2".hash(&mut hasher);
+    body_identity.hash(&mut hasher);
     for (name, value) in bindings {
         name.hash(&mut hasher);
         hash_value(value, &mut hasher);
