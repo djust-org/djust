@@ -119,8 +119,9 @@ class TestContrast:
         ("primary_foreground", "primary", 4.5),
         ("destructive_foreground", "destructive", 4.5),
         ("accent_foreground", "accent", 4.5),
-        # Muted text is allowed to be quieter, but must stay readable.
-        ("muted_foreground", "background", 3.0),
+        # Muted text also held to AA — all five themes clear it with margin
+        # (>=4.91 at authoring), and the CHANGELOG claims AA across the board.
+        ("muted_foreground", "background", 4.5),
     ]
 
     @pytest.mark.parametrize("mode", ["light", "dark"])
@@ -139,7 +140,9 @@ class TestContrast:
 class TestDistinctness:
     def test_new_theme_palettes_are_not_duplicates(self):
         """No new theme shares its (primary, background) identity with any
-        other preset in either mode — guards copy-paste authoring."""
+        other preset in the SAME mode — guards copy-paste authoring.
+        (Cross-mode duplication — a light palette matching another theme's
+        dark palette — is not compared; mode is part of the identity key.)"""
         seen = {}
         for name, preset in THEME_PRESETS.items():
             for mode in ("light", "dark"):

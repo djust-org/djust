@@ -186,7 +186,7 @@ INTERACTION = InteractionStyle(
     name="obsidian",
     button_hover="glow",
     link_hover="color",
-    card_hover="glow",
+    card_hover="shadow",  # shadow-glow on cards; "glow" is not a card_hover vocab value
     focus_style="ring",
     focus_ring_width="2px",
 )
