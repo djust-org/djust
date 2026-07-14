@@ -21,18 +21,24 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 ## v1.1.0-10 — brainstorm shortlist drain: silent-failure hardening + DX (drain bucket → ships in 1.1.0)
 
-**5/6 complete (2026-07-14)** — #2057 (PR #2068), #2058 (PR #2071), #2059
-(PR #2066), #2060 (PR #2069), #2061 (PR #2065) all merged, main CI green
-after each. **#2062 BLOCKED**: the mandated flip-time full-suite run surfaced
-a real pre-existing silent-corruption bug in the loop cache (#2067,
-priority:high — global fragment map lacks per-For-node identity; sibling
-loops sharing a loop-var name over equal-content items cross-render). Stays
-default-OFF until #2067 is fixed; the soak-then-flip gate did exactly its
-job. Drain side-findings filed: #2067, #2070 (S004 duplicate check ID).
+**COMPLETE 6/6 (2026-07-14)** ✅ — #2057 (PR #2068), #2058 (PR #2071), #2059
+(PR #2066), #2060 (PR #2069), #2061 (PR #2065), and #2062 (PRs #2073 + #2075)
+all merged, main CI green after each. #2062's story is the drain's headline:
+the mandated flip-time full-suite run surfaced a real pre-existing
+silent-corruption bug in the loop cache (#2067 — the shared fragment map
+lacked per-For-node identity; sibling loops sharing a loop-var name over
+equal-content items cross-rendered), live since rc5 for opt-ins. The fix
+(body-identity fold, PR #2073, independently reviewed) merged first; the
+default-ON re-flip (PR #2075) followed with the full suite green under the
+new default. Drain side-findings filed: #2067 (fixed), #2070 (S004 duplicate
+check ID), #2072 (uv-standalone python cannot be embedded — the true identity
+of the "flaky" pre-push cargo gate), #2074 (include-loop keyspace nuance).
 Note: GitHub Actions stopped creating check suites for branch/PR events
 mid-drain (main-push runs unaffected) — PRs merged on independent local
 validation per the 1.0.7 Actions-unavailable protocol, each confirmed by the
-main-push CI run post-merge.
+main-push CI run post-merge. The mid-drain toolchain repair (doctor → rustup
+→ poisoned-rlib purge) restored the pre-push hook, which passed organically
+on the final flip push.
 
 Open-issue drain (2026-07-14) of the top-priority items from
 `docs/internal/IMPROVEMENT_BRAINSTORM-2026-07.md` (shortlist items 1–3 and
@@ -50,7 +56,7 @@ own milestone), #2064 (surface manifest — cross-repo), plus the pre-existing
 | **P1** | ~~system check for HTTP-only mixin overrides on LiveViews (#2059)~~ ✅ PR #2066 | `djust.V013` MRO-walking warning with canonical fix in the hint; demo dogfood zero-warnings | v1.1.0 |
 | **P2** | ~~extend the WCAG contrast gate to all built-in presets (#2060)~~ ✅ PR #2069 | all 68 presets gated; 197 documented exemptions (58/68 presets had failures; 57 pairs <3.0 = palette-fix follow-up candidates) with a stale-exemption anti-rot check | v1.1.0 |
 | **P2** | ~~`make doctor` dev-environment self-diagnosis (#2061)~~ ✅ PR #2065 | 7 checks with one-line remedies; caught the live rustc/LLVM mismatch on the dev machine during its own build | v1.1.0 |
-| **P2** | graduate loop render+parse cache to default-ON (#2062) — **BLOCKED on #2067** | flip-time full-suite gate surfaced cross-loop fragment corruption in the cache (same-var-name sibling loops); fix #2067 (Rust, needs toolchain repair or CI-validated authoring), add the sibling-loop case to the correctness matrix, then flip | v1.1.0 |
+| **P2** | ~~graduate loop render+parse cache to default-ON (#2062)~~ ✅ PRs #2073 + #2075 | flip-time gate surfaced #2067 (cross-loop fragment corruption, live since rc5); body-identity fold fixed it (independently reviewed), then the flip landed with the full suite green under the new default — reorder of large keyed lists is O(changed) out of the box, flag is now the opt-out kill-switch | v1.1.0 |
 
 ## v1.1.0-9 — regroup review follow-ups: template-engine arg-resolution hardening (drain bucket → ships in 1.1.0)
 
