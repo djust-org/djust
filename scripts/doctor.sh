@@ -12,6 +12,13 @@
 # Plus #1796: the native pre-push hook hardcoded `.venv/bin/python` and
 # failed inside a `git worktree` (fixed via scripts/run-with-venv-python.sh;
 # this doctor checks the fix is still wired in when run from a worktree).
+# Plus #2072: PYO3_PYTHON pointed at the venv python whose base_prefix is a
+# python-build-standalone (uv-managed) install — unembeddable, so the
+# pre-push cargo-test hook (which DOES export PYO3_PYTHON) deterministically
+# hit incident #2's `init_fs_encoding` class. Fixed via
+# scripts/embeddable-python.sh; the embedded-pyo3 check below detects this
+# condition and shells out to that same script (single source of truth) so
+# the two never drift (#1646).
 #
 # `make doctor` (or `bash scripts/doctor.sh` directly) runs EVERY check below
 # regardless of earlier failures — no `set -e` — and prints one line per
@@ -27,6 +34,8 @@
 # actually break the environment:
 #   DOCTOR_FAKE_STALE_SO=1   forces the "stale-extension" check to FAIL
 #   DOCTOR_FAKE_PTH_BAD=1    forces the "djust.pth" check to FAIL
+#   DOCTOR_FAKE_UV_BASE=1    forces the "embedded-pyo3" check's #2072
+#                            uv-standalone-base detection to WARN
 #
 # Usage:
 #   bash scripts/doctor.sh
@@ -237,6 +246,15 @@ check_stale_so() {
 check_embedded_pyo3() {
     local name="embedded-pyo3"
 
+    # #2072 test hook: force the uv-standalone-base detection to WARN,
+    # short-circuiting the rest of the check (mirrors the DOCTOR_FAKE_STALE_SO
+    # / DOCTOR_FAKE_PTH_BAD pattern above — one verdict call per check name).
+    if [ -n "${DOCTOR_FAKE_UV_BASE:-}" ]; then
+        warn "$name" "[test-hook DOCTOR_FAKE_UV_BASE=1] simulated venv interpreter with a python-build-standalone (uv-managed) base_prefix — unsafe for PYO3_PYTHON embedding (#2072: init_fs_encoding / sys.prefix='/install')" \
+            "the pre-push cargo-test hook resolves PYO3_PYTHON via scripts/embeddable-python.sh, which avoids this; if exporting PYO3_PYTHON by hand, use: PYO3_PYTHON=\$(bash scripts/embeddable-python.sh)"
+        return
+    fi
+
     if ! command -v cargo >/dev/null 2>&1; then
         warn "$name" "cargo not found on PATH" \
             "install Rust via https://rustup.rs (or 'brew install rust')"
@@ -247,6 +265,21 @@ check_embedded_pyo3() {
         warn "$name" "crates/djust_templates/tests/ not found" \
             "verify you are at the repo root"
         return
+    fi
+
+    # #2072: is the resolved venv interpreter's base_prefix a
+    # python-build-standalone (uv-managed) install? scripts/embeddable-python.sh
+    # is the single source of truth for this detection (shared with the
+    # pre-push cargo-test hook) — shell out to it rather than duplicating the
+    # base_prefix check here (#1646). A resolved path that differs from
+    # $VENV_PYTHON means the venv was REJECTED as unembeddable.
+    local uv_base_note=""
+    if [ -n "$VENV_PYTHON" ] && [ -x "$VENV_PYTHON" ] && [ -f "$REPO_ROOT/scripts/embeddable-python.sh" ]; then
+        local embeddable_python
+        embeddable_python="$(bash "$REPO_ROOT/scripts/embeddable-python.sh" 2>/dev/null || true)"
+        if [ -n "$embeddable_python" ] && [ "$embeddable_python" != "$VENV_PYTHON" ]; then
+            uv_base_note=" NOTE (#2072): $VENV_PYTHON has a python-build-standalone (uv-managed) base_prefix — unsafe for PYO3_PYTHON (init_fs_encoding / sys.prefix='/install'). scripts/embeddable-python.sh resolves $embeddable_python instead — the same interpreter the pre-push cargo-test hook uses."
+        fi
     fi
 
     # Pick ONE small PyO3-embedding test file — the smallest (by line count)
@@ -270,19 +303,27 @@ check_embedded_pyo3() {
     rc=$?
 
     if [ $rc -eq 0 ]; then
-        ok "$name" "cargo test -p djust_templates --test $test_name passed"
+        if [ -n "$uv_base_note" ]; then
+            warn "$name" "cargo test -p djust_templates --test $test_name passed (PYO3_PYTHON unset here — pyo3 self-discovered a working interpreter).$uv_base_note" \
+                "no action needed for this run; the pre-push hook already avoids the venv python via scripts/embeddable-python.sh"
+        else
+            ok "$name" "cargo test -p djust_templates --test $test_name passed"
+        fi
     elif [ $rc -eq 124 ]; then
         warn "$name" "cargo test -p djust_templates --test $test_name timed out after 30s (cold build cache?)" \
             "run 'cargo build -p djust_templates --tests' once to warm the cache, then re-run doctor"
     elif echo "$output" | grep -qi "init_fs_encoding\|'/install'"; then
-        fail "$name" "cargo test -p djust_templates --test $test_name: embedded CPython bootstrap failed (init_fs_encoding class): $(echo "$output" | grep -i "init_fs_encoding\|/install" | head -1 | tr -s ' ')" \
-            "Python env vars/homebrew python drift — try a clean shell; see issue #2061"
+        fail "$name" "cargo test -p djust_templates --test $test_name: embedded CPython bootstrap failed (init_fs_encoding class):$uv_base_note $(echo "$output" | grep -i "init_fs_encoding\|/install" | head -1 | tr -s ' ')" \
+            "Python env vars/homebrew python drift — try a clean shell; if PYO3_PYTHON is set, resolve it via 'PYO3_PYTHON=\$(bash scripts/embeddable-python.sh)' instead of the venv python directly (#2072); see issue #2061"
+    elif echo "$output" | grep -qi "_Py_Dealloc"; then
+        fail "$name" "cargo test -p djust_templates --test $test_name: link failure referencing _Py_Dealloc (poisoned release-profile pyo3/pyo3-ffi/djust_core rlib cache from a prior broken-toolchain build — #2072): $(echo "$output" | grep -i "_Py_Dealloc" | head -1 | tr -s ' ')" \
+            "cargo clean -p pyo3 -p pyo3-ffi -p djust_core --release"
     elif echo "$output" | grep -qi "SIGABRT\|signal: 6"; then
         fail "$name" "cargo test -p djust_templates --test $test_name: rustc build probe crashed (SIGABRT in the rustc -vV probe): $(echo "$output" | grep -i "SIGABRT\|signal: 6" | head -1 | tr -s ' ')" \
             "rustc/LLVM toolchain drift — try a clean shell (unset stray DYLD_*/LLVM env vars) or reinstall the rust toolchain; see issue #2061"
     else
         fail "$name" "cargo test -p djust_templates --test $test_name failed: $(echo "$output" | tail -3 | tr '\n' ' ')" \
-            "see issue #2061 and the captured output above"
+            "see issue #2061 and the captured output above; if this is a link error mentioning _Py_Dealloc, try 'cargo clean -p pyo3 -p pyo3-ffi -p djust_core --release' (#2072)"
     fi
 }
 
