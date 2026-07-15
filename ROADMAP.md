@@ -19,6 +19,26 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-11 — hygiene drain: test-infra trust + build churn + docs + replay viewer (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-14) sweeping the accumulated side-findings of the
+v1.1.0-10 arc plus the long-deferred bug-capture iter B. Theme: restoring
+trust in local gates (the two proven-deterministic "flakes"), killing PR-diff
+noise, finishing the docs modernization, and shipping the replay surface that
+closes the bug-capture share→reproduce loop. Deferred with reasons: #2074
+(needs Rust include-caching design; low), #2063 (adapter pilot — own
+milestone), #2064 (cross-repo), #2017 (L-sized differ work), #1561
+(priority:low; iter C sequences after B).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | root-cause the regroup xdist pollution (#2053) | 9 `test_regroup_tag.py` tests fail under some orderings on dev machines (pass isolated, CI green) — suspected global assign-handler registry clobber; bisect the polluter, isolate, 3-clean-runs gate (#182) | v1.1.0 |
+| **P1** | pre-push cargo hook vs uv-standalone python (#2072) | `PYO3_PYTHON=<venv>` deterministically breaks embedded-PyO3 test binaries when the venv's base is uv python-build-standalone (`init_fs_encoding`); fix the hook interpreter selection + doctor remedy hint for poisoned release rlibs | v1.1.0 |
+| **P2** | stop committing debug-panel `.gz`/`.br` (#2054) | compressed siblings churn between contributor toolchains, polluting every JS-touching PR diff; generate at build/release time instead | v1.1.0 |
+| **P2** | reallocate the duplicated S004 check ID (#2070) | `djust.S004` names two different checks (configuration.py vs security.py) — suppressing one silently suppresses both; reallocate + a check-ID uniqueness canary (#1859) | v1.1.0 |
+| **P2** | modernize hooks.md to `this.values` + reserved names (#2055) | the guide still teaches `JSON.parse(this.el.dataset.*)` in its flagship examples after typed values obsoleted it; also the reserved-names note + stale `djust.d.ts` header | v1.1.0 |
+| **P2** | bug-capture iter B — read-only replay viewer (#1562) | DEBUG-gated `/__djust__/replay/<blob>` LiveView decoding iter A's blob: side-by-side state diff, patch list, strict read-only, escape-on-render + sandboxed iframe; share button in the debug panel | v1.1.0 |
+
 ## v1.1.0-10 — brainstorm shortlist drain: silent-failure hardening + DX (drain bucket → ships in 1.1.0)
 
 **COMPLETE 6/6 (2026-07-14)** ✅ — #2057 (PR #2068), #2058 (PR #2071), #2059
