@@ -1,0 +1,180 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>djust Bug Capture Replay{% if event_name %} — {{ event_name }}{% endif %}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --dj-bg: #ffffff;
+      --dj-fg: #1a1a1a;
+      --dj-muted: #6b7280;
+      --dj-border: #e5e7eb;
+      --dj-surface: #f9fafb;
+      --dj-added: #16a34a;
+      --dj-removed: #dc2626;
+      --dj-changed: #d97706;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --dj-bg: #0f1115;
+        --dj-fg: #e5e7eb;
+        --dj-muted: #9ca3af;
+        --dj-border: #2a2e37;
+        --dj-surface: #171a21;
+        --dj-added: #4ade80;
+        --dj-removed: #f87171;
+        --dj-changed: #fbbf24;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--dj-bg);
+      color: var(--dj-fg);
+      line-height: 1.5;
+    }
+    header.dj-banner {
+      background: var(--dj-changed);
+      color: #1a1a1a;
+      padding: 0.6rem 1.25rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    main { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
+    h2 { font-size: 1rem; margin: 1.75rem 0 0.5rem; border-bottom: 1px solid var(--dj-border); padding-bottom: 0.35rem; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
+    pre {
+      background: var(--dj-surface);
+      border: 1px solid var(--dj-border);
+      border-radius: 6px;
+      padding: 0.75rem;
+      overflow: auto;
+      max-height: 420px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .dj-meta { color: var(--dj-muted); font-size: 0.85rem; margin-bottom: 0.5rem; }
+    .dj-meta strong { color: var(--dj-fg); }
+    .dj-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 800px) { .dj-columns { grid-template-columns: 1fr; } }
+    table.dj-diff { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    table.dj-diff th, table.dj-diff td { border: 1px solid var(--dj-border); padding: 0.4rem 0.5rem; text-align: left; vertical-align: top; }
+    table.dj-diff th { background: var(--dj-surface); }
+    tr.dj-diff-added { background: color-mix(in srgb, var(--dj-added) 12%, transparent); }
+    tr.dj-diff-removed { background: color-mix(in srgb, var(--dj-removed) 12%, transparent); }
+    tr.dj-diff-changed { background: color-mix(in srgb, var(--dj-changed) 12%, transparent); }
+    .dj-status-badge { font-weight: 600; font-size: 0.7rem; text-transform: uppercase; }
+    .dj-status-added { color: var(--dj-added); }
+    .dj-status-removed { color: var(--dj-removed); }
+    .dj-status-changed { color: var(--dj-changed); }
+    .dj-status-same { color: var(--dj-muted); }
+    .dj-patch { border: 1px solid var(--dj-border); border-radius: 6px; margin-bottom: 0.75rem; overflow: hidden; }
+    .dj-patch-head { background: var(--dj-surface); padding: 0.4rem 0.6rem; font-size: 0.8rem; display: flex; gap: 0.75rem; }
+    .dj-patch-head .dj-op { font-weight: 700; }
+    .dj-patch pre { border: none; border-radius: 0; margin: 0; max-height: 260px; }
+    .dj-scrubbed { color: var(--dj-changed); }
+    .dj-share {
+      display: flex; gap: 0.5rem; align-items: center; margin: 1rem 0;
+      flex-wrap: wrap;
+    }
+    .dj-share input {
+      flex: 1; min-width: 240px; font-family: ui-monospace, monospace; font-size: 0.75rem;
+      padding: 0.4rem 0.5rem; border: 1px solid var(--dj-border); border-radius: 6px;
+      background: var(--dj-surface); color: var(--dj-fg);
+    }
+    .dj-bugcapture-copy {
+      padding: 0.4rem 0.9rem; border-radius: 6px; border: 1px solid var(--dj-border);
+      background: var(--dj-surface); color: var(--dj-fg); cursor: pointer; font-size: 0.8rem;
+    }
+    .dj-bugcapture-copy:hover { filter: brightness(0.95); }
+    iframe.dj-dom-preview {
+      width: 100%; min-height: 200px; border: 1px solid var(--dj-border); border-radius: 6px;
+      background: #fff;
+    }
+    .dj-empty { color: var(--dj-muted); font-style: italic; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <header class="dj-banner">
+    Read-only bug-capture replay — decoded from an untrusted, unauthenticated URL fragment. Nothing on this page can dispatch an event handler or mutate application state.
+  </header>
+  <main>
+    <h1>Bug Capture Replay</h1>
+    <p class="dj-meta">
+      <strong>Event:</strong> {{ event_name|default:"(none recorded)" }}
+      &nbsp;·&nbsp;
+      <strong>Patches:</strong> {{ patch_count }}
+      &nbsp;·&nbsp;
+      <strong>Scrubbed fields:</strong>
+      {% if scrubbed_fields %}
+        <span class="dj-scrubbed">{{ scrubbed_fields|join:", " }}</span>
+      {% else %}
+        none
+      {% endif %}
+    </p>
+
+    <div class="dj-share">
+      <input type="text" readonly value="{{ blob }}" aria-label="djbug1 share blob">
+      <button type="button" class="dj-bugcapture-copy" data-bugcapture-url="{{ blob }}">Copy as djbug1. URL</button>
+    </div>
+
+    <h2>State diff</h2>
+    {% if diff_rows %}
+    <table class="dj-diff">
+      <thead>
+        <tr><th>Key</th><th>Status</th><th>Before</th><th>After</th></tr>
+      </thead>
+      <tbody>
+        {% for row in diff_rows %}
+        <tr class="dj-diff-{{ row.status }}">
+          <td><code>{{ row.key }}</code></td>
+          <td><span class="dj-status-badge dj-status-{{ row.status }}">{{ row.status }}</span></td>
+          <td><pre>{{ row.before|default:"—" }}</pre></td>
+          <td><pre>{{ row.after|default:"—" }}</pre></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="dj-empty">No top-level state keys captured.</p>
+    {% endif %}
+
+    <h2>Full state (side-by-side)</h2>
+    <div class="dj-columns">
+      <div>
+        <p class="dj-meta"><strong>state_before</strong></p>
+        <pre><code>{{ state_before_json }}</code></pre>
+      </div>
+      <div>
+        <p class="dj-meta"><strong>state_after</strong></p>
+        <pre><code>{{ state_after_json }}</code></pre>
+      </div>
+    </div>
+
+    <h2>VDOM patches</h2>
+    {% if patch_rows %}
+      {% for patch in patch_rows %}
+      <div class="dj-patch">
+        <div class="dj-patch-head">
+          <span class="dj-op">#{{ patch.index }} {{ patch.op }}</span>
+          <span>path: <code>{{ patch.path }}</code></span>
+        </div>
+        <pre><code>{{ patch.pretty }}</code></pre>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="dj-empty">No VDOM patches captured for this transition.</p>
+    {% endif %}
+
+    {% if dom_preview %}
+    <h2>Captured HTML preview (sandboxed — no scripts, no same-origin)</h2>
+    <iframe class="dj-dom-preview" sandbox="" srcdoc="{{ dom_preview }}"></iframe>
+    {% endif %}
+  </main>
+  <script src="{% static 'djust/bug_capture_replay.js' %}"></script>
+</body>
+</html>

@@ -126,6 +126,17 @@ class LiveViewConfig:
         # caps per-view ring buffer size (memory-bound).
         "time_travel_enabled": False,
         "time_travel_max_events": 100,
+        # Bug-capture (B7 iter B, #1562) — default scrub field names applied
+        # by the debug panel's "Share" button before it calls
+        # ``encode_view_state()``. Empty by default (no default scrub); set
+        # e.g. ``LIVEVIEW_CONFIG['bug_capture_default_scrub'] = ["password"]``
+        # to redact known-sensitive top-level state keys on every share
+        # without requiring a per-call ``scrub_fields(...)`` argument. Only
+        # consulted by the WS "Share" button path
+        # (``LiveViewConsumer.handle_bug_capture_share``) — the programmatic
+        # ``encode_view_state()`` API always requires an explicit ``scrub``
+        # argument from the caller.
+        "bug_capture_default_scrub": [],
         # JIT Serialization (Phase 5)
         "jit_serialization": True,  # Enable/disable JIT auto-serialization
         "jit_debug": False,  # Debug logging for JIT serialization

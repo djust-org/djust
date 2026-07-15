@@ -1777,6 +1777,22 @@
                     }
                 });
             }
+
+            // Bug-capture iter B (#1562) — Share button result listener.
+            // Same bound-once guard shape as the time-travel-event listener
+            // above; lives on `document` so it survives tab content re-renders.
+            if (typeof this.onBugCaptureShareResult === 'function' && !this._bugCaptureShareListenerBound) {
+                this._bugCaptureShareListenerBound = true;
+                document.addEventListener('djust:bug-capture-share-result', (ev) => {
+                    try {
+                        this.onBugCaptureShareResult(ev && ev.detail);
+                    } catch (e) {
+                        if (globalThis.djustDebug) {
+                            console.warn('[djust] djust:bug-capture-share-result handler failed', e);
+                        }
+                    }
+                });
+            }
         }
 
         registerTab(id, config) {
@@ -2794,6 +2810,17 @@
                 ? `<span class="tt-replay-hint">Replay-enabled at cursor</span>`
                 : '';
 
+            // Bug-capture iter B (#1562) — Share button. Only meaningful
+            // once at least one event is captured (history.length > 0,
+            // which this branch already guarantees — the empty-state
+            // early-return above covers the "nothing to share yet" case).
+            const shareStatus = this._bugCaptureShareStatus === 'copied'
+                ? `<span class="tt-share-status tt-share-copied">Copied!</span>`
+                : this._bugCaptureShareStatus === 'blob-ready'
+                    ? `<span class="tt-share-status tt-share-manual">Clipboard unavailable — blob logged to console</span>`
+                    : '';
+            const shareButton = `<button type="button" class="tt-share-btn" data-tt-share title="Compute a djbug1. share URL for the current captured state and copy it to your clipboard">📋 Share bug</button>${shareStatus}`;
+
             return `
                 <div class="tt-container">
                     <div class="tt-header">
@@ -2802,6 +2829,7 @@
                         <span class="tt-cursor">${cursorLabel}</span>
                         <span class="tt-count">${countLabel}</span>
                         ${replayHint}
+                        ${shareButton}
                     </div>
                     <div class="tt-timeline">${rows}</div>
                 </div>
@@ -2976,6 +3004,13 @@
                     this.toggleTimeTravelExpandRow(index);
                     return;
                 }
+
+                // 5. Bug-capture Share button (#1562).
+                const shareButton = target.closest('.tt-share-btn');
+                if (shareButton && this.panel.contains(shareButton)) {
+                    this.onBugCaptureShareClick();
+                    return;
+                }
             });
         }
 
@@ -3006,6 +3041,69 @@
                     }
                 }
             }
+        }
+
+        // ============================================================
+        // Bug-capture Share button (#1562, B7 iter B).
+        //
+        // Clicking "Share bug" sends {type: 'bug_capture_share'} over the
+        // main djust WebSocket. The server computes a djbug1. blob (via
+        // handle_bug_capture_share -> encode_view_state) and replies with
+        // a bug_capture_share_result frame, fanned out client-side as the
+        // `djust:bug-capture-share-result` CustomEvent (03-websocket.js).
+        // This panel is the ONLY thing that touches the clipboard — the
+        // server never does, and the main client layer just fans the
+        // frame out without inspecting it.
+        // ============================================================
+
+        onBugCaptureShareClick() {
+            this._bugCaptureShareStatus = null;
+            this._sendTimeTravelMessage({ type: 'bug_capture_share' });
+        }
+
+        // Split out for testability — resolves true/false rather than
+        // throwing, so callers never need a try/catch around the await.
+        async _copyBugCaptureBlob(blob) {
+            if (!blob || typeof blob !== 'string') return false;
+            try {
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    await navigator.clipboard.writeText(blob);
+                    return true;
+                }
+            } catch (e) {
+                if (globalThis.djustDebug) {
+                    console.warn('[djust] bug-capture clipboard writeText failed', e);
+                }
+            }
+            return false;
+        }
+
+        onBugCaptureShareResult(detail) {
+            if (!detail || typeof detail.blob !== 'string' || !detail.blob) return;
+            const blob = detail.blob;
+            this._copyBugCaptureBlob(blob).then((copied) => {
+                this._bugCaptureShareStatus = copied ? 'copied' : 'blob-ready';
+                this._bugCaptureShareBlob = blob;
+                if (!copied && globalThis.djustDebug) {
+                    // Clipboard API unavailable (e.g. insecure context) —
+                    // surface the blob somewhere the developer can still
+                    // grab it. Guarded per the djust console.log rule.
+                    console.log('[djust] bug-capture share blob (clipboard unavailable):', blob);
+                }
+                if (this.state && this.state.activeTab === 'timeTravel') {
+                    try {
+                        if (typeof this.refreshActiveTab === 'function') {
+                            this.refreshActiveTab();
+                        } else if (typeof this.renderTabContent === 'function') {
+                            this.renderTabContent();
+                        }
+                    } catch (_e) {
+                        if (globalThis.djustDebug) {
+                            console.warn('[djust] bug-capture-share-result re-render failed', _e);
+                        }
+                    }
+                }
+            });
         }
         captureEvent(event) {
             this.eventHistory.unshift({

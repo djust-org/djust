@@ -1122,6 +1122,8 @@ module = [
     "djust.audit_ast",
     "djust.audit_live",
     "djust.bug_capture",
+    "djust.bug_capture_views",
+    "djust.urls",
     "djust.checks_css_proposal",
     "djust.hooks",
     "djust.hot_view_replacement",

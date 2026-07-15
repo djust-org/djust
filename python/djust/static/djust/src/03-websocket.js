@@ -1191,6 +1191,25 @@ class LiveViewWebSocket {
                     }
                 }
                 break;
+
+            case 'bug_capture_share_result':
+                // Bug-capture iter B (#1562) — server computed a djbug1.
+                // blob in response to the debug panel's Share button.
+                // Payload shape: { type: 'bug_capture_share_result', blob: '...' }
+                // Fanned out as a CustomEvent so the debug panel (which
+                // owns clipboard access) can copy it — the main client
+                // layer never touches the clipboard itself.
+                try {
+                    document.dispatchEvent(new CustomEvent('djust:bug-capture-share-result', {
+                        detail: data,
+                        bubbles: true,
+                    }));
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[djust] bug-capture-share-result dispatch failed', e);
+                    }
+                }
+                break;
         }
     }
 
