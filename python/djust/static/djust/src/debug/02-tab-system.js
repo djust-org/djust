@@ -81,6 +81,22 @@
                     }
                 });
             }
+
+            // Bug-capture iter B (#1562) — Share button result listener.
+            // Same bound-once guard shape as the time-travel-event listener
+            // above; lives on `document` so it survives tab content re-renders.
+            if (typeof this.onBugCaptureShareResult === 'function' && !this._bugCaptureShareListenerBound) {
+                this._bugCaptureShareListenerBound = true;
+                document.addEventListener('djust:bug-capture-share-result', (ev) => {
+                    try {
+                        this.onBugCaptureShareResult(ev && ev.detail);
+                    } catch (e) {
+                        if (globalThis.djustDebug) {
+                            console.warn('[djust] djust:bug-capture-share-result handler failed', e);
+                        }
+                    }
+                });
+            }
         }
 
         registerTab(id, config) {

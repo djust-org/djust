@@ -2069,7 +2069,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             #   mount_batch, ping, live_redirect_mount, upload_register,
             #   upload_resume, presence_heartbeat, cursor_move, request_html,
             #   debug_panel_open, debug_panel_close, time_travel_jump,
-            #   time_travel_component_jump, forward_replay.
+            #   time_travel_component_jump, forward_replay, bug_capture_share.
             if msg_type in self.RUNTIME_OWNED_VERBS:
                 # Runtime-owned: route through the dispatch_message chokepoint
                 # rather than calling the bespoke handler directly, so future
@@ -2109,6 +2109,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_time_travel_component_jump(data)
             elif msg_type == "forward_replay":
                 await self.handle_forward_replay(data)
+            elif msg_type == "bug_capture_share":
+                await self.handle_bug_capture_share(data)
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -3759,6 +3761,64 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self.send_json(
             self._build_time_travel_state(self.view_instance, buffer, new_cursor, "after")
         )
+
+    async def handle_bug_capture_share(self, data: Dict[str, Any]) -> None:
+        """Compute a `djbug1.` bug-capture blob for the debug panel's Share button (#1562).
+
+        Dev-only, mirrors the ``handle_time_travel_jump`` gating shape.
+        Strictly read-only from the client's point of view: this never
+        mutates view state, never dispatches a handler, and the server
+        never touches the clipboard itself — it only computes the blob
+        and sends it back as a ``bug_capture_share_result`` frame; the
+        client-side debug panel (``09a-tab-time-travel.js``) is
+        responsible for the actual ``navigator.clipboard.writeText()``
+        call.
+
+        The DEBUG-vs-production gate is intentionally NOT duplicated
+        here — ``encode_view_state()`` -> ``BugCapture.encode()`` ->
+        ``_enforce_prod_gate()`` is the single authoritative check (the
+        same one the programmatic ``encode_view_state()`` API and the
+        replay viewer's URL registration both key off), so this handler
+        can't silently drift from it. A ``RuntimeError`` from that gate
+        is caught below like any other encode-time error.
+
+        Frame: ``{"type": "bug_capture_share"}`` (no other fields —
+        the field list this view's ``scrub`` applies comes from
+        ``LIVEVIEW_CONFIG['bug_capture_default_scrub']``, a *server*
+        setting; the client cannot widen or narrow what gets scrubbed).
+        """
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+        if not getattr(self.view_instance, "time_travel_enabled", False):
+            await self.send_error(
+                "bug_capture_share: time_travel_enabled must be True on this view"
+            )
+            return
+
+        from djust.bug_capture import encode_view_state, scrub_fields
+        from djust.config import config as _djust_config
+
+        try:
+            _html, patches_json, _version = await sync_to_async(
+                self.view_instance.render_with_diff
+            )()
+            default_scrub = _djust_config.get("bug_capture_default_scrub", []) or []
+            scrub = scrub_fields(*default_scrub) if default_scrub else None
+            blob = await sync_to_async(encode_view_state)(
+                self.view_instance,
+                patches=patches_json or "[]",
+                scrub=scrub,
+            )
+        except (RuntimeError, ValueError) as exc:
+            await self.send_error("bug_capture_share: %s" % exc)
+            return
+        except Exception:  # noqa: BLE001 — dev tool, never crash the socket
+            logger.exception("bug_capture_share: failed to encode capture")
+            await self.send_error("bug_capture_share: failed to encode capture")
+            return
+
+        await self.send_json({"type": "bug_capture_share_result", "blob": blob})
 
     async def presence_event(self, event: Dict[str, Any]) -> None:
         """
