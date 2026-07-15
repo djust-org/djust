@@ -29,11 +29,11 @@ window.djust.hooks = {
         mounted() {
             this.chart = new Chart(this.el, {
                 type: 'line',
-                data: JSON.parse(this.el.dataset.values),
+                data: this.values.data,
             });
         },
         updated() {
-            this.chart.data = JSON.parse(this.el.dataset.values);
+            this.chart.data = this.values.data;
             this.chart.update();
         },
         destroyed() {
@@ -47,8 +47,13 @@ window.djust.hooks = {
 ### 2. Use `dj-hook` in Your Template
 
 ```html
-<canvas dj-hook="MyChart" data-values='{{ chart_data_json }}'></canvas>
+<canvas dj-hook="MyChart" dj-hook-value-data='{{ chart_data_json }}'></canvas>
 ```
+
+`dj-hook-value-data` is exposed on the instance as `this.values.data`,
+JSON-parsed automatically — no manual `JSON.parse(this.el.dataset...)`.
+See [Typed values & targets](#typed-values--targets) below for the full
+coercion rules.
 
 ### 3. Communicate with the Server
 
@@ -95,7 +100,7 @@ detects Promise return and chains `.catch` to log rejections via
 window.djust.hooks.UserAvatar = {
     async mounted() {
         // Fetch profile data on mount; safe — rejection logs cleanly
-        const res = await fetch(`/api/profile/${this.el.dataset.userId}`);
+        const res = await fetch(`/api/profile/${this.values.userId}`);
         const profile = await res.json();
         this.el.querySelector('img').src = profile.avatar_url;
     },
@@ -163,7 +168,7 @@ window.DjustHooks.Chart = {
         // "Canvas is already in use" error on updated()/re-mount).
         const prior = Chart.getChart(this.el);
         if (prior) prior.destroy();
-        const data = JSON.parse(this.el.dataset.chart);
+        const data = this.values.chart;
         new Chart(this.el, {
             type: data.type,
             data: { labels: data.labels, datasets: [{ data: data.values }] },
@@ -176,7 +181,7 @@ window.DjustHooks.Chart = {
 ```html
 <!-- per-page template — the element opts into the hook -->
 <canvas dj-hook="Chart" dj-update="ignore"
-        data-chart='{{ chart_json }}'></canvas>
+        dj-hook-value-chart='{{ chart_json }}'></canvas>
 ```
 
 > `window.DjustHooks` and `window.djust.hooks` are merged into one registry, so
@@ -189,8 +194,8 @@ gets a sized drawing buffer, a map fills a `<div>` with tiles. djust's VDOM has
 no idea those mutations happened and would fight the library on the next patch,
 wiping its work. `dj-update="ignore"` tells the patcher to **skip this element
 entirely** on server re-renders, leaving the subtree fully under the library's
-control. You drive updates yourself from `updated()` (reading fresh
-`data-*` attributes), not from the VDOM.
+control. You drive updates yourself from `updated()` (reading the live
+`this.values` proxy), not from the VDOM.
 
 > For elements where you want the VDOM to keep patching *most* attributes but
 > leave a specific few alone (e.g. a `<dialog open>` toggled by the browser),
@@ -206,6 +211,15 @@ error when you navigate back. See [Best Practices](#best-practices) below.
 
 ## Hook Instance API
 
+> **Reserved names**: `el`, `viewName`, `values`, `target`, `targets`,
+> `pushEvent`, `handleEvent`, and `js` are framework-owned properties that
+> djust assigns on every hook instance (see `this.values` / `this.target()`
+> below). If your hook definition declares a member with one of these
+> names — `{ values: [], mounted() {...} }`, or a method named `target` —
+> the framework's own property silently shadows it. There is no warning at
+> registration or mount time; your member is simply never called. Pick a
+> different name for hook-owned state (e.g. `this._chart`, `this.data`).
+
 ### Properties
 
 | Property | Type | Description |
@@ -213,12 +227,15 @@ error when you navigate back. See [Best Practices](#best-practices) below.
 | `this.el` | `HTMLElement` | The DOM element with `dj-hook`. Updated automatically on patches. |
 | `this.viewName` | `string` | LiveView name from closest `[dj-view]` ancestor. |
 
+See [Typed values & targets](#typed-values--targets) below for
+`this.values`, `this.target()`, and `this.targets()`.
+
 ### Methods
 
 **`this.pushEvent(event, payload)`** -- Send an event to the server LiveView.
 
 ```javascript
-this.pushEvent('item_clicked', { id: this.el.dataset.itemId });
+this.pushEvent('item_clicked', { id: this.values.itemId });
 ```
 
 **`this.handleEvent(eventName, callback)`** -- Listen for server push events.
@@ -359,6 +376,36 @@ To *drive* a hook-owned library instance from Python between renders —
 instance, a registered command manipulates it, and the server binds the
 chain to any event attribute.
 
+### Pre-1.1 hooks (dataset attributes)
+
+Hooks written before typed values (pre-1.1) commonly read raw `data-*`
+attributes off `this.el.dataset` and parsed them by hand:
+
+```html
+<canvas dj-hook="Chart" data-values='{{ chart_data_json }}'></canvas>
+```
+
+```javascript
+window.djust.hooks.Chart = {
+    mounted() {
+        const data = JSON.parse(this.el.dataset.values);
+        this.chart = new Chart(this.el, { type: 'line', data });
+    },
+    updated() {
+        this.chart.data = JSON.parse(this.el.dataset.values);
+        this.chart.update();
+    },
+};
+```
+
+**This still works, unmodified.** `dj-hook`, the lifecycle callbacks, and
+`this.el` haven't changed — `this.el.dataset` is plain DOM, not a djust
+API, so nothing about typed values deprecates it. New hooks should still
+prefer `dj-hook-value-*` + `this.values` (above): no manual `JSON.parse`,
+live reads on `updated()`, and no risk of shadowing the reserved
+`this.values` name (see [Reserved names](#hook-instance-api) above) by
+also using it for something else.
+
 ## TypeScript & editor support
 
 djust ships ambient type declarations for the public `window.djust` surface
@@ -402,14 +449,14 @@ class DashboardView(LiveView):
 ```
 
 ```html
-<canvas dj-hook="SalesChart" data-chart='{{ chart_json }}'></canvas>
+<canvas dj-hook="SalesChart" dj-hook-value-chart='{{ chart_json }}'></canvas>
 <button dj-click="refresh_data">Refresh</button>
 
 <script>
 window.djust.hooks = {
     SalesChart: {
         mounted() {
-            const data = JSON.parse(this.el.dataset.chart);
+            const data = this.values.chart;
             this.chart = new Chart(this.el, {
                 type: 'bar',
                 data: {
@@ -419,7 +466,7 @@ window.djust.hooks = {
             });
         },
         updated() {
-            const data = JSON.parse(this.el.dataset.chart);
+            const data = this.values.chart;
             this.chart.data.labels = data.labels;
             this.chart.data.datasets[0].data = data.values;
             this.chart.update();
@@ -440,7 +487,7 @@ window.djust.hooks = {
     <div class="item">{{ item.name }}</div>
     {% endfor %}
 </div>
-<div dj-hook="InfiniteScroll" data-page="{{ page }}"></div>
+<div dj-hook="InfiniteScroll" dj-hook-value-page="{{ page }}"></div>
 
 <script>
 window.djust.hooks = {
@@ -448,7 +495,9 @@ window.djust.hooks = {
         mounted() {
             this.observer = new IntersectionObserver((entries) => {
                 if (entries[0].isIntersecting) {
-                    const page = parseInt(this.el.dataset.page) + 1;
+                    // this.values.page is already a Number (JSON-coerced) —
+                    // no parseInt needed.
+                    const page = this.values.page + 1;
                     this.pushEvent('load_more', { page });
                 }
             });
@@ -469,7 +518,7 @@ window.djust.hooks = {
 
 - **Always clean up in `destroyed()`**: Destroy library instances, disconnect observers, remove global listeners, clear timers.
 - **Do not create new instances in `updated()`**: Only refresh existing ones. Creating new instances on every re-render causes memory leaks.
-- **Pass data via `data-*` attributes**: Use JSON in data attributes for complex data. Parse in the hook.
+- **Pass data via `dj-hook-value-*` attributes**: use `this.values` for JSON-typed data (arrays, objects, numbers, booleans) — no manual `JSON.parse`. Reserve plain `data-*` / `this.el.dataset` for [pre-1.1 hooks](#pre-11-hooks-dataset-attributes) you haven't migrated yet.
 - **Use `pushEvent` / `handleEvent`** for server communication, not direct WebSocket calls.
 - **Register hooks before mount**: Place hook definitions in `<head>` or before the djust client script. Hooks registered late are picked up on the next DOM patch.
 
@@ -482,11 +531,11 @@ Write hook JavaScript inline with the template that uses it, instead of in a sep
 
 {% colocated_hook "Chart" %}
     hook.mounted = function() {
-        const data = JSON.parse(this.el.dataset.values);
+        const data = this.values.data;
         this.chart = new Chart(this.el, { type: 'line', data });
     };
     hook.updated = function() {
-        this.chart.data = JSON.parse(this.el.dataset.values);
+        this.chart.data = this.values.data;
         this.chart.update();
     };
     hook.destroyed = function() {
@@ -494,7 +543,7 @@ Write hook JavaScript inline with the template that uses it, instead of in a sep
     };
 {% endcolocated_hook %}
 
-<canvas dj-hook="Chart" data-values='{{ chart_data_json }}'></canvas>
+<canvas dj-hook="Chart" dj-hook-value-data='{{ chart_data_json }}'></canvas>
 ```
 
 **Convention**: your body assigns callbacks to a local `hook` object. The client wraps the body in an IIFE factory (`(function() { const hook = {}; <body>; return hook; })()`) and stores the result under `data-hook`.
