@@ -21,6 +21,27 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 ## v1.1.0-11 — hygiene drain: test-infra trust + build churn + docs + replay viewer (drain bucket → ships in 1.1.0)
 
+**COMPLETE 6/6 (2026-07-14)** ✅ — #2054 (PR #2076), #2070 (PR #2077), #2053
+(PR #2078), #2055 (PR #2079), #2072 (PR #2080), and #1562 (PR #2083) all
+merged, main CI green after each. Headlines: **#2053** finally retired the
+recurring release-gate ghost — the `test_regroup_tag.py` xdist pollution was
+NOT the briefed registry-precedence lead but two test fixtures re-registering
+`regroup` (an assign-only tag) into the plain registry that `parser.rs` checks
+first; the structural cure (#1646) hardens `reregister_builtins()` to actively
+unregister from the wrong registry, so it heals any polluter (existing or
+future). **#2072** unmasked the other proven-deterministic "flake": uv's
+python-build-standalone cannot be embedded as `PYO3_PYTHON`
+(`init_fs_encoding`, baked `sys.prefix='/install'`), fixed with an
+`embeddable-python.sh` resolver that shares one detection heuristic with
+doctor.sh (#1646). **#1562** (bug-capture iter B replay viewer + Share button)
+shipped with an independent worktree-isolated adversarial security review
+(#1825): all 5 XSS/gate probes pass empirically and a gate-off (#1468) proved
+the Django-autoescape + empty-sandbox iframe is load-bearing, not incidental.
+GitHub Actions PR check suites RECOVERED at the start of this drain (they were
+dark through v1.1.0-10), so every PR was gated on CI-green-before-merge.
+Scope-disciplined follow-ups filed: #2081 (dj_transition real-rAF flake, #1830
+class), #2082 (Makefile targets share the same `PYO3_PYTHON` pattern).
+
 Open-issue drain (2026-07-14) sweeping the accumulated side-findings of the
 v1.1.0-10 arc plus the long-deferred bug-capture iter B. Theme: restoring
 trust in local gates (the two proven-deterministic "flakes"), killing PR-diff
