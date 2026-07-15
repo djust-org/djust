@@ -8,10 +8,28 @@
 #   client.min.js   — terser-minified; default served in production
 #   client.min.js.gz  — gzip-precompressed sibling (whitenoise picks automatically)
 #   client.min.js.br  — brotli-precompressed sibling (when `brotli` command available)
+#   client.min.js.map — terser source map (dev aid; DevTools only)
 #
 # Same layout for debug-panel.js. Minification is skipped gracefully if
 # terser isn't installed, so contributors can still iterate on the raw
 # source modules without an npm install.
+#
+# #2054: client.js / client.min.js (and their debug-panel.js equivalents) are
+# committed to git — terser is npm-pinned via package-lock.json, so their
+# output is byte-identical across every contributor's machine. The .gz / .br
+# / .map siblings are gitignored, build-time-only artifacts: they are NOT
+# committed. gzip/brotli are unpinned system CLI tools, so their compressed
+# output can differ byte-for-byte across contributor toolchains even when the
+# input (.min.js) is unchanged — every regeneration by any contributor showed
+# up as diff noise on every JS-touching PR. .map files have a second, worse
+# problem: terser's `sources` field embeds the absolute filesystem path of
+# the checkout, which is guaranteed to differ across every clone/worktree.
+# Downstream apps that serve static files via WhiteNoise's
+# `CompressedManifestStaticFilesStorage` (djust's own documented pattern —
+# see djust.org/marketing_project/settings.py) regenerate their own .gz/.br
+# at `collectstatic` time regardless, so nothing at runtime relies on these
+# files being pre-built or committed. Still generated here (uncommitted) so
+# local dev / `make start` / whitenoise-in-dev-mode has them on disk.
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"

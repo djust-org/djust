@@ -361,17 +361,41 @@ def reregister_builtins() -> None:
     ``_registered_handlers`` to its correct registry, mirroring the
     theme/component ``register_with_rust_engine`` restore path (#1928).
     No-op without the Rust extension.
+
+    Also strips each handler from the OTHER (wrong) registry (#2053). The
+    Rust parser decides a tag's node type at PARSE time by checking the
+    plain-tag registry BEFORE the assign-tag registry
+    (``parser.rs`` — ``handler_exists`` before ``assign_handler_exists``),
+    so a stray plain-registry entry for an assign-only built-in (e.g.
+    ``regroup``) always wins, even after this function re-asserts the
+    CORRECT assign registration — merely adding the right entry is not
+    enough to heal the pollution. This happens for real: some test
+    fixtures (``tests/unit/test_tag_registry.py``,
+    ``tests/benchmarks/test_tag_registry.py``) blindly re-register every
+    built-in via ``register_tag_handler`` without checking
+    ``isinstance(handler, AssignTagHandler)``, planting ``regroup`` in the
+    plain registry for the rest of the xdist worker — the #2053 class.
+    Actively unregistering from the wrong registry here makes this
+    function a complete cure regardless of which polluter (existing or
+    future) caused the cross-registry drift.
     """
     try:
-        from djust._rust import register_assign_tag_handler, register_tag_handler
+        from djust._rust import (
+            register_assign_tag_handler,
+            register_tag_handler,
+            unregister_assign_tag_handler,
+            unregister_tag_handler,
+        )
     except ImportError:
         return
     for name, handler in list(_registered_handlers.items()):
         try:
             if isinstance(handler, AssignTagHandler):
                 register_assign_tag_handler(name, handler)
+                unregister_tag_handler(name)
             else:
                 register_tag_handler(name, handler)
+                unregister_assign_tag_handler(name)
         except Exception as e:  # noqa: BLE001 — restore must never break a test
             logger.debug("Could not re-register built-in tag handler '%s': %s", name, e)
 

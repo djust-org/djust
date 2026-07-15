@@ -16,11 +16,19 @@ explicitly NOT required — a CI/dev box may legitimately WARN (no
 ``node_modules/`` yet, a venv shared with a different checkout, etc.), and a
 FAIL is possible too (e.g. a genuine local rustc/LLVM toolchain mismatch).
 Instead we assert: the script always runs to completion, every check name
-appears in the output, and two small env-var test hooks built into the
-script (``DOCTOR_FAKE_STALE_SO`` / ``DOCTOR_FAKE_PTH_BAD``) deterministically
-force a FAIL + remedy line — with a gate-off sibling proving those FAIL
-markers do NOT appear unprompted, so the assertions are non-tautological
-(#1468/#1200).
+appears in the output, and three small env-var test hooks built into the
+script (``DOCTOR_FAKE_STALE_SO`` / ``DOCTOR_FAKE_PTH_BAD`` / a FAIL each;
+``DOCTOR_FAKE_UV_BASE`` / a WARN) deterministically force a verdict + remedy
+line — with a gate-off sibling proving those forced markers do NOT appear
+unprompted, so the assertions are non-tautological (#1468/#1200).
+
+``DOCTOR_FAKE_UV_BASE`` covers #2072: the pre-push cargo-test hook used to
+export ``PYO3_PYTHON`` as the project venv's interpreter, which
+deterministically breaks embedded-PyO3 test binaries when the venv's base
+interpreter is uv's python-build-standalone (``init_fs_encoding`` /
+``sys.prefix='/install'``). ``scripts/embeddable-python.sh`` now resolves a
+safe interpreter instead; the embedded-pyo3 check below detects a
+uv-standalone venv and WARNs with the resolved alternative.
 """
 
 from __future__ import annotations
@@ -225,6 +233,68 @@ def test_pth_force_fail_is_detected() -> None:
             f"forcing djust.pth to FAIL must not stop other checks from "
             f"running; missing {name!r}:\n{result.stdout}"
         )
+
+
+def test_uv_base_gate_off_no_forced_marker_by_default() -> None:
+    """Gate-off half for the #2072 uv-standalone-base detection hook
+    (``DOCTOR_FAKE_UV_BASE``, #1468/#1200): WITHOUT the env override, the
+    embedded-pyo3 line must never contain the test-hook's own marker text.
+    (The REAL, non-forced detection may still legitimately WARN about a
+    genuine uv-standalone venv on this machine — that's a different message
+    that doesn't name the env var — so this only excludes the forced-hook
+    marker string, not "uv-standalone"/"#2072" generally.)"""
+    result = _run_doctor()
+    embedded_line = next(
+        (
+            line
+            for line in result.stdout.splitlines()
+            if "embedded-pyo3" in line and line.startswith("[")
+        ),
+        None,
+    )
+    assert embedded_line is not None, f"no embedded-pyo3 status line found:\n{result.stdout}"
+    assert "DOCTOR_FAKE_UV_BASE" not in embedded_line, (
+        "embedded-pyo3 check reported the forced uv-base marker WITHOUT the "
+        f"env override set — tautological check: {embedded_line!r}"
+    )
+
+
+def test_uv_base_force_warn_is_detected() -> None:
+    """Forced-WARN half: with DOCTOR_FAKE_UV_BASE=1, the embedded-pyo3 check
+    WARNs (not FAILs — detection is informational, not itself an error) with
+    the #2072 explanation + remedy, and every other check still runs to
+    completion."""
+    result = _run_doctor({"DOCTOR_FAKE_UV_BASE": "1"})
+
+    assert re.search(
+        r"^\[WARN\] embedded-pyo3: .*DOCTOR_FAKE_UV_BASE", result.stdout, re.MULTILINE
+    ), f"expected a [WARN] embedded-pyo3 line naming the test hook:\n{result.stdout}"
+    assert "#2072" in result.stdout
+    assert "embeddable-python.sh" in result.stdout, (
+        f"expected the scripts/embeddable-python.sh remedy in output:\n{result.stdout}"
+    )
+    # Every OTHER check still ran (the script does not `set -e` / bail early).
+    for name in CHECK_NAMES:
+        assert _status_line_pattern(name).search(result.stdout), (
+            f"forcing embedded-pyo3's uv-base detection to WARN must not stop "
+            f"other checks from running; missing {name!r}:\n{result.stdout}"
+        )
+    # A forced WARN never fails the overall exit code by itself — assert the
+    # summary counts still add up to exactly one verdict per check name
+    # (proves the forced branch short-circuits to a SINGLE warn() call
+    # rather than stacking on top of the normal cargo-test verdict).
+    summary_match = re.search(
+        r"^djust doctor summary: (\d+) ok, (\d+) warn, (\d+) fail\s*$",
+        result.stdout,
+        re.MULTILINE,
+    )
+    assert summary_match, f"missing summary line in output:\n{result.stdout}"
+    ok_n, warn_n, fail_n = (int(x) for x in summary_match.groups())
+    assert ok_n + warn_n + fail_n == len(CHECK_NAMES), (
+        f"summary counts ({ok_n}+{warn_n}+{fail_n}) don't add up to {len(CHECK_NAMES)} "
+        "checks — DOCTOR_FAKE_UV_BASE must short-circuit with a SINGLE verdict "
+        "call, not add an extra one on top of the real cargo-test verdict"
+    )
 
 
 def test_every_check_name_has_a_dedicated_check_function() -> None:

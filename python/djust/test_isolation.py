@@ -79,6 +79,13 @@ Globals reset (and why):
   process). A ``clear_tag_handlers()`` / ``clear_assign_tag_handlers()``
   polluter wipes them for the rest of the worker; re-asserting them via
   ``reregister_builtins()`` restores them before each test.
+  ``reregister_builtins()`` also strips each built-in from the OTHER
+  (wrong) registry (#2053): a polluter that blindly re-registers every
+  built-in via ``register_tag_handler`` without checking
+  ``isinstance(handler, AssignTagHandler)`` plants an assign-only
+  built-in (``regroup``) in the plain registry, which wins at parse time
+  regardless of the assign registry being correct — merely re-asserting
+  the correct registration does not heal that.
 
 Explicitly NOT reset (would be too aggressive / not a leak):
 

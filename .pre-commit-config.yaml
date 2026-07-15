@@ -230,7 +230,12 @@ repos:
       # Rust tests
       - id: cargo-test
         name: cargo test
-        entry: bash -c 'PYO3_PYTHON="$(bash scripts/run-with-venv-python.sh --print)" cargo test --workspace --exclude djust_live --release -q'
+        # PYO3_PYTHON must resolve to an EMBEDDABLE interpreter, not just any
+        # project-venv python: when the venv's base interpreter is uv's
+        # python-build-standalone, embedded-PyO3 test binaries deterministically
+        # fail bootstrap (`init_fs_encoding`, baked `sys.prefix='/install'`).
+        # scripts/embeddable-python.sh resolves a safe interpreter (closes #2072).
+        entry: bash -c 'PYO3_PYTHON="$(bash scripts/embeddable-python.sh)" cargo test --workspace --exclude djust_live --release -q'
         language: system
         types: [rust]
         pass_filenames: false

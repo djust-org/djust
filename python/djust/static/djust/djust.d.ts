@@ -11,15 +11,22 @@
  *   - Streaming API types
  *   - File upload progress event types
  *
+ * This file ships inside the djust wheel — its version always matches
+ * your installed djust package, so there's no separate version to track
+ * here.
+ *
+ * Locate the shipped file with:
+ *
+ *   python -c "import djust, pathlib; print(pathlib.Path(djust.__file__).parent / 'static/djust/djust.d.ts')"
+ *
  * Usage — reference in your TypeScript project:
  *
  *   /// <reference path="path/to/djust.d.ts" />
  *
- * Or add to tsconfig.json:
+ * Or add to tsconfig.json / jsconfig.json:
  *
- *   { "files": ["node_modules/djust/static/djust/djust.d.ts"] }
+ *   { "include": ["path/to/djust.d.ts"] }
  *
- * @version 0.3.4
  * @see https://djust.org
  */
 

@@ -51,11 +51,25 @@ def test_minified_client_js_exists_after_build():
 
 
 def test_gzip_sibling_exists_after_build():
-    """``make build-js`` emits a ``.gz`` pre-compressed sibling for whitenoise."""
+    """``make build-js`` emits a ``.gz`` pre-compressed sibling for whitenoise.
+
+    The ``.gz``/``.br``/``.map`` siblings are gitignored, build-time-only
+    artifacts (#2054) — not committed, because their bytes depend on the
+    local machine's gzip/brotli library version even when the source
+    ``client.min.js`` is byte-identical. A bare checkout (or a CI job that
+    doesn't run ``scripts/build-client.sh``) legitimately won't have them on
+    disk, so this test skips rather than fails in that case; it still
+    validates the compression ratio whenever the artifact IS present (e.g.
+    after a local ``make build-js``).
+    """
     gz = STATIC_DIR / "client.min.js.gz"
     if not (STATIC_DIR / "client.min.js").exists():
         pytest.skip("client.min.js missing — skipping gzip sibling check")
-    assert gz.exists(), f"gzip sibling missing: {gz} — run 'make build-js'"
+    if not gz.exists():
+        pytest.skip(
+            f"{gz} missing — gitignored build-time artifact (#2054); "
+            "run 'make build-js' to generate it locally"
+        )
     minified_size = (STATIC_DIR / "client.min.js").stat().st_size
     gz_size = gz.stat().st_size
     # Gzip of already-minified JS should be ~30-40% of the minified size.

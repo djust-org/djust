@@ -1,7 +1,11 @@
 """djust system checks — security checks (S0xx).
 
-Mostly AST-based (S001-S009); S011 is a template-source scan (inline-script /
-CSP). Split from the former monolithic ``checks.py`` (#1822).
+Mostly AST-based (S001-S003, S008, S009, S012); S011 is a template-source
+scan (inline-script / CSP). Split from the former monolithic ``checks.py``
+(#1822). Note: S012 was reallocated from a duplicate S004 (#2070) --
+configuration.py's "DEBUG=True with non-localhost ALLOWED_HOSTS" check kept
+S004; this module's "LiveView gates auth via dispatch()" check moved to
+S012.
 """
 
 import ast
@@ -140,17 +144,21 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                             )
                         )
 
-            # S004 -- LiveView subclass whose authorization is applied via
-            # @method_decorator(<auth>, name="dispatch"). The WS/SSE mount
-            # path authorizes through check_view_auth (not dispatch()), so a
-            # decorated dispatch is enforced on the HTTP GET but NOT over
-            # WebSocket. (Django auth MIXINS are auto-honored by
-            # check_view_auth; only the decorated/overridden-dispatch pattern
-            # is un-portable and flagged here.) See finding #14.
+            # S012 (#2070 -- reallocated from a duplicate djust.S004; this
+            # check originally shipped as S004 in PR #154/finding #14, which
+            # collided with configuration.py's pre-existing "DEBUG=True with
+            # non-localhost ALLOWED_HOSTS" S004) -- LiveView subclass whose
+            # authorization is applied via @method_decorator(<auth>,
+            # name="dispatch"). The WS/SSE mount path authorizes through
+            # check_view_auth (not dispatch()), so a decorated dispatch is
+            # enforced on the HTTP GET but NOT over WebSocket. (Django auth
+            # MIXINS are auto-honored by check_view_auth; only the
+            # decorated/overridden-dispatch pattern is un-portable and
+            # flagged here.) See finding #14.
             if isinstance(node, ast.ClassDef) and _is_liveview_subclass(node):
                 for deco in node.decorator_list:
                     if _is_dispatch_auth_method_decorator(deco) and not _has_noqa(
-                        source_lines, deco.lineno, "S004"
+                        source_lines, deco.lineno, "S012"
                     ):
                         errors.append(
                             DjustError(
@@ -168,7 +176,7 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                                     "auto-honored). A decorated dispatch() is "
                                     "HTTP-only."
                                 ),
-                                id="djust.S004",
+                                id="djust.S012",
                                 fix_hint=(
                                     "On `%s` (line %d in `%s`), replace the "
                                     "@method_decorator(..., name='dispatch') with "
@@ -189,7 +197,7 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 # so such auth is HTTP-only too.
                 auth_dispatch = _liveview_auth_dispatch_method(node)
                 if auth_dispatch is not None and not _has_noqa(
-                    source_lines, auth_dispatch.lineno, "S004"
+                    source_lines, auth_dispatch.lineno, "S012"
                 ):
                     errors.append(
                         DjustError(
@@ -205,7 +213,7 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                                 "/ UserPassesTestMixin, auto-honored). Auth inside an "
                                 "overridden dispatch() is HTTP-only."
                             ),
-                            id="djust.S004",
+                            id="djust.S012",
                             fix_hint=(
                                 "On `%s` (line %d in `%s`), move the dispatch() auth "
                                 "into `login_required` / `permission_required` / a "
@@ -447,7 +455,8 @@ def _is_liveview_subclass(node: "ast.ClassDef") -> bool:
     AST can't resolve cross-module inheritance, so this matches on the base
     name (``LiveView`` or a ``X.LiveView`` attribute). Sufficient for the
     common ``class FooView(LiveView)`` / ``class FooView(SomeMixin, LiveView)``
-    shapes the S004 warning targets.
+    shapes the S012 warning targets (reallocated from a duplicate S004,
+    #2070).
     """
     for base in node.bases:
         name = None

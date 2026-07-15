@@ -36,6 +36,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S007 | Security | Warning | `client_name\|safe` renders an unsanitised upload filename (stored XSS) |
 | S009 | Security | Warning | View-auth'd LiveView exposes a public `@event_handler` with no per-handler gate |
 | S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
+| S012 | Security | Error | LiveView gates auth via `@method_decorator(..., name="dispatch")` or an overridden `dispatch()` — not enforced over WebSocket (#14; reallocated from a duplicate S004, #2070) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | LiveView template missing dj-root |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -306,6 +307,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: `DEBUG=True` and `ALLOWED_HOSTS` contains entries other than `localhost` / `127.0.0.1`
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.S004"]`
 - **False positives**: Local dev environments using custom hostnames (e.g. `myapp.local`)
+- **Note (#2070)**: Before this fix, `S004` was ALSO used by a second,
+  unrelated check ("LiveView gates auth via dispatch()", see `S012`
+  below) — suppressing `djust.S004` silently suppressed both. That check
+  has been reallocated to `djust.S012`; `S004` now refers exclusively to
+  this DEBUG/ALLOWED_HOSTS check.
 
 ### S005 — LiveView exposes state without authentication
 - **Severity**: Warning
@@ -378,6 +384,42 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 > **Note**: `S010` (rate-limit-presence) is intentionally not shipped as a
 > default-on check — it is advisory/opt-in only (high false-positive risk).
+
+### S012 — LiveView gates auth via dispatch() (reallocated from S004, #2070)
+- **Severity**: Error
+- **Method**: AST (LiveView class + decorator/method walk)
+- **What it detects**: A LiveView subclass whose authorization is applied via
+  `@method_decorator(<auth>, name="dispatch")`, or via an overridden
+  `dispatch()` method that performs auth itself (e.g.
+  `if not request.user.is_authenticated: raise PermissionDenied()`). The
+  WS/SSE mount path authorizes through `check_view_auth` and never calls
+  `dispatch()`, so either pattern is enforced on the initial HTTP GET but
+  silently bypassed over WebSocket (finding #14). Django auth **mixins**
+  (`LoginRequiredMixin` / `PermissionRequiredMixin` / `UserPassesTestMixin`)
+  are auto-honored by `check_view_auth` and do NOT trigger this check —
+  only the decorated/overridden-`dispatch` forms are un-portable.
+- **Fix**: Replace the `@method_decorator(..., name="dispatch")` (or the
+  dispatch()-level auth) with djust's `login_required = True` /
+  `permission_required = ...` class attributes, a `check_permissions(self,
+  request)` method (honored on every transport), or subclass a Django auth
+  mixin.
+- **Suppression**: `# noqa: S012` on the decorator or the `def dispatch`
+  line (this check, like `S001`-`S003` in the same module, is AST/inline-noqa
+  only — it does not consult `DJUST_CONFIG['suppress_checks']`), or
+  `SILENCED_SYSTEM_CHECKS = ["djust.S012"]` in settings (honored by
+  `python manage.py check`; note `python manage.py djust_check` does not
+  currently filter on Django's `is_silenced()`).
+- **False positives**: A plain Django `View` (not a `LiveView` subclass)
+  with a decorated `dispatch()` is correct HTTP-only usage and is not
+  flagged; a `dispatch()` override that does no auth work is not flagged.
+- **Migration note**: This check was originally shipped as `djust.S004`
+  (PR #154, finding #14) and collided with the pre-existing `djust.S004`
+  ("DEBUG=True with non-localhost ALLOWED_HOSTS", configuration.py) —
+  suppressing one silently suppressed both. #2070 reallocated this check to
+  `S012`; `S004` now refers ONLY to the DEBUG/ALLOWED_HOSTS check. If you
+  suppressed `djust.S004` (via `# noqa: S004` or `SILENCED_SYSTEM_CHECKS`)
+  specifically to silence the dispatch-auth warning, update the suppression
+  to `djust.S012`.
 
 ---
 
