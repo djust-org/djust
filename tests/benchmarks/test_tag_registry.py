@@ -193,14 +193,20 @@ class TestRustPythonInterop:
 
     @pytest.fixture(autouse=True)
     def restore_registry(self):
-        """Restore built-in handlers after each test to prevent test pollution."""
+        """Restore built-in handlers after each test to prevent test pollution.
+
+        Delegates to ``djust.template_tags.reregister_builtins()`` rather
+        than looping over ``_registered_handlers`` and calling
+        ``register_tag_handler`` directly — that hand-rolled version
+        mis-registered assign-tag built-ins (``regroup``) into the plain
+        ``TAG_HANDLERS`` registry, the parallel-path twin of the same bug
+        fixed in ``tests/unit/test_tag_registry.py`` (#2053, #1646-class).
+        """
         yield
         try:
-            from djust._rust import register_tag_handler
-            from djust.template_tags import _registered_handlers
+            from djust.template_tags import reregister_builtins
 
-            for name, handler in _registered_handlers.items():
-                register_tag_handler(name, handler)
+            reregister_builtins()
         except ImportError:
             pass  # Rust extension not available; nothing to restore
 
