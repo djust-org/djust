@@ -59,6 +59,18 @@ node_modules/
 coverage/
 .vitest/
 
+# Pre-compressed client bundle siblings + source maps (#2054): build-time-only
+# artifacts produced by scripts/build-client.sh. NOT committed — their bytes
+# depend on the local machine's gzip/brotli library version (cross-contributor
+# drift on a byte-identical client.min.js/debug-panel.min.js), and .map files
+# additionally embed the absolute filesystem path of the checkout in the
+# `sources` field (guaranteed to differ across every clone/worktree).
+# client.min.js / debug-panel.min.js themselves stay committed — terser is
+# npm-pinned via package-lock.json, so THEIR output is deterministic.
+python/djust/static/djust/*.min.js.gz
+python/djust/static/djust/*.min.js.br
+python/djust/static/djust/*.min.js.map
+
 # Build artifacts
 marketing-site/
 .serena/
