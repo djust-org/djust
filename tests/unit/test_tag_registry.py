@@ -21,6 +21,21 @@ and after every test, then re-registers the built-ins from the
 Python ``_registered_handlers`` snapshot. This makes the file
 self-contained: no test in this module can leak any handler into
 the rest of the suite.
+
+Restore correctness (#2053)
+----------------------------
+The restore used to loop over ``_registered_handlers`` and blindly call
+``register_tag_handler`` for every built-in — including ``regroup``,
+which is an *assign*-tag handler. That planted ``regroup`` in the plain
+``TAG_HANDLERS`` registry; since the Rust parser checks that registry
+BEFORE the assign registry (``parser.rs`` — ``handler_exists`` before
+``assign_handler_exists``), the stray entry silently won for the rest of
+the xdist worker, breaking every downstream ``{% regroup %}`` test
+(``python/djust/tests/test_regroup_tag.py``) with "Handler 'regroup'
+render() must return a string" — even though ``has_assign_tag_handler``
+still reported it correctly registered. The restore now delegates to
+``djust.template_tags.reregister_builtins()``, which routes each
+built-in to its correct registry AND strips it from the other one.
 """
 
 import pytest
@@ -43,9 +58,8 @@ def _isolate_tag_registries():
             clear_tag_handlers,
             clear_block_tag_handlers,
             clear_assign_tag_handlers,
-            register_tag_handler,
         )
-        from djust.template_tags import _registered_handlers
+        from djust.template_tags import reregister_builtins
         from djust.theming.rust_handlers import (
             register_with_rust_engine as _register_theme_tags,
         )
@@ -60,8 +74,14 @@ def _isolate_tag_registries():
         clear_tag_handlers()
         clear_block_tag_handlers()
         clear_assign_tag_handlers()
-        for name, handler in _registered_handlers.items():
-            register_tag_handler(name, handler)
+        # Restores each djust.template_tags built-in (url, static, regroup,
+        # …) to its CORRECT registry — assign-tag handlers via
+        # register_assign_tag_handler, plain handlers via
+        # register_tag_handler — and strips any stale cross-registry entry
+        # (#2053). Do not reimplement this loop inline; a hand-rolled
+        # version that skips the AssignTagHandler check silently
+        # mis-registers regroup (see module docstring).
+        reregister_builtins()
         # #1771: theme + component tag handlers register at AppConfig.ready()
         # (DjustThemingConfig / DjustComponentsConfig), NOT via
         # _registered_handlers. Without re-registering them here, the

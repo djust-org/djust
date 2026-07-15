@@ -17,6 +17,7 @@ grouper, and the ``[{grouper, list}, ...]`` shape.
 from __future__ import annotations
 
 import django
+import pytest
 from django.conf import settings
 
 if not settings.configured:
@@ -48,6 +49,34 @@ TEMPLATE = (
     "{{ group.grouper }}[{% for city in group.list %}{{ city.name }},{% endfor %}]"
     "{% endfor %}"
 )
+
+
+@pytest.fixture(autouse=True)
+def _ensure_regroup_handler_registered():
+    """Self-heal the built-in assign-tag handlers before every test (#2053).
+
+    ``python/djust/tests/conftest.py``'s autouse ``reset_djust_globals``
+    fixture already re-asserts the built-ins before each test in this
+    directory, so this is belt-and-suspenders: a sibling test ANYWHERE
+    in the same xdist worker that blindly re-registers every built-in
+    handler via ``register_tag_handler`` (the plain, non-assign registry)
+    — without checking ``isinstance(handler, AssignTagHandler)`` — plants
+    ``regroup`` in the WRONG Rust registry. Because the parser decides a
+    tag's node type at PARSE time by checking the plain registry BEFORE
+    the assign registry (``parser.rs`` — ``handler_exists`` before
+    ``assign_handler_exists``), the stray entry wins even though
+    ``has_assign_tag_handler("regroup")`` still (correctly) reports it
+    registered — every ``render_template()`` call in this file then fails
+    with "Handler 'regroup' render() must return a string". Calling
+    ``reregister_builtins()`` (idempotent) re-asserts the correct
+    registration AND strips any such cross-registry pollution, so this
+    file is self-contained regardless of what ran before it in the
+    worker.
+    """
+    from djust.template_tags import reregister_builtins
+
+    reregister_builtins()
+    yield
 
 
 # ---------------------------------------------------------------------------
