@@ -135,7 +135,8 @@ def test_admin_views_declare_ws_honored_auth():
         )
 
 
-# --- S004 system check: flag the un-honorable decorated-dispatch pattern (#14) ---
+# --- S012 system check: flag the un-honorable decorated-dispatch pattern (#14) ---
+# (reallocated from a duplicate djust.S004, #2070 -- see docs/system-checks.md)
 
 import ast  # noqa: E402
 
@@ -150,7 +151,7 @@ def _classdef(src):
     return ast.parse(src).body[0]
 
 
-def test_s004_flags_decorated_dispatch_on_liveview():
+def test_s012_flags_decorated_dispatch_on_liveview():
     """The exact un-portable pattern must be detected (empirical canary)."""
     cls = _classdef(
         "@method_decorator(login_required, name='dispatch')\n"
@@ -160,7 +161,7 @@ def test_s004_flags_decorated_dispatch_on_liveview():
     assert any(_is_dispatch_auth_method_decorator(d) for d in cls.decorator_list)
 
 
-def test_s004_flags_permission_required_call_form():
+def test_s012_flags_permission_required_call_form():
     cls = _classdef(
         "@method_decorator(permission_required('app.view'), name='dispatch')\n"
         "class V(SomeMixin, LiveView):\n    pass\n"
@@ -169,17 +170,17 @@ def test_s004_flags_permission_required_call_form():
     assert any(_is_dispatch_auth_method_decorator(d) for d in cls.decorator_list)
 
 
-def test_s004_ignores_plain_liveview():
+def test_s012_ignores_plain_liveview():
     cls = _classdef("class PublicView(LiveView):\n    pass\n")
     assert not any(_is_dispatch_auth_method_decorator(d) for d in cls.decorator_list)
 
 
-def test_s004_ignores_decorator_not_targeting_dispatch():
+def test_s012_ignores_decorator_not_targeting_dispatch():
     cls = _classdef("@method_decorator(login_required, name='get')\nclass V(LiveView):\n    pass\n")
     assert not any(_is_dispatch_auth_method_decorator(d) for d in cls.decorator_list)
 
 
-def test_s004_ignores_non_liveview_with_decorated_dispatch():
+def test_s012_ignores_non_liveview_with_decorated_dispatch():
     """A plain Django View with decorated dispatch is correct — must not flag."""
     cls = _classdef(
         "@method_decorator(login_required, name='dispatch')\nclass V(View):\n    pass\n"
@@ -187,7 +188,7 @@ def test_s004_ignores_non_liveview_with_decorated_dispatch():
     assert not _is_liveview_subclass(cls)
 
 
-def test_s004_flags_overridden_dispatch_with_auth():
+def test_s012_flags_overridden_dispatch_with_auth():
     """An overridden dispatch() doing auth is HTTP-only — must be flagged."""
     cls = _classdef(
         "class V(LiveView):\n"
@@ -199,7 +200,7 @@ def test_s004_flags_overridden_dispatch_with_auth():
     assert _liveview_auth_dispatch_method(cls) is not None
 
 
-def test_s004_ignores_benign_overridden_dispatch():
+def test_s012_ignores_benign_overridden_dispatch():
     """A dispatch() override that does NO auth must not be flagged."""
     cls = _classdef(
         "class V(LiveView):\n"
