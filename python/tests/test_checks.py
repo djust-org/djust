@@ -549,6 +549,122 @@ class TestS004DebugAllowedHosts:
         assert len(s004) == 0
 
 
+class TestS012LiveViewDispatchAuth:
+    """S012 -- LiveView gates auth via dispatch() (#2070: reallocated from a
+    duplicate djust.S004; this check used to collide with
+    TestS004DebugAllowedHosts's check under the same ID, so suppressing one
+    silently suppressed the other). The check itself is unchanged from its
+    original S004 behavior -- only the ID moved."""
+
+    def _scan(self, tmp_path, source):
+        py_file = tmp_path / "views.py"
+        py_file.write_text(textwrap.dedent(source))
+        from djust.checks import check_security
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            errors = check_security(None)
+        return errors
+
+    def test_s012_flags_decorated_dispatch(self, tmp_path):
+        """CANARY: @method_decorator(login_required, name='dispatch') on a
+        LiveView must fire under the NEW id djust.S012, not the old S004."""
+        errors = self._scan(
+            tmp_path,
+            """\
+            from django.contrib.auth.decorators import login_required
+            from django.utils.decorators import method_decorator
+            from djust import LiveView
+
+            @method_decorator(login_required, name="dispatch")
+            class SecretView(LiveView):
+                template_name = "secret.html"
+            """,
+        )
+        s012 = [e for e in errors if e.id == "djust.S012"]
+        assert len(s012) == 1, "S012 should fire: %r" % errors
+        assert "SecretView" in s012[0].msg
+        assert "dispatch" in s012[0].msg
+        # The old id must NEVER be emitted by this check post-reallocation.
+        assert not any(e.id == "djust.S004" for e in errors), (
+            "the dispatch-auth check must no longer emit djust.S004: %r" % errors
+        )
+
+    def test_s012_flags_overridden_dispatch_with_auth(self, tmp_path):
+        errors = self._scan(
+            tmp_path,
+            """\
+            from django.core.exceptions import PermissionDenied
+            from djust import LiveView
+
+            class SecretView(LiveView):
+                template_name = "secret.html"
+
+                def dispatch(self, request, *args, **kwargs):
+                    if not request.user.is_authenticated:
+                        raise PermissionDenied()
+                    return super().dispatch(request, *args, **kwargs)
+            """,
+        )
+        s012 = [e for e in errors if e.id == "djust.S012"]
+        assert len(s012) == 1, (
+            "S012 should fire for an auth-performing dispatch() override: %r" % errors
+        )
+
+    def test_s012_ignores_plain_liveview(self, tmp_path):
+        """A LiveView with no dispatch()-based auth must not fire S012."""
+        errors = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+
+            class PublicView(LiveView):
+                template_name = "public.html"
+            """,
+        )
+        assert [e for e in errors if e.id == "djust.S012"] == []
+
+    def test_s012_suppressible_by_new_noqa_only(self, tmp_path):
+        """#1468 gate-off / migration-note proof: this check (like S001-S003
+        in the same module) is only suppressible via inline '# noqa' -- it
+        does not call _is_check_suppressed(), so DJUST_CONFIG suppress_checks
+        does not apply to it (matching the S001/S002/S003 precedent in this
+        file). An inline '# noqa: S004' comment (the OLD, pre-#2070 id) must
+        NOT suppress the reallocated check; '# noqa: S012' (the NEW id) must.
+        This proves the reallocation is a real ID change, not just a label."""
+        old_id_noqa = self._scan(
+            tmp_path,
+            """\
+            from django.contrib.auth.decorators import login_required
+            from django.utils.decorators import method_decorator
+            from djust import LiveView
+
+            @method_decorator(login_required, name="dispatch")  # noqa: S004
+            class SecretView(LiveView):
+                template_name = "secret.html"
+            """,
+        )
+        assert any(e.id == "djust.S012" for e in old_id_noqa), (
+            "an inline '# noqa: S004' (the OLD, pre-#2070 id) must NOT "
+            "suppress the reallocated S012 check: %r" % old_id_noqa
+        )
+
+        new_id_noqa = self._scan(
+            tmp_path,
+            """\
+            from django.contrib.auth.decorators import login_required
+            from django.utils.decorators import method_decorator
+            from djust import LiveView
+
+            @method_decorator(login_required, name="dispatch")  # noqa: S012
+            class SecretView(LiveView):
+                template_name = "secret.html"
+            """,
+        )
+        assert not any(e.id == "djust.S012" for e in new_id_noqa), (
+            "an inline '# noqa: S012' comment must suppress the check: %r" % new_id_noqa
+        )
+
+
 class TestC010TailwindCdnInProduction:
     """C010 -- Tailwind CDN detected in production templates."""
 
