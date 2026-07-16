@@ -72,7 +72,7 @@ function _applyStreamOp(op, streamName) {
             // #2058: streaming HTML ops (LLM chat / live feeds) go through
             // innerHTML — a classic <script> in the streamed HTML is
             // silently dead exactly like #1848. Loud DEBUG-mode warning.
-            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(el);
+            _warnDeadScripts(el);
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
             break;
@@ -80,7 +80,7 @@ function _applyStreamOp(op, streamName) {
         case 'append': {
             const frag = _htmlToFragment(op.html);
             // #2058: scan BEFORE appendChild empties the fragment.
-            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(frag);
+            _warnDeadScripts(frag);
             el.appendChild(frag);
             _autoScroll(el);
             _removeStreamError(el);
@@ -91,7 +91,7 @@ function _applyStreamOp(op, streamName) {
         case 'prepend': {
             const frag = _htmlToFragment(op.html);
             // #2058: scan BEFORE insertBefore empties the fragment.
-            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(frag);
+            _warnDeadScripts(frag);
             el.insertBefore(frag, el.firstChild);
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'prepend', stream: streamName });

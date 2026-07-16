@@ -2359,7 +2359,7 @@ class LiveViewSSE {
                             // _runInsertedScripts() (WS-only fix) — a classic
                             // <script> is silently dead here exactly like
                             // #1848. Loud DEBUG-mode warning.
-                            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(container);
+                            _warnDeadScripts(container);
                         }
                         reinitAfterDOMUpdate();
                         // Set mount ready flag so dj-mounted handlers only fire
@@ -7275,7 +7275,7 @@ function applyInsertSubtree(patch, rootEl = null) {
     // InsertSubtree payload (e.g. a {% if %} block that toggled on) is
     // parsed via <template>.innerHTML (see _parseSubtreeHtml above) and is
     // therefore inert-by-spec exactly like #1848 — loud DEBUG-mode warning.
-    if (typeof _warnDeadScripts === 'function') _warnDeadScripts(fragment);
+    _warnDeadScripts(fragment);
     // Determine insert position: index counted against significant
     // children (matches InsertChild semantics).
     const children = getSignificantChildren(parent);
@@ -9730,7 +9730,7 @@ function _applyStreamOp(op, streamName) {
             // #2058: streaming HTML ops (LLM chat / live feeds) go through
             // innerHTML — a classic <script> in the streamed HTML is
             // silently dead exactly like #1848. Loud DEBUG-mode warning.
-            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(el);
+            _warnDeadScripts(el);
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
             break;
@@ -9738,7 +9738,7 @@ function _applyStreamOp(op, streamName) {
         case 'append': {
             const frag = _htmlToFragment(op.html);
             // #2058: scan BEFORE appendChild empties the fragment.
-            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(frag);
+            _warnDeadScripts(frag);
             el.appendChild(frag);
             _autoScroll(el);
             _removeStreamError(el);
@@ -9749,7 +9749,7 @@ function _applyStreamOp(op, streamName) {
         case 'prepend': {
             const frag = _htmlToFragment(op.html);
             // #2058: scan BEFORE insertBefore empties the fragment.
-            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(frag);
+            _warnDeadScripts(frag);
             el.insertBefore(frag, el.firstChild);
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'prepend', stream: streamName });

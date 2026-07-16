@@ -205,7 +205,7 @@ class LiveViewSSE {
                             // _runInsertedScripts() (WS-only fix) — a classic
                             // <script> is silently dead here exactly like
                             // #1848. Loud DEBUG-mode warning.
-                            if (typeof _warnDeadScripts === 'function') _warnDeadScripts(container);
+                            _warnDeadScripts(container);
                         }
                         reinitAfterDOMUpdate();
                         // Set mount ready flag so dj-mounted handlers only fire
