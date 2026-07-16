@@ -71,8 +71,6 @@ from django.utils.html import escape
 
 from djust.bug_capture import BugCapture
 
-_MISSING = object()
-
 
 def _prod_gate_open() -> bool:
     """Mirror ``djust.bug_capture._enforce_prod_gate()``'s condition.
