@@ -203,10 +203,28 @@ describe('dj-transition', () => {
     });
 
     it('re-runs the sequence when the attribute value changes', async () => {
-        dom = createDom('<div id="t" dj-transition="s a e"></div>');
+        // Controlled rAF: drive frame advancement explicitly instead of
+        // racing jsdom's real ~16ms requestAnimationFrame (#1830 flake
+        // class; mirrors the #1839 pattern used by the sibling case
+        // above — "applies start class synchronously, active/end on
+        // next frame"). MutationObserver attribute-change callbacks are
+        // still real microtasks (jsdom doesn't offer a controllable
+        // stub for them), so we await a single microtask tick after
+        // mutating the attribute — that's enough because the observer's
+        // "notify mutation observers" microtask is queued synchronously
+        // inside `setAttribute`, strictly before our `await
+        // Promise.resolve()` continuation is queued, so FIFO microtask
+        // ordering guarantees it runs first. Nothing here races a
+        // wall-clock timer.
+        dom = createDom('<div id="t" dj-transition="s a e"></div>', {
+            controlledRaf: true,
+        });
         const el = dom.window.document.getElementById('t');
-        // Wait for the listener registration to complete (rAF fired).
-        await waitForClass(el, 'a');
+
+        // Drive the initial mount's phase-2/3 frame (queued by the
+        // DOMContentLoaded init sweep).
+        expect(dom.flushFrame()).toBeGreaterThan(0); // a frame was actually queued
+        expect(el.classList.contains('a')).toBe(true);
 
         // Synchronous dispatch — handler runs inline, classList updates
         // are observable immediately.
@@ -215,9 +233,21 @@ describe('dj-transition', () => {
 
         // Re-trigger by swapping the spec.
         el.setAttribute('dj-transition', 's2 a2 e2');
-        await waitForClass(el, 's2');
+        await Promise.resolve(); // let the MutationObserver callback run
+
+        // Ordering invariant: phase 1 (start) is applied SYNCHRONOUSLY
+        // by the MutationObserver's attribute-change callback
+        // (_installDjTransitionFor → _runTransition → classList.add).
+        // The phase-2/3 transition is queued on our controllable rAF
+        // and has NOT run yet.
         expect(el.classList.contains('s2')).toBe(true);
-        await waitForClass(el, 'a2');
+        expect(el.classList.contains('a2')).toBe(false);
+        expect(el.classList.contains('e2')).toBe(false);
+
+        // Drive exactly one frame: phase-2 + phase-3 land, phase-1 is removed.
+        expect(dom.flushFrame()).toBeGreaterThan(0); // a frame was actually queued
+        expect(el.classList.contains('s2')).toBe(false);
+        expect(el.classList.contains('a2')).toBe(true);
         expect(el.classList.contains('e2')).toBe(true);
     });
 });
