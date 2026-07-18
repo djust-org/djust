@@ -104,3 +104,30 @@ async def test_binary_frame_send_is_guarded_too():
     await consumer._send_frame(bytes_data=b"\x93\x01\x02\x03")
 
     assert base_send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_disconnect_marks_connection_so_late_sends_are_dropped():
+    """``disconnect()`` sets the flag too — parity with the ``close()`` path.
+
+    Both server-side termination paths must mark the connection closed
+    (#1104: N similar sites need N tests). The scenario this guards: a
+    background task (``start_async``) finishes and tries to push a result
+    frame *after* the client disconnected — it must be dropped, not hit the
+    transport. Only the minimal group-cleanup state ``disconnect()`` touches
+    is stubbed; the flag-set is its first statement and is what this pins.
+    """
+    base_send = AsyncMock()
+    consumer = _consumer(base_send)
+    consumer.channel_layer = AsyncMock()
+    consumer.channel_name = "test.channel"
+    consumer._view_group = None
+    consumer._presence_group = None
+    consumer.view_instance = None
+
+    await consumer.disconnect(1006)
+    assert consumer._ws_close_sent is True
+
+    # A late async-result frame must be dropped, not raised on the dead socket.
+    await consumer.send_json({"type": "async_result", "html": "<div></div>"})
+    assert base_send.await_count == 0, "a frame sent after disconnect must be dropped"

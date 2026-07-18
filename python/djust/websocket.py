@@ -1765,6 +1765,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def connect(self) -> None:
         """Handle WebSocket connection"""
+        # Per-connection default: the socket is open until a close()/disconnect()
+        # (or a send-after-close rejection) flips this. _send_frame still reads it
+        # via getattr() so a directly-instantiated consumer (unit tests) is safe
+        # before connect() runs.
+        self._ws_close_sent = False
+
         # CSWSH defense (#653): reject the handshake if the Origin header is
         # not in settings.ALLOWED_HOSTS *before* calling self.accept(). This
         # is defense in depth on top of DjustMiddlewareStack's
