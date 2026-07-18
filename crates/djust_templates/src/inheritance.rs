@@ -9,7 +9,11 @@
 
 use crate::parser::Node;
 use djust_core::{DjangoRustError, Result};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+use std::time::SystemTime;
 
 /// Represents a template in the inheritance chain
 #[derive(Debug, Clone)]
@@ -198,6 +202,33 @@ fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>
 /// This will be implemented by the Python integration layer
 pub trait TemplateLoader {
     fn load_template(&self, name: &str) -> Result<Vec<Node>>;
+
+    /// Like [`load_template`](Self::load_template), but returns a
+    /// reference-counted, immutable slice whose ALLOCATION is stable across
+    /// calls when the underlying source is unchanged (#2074).
+    ///
+    /// The `{% for %}` loop-render cache (#2067) keys each For-node's body
+    /// by identity — `(nodes.as_ptr() as usize, nodes.len())`
+    /// (`renderer.rs::content_hash` call site) — so it can distinguish
+    /// sibling loops that share a loop-variable name. That identity is only
+    /// meaningful if the SAME body allocation is seen across renders; a
+    /// loader that reparses from scratch on every call (the default
+    /// [`load_template`](Self::load_template) contract) hands back a fresh
+    /// `Vec<Node>` — and therefore a fresh pointer — every time, so a
+    /// `{% for %}` loop living inside an `{% include %}` never accumulates
+    /// cache hits.
+    ///
+    /// The default implementation just wraps [`load_template`](Self::load_template)
+    /// in a fresh `Arc` each call — correct (no cross-render identity is
+    /// promised or required) for loaders that don't need cross-render
+    /// stability, e.g. in-memory test loaders and other loaders with no
+    /// stable backing store to key a cache off of. [`FilesystemTemplateLoader`]
+    /// overrides this with a real mtime-keyed cache — see its impl for why
+    /// the cache must be loader-instance-EXTERNAL (a process-global static,
+    /// not a `&self` field).
+    fn load_template_cached(&self, name: &str) -> Result<std::sync::Arc<[Node]>> {
+        Ok(std::sync::Arc::from(self.load_template(name)?))
+    }
 }
 
 /// Build complete inheritance chain by recursively loading parents
@@ -233,6 +264,39 @@ pub fn build_inheritance_chain<L: TemplateLoader>(
 
     Ok(chain)
 }
+
+/// `(mtime-at-parse-time, parsed nodes)` — see [`PARSED_TEMPLATE_CACHE`].
+type ParsedTemplateEntry = (SystemTime, Arc<[Node]>);
+
+/// Process-global cache of parsed `{% include %}`-able template bodies,
+/// keyed by the RESOLVED filesystem path and invalidated by mtime (#2074).
+///
+/// This is a process-wide `static`, NOT a `FilesystemTemplateLoader`
+/// instance field. Production (`crates/djust_live/src/lib.rs`) constructs a
+/// FRESH `FilesystemTemplateLoader` on EVERY render call —
+/// `let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());`
+/// appears in `render()`, `render_with_diff()`, and every other render
+/// entry point — while the parsed parent `Template` and the
+/// `LoopRenderCache` are held PERSISTENTLY across renders (the
+/// `TEMPLATE_CACHE` static + the `self.loop_render_cache` instance field,
+/// respectively). An instance-scoped cache field on
+/// `FilesystemTemplateLoader` would be discarded and rebuilt on every
+/// single render — the Arc it hands back would still get a fresh
+/// allocation every render, and the #2067 loop-cache's body-identity key
+/// would never see a repeat pointer. Only a cache that outlives the loader
+/// instance can give an include's parsed body a stable identity across
+/// renders. Mirrors the existing `Lazy<RwLock<HashMap<...>>>` pattern
+/// already used for the filter/tag registries in this crate
+/// (`filter_registry.rs`, `registry.rs`).
+///
+/// HVR/hot-reload tradeoff: pickup of an edited include is mtime-granularity-
+/// bound. An include edited twice within a single coarse-mtime tick (some
+/// filesystems have 1s mtime resolution) can serve the stale parse until the
+/// NEXT mtime change — a minor HVR-robustness regression vs the pre-#2074
+/// always-re-parse behavior. Acceptable because dev filesystems (APFS/ext4)
+/// are sub-second and production templates are immutable.
+static PARSED_TEMPLATE_CACHE: Lazy<RwLock<HashMap<PathBuf, ParsedTemplateEntry>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Filesystem-based template loader for production use
 pub struct FilesystemTemplateLoader {
@@ -294,6 +358,63 @@ impl TemplateLoader for FilesystemTemplateLoader {
         // #1358 Iter 1).
         let tokens = lexer::tokenize(&source)?;
         parser::parse_with_source(&tokens, &source)
+    }
+
+    /// Cached counterpart of [`load_template`](Self::load_template) — see
+    /// [`TemplateLoader::load_template_cached`] and [`PARSED_TEMPLATE_CACHE`]
+    /// for why this must be a process-global cache rather than a `&self`
+    /// field. Keyed by the RESOLVED path (not the raw `name` argument) so
+    /// two loader instances with different `template_dirs` search orders
+    /// that resolve to the SAME file share the cache entry; invalidated by
+    /// mtime so an on-disk edit (including a hot-reload save) is picked up
+    /// on the next call without any explicit `clear()`/invalidation wiring.
+    fn load_template_cached(&self, name: &str) -> Result<Arc<[Node]>> {
+        use crate::lexer;
+        use crate::parser;
+
+        let path = self.find_template(name)?;
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map_err(|e| {
+                DjangoRustError::TemplateError(format!(
+                    "Failed to stat template {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+
+        // Fast path: a read-locked cache hit for the CURRENT mtime.
+        {
+            let cache = PARSED_TEMPLATE_CACHE.read().map_err(|e| {
+                DjangoRustError::TemplateError(format!("Template parse cache lock: {e}"))
+            })?;
+            if let Some((cached_mtime, nodes)) = cache.get(&path) {
+                if *cached_mtime == mtime {
+                    return Ok(nodes.clone());
+                }
+            }
+        }
+
+        // Slow path: no entry, or the file changed since it was cached —
+        // reparse and (re)populate. Uses the same `parse_with_source` call
+        // as `load_template` so the boundary-marker ID prefix is identical
+        // regardless of which method a caller used.
+        let source = std::fs::read_to_string(&path).map_err(|e| {
+            DjangoRustError::TemplateError(format!(
+                "Failed to read template {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        let tokens = lexer::tokenize(&source)?;
+        let nodes_vec = parser::parse_with_source(&tokens, &source)?;
+        let arc: Arc<[Node]> = Arc::from(nodes_vec);
+
+        let mut cache = PARSED_TEMPLATE_CACHE.write().map_err(|e| {
+            DjangoRustError::TemplateError(format!("Template parse cache lock: {e}"))
+        })?;
+        cache.insert(path, (mtime, arc.clone()));
+        Ok(arc)
     }
 }
 

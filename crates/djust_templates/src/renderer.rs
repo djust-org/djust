@@ -929,7 +929,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             if let Some(loader) = loader {
                 // Remove quotes from template name if present
                 let name = template.trim_matches(|c| c == '"' || c == '\'');
-                let nodes = loader.load_template(name)?;
+                // Use the CACHED loader method (#2074) so the parsed body's
+                // allocation is STABLE across renders — the `{% for %}`
+                // loop-render cache (#2067) keys each For-node's body by
+                // identity (`nodes.as_ptr()`), which only matches across
+                // renders when the same allocation is reused. The
+                // `{% extends %}` inheritance path (`build_inheritance_chain`)
+                // intentionally stays on `load_template` — it needs an
+                // owned, mutable `Vec<Node>` for block-merging and has no
+                // per-render identity requirement.
+                let nodes = loader.load_template_cached(name)?;
 
                 // Create context for included template
                 let mut include_context = if *only {
