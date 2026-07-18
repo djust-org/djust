@@ -118,6 +118,17 @@ def _warn_heuristic_type_drop(field_cls: type) -> None:
     )
 
 
+# TYPE-floor verdict memo. The verdict is a pure function of the field's
+# CLASS and the configured sensitive-type names — never of instance state —
+# and the eager path calls the authority once per field per serialized model
+# (a chat-sized render is thousands of calls per event, each walking the MRO
+# with casefold scans). Keyed by (field class, configured frozenset) so a
+# ``LIVEVIEW_CONFIG['sensitive_field_types']`` mutation lands on a NEW key and
+# can never be served a stale verdict. Field classes are finite per process,
+# so the unbounded dict is safe.
+_FIELD_TYPE_EXCLUSION_MEMO: Dict[Any, bool] = {}
+
+
 def _field_type_is_excluded(field: Any) -> bool:
     """TYPE-based serialization floor (#1987) — the single authority both the
     eager (:meth:`DjangoJSONEncoder._serialize_model_safely`) and sidecar
@@ -144,22 +155,35 @@ def _field_type_is_excluded(field: Any) -> bool:
     """
     from django.db import models as _m
 
+    configured = _sensitive_field_types()
+    memo_key = (type(field), configured)
+    hit = _FIELD_TYPE_EXCLUSION_MEMO.get(memo_key)
+    if hit is not None:
+        return hit
+
     # FileField (and its ImageField subclass) serialize a URL — never dropped.
     if isinstance(field, _m.FileField):
-        return False
-    if isinstance(field, _m.BinaryField):
-        return True
-    mro_names = [k.__name__ for k in type(field).__mro__]
-    configured = _sensitive_field_types()
-    if configured and any(n in configured for n in mro_names):
-        return True
-    # Case-insensitive so a lowercased/oddly-cased variant can't slip the floor
-    # (#1987 review M2). Configured names above stay case-EXACT (the developer
-    # spells the class name they mean).
-    if any(("encrypted" in n.casefold() or "fernet" in n.casefold()) for n in mro_names):
-        _warn_heuristic_type_drop(type(field))
-        return True
-    return False
+        result = False
+    elif isinstance(field, _m.BinaryField):
+        result = True
+    else:
+        mro_names = [k.__name__ for k in type(field).__mro__]
+        if configured and any(n in configured for n in mro_names):
+            result = True
+        # Case-insensitive so a lowercased/oddly-cased variant can't slip the
+        # floor (#1987 review M2). Configured names above stay case-EXACT (the
+        # developer spells the class name they mean).
+        elif any(("encrypted" in n.casefold() or "fernet" in n.casefold()) for n in mro_names):
+            # The memo preserves the one-shot breadcrumb semantics: the warn
+            # fires on the first (computed) drop per class and never again on
+            # memo hits — same observable behavior as the un-memoized one-shot.
+            _warn_heuristic_type_drop(type(field))
+            result = True
+        else:
+            result = False
+
+    _FIELD_TYPE_EXCLUSION_MEMO[memo_key] = result
+    return result
 
 
 def _field_type_excluded_for(model_class: Any, field_name: str) -> bool:

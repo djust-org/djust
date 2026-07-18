@@ -107,6 +107,45 @@ class TestConfiguredTypes:
         assert _field_type_is_excluded(_fields()["name"]) is False
 
 
+class TestTypeFloorMemo:
+    """The verdict is a pure function of (field CLASS, configured type names),
+    and the eager path calls the authority once per field per serialized model
+    — a chat-sized render is thousands of calls per event. The memo caches the
+    verdict per (class, config) key; a config mutation lands on a NEW key, so
+    stale verdicts can never be served after ``LIVEVIEW_CONFIG`` changes."""
+
+    def test_verdict_memoized_per_class(self):
+        from djust.serialization import (
+            _FIELD_TYPE_EXCLUSION_MEMO,
+            _sensitive_field_types,
+        )
+
+        _FIELD_TYPE_EXCLUSION_MEMO.clear()
+        f = _fields()["name"]
+        assert _field_type_is_excluded(f) is False
+        key = (type(f), _sensitive_field_types())
+        assert _FIELD_TYPE_EXCLUSION_MEMO[key] is False
+        # A DIFFERENT instance of the same field class hits the memo (the
+        # verdict never depends on instance state).
+        f2 = models.CharField(max_length=5)
+        assert _field_type_is_excluded(f2) is False
+
+    def test_config_mutation_bypasses_stale_memo(self):
+        from djust.serialization import _FIELD_TYPE_EXCLUSION_MEMO
+
+        cfg = get_config()
+        orig = cfg._config.get("sensitive_field_types")
+        _FIELD_TYPE_EXCLUSION_MEMO.clear()
+        f = _fields()["name"]
+        assert _field_type_is_excluded(f) is False  # memo populated (excluded=False)
+        cfg._config["sensitive_field_types"] = ["CharField"]
+        try:
+            # New config → new memo key → fresh verdict, no stale False served.
+            assert _field_type_is_excluded(f) is True
+        finally:
+            cfg._config["sensitive_field_types"] = orig
+
+
 class TestEagerPath:
     def test_eager_drops_binaryfield(self):
         """SENTINEL (#1468): removing the eager wired check leaks `blob`."""
