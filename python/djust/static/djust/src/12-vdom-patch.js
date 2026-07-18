@@ -1491,7 +1491,7 @@ function applyInsertSubtree(patch, rootEl = null) {
     // InsertSubtree payload (e.g. a {% if %} block that toggled on) is
     // parsed via <template>.innerHTML (see _parseSubtreeHtml above) and is
     // therefore inert-by-spec exactly like #1848 — loud DEBUG-mode warning.
-    if (typeof _warnDeadScripts === 'function') _warnDeadScripts(fragment);
+    _warnDeadScripts(fragment);
     // Determine insert position: index counted against significant
     // children (matches InsertChild semantics).
     const children = getSignificantChildren(parent);
