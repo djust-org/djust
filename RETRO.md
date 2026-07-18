@@ -363,6 +363,59 @@ issue or be explicitly closed with a reason.
 | 321 | Automated pre-commit/CI check pinning already-tagged CHANGELOG.md sections against their tagged content | v1.1.0rc5 retro | #2028 | Closed | Resolved v1.1.0-6 (PR #2029): `scripts/check-changelog-tagged-sections.py` pins every shipped section against the *newest* release tag's snapshot (dogfood #1060 showed pinning against each section's OWN tag floods false positives — rolling-rc sections keep accumulating post-tag; a section is frozen once *superseded*). Wired as a pre-commit hook; empirical canary (#1459) is a permanent test. 119 sections pin clean against v1.1.0rc5. |
 | 322 | CI Python job omits `python/djust/tests/` — a large suite (incl. the RED `TestSetattrChokepoint` CWE-915 guard, and this-repo's #2020/#1977 tests) is un-gated | PR #2031 / v1.1.0-6 retro | #2032 | Closed | Resolved v1.1.0-7 (PR #2035): deliberately re-verified + fixed the stale `_SETATTR_WHITELIST` pins (1213/1215 → 1225/1227, confirmed still the sanctioned DynamicLiveView developer-dict application, not a new client-controlled setattr), and added `python/djust/tests/` to CI as a `continue-on-error` soak step (green on first runner run). Blocking-gate promotion split to #323 (#2034). |
 | 323 | Promote the `python/djust/tests/` CI soak step to a blocking gate + add the dir to the pre-push hook | PR #2035 / v1.1.0-7 retro | #2034 | Closed | Resolved v1.1.0-8 (PR #2039): the soak ran green on the `main` push-CI run at `72d78601` (the awaited precondition), so `continue-on-error` was removed — the step now runs inside `python-tests`, which is in the `test-summary` AND-condition (#1713), so a failure gates the merge; `python/djust/tests/` added to the pre-push `pytest` hook too. Self-validated: PR #2039's own `python-tests (py3.12)` was the first run with the gate live and passed (empirical canary #1459). |
+| 324 | dj_transition `re-runs the sequence` JS test still uses polling `waitForClass` — real-rAF flake (#1830 class) | PR #2077 / v1.1.0-11 retro | #2081 | Open | Surfaced during the #2070 drain (cost one CI cycle); the case wasn't converted to the controllable-rAF stub PR #1839 applied to its sibling. Fix: drive `flushFrame()` + assert an ordering invariant + gate-off sibling. |
+| 325 | Makefile `test-rust`/`bench`/`clippy`/`test-full` share the #2072 `PYO3_PYTHON=$(PYTHON)` pattern — same uv-standalone unembeddable fault | PR #2080 / v1.1.0-11 retro | #2082 | Open | The #2080 fix scoped to the pre-push `cargo-test` hook per #1079; these Makefile targets have the identical failure on a uv-python-build-standalone venv. Route them through `scripts/embeddable-python.sh` too. |
+
+## v1.1.0-11 — hygiene drain: test-infra trust + build churn + docs + replay viewer (PRs #2076-#2080, #2083)
+
+**Date**: 2026-07-18
+**Scope**: 6-issue open-issue drain restoring trust in local gates (two proven-deterministic "flakes"), killing PR-diff churn, finishing the 1.1 docs modernization, and shipping the bug-capture replay surface. All 6 merged, main CI green after each.
+**Tests at close**: ~9801 Python + 1821 JS (full suite green)
+
+### What We Learned
+
+**1. The recurring regroup xdist-pollution ghost was finally retired — with a structural cure, not a point patch.**
+#2053 had haunted multiple release gates as a "flaky" `test_regroup_tag.py` failure under `pytest-xdist`. PR #2078's symptom-up triage disproved the briefed lead (parser.rs registry precedence was contributing, but the real polluter was two test fixtures re-registering `regroup` — an assign-tag — into the plain registry). The fix hardened `reregister_builtins()` to actively unregister from the wrong registry (#1646 structural cure — heals any polluter, existing or future), and load-bearing verification (#1859) confirmed the `unregister_*` bindings exist + CI Python-tests green = a real cure, not an `ImportError`-masked no-op.
+
+**Action taken**: Closed — fixed in PR #2078 (structural `reregister_builtins()` cure + `test_reset_heals_regroup_cross_registry_pollution_2053` reproducer with gate-off sibling).
+
+**2. The uv-python-standalone "flake" is deterministic and has un-fixed twins in the Makefile.**
+#2072's "flaky" pre-push `cargo-test` was a deterministic embedded-PyO3 bootstrap failure (`init_fs_encoding`) whenever the venv base is uv's python-build-standalone. PR #2080 fixed the pre-push hook via `scripts/embeddable-python.sh` and stayed scoped (#1079). But the same `PYO3_PYTHON=$(PYTHON)` pattern lives in the Makefile's `test-rust`/`bench`/`clippy`/`test-full` targets, which have the identical fault on a uv-standalone machine.
+
+**Action taken**: Open — tracked in Action Tracker #325 (GitHub #2082).
+
+**3. A latent real-rAF test flake in the JS suite cost a CI cycle.**
+`dj_transition.test.js`'s "re-runs the sequence" case still uses the polling `waitForClass` helper racing jsdom's ~16ms `requestAnimationFrame` — the #1830 flake class PR #1839 fixed for the sibling case with a controllable-rAF stub. It flaked once during the #2070 drain (green on re-run).
+
+**Action taken**: Open — tracked in Action Tracker #324 (GitHub #2081).
+
+### Insights
+
+- **Two proven-deterministic "flakes" retired in one drain** (#2053 ordering-pollution, #2072 environment-unembeddable) — both validate the root-cause-don't-retry discipline. A gate that fails "sometimes on some machines" is a deterministic ordering/environment fault far more often than a timing flake.
+- **Load-bearing verification (#1859) was the drain's quality signature** — applied 3x: the S012 uniqueness canary's in-docstring gate-off (#2077), confirming the `unregister_*` bindings exist + CI-green = real cure (#2078), and the XSS-escaping gate-off (#2083). Never trust a pin/fix works — prove it by neutering it or by confirming the mechanism is wired.
+- **Security-boundary PR (#2083) got the model treatment**: an independent worktree-isolated adversarial review with empirical encoded-bypass probing (#1825) + gate-off — and the implementer honestly escalated the XSS-signoff checkbox rather than self-certifying. Reward that escalation behavior.
+- **Union-merge dance is now routine, but a PR that removes tracked files sharpens it**: #2076 deleted + gitignored the compressed bundle siblings, so #2083 (branched earlier) hit 6 modify/delete conflicts on exactly those files — resolved by taking the deletion. Cross-PR ordering awareness for any drain where one PR removes tracked files.
+- **git stash/pop hazard recurred** (a #2083 subagent's stash bounced on a `.map` conflict and silently reverted edits) — the shared stash stack (across worktrees) also holds a user's preserved WIP; recovered + verified intact via grep.
+- **GitHub Actions PR check suites RECOVERED** at the start of this drain (dark through v1.1.0-10's Actions outage) -> normal CI-green-before-merge gating resumed for every PR.
+
+### Review Stats
+
+| Metric | #2076 | #2077 | #2078 | #2079 | #2080 | #2083 | Total |
+|--------|-------|-------|-------|-------|-------|-------|-------|
+| Quality (self) | 5 | 5 | 5 | 4 | 5 | 5 | - |
+| Tests added | ~0 | ~5 | ~3 | 0 | 7 | 52 | ~67 |
+| Gate-off proofs (#1468) | - | 1 | 1 | - | 1 | 1 | 4 |
+| CI re-runs (flake) | - | 1 | - | - | - | - | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No new canon rules — the drain applied existing canon (#1646 structural cure, #1859 load-bearing verification, #1079 scope discipline, #1468 gate-off, #1825 adversarial security review). A maturity signal for the v1.1 process.
+**Follow-ups filed**: #2081 (dj_transition flake), #2082 (Makefile PYO3_PYTHON twins) — tracked as Action Tracker #324/#325.
+
+### Open Items
+
+- [ ] dj_transition rAF flake — Action Tracker #324 (GitHub #2081)
+- [ ] Makefile PYO3_PYTHON twins — Action Tracker #325 (GitHub #2082)
 
 ## v1.1.0rc5 — main/1.1 branch consolidation + release cut (PR #2026)
 
@@ -460,7 +513,7 @@ The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut r
 ### Open Items
 
 - [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried forward
-- [ ] bug-capture iter B/C (`priority:low`) — GitHub #1562/#1561, carried forward
+- [x] bug-capture iter B (#1562) — **resolved in v1.1.0-11 (PR #2083)**; iter C (#1561) still deferred (`priority:low`)
 
 ## v1.1.0-7 — post-rc6 live-verify drain (PRs #2035/#2036)
 
