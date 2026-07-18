@@ -21,6 +21,21 @@ ifndef PYTHON
 PYTHON := $(shell bash scripts/run-with-venv-python.sh --print)
 endif
 
+# Interpreter for PYO3_PYTHON — must be safe to EMBED, not just any project
+# venv python. When the venv's base interpreter is uv's python-build-standalone,
+# an embedded-PyO3 `cargo test`/`cargo bench`/`cargo clippy` binary fails
+# bootstrap deterministically (`Fatal Python error: init_fs_encoding`,
+# `sys.prefix='/install'`). scripts/embeddable-python.sh resolves a safe
+# interpreter (venv-if-safe -> framework/homebrew pythonX.Y -> venv-anyway-with-
+# warning); see #2072, and #2080 which applied this to the pre-commit
+# cargo-test hook.
+#
+# `=` (recursively expanded, NOT `:=`) is deliberate: the resolver only runs
+# when a recipe line actually references $(EMBEDDABLE_PYTHON), i.e. only for
+# the cargo-invoking targets below. A `:=` here would run the resolver at
+# PARSE time for every `make` invocation, including `make help`.
+EMBEDDABLE_PYTHON = $(shell bash scripts/embeddable-python.sh)
+
 .DEFAULT_GOAL := help
 
 ##@ Help
@@ -175,7 +190,7 @@ test: ## Run all tests (Python + JavaScript + Rust) in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"
 	@PY_EXIT=0; RS_EXIT=0; JS_EXIT=0; \
 	PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
-	PYO3_PYTHON=$(PYTHON) sh -c "cargo test --workspace --exclude djust_live -q && cargo test -p djust_live --no-default-features -q" > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
+	PYO3_PYTHON=$(EMBEDDABLE_PYTHON) sh -c "cargo test --workspace --exclude djust_live -q && cargo test -p djust_live --no-default-features -q" > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
 	npm test > /tmp/djust-test-js.log 2>&1 & JS_PID=$$!; \
 	wait $$PY_PID || PY_EXIT=$$?; \
 	wait $$RS_PID || RS_EXIT=$$?; \
@@ -201,9 +216,9 @@ test-sequential: test-python test-js test-rust ## Run all tests sequentially (fa
 test-rust: ## Run Rust tests
 	@echo "$(GREEN)Running Rust tests...$(NC)"
 	@echo "$(YELLOW)Phase 1: workspace excluding djust_live (cdylib link constraint)$(NC)"
-	@PYO3_PYTHON=$(PYTHON) cargo test --workspace --exclude djust_live
+	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo test --workspace --exclude djust_live
 	@echo "$(YELLOW)Phase 2: djust_live with --no-default-features (libpython static link, #1543)$(NC)"
-	@PYO3_PYTHON=$(PYTHON) cargo test -p djust_live --no-default-features
+	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo test -p djust_live --no-default-features
 
 .PHONY: test-python
 test-python: ## Run Python tests
@@ -247,7 +262,7 @@ check-test-coverage: ## Verify all test directories are collected by CI
 lint: ## Run linters
 	@echo "$(GREEN)Running linters...$(NC)"
 	@uv run ruff check python/
-	@PYO3_PYTHON=$(PYTHON) cargo clippy -- -W clippy::all -D clippy::correctness -D clippy::suspicious
+	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo clippy -- -W clippy::all -D clippy::correctness -D clippy::suspicious
 
 .PHONY: lint-ci
 lint-ci: ## Run linters in CI mode (warnings as errors)
@@ -324,8 +339,8 @@ benchmark: benchmark-rust benchmark-python ## Run all benchmarks
 benchmark-rust: ## Run Rust benchmarks (Criterion)
 	@echo "$(GREEN)Running Rust benchmarks...$(NC)"
 	@echo "$(YELLOW)Note: This may take several minutes$(NC)"
-	@PYO3_PYTHON=$(PYTHON) cargo bench --workspace --exclude djust_live 2>&1 | tee benchmark-rust.log
-	@PYO3_PYTHON=$(PYTHON) cargo bench -p djust_live --no-default-features 2>&1 | tee -a benchmark-rust.log
+	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo bench --workspace --exclude djust_live 2>&1 | tee benchmark-rust.log
+	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo bench -p djust_live --no-default-features 2>&1 | tee -a benchmark-rust.log
 	@echo "$(GREEN)Rust benchmark results saved to benchmark-rust.log$(NC)"
 	@echo "$(YELLOW)HTML reports available in target/criterion/$(NC)"
 
