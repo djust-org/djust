@@ -19,6 +19,24 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-12 — post-11 follow-up drain: JS test flake + Makefile PYO3_PYTHON parity (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-18) of the two scope-disciplined follow-ups filed
+during the v1.1.0-11 drain. Both mirror an existing fix pattern verbatim, so
+the risk is low. Deferred (not drain-sized): #2074 (needs Rust include-cache
+design; low), #2063 (official adapters — own milestone), #2064 (cross-repo
+surface manifest), #2017 (L-sized dj-virtual server-side reconcile), #1561
+(priority:low iter C — multi-day Redis-store feature).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P2** | dj_transition 're-runs the sequence' rAF flake (#2081) | The case still uses the polling `waitForClass` helper racing jsdom's ~16ms rAF (#1830 class); convert to the controllable-rAF stub PR #1839 applied to its sibling (`flushFrame()` + ordering-invariant assertion + gate-off sibling) | v1.1.0 |
+| **P2** | Makefile `PYO3_PYTHON` targets share the #2072 fault (#2082) | `test-rust`/`bench`/`clippy`/`test-full` export `PYO3_PYTHON=$(PYTHON)` — the same uv-python-build-standalone unembeddable fault #2080 fixed for the pre-push hook; route them through `scripts/embeddable-python.sh` too | v1.1.0 |
+
+**#2081 — dj_transition rAF flake** — The "re-runs the sequence when the attribute value changes" case in `tests/js/dj_transition.test.js` still polls a real rAF; convert to the `controlledRaf`/`flushFrame` stub already used by the sibling case (PR #1839), asserting an ordering invariant with a non-tautological gate-off sibling (#1468).
+
+**#2082 — Makefile PYO3_PYTHON parity** — Mirror the #2080 pre-push-hook fix: the Makefile's cargo-invoking targets (`test-rust`/`bench`/`clippy`/`test-full`) need the embeddable-interpreter resolver too (`scripts/embeddable-python.sh`), or they hit `init_fs_encoding` on a uv-python-build-standalone venv.
+
 ## v1.1.0-11 — hygiene drain: test-infra trust + build churn + docs + replay viewer (drain bucket → ships in 1.1.0)
 
 **COMPLETE 6/6 (2026-07-14)** ✅ — #2054 (PR #2076), #2070 (PR #2077), #2053
