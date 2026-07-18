@@ -92,6 +92,23 @@ except ImportError:
 _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
 
 
+def _is_send_after_close_error(exc: RuntimeError) -> bool:
+    """True when *exc* is the ASGI server rejecting a send on a closed socket.
+
+    uvicorn (websockets/wsproto/sansio impls alike) raises
+    ``RuntimeError("Unexpected ASGI message 'websocket.send', after sending
+    'websocket.close'.")`` when the app sends a frame after the close
+    handshake — a benign race, not an app bug: a client that disconnects right
+    after sending a frame (page reload mid-mount) leaves that frame queued in
+    Channels, and the consumer processes it against a socket that is already
+    closed. Daphne silently drops such sends, so this only fires on servers
+    that reject them. Match on the ``'websocket.close'`` payload so unrelated
+    RuntimeErrors (including uvicorn's send-before-accept rejection) still
+    propagate.
+    """
+    return "websocket.close" in str(exc)
+
+
 def _is_allowed_origin(origin: Optional[bytes]) -> bool:
     """
     Check whether a WebSocket Origin header is allowed under settings.ALLOWED_HOSTS.
@@ -1445,7 +1462,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if patches is not None:
             if self.use_binary:
                 patches_data = msgpack.packb(patches)
-                await self.send(bytes_data=patches_data)
+                await self._send_frame(bytes_data=patches_data)
             else:
                 response: Dict[str, Any] = {
                     "type": "patch",
@@ -1748,6 +1765,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def connect(self) -> None:
         """Handle WebSocket connection"""
+        # Per-connection default: the socket is open until a close()/disconnect()
+        # (or a send-after-close rejection) flips this. _send_frame still reads it
+        # via getattr() so a directly-instantiated consumer (unit tests) is safe
+        # before connect() runs.
+        self._ws_close_sent = False
+
         # CSWSH defense (#653): reject the handshake if the Origin header is
         # not in settings.ALLOWED_HOSTS *before* calling self.accept(). This
         # is defense in depth on top of DjustMiddlewareStack's
@@ -1807,6 +1830,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection"""
+        # The socket is gone — any frame a handler still tries to send from
+        # here on would be rejected by the ASGI server (_send_frame drops it).
+        self._ws_close_sent = True
+
         # Clear the tenant ContextVar bound at mount (Finding #6) so the
         # consumer task doesn't carry a stale tenant if the executor/context is
         # reused. No-op when tenants is unavailable.
@@ -2646,9 +2673,48 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             mgr.cancel_upload(ref)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
 
+    async def close(self, code: Optional[int] = None, reason: Optional[str] = None) -> None:
+        """Close the socket and remember it, so later sends are dropped.
+
+        Frames the client queued before our close frame reaches it (e.g. the
+        ``mount`` sent immediately after the handshake, when connect() rejects
+        with 4403/4429) still get dispatched by Channels; ``_send_frame``
+        consults this flag to drop their responses instead of hitting the
+        transport, which uvicorn would reject with a RuntimeError.
+        """
+        self._ws_close_sent = True
+        if reason is None:
+            # channels<4.1 close() has no reason parameter.
+            await super().close(code)
+        else:
+            await super().close(code, reason)
+
+    async def _send_frame(
+        self,
+        text_data: Optional[str] = None,
+        bytes_data: Optional[bytes] = None,
+    ) -> None:
+        """Single outbound chokepoint: drop frames once the socket is closed.
+
+        Short-circuits when the connection is known-closed and downgrades the
+        ASGI server's send-after-close rejection (see
+        :func:`_is_send_after_close_error`) to a debug log — the client is
+        gone, there is nobody to answer. Everything else propagates.
+        """
+        if getattr(self, "_ws_close_sent", False):
+            logger.debug("Dropping outbound frame: WebSocket already closed")
+            return
+        try:
+            await self.send(text_data=text_data, bytes_data=bytes_data)
+        except RuntimeError as exc:
+            if not _is_send_after_close_error(exc):
+                raise
+            self._ws_close_sent = True
+            logger.debug("Dropping outbound frame: WebSocket closed during send (%s)", exc)
+
     async def send_json(self, data: Dict[str, Any]) -> None:
         """Send JSON message to client with Django type support"""
-        await self.send(text_data=json.dumps(data, cls=DjangoJSONEncoder))
+        await self._send_frame(text_data=json.dumps(data, cls=DjangoJSONEncoder))
 
     @staticmethod
     def _clear_template_caches() -> int:
