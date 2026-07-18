@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`tests/js/dj_transition.test.js` "re-runs the sequence when the attribute value changes" — flaky under parallel CI load (#2081, #1830 flake class).** The case polled a wall-clock deadline (`waitForClass`, `setTimeout(tick, 5)`) racing jsdom's real ~16ms `requestAnimationFrame`, intermittently failing with `Error: class "s2" never applied within 300ms`. Converted to the controllable-rAF stub already established by the sibling case above it ("applies start class synchronously, active/end on next frame", #1839): the `controlledRaf` option in `createDom` queues `requestAnimationFrame` callbacks and drives them explicitly via `dom.flushFrame()`, so the test now asserts the ordering invariant (phase-1 class lands synchronously from the `MutationObserver` attribute-change callback; phase-2/3 classes are absent until the frame is driven) instead of racing a wall-clock timer — fully synchronous once the frame is driven, no timeout. The attribute re-trigger still goes through a real `MutationObserver` microtask (jsdom has no controllable stub for it), so the test awaits a single `Promise.resolve()` tick — FIFO-ordered after the observer's already-queued microtask, not a wall-clock wait. Gate-off verified (#1468): commenting out the second `dom.flushFrame()` call makes the post-frame assertions fail (`s2`/`a2`/`e2` stay in their pre-frame state). Ran the case 10x consecutively with zero flakes.
+
 - **Send-after-close RuntimeError noise: "Exception in ASGI application" on
   every reload-mid-mount under uvicorn (#2084).** A client that sends `mount`
   and immediately disconnects (page reload, quick navigation away) leaves the
