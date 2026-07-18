@@ -21,6 +21,15 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 ## v1.1.0-12 — post-11 follow-up drain: JS test flake + Makefile PYO3_PYTHON parity (drain bucket → ships in 1.1.0)
 
+**COMPLETE 2/2 (2026-07-18)** ✅ — #2081 (PR #2092), #2082 (PR #2093) both
+merged, main CI green. Both were verbatim mirrors of an existing fix (#1077):
+#2081 converted the flaky `dj_transition` "re-runs the sequence" case to the
+#1839 controllable-rAF stub (ordering invariant + `flushFrame()` drive + gate-off,
+10× no-flake); #2082 routed the Makefile's 6 `PYO3_PYTHON` cargo sites through
+`scripts/embeddable-python.sh` (the #2080 pre-push-hook fix), with a
+lazy-`=` variable proven parse-time-free by an empirical stub-resolver dry-run
+test. Both landed clean on first review; no follow-ups filed.
+
 Open-issue drain (2026-07-18) of the two scope-disciplined follow-ups filed
 during the v1.1.0-11 drain. Both mirror an existing fix pattern verbatim, so
 the risk is low. Deferred (not drain-sized): #2074 (needs Rust include-cache
