@@ -416,11 +416,16 @@ pub fn body_is_cacheable(nodes: &[Node], var_names: &[String]) -> bool {
 /// same stable identity [`LoopRenderCache::body_cacheable`] memoizes on
 /// (immutable AST held by a cached `Template`; [`LoopRenderCache::clear`]
 /// drops every entry on template change, so a re-parse can never serve stale
-/// fragments through a reused allocation). Folding it in isolates each
-/// For-node's keyspace: the `fragments`/`parsed` maps span EVERY `{% for %}`
-/// in the view, and without it two sibling loops reusing the same loop-var
-/// name over equal-content items collided and cross-rendered each other's
-/// fragments (#2067).
+/// fragments through a reused allocation). Note the `clear`-on-template-change
+/// invariant covers only the PARENT template's own For-bodies; `{% include %}`d
+/// bodies live in `PARSED_TEMPLATE_CACHE` (`inheritance.rs`, #2074) and get
+/// their staleness safety from the pointer-change-on-mtime mechanism instead
+/// (an include edit bumps mtime → a fresh `Arc<[Node]>` → a new `ptr` → a new
+/// `body_identity` key → a natural miss), NOT from `clear()`. Folding it in
+/// isolates each For-node's keyspace: the `fragments`/`parsed` maps span EVERY
+/// `{% for %}` in the view, and without it two sibling loops reusing the same
+/// loop-var name over equal-content items collided and cross-rendered each
+/// other's fragments (#2067).
 ///
 /// `bindings` is the list of `(var_name, value)` pairs set for this iteration
 /// (one for `{% for x in xs %}`, several for tuple unpacking).

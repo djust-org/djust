@@ -288,6 +288,13 @@ type ParsedTemplateEntry = (SystemTime, Arc<[Node]>);
 /// renders. Mirrors the existing `Lazy<RwLock<HashMap<...>>>` pattern
 /// already used for the filter/tag registries in this crate
 /// (`filter_registry.rs`, `registry.rs`).
+///
+/// HVR/hot-reload tradeoff: pickup of an edited include is mtime-granularity-
+/// bound. An include edited twice within a single coarse-mtime tick (some
+/// filesystems have 1s mtime resolution) can serve the stale parse until the
+/// NEXT mtime change — a minor HVR-robustness regression vs the pre-#2074
+/// always-re-parse behavior. Acceptable because dev filesystems (APFS/ext4)
+/// are sub-second and production templates are immutable.
 static PARSED_TEMPLATE_CACHE: Lazy<RwLock<HashMap<PathBuf, ParsedTemplateEntry>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
