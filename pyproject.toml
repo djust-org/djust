@@ -1199,10 +1199,10 @@ skips = ["B703", "B308"]  # mark_safe is expected in templates
 [tool.uv]
 constraint-dependencies = [
     "urllib3>=2.6.3",
-    "setuptools>=78.1.1",
+    "setuptools>=83.0.0",
     "ujson>=5.12.0",
     "pyopenssl>=26.0.0",
-    "pyasn1>=0.6.3",
+    "pyasn1>=0.6.4",
 ]
 
 [tool.bandit.per_file_ignores]
