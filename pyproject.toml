@@ -990,6 +990,7 @@ module = [
     "djust.management.commands.djust_new",
     "djust.management.commands.djust_schema",
     "djust.management.commands.djust_setup_css",
+    "djust.management.commands.djust_surface_manifest",
     "djust.management.commands.djust_typecheck",
     "djust.management.commands.generate_sw",
     "djust.checks.__init__",
