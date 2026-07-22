@@ -10,8 +10,15 @@ sync with the framework for months; this manifest is what a downstream
 consumer's CI diffs its reference doc fixture against).
 
 Usage:
-    python manage.py djust_surface_manifest                # compact JSON
-    python manage.py djust_surface_manifest --indent 2      # pretty-print
+    python manage.py djust_surface_manifest                       # compact JSON to stdout
+    python manage.py djust_surface_manifest --indent 2            # pretty-print to stdout
+    python manage.py djust_surface_manifest --output manifest.json  # write clean JSON to a file
+
+The ``--output <file>`` form is the phase-2-consumer path: in a ``DEBUG=True``
+environment the HVR ``[HotReload]`` banner writes to stdout, so
+``... > manifest.json`` would capture that banner ahead of the JSON and
+corrupt the file. ``--output`` writes ONLY the JSON (no banner, no trailing
+newline noise) directly to the given path.
 """
 
 import json
@@ -30,10 +37,28 @@ class Command(BaseCommand):
             default=0,
             help="JSON indentation level (default: 0, compact single-line output)",
         )
+        parser.add_argument(
+            "--output",
+            type=str,
+            default=None,
+            help=(
+                "Write the JSON manifest to this file instead of stdout. "
+                "Use this for machine consumption — it avoids the DEBUG-mode "
+                "[HotReload] stdout banner that would corrupt a `> file` redirect."
+            ),
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         from djust.schema import get_surface_manifest
 
         indent = options.get("indent", 0) or None
+        output_path = options.get("output")
 
-        self.stdout.write(json.dumps(get_surface_manifest(), indent=indent, default=str))
+        payload = json.dumps(get_surface_manifest(), indent=indent, default=str)
+
+        if output_path:
+            with open(output_path, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            self.stderr.write("Surface manifest written to %s" % output_path)
+        else:
+            self.stdout.write(payload)

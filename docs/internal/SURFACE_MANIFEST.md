@@ -91,11 +91,14 @@ of this change (a manifest that can silently drift is decorative, #1859):
   manifest picking it up (structurally impossible today since the manifest
   derives from `dir(JS)`, but the test also guards the derivation itself).
 - **`TestDirectiveBindingParity`** — extracts every `dj-*` attribute name
-  the client actually binds/reads (across every `static/djust/src/*.js`
-  module, via a set of regexes anchored to real DOM-binding call shapes:
-  `closest`/`querySelector(All)`/`matches` selector arguments,
-  `get/has/set/removeAttribute`, `attr.name.startsWith(...)`, two-arg
-  attribute-reading helpers, and `const _XXX_ATTR = 'dj-...'` constants) and
+  the client binds via one of the covered call shapes (across every
+  `static/djust/src/*.js` module, via a set of regexes anchored to real
+  DOM-binding call shapes: `closest`/`querySelector(All)`/`matches` selector
+  arguments, `get/has/set/removeAttribute`, `attr.name.startsWith(...)`,
+  two-arg attribute-reading helpers, `const _XXX_ATTR = 'dj-...'` constants,
+  and strict-equality `name === 'dj-X'` / `m.attributeName === 'dj-X'` reads
+  — the last being the sole observation trigger for the MutationObserver
+  modules, covered by `TestEqualityShapeCoverage`) and
   asserts every one is documented in `DIRECTIVES` — either as a literal
   `name`, inside some entry's `related_attributes` (including `-*` prefix
   families like `dj-hook-value-*`), or as a dotted modifier of a directive

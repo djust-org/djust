@@ -19,9 +19,15 @@ manifest plumbing:
   ``static/djust/src/26-js-commands.js``, and asserts client == Python
   ``djust.js.JS`` == manifest ``js_commands``.
 - ``TestDirectiveBindingParity`` — extracts every ``dj-*`` attribute name the
-  CLIENT actually binds (across every ``static/djust/src/*.js`` module) and
-  asserts each one is documented in ``DIRECTIVES`` (or is in the explicit,
-  justified ``_STRUCTURAL_EXCLUSIONS`` list).
+  CLIENT binds via one of the covered call shapes (selector arguments,
+  ``get/has/set/removeAttribute``, ``startsWith`` prefix checks, attribute-name
+  constants, and strict-equality ``name === 'dj-X'`` reads — across every
+  ``static/djust/src/*.js`` module) and asserts each one is documented in
+  ``DIRECTIVES`` (or is in the explicit, justified ``_STRUCTURAL_EXCLUSIONS``
+  list).
+- ``TestEqualityShapeCoverage`` — pins that the ``name === 'dj-X'`` /
+  ``m.attributeName === 'dj-X'`` read shape (the sole trigger for the
+  MutationObserver modules) is covered and load-bearing (#1459/#1859).
 - ``TestGateOffNonVacuous`` — proves both canaries are load-bearing (#1468):
   neuter the thing being checked and confirm the assertion actually goes red.
 
@@ -34,10 +40,13 @@ corresponding client module (never invented).
 
 from __future__ import annotations
 
+import io
 import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
+
+from django.core.management import call_command
 
 from djust import __version__
 from djust.js import JS
@@ -196,6 +205,18 @@ _STARTSWITH_RE = re.compile(r"""\.startsWith\(\s*['"]dj-([a-zA-Z0-9_.-]+)['"]\s*
 # two-arg helper(el, 'dj-xxx', ...) style, e.g. hasBoolAttr/parseIntAttr/parseFloatAttr
 _HELPER_ARG_RE = re.compile(r"""\w+\(\s*\w+,\s*['"]dj-([a-zA-Z0-9_.-]+)['"]""")
 
+# `attr.name === 'dj-xxx'` / `m.attributeName === 'dj-xxx'` — the strict-equality
+# read shape. This is the SOLE observation trigger for MutationObserver-driven
+# modules (35-dj-dialog.js / 37-dj-mutation.js / 38-dj-sticky-scroll.js /
+# 41-dj-transition.js / 42-dj-remove.js check `m.attributeName === 'dj-X'`) and
+# the primary attribute-iteration loop in 20-model-binding.js / 08-event-parsing.js
+# (`name === 'dj-model'` / `attr.name === 'dj-id'`). Without this pattern the
+# canary is blind to any directive discovered ONLY via equality — a confirmed
+# false-negative (a reviewer's injected `else if (name === 'dj-probeonly')`
+# slipped past a green canary). Covered by
+# TestEqualityShapeCoverage::test_equality_pattern_is_load_bearing.
+_EQ_ATTR_RE = re.compile(r"""(?:name|attributeName)\s*===\s*['"]dj-([a-zA-Z0-9_.-]+)['"]""")
+
 # `const _XXX_ATTR = 'dj-...';` — module-level attribute-name constants.
 # Anchored to a `const/let/var` DECLARATION of an identifier that itself
 # starts with `_` (e.g. `_FLIP_ATTR`, `_GROUP_ENTER_ATTR`) to avoid matching
@@ -217,10 +238,19 @@ def _normalize(name: str) -> str:
     return name.replace("\\", "")
 
 
-def _extract_client_bound_directives() -> Set[str]:
+def _extract_client_bound_directives(
+    text: str | None = None, *, include_equality: bool = True
+) -> Set[str]:
     """Every ``dj-*`` attribute name the client queries/reads, prefixed
-    with ``dj-`` (e.g. ``{"dj-click", "dj-model.lazy", ...}``)."""
-    text = _all_client_src_text()
+    with ``dj-`` (e.g. ``{"dj-click", "dj-model.lazy", ...}``).
+
+    ``text`` defaults to the concatenated real client source; a test may pass
+    a synthetic bundle (the #1459 empirical-canary shape). ``include_equality``
+    is the gate-off toggle for `_EQ_ATTR_RE` — with it False, the equality
+    read shape is NOT scanned, which is what `TestEqualityShapeCoverage`
+    uses to prove the pattern is load-bearing."""
+    if text is None:
+        text = _all_client_src_text()
     found: Set[str] = set()
 
     for m in _CALL_ARG_BACKTICK_RE.finditer(text):
@@ -235,11 +265,23 @@ def _extract_client_bound_directives() -> Set[str]:
     for m in _BARE_SELECTOR_LITERAL_BACKTICK_RE.finditer(text):
         for bm in _BRACKET_RE.finditer(m.group(1)):
             found.add(_normalize(bm.group(1)))
-    for pattern in (_ATTR_METHOD_RE, _STARTSWITH_RE, _HELPER_ARG_RE, _CONST_ATTR_RE):
+    simple_patterns = [_ATTR_METHOD_RE, _STARTSWITH_RE, _HELPER_ARG_RE, _CONST_ATTR_RE]
+    if include_equality:
+        simple_patterns.append(_EQ_ATTR_RE)
+    for pattern in simple_patterns:
         for m in pattern.finditer(text):
             found.add(_normalize(m.group(1)))
 
     return {"dj-" + n for n in found}
+
+
+def _extract_equality_bound_names() -> Set[str]:
+    """Only the names discovered via the `=== 'dj-X'` shape (`_EQ_ATTR_RE`),
+    prefixed with ``dj-``. Used by the load-bearing coverage test to prove the
+    equality pattern actually catches its shape independently of the other
+    extractors."""
+    text = _all_client_src_text()
+    return {"dj-" + _normalize(m.group(1)) for m in _EQ_ATTR_RE.finditer(text)}
 
 
 def _extract_client_bound_prefix_families() -> Set[str]:
@@ -432,6 +474,65 @@ class TestDirectiveBindingParity:
 
 
 # ===========================================================================
+# (b') Equality-shape coverage — `_EQ_ATTR_RE` is load-bearing (#1859).
+#
+# The `name === 'dj-X'` / `m.attributeName === 'dj-X'` read shape is the SOLE
+# observation trigger for the MutationObserver-driven modules and the primary
+# attribute-iteration loop. A reviewer proved the pre-fix canary was blind to
+# it: an injected `else if (name === 'dj-probeonly')` slipped past a green
+# canary. These tests pin that `_EQ_ATTR_RE` closes that blind spot.
+# ===========================================================================
+
+
+class TestEqualityShapeCoverage:
+    def test_equality_extractor_finds_real_shapes(self) -> None:
+        """The equality regex actually matches the real `=== 'dj-X'` shapes in
+        the shipped source (e.g. `m.attributeName === 'dj-sticky-scroll'` in
+        38-dj-sticky-scroll.js, `name === 'dj-model'` in 20-model-binding.js)."""
+        eq_names = _extract_equality_bound_names()
+        for expected in ("dj-sticky-scroll", "dj-mutation", "dj-model", "dj-dialog"):
+            assert expected in eq_names, (
+                f"{expected} is bound via the `=== 'dj-X'` shape in the client "
+                f"source but `_EQ_ATTR_RE` did not extract it — got {sorted(eq_names)!r}"
+            )
+
+    def test_equality_pattern_is_load_bearing(self) -> None:
+        """Empirical canary (#1459) mirroring the reviewer's reproduction:
+        inject an equality-ONLY binding (`else if (name === 'dj-probeonly')`,
+        with NO selector/getAttribute/... sibling) into the real client bundle.
+
+        - WITH `_EQ_ATTR_RE` in the extraction loop, the probe IS discovered.
+        - WITHOUT it (`include_equality=False` — the gate-off), the probe is
+          NOT discovered.
+
+        This goes RED the moment `_EQ_ATTR_RE` is dropped from the loop, proving
+        the pattern is load-bearing rather than decorative (#1859/#1468). The
+        probe name is deliberately equality-only so no other extractor can mask
+        the regression."""
+        probe_snippet = (
+            "\nfunction _probe(name) {\n"
+            "    if (name === 'dj-probeonly') { return true; }\n"
+            "    return false;\n"
+            "}\n"
+        )
+        mutated = _all_client_src_text() + probe_snippet
+
+        with_eq = _extract_client_bound_directives(mutated, include_equality=True)
+        without_eq = _extract_client_bound_directives(mutated, include_equality=False)
+
+        assert "dj-probeonly" in with_eq, (
+            "Equality pattern failed to catch an injected `name === 'dj-probeonly'` "
+            "binding — `_EQ_ATTR_RE` is not wired into the extraction loop."
+        )
+        assert "dj-probeonly" not in without_eq, (
+            "Gate-off failed: the equality-only probe was discovered even with "
+            "`_EQ_ATTR_RE` disabled, so some OTHER extractor is catching it and "
+            "this test is not actually proving the equality pattern is load-bearing "
+            "(#1468). Choose a probe name only reachable via the `===` shape."
+        )
+
+
+# ===========================================================================
 # (c) Manifest shape pins
 # ===========================================================================
 
@@ -552,3 +653,41 @@ class TestGateOffNonVacuous:
             "assertion fails, test_client_python_manifest_tri_parity is "
             "not load-bearing (#1468)."
         )
+
+
+# ===========================================================================
+# Management command — `djust_surface_manifest`
+# ===========================================================================
+
+
+class TestManagementCommand:
+    def test_stdout_emits_valid_manifest_json(self) -> None:
+        buf = io.StringIO()
+        call_command("djust_surface_manifest", stdout=buf)
+        payload = json.loads(buf.getvalue())
+        assert payload == get_surface_manifest()
+
+    def test_indent_option_pretty_prints(self) -> None:
+        buf = io.StringIO()
+        call_command("djust_surface_manifest", "--indent", "2", stdout=buf)
+        out = buf.getvalue()
+        assert "\n  " in out  # a 2-space indent level appears
+        assert json.loads(out) == get_surface_manifest()
+
+    def test_output_flag_writes_clean_json_file(self, tmp_path: Path) -> None:
+        """`--output <file>` must write ONLY the JSON (no stdout banner noise),
+        so a DEBUG-mode HVR `[HotReload]` line can't corrupt the file the
+        phase-2 consumer reads (finding #3)."""
+        target = tmp_path / "manifest.json"
+        buf = io.StringIO()
+        call_command("djust_surface_manifest", "--output", str(target), stdout=buf)
+
+        # Nothing written to stdout on the --output path (so a `> file`
+        # redirect of a banner-polluted stdout is moot; the file is clean).
+        assert buf.getvalue() == ""
+
+        text = target.read_text(encoding="utf-8")
+        assert text.startswith("{"), (
+            f"manifest file must start with the JSON object, not a banner line — got: {text[:60]!r}"
+        )
+        assert json.loads(text) == get_surface_manifest()
