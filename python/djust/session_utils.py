@@ -277,7 +277,7 @@ class Stream:
             or hasattr(item_or_id, "pk")
         )
 
-    def dom_id_for(self, item_or_id: Any) -> str:
+    def dom_id_for(self, item_or_id: Any, *, allow_factory_fallback: bool = False) -> str:
         """THE dom id for a stream op — the single place it is computed (#2121).
 
         Insert and delete MUST agree on this string, or nothing can match the
@@ -295,20 +295,25 @@ class Stream:
         (what ``LiveViewTestClient`` asserts against, and correctness for
         whenever the ops ARE wired), not a live on-screen symptom.
 
-        Two arguments cannot produce the custom dom id, and neither is the
-        caller doing anything unreasonable:
+        A **bare id** can never produce the custom dom id — the framework
+        cannot invert an arbitrary callable — so it warns and falls back to
+        :meth:`resolve_id`.
 
-        - a **bare id**, because the framework cannot invert an arbitrary
-          callable;
-        - an **item the factory rejects** (``{"id": 1}`` under a
-          ``m["slug"]`` factory — a natural shape right after a DB delete).
-
-        Both warn and fall back to :meth:`resolve_id`. Raising was the
-        alternative and is rejected: the dom id is unrecoverable either way, so
-        raising converts a cosmetic mismatch into a 500 inside an event
-        handler. The warning names the stream and says what to pass instead.
+        ``allow_factory_fallback`` is the DELETE path's concession, and it is
+        deliberately asymmetric. `stream_delete`'s parameter is named
+        ``item_or_id``, so a partial argument (``{"id": pk}`` right after a DB
+        delete) is in contract; the dom id is unrecoverable either way, and
+        raising would convert a cosmetic mismatch into a 500 inside an event
+        handler. INSERT gets no such concession: the caller is handing over the
+        item that DEFINES the row, so a factory that cannot process it is a
+        programming error — a typo'd key would otherwise make ``dom_id=``
+        silently do nothing, and a factory that raises on only SOME items would
+        leave one stream holding ids from two different resolutions, which is
+        the exact disagreement this method exists to prevent.
         """
         if self._looks_like_item(item_or_id):
+            if not allow_factory_fallback:
+                return f"{self.name}-{self.dom_id_fn(item_or_id)}"
             try:
                 return f"{self.name}-{self.dom_id_fn(item_or_id)}"
             except Exception:

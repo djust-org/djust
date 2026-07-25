@@ -177,7 +177,7 @@ class StreamsMixin:
 
         # One chokepoint with both insert sites, so a custom dom_id= factory
         # cannot make them disagree (#2121, #1646).
-        dom_id_val = stream_obj.dom_id_for(item_or_id)
+        dom_id_val = stream_obj.dom_id_for(item_or_id, allow_factory_fallback=True)
 
         stream_obj.delete(item_or_id)
         self._stream_operations.append(

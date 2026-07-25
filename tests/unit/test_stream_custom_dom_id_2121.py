@@ -216,3 +216,32 @@ def test_passing_the_default_factory_explicitly_rebinds_a_custom_stream():
     assert _ids(v, "stream_insert") == ["rows-a", "rows-2"]
     v.stream_delete("rows", {"id": 2, "slug": "b"})
     assert _ids(v, "stream_delete") == ["rows-2"]
+
+
+# --- the fallback is DELETE-only, deliberately ----------------------------
+
+
+def test_insert_still_raises_when_the_factory_rejects_an_item():
+    # The delete-path fallback must NOT extend to insert. On insert the caller
+    # hands over the item that DEFINES the row, so a factory that cannot
+    # process it is a programming error — and swallowing it would leave one
+    # stream holding ids from two different resolutions, which is the exact
+    # disagreement this module exists to prevent.
+    v = _View()
+    with pytest.raises(KeyError):
+        v.stream("rows", [{"id": 1, "slug": "ok"}, {"id": 2}], dom_id=lambda m: m["slug"])
+
+
+def test_stream_insert_still_raises_when_the_factory_rejects_an_item():
+    v = _View()
+    v.stream("rows", [{"id": 1, "slug": "ok"}], dom_id=lambda m: m["slug"])
+    with pytest.raises(KeyError):
+        v.stream_insert("rows", {"id": 2})
+
+
+def test_a_typod_factory_key_fails_loudly_rather_than_doing_nothing():
+    # Without the asymmetry this inserted every row under the DEFAULT id and
+    # the only signal that dom_id= was inert was a log line.
+    v = _View()
+    with pytest.raises(KeyError):
+        v.stream("rows", [{"id": 1, "slug": "a"}], dom_id=lambda m: m["slgu"])
