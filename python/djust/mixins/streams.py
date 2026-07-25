@@ -193,8 +193,19 @@ class StreamsMixin:
             self.stream(name, items, reset=False)
 
     def _get_streams_context(self) -> Dict[str, list]:
-        """Get streams data for template context."""
-        return {name: stream_obj.items for name, stream_obj in self._streams.items()}
+        """Get streams data for template context.
+
+        Returns a COPY of each item list. Handing out ``stream_obj.items``
+        directly aliased the live list, so ``_reset_streams()`` — which calls
+        ``Stream.clear()``, an in-place ``items.clear()`` — emptied a value
+        that had already been handed to the context. Change-detection could
+        not see the reset either, because its "before" and "after" were the
+        same object (#2119, Action #1039 mutation-after-capture).
+
+        The copy is shallow: the ITEMS are shared, which is correct — they are
+        the caller's own objects. Only the list container is independent.
+        """
+        return {name: list(stream_obj.items) for name, stream_obj in self._streams.items()}
 
     def _get_stream_operations(self) -> list:
         """Get and clear pending stream operations."""
