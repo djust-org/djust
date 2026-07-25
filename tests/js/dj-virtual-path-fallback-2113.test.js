@@ -133,6 +133,38 @@ describe('#2113: path-fallback must not retarget a detached virtual item', () =>
         expect(dom.window.document.body.textContent).toContain('fellback');
     });
 
+    it('a held id whose fallback lands OUTSIDE the list still falls back', async () => {
+        // The over-suppression case. The list holds 129 detached, but this
+        // patch's path resolves to an unrelated live sibling elsewhere in the
+        // tree — nothing to do with the virtual list. Suppressing on the id
+        // alone would drop a patch main applies correctly.
+        //
+        // dj-ids are purely positional (crates/djust_vdom/src/lib.rs), so a
+        // drifted id colliding with one a windowed list still holds is
+        // routine, not exotic.
+        let rows = '';
+        for (let i = 0; i < 30; i++) {
+            rows += `<div data-key="k${i}" dj-id="${100 + i}">row ${i}</div>`;
+        }
+        const { dom } = createEnv(
+            '<div dj-root dj-view="app.V">' +
+                `<div id="vl" dj-virtual="rows" dj-virtual-item-height="20" style="height:40px">${rows}</div>` +
+                '<div id="sibling">untouched</div>' +
+                '</div>'
+        );
+        dom.window.djust.initVirtualLists();
+        expect(dom.window.djust._findVirtualListHolding('129')).toBeTruthy();
+
+        // From dj-root: child 0 is the list itself, child 1 is the sibling —
+        // so path [1] lands OUTSIDE the virtual container.
+        await dom.window.djust.applyPatches(
+            [{ type: 'SetText', path: [1], d: '129', text: 'FELLBACK' }],
+            null
+        );
+
+        expect(dom.window.document.getElementById('sibling').textContent).toBe('FELLBACK');
+    });
+
     it('a virtual list present but NOT holding the id still falls back', async () => {
         // Only a detached item the list actually holds should suppress the
         // fallback — otherwise merely having a virtual list on the page would

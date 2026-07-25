@@ -6087,22 +6087,10 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
         if (byId) {
             return byId;
         }
-        // The id is absent. Normally that means the id changed or the patch is
-        // id-less, and positional fallback is the right resilience.
-        //
-        // But if a [dj-virtual] list is holding that exact id DETACHED, the
-        // element is not missing — it is off-window by design, and the server
-        // addressed a KNOWN item. Falling back to the path would silently
-        // retarget a different element: not a dropped update but a wrong one,
-        // with applyPatches still returning true (#2113). Treat it as a miss so
-        // the caller's diagnostic explains the real reason (#2017 item 5).
-        if (globalThis.djust && typeof globalThis.djust._findVirtualListHolding === 'function') {
-            if (globalThis.djust._findVirtualListHolding(djustId, rootEl)) {
-                return null;
-            }
-        }
-
-        // ID not found - fall through to path-based
+        // ID not found - fall through to path-based. The #2113 guard is
+        // applied AFTER resolution (see below), not here: whether the fallback
+        // is safe depends on WHERE it lands, and suppressing on the id alone
+        // drops legitimate patches.
         if (globalThis.djustDebug || window.DEBUG_MODE) {
             // Log without user data to avoid log injection
             if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
@@ -6140,6 +6128,36 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
 
         // eslint-disable-next-line security/detect-object-injection
         node = children[index];
+    }
+
+    // #2113: the positional fallback resolved, but the patch carried a dj-id
+    // that was NOT found. If the node it landed on lives inside a [dj-virtual]
+    // container, that is the dangerous case — dj-ids are purely positional
+    // (crates/djust_vdom/src/lib.rs), so a windowed list keeps a contiguous
+    // block of ids that a drifted id collides with, and the patch would
+    // silently mutate the WRONG ROW of the same list.
+    //
+    // Only then is it worth asking whether a virtual list holds the id
+    // detached. Two reasons this check is here and not at the id-lookup
+    // failure above:
+    //   1. Correctness — suppressing on the id alone also drops a patch whose
+    //      fallback legitimately lands on an unrelated live element elsewhere
+    //      in the tree. Measured as a real regression against main.
+    //   2. Cost — the holder lookup walks state.items, which is large by
+    //      definition. Gating it on "the fallback landed inside a virtual
+    //      container" keeps it off the ordinary stale-id path, which is
+    //      routine during rapid re-render (21.7x slower without this gate).
+    if (
+        djustId &&
+        node &&
+        node.nodeType === 1 &&
+        typeof node.closest === 'function' &&
+        node.closest('[dj-virtual]') &&
+        globalThis.djust &&
+        typeof globalThis.djust._findVirtualListHolding === 'function' &&
+        globalThis.djust._findVirtualListHolding(djustId, rootEl)
+    ) {
+        return null;
     }
 
     return node;
