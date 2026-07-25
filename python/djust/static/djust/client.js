@@ -5872,6 +5872,21 @@ function sanitizeIdForLog(id) {
 }
 
 /**
+ * Like sanitizeIdForLog but keeps dots, for values that are dotted NAMES
+ * (e.g. a dj-virtual context variable "chat.rows"). Stripping the dot would
+ * mangle the identifier the message exists to report.
+ */
+function sanitizeNameForLog(name) {
+    if (!name) return 'none';
+    return String(name).slice(0, 40).replace(/[^\w.-]/g, '');
+}
+
+// Throttle for the dj-virtual miss diagnosis (#2017): the lookup is O(items)
+// and the miss path can fire once per patch in a batch.
+const VIRTUAL_DIAGNOSIS_THROTTLE_MS = 1000;
+let _lastVirtualDiagnosisAt = -Infinity;
+
+/**
  * Returns true if a comment node's text content matches the dj-if family
  * preserved by the server's VDOM parser. Mirrors
  * `crates/djust_vdom/src/parser.rs:494-499` so client-side path-fallback
@@ -7668,8 +7683,28 @@ function applySinglePatch(patch, rootEl = null) {
         // answers when it positively identifies a detached holder: there is no
         // speculative branch to add noise. Runtime lookup — 29-virtual-list.js
         // loads after this module.
-        if (globalThis.djust && typeof globalThis.djust._findVirtualListHolding === 'function') {
-            const holder = globalThis.djust._findVirtualListHolding(patch.d);
+        // Throttled: the lookup walks state.items, which is large by
+        // definition on a virtual list, and the miss path can fire once per
+        // patch in a batch. Unthrottled that is O(misses x items) on a page
+        // already under strain — measured ~3ms per miss at 10k items. One
+        // diagnosis per window is enough to point the reader at the cause.
+        const nowMs = (globalThis.performance && globalThis.performance.now)
+            ? globalThis.performance.now()
+            : 0;
+        if (
+            nowMs - _lastVirtualDiagnosisAt > VIRTUAL_DIAGNOSIS_THROTTLE_MS &&
+            globalThis.djust &&
+            typeof globalThis.djust._findVirtualListHolding === 'function'
+        ) {
+            // Stamp BEFORE the lookup, not on a hit: the expensive case is a
+            // MISS on a page that merely has a big list (full scan, no early
+            // exit), and that is also the common case. Recording only on a hit
+            // would leave every not-found miss paying the full cost.
+            _lastVirtualDiagnosisAt = nowMs;
+            // Scope to the SAME root the patch resolved against — dj-id
+            // namespaces are per-view, so a document-wide scan would blame a
+            // sticky child's list for a parent-root miss.
+            const holder = globalThis.djust._findVirtualListHolding(patch.d, rootEl);
             if (holder) {
                 console.warn(
                     '[LiveView] ...the target is an off-window item held by a dj-virtual list ' +
@@ -7677,7 +7712,10 @@ function applySinglePatch(patch, rootEl = null) {
                         'cannot land until the item scrolls back into the window. Deeper reconcile ' +
                         'is tracked in #2017.',
                     sanitizeIdForLog(holder.id || '(no id)'),
-                    sanitizeIdForLog(holder.getAttribute('dj-virtual') || '')
+                    // Not sanitizeIdForLog: it strips dots, so a context var
+                    // like "chat.rows" would print as "chatrows" — mangling
+                    // the very name this message exists to report.
+                    sanitizeNameForLog(holder.getAttribute('dj-virtual') || '')
                 );
             }
         }
@@ -13277,13 +13315,28 @@ window.djust.bindModelElements = bindModelElements;
      * STATE is a WeakMap and deliberately not iterable (#2033), so containers
      * are re-discovered from the DOM rather than tracked in a parallel list.
      *
+     * MUST be scoped to the same root the patch resolved against: dj-id
+     * namespaces are PER-VIEW (see 12-vdom-patch.js — "child / sticky patches
+     * don't resolve against the parent view's dj-id namespace"). Scanning the
+     * whole document would let a sticky child's detached item get blamed for a
+     * parent-root miss on the same id — the exact misdirection this helper
+     * exists to remove.
+     *
      * @param {string} djId - the dj-id the patch failed to resolve
+     * @param {Element|null} [rootEl] - the root the patch resolved against
      * @returns {Element|null} the holding container, or null
      */
-    function findVirtualListHolding(djId) {
+    function findVirtualListHolding(djId, rootEl) {
         if (!djId) return null;
         const wanted = String(djId);
-        const containers = document.querySelectorAll('[dj-virtual]');
+        const scope = rootEl || document;
+        const descendants = scope.querySelectorAll('[dj-virtual]');
+        // querySelectorAll matches descendants only, so a root that IS the
+        // virtual container would be missed (#2097 class).
+        const containers =
+            scope !== document && scope.matches && scope.matches('[dj-virtual]')
+                ? [scope].concat(Array.prototype.slice.call(descendants))
+                : descendants;
         for (let ci = 0; ci < containers.length; ci++) {
             // eslint-disable-next-line security/detect-object-injection
             const container = containers[ci];

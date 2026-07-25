@@ -696,13 +696,28 @@
      * STATE is a WeakMap and deliberately not iterable (#2033), so containers
      * are re-discovered from the DOM rather than tracked in a parallel list.
      *
+     * MUST be scoped to the same root the patch resolved against: dj-id
+     * namespaces are PER-VIEW (see 12-vdom-patch.js — "child / sticky patches
+     * don't resolve against the parent view's dj-id namespace"). Scanning the
+     * whole document would let a sticky child's detached item get blamed for a
+     * parent-root miss on the same id — the exact misdirection this helper
+     * exists to remove.
+     *
      * @param {string} djId - the dj-id the patch failed to resolve
+     * @param {Element|null} [rootEl] - the root the patch resolved against
      * @returns {Element|null} the holding container, or null
      */
-    function findVirtualListHolding(djId) {
+    function findVirtualListHolding(djId, rootEl) {
         if (!djId) return null;
         const wanted = String(djId);
-        const containers = document.querySelectorAll('[dj-virtual]');
+        const scope = rootEl || document;
+        const descendants = scope.querySelectorAll('[dj-virtual]');
+        // querySelectorAll matches descendants only, so a root that IS the
+        // virtual container would be missed (#2097 class).
+        const containers =
+            scope !== document && scope.matches && scope.matches('[dj-virtual]')
+                ? [scope].concat(Array.prototype.slice.call(descendants))
+                : descendants;
         for (let ci = 0; ci < containers.length; ci++) {
             // eslint-disable-next-line security/detect-object-injection
             const container = containers[ci];
