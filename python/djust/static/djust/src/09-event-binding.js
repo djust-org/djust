@@ -143,9 +143,18 @@ function _scanScopedElements() {
     });
 
     // Scan ALL elements in the LiveView root (only way to find dotted attr names).
-    // This runs once at mount and on TurboNav — NOT after every patch.
-    const allElements = root.querySelectorAll('*');
-    allElements.forEach(function(element) {
+    // bindLiveViewEvents() calls this on EVERY invocation (#1996) — only the
+    // window/document listener install is one-shot.
+    //
+    // The root element ITSELF must be included: querySelectorAll matches
+    // descendants only, so a scoped attr written on the dj-view/dj-root element
+    // (e.g. <div dj-view="app.SnakeView" dj-window-keydown="key">) was never
+    // registered and the directive was silently dead — no error, no WS frame
+    // (#2097).
+    // Iterate the NodeList directly and scan the root separately — building a
+    // combined array would allocate two arrays on every patch, and this runs on
+    // every bind in one of the largest client modules.
+    function scanElement(element) {
         for (let ai = 0; ai < element.attributes.length; ai++) {
             // eslint-disable-next-line security/detect-object-injection
             const attrName = element.attributes[ai].name;
@@ -195,7 +204,15 @@ function _scanScopedElements() {
                 });
             }
         }
-    });
+    }
+
+    // `document` has no .attributes — scanning it would throw. Its
+    // querySelectorAll('*') already covers <html>/<body>, so the fallback root
+    // needs no special handling beyond being skipped here.
+    if (root !== document) {
+        scanElement(root);
+    }
+    root.querySelectorAll('*').forEach(scanElement);
 }
 
 /**
