@@ -663,6 +663,65 @@ pub enum Patch {
         #[serde(skip_serializing_if = "Option::is_none")]
         child_d: Option<String>,
     },
+    // --- [dj-virtual] keyed splice ops (ADR-026, #2017 items 2-4) ---
+    //
+    // A [dj-virtual] container's children are only the visible WINDOW on the
+    // client; the full collection lives in the list's item pool with
+    // off-window rows detached. INDEX-addressed ops (InsertChild/MoveChild/
+    // RemoveChild above) are therefore meaningless for such a parent: index 7
+    // means "the 8th item" to the differ and "the 8th VISIBLE item" to the DOM.
+    //
+    // These variants address items by KEY instead, so the client can apply
+    // them to the pool without the DOM being the source of truth. Emitted only
+    // when the parent carries `dj-virtual` AND the feature flag is on
+    // (`diff::set_virtual_keyed_ops`, default OFF).
+    //
+    // Wire note (corrected — the first version of this comment was wrong, and
+    // so is the older one on `MoveSubtree` below). `#[serde(tag = "type")]`
+    // does NOT force a map encoding under msgpack: `rmp_serde` encodes an
+    // internally-tagged enum as a POSITIONAL array with the tag in slot 0.
+    // Measured: `SetText { d: None }` -> first byte 0x93 (FIXARRAY), and it
+    // fails its own round-trip with "invalid length 2, expected 3 elements"
+    // because `skip_serializing_if` dropped the interior `d` — the exact
+    // #1541 shape. That breakage is PRE-EXISTING and affects every variant,
+    // not just these; `render_binary_diff` (djust_live/src/lib.rs:1028) is the
+    // only msgpack producer and has no non-test consumer today, which is why
+    // it has gone unnoticed. Tracked separately rather than widened into this
+    // change (#1079); pinned as-is in `wire_protocol_snapshot.rs` so the
+    // reality is recorded rather than assumed.
+    //
+    // These variants therefore keep `skip_serializing_if` to match every
+    // sibling variant: the LIVE path is `serde_json` (a named map), where it
+    // is genuinely safe and saves wire bytes on every patch.
+    /// Insert a keyed item into a `[dj-virtual]` parent's pool.
+    VirtualInsert {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        /// The item's key (from `dj-key`), NOT an index.
+        key: String,
+        node: VNode,
+        /// Insert before the item with this key; `None` appends at the tail.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        before_key: Option<String>,
+    },
+    /// Move an existing keyed item within a `[dj-virtual]` parent's pool.
+    VirtualMove {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        key: String,
+        /// Move before the item with this key; `None` moves to the tail.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        before_key: Option<String>,
+    },
+    /// Remove a keyed item from a `[dj-virtual]` parent's pool.
+    VirtualRemove {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        key: String,
+    },
     /// Remove a `dj-if` keyed subtree by marker id.
     ///
     /// Capability of issue #1358 (keyed VDOM diff for `{% if %}` conditional
@@ -712,10 +771,12 @@ pub enum Patch {
     /// dj-ids). `index` is the open marker's position among the parent's
     /// significant children (same frame as `InsertSubtree.index`).
     ///
-    /// `Patch` is internally tagged (`#[serde(tag = "type")]`) → map-encoded
-    /// even under msgpack, so an interior `d: Option` with `skip_serializing_if`
-    /// is wire-safe (the #1538/#1541 positional-array hazard applies only to
-    /// plain structs like `VNode`).
+    /// NOTE: this paragraph used to claim that `#[serde(tag = "type")]` makes
+    /// `Patch` map-encoded even under msgpack, and it is FALSE — `rmp_serde`
+    /// encodes an internally-tagged enum as a positional array (measured:
+    /// `SetText` -> 0x93 FIXARRAY, round-trip fails). The `skip_serializing_if`
+    /// on `d` is wire-safe on the LIVE path because that path is `serde_json`,
+    /// not because of the tag. See the corrected note on `VirtualInsert`.
     MoveSubtree {
         /// Boundary marker id (e.g. `"if-a3b1c2d4-0"`).
         id: String,
