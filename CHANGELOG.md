@@ -90,6 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`crossbeam-epoch` 0.9.18 → 0.9.20 — invalid pointer dereference (RUSTSEC-2026-0204).** The `fmt::Pointer` impl for `Atomic`/`Shared` dereferences an invalid underlying pointer. Advisory dated 2026-07-06, fixed in 0.9.20. Transitive (`crossbeam-epoch` ← `crossbeam-deque` ← `rayon-core` ← … ← `djust_components`), and the existing caret range already admitted the fix, so this is a **lockfile-only** bump with no manifest change. Surfaced because the pre-push `cargo audit` hook blocks *every* push until clean, so it was blocking unrelated work; fixed on its own branch rather than folded into the feature PR that hit it. Verified `cargo audit` exits 0 and the workspace still tests green across 41 binaries.
+
+### Security
+
 - **Dependency security bumps — resolved 3 open Dependabot alerts (#134, #135, #136).** Bumped two `uv.lock` dependencies to their patched versions and raised their `[tool.uv]` `constraint-dependencies` security floors to match (so a future re-resolve can never fall back to a vulnerable version):
   - `pyasn1` 0.6.3 → 0.6.4 — two High advisories: GHSA-8ppf-4f7h-5ppj (#135, quadratic complexity in OBJECT IDENTIFIER and RELATIVE-OID processing allows denial of service) and GHSA-hm4w-wwcw-mr6r (#136, uncontrolled resource consumption when converting decoded REAL values). Pulled in transitively via the TLS/cert-parsing stack (`service-identity` → `pyopenssl`); floor bumped `>=0.6.3` → `>=0.6.4`.
   - `setuptools` 82.0.1 → 83.0.0 — GHSA-h35f-9h28-mq5c (#134, Moderate: `MANIFEST.in` exclusion bypass in sdist via Unicode normalization collision (NFC/NFD) on macOS APFS/HFS+). Build-time dependency only — not on any djust runtime path; floor bumped `>=78.1.1` → `>=83.0.0`.
