@@ -7657,6 +7657,30 @@ function applySinglePatch(patch, rootEl = null) {
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
         const patchType = String(patch.type || 'Unknown');
         console.warn('[LiveView] Patch failed (%s): node not found at path=%s, dj-id=%s', patchType, safePath, sanitizeIdForLog(patch.d));
+
+        // A [dj-virtual] list holds off-window items DETACHED, so a patch
+        // aimed at one legitimately resolves to null. Say so when we can
+        // PROVE it — the generic causes below (third-party JS, a changed
+        // {% if %}) are all wrong in that case, and following them is what
+        // made #1988/#1989 expensive to investigate (#2017).
+        //
+        // Unconditional rather than djustDebug-gated because the helper only
+        // answers when it positively identifies a detached holder: there is no
+        // speculative branch to add noise. Runtime lookup — 29-virtual-list.js
+        // loads after this module.
+        if (globalThis.djust && typeof globalThis.djust._findVirtualListHolding === 'function') {
+            const holder = globalThis.djust._findVirtualListHolding(patch.d);
+            if (holder) {
+                console.warn(
+                    '[LiveView] ...the target is an off-window item held by a dj-virtual list ' +
+                        '(container id=%s, dj-virtual=%s). It is detached by design, so this patch ' +
+                        'cannot land until the item scrolls back into the window. Deeper reconcile ' +
+                        'is tracked in #2017.',
+                    sanitizeIdForLog(holder.id || '(no id)'),
+                    sanitizeIdForLog(holder.getAttribute('dj-virtual') || '')
+                );
+            }
+        }
         if (window.DEBUG_MODE) {
             console.groupCollapsed('[LiveView] Patch detail (%s)', patchType);
             if (globalThis.djustDebug) console.log('[LiveView] Full patch object:', JSON.stringify(patch));
@@ -13238,10 +13262,50 @@ window.djust.bindModelElements = bindModelElements;
         // STATE entry already dropped by detachState() above.
     }
 
+    /**
+     * Diagnostic: which [dj-virtual] container, if any, currently holds a
+     * DETACHED item carrying `djId`?
+     *
+     * A virtual list keeps off-window items out of the DOM (see the absorb
+     * path above: "Off-window items stay detached, held only in state.items").
+     * A server patch aimed at such an item therefore resolves to null, and the
+     * VDOM patcher's generic "node not found" warning sends the reader after
+     * third-party JS or a changed {% if %} — none of which is the cause. That
+     * misdirection is what made #1988/#1989 expensive to investigate, so the
+     * patcher calls this to name the real reason (#2017).
+     *
+     * STATE is a WeakMap and deliberately not iterable (#2033), so containers
+     * are re-discovered from the DOM rather than tracked in a parallel list.
+     *
+     * @param {string} djId - the dj-id the patch failed to resolve
+     * @returns {Element|null} the holding container, or null
+     */
+    function findVirtualListHolding(djId) {
+        if (!djId) return null;
+        const wanted = String(djId);
+        const containers = document.querySelectorAll('[dj-virtual]');
+        for (let ci = 0; ci < containers.length; ci++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const container = containers[ci];
+            const state = STATE.get(container);
+            if (!state || !state.items) continue;
+            for (const node of state.items) {
+                if (!node || node.nodeType !== 1) continue;
+                if (node.getAttribute('dj-id') !== wanted) continue;
+                // Only a DETACHED item explains a patch miss. An item still in
+                // the document was resolvable, so the miss has another cause
+                // and blaming dj-virtual would be a false positive.
+                if (!document.contains(node)) return container;
+            }
+        }
+        return null;
+    }
+
     window.djust = window.djust || {};
     window.djust.initVirtualLists = initVirtualLists;
     window.djust.refreshVirtualList = refreshVirtualList;
     window.djust.teardownVirtualList = teardownVirtualList;
+    window.djust._findVirtualListHolding = findVirtualListHolding;
 })();
 
 // ============================================================================

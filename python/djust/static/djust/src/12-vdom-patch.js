@@ -1797,6 +1797,30 @@ function applySinglePatch(patch, rootEl = null) {
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
         const patchType = String(patch.type || 'Unknown');
         console.warn('[LiveView] Patch failed (%s): node not found at path=%s, dj-id=%s', patchType, safePath, sanitizeIdForLog(patch.d));
+
+        // A [dj-virtual] list holds off-window items DETACHED, so a patch
+        // aimed at one legitimately resolves to null. Say so when we can
+        // PROVE it — the generic causes below (third-party JS, a changed
+        // {% if %}) are all wrong in that case, and following them is what
+        // made #1988/#1989 expensive to investigate (#2017).
+        //
+        // Unconditional rather than djustDebug-gated because the helper only
+        // answers when it positively identifies a detached holder: there is no
+        // speculative branch to add noise. Runtime lookup — 29-virtual-list.js
+        // loads after this module.
+        if (globalThis.djust && typeof globalThis.djust._findVirtualListHolding === 'function') {
+            const holder = globalThis.djust._findVirtualListHolding(patch.d);
+            if (holder) {
+                console.warn(
+                    '[LiveView] ...the target is an off-window item held by a dj-virtual list ' +
+                        '(container id=%s, dj-virtual=%s). It is detached by design, so this patch ' +
+                        'cannot land until the item scrolls back into the window. Deeper reconcile ' +
+                        'is tracked in #2017.',
+                    sanitizeIdForLog(holder.id || '(no id)'),
+                    sanitizeIdForLog(holder.getAttribute('dj-virtual') || '')
+                );
+            }
+        }
         if (window.DEBUG_MODE) {
             console.groupCollapsed('[LiveView] Patch detail (%s)', patchType);
             if (globalThis.djustDebug) console.log('[LiveView] Full patch object:', JSON.stringify(patch));
