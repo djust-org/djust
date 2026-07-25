@@ -491,6 +491,50 @@ def _check_tenant_strict_mode_disabled(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_unknown_extensions(errors: list) -> None:
+    """C015 -- unknown adapter name in ``DJUST_CONFIG['extensions']`` (#2063).
+
+    An unrecognized name is dropped at injection time rather than raising, so
+    without this check a typo (``["charts"]``) is completely silent: no script
+    tag, no error, and a hook that simply never mounts. This makes it loud at
+    startup instead.
+    """
+    from ..config import get_djust_config
+    from ..extensions import AVAILABLE_EXTENSIONS, get_configured_extensions
+
+    if _is_check_suppressed("djust.C015"):
+        return
+
+    raw = get_djust_config().get("extensions", [])
+    if raw and not isinstance(raw, (list, tuple)):
+        errors.append(
+            DjustError(
+                "DJUST_CONFIG['extensions'] must be a list of adapter names, "
+                f"got {type(raw).__name__}.",
+                hint="Example: DJUST_CONFIG = {'extensions': ['chart']}",
+                id="djust.C015",
+            )
+        )
+        return
+
+    known = sorted(AVAILABLE_EXTENSIONS)
+    for name in get_configured_extensions():
+        if name not in AVAILABLE_EXTENSIONS:
+            errors.append(
+                DjustError(
+                    f"DJUST_CONFIG['extensions'] lists unknown adapter '{name}'. "
+                    "It will be ignored -- no script is injected and the "
+                    "adapter's hook never mounts.",
+                    hint=(
+                        f"Available adapters: {', '.join(known)}. "
+                        "Suppress with DJUST_CONFIG = "
+                        "{'suppress_checks': ['C015']}."
+                    ),
+                    id="djust.C015",
+                )
+            )
+
+
 # ---------------------------------------------------------------------------
 # Configuration checks (C0xx)
 # ---------------------------------------------------------------------------
@@ -593,6 +637,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C014 -- Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS (closes #1556)
     _check_multi_tenant_asgi_set_calls(errors)
+
+    # C015 -- Unknown adapter name in DJUST_CONFIG['extensions'] (#2063)
+    _check_unknown_extensions(errors)
 
     # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
     _check_tenant_strict_mode_disabled(errors)

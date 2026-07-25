@@ -151,6 +151,11 @@ navigation:
         file: guides/js-commands.md
         order: 6.5
         level: intermediate
+      - title: Official Adapters
+        slug: official-adapters
+        file: guides/official-adapters.md
+        order: 6.6
+        level: intermediate
       - title: Server-Driven UI
         slug: server-driven-ui
         file: guides/server-driven-ui.md

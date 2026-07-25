@@ -55,6 +55,7 @@ How to build specific features.
 |                                                        |                                                           |
 | ------------------------------------------------------ | --------------------------------------------------------- |
 | **[JS Commands](guides/js-commands.md)**               | `show`, `hide`, `toggle`, `add_class`, `transition`, `push`, … — client-side DOM ops with Phoenix LV 1.0 parity |
+| **[Official Adapters](guides/official-adapters.md)**   | `DJUST_CONFIG['extensions']` — pre-written morph-safe glue for third-party libraries (`chart` / Chart.js); you bring the library |
 | **[Server-Driven UI](guides/server-driven-ui.md)**     | `push_commands()` — the server pushes JS Command chains to the client for immediate execution (ADR-002 Phase 1a) |
 | **[Guided Tours](guides/tutorials.md)**                | `TutorialMixin` + `{% tutorial_bubble %}` — declarative guided tours, onboarding flows, and wizards (ADR-002 Phase 1c) |
 
