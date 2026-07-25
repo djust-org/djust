@@ -1,0 +1,156 @@
+# ADR-026: `dj-virtual` differ awareness — reconciling a server-rendered list against a client-windowed DOM
+
+**Status**: Proposed — no implementation yet
+**Date**: 2026-07-25
+**Deciders**: Project maintainers
+**Related**:
+- [#2017](https://github.com/djust-org/djust/issues/2017) — items 2, 3, 4. This ADR is the design deliverable for them; items 1 and 5 shipped separately.
+- [ADR-025](025-js-extension-sockets.md) — extension sockets; the adapters milestone that rides on them
+- #1988 / #1989 — the client-side self-heal this builds on
+- #2113 — path-fallback landing a patch on the wrong node
+- #1646 — parallel-path drift, the failure class this design must not create
+
+## Context
+
+`dj-virtual` renders only a window of a large list. Off-window items are
+**detached** from the DOM and held in the client's `state.items`.
+
+The server does not know that. It renders the **whole** list and diffs the
+whole list. `grep -rn "dj-virtual" crates/` returns **zero** — the Rust differ
+has no concept of a client-windowed subtree.
+
+So the two sides disagree about what the DOM contains:
+
+| | server's model | client's DOM |
+|---|---|---|
+| 10 000-row feed | 10 000 nodes | ~20 nodes (window + overscan) |
+
+Every patch the differ emits for that subtree addresses a node the client may
+not have attached. Three consequences, which are #2017 items 2–4:
+
+1. **Patches for off-window items cannot land.** The node is not in the DOM.
+2. **Positional paths are meaningless inside the window.** `path: [0, 7]` means
+   "the 8th child" to the differ and "the 8th *visible* child" to the DOM.
+3. **Insert position is lost.** The client-side absorb (#1989) appends loose
+   rows at the tail, which is right for an append-only feed and wrong for an
+   insert in the middle.
+
+### What already mitigates this
+
+Shipped, and deliberately *not* superseded by this ADR:
+
+- **#1989** — the client self-heals a clobbered shell and absorbs loose rows.
+- **#2017 item 5** — a patch miss on an off-window item now names `dj-virtual`
+  as the cause instead of listing three wrong ones.
+- **#2113** — a patch whose `dj-id` is held detached no longer falls back to a
+  positional path and silently mutates the wrong row.
+- **#2017 item 1** — stream ops route through the item pool, so `prepend` lands
+  at the front and `prune` trims the pool rather than the window.
+
+Together these make the failure **loud and safe** rather than silent and
+corrupting. What they do not do is make a mid-window update *land*.
+
+## Decision
+
+**Not yet.** This ADR records the options and recommends one; it does not
+authorise implementation. Rationale for deferring is in Consequences.
+
+The recommended direction, when taken, is **Option A — keyed splice ops for
+`[dj-virtual]` subtrees**.
+
+## Options considered
+
+### Option A — differ emits keyed splice ops for a `[dj-virtual]` subtree
+
+Teach the differ that a subtree marked `dj-virtual` is client-windowed, and for
+its children emit **key-addressed** operations (`InsertBefore(key)`,
+`Move(key)`, `Remove(key)`, `Update(key)`) instead of positional patches.
+
+The client applies them to `state.items`, and the window re-renders from the
+pool. The DOM is never addressed directly.
+
+- **Pro** — the only option that makes a mid-window update *correct* rather
+  than merely safe. It also subsumes items 3 and 4: an off-window update
+  mutates the pool entry (item 3), and a keyed insert lands at its key position
+  (item 4).
+- **Pro** — the machinery mostly exists. `diff.rs` already has keyed child
+  reconciliation with an LIS pass (`lis.rs`) for minimal moves.
+- **Con** — a new wire-protocol shape. Per #1448 it needs snapshot pinning, and
+  per #1541 the serde field ordering needs checking for both encodings.
+- **Con** — the differ must learn a client-rendering concern. That is a real
+  layering cost and the main argument against.
+
+### Option B — client-side patch buffering
+
+Keep emitting ordinary patches. The client buffers those it cannot land and
+replays them when the item scrolls in.
+
+- **Pro** — no protocol change, no differ change.
+- **Con** — unbounded buffer on a long-lived feed, and replay ordering against
+  later patches for the same node is genuinely hard.
+- **Con** — does not fix item 4 at all: a buffered insert still has no position.
+- **Verdict** — rejected. It converts a correctness problem into a memory and
+  ordering problem.
+
+### Option C — server-side windowing
+
+The server renders only the visible window and diffs that.
+
+- **Pro** — the two sides would agree exactly.
+- **Con** — the server must track each client's scroll offset, making render
+  stateful per connection. That is contrary to the framework's model and would
+  put scroll position on the wire at scroll frequency.
+- **Verdict** — rejected.
+
+### Option D — status quo plus the shipped mitigations
+
+Accept that mid-window updates to off-window items do not land, and rely on the
+diagnostic (#2017 item 5) to explain why.
+
+- **Pro** — zero cost; already in place.
+- **Con** — the documented `dj-virtual` + streams pairing remains partly
+  aspirational for anything other than append-only feeds.
+- **Verdict** — this is the current state, and an acceptable one to hold while
+  the demand for Option A is unproven.
+
+## Why defer
+
+Three reasons, in order of weight:
+
+1. **No confirmed demand.** The reported pain (#1988/#1989, snake-arena, the
+   #1724 chart case) was **append-only feeds and teardown**, all of which the
+   shipped mitigations now cover. Nobody has yet reported a mid-window keyed
+   update failing.
+2. **High blast radius.** This touches the Rust differ, the wire protocol, and
+   the client patch applier at once. Per the split-foundation rule (#1122) it
+   wants to be sequenced behind a soak of the pieces that just landed — four
+   PRs touched `12-vdom-patch.js` in the last day.
+3. **The cheap half is done.** Items 1 and 5 delivered most of the practical
+   value. What remains is the expensive half.
+
+## Non-goals
+
+- Server-side scroll tracking (Option C).
+- Changing `dj-virtual`'s client-side windowing model.
+- Superseding the #1989 self-heal — it remains the safety net regardless.
+
+## Consequences
+
+**If Option A is taken later**, it should be split per #1122:
+
+1. Differ emits keyed splice ops for `[dj-virtual]` subtrees, behind a config
+   flag, default OFF. Wire-format snapshot tests first (#1448), with the serde
+   field-position check from #1541.
+2. Client applies them to the pool. Reuses `_virtualInsert` / `_virtualPrune`
+   from #2017 item 1 rather than adding a second path (#1646).
+3. Flag flips ON after a soak.
+
+**Testing** this would require, per repo canon: wire-format pinning for every
+new op shape; gate-off siblings for each behavioural test; and — the specific
+trap here — assertions on **order and position**, not counts. #2017 item 1's
+first tests counted pool size and passed with the fix disabled, because the
+#1989 absorb already produced the right count for the wrong reason.
+
+**If it is never taken**, `dj-virtual` remains documented as suited to
+append-only and replace-whole-list workloads, which is what it is good at
+today. That should be stated in `large-lists.md` rather than left implicit.

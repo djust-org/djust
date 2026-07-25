@@ -42,7 +42,12 @@ class StreamsMixin:
         """
 
         def default_dom_id(x):
-            return getattr(x, "id", None) or getattr(x, "pk", None) or id(x)
+            # Routed through Stream._identity so insert and delete agree on
+            # what identifies a row (#2116). The previous form used ``or``,
+            # i.e. TRUTHINESS, so an item with id=0 inserted as
+            # "<name>-<address>" while delete emitted "<name>-0" and the
+            # client could never match them.
+            return Stream._identity(x)
 
         if dom_id is None:
             dom_id = default_dom_id
@@ -160,13 +165,16 @@ class StreamsMixin:
 
         stream_obj = self._streams[name]
 
-        # Get the DOM id
-        if hasattr(item_or_id, "id"):
-            dom_id_val = f"{name}-{item_or_id.id}"
-        elif hasattr(item_or_id, "pk"):
-            dom_id_val = f"{name}-{item_or_id.pk}"
-        else:
-            dom_id_val = f"{name}-{item_or_id}"
+        # Get the DOM id. Matches insert for the DEFAULT dom_id factory
+        # (#2116, #1646). NOTE: a stream created with a custom ``dom_id=``
+        # callable still disagrees — insert uses that callable, this uses the
+        # default resolution. Pre-existing and unchanged here; filed separately
+        # rather than widened into this fix. The
+        # pre-fix hasattr chain here meant a dict item produced a dom_id of
+        # "<name>-{'id': 1, 't': 'a'}" — the dict's repr — while the same
+        # item inserted as "<name>-<address>". Fixing Stream.delete alone
+        # left this public entry point on the old path.
+        dom_id_val = f"{name}-{Stream.resolve_id(item_or_id)}"
 
         stream_obj.delete(item_or_id)
         self._stream_operations.append(

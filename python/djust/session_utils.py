@@ -6,7 +6,7 @@ Extracted from live_view.py for modularity.
 
 import hashlib
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
 
@@ -202,22 +202,86 @@ class Stream:
         else:
             self.items.append(item)
 
-    def delete(self, item_or_id: Any) -> None:
-        """Mark item for deletion."""
-        if hasattr(item_or_id, "id"):
-            item_id = item_or_id.id
-        elif hasattr(item_or_id, "pk"):
-            item_id = item_or_id.pk
-        else:
-            item_id = item_or_id
+    @staticmethod
+    def _identity(item: Any) -> Any:
+        """Identity of a stream item, for deletion matching.
 
-        self._deleted_ids.add(item_id)
+        Handles mappings as well as objects (#2116). ``getattr`` reads an
+        ATTRIBUTE, so a dict item like ``{"id": 1}`` has no ``.id`` and used to
+        fall through to ``id(item)`` — the CPython object address — which never
+        matched a caller's id. Dict items were silently undeletable.
+
+        Truthiness is NOT the test — ``{"id": 0}`` resolves to ``0``, not to
+        the address. But ``None`` means "no identity yet" (an unsaved row), so
+        it falls through to the address: treating it as a value would give
+        every unsaved item the SAME identity, colliding their dom_ids. That
+        regression is why this is ``is not None`` rather than ``in item``.
+        """
+        if isinstance(item, Mapping):
+            for key in ("id", "pk"):
+                if key in item and item[key] is not None:
+                    return item[key]
+            return id(item)
+        for attr in ("id", "pk"):
+            value = getattr(item, attr, None)
+            if value is not None:
+                return value
+        return id(item)
+
+    @staticmethod
+    def resolve_id(item_or_id: Any) -> Any:
+        """Identity of a delete/lookup ARGUMENT, which may be an item or a bare id.
+
+        Distinct from :meth:`_identity`, which is for values known to be
+        ITEMS. The difference is the fallback: an unrecognized item resolves
+        to its object address (matching only itself), whereas an unrecognized
+        ARGUMENT is the id the caller passed and must be used verbatim.
+
+        Collapsing the two is a real bug — ``_identity(0)`` returns the
+        address of the int ``0``, not ``0`` — so every caller that accepts
+        "item or id" must use THIS one (#2116).
+        """
+        if isinstance(item_or_id, Mapping):
+            # A mapping is always an ITEM, never a bare id. Previously this
+            # reached ``_deleted_ids.add(dict)`` and raised
+            # ``TypeError: unhashable type: 'dict'``.
+            return Stream._identity(item_or_id)
+        if hasattr(item_or_id, "id"):
+            return item_or_id.id
+        if hasattr(item_or_id, "pk"):
+            return item_or_id.pk
+        # No id/pk and not a mapping — the caller passed the id itself.
+        return item_or_id
+
+    def delete(self, item_or_id: Any) -> None:
+        """Mark item for deletion.
+
+        Accepts either the item or its bare id, per the parameter name.
+
+        A MAPPING with no usable id/pk resolves to its object address, so a
+        look-alike dict never matches. A non-Mapping object with no id/pk is
+        treated as the id ITSELF (the caller passed a bare id) — so an id-less
+        plain object passed as an item does not delete. That asymmetry is
+        pre-existing and unchanged here.
+        """
+        item_id = self.resolve_id(item_or_id)
+
+        try:
+            self._deleted_ids.add(item_id)
+        except TypeError:
+            # Unhashable identity (an id-less dict resolves to its hashable
+            # address, but a user-supplied unhashable id does not). Removal
+            # from ``items`` below still works, which is what callers observe.
+            #
+            # NOTE: ``_deleted_ids`` currently has NO readers anywhere in the
+            # codebase — it is written here and cleared in clear(), nothing
+            # else. So skipping an entry cannot break a consumer today. Do not
+            # read this as "the tombstone is optional"; if a client-diff
+            # consumer is ever added, this branch needs revisiting.
+            logger.debug("Stream %s: unhashable delete id, skipping tombstone", self.name)
+
         # Remove from items list if present
-        self.items = [
-            item
-            for item in self.items
-            if getattr(item, "id", getattr(item, "pk", id(item))) != item_id
-        ]
+        self.items = [item for item in self.items if self._identity(item) != item_id]
 
     def clear(self) -> None:
         """Clear all items."""
