@@ -6087,6 +6087,21 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
         if (byId) {
             return byId;
         }
+        // The id is absent. Normally that means the id changed or the patch is
+        // id-less, and positional fallback is the right resilience.
+        //
+        // But if a [dj-virtual] list is holding that exact id DETACHED, the
+        // element is not missing — it is off-window by design, and the server
+        // addressed a KNOWN item. Falling back to the path would silently
+        // retarget a different element: not a dropped update but a wrong one,
+        // with applyPatches still returning true (#2113). Treat it as a miss so
+        // the caller's diagnostic explains the real reason (#2017 item 5).
+        if (globalThis.djust && typeof globalThis.djust._findVirtualListHolding === 'function') {
+            if (globalThis.djust._findVirtualListHolding(djustId, rootEl)) {
+                return null;
+            }
+        }
+
         // ID not found - fall through to path-based
         if (globalThis.djustDebug || window.DEBUG_MODE) {
             // Log without user data to avoid log injection
