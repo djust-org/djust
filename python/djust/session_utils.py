@@ -6,7 +6,7 @@ Extracted from live_view.py for modularity.
 
 import hashlib
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional
 
@@ -202,22 +202,56 @@ class Stream:
         else:
             self.items.append(item)
 
+    @staticmethod
+    def _identity(item: Any) -> Any:
+        """Identity of a stream item, for deletion matching.
+
+        Handles mappings as well as objects (#2116). ``getattr`` reads an
+        ATTRIBUTE, so a dict item like ``{"id": 1}`` has no ``.id`` and used to
+        fall through to ``id(item)`` — the CPython object address — which never
+        matched a caller's id. Dict items were silently undeletable.
+
+        Key PRESENCE is what matters, not truthiness, so ``{"id": 0}`` and
+        ``{"id": None}`` resolve to their real ids rather than the address.
+        """
+        if isinstance(item, Mapping):
+            for key in ("id", "pk"):
+                if key in item:
+                    return item[key]
+            return id(item)
+        return getattr(item, "id", getattr(item, "pk", id(item)))
+
     def delete(self, item_or_id: Any) -> None:
-        """Mark item for deletion."""
-        if hasattr(item_or_id, "id"):
+        """Mark item for deletion.
+
+        Accepts either the item or its bare id, per the parameter name. An
+        item that carries no id/pk resolves to its object address, which
+        matches only that exact object — never a look-alike.
+        """
+        if isinstance(item_or_id, Mapping):
+            # A mapping is always an ITEM, never a bare id. Previously this
+            # reached ``_deleted_ids.add(dict)`` and raised
+            # ``TypeError: unhashable type: 'dict'``.
+            item_id = self._identity(item_or_id)
+        elif hasattr(item_or_id, "id"):
             item_id = item_or_id.id
         elif hasattr(item_or_id, "pk"):
             item_id = item_or_id.pk
         else:
+            # No id/pk and not a mapping — the caller passed the id itself.
             item_id = item_or_id
 
-        self._deleted_ids.add(item_id)
+        try:
+            self._deleted_ids.add(item_id)
+        except TypeError:
+            # Unhashable identity (e.g. an id-less dict resolved to its
+            # address is hashable, but a user-supplied unhashable id is not).
+            # Deletion from ``items`` below still works; the tombstone set is
+            # only an optimisation for the client diff.
+            logger.debug("Stream %r: unhashable delete id, skipping tombstone", self.name)
+
         # Remove from items list if present
-        self.items = [
-            item
-            for item in self.items
-            if getattr(item, "id", getattr(item, "pk", id(item))) != item_id
-        ]
+        self.items = [item for item in self.items if self._identity(item) != item_id]
 
     def clear(self) -> None:
         """Clear all items."""
