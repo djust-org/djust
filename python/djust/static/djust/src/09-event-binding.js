@@ -150,13 +150,11 @@ function _scanScopedElements() {
     // descendants only, so a scoped attr written on the dj-view/dj-root element
     // (e.g. <div dj-view="app.SnakeView" dj-window-keydown="key">) was never
     // registered and the directive was silently dead — no error, no WS frame
-    // (#2097). When root falls back to `document` there is nothing to prepend:
-    // document has no attributes, and document.querySelectorAll('*') already
-    // covers <html>/<body>.
-    const descendants = root.querySelectorAll('*');
-    const allElements =
-        root === document ? Array.from(descendants) : [root].concat(Array.from(descendants));
-    allElements.forEach(function(element) {
+    // (#2097).
+    // Iterate the NodeList directly and scan the root separately — building a
+    // combined array would allocate two arrays on every patch, and this runs on
+    // every bind in one of the largest client modules.
+    function scanElement(element) {
         for (let ai = 0; ai < element.attributes.length; ai++) {
             // eslint-disable-next-line security/detect-object-injection
             const attrName = element.attributes[ai].name;
@@ -206,7 +204,15 @@ function _scanScopedElements() {
                 });
             }
         }
-    });
+    }
+
+    // `document` has no .attributes — scanning it would throw. Its
+    // querySelectorAll('*') already covers <html>/<body>, so the fallback root
+    // needs no special handling beyond being skipped here.
+    if (root !== document) {
+        scanElement(root);
+    }
+    root.querySelectorAll('*').forEach(scanElement);
 }
 
 /**

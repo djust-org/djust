@@ -166,6 +166,27 @@ describe('#2097: scoped attrs on the root element itself', () => {
         expect(calls.map((c) => c.eventName)).toEqual(['key2']);
     });
 
+    it('does not throw when root falls back to document (no dj-view/dj-root)', async () => {
+        // The root-inclusion guard is load-bearing: `document.attributes` is
+        // undefined, so scanning document itself throws TypeError and would
+        // take out every scoped binding on the page. Pin it — the guard is one
+        // `if` and trivially droppable in a refactor.
+        const dom = createTestEnv('<div id="plain"></div>');
+        initClient(dom);
+        expect(() => dom.window.djust.bindLiveViewEvents()).not.toThrow();
+
+        // And the document fallback still binds a scoped attr found under it.
+        dom.window.document.body.innerHTML =
+            '<div id="plain"></div><div dj-window-keydown="fallback_key"></div>';
+        expect(() => dom.window.djust.bindLiveViewEvents()).not.toThrow();
+
+        dom.window.dispatchEvent(
+            new dom.window.KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', bubbles: true })
+        );
+        await new Promise((r) => setTimeout(r, 50));
+        expect(getFetchCalls(dom).map((c) => c.eventName)).toEqual(['fallback_key']);
+    });
+
     it('cause 1 is already fixed: the scan re-runs on every bind (#1996 pin)', async () => {
         // Descendant case — the #1996 fix. Pinned here so a future refactor
         // cannot revert to scan-once and blame #2097.
