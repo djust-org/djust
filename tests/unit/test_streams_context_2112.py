@@ -108,25 +108,39 @@ def test_multiple_streams_all_exposed():
 # ---------------------------------------------------------------------------
 
 
-def test_existing_streams_key_is_not_clobbered():
-    """A view that already defines ``streams`` keeps its own value.
+def test_live_streams_win_over_a_stale_streams_attribute():
+    """Live data must win — deferring to an existing key causes data loss.
 
-    Streams never reached the context before this fix, so an app that set
-    ``self.streams`` (or injected one) renders that today. Overwriting it here
-    would be a silent breaking change.
+    A stale ``streams`` attribute (restored from a session written before the
+    snapshot exclusion) would otherwise shadow the live stream permanently.
     """
 
     class Clashing(LiveView):
         template_name = "unused.html"
 
         def mount(self, request, **kwargs):
-            self.streams = {"mine": ["user-value"]}
+            self.streams = {"mine": ["stale-value"]}
             self.stream("messages", [{"id": 1, "text": "from-stream"}])
 
     v = Clashing()
     v.mount(None)
     got = v.get_context_data()
-    assert got["streams"] == {"mine": ["user-value"]}
+    assert "messages" in got["streams"]
+    assert "mine" not in got["streams"]
+
+
+def test_view_without_streams_keeps_its_own_streams_attribute():
+    """An app that never calls stream() is left completely alone."""
+
+    class OwnUse(LiveView):
+        template_name = "unused.html"
+
+        def mount(self, request, **kwargs):
+            self.streams = {"mine": ["user-value"]}
+
+    v = OwnUse()
+    v.mount(None)
+    assert v.get_context_data()["streams"] == {"mine": ["user-value"]}
 
 
 def test_top_level_stream_name_is_NOT_exposed():
@@ -184,3 +198,54 @@ def test_stream_name_becomes_the_context_key(name):
     v = Named()
     v.mount(None)
     assert name in v.get_context_data()["streams"]
+
+
+# ---------------------------------------------------------------------------
+# The self-poisoning loop (Stage 11 finding on PR #2117)
+# ---------------------------------------------------------------------------
+#
+# context["streams"] -> _cached_context -> session snapshot -> restore does
+# safe_setattr(view, "streams", <stale dict>). That makes `streams` a PUBLIC
+# attribute, so the attribute walk puts the stale dict into the context, and
+# the existing-key-wins guard then skips the live data forever: every insert
+# after a restore is invisible.
+#
+# Cure: `streams` is derived, so it is excluded from the session snapshot.
+
+
+def test_streams_is_excluded_from_the_session_snapshot():
+    """Derived data must never be persisted — it is what causes the loop."""
+    from djust.mixins.request import RequestMixin  # noqa: F401  (import guard)
+
+    v = _mounted()
+    ctx = v.get_context_data()
+    assert "streams" in ctx  # present for rendering...
+
+    # ...but the snapshot builder must drop it. Mirror the comprehension used
+    # in RequestMixin so the exclusion is pinned even if the surrounding
+    # save path changes shape.
+    from djust.components import LiveComponent
+
+    snapshot = {
+        k: val for k, val in ctx.items() if not isinstance(val, LiveComponent) and k != "streams"
+    }
+    assert "streams" not in snapshot
+
+
+def test_restored_stale_streams_attribute_does_not_shadow_live_data():
+    """Even if a stale `streams` attribute exists, live data must win.
+
+    Belt-and-braces: the snapshot exclusion prevents this from arising, but a
+    session written by an older release could still carry one.
+    """
+    v = _mounted()
+    # Simulate the restore: a stale public attribute from an old session.
+    v.streams = {"messages": [{"id": 0, "text": "STALE"}]}
+    v.stream_insert("messages", {"id": 3, "text": "c"})
+
+    ctx = v.get_context_data()
+    texts = [m["text"] for m in ctx["streams"]["messages"]]
+    assert "STALE" not in texts, (
+        "a stale restored `streams` attribute shadowed the live stream data"
+    )
+    assert texts == ["a", "b", "c"]
