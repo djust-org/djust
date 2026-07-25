@@ -253,6 +253,97 @@ class Stream:
         # No id/pk and not a mapping — the caller passed the id itself.
         return item_or_id
 
+    @staticmethod
+    def default_dom_id(item: Any) -> Any:
+        """The dom-id factory used when the app does not supply ``dom_id=``.
+
+        Lives here, not as a closure inside ``StreamsMixin.stream``, so that
+        :meth:`dom_id_for` can tell a default factory from a custom one by
+        identity — and so there is exactly one definition of it (#1646).
+        """
+        return Stream._identity(item)
+
+    @staticmethod
+    def _looks_like_item(item_or_id: Any) -> bool:
+        """Whether an "item or id" argument is an ITEM.
+
+        The same discrimination :meth:`resolve_id` makes, named so callers can
+        branch on it: a mapping is always an item, an object carrying ``id``
+        or ``pk`` is an item, and anything else is the bare id itself.
+        """
+        return (
+            isinstance(item_or_id, Mapping)
+            or hasattr(item_or_id, "id")
+            or hasattr(item_or_id, "pk")
+        )
+
+    def dom_id_for(self, item_or_id: Any, *, allow_factory_fallback: bool = False) -> str:
+        """THE dom id for a stream op — the single place it is computed (#2121).
+
+        Insert and delete MUST agree on this string, or nothing can match the
+        two ops up. They used to compute it in three separate places:
+        ``stream()``'s insert loop and ``stream_insert()`` both called the
+        stream's factory, while ``stream_delete()`` called :meth:`resolve_id`
+        and ignored the factory entirely. A stream created with
+        ``dom_id=lambda m: m["slug"]`` therefore inserted ``rows-hello-world``
+        and deleted ``rows-1``.
+
+        Scope note: ``StreamsMixin``'s ops are not delivered to a transport
+        today — ``_get_stream_operations()`` has no callers, and the client's
+        ``17-streaming.js`` speaks ``StreamingMixin``'s separate
+        ``{op, target, html}`` protocol. So this fixes an internal contract
+        (the op-dict shape ``LiveViewTestClient`` reads, and correctness for
+        whenever the ops ARE wired), not a live on-screen symptom.
+
+        A **bare id** can never produce the custom dom id — the framework
+        cannot invert an arbitrary callable — so it warns and falls back to
+        :meth:`resolve_id`.
+
+        ``allow_factory_fallback`` is the DELETE path's concession, and it is
+        deliberately asymmetric. `stream_delete`'s parameter is named
+        ``item_or_id``, so a partial argument (``{"id": pk}`` right after a DB
+        delete) is in contract; the dom id is unrecoverable either way, and
+        raising would convert a cosmetic mismatch into a 500 inside an event
+        handler. INSERT gets no such concession: the caller is handing over the
+        item that DEFINES the row, so a factory that cannot process it is a
+        programming error — a typo'd key would otherwise make ``dom_id=``
+        silently do nothing, and a factory that raises on only SOME items would
+        leave one stream holding ids from two different resolutions, which is
+        the exact disagreement this method exists to prevent.
+        """
+        if self._looks_like_item(item_or_id):
+            # ONE expression for the id, with the strict/lenient choice made in
+            # the handler. Writing it twice — once per branch — would put this
+            # module's own failure class inside the chokepoint meant to retire
+            # it, and the structural pin only scans streams.py so it would not
+            # catch the drift.
+            try:
+                return f"{self.name}-{self.dom_id_fn(item_or_id)}"
+            except Exception:
+                if not allow_factory_fallback:
+                    raise
+                # Never swallowed — logged with the traceback, then handled.
+                logger.warning(
+                    "Stream %r custom dom_id= factory raised on %r; falling back to "
+                    "the default id resolution, which will NOT match the row that "
+                    "was inserted. The argument must be an item the factory accepts.",
+                    self.name,
+                    item_or_id,
+                    exc_info=True,
+                )
+                return f"{self.name}-{Stream.resolve_id(item_or_id)}"
+
+        if self.dom_id_fn is not Stream.default_dom_id:
+            logger.warning(
+                "Stream %r has a custom dom_id= factory but was given the bare id %r. "
+                "The factory needs the item to compute its dom id, so this op will "
+                "use the id verbatim and will NOT match the row that was inserted. "
+                "Pass the item itself instead.",
+                self.name,
+                item_or_id,
+            )
+        return f"{self.name}-{Stream.resolve_id(item_or_id)}"
+
     def delete(self, item_or_id: Any) -> None:
         """Mark item for deletion.
 
