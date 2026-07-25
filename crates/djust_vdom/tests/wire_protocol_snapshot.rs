@@ -598,3 +598,163 @@ fn snapshot_all_variants_round_trip_via_serde() {
     let parsed: Vec<Patch> = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.len(), patches.len());
 }
+
+// ---------------------------------------------------------------------------
+// #2017 / ADR-026: the three [dj-virtual] keyed splice variants.
+//
+// This suite exists to pin the JSON SHAPE of the wire contract (#1448), and
+// the v1.0.0rc4 retro finding #1 is precisely that a coverage suite must
+// enumerate every variant of the surface it covers. These were added with the
+// variants themselves rather than after the next incident.
+// ---------------------------------------------------------------------------
+
+fn vnode_leaf(tag: &str) -> VNode {
+    VNode {
+        tag: tag.to_string(),
+        attrs: Default::default(),
+        children: vec![],
+        text: None,
+        key: None,
+        djust_id: None,
+        cached_html: None,
+    }
+}
+
+#[test]
+fn virtual_insert_json_shape_is_key_addressed() {
+    let p = Patch::VirtualInsert {
+        path: vec![0, 2],
+        d: Some("v1".into()),
+        key: "row-7".into(),
+        node: vnode_leaf("li"),
+        before_key: Some("row-8".into()),
+    };
+    let json = serde_json::to_string(&p).unwrap();
+    assert!(json.contains(r#""type":"VirtualInsert""#), "{json}");
+    assert!(json.contains(r#""key":"row-7""#), "{json}");
+    assert!(json.contains(r#""before_key":"row-8""#), "{json}");
+    // The point of the variant: position is a KEY, never an index.
+    assert!(!json.contains(r#""index":"#), "{json}");
+}
+
+#[test]
+fn virtual_move_and_remove_json_shape() {
+    let m = serde_json::to_string(&Patch::VirtualMove {
+        path: vec![1],
+        d: None,
+        key: "row-3".into(),
+        before_key: None,
+    })
+    .unwrap();
+    assert!(m.contains(r#""type":"VirtualMove""#), "{m}");
+    assert!(m.contains(r#""key":"row-3""#), "{m}");
+    // Both optionals omitted when None — a tail move has no anchor.
+    assert!(!m.contains(r#""d":"#), "{m}");
+    assert!(!m.contains(r#""before_key":"#), "{m}");
+
+    let r = serde_json::to_string(&Patch::VirtualRemove {
+        path: vec![1],
+        d: Some("v1".into()),
+        key: "row-3".into(),
+    })
+    .unwrap();
+    assert!(r.contains(r#""type":"VirtualRemove""#), "{r}");
+    assert!(r.contains(r#""d":"v1""#), "{r}");
+}
+
+#[test]
+fn virtual_variants_json_round_trip_in_every_optional_permutation() {
+    let cases = vec![
+        Patch::VirtualInsert {
+            path: vec![0],
+            d: None,
+            key: "k".into(),
+            node: vnode_leaf("li"),
+            before_key: None,
+        },
+        Patch::VirtualInsert {
+            path: vec![0],
+            d: Some("v".into()),
+            key: "k".into(),
+            node: vnode_leaf("li"),
+            before_key: Some("k2".into()),
+        },
+        Patch::VirtualMove {
+            path: vec![0],
+            d: None,
+            key: "k".into(),
+            before_key: Some("k2".into()),
+        },
+        Patch::VirtualMove {
+            path: vec![0],
+            d: Some("v".into()),
+            key: "k".into(),
+            before_key: None,
+        },
+        Patch::VirtualRemove {
+            path: vec![0],
+            d: None,
+            key: "k".into(),
+        },
+        Patch::VirtualRemove {
+            path: vec![0],
+            d: Some("v".into()),
+            key: "k".into(),
+        },
+    ];
+    for case in &cases {
+        let json = serde_json::to_string(case).unwrap();
+        let back: Patch = serde_json::from_str(&json)
+            .unwrap_or_else(|e| panic!("round-trip failed for {json}: {e}"));
+        assert_eq!(
+            serde_json::to_string(&back).unwrap(),
+            json,
+            "re-serialising must be byte-identical"
+        );
+    }
+}
+
+#[test]
+fn msgpack_encodes_patch_positionally_and_is_already_broken() {
+    // Records a PRE-EXISTING fact, not a new defect, and corrects a comment
+    // that was in the tree before this suite: `#[serde(tag = "type")]` does
+    // NOT make `Patch` map-encoded under msgpack. `rmp_serde` writes a
+    // positional array, so `skip_serializing_if` on the interior `d` drops a
+    // slot and the value cannot be read back — the #1541 shape.
+    //
+    // It is latent because `render_binary_diff` (the only msgpack producer)
+    // has no non-test consumer. Pinned here so the next person to reach for
+    // the binary path finds the truth instead of the old comment, and so a
+    // future fix has a test that flips.
+    let existing = Patch::SetText {
+        path: vec![0],
+        d: None,
+        text: "hi".into(),
+    };
+    let bytes = rmp_serde::to_vec(&existing).unwrap();
+    assert_eq!(
+        bytes[0] & 0xf0,
+        0x90,
+        "expected a FIXARRAY (positional) encoding, got first byte 0x{:02x}",
+        bytes[0]
+    );
+    assert!(
+        rmp_serde::from_slice::<Patch>(&bytes).is_err(),
+        "if this now round-trips, the msgpack asymmetry was fixed — update this \
+         test and the wire notes in lib.rs"
+    );
+
+    // The new variants inherit the same property; they are not a regression.
+    let new = Patch::VirtualRemove {
+        path: vec![0],
+        d: None,
+        key: "k".into(),
+    };
+    let nb = rmp_serde::to_vec(&new).unwrap();
+    assert_eq!(nb[0] & 0xf0, 0x90, "first byte 0x{:02x}", nb[0]);
+    assert!(
+        rmp_serde::from_slice::<Patch>(&nb).is_err(),
+        "the new variants inherit the same asymmetry — assert it fully rather \
+         than only checking the encoding tag"
+    );
+}

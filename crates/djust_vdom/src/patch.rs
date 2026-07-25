@@ -368,6 +368,68 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
         // that exercise the diff output should assert on patch shape (via
         // `matches!`) rather than round-tripping through `apply_patch`.
         Patch::RemoveSubtree { .. } | Patch::InsertSubtree { .. } | Patch::MoveSubtree { .. } => {}
+
+        // [dj-virtual] keyed splice ops (ADR-026). Unlike the Subtree variants
+        // above, these ARE modelled here: they address a child by `key` within
+        // the parent at `path`, which this helper can resolve exactly. Tests
+        // can therefore round-trip them rather than only asserting shape.
+        Patch::VirtualInsert {
+            path,
+            key,
+            node,
+            before_key,
+            ..
+        } => {
+            if let Some(parent) = get_node_mut(root, path) {
+                let at = match before_key {
+                    Some(bk) => parent
+                        .children
+                        .iter()
+                        .position(|c| c.key.as_deref() == Some(bk.as_str()))
+                        .unwrap_or(parent.children.len()),
+                    None => parent.children.len(),
+                };
+                let mut inserted = node.clone();
+                if inserted.key.is_none() {
+                    inserted.key = Some(key.clone());
+                }
+                parent.children.insert(at, inserted);
+            }
+        }
+
+        Patch::VirtualMove {
+            path,
+            key,
+            before_key,
+            ..
+        } => {
+            if let Some(parent) = get_node_mut(root, path) {
+                if let Some(from) = parent
+                    .children
+                    .iter()
+                    .position(|c| c.key.as_deref() == Some(key.as_str()))
+                {
+                    let item = parent.children.remove(from);
+                    let at = match before_key {
+                        Some(bk) => parent
+                            .children
+                            .iter()
+                            .position(|c| c.key.as_deref() == Some(bk.as_str()))
+                            .unwrap_or(parent.children.len()),
+                        None => parent.children.len(),
+                    };
+                    parent.children.insert(at, item);
+                }
+            }
+        }
+
+        Patch::VirtualRemove { path, key, .. } => {
+            if let Some(parent) = get_node_mut(root, path) {
+                parent
+                    .children
+                    .retain(|c| c.key.as_deref() != Some(key.as_str()));
+            }
+        }
     }
 }
 

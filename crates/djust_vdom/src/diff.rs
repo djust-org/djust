@@ -149,6 +149,40 @@ fn positionally_compatible(a: &VNode, b: &VNode) -> bool {
 /// Compute the patches transforming `old` into `new`. `path` is the index path
 /// from the diff root to the node pair being compared; emitted patches for this
 /// node use `path`, and child patches use `path + [child_index]`.
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Emit KEY-addressed splice ops for `[dj-virtual]` parents (ADR-026).
+///
+/// Default OFF. Iteration 1 of the ADR ships the differ side dark: the ops are
+/// emitted only when this is enabled, so `main` behaviour is byte-identical
+/// until the client half (iteration 2) can apply them and the flag is flipped
+/// after a soak (iteration 3).
+///
+/// A process-global atomic rather than a threaded parameter because `diff_nodes`
+/// is a pure free function reached from several entry points; threading config
+/// through every signature would touch far more surface than the flag is worth
+/// while it is still dark. Set once at startup from
+/// a `LIVEVIEW_CONFIG` key — that wiring is iteration 3's job and no such
+/// setting exists yet (`grep` finds none); do not cite it as if it does.
+static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(false);
+
+/// Enable/disable `[dj-virtual]` keyed splice ops. Wired from Python config.
+pub fn set_virtual_keyed_ops(enabled: bool) {
+    VIRTUAL_KEYED_OPS.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether `[dj-virtual]` keyed splice ops are enabled.
+pub fn virtual_keyed_ops_enabled() -> bool {
+    VIRTUAL_KEYED_OPS.load(Ordering::Relaxed)
+}
+
+/// True when this parent is a client-windowed `[dj-virtual]` container AND the
+/// feature is enabled. Both conditions matter: the ops are meaningless for an
+/// ordinary parent, and must stay dark until the client can apply them.
+fn emits_virtual_ops(parent: &VNode) -> bool {
+    virtual_keyed_ops_enabled() && parent.attrs.contains_key("dj-virtual")
+}
+
 pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
     let mut patches = Vec::new();
     diff_node_into(old, new, path, &mut patches);
@@ -206,6 +240,8 @@ fn diff_node_into(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>
         path,
         old.djust_id.as_deref(),
         out,
+        // The NEW tree is authoritative for what this container is now.
+        emits_virtual_ops(new),
     );
 }
 
@@ -301,6 +337,10 @@ fn diff_children(
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
+    // virtual_parent: true when the PARENT is a `[dj-virtual]` container and
+    // the ADR-026 flag is on — its children are a client-side window, so
+    // index-addressed ops are meaningless and keyed splice ops are emitted.
+    virtual_parent: bool,
 ) {
     let (old_boundaries, old_excluded) = find_top_level_boundaries(old);
     let (new_boundaries, new_excluded) = find_top_level_boundaries(new);
@@ -369,6 +409,9 @@ fn diff_children(
                     ppath,
                     pid,
                     out,
+                    // A dj-if body lives INSIDE this parent, so it inherits
+                    // the parent's virtual-ness.
+                    virtual_parent,
                 );
             } else {
                 // Old-only -> RemoveSubtree.
@@ -403,7 +446,7 @@ fn diff_children(
         .map(|(i, n)| (new_off + i, n))
         .collect();
 
-    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out);
+    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out, virtual_parent);
 }
 
 /// Reconcile two lists of non-boundary siblings (each carrying its parent-
@@ -415,12 +458,202 @@ fn reconcile_siblings(
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
+    virtual_parent: bool,
 ) {
     let any_new_keyed = new_nb.iter().any(|(_, n)| n.key.is_some());
-    if any_new_keyed {
+
+    // A [dj-virtual] parent gets KEY-addressed ops (ADR-026): its children on
+    // the client are only the visible window, so an index means different
+    // things on the two sides.
+    //
+    // The gate is the PARENT, not `any_new_keyed`. Gating on the children let
+    // two shapes escape to the index-addressed path: an EMPTY new list (clear
+    // the feed, a filter matching nothing) and an all-unkeyed new list — both
+    // of which then emit RemoveChild/InsertChild against a windowed container,
+    // which is the exact failure this exists to remove. "Clear the list" is
+    // about the most common operation a feed has.
+    if virtual_parent {
+        if let Some(reason) = virtual_keyed_unsupported(old_nb, new_nb) {
+            // Key-addressed ops cannot express this change, so fall back to
+            // the plain reconcilers — which handle both cases explicitly and
+            // warn — rather than silently dropping it. The fallback still
+            // emits index-addressed ops, which is wrong for a windowed
+            // container; that is why this warns rather than passing quietly.
+            vdom_trace!(
+                "DJE-052: [dj-virtual] children fell back to index diffing: {}",
+                reason
+            );
+            tracing::warn!(
+                "DJE-052: a [dj-virtual] container's children {} — falling back to \
+                 index-addressed diffing, which cannot address items outside the \
+                 client's visible window. Give every child a unique dj-key.",
+                reason
+            );
+            if any_new_keyed {
+                reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+            } else {
+                reconcile_indexed(old_nb, new_nb, ppath, pid, out);
+            }
+        } else {
+            reconcile_virtual_keyed(old_nb, new_nb, ppath, pid, out);
+        }
+    } else if any_new_keyed {
         reconcile_keyed(old_nb, new_nb, ppath, pid, out);
     } else {
         reconcile_indexed(old_nb, new_nb, ppath, pid, out);
+    }
+}
+
+/// Reconcile a `[dj-virtual]` parent's keyed children into KEY-addressed
+/// splice ops (ADR-026, #2017 items 2-4).
+///
+/// Uses the same LIS minimisation as `reconcile_keyed`, and for a reason that
+/// is easy to get wrong: the FIRST version of this skipped LIS, arguing that
+/// the client applies these to an item pool where a move is an array splice
+/// rather than a DOM operation, so extra moves are cheap. That reasoning was
+/// about the wrong cost. Without LIS every surviving key gets a move, so a
+/// single append to a 50-item list emitted 50 moves — and on the 10k-row feeds
+/// `dj-virtual` exists for, one append would emit 10k ops. The binding cost is
+/// WIRE SIZE, not DOM mutations, and O(n) ops per patch defeats the purpose of
+/// virtualising at all.
+/// Why `reconcile_virtual_keyed` cannot handle these children, if it cannot.
+///
+/// Key-addressed ops address a row by its key and anchor it to a neighbour's
+/// key. Two shapes are unrepresentable in that scheme, and both are silent
+/// data loss if the reconciler is handed them anyway:
+///
+/// - **An unkeyed child** has no address at all, so every change to it —
+///   content, insertion, removal — is invisible. `reconcile_keyed` handles
+///   this case at length (a positional group, LIS disabled, a DJE-050
+///   warning); this reconciler had none of it.
+/// - **A duplicate key** makes `before_key` ambiguous: two rows answer to the
+///   same anchor. `reconcile_keyed` demotes ambiguous keys to positional
+///   diffing and warns DJE-051; here they would collapse in a hash set and the
+///   extra row would simply never appear (or never leave).
+fn virtual_keyed_unsupported(
+    old_nb: &[(usize, &VNode)],
+    new_nb: &[(usize, &VNode)],
+) -> Option<&'static str> {
+    if new_nb.iter().any(|(_, n)| n.key.is_none()) || old_nb.iter().any(|(_, n)| n.key.is_none()) {
+        return Some("include a child with no dj-key");
+    }
+    for list in [old_nb, new_nb] {
+        let mut seen: AHashSet<&str> = AHashSet::new();
+        for (_, n) in list.iter() {
+            if let Some(k) = n.key.as_deref() {
+                if !seen.insert(k) {
+                    return Some("include a duplicate dj-key");
+                }
+            }
+        }
+    }
+    None
+}
+
+fn reconcile_virtual_keyed(
+    old_nb: &[(usize, &VNode)],
+    new_nb: &[(usize, &VNode)],
+    ppath: &[usize],
+    pid: Option<&str>,
+    out: &mut Vec<Patch>,
+) {
+    // Old positions by key, so a surviving key can be located in old-order.
+    let mut old_pos: AHashMap<&str, usize> = AHashMap::new();
+    for (i, (_, n)) in old_nb.iter().enumerate() {
+        if let Some(k) = n.key.as_deref() {
+            // First occurrence wins; duplicate keys are ambiguous and are
+            // reported separately by the shared `ambiguous_keys` warning.
+            old_pos.entry(k).or_insert(i);
+        }
+    }
+
+    // (position within this vec, ABSOLUTE index in new_nb, key, node).
+    // The absolute index is what a child path must use: the filtered position
+    // diverges from it the moment an unkeyed sibling precedes a keyed one, and
+    // a content patch built from the wrong one rewrites the WRONG child. The
+    // gate above rejects unkeyed children, so today they cannot diverge — this
+    // carries both anyway rather than depending on a caller's invariant.
+    let new_keyed: Vec<(usize, usize, &str, &VNode)> = new_nb
+        .iter()
+        .filter_map(|(abs, n)| n.key.as_deref().map(|k| (*abs, k, *n)))
+        .enumerate()
+        .map(|(i, (abs, k, n))| (i, abs, k, n))
+        .collect();
+
+    // Removals: an old key with no counterpart in the new list.
+    let new_key_set: AHashSet<&str> = new_keyed.iter().map(|(_, _, k, _)| *k).collect();
+    for (_, n) in old_nb.iter() {
+        if let Some(k) = n.key.as_deref() {
+            if !new_key_set.contains(k) {
+                out.push(Patch::VirtualRemove {
+                    path: ppath.to_vec(),
+                    d: pid.map(|s| s.to_string()),
+                    key: k.to_string(),
+                });
+            }
+        }
+    }
+
+    // Survivors in NEW order, carrying their OLD index. Their old-index
+    // sequence is what the LIS runs over: the increasing subsequence is
+    // already in relative order and needs no move.
+    let survivors: Vec<(&str, usize)> = new_keyed
+        .iter()
+        .filter_map(|(_, _, k, _)| old_pos.get(k).map(|oi| (*k, *oi)))
+        .collect();
+    let old_seq: Vec<usize> = survivors.iter().map(|(_, oi)| *oi).collect();
+    let stable_positions = longest_increasing_subsequence(&old_seq);
+    let stable: AHashSet<&str> = stable_positions
+        .iter()
+        .filter_map(|si| survivors.get(*si).map(|(k, _)| *k))
+        .collect();
+
+    // Content updates for survivors. Without this a surviving row's text
+    // change emits NOTHING for a [dj-virtual] parent — the structural ops
+    // below only reposition. `reconcile_keyed` recurses for every matched
+    // pair (step 3) and this must too; emitted BEFORE the structural ops to
+    // match that function's phase ordering.
+    for (_, abs, key, new_node) in new_keyed.iter() {
+        let Some(oi) = old_pos.get(*key) else {
+            continue;
+        };
+        let (_, old_node) = old_nb[*oi];
+        let mut child_path = ppath.to_vec();
+        // The ABSOLUTE index in new_nb, not the filtered position — see the
+        // note on new_keyed. Building this from the filtered index rewrites
+        // the wrong child whenever an unkeyed sibling precedes a keyed one.
+        child_path.push(*abs);
+        diff_node_into(old_node, new_node, &child_path, out);
+    }
+
+    // Structural ops, walked in REVERSE new order. `before_key` names the NEXT
+    // new sibling, so that anchor must already be in place when the op is
+    // applied — which reverse order guarantees and forward order does not.
+    // Forward, prepending [x, y] onto [a, b] emits "insert x before y" while y
+    // is still absent: the client cannot find the anchor, falls back to the
+    // tail, and the list ends up y,a,b,x instead of x,y,a,b.
+    for (i, _, key, node) in new_keyed.iter().rev() {
+        let before_key = new_keyed.get(i + 1).map(|(_, _, k, _)| (*k).to_string());
+
+        if old_pos.contains_key(*key) {
+            // Survivor: emit a move ONLY if it is outside the stable run.
+            if !stable.contains(*key) {
+                out.push(Patch::VirtualMove {
+                    path: ppath.to_vec(),
+                    d: pid.map(|s| s.to_string()),
+                    key: (*key).to_string(),
+                    before_key,
+                });
+            }
+        } else {
+            out.push(Patch::VirtualInsert {
+                path: ppath.to_vec(),
+                d: pid.map(|s| s.to_string()),
+                key: (*key).to_string(),
+                node: (*node).clone(),
+                before_key,
+            });
+        }
     }
 }
 
