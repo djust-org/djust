@@ -752,4 +752,9 @@ fn msgpack_encodes_patch_positionally_and_is_already_broken() {
     };
     let nb = rmp_serde::to_vec(&new).unwrap();
     assert_eq!(nb[0] & 0xf0, 0x90, "first byte 0x{:02x}", nb[0]);
+    assert!(
+        rmp_serde::from_slice::<Patch>(&nb).is_err(),
+        "the new variants inherit the same asymmetry — assert it fully rather \
+         than only checking the encoding tag"
+    );
 }

@@ -509,11 +509,17 @@ fn comment(text: &str) -> VNode {
 
 #[test]
 fn a_content_patch_targets_the_right_child_index() {
-    // The child path was built from the position within the FILTERED keyed
-    // list while indexing the UNFILTERED child list. Those diverge whenever a
-    // child is EXCLUDED from sibling reconciliation — which a dj-if boundary
-    // pair is, by construction (`find_top_level_boundaries` masks the open
-    // marker through the close marker inclusive).
+    // DEFENSE IN DEPTH, not a reproduction of the shipped defect — worth
+    // being precise about. The real defect needed an UNKEYED entry inside
+    // new_nb, and the gate above now makes that unreachable; the pre-fix
+    // expression indexed new_nb and so was correct whenever new_nb is
+    // entirely keyed. Restoring it verbatim passes all of these.
+    //
+    // What this pins is the arithmetic itself: the child path must come from
+    // the ABSOLUTE index, never the filtered position. Those diverge whenever
+    // a child is EXCLUDED from sibling reconciliation — which a dj-if
+    // boundary pair is, by construction (`find_top_level_boundaries` masks
+    // the open marker through the close marker inclusive).
     //
     // Here the boundary occupies absolute indices 0..=1, so the two keyed rows
     // sit at absolute 2 and 3 while their filtered positions are 0 and 1. A
