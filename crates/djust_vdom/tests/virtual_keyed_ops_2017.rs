@@ -281,3 +281,34 @@ fn wire_round_trips_through_json_in_every_optional_permutation() {
         }
     }
 }
+
+#[test]
+fn append_to_a_large_list_emits_one_op_not_n() {
+    // The first version emitted a VirtualMove for EVERY surviving key, so a
+    // single append to a 50-item list produced 50 moves. On the 10k-row feeds
+    // dj-virtual exists for that is 10k ops for one new row — which defeats
+    // virtualising at all. LIS keeps the untouched run stable.
+    let _g = FLAG_LOCK.lock().unwrap();
+    set_virtual_keyed_ops(true);
+    let old_keys: Vec<String> = (0..50).map(|i| format!("k{i}")).collect();
+    let mut new_keys = old_keys.clone();
+    new_keys.push("new".to_string());
+    let ov: Vec<&str> = old_keys.iter().map(|s| s.as_str()).collect();
+    let nv: Vec<&str> = new_keys.iter().map(|s| s.as_str()).collect();
+    let patches = diff_nodes(&virtual_list(&ov), &virtual_list(&nv), &[]);
+    set_virtual_keyed_ops(false);
+
+    let moves = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::VirtualMove { .. }))
+        .count();
+    let inserts = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::VirtualInsert { .. }))
+        .count();
+    assert_eq!(inserts, 1, "one new key -> one insert");
+    assert_eq!(
+        moves, 0,
+        "an append moves nothing; got {moves} moves for 50 unchanged rows"
+    );
+}

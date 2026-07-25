@@ -477,11 +477,15 @@ fn reconcile_siblings(
 /// Reconcile a `[dj-virtual]` parent's keyed children into KEY-addressed
 /// splice ops (ADR-026, #2017 items 2-4).
 ///
-/// Deliberately simple compared with `reconcile_keyed`: no LIS minimisation.
-/// The client applies these to its item POOL, where a move is an array splice
-/// rather than a DOM operation, so the cost of an extra move is negligible and
-/// the win from LIS (fewer DOM mutations) does not apply. Correctness of
-/// position is what matters here, which is exactly what #2017 item 4 lacked.
+/// Uses the same LIS minimisation as `reconcile_keyed`, and for a reason that
+/// is easy to get wrong: the FIRST version of this skipped LIS, arguing that
+/// the client applies these to an item pool where a move is an array splice
+/// rather than a DOM operation, so extra moves are cheap. That reasoning was
+/// about the wrong cost. Without LIS every surviving key gets a move, so a
+/// single append to a 50-item list emitted 50 moves — and on the 10k-row feeds
+/// `dj-virtual` exists for, one append would emit 10k ops. The binding cost is
+/// WIRE SIZE, not DOM mutations, and O(n) ops per patch defeats the purpose of
+/// virtualising at all.
 fn reconcile_virtual_keyed(
     old_nb: &[(usize, &VNode)],
     new_nb: &[(usize, &VNode)],
@@ -489,45 +493,74 @@ fn reconcile_virtual_keyed(
     pid: Option<&str>,
     out: &mut Vec<Patch>,
 ) {
-    let old_keys: Vec<Option<&str>> = old_nb.iter().map(|(_, n)| n.key.as_deref()).collect();
-    let new_keys: Vec<Option<&str>> = new_nb.iter().map(|(_, n)| n.key.as_deref()).collect();
-
-    // Removals: an old key absent from the new list.
-    for key in old_keys.iter().flatten() {
-        if !new_keys.iter().flatten().any(|k| k == key) {
-            out.push(Patch::VirtualRemove {
-                path: ppath.to_vec(),
-                d: pid.map(|s| s.to_string()),
-                key: (*key).to_string(),
-            });
+    // Old positions by key, so a surviving key can be located in old-order.
+    let mut old_pos: AHashMap<&str, usize> = AHashMap::new();
+    for (i, (_, n)) in old_nb.iter().enumerate() {
+        if let Some(k) = n.key.as_deref() {
+            // First occurrence wins; duplicate keys are ambiguous and are
+            // reported separately by the shared `ambiguous_keys` warning.
+            old_pos.entry(k).or_insert(i);
         }
     }
 
-    // Inserts and moves, walked in NEW order so `before_key` is the key of the
-    // next new sibling — a stable anchor that does not depend on how many
-    // earlier ops the client has already applied.
-    for (i, (_, node)) in new_nb.iter().enumerate() {
-        let Some(key) = node.key.as_deref() else {
-            continue;
-        };
-        let before_key = new_keys
-            .get(i + 1..)
-            .and_then(|rest| rest.iter().flatten().next())
-            .map(|k| (*k).to_string());
+    let new_keyed: Vec<(usize, &str, &VNode)> = new_nb
+        .iter()
+        .filter_map(|(_, n)| n.key.as_deref().map(|k| (0usize, k, *n)))
+        .enumerate()
+        .map(|(i, (_, k, n))| (i, k, n))
+        .collect();
 
-        let existed = old_keys.iter().flatten().any(|k| *k == key);
-        if existed {
-            out.push(Patch::VirtualMove {
-                path: ppath.to_vec(),
-                d: pid.map(|s| s.to_string()),
-                key: key.to_string(),
-                before_key,
-            });
+    // Removals: an old key with no counterpart in the new list.
+    let new_key_set: AHashSet<&str> = new_keyed.iter().map(|(_, k, _)| *k).collect();
+    for (_, n) in old_nb.iter() {
+        if let Some(k) = n.key.as_deref() {
+            if !new_key_set.contains(k) {
+                out.push(Patch::VirtualRemove {
+                    path: ppath.to_vec(),
+                    d: pid.map(|s| s.to_string()),
+                    key: k.to_string(),
+                });
+            }
+        }
+    }
+
+    // Survivors in NEW order, carrying their OLD index. Their old-index
+    // sequence is what the LIS runs over: the increasing subsequence is
+    // already in relative order and needs no move.
+    let survivors: Vec<(&str, usize)> = new_keyed
+        .iter()
+        .filter_map(|(_, k, _)| old_pos.get(k).map(|oi| (*k, *oi)))
+        .collect();
+    let old_seq: Vec<usize> = survivors.iter().map(|(_, oi)| *oi).collect();
+    let stable_positions = longest_increasing_subsequence(&old_seq);
+    let stable: AHashSet<&str> = stable_positions
+        .iter()
+        .filter_map(|si| survivors.get(*si).map(|(k, _)| *k))
+        .collect();
+
+    // Walk NEW order so `before_key` is the next new sibling's key — a stable
+    // anchor that does not depend on how many earlier ops the client applied.
+    for (i, key, node) in new_keyed.iter() {
+        let before_key = new_keyed
+            .get(i + 1..)
+            .and_then(|rest| rest.first())
+            .map(|(_, k, _)| (*k).to_string());
+
+        if old_pos.contains_key(*key) {
+            // Survivor: emit a move ONLY if it is outside the stable run.
+            if !stable.contains(*key) {
+                out.push(Patch::VirtualMove {
+                    path: ppath.to_vec(),
+                    d: pid.map(|s| s.to_string()),
+                    key: (*key).to_string(),
+                    before_key,
+                });
+            }
         } else {
             out.push(Patch::VirtualInsert {
                 path: ppath.to_vec(),
                 d: pid.map(|s| s.to_string()),
-                key: key.to_string(),
+                key: (*key).to_string(),
                 node: (*node).clone(),
                 before_key,
             });
