@@ -280,21 +280,48 @@ class Stream:
     def dom_id_for(self, item_or_id: Any) -> str:
         """THE dom id for a stream op — the single place it is computed (#2121).
 
-        Insert and delete MUST agree on this string or the client cannot match
-        the rows, and the delete silently does nothing on screen. They used to
-        compute it in three separate places: ``stream()``'s insert loop and
-        ``stream_insert()`` both called the stream's factory, while
-        ``stream_delete()`` called :meth:`resolve_id` and ignored the factory
-        entirely. A stream created with ``dom_id=lambda m: m["slug"]``
-        therefore inserted ``rows-hello-world`` and deleted ``rows-1``.
+        Insert and delete MUST agree on this string, or nothing can match the
+        two ops up. They used to compute it in three separate places:
+        ``stream()``'s insert loop and ``stream_insert()`` both called the
+        stream's factory, while ``stream_delete()`` called :meth:`resolve_id`
+        and ignored the factory entirely. A stream created with
+        ``dom_id=lambda m: m["slug"]`` therefore inserted ``rows-hello-world``
+        and deleted ``rows-1``.
 
-        The bare-id case genuinely cannot use the factory — the framework
-        cannot invert an arbitrary callable — so it falls back to
-        :meth:`resolve_id` and warns when a custom factory is in play, because
-        that mismatch is otherwise silent.
+        Scope note: ``StreamsMixin``'s ops are not delivered to a transport
+        today — ``_get_stream_operations()`` has no callers, and the client's
+        ``17-streaming.js`` speaks ``StreamingMixin``'s separate
+        ``{op, target, html}`` protocol. So this fixes an internal contract
+        (what ``LiveViewTestClient`` asserts against, and correctness for
+        whenever the ops ARE wired), not a live on-screen symptom.
+
+        Two arguments cannot produce the custom dom id, and neither is the
+        caller doing anything unreasonable:
+
+        - a **bare id**, because the framework cannot invert an arbitrary
+          callable;
+        - an **item the factory rejects** (``{"id": 1}`` under a
+          ``m["slug"]`` factory — a natural shape right after a DB delete).
+
+        Both warn and fall back to :meth:`resolve_id`. Raising was the
+        alternative and is rejected: the dom id is unrecoverable either way, so
+        raising converts a cosmetic mismatch into a 500 inside an event
+        handler. The warning names the stream and says what to pass instead.
         """
         if self._looks_like_item(item_or_id):
-            return f"{self.name}-{self.dom_id_fn(item_or_id)}"
+            try:
+                return f"{self.name}-{self.dom_id_fn(item_or_id)}"
+            except Exception:
+                # Never swallowed — logged with the traceback, then handled.
+                logger.warning(
+                    "Stream %r custom dom_id= factory raised on %r; falling back to "
+                    "the default id resolution, which will NOT match the row that "
+                    "was inserted. The argument must be an item the factory accepts.",
+                    self.name,
+                    item_or_id,
+                    exc_info=True,
+                )
+                return f"{self.name}-{Stream.resolve_id(item_or_id)}"
 
         if self.dom_id_fn is not Stream.default_dom_id:
             logger.warning(

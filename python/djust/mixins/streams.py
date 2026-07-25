@@ -44,6 +44,11 @@ class StreamsMixin:
         # The default factory is Stream.default_dom_id itself, not a local
         # closure — dom_id_for() distinguishes default from custom by
         # identity, and a closure would be a fresh object every call (#2121).
+        # `explicit` is captured BEFORE the coercion: testing
+        # `dom_id is not Stream.default_dom_id` afterwards cannot tell "not
+        # passed" from "passed the default on purpose", and the latter should
+        # rebind a stream that currently holds a custom factory.
+        explicit = dom_id is not None
         if dom_id is None:
             dom_id = Stream.default_dom_id
 
@@ -62,8 +67,12 @@ class StreamsMixin:
         # An explicit dom_id= on an EXISTING stream is authoritative. Without
         # this the loop below would emit ids from the new factory while
         # stream_insert/stream_delete kept using the old one — the same
-        # insert/delete disagreement one call later (#2121).
-        if dom_id is not Stream.default_dom_id:
+        # insert/delete disagreement one call later (#2121). Note this is
+        # last-writer-wins: rows inserted under an earlier factory keep the
+        # dom ids it produced, and deleting one of them by item now emits the
+        # NEW factory's id. Re-binding mid-stream is pathological; documented
+        # rather than defended against.
+        if explicit:
             stream_obj.dom_id_fn = dom_id
 
         # Convert items to list if needed

@@ -142,12 +142,18 @@ def test_dom_id_for_is_the_only_place_streams_py_builds_a_dom_id():
     # A future op that formats its own f"{name}-{...}" reintroduces #2121.
     import pathlib
 
-    src = pathlib.Path("python/djust/mixins/streams.py").read_text()
+    # Anchored on __file__, not the CWD — every other structural pin in this
+    # repo does the same, and a CWD-relative path fails with a confusing
+    # "missing file" instead of a pin violation when pytest runs elsewhere.
+    root = pathlib.Path(__file__).resolve().parents[2]
+    src = (root / "python/djust/mixins/streams.py").read_text()
     assert 'f"{name}-' not in src, (
         "streams.py must build dom ids via Stream.dom_id_for, not by "
         "formatting the name prefix itself (#2121)"
     )
-    assert src.count("stream_obj.dom_id_for(") == 3, (
+    # Receiver-agnostic: renaming the local `stream_obj` is semantically inert
+    # and must not fail this pin.
+    assert src.count(".dom_id_for(") == 3, (
         "expected exactly 3 dom_id_for call sites (stream, stream_insert, "
         "stream_delete); a new one needs a corresponding agreement test"
     )
@@ -166,3 +172,47 @@ def test_dom_id_for_is_the_only_place_streams_py_builds_a_dom_id():
 )
 def test_looks_like_item_discrimination(arg, expected):
     assert Stream._looks_like_item(arg) is expected
+
+
+# --- Stage 11: the factory now runs on the DELETE path too ----------------
+
+
+def test_a_factory_that_rejects_the_argument_warns_and_falls_back(caplog):
+    # New exposure: stream_delete never invoked the user callable before this
+    # change (it used resolve_id), so a factory that raises is a path that did
+    # not exist. {"id": pk} is a natural argument right after a DB delete.
+    v = _View()
+    v.stream("rows", [{"id": 1, "slug": "hello"}], dom_id=lambda m: m["slug"])
+
+    with caplog.at_level(logging.WARNING, logger="djust"):
+        v.stream_delete("rows", {"id": 1})  # no "slug" -> KeyError inside the factory
+
+    assert "raised" in caplog.text
+    assert "rows" in caplog.text
+    # Falls back rather than propagating: the dom id is unrecoverable either
+    # way, so raising would turn a cosmetic mismatch into a 500 in a handler.
+    assert _ids(v, "stream_delete") == ["rows-1"]
+
+
+def test_an_object_the_factory_cannot_handle_also_falls_back(caplog):
+    v = _View()
+    v.stream("rows", [{"id": 1, "slug": "a"}], dom_id=lambda m: m["slug"])
+
+    with caplog.at_level(logging.WARNING, logger="djust"):
+        v.stream_delete("rows", _Row(2, "b"))  # not subscriptable
+
+    assert "raised" in caplog.text
+    assert _ids(v, "stream_delete") == ["rows-2"]
+
+
+def test_passing_the_default_factory_explicitly_rebinds_a_custom_stream():
+    # `explicit` is captured before the None-coercion, so "passed the default
+    # on purpose" is distinguishable from "not passed" and correctly resets a
+    # stream that currently holds a custom factory.
+    v = _View()
+    v.stream("rows", [{"id": 1, "slug": "a"}], dom_id=lambda m: m["slug"])
+    v.stream("rows", [{"id": 2, "slug": "b"}], dom_id=Stream.default_dom_id)
+
+    assert _ids(v, "stream_insert") == ["rows-a", "rows-2"]
+    v.stream_delete("rows", {"id": 2, "slug": "b"})
+    assert _ids(v, "stream_delete") == ["rows-2"]
