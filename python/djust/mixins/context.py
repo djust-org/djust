@@ -338,6 +338,23 @@ class ContextMixin:
             for action_name, state in action_state.items():
                 context[action_name] = state
 
+        # Streams (#2112). ``self.stream("messages", ...)`` filled
+        # ``_streams["messages"].items``, and ``_get_streams_context()`` exists
+        # to expose it — its docstring says "Get streams data for template
+        # context" — but nothing ever called it, so the documented pattern in
+        # docs/website/guides/large-lists.md stored data and rendered nothing.
+        #
+        # Precedence is the OPPOSITE of actions above: an existing key wins.
+        # Because streams never reached the context before, an app that has
+        # both ``self.messages`` and a stream named "messages" renders the
+        # attribute today; clobbering it here would be a silent breaking
+        # change. A stream only fills a name nothing else claimed.
+        get_streams = getattr(self, "_get_streams_context", None)
+        if callable(get_streams):
+            for stream_name, items in get_streams().items():
+                if stream_name not in context:
+                    context[stream_name] = items
+
         return context
 
     def _deep_serialize_dict(
