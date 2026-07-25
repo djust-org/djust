@@ -310,6 +310,21 @@ class PostProcessingMixin:
 
         script = f'<script src="{client_js_url}" defer data-turbo-track="reload"></script>'
 
+        # Official adapters (ADR-025 milestone C). Opt-in via
+        # DJUST_CONFIG['extensions']; nothing is emitted when unused.
+        # These MUST come after client.js: they register into
+        # window.djust.hooks / window.djust.commands, which client.js
+        # creates. `defer` scripts execute in document order, so appending
+        # here is what guarantees the ordering.
+        from ..extensions import get_extension_static_paths
+
+        for ext_path in get_extension_static_paths():
+            try:
+                ext_url = static(ext_path)
+            except (ValueError, AttributeError):
+                ext_url = f"/static/{ext_path}"
+            script += f'\n        <script src="{ext_url}" defer data-turbo-track="reload"></script>'
+
         if settings.DEBUG:
             # debug-panel.js MUST load before client-dev.js so that
             # DjustDebugPanel is defined when client-dev.js calls
