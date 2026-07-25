@@ -735,7 +735,81 @@
         return null;
     }
 
+    /**
+     * Number of items a virtual list is tracking, or null if `container` is
+     * not an initialised virtual list. Exposed so the stream-op applier can
+     * tell "this target is virtualised" from "this is an ordinary element",
+     * and for diagnosis (#2017).
+     */
+    function virtualPoolSize(container) {
+        const state = container && STATE.get(container);
+        return state && state.items ? state.items.length : null;
+    }
+
+    /**
+     * Splice nodes into a virtual list's item pool (#2017 item 1).
+     *
+     * Stream ops must not mutate a [dj-virtual] container's children
+     * directly: those children are only the visible WINDOW, so an appended
+     * row never enters `state.items` — it is not counted for the spacer
+     * height, not reachable by scrolling, and dropped on the next re-render.
+     *
+     * @param {Element} container - the [dj-virtual] element
+     * @param {Node[]} nodes - element nodes to insert
+     * @param {number} at - 0 to prepend, -1 (default) to append
+     * @returns {boolean} true if handled (container is a virtual list)
+     */
+    function virtualInsert(container, nodes, at) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return false;
+        if (at === 0) {
+            state.items.unshift.apply(state.items, nodes);
+        } else {
+            state.items.push.apply(state.items, nodes);
+        }
+        invalidateWindow(state);
+        render(state);
+        return true;
+    }
+
+    /**
+     * Trim a virtual list's pool to `limit` items from `edge` (#2017 item 1).
+     *
+     * @returns {boolean} true if handled
+     */
+    function virtualPrune(container, limit, edge) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return false;
+        const keep = Math.max(0, limit);
+        if (state.items.length > keep) {
+            if (edge === 'bottom') {
+                state.items.length = keep;
+            } else {
+                state.items.splice(0, state.items.length - keep);
+            }
+        }
+        invalidateWindow(state);
+        render(state);
+        return true;
+    }
+
+    /** Force the next render() to re-slice rather than reuse the window. */
+    function invalidateWindow(state) {
+        state.visibleStart = -1;
+        state.visibleEnd = -1;
+        if (state.mode === 'variable') {
+            state.offsets = null;
+        }
+    }
+
     window.djust = window.djust || {};
+    window.djust._virtualPoolSize = virtualPoolSize;
+    window.djust._virtualPoolItems = function (container) {
+        const state = STATE.get(container);
+        return state && state.items ? state.items.slice() : null;
+    };
+    window.djust._virtualInsert = virtualInsert;
+    window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;
     window.djust.refreshVirtualList = refreshVirtualList;
     window.djust.teardownVirtualList = teardownVirtualList;
