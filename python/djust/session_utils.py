@@ -292,7 +292,7 @@ class Stream:
         today — ``_get_stream_operations()`` has no callers, and the client's
         ``17-streaming.js`` speaks ``StreamingMixin``'s separate
         ``{op, target, html}`` protocol. So this fixes an internal contract
-        (what ``LiveViewTestClient`` asserts against, and correctness for
+        (the op-dict shape ``LiveViewTestClient`` reads, and correctness for
         whenever the ops ARE wired), not a live on-screen symptom.
 
         A **bare id** can never produce the custom dom id — the framework
@@ -312,11 +312,16 @@ class Stream:
         the exact disagreement this method exists to prevent.
         """
         if self._looks_like_item(item_or_id):
-            if not allow_factory_fallback:
-                return f"{self.name}-{self.dom_id_fn(item_or_id)}"
+            # ONE expression for the id, with the strict/lenient choice made in
+            # the handler. Writing it twice — once per branch — would put this
+            # module's own failure class inside the chokepoint meant to retire
+            # it, and the structural pin only scans streams.py so it would not
+            # catch the drift.
             try:
                 return f"{self.name}-{self.dom_id_fn(item_or_id)}"
             except Exception:
+                if not allow_factory_fallback:
+                    raise
                 # Never swallowed — logged with the traceback, then handled.
                 logger.warning(
                     "Stream %r custom dom_id= factory raised on %r; falling back to "
