@@ -133,10 +133,18 @@ function _scanScopedElements() {
     const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
     const root = document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document;
 
-    // Clear stale entries (elements removed from DOM)
+    // Clear stale entries: the element left the DOM, or it survived but the
+    // server dropped the attribute. The second case matters because morphdom
+    // PATCHES a surviving element's attributes rather than replacing the node —
+    // a replaced element is evicted by the contains() check, but one that is
+    // merely mutated would otherwise keep dispatching a directive the template
+    // no longer declares (#2108).
     _scopedRegistry.forEach(function(entries, _key) {
         entries.forEach(function(entry) {
-            if (!document.contains(entry.element)) {
+            if (
+                !document.contains(entry.element) ||
+                entry.element.getAttribute(entry.attrName) === null
+            ) {
                 entries.delete(entry);
             }
         });
@@ -186,11 +194,17 @@ function _scanScopedElements() {
                 // eslint-disable-next-line security/detect-object-injection
                 const parsed = parseEventHandler(element.attributes[ai].value);
 
-                // Check if already registered (prevent duplicates)
+                // Check if already registered (prevent duplicates). An existing
+                // entry is REFRESHED rather than skipped: the element survives a
+                // morph while its attribute VALUE changes, so a skip would keep
+                // dispatching the old handler (and old kwargs / old key filter)
+                // forever (#2108).
                 const entries = _scopedRegistry.get(registryKey);
                 let alreadyRegistered = false;
                 entries.forEach(function(entry) {
                     if (entry.element === element && entry.attrName === attrName) {
+                        entry.parsed = parsed;
+                        entry.requiredKey = requiredKey;
                         alreadyRegistered = true;
                     }
                 });
