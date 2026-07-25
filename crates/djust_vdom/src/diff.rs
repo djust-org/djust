@@ -162,7 +162,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// is a pure free function reached from several entry points; threading config
 /// through every signature would touch far more surface than the flag is worth
 /// while it is still dark. Set once at startup from
-/// `LIVEVIEW_CONFIG['virtual_keyed_ops_enabled']`.
+/// a `LIVEVIEW_CONFIG` key — that wiring is iteration 3's job and no such
+/// setting exists yet (`grep` finds none); do not cite it as if it does.
 static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(false);
 
 /// Enable/disable `[dj-virtual]` keyed splice ops. Wired from Python config.
@@ -460,15 +461,44 @@ fn reconcile_siblings(
     virtual_parent: bool,
 ) {
     let any_new_keyed = new_nb.iter().any(|(_, n)| n.key.is_some());
-    if any_new_keyed {
-        // A [dj-virtual] parent gets KEY-addressed ops (ADR-026): its children
-        // on the client are only the visible window, so an index means
-        // different things on the two sides.
-        if virtual_parent {
-            reconcile_virtual_keyed(old_nb, new_nb, ppath, pid, out);
+
+    // A [dj-virtual] parent gets KEY-addressed ops (ADR-026): its children on
+    // the client are only the visible window, so an index means different
+    // things on the two sides.
+    //
+    // The gate is the PARENT, not `any_new_keyed`. Gating on the children let
+    // two shapes escape to the index-addressed path: an EMPTY new list (clear
+    // the feed, a filter matching nothing) and an all-unkeyed new list — both
+    // of which then emit RemoveChild/InsertChild against a windowed container,
+    // which is the exact failure this exists to remove. "Clear the list" is
+    // about the most common operation a feed has.
+    if virtual_parent {
+        if let Some(reason) = virtual_keyed_unsupported(old_nb, new_nb) {
+            // Key-addressed ops cannot express this change, so fall back to
+            // the plain reconcilers — which handle both cases explicitly and
+            // warn — rather than silently dropping it. The fallback still
+            // emits index-addressed ops, which is wrong for a windowed
+            // container; that is why this warns rather than passing quietly.
+            vdom_trace!(
+                "DJE-052: [dj-virtual] children fell back to index diffing: {}",
+                reason
+            );
+            tracing::warn!(
+                "DJE-052: a [dj-virtual] container's children {} — falling back to \
+                 index-addressed diffing, which cannot address items outside the \
+                 client's visible window. Give every child a unique dj-key.",
+                reason
+            );
+            if any_new_keyed {
+                reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+            } else {
+                reconcile_indexed(old_nb, new_nb, ppath, pid, out);
+            }
         } else {
-            reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+            reconcile_virtual_keyed(old_nb, new_nb, ppath, pid, out);
         }
+    } else if any_new_keyed {
+        reconcile_keyed(old_nb, new_nb, ppath, pid, out);
     } else {
         reconcile_indexed(old_nb, new_nb, ppath, pid, out);
     }
@@ -486,6 +516,40 @@ fn reconcile_siblings(
 /// `dj-virtual` exists for, one append would emit 10k ops. The binding cost is
 /// WIRE SIZE, not DOM mutations, and O(n) ops per patch defeats the purpose of
 /// virtualising at all.
+/// Why `reconcile_virtual_keyed` cannot handle these children, if it cannot.
+///
+/// Key-addressed ops address a row by its key and anchor it to a neighbour's
+/// key. Two shapes are unrepresentable in that scheme, and both are silent
+/// data loss if the reconciler is handed them anyway:
+///
+/// - **An unkeyed child** has no address at all, so every change to it —
+///   content, insertion, removal — is invisible. `reconcile_keyed` handles
+///   this case at length (a positional group, LIS disabled, a DJE-050
+///   warning); this reconciler had none of it.
+/// - **A duplicate key** makes `before_key` ambiguous: two rows answer to the
+///   same anchor. `reconcile_keyed` demotes ambiguous keys to positional
+///   diffing and warns DJE-051; here they would collapse in a hash set and the
+///   extra row would simply never appear (or never leave).
+fn virtual_keyed_unsupported(
+    old_nb: &[(usize, &VNode)],
+    new_nb: &[(usize, &VNode)],
+) -> Option<&'static str> {
+    if new_nb.iter().any(|(_, n)| n.key.is_none()) || old_nb.iter().any(|(_, n)| n.key.is_none()) {
+        return Some("include a child with no dj-key");
+    }
+    for list in [old_nb, new_nb] {
+        let mut seen: AHashSet<&str> = AHashSet::new();
+        for (_, n) in list.iter() {
+            if let Some(k) = n.key.as_deref() {
+                if !seen.insert(k) {
+                    return Some("include a duplicate dj-key");
+                }
+            }
+        }
+    }
+    None
+}
+
 fn reconcile_virtual_keyed(
     old_nb: &[(usize, &VNode)],
     new_nb: &[(usize, &VNode)],
@@ -503,15 +567,21 @@ fn reconcile_virtual_keyed(
         }
     }
 
-    let new_keyed: Vec<(usize, &str, &VNode)> = new_nb
+    // (position within this vec, ABSOLUTE index in new_nb, key, node).
+    // The absolute index is what a child path must use: the filtered position
+    // diverges from it the moment an unkeyed sibling precedes a keyed one, and
+    // a content patch built from the wrong one rewrites the WRONG child. The
+    // gate above rejects unkeyed children, so today they cannot diverge — this
+    // carries both anyway rather than depending on a caller's invariant.
+    let new_keyed: Vec<(usize, usize, &str, &VNode)> = new_nb
         .iter()
-        .filter_map(|(_, n)| n.key.as_deref().map(|k| (0usize, k, *n)))
+        .filter_map(|(abs, n)| n.key.as_deref().map(|k| (*abs, k, *n)))
         .enumerate()
-        .map(|(i, (_, k, n))| (i, k, n))
+        .map(|(i, (abs, k, n))| (i, abs, k, n))
         .collect();
 
     // Removals: an old key with no counterpart in the new list.
-    let new_key_set: AHashSet<&str> = new_keyed.iter().map(|(_, k, _)| *k).collect();
+    let new_key_set: AHashSet<&str> = new_keyed.iter().map(|(_, _, k, _)| *k).collect();
     for (_, n) in old_nb.iter() {
         if let Some(k) = n.key.as_deref() {
             if !new_key_set.contains(k) {
@@ -529,7 +599,7 @@ fn reconcile_virtual_keyed(
     // already in relative order and needs no move.
     let survivors: Vec<(&str, usize)> = new_keyed
         .iter()
-        .filter_map(|(_, k, _)| old_pos.get(k).map(|oi| (*k, *oi)))
+        .filter_map(|(_, _, k, _)| old_pos.get(k).map(|oi| (*k, *oi)))
         .collect();
     let old_seq: Vec<usize> = survivors.iter().map(|(_, oi)| *oi).collect();
     let stable_positions = longest_increasing_subsequence(&old_seq);
@@ -543,13 +613,16 @@ fn reconcile_virtual_keyed(
     // below only reposition. `reconcile_keyed` recurses for every matched
     // pair (step 3) and this must too; emitted BEFORE the structural ops to
     // match that function's phase ordering.
-    for (i, key, new_node) in new_keyed.iter() {
+    for (_, abs, key, new_node) in new_keyed.iter() {
         let Some(oi) = old_pos.get(*key) else {
             continue;
         };
         let (_, old_node) = old_nb[*oi];
         let mut child_path = ppath.to_vec();
-        child_path.push(new_nb.get(*i).map(|(abs, _)| *abs).unwrap_or(*i));
+        // The ABSOLUTE index in new_nb, not the filtered position — see the
+        // note on new_keyed. Building this from the filtered index rewrites
+        // the wrong child whenever an unkeyed sibling precedes a keyed one.
+        child_path.push(*abs);
         diff_node_into(old_node, new_node, &child_path, out);
     }
 
@@ -559,8 +632,8 @@ fn reconcile_virtual_keyed(
     // Forward, prepending [x, y] onto [a, b] emits "insert x before y" while y
     // is still absent: the client cannot find the anchor, falls back to the
     // tail, and the list ends up y,a,b,x instead of x,y,a,b.
-    for (i, key, node) in new_keyed.iter().rev() {
-        let before_key = new_keyed.get(i + 1).map(|(_, k, _)| (*k).to_string());
+    for (i, _, key, node) in new_keyed.iter().rev() {
+        let before_key = new_keyed.get(i + 1).map(|(_, _, k, _)| (*k).to_string());
 
         if old_pos.contains_key(*key) {
             // Survivor: emit a move ONLY if it is outside the stable run.

@@ -676,10 +676,23 @@ pub enum Patch {
     // when the parent carries `dj-virtual` AND the feature flag is on
     // (`diff::set_virtual_keyed_ops`, default OFF).
     //
-    // Wire note: `Patch` is serialized with serde_json (a NAMED map), not
-    // rmp_serde, so `skip_serializing_if` on interior optionals is safe here —
-    // the #1541 positional-slot hazard applies to msgpack-encoded structs
-    // (VNode), not to these. Verified before choosing this shape.
+    // Wire note (corrected — the first version of this comment was wrong, and
+    // so is the older one on `MoveSubtree` below). `#[serde(tag = "type")]`
+    // does NOT force a map encoding under msgpack: `rmp_serde` encodes an
+    // internally-tagged enum as a POSITIONAL array with the tag in slot 0.
+    // Measured: `SetText { d: None }` -> first byte 0x93 (FIXARRAY), and it
+    // fails its own round-trip with "invalid length 2, expected 3 elements"
+    // because `skip_serializing_if` dropped the interior `d` — the exact
+    // #1541 shape. That breakage is PRE-EXISTING and affects every variant,
+    // not just these; `render_binary_diff` (djust_live/src/lib.rs:1028) is the
+    // only msgpack producer and has no non-test consumer today, which is why
+    // it has gone unnoticed. Tracked separately rather than widened into this
+    // change (#1079); pinned as-is in `wire_protocol_snapshot.rs` so the
+    // reality is recorded rather than assumed.
+    //
+    // These variants therefore keep `skip_serializing_if` to match every
+    // sibling variant: the LIVE path is `serde_json` (a named map), where it
+    // is genuinely safe and saves wire bytes on every patch.
     /// Insert a keyed item into a `[dj-virtual]` parent's pool.
     VirtualInsert {
         path: Vec<usize>,
@@ -758,10 +771,12 @@ pub enum Patch {
     /// dj-ids). `index` is the open marker's position among the parent's
     /// significant children (same frame as `InsertSubtree.index`).
     ///
-    /// `Patch` is internally tagged (`#[serde(tag = "type")]`) → map-encoded
-    /// even under msgpack, so an interior `d: Option` with `skip_serializing_if`
-    /// is wire-safe (the #1538/#1541 positional-array hazard applies only to
-    /// plain structs like `VNode`).
+    /// NOTE: this paragraph used to claim that `#[serde(tag = "type")]` makes
+    /// `Patch` map-encoded even under msgpack, and it is FALSE — `rmp_serde`
+    /// encodes an internally-tagged enum as a positional array (measured:
+    /// `SetText` -> 0x93 FIXARRAY, round-trip fails). The `skip_serializing_if`
+    /// on `d` is wire-safe on the LIVE path because that path is `serde_json`,
+    /// not because of the tag. See the corrected note on `VirtualInsert`.
     MoveSubtree {
         /// Boundary marker id (e.g. `"if-a3b1c2d4-0"`).
         id: String,
