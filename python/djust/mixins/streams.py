@@ -41,16 +41,11 @@ class StreamsMixin:
             Stream object for chaining
         """
 
-        def default_dom_id(x):
-            # Routed through Stream._identity so insert and delete agree on
-            # what identifies a row (#2116). The previous form used ``or``,
-            # i.e. TRUTHINESS, so an item with id=0 inserted as
-            # "<name>-<address>" while delete emitted "<name>-0" and the
-            # client could never match them.
-            return Stream._identity(x)
-
+        # The default factory is Stream.default_dom_id itself, not a local
+        # closure — dom_id_for() distinguishes default from custom by
+        # identity, and a closure would be a fresh object every call (#2121).
         if dom_id is None:
-            dom_id = default_dom_id
+            dom_id = Stream.default_dom_id
 
         if name not in self._streams or reset:
             self._streams[name] = Stream(name, dom_id)
@@ -63,6 +58,13 @@ class StreamsMixin:
                 )
 
         stream_obj = self._streams[name]
+
+        # An explicit dom_id= on an EXISTING stream is authoritative. Without
+        # this the loop below would emit ids from the new factory while
+        # stream_insert/stream_delete kept using the old one — the same
+        # insert/delete disagreement one call later (#2121).
+        if dom_id is not Stream.default_dom_id:
+            stream_obj.dom_id_fn = dom_id
 
         # Convert items to list if needed
         if hasattr(items, "__iter__") and not isinstance(items, (str, bytes)):
@@ -94,7 +96,7 @@ class StreamsMixin:
                 {
                     "type": "stream_insert",
                     "stream": name,
-                    "dom_id": f"{name}-{dom_id(item)}",
+                    "dom_id": stream_obj.dom_id_for(item),
                     "at": at,
                 }
             )
@@ -146,14 +148,13 @@ class StreamsMixin:
             raise ValueError(f"Stream '{name}' not initialized. Call stream() first.")
 
         stream_obj = self._streams[name]
-        dom_id = stream_obj.dom_id_fn
 
         stream_obj.insert(item, at=at)
         self._stream_operations.append(
             {
                 "type": "stream_insert",
                 "stream": name,
-                "dom_id": f"{name}-{dom_id(item)}",
+                "dom_id": stream_obj.dom_id_for(item),
                 "at": at,
             }
         )
@@ -165,16 +166,9 @@ class StreamsMixin:
 
         stream_obj = self._streams[name]
 
-        # Get the DOM id. Matches insert for the DEFAULT dom_id factory
-        # (#2116, #1646). NOTE: a stream created with a custom ``dom_id=``
-        # callable still disagrees — insert uses that callable, this uses the
-        # default resolution. Pre-existing and unchanged here; filed separately
-        # rather than widened into this fix. The
-        # pre-fix hasattr chain here meant a dict item produced a dom_id of
-        # "<name>-{'id': 1, 't': 'a'}" — the dict's repr — while the same
-        # item inserted as "<name>-<address>". Fixing Stream.delete alone
-        # left this public entry point on the old path.
-        dom_id_val = f"{name}-{Stream.resolve_id(item_or_id)}"
+        # One chokepoint with both insert sites, so a custom dom_id= factory
+        # cannot make them disagree (#2121, #1646).
+        dom_id_val = stream_obj.dom_id_for(item_or_id)
 
         stream_obj.delete(item_or_id)
         self._stream_operations.append(
