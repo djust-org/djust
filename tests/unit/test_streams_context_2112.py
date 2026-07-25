@@ -7,8 +7,8 @@ documented pattern in ``docs/website/guides/large-lists.md``::
 
     self.stream("messages", Message.recent(50), limit=50)
 
-stored the data and then rendered nothing: ``{% for m in messages %}`` saw an
-undefined name.
+stored the data and then rendered nothing: the documented
+``{% for msg in streams.messages %}`` saw an undefined name.
 
 The second half of the bug is that this was invisible to tests.
 ``assert_stream_insert`` inspects the queued op list, which is populated
@@ -45,18 +45,19 @@ def _mounted():
 def test_stream_data_reaches_template_context():
     """THE BUG: the documented pattern must expose the stream to templates."""
     ctx = _mounted().get_context_data()
-    assert "messages" in ctx, (
-        "self.stream('messages', ...) stored data but 'messages' is absent from "
-        "the template context, so {% for m in messages %} renders nothing"
+    assert "streams" in ctx, (
+        "self.stream('messages', ...) stored data but 'streams' is absent from "
+        "the template context, so the documented {% for msg in streams.messages %} "
+        "renders nothing"
     )
-    assert [m["text"] for m in ctx["messages"]] == ["a", "b"]
+    assert [m["text"] for m in ctx["streams"]["messages"]] == ["a", "b"]
 
 
 def test_stream_context_reflects_later_inserts():
     v = _mounted()
     v.stream_insert("messages", {"id": 3, "text": "c"})
     ctx = v.get_context_data()
-    assert [m["text"] for m in ctx["messages"]] == ["a", "b", "c"]
+    assert [m["text"] for m in ctx["streams"]["messages"]] == ["a", "b", "c"]
 
 
 class _Msg:
@@ -85,7 +86,7 @@ def test_stream_delete_is_reflected():
     v.mount(None)
     v.stream_delete("messages", 1)
     ctx = v.get_context_data()
-    assert [m.text for m in ctx["messages"]] == ["b"]
+    assert [m.text for m in ctx["streams"]["messages"]] == ["b"]
 
 
 def test_multiple_streams_all_exposed():
@@ -99,7 +100,7 @@ def test_multiple_streams_all_exposed():
     v = Multi()
     v.mount(None)
     ctx = v.get_context_data()
-    assert "alpha" in ctx and "beta" in ctx
+    assert "alpha" in ctx["streams"] and "beta" in ctx["streams"]
 
 
 # ---------------------------------------------------------------------------
@@ -107,24 +108,36 @@ def test_multiple_streams_all_exposed():
 # ---------------------------------------------------------------------------
 
 
-def test_user_context_wins_over_stream_of_same_name():
-    """An explicit get_context_data value must not be silently overwritten."""
+def test_existing_streams_key_is_not_clobbered():
+    """A view that already defines ``streams`` keeps its own value.
+
+    Streams never reached the context before this fix, so an app that set
+    ``self.streams`` (or injected one) renders that today. Overwriting it here
+    would be a silent breaking change.
+    """
 
     class Clashing(LiveView):
         template_name = "unused.html"
 
         def mount(self, request, **kwargs):
+            self.streams = {"mine": ["user-value"]}
             self.stream("messages", [{"id": 1, "text": "from-stream"}])
-
-        def get_context_data(self, **kwargs):
-            ctx = super().get_context_data(**kwargs)
-            ctx["messages"] = [{"id": 9, "text": "from-user"}]
-            return ctx
 
     v = Clashing()
     v.mount(None)
     got = v.get_context_data()
-    assert [m["text"] for m in got["messages"]] == ["from-user"]
+    assert got["streams"] == {"mine": ["user-value"]}
+
+
+def test_top_level_stream_name_is_NOT_exposed():
+    """Only ``streams.<name>`` is the contract — not a bare top-level name.
+
+    Splatting names at top level would be a second, undocumented spelling and
+    would collide with ordinary view attributes.
+    """
+    ctx = _mounted().get_context_data()
+    assert "messages" not in ctx
+    assert "messages" in ctx["streams"]
 
 
 def test_no_streams_leaves_context_unchanged():
@@ -157,7 +170,7 @@ def test_assert_stream_insert_alone_cannot_prove_rendering():
     ops = getattr(v, "_stream_operations", [])
     assert any(o.get("type") == "stream_insert" for o in ops), "op queue should record the insert"
     # The op queue says nothing about reachability; the context is the proof.
-    assert "messages" in v.get_context_data()
+    assert "messages" in v.get_context_data()["streams"]
 
 
 @pytest.mark.parametrize("name", ["messages", "items", "rows"])
@@ -170,4 +183,4 @@ def test_stream_name_becomes_the_context_key(name):
 
     v = Named()
     v.mount(None)
-    assert name in v.get_context_data()
+    assert name in v.get_context_data()["streams"]

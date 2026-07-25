@@ -344,16 +344,21 @@ class ContextMixin:
         # context" — but nothing ever called it, so the documented pattern in
         # docs/website/guides/large-lists.md stored data and rendered nothing.
         #
+        # Exposed under a ``streams`` namespace, matching the documented
+        # template contract -- ``{% for msg in streams.messages %}`` in
+        # docs/website/guides/large-lists.md and in Stream's own docstring.
+        # NOT splatted as top-level names: that would be a second, undocumented
+        # spelling and would collide with ordinary view attributes.
+        #
         # Precedence is the OPPOSITE of actions above: an existing key wins.
-        # Because streams never reached the context before, an app that has
-        # both ``self.messages`` and a stream named "messages" renders the
-        # attribute today; clobbering it here would be a silent breaking
-        # change. A stream only fills a name nothing else claimed.
+        # Because streams never reached the context before, an app that already
+        # defines ``streams`` renders that today; clobbering it here would be a
+        # silent breaking change.
         get_streams = getattr(self, "_get_streams_context", None)
         if callable(get_streams):
-            for stream_name, items in get_streams().items():
-                if stream_name not in context:
-                    context[stream_name] = items
+            streams_ctx = get_streams()
+            if streams_ctx and "streams" not in context:
+                context["streams"] = streams_ctx
 
         return context
 
