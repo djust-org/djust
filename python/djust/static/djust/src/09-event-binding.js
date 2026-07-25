@@ -131,19 +131,43 @@ let _scopedDelegationInstalled = false;
 function _scanScopedElements() {
     const scopedPrefixes = ['dj-window-', 'dj-document-'];
     const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
-    const root = document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document;
+    // EVERY LiveView root, not just the first. A page can carry more than one
+    // (`{% live_render %}` children, sticky views), and picking only
+    // querySelector's first match meant a second root's scoped attrs never
+    // registered at all — and, once #2108 added refresh-on-rescan, that a root
+    // which stopped being the first match kept dispatching its original
+    // handlers forever (#2110).
+    //
+    // The sweep and the scan below MUST agree on this set. When they disagreed
+    // — sweep document-wide, scan root-scoped — an entry outside the scanned
+    // root was neither refreshed nor evicted, which is exactly the bug.
+    const roots = document.querySelectorAll('[dj-view], [dj-root]');
 
-    // Clear stale entries: the element left the DOM, or it survived but the
-    // server dropped the attribute. The second case matters because morphdom
-    // PATCHES a surviving element's attributes rather than replacing the node —
-    // a replaced element is evicted by the contains() check, but one that is
-    // merely mutated would otherwise keep dispatching a directive the template
-    // no longer declares (#2108).
+    /** Is `el` one of the roots, or inside one? (No roots ⇒ document fallback.) */
+    function isGoverned(el) {
+        if (roots.length === 0) return true;
+        for (let i = 0; i < roots.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const r = roots[i];
+            if (r === el || r.contains(el)) return true;
+        }
+        return false;
+    }
+
+    // Clear stale entries: the element left the DOM, the server dropped the
+    // attribute, or the element is no longer governed by any root. The middle
+    // case matters because morphdom PATCHES a surviving element's attributes
+    // rather than replacing the node — a replaced element is evicted by the
+    // contains() check, but one that is merely mutated would otherwise keep
+    // dispatching a directive the template no longer declares (#2108). The last
+    // case keeps the sweep symmetric with the scan (#2110): an entry the scan
+    // can no longer reach must not keep firing a value nothing will refresh.
     _scopedRegistry.forEach(function(entries, _key) {
         entries.forEach(function(entry) {
             if (
                 !document.contains(entry.element) ||
-                entry.element.getAttribute(entry.attrName) === null
+                entry.element.getAttribute(entry.attrName) === null ||
+                !isGoverned(entry.element)
             ) {
                 entries.delete(entry);
             }
@@ -220,13 +244,22 @@ function _scanScopedElements() {
         }
     }
 
-    // `document` has no .attributes — scanning it would throw. Its
-    // querySelectorAll('*') already covers <html>/<body>, so the fallback root
-    // needs no special handling beyond being skipped here.
-    if (root !== document) {
-        scanElement(root);
+    if (roots.length === 0) {
+        // No LiveView root on the page — fall back to the whole document.
+        // `document` itself has no .attributes (scanning it would throw), and
+        // its querySelectorAll('*') already covers <html>/<body>.
+        document.querySelectorAll('*').forEach(scanElement);
+        return;
     }
-    root.querySelectorAll('*').forEach(scanElement);
+
+    // Each root plus its descendants. A nested root is visited twice (once as a
+    // descendant of its parent, once as a root); that is harmless because
+    // scanElement REFRESHES an existing entry rather than adding a second one
+    // (#2108), which is what keeps this from double-firing.
+    roots.forEach(function(r) {
+        scanElement(r);
+        r.querySelectorAll('*').forEach(scanElement);
+    });
 }
 
 /**
