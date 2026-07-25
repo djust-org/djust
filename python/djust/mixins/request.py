@@ -251,7 +251,22 @@ class RequestMixin:
         # Use _cached_context (pre-context-processor copy) to avoid
         # non-serializable processor objects (PermWrapper, csrf, etc.)
         _cached = self._cached_context or {}
-        _session_state = {k: v for k, v in _cached.items() if not isinstance(v, LiveComponent)}
+        # ``streams`` is DERIVED from ``_streams`` on every get_context_data()
+        # call — it is not user state and must never be persisted (#2112).
+        #
+        # Persisting it is self-poisoning: the restore paths below (and the WS
+        # equivalent in runtime.py) safe_setattr every saved key back onto the
+        # view, so ``self.streams`` would become a public attribute, the
+        # attribute walk would put that STALE dict into the context, and the
+        # existing-key-wins guard in mixins/context.py would then skip the live
+        # data forever — every insert after a restore invisible.
+        #
+        # It is also pure bloat: the documented 500-item example persists ~45 KB
+        # per GET, and streams exist precisely to keep large collections OUT of
+        # state.
+        _session_state = {
+            k: v for k, v in _cached.items() if not isinstance(v, LiveComponent) and k != "streams"
+        }
         request.session[view_key] = normalize_django_value(_session_state)
 
         # Persist user-defined _private attributes so they survive reconnects
