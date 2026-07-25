@@ -221,6 +221,31 @@ class Stream:
             return id(item)
         return getattr(item, "id", getattr(item, "pk", id(item)))
 
+    @staticmethod
+    def resolve_id(item_or_id: Any) -> Any:
+        """Identity of a delete/lookup ARGUMENT, which may be an item or a bare id.
+
+        Distinct from :meth:`_identity`, which is for values known to be
+        ITEMS. The difference is the fallback: an unrecognized item resolves
+        to its object address (matching only itself), whereas an unrecognized
+        ARGUMENT is the id the caller passed and must be used verbatim.
+
+        Collapsing the two is a real bug — ``_identity(0)`` returns the
+        address of the int ``0``, not ``0`` — so every caller that accepts
+        "item or id" must use THIS one (#2116).
+        """
+        if isinstance(item_or_id, Mapping):
+            # A mapping is always an ITEM, never a bare id. Previously this
+            # reached ``_deleted_ids.add(dict)`` and raised
+            # ``TypeError: unhashable type: 'dict'``.
+            return Stream._identity(item_or_id)
+        if hasattr(item_or_id, "id"):
+            return item_or_id.id
+        if hasattr(item_or_id, "pk"):
+            return item_or_id.pk
+        # No id/pk and not a mapping — the caller passed the id itself.
+        return item_or_id
+
     def delete(self, item_or_id: Any) -> None:
         """Mark item for deletion.
 
@@ -228,18 +253,7 @@ class Stream:
         item that carries no id/pk resolves to its object address, which
         matches only that exact object — never a look-alike.
         """
-        if isinstance(item_or_id, Mapping):
-            # A mapping is always an ITEM, never a bare id. Previously this
-            # reached ``_deleted_ids.add(dict)`` and raised
-            # ``TypeError: unhashable type: 'dict'``.
-            item_id = self._identity(item_or_id)
-        elif hasattr(item_or_id, "id"):
-            item_id = item_or_id.id
-        elif hasattr(item_or_id, "pk"):
-            item_id = item_or_id.pk
-        else:
-            # No id/pk and not a mapping — the caller passed the id itself.
-            item_id = item_or_id
+        item_id = self.resolve_id(item_or_id)
 
         try:
             self._deleted_ids.add(item_id)

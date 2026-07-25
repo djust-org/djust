@@ -108,3 +108,80 @@ def test_falsy_ids_are_handled(bad):
     s = _stream([{"id": bad, "t": "keep-me"}, {"id": 99, "t": "other"}])
     s.delete(bad)
     assert [i["t"] for i in s.items] == ["other"]
+
+
+# --- the PUBLIC entry point must agree with Stream.delete (#1646) ----------
+#
+# Fixing Stream.delete alone left StreamsMixin.stream_delete and the
+# default_dom_id factory on the old resolution, so insert and delete disagreed
+# on what identifies a row. Stage 11 caught it: a dict item produced a dom_id
+# of "<name>-{'id': 1, 't': 'a'}" (the dict's repr) on delete while inserting
+# as "<name>-<address>". The client can never match those.
+
+
+class _StreamHost:
+    """Minimal StreamsMixin host — avoids a full LiveView for a unit test."""
+
+    def __init__(self):
+        self._streams = {}
+        self._stream_operations = []
+
+
+def _host():
+    from djust.mixins.streams import StreamsMixin
+
+    class Host(StreamsMixin, _StreamHost):
+        pass
+
+    return Host()
+
+
+def test_public_stream_delete_emits_the_same_dom_id_as_insert():
+    h = _host()
+    h.stream("things", [{"id": 1, "t": "a"}, {"id": 2, "t": "b"}])
+    insert_ids = [o["dom_id"] for o in h._stream_operations if o["type"] == "stream_insert"]
+
+    h._stream_operations.clear()
+    h.stream_delete("things", {"id": 1, "t": "a"})
+    delete_id = [o["dom_id"] for o in h._stream_operations if o["type"] == "stream_delete"][0]
+
+    assert delete_id == insert_ids[0], (
+        f"delete emitted {delete_id!r} but the item was inserted as "
+        f"{insert_ids[0]!r} — the client cannot match them"
+    )
+    assert "{" not in delete_id, f"dom_id contains a dict repr: {delete_id!r}"
+
+
+def test_public_stream_delete_by_bare_id_matches_too():
+    h = _host()
+    h.stream("things", [{"id": 7, "t": "x"}])
+    insert_id = [o["dom_id"] for o in h._stream_operations if o["type"] == "stream_insert"][0]
+    h._stream_operations.clear()
+    h.stream_delete("things", 7)
+    delete_id = [o["dom_id"] for o in h._stream_operations if o["type"] == "stream_delete"][0]
+    assert delete_id == insert_id
+
+
+def test_falsy_id_zero_agrees_between_insert_and_delete():
+    """default_dom_id used ``or`` — truthiness — so id=0 fell to the address."""
+    h = _host()
+    h.stream("things", [{"id": 0, "t": "zero"}])
+    insert_id = [o["dom_id"] for o in h._stream_operations if o["type"] == "stream_insert"][0]
+    assert insert_id == "things-0", f"id=0 inserted as {insert_id!r}"
+    h._stream_operations.clear()
+    h.stream_delete("things", 0)
+    delete_id = [o["dom_id"] for o in h._stream_operations if o["type"] == "stream_delete"][0]
+    assert delete_id == insert_id
+
+
+# --- the unhashable-id guard (was untested) --------------------------------
+
+
+def test_unhashable_id_still_removes_from_items():
+    """The try/except around the tombstone add must not swallow the removal."""
+    s = _stream([{"id": 1, "t": "a"}])
+    # An item whose id is itself unhashable.
+    weird = {"id": ["not", "hashable"], "t": "w"}
+    s.insert(weird)
+    s.delete(weird)
+    assert [i["t"] for i in s.items] == ["a"], "removal must work even when the tombstone cannot"
