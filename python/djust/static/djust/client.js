@@ -3757,7 +3757,21 @@ function _scanScopedElements() {
     // The sweep and the scan below MUST agree on this set. When they disagreed
     // — sweep document-wide, scan root-scoped — an entry outside the scanned
     // root was neither refreshed nor evicted, which is exactly the bug.
-    const roots = document.querySelectorAll('[dj-view], [dj-root]');
+    //
+    // Keep only the OUTERMOST roots. Containment is transitive, so a nested
+    // root's subtree is already covered by its ancestor: the set is exactly
+    // equivalent for both the scan and isGoverned, but scanning every root
+    // would re-walk each nested subtree once per level — cost grows with
+    // nesting DEPTH (measured ~+20% at depth 4, ~+300% at depth 50, vs ~+1%
+    // once filtered). querySelectorAll returns document order, in which an
+    // ancestor always precedes its descendants, so a single pass comparing
+    // against the last kept root is sufficient.
+    const allRoots = document.querySelectorAll('[dj-view], [dj-root]');
+    const roots = [];
+    allRoots.forEach(function(r) {
+        if (roots.length && roots[roots.length - 1].contains(r)) return;
+        roots.push(r);
+    });
 
     /** Is `el` one of the roots, or inside one? (No roots ⇒ document fallback.) */
     function isGoverned(el) {
@@ -3868,10 +3882,8 @@ function _scanScopedElements() {
         return;
     }
 
-    // Each root plus its descendants. A nested root is visited twice (once as a
-    // descendant of its parent, once as a root); that is harmless because
-    // scanElement REFRESHES an existing entry rather than adding a second one
-    // (#2108), which is what keeps this from double-firing.
+    // Each outermost root plus its descendants. Nested roots need no separate
+    // visit — they are already inside one of these subtrees.
     roots.forEach(function(r) {
         scanElement(r);
         r.querySelectorAll('*').forEach(scanElement);
