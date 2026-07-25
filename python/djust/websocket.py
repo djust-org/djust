@@ -4157,16 +4157,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def _run_tick(self, interval_ms: int) -> None:
         """
-        Periodic tick loop. Calls handle_tick() on the view instance every
-        interval_ms milliseconds, then re-renders and sends patches.
+        Periodic tick loop. Calls :meth:`_tick_once` every ``interval_ms``
+        milliseconds until the view goes away or the task is cancelled.
 
-        Event sequencing (#560):
-        - Skips render when handle_tick() doesn't change any public assigns
-        - Acquires _render_lock to serialize with event handlers
-        - Yields to user events: if a user event is being processed, the
-          tick is deferred to the next interval instead of blocking
-        - Tags tick updates with source="tick" so the client can buffer
-          them during pending user event round-trips
+        The loop is deliberately this thin: everything that decides whether a
+        tick renders and sends lives in :meth:`_tick_once`, which a test can
+        drive directly instead of waiting on a real timer. The end-to-end test
+        that waited for a real 50ms tick to fire was flaky under CPU load — the
+        first render can exceed the sampling window, so a pass/fail gate on it
+        is a wall-clock race (#2124, the class canonized by #1795 / #1830).
         """
         interval_s = interval_ms / 1000.0
         try:
@@ -4175,82 +4174,104 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if not self.view_instance:
                     break
                 try:
-                    # User events take priority over ticks (#560). If a user
-                    # event is currently being processed, skip this tick
-                    # entirely — the next tick interval will pick up any
-                    # changes. This prevents version interleaving.
-                    if self._processing_user_event:
-                        logger.debug(
-                            "[djust] Tick on %s deferred — user event in progress",
-                            self.view_instance.__class__.__name__,
-                        )
-                        continue
-
-                    # Acquire render lock to serialize with event handlers.
-                    # Use a short timeout so ticks don't block indefinitely
-                    # if an event handler is slow.
-                    try:
-                        await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
-                    except asyncio.TimeoutError:
-                        logger.debug(
-                            "[djust] Tick on %s skipped — render lock held",
-                            self.view_instance.__class__.__name__,
-                        )
-                        continue
-
-                    try:
-                        # Snapshot state before tick to detect changes
-                        pre_assigns = _snapshot_assigns(self.view_instance)
-
-                        await sync_to_async(self.view_instance.handle_tick)()
-
-                        # Skip render if tick handler didn't change any state.
-                        # Honor _force_full_html (set by set_changed_keys(), #1981)
-                        # like the event paths do (runtime.py / handle_event) — an
-                        # in-place mutation inside handle_tick is invisible to the
-                        # snapshot, so without this guard the hatch would be
-                        # silently dropped on the tick path (#1646 parallel-path).
-                        post_assigns = _snapshot_assigns(self.view_instance)
-                        if pre_assigns == post_assigns and not getattr(
-                            self.view_instance, "_force_full_html", False
-                        ):
-                            logger.debug(
-                                "[djust] Tick on %s produced no state changes, skipping render",
-                                self.view_instance.__class__.__name__,
-                            )
-                            continue
-
-                        if hasattr(self.view_instance, "_sync_state_to_rust"):
-                            await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-                        html, patches, version = await sync_to_async(
-                            self.view_instance.render_with_diff
-                        )()
-
-                        # Consume the force flag (one render per
-                        # set_changed_keys()/_force_full_html, #1981) — mirrors
-                        # the runtime's reset in _render_and_send.
-                        if getattr(self.view_instance, "_force_full_html", False):
-                            self.view_instance._force_full_html = False
-
-                        if patches is not None:
-                            if isinstance(patches, str):
-                                patches = fast_json_loads(patches)
-                            # Render-send: arm recovery so _recovery_version
-                            # tracks this tick's version (#1817). ``html`` is the
-                            # pre-strip render from render_with_diff() above.
-                            await self._send_update(
-                                patches=patches,
-                                version=self._next_version_armed(html),
-                                event_name="tick",
-                                source="tick",
-                            )
-                    finally:
-                        self._render_lock.release()
+                    await self._tick_once()
                 except Exception as e:
                     logger.exception("Error in tick handler: %s", e)
         except asyncio.CancelledError:
             pass  # Normal shutdown path when tick loop is cancelled
+
+    async def _tick_once(self) -> bool:
+        """One tick iteration: run ``handle_tick``, render, send. Returns
+        whether a patch frame was actually sent.
+
+        Event sequencing (#560):
+        - Skips render when handle_tick() doesn't change any public assigns
+        - Acquires _render_lock to serialize with event handlers
+        - Yields to user events: if a user event is being processed, the
+          tick is skipped instead of blocking
+        - Tags tick updates with source="tick" so the client can buffer
+          them during pending user event round-trips
+
+        Every early return here is a SKIP, not a stop — the caller keeps
+        ticking. The one condition that stops the loop (no view instance) is
+        checked by the caller, so calling this directly with no view is a
+        no-op rather than a crash.
+        """
+        if not self.view_instance:
+            return False
+
+        # User events take priority over ticks (#560). If a user event is
+        # currently being processed, skip this tick entirely — the next tick
+        # interval will pick up any changes. This prevents version
+        # interleaving.
+        if self._processing_user_event:
+            logger.debug(
+                "[djust] Tick on %s deferred — user event in progress",
+                self.view_instance.__class__.__name__,
+            )
+            return False
+
+        # Acquire render lock to serialize with event handlers. Use a short
+        # timeout so ticks don't block indefinitely if an event handler is
+        # slow.
+        try:
+            await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
+        except asyncio.TimeoutError:
+            logger.debug(
+                "[djust] Tick on %s skipped — render lock held",
+                self.view_instance.__class__.__name__,
+            )
+            return False
+
+        try:
+            # Snapshot state before tick to detect changes
+            pre_assigns = _snapshot_assigns(self.view_instance)
+
+            await sync_to_async(self.view_instance.handle_tick)()
+
+            # Skip render if tick handler didn't change any state.
+            # Honor _force_full_html (set by set_changed_keys(), #1981)
+            # like the event paths do (runtime.py / handle_event) — an
+            # in-place mutation inside handle_tick is invisible to the
+            # snapshot, so without this guard the hatch would be
+            # silently dropped on the tick path (#1646 parallel-path).
+            post_assigns = _snapshot_assigns(self.view_instance)
+            if pre_assigns == post_assigns and not getattr(
+                self.view_instance, "_force_full_html", False
+            ):
+                logger.debug(
+                    "[djust] Tick on %s produced no state changes, skipping render",
+                    self.view_instance.__class__.__name__,
+                )
+                return False
+
+            if hasattr(self.view_instance, "_sync_state_to_rust"):
+                await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+            # Consume the force flag (one render per
+            # set_changed_keys()/_force_full_html, #1981) — mirrors
+            # the runtime's reset in _render_and_send.
+            if getattr(self.view_instance, "_force_full_html", False):
+                self.view_instance._force_full_html = False
+
+            if patches is not None:
+                if isinstance(patches, str):
+                    patches = fast_json_loads(patches)
+                # Render-send: arm recovery so _recovery_version
+                # tracks this tick's version (#1817). ``html`` is the
+                # pre-strip render from render_with_diff() above.
+                await self._send_update(
+                    patches=patches,
+                    version=self._next_version_armed(html),
+                    event_name="tick",
+                    source="tick",
+                )
+                return True
+            return False
+        finally:
+            self._render_lock.release()
 
     @classmethod
     async def broadcast_reload(cls, file_path: str) -> None:

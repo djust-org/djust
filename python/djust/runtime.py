@@ -95,6 +95,33 @@ def _tenant_context(tenant: Any) -> ContextManager[Any]:
 # per-event / url-change re-bind still uses the _tenant_context manager above.
 
 
+def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
+    """Start the periodic tick task for ``view_class`` if it opted in.
+
+    A view opts in by setting ``tick_interval`` AND overriding ``handle_tick``
+    — the base implementation is a no-op, so starting a loop for it would burn
+    a task per connection to render nothing.
+
+    Extracted from the mount hook so a test can assert "mount starts the tick
+    task" against THIS function rather than re-implementing the condition
+    (#2124). A test that duplicates the rule passes even when the runtime stops
+    applying it, which is the decorative-pin failure mode (#1859).
+
+    Returns whether a task was started.
+    """
+    tick_interval = getattr(view_class, "tick_interval", None)
+    if not tick_interval:
+        return False
+
+    from .live_view import LiveView as _LV
+
+    if view_class.handle_tick is _LV.handle_tick:
+        return False
+
+    consumer._tick_task = asyncio.create_task(consumer._run_tick(tick_interval))
+    return True
+
+
 # ------------------------------------------------------------------ #
 # Transport Protocol + adapters
 # ------------------------------------------------------------------ #
@@ -772,12 +799,7 @@ class WSConsumerTransport:
         # Start periodic tick if the subclass overrides handle_tick
         # (websocket.py:2202-2208).
         view_class = type(view_instance)
-        tick_interval = getattr(view_class, "tick_interval", None)
-        if tick_interval:
-            from .live_view import LiveView as _LV
-
-            if view_class.handle_tick is not _LV.handle_tick:
-                consumer._tick_task = asyncio.create_task(consumer._run_tick(tick_interval))
+        maybe_start_tick_task(consumer, view_class)
 
         # Set the use_actors flag off the view class (websocket.py:2211) so
         # disconnect's actor cleanup guard reflects reality. The actor HANDLE is
