@@ -84,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Verified locally: the `mcp` and WebSocket/`daphne` test suites pass under the new versions (the 1.27→1.28.1 `mcp` minor bump is the largest and carries no API break in the `djust.mcp` server tests). No API or behavioral change to djust.
 
+### Security
+
+- **postcss 8.5.16 → 8.5.20 — path traversal in source-map auto-loading (GHSA-r28c-9q8g-f849, Dependabot #137, high).** `postcss` ≤ 8.5.17 auto-loads a previous source map from a `sourceMappingURL` annotation without constraining the resolved path, so a crafted CSS input can make it read an arbitrary `.map` file off disk and surface its contents. **Not a runtime exposure for djust applications**: `postcss` is a dev-only transitive dependency (via `vite`), never packaged in the wheel and never served to a browser — the surface is a contributor or CI machine processing untrusted CSS. Lockfile-only change; `vite`'s existing `^8.5.16` range already admits the fix, so no `vite` bump and no `package.json` change were needed (`npm update postcss`, not `npm install`, which would have added postcss as a spurious direct *runtime* dependency). `nanoid` 3.3.15 → 3.3.16 rides along as postcss's own bumped requirement. The npm 10.9.2 in this environment strips `libc` metadata it does not emit from 10 rollup/lightningcss platform entries; those entries were restored verbatim from HEAD so the diff is exactly the security bump (7 lines) and `npm ci`'s musl-vs-glibc optional-dependency selection is unaffected. Verified with `npm ci` (lockfile internally consistent, postcss 8.5.20 installed), the full JS suite (1847 passing), and a `scripts/build-client.sh` run that reproduced the committed bundles byte-identically.
+
 ## [1.1.0rc8] - 2026-07-14
 
 ### Added
