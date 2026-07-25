@@ -9853,6 +9853,32 @@ window.djust.hooks.CursorOverlay = {
 // Track active streams for error recovery and state
 const _activeStreams = new Map();
 
+/**
+ * Route an insert into a [dj-virtual] container's item pool (#2017 item 1).
+ *
+ * A virtual container's children are only the visible WINDOW; the full
+ * collection lives in the list's item pool with off-window rows detached.
+ * Appending straight into the shell therefore does not add a row to the list
+ * at all — it is not counted for the spacer height, not reachable by
+ * scrolling, and dropped on the next re-render.
+ *
+ * Runtime lookup: 29-virtual-list.js loads after this module.
+ *
+ * @returns {boolean} true if handled (caller must then skip its direct DOM path)
+ */
+function _virtualSplice(el, frag, at) {
+    if (!globalThis.djust || typeof globalThis.djust._virtualInsert !== 'function') return false;
+    const nodes = Array.prototype.filter.call(frag.childNodes, (n) => n.nodeType === 1);
+    if (nodes.length === 0) return false;
+    return globalThis.djust._virtualInsert(el, nodes, at);
+}
+
+/** Prune a [dj-virtual] container's pool rather than its visible window. */
+function _virtualPruneOp(el, limit, edge) {
+    if (!globalThis.djust || typeof globalThis.djust._virtualPrune !== 'function') return false;
+    return globalThis.djust._virtualPrune(el, limit, edge);
+}
+
 function handleStreamMessage(data) {
     const ops = data.ops;
     if (!ops || !Array.isArray(ops)) return;
@@ -9910,7 +9936,12 @@ function _applyStreamOp(op, streamName) {
             const frag = _htmlToFragment(op.html);
             // #2058: scan BEFORE appendChild empties the fragment.
             _warnDeadScripts(frag);
-            el.appendChild(frag);
+            // A [dj-virtual] container's children are only the visible
+            // WINDOW — appending into it does not add a row to the list
+            // (#2017 item 1). Route into the item pool instead.
+            if (!_virtualSplice(el, frag, -1)) {
+                el.appendChild(frag);
+            }
             _autoScroll(el);
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'append', stream: streamName });
@@ -9921,7 +9952,9 @@ function _applyStreamOp(op, streamName) {
             const frag = _htmlToFragment(op.html);
             // #2058: scan BEFORE insertBefore empties the fragment.
             _warnDeadScripts(frag);
-            el.insertBefore(frag, el.firstChild);
+            if (!_virtualSplice(el, frag, 0)) {
+                el.insertBefore(frag, el.firstChild);
+            }
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'prepend', stream: streamName });
             break;
@@ -9938,13 +9971,18 @@ function _applyStreamOp(op, streamName) {
             // the end) until `limit` or fewer element children remain.
             const limit = typeof op.limit === 'number' ? Math.max(0, op.limit) : 0;
             const edge = op.edge === 'bottom' ? 'bottom' : 'top';
-            // `.children` is an HTMLCollection — always element-only, no
-            // nodeType filter needed (was redundant per review #801).
-            const kids = Array.from(el.children);
-            while (kids.length > limit) {
-                const victim = edge === 'top' ? kids.shift() : kids.pop();
-                if (!victim) break;
-                victim.remove();
+            // On a [dj-virtual] container `.children` is only the visible
+            // window, so trimming it would prune the wrong rows and leave
+            // the pool untouched (#2017 item 1).
+            if (!_virtualPruneOp(el, limit, edge)) {
+                // `.children` is an HTMLCollection — always element-only, no
+                // nodeType filter needed (was redundant per review #801).
+                const kids = Array.from(el.children);
+                while (kids.length > limit) {
+                    const victim = edge === 'top' ? kids.shift() : kids.pop();
+                    if (!victim) break;
+                    victim.remove();
+                }
             }
             _dispatchStreamEvent(el, 'stream:prune', { stream: streamName, edge, limit });
             break;
@@ -13387,7 +13425,81 @@ window.djust.bindModelElements = bindModelElements;
         return null;
     }
 
+    /**
+     * Number of items a virtual list is tracking, or null if `container` is
+     * not an initialised virtual list. Exposed so the stream-op applier can
+     * tell "this target is virtualised" from "this is an ordinary element",
+     * and for diagnosis (#2017).
+     */
+    function virtualPoolSize(container) {
+        const state = container && STATE.get(container);
+        return state && state.items ? state.items.length : null;
+    }
+
+    /**
+     * Splice nodes into a virtual list's item pool (#2017 item 1).
+     *
+     * Stream ops must not mutate a [dj-virtual] container's children
+     * directly: those children are only the visible WINDOW, so an appended
+     * row never enters `state.items` — it is not counted for the spacer
+     * height, not reachable by scrolling, and dropped on the next re-render.
+     *
+     * @param {Element} container - the [dj-virtual] element
+     * @param {Node[]} nodes - element nodes to insert
+     * @param {number} at - 0 to prepend, -1 (default) to append
+     * @returns {boolean} true if handled (container is a virtual list)
+     */
+    function virtualInsert(container, nodes, at) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return false;
+        if (at === 0) {
+            state.items.unshift.apply(state.items, nodes);
+        } else {
+            state.items.push.apply(state.items, nodes);
+        }
+        invalidateWindow(state);
+        render(state);
+        return true;
+    }
+
+    /**
+     * Trim a virtual list's pool to `limit` items from `edge` (#2017 item 1).
+     *
+     * @returns {boolean} true if handled
+     */
+    function virtualPrune(container, limit, edge) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return false;
+        const keep = Math.max(0, limit);
+        if (state.items.length > keep) {
+            if (edge === 'bottom') {
+                state.items.length = keep;
+            } else {
+                state.items.splice(0, state.items.length - keep);
+            }
+        }
+        invalidateWindow(state);
+        render(state);
+        return true;
+    }
+
+    /** Force the next render() to re-slice rather than reuse the window. */
+    function invalidateWindow(state) {
+        state.visibleStart = -1;
+        state.visibleEnd = -1;
+        if (state.mode === 'variable') {
+            state.offsets = null;
+        }
+    }
+
     window.djust = window.djust || {};
+    window.djust._virtualPoolSize = virtualPoolSize;
+    window.djust._virtualPoolItems = function (container) {
+        const state = STATE.get(container);
+        return state && state.items ? state.items.slice() : null;
+    };
+    window.djust._virtualInsert = virtualInsert;
+    window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;
     window.djust.refreshVirtualList = refreshVirtualList;
     window.djust.teardownVirtualList = teardownVirtualList;
