@@ -15,13 +15,25 @@
 // Template recipe:
 //
 //     <canvas dj-hook="Chart"
-//             dj-update="ignore"
 //             dj-hook-value-type='"bar"'
 //             dj-hook-value-data='{{ chart_data_json }}'></canvas>
 //
-// `dj-update="ignore"` is required: Chart.js owns the canvas internals, and
-// the server must not morph them. Without it the server's idea of the
-// canvas subtree fights the library's — the #1724 teardown class.
+// Deliberately NO `dj-update="ignore"` here. It looks like the right
+// morph-safety knob, but it is actively wrong for this adapter on both
+// counts:
+//
+//   1. It would BREAK updates. The patcher returns early on
+//      dj-update="ignore" (12-vdom-patch.js) — before attribute sync — so
+//      the server could never change dj-hook-value-data, and updated()
+//      would read permanently stale values.
+//   2. It is not needed. A <canvas> has no server-owned children to
+//      clobber, and the morph already refuses to remove a canvas's
+//      width/height (12-vdom-patch.js), which is what resets the drawing
+//      context. Wholesale canvas replacement was #1724 and is fixed.
+//
+// If a specific attribute really is client-owned (Chart.js writes some
+// inline styles), name it in `dj-ignore-attrs` — that is per-attribute and
+// does not block the rest of the sync.
 //
 // Values are ADR-025 typed values (JSON-first, live-read on each access), so
 // a server re-render that changes dj-hook-value-data flows into updated()
@@ -44,7 +56,16 @@
         return globalThis.Chart || null;
     }
 
+    // Elements already warned about, so a missing library produces ONE
+    // message per element rather than one per server re-render (updated()
+    // retries mount, which would otherwise flood the console).
+    const warned = new WeakSet();
+
     function warnMissingLib(el) {
+        if (el) {
+            if (warned.has(el)) return;
+            warned.add(el);
+        }
         // %s parameterized rather than interpolated — CodeQL
         // js/tainted-format-string (#1124); el ids are DOM-controlled.
         console.error(

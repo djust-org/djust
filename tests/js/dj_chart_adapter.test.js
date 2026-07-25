@@ -206,4 +206,33 @@ describe('dj-chart adapter — lifecycle', () => {
         const msg = made.errors.flat().join(' ');
         expect(msg).toMatch(/chart/i);
     });
+
+    it('missing library warns ONCE per element, not once per re-render', () => {
+        // updated() retries the mount, so without a guard every server
+        // re-render would emit another copy of the same error.
+        const made = createDom(`dj-hook-value-type='"bar"'`);
+        loadAdapter(made.dom);
+        made.dom.window.djust.mountHooks(made.dom.window.document);
+        const after1 = made.errors.length;
+        made.dom.window.djust.updateHooks(made.dom.window.document);
+        made.dom.window.djust.updateHooks(made.dom.window.document);
+        expect(made.errors.length).toBe(after1);
+    });
+
+    it('never sets dj-update="ignore" on the canvas — that would freeze values', () => {
+        // dj-update="ignore" makes the patcher return BEFORE attribute sync
+        // (12-vdom-patch.js), so dj-hook-value-* could never change and
+        // updated() would read stale data forever. The adapter must not add
+        // it, and must work with it absent — which the update test above
+        // demonstrates, since no test here sets it.
+        mount();
+        const el = dom.window.document.getElementById('c1');
+        expect(el.getAttribute('dj-update')).not.toBe('ignore');
+
+        // And a value change still reaches the instance with it absent.
+        setData('{"labels":["q"],"datasets":[{"data":[7]}]}');
+        dom.window.djust.updateHooks(dom.window.document);
+        const last = calls.filter((c) => c.op === 'update').pop();
+        expect(last.data.datasets[0].data).toEqual([7]);
+    });
 });
