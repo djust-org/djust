@@ -149,6 +149,39 @@ fn positionally_compatible(a: &VNode, b: &VNode) -> bool {
 /// Compute the patches transforming `old` into `new`. `path` is the index path
 /// from the diff root to the node pair being compared; emitted patches for this
 /// node use `path`, and child patches use `path + [child_index]`.
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Emit KEY-addressed splice ops for `[dj-virtual]` parents (ADR-026).
+///
+/// Default OFF. Iteration 1 of the ADR ships the differ side dark: the ops are
+/// emitted only when this is enabled, so `main` behaviour is byte-identical
+/// until the client half (iteration 2) can apply them and the flag is flipped
+/// after a soak (iteration 3).
+///
+/// A process-global atomic rather than a threaded parameter because `diff_nodes`
+/// is a pure free function reached from several entry points; threading config
+/// through every signature would touch far more surface than the flag is worth
+/// while it is still dark. Set once at startup from
+/// `LIVEVIEW_CONFIG['virtual_keyed_ops_enabled']`.
+static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(false);
+
+/// Enable/disable `[dj-virtual]` keyed splice ops. Wired from Python config.
+pub fn set_virtual_keyed_ops(enabled: bool) {
+    VIRTUAL_KEYED_OPS.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether `[dj-virtual]` keyed splice ops are enabled.
+pub fn virtual_keyed_ops_enabled() -> bool {
+    VIRTUAL_KEYED_OPS.load(Ordering::Relaxed)
+}
+
+/// True when this parent is a client-windowed `[dj-virtual]` container AND the
+/// feature is enabled. Both conditions matter: the ops are meaningless for an
+/// ordinary parent, and must stay dark until the client can apply them.
+fn emits_virtual_ops(parent: &VNode) -> bool {
+    virtual_keyed_ops_enabled() && parent.attrs.contains_key("dj-virtual")
+}
+
 pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
     let mut patches = Vec::new();
     diff_node_into(old, new, path, &mut patches);
@@ -206,6 +239,8 @@ fn diff_node_into(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>
         path,
         old.djust_id.as_deref(),
         out,
+        // The NEW tree is authoritative for what this container is now.
+        emits_virtual_ops(new),
     );
 }
 
@@ -301,6 +336,10 @@ fn diff_children(
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
+    // virtual_parent: true when the PARENT is a `[dj-virtual]` container and
+    // the ADR-026 flag is on — its children are a client-side window, so
+    // index-addressed ops are meaningless and keyed splice ops are emitted.
+    virtual_parent: bool,
 ) {
     let (old_boundaries, old_excluded) = find_top_level_boundaries(old);
     let (new_boundaries, new_excluded) = find_top_level_boundaries(new);
@@ -369,6 +408,9 @@ fn diff_children(
                     ppath,
                     pid,
                     out,
+                    // A dj-if body lives INSIDE this parent, so it inherits
+                    // the parent's virtual-ness.
+                    virtual_parent,
                 );
             } else {
                 // Old-only -> RemoveSubtree.
@@ -403,7 +445,7 @@ fn diff_children(
         .map(|(i, n)| (new_off + i, n))
         .collect();
 
-    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out);
+    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out, virtual_parent);
 }
 
 /// Reconcile two lists of non-boundary siblings (each carrying its parent-
@@ -415,12 +457,81 @@ fn reconcile_siblings(
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
+    virtual_parent: bool,
 ) {
     let any_new_keyed = new_nb.iter().any(|(_, n)| n.key.is_some());
     if any_new_keyed {
-        reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+        // A [dj-virtual] parent gets KEY-addressed ops (ADR-026): its children
+        // on the client are only the visible window, so an index means
+        // different things on the two sides.
+        if virtual_parent {
+            reconcile_virtual_keyed(old_nb, new_nb, ppath, pid, out);
+        } else {
+            reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+        }
     } else {
         reconcile_indexed(old_nb, new_nb, ppath, pid, out);
+    }
+}
+
+/// Reconcile a `[dj-virtual]` parent's keyed children into KEY-addressed
+/// splice ops (ADR-026, #2017 items 2-4).
+///
+/// Deliberately simple compared with `reconcile_keyed`: no LIS minimisation.
+/// The client applies these to its item POOL, where a move is an array splice
+/// rather than a DOM operation, so the cost of an extra move is negligible and
+/// the win from LIS (fewer DOM mutations) does not apply. Correctness of
+/// position is what matters here, which is exactly what #2017 item 4 lacked.
+fn reconcile_virtual_keyed(
+    old_nb: &[(usize, &VNode)],
+    new_nb: &[(usize, &VNode)],
+    ppath: &[usize],
+    pid: Option<&str>,
+    out: &mut Vec<Patch>,
+) {
+    let old_keys: Vec<Option<&str>> = old_nb.iter().map(|(_, n)| n.key.as_deref()).collect();
+    let new_keys: Vec<Option<&str>> = new_nb.iter().map(|(_, n)| n.key.as_deref()).collect();
+
+    // Removals: an old key absent from the new list.
+    for key in old_keys.iter().flatten() {
+        if !new_keys.iter().flatten().any(|k| k == key) {
+            out.push(Patch::VirtualRemove {
+                path: ppath.to_vec(),
+                d: pid.map(|s| s.to_string()),
+                key: (*key).to_string(),
+            });
+        }
+    }
+
+    // Inserts and moves, walked in NEW order so `before_key` is the key of the
+    // next new sibling — a stable anchor that does not depend on how many
+    // earlier ops the client has already applied.
+    for (i, (_, node)) in new_nb.iter().enumerate() {
+        let Some(key) = node.key.as_deref() else {
+            continue;
+        };
+        let before_key = new_keys
+            .get(i + 1..)
+            .and_then(|rest| rest.iter().flatten().next())
+            .map(|k| (*k).to_string());
+
+        let existed = old_keys.iter().flatten().any(|k| *k == key);
+        if existed {
+            out.push(Patch::VirtualMove {
+                path: ppath.to_vec(),
+                d: pid.map(|s| s.to_string()),
+                key: key.to_string(),
+                before_key,
+            });
+        } else {
+            out.push(Patch::VirtualInsert {
+                path: ppath.to_vec(),
+                d: pid.map(|s| s.to_string()),
+                key: key.to_string(),
+                node: (*node).clone(),
+                before_key,
+            });
+        }
     }
 }
 

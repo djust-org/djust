@@ -286,6 +286,19 @@ pub fn assert_handles_resolve(patches: &[Patch], client: &VNode, ctx: &str) {
                 // Boundary id, not a dj-id; verified by `apply_all`
                 // panicking if it can't find the marker.
             }
+            // [dj-virtual] keyed splice ops (ADR-026): `d` is the PARENT's
+            // djust_id and must resolve like any other parent handle. The
+            // `key` is an item key (a different namespace, from dj-key), so
+            // it is exempt — same rule as the Subtree marker ids below.
+            Patch::VirtualInsert { d, .. } => {
+                check_handle(d, client, ctx, i, "VirtualInsert.d");
+            }
+            Patch::VirtualMove { d, .. } => {
+                check_handle(d, client, ctx, i, "VirtualMove.d");
+            }
+            Patch::VirtualRemove { d, .. } => {
+                check_handle(d, client, ctx, i, "VirtualRemove.d");
+            }
             Patch::MoveSubtree { d, .. } => {
                 // Boundary id is a marker namespace (exempt); the parent `d`
                 // must resolve in the client tracker, like InsertSubtree.d.

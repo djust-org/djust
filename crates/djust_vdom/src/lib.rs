@@ -663,6 +663,52 @@ pub enum Patch {
         #[serde(skip_serializing_if = "Option::is_none")]
         child_d: Option<String>,
     },
+    // --- [dj-virtual] keyed splice ops (ADR-026, #2017 items 2-4) ---
+    //
+    // A [dj-virtual] container's children are only the visible WINDOW on the
+    // client; the full collection lives in the list's item pool with
+    // off-window rows detached. INDEX-addressed ops (InsertChild/MoveChild/
+    // RemoveChild above) are therefore meaningless for such a parent: index 7
+    // means "the 8th item" to the differ and "the 8th VISIBLE item" to the DOM.
+    //
+    // These variants address items by KEY instead, so the client can apply
+    // them to the pool without the DOM being the source of truth. Emitted only
+    // when the parent carries `dj-virtual` AND the feature flag is on
+    // (`diff::set_virtual_keyed_ops`, default OFF).
+    //
+    // Wire note: `Patch` is serialized with serde_json (a NAMED map), not
+    // rmp_serde, so `skip_serializing_if` on interior optionals is safe here —
+    // the #1541 positional-slot hazard applies to msgpack-encoded structs
+    // (VNode), not to these. Verified before choosing this shape.
+    /// Insert a keyed item into a `[dj-virtual]` parent's pool.
+    VirtualInsert {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        /// The item's key (from `dj-key`), NOT an index.
+        key: String,
+        node: VNode,
+        /// Insert before the item with this key; `None` appends at the tail.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        before_key: Option<String>,
+    },
+    /// Move an existing keyed item within a `[dj-virtual]` parent's pool.
+    VirtualMove {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        key: String,
+        /// Move before the item with this key; `None` moves to the tail.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        before_key: Option<String>,
+    },
+    /// Remove a keyed item from a `[dj-virtual]` parent's pool.
+    VirtualRemove {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        key: String,
+    },
     /// Remove a `dj-if` keyed subtree by marker id.
     ///
     /// Capability of issue #1358 (keyed VDOM diff for `{% if %}` conditional
