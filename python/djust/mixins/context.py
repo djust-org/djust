@@ -338,6 +338,35 @@ class ContextMixin:
             for action_name, state in action_state.items():
                 context[action_name] = state
 
+        # Streams (#2112). ``self.stream("messages", ...)`` filled
+        # ``_streams["messages"].items``, and ``_get_streams_context()`` exists
+        # to expose it — its docstring says "Get streams data for template
+        # context" — but nothing ever called it, so the documented pattern in
+        # docs/website/guides/large-lists.md stored data and rendered nothing.
+        #
+        # Exposed under a ``streams`` namespace, matching the documented
+        # template contract -- ``{% for msg in streams.messages %}`` in
+        # docs/website/guides/large-lists.md and in Stream's own docstring.
+        # NOT splatted as top-level names: that would be a second, undocumented
+        # spelling and would collide with ordinary view attributes.
+        #
+        # Precedence: LIVE stream data wins whenever the view actually has
+        # streams. Deferring to an existing key looks safer but is not — a
+        # stale ``streams`` attribute (e.g. restored from a session written by
+        # an older release, before the snapshot exclusion in
+        # mixins/request.py) would shadow the live data permanently, making
+        # every subsequent insert invisible. Silent data loss is worse than
+        # overriding a name that is now framework-owned and documented.
+        #
+        # A view with NO streams is left completely alone, so an app that uses
+        # ``self.streams`` for its own purposes and never calls ``stream()``
+        # is unaffected.
+        get_streams = getattr(self, "_get_streams_context", None)
+        if callable(get_streams):
+            streams_ctx = get_streams()
+            if streams_ctx:
+                context["streams"] = streams_ctx
+
         return context
 
     def _deep_serialize_dict(
