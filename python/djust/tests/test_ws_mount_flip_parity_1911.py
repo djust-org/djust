@@ -77,6 +77,43 @@ async def _drain_available(communicator, *, max_frames=8, timeout=2):
     return frames
 
 
+def _consumer_with_view(view_class):
+    """A ``LiveViewConsumer`` with ``view_class`` mounted and its sends captured.
+
+    Direct construction rather than a ``WebsocketCommunicator`` because these
+    tests drive ``_tick_once`` explicitly — there is no timer to wait on and no
+    wire to read. Follows the established pattern in
+    ``test_live_redirect_mount_resolve_1647.py``.
+    """
+    from djust.websocket import LiveViewConsumer
+
+    consumer = LiveViewConsumer()
+    consumer.scope = {"session": None, "user": None}
+    consumer.sent = []
+
+    async def _capture(payload):
+        consumer.sent.append(payload)
+
+    consumer.send_json = _capture
+
+    view = view_class()
+    view.mount(None, **{})
+    # Establish the diff baseline the real mount render establishes. Without
+    # it the first render_with_diff() returns full HTML with patches=None and
+    # a tick would legitimately send nothing.
+    view.render_with_diff()
+    consumer.view_instance = view
+    return consumer
+
+
+def _start_tick_task(consumer, view_class):
+    """Start the tick task through the SAME function the runtime mount hook
+    calls, so this cannot pass if the mount path stops starting ticks."""
+    from djust.runtime import maybe_start_tick_task
+
+    return maybe_start_tick_task(consumer, view_class)
+
+
 class _ScopeSession:
     def __init__(self, key):
         self.session_key = key
@@ -162,6 +199,24 @@ class TickView(LiveView):
 
     def handle_tick(self):
         self.t += 1
+
+    def get_context_data(self, **kwargs):
+        return {"t": self.t}
+
+
+class StaticTickView(LiveView):
+    """Gate-off control: ``tick_interval`` is set but ``handle_tick`` changes
+    NOTHING, so the #560 no-change guard must suppress the render. Proves a
+    tick frame comes from a STATE CHANGE, not merely from a tick firing."""
+
+    tick_interval = 50  # ms
+    template = f'<div dj-root dj-view="{_ALLOWED}.StaticTickView" dj-id="0">t={{{{ t }}}}</div>'
+
+    def mount(self, request, **kwargs):
+        self.t = 0
+
+    def handle_tick(self):
+        pass  # deliberately no state change
 
     def get_context_data(self, **kwargs):
         return {"t": self.t}
@@ -562,30 +617,70 @@ class TestGroupAddReachability:
 @pytest.mark.django_db
 @pytest.mark.asyncio
 class TestTickAtMount:
-    async def test_tick_interval_view_emits_tick_frame_without_client_event(self):
-        """A view with ``tick_interval`` whose ``handle_tick`` mutates state emits a
-        ``source="tick"`` render frame WITHOUT any client event — proving the tick
-        task started at mount (websocket.py:2208).
+    async def test_tick_once_emits_a_source_tick_frame(self):
+        """One tick iteration on a ``tick_interval`` view emits a
+        ``source="tick"`` render frame with NO client event.
 
-        The flip must move the tick-task start into a transport hook so periodic
-        ticks survive. Reproduce-first: no event is sent, so the only source of a
-        render frame is the mount-started tick loop.
+        Driven by calling :meth:`_tick_once` directly rather than waiting for a
+        real 50ms timer. The wall-clock version of this test was flaky — 2 of 5
+        runs on an unmodified ``main``, every failing run slow (~4.5s) and every
+        passing one fast (~1.7s), the signature of a race rather than a logic
+        bug: under CPU load the first tick render exceeds the sampling window
+        and the frame list comes back empty (#2124). A pass/fail gate on a
+        wall-clock signal is the class canonized by #1795 and #1830; the remedy
+        is the same one — drive the async primitive explicitly and assert the
+        logical invariant.
         """
-        from django.test import override_settings
+        consumer = _consumer_with_view(TickView)
 
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
-            communicator, _ = await _connect_and_mount(f"{_ALLOWED}.TickView")
+        sent = await consumer._tick_once()
 
-            # No client event — just wait for the tick loop (50ms interval) to fire.
-            frames = await _drain_available(communicator, timeout=3)
-            tick_frames = [f for f in frames if f.get("source") == "tick"]
-            assert tick_frames, (
-                "a tick_interval view must emit a source='tick' frame from the "
-                "mount-started tick loop with NO client event; got "
-                f"{[(f.get('type'), f.get('source')) for f in frames]}"
+        assert sent, "a state-changing handle_tick must send a frame"
+        tick_frames = [f for f in consumer.sent if f.get("source") == "tick"]
+        assert tick_frames, (
+            "a tick iteration must emit a source='tick' frame; got "
+            f"{[(f.get('type'), f.get('source')) for f in consumer.sent]}"
+        )
+
+    async def test_mount_starts_the_tick_task_for_a_tick_interval_view(self):
+        """The other half of what the wall-clock test proved: mount STARTS the
+        loop. Asserted structurally against the runtime's mount path, so it
+        does not depend on any tick actually having fired yet."""
+        consumer = _consumer_with_view(TickView)
+        assert consumer._tick_task is None
+
+        assert _start_tick_task(consumer, TickView) is True
+
+        try:
+            assert consumer._tick_task is not None, (
+                "mounting a tick_interval view must start the tick task"
             )
+            assert not consumer._tick_task.done(), "the tick task must still be running"
+        finally:
+            consumer._tick_task.cancel()
 
-            await communicator.disconnect()
+    async def test_gate_off_tick_once_sends_nothing_when_state_is_unchanged(self):
+        """GATE-OFF (#1468): the frame comes from ``handle_tick`` CHANGING
+        state, not from the tick firing. A view whose handle_tick is a no-op
+        must send nothing — so the assertion above cannot pass for free."""
+        consumer = _consumer_with_view(StaticTickView)
+
+        sent = await consumer._tick_once()
+
+        assert not sent
+        assert not [f for f in consumer.sent if f.get("source") == "tick"], (
+            "an unchanged tick must not send a frame; "
+            f"got {[(f.get('type'), f.get('source')) for f in consumer.sent]}"
+        )
+
+    async def test_gate_off_tick_once_skips_during_a_user_event(self):
+        """GATE-OFF (#1468) for the #560 sequencing guard: a tick that lands
+        while a user event is in flight must skip rather than interleave."""
+        consumer = _consumer_with_view(TickView)
+        consumer._processing_user_event = True
+
+        assert await consumer._tick_once() is False
+        assert consumer.sent == []
 
     async def test_gate_off_no_tick_interval_no_tick_frame(self):
         """GATE-OFF (#1468): an identical mount on a view WITHOUT ``tick_interval``
