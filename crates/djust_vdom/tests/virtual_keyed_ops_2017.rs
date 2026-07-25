@@ -74,7 +74,7 @@ fn kinds(patches: &[Patch]) -> Vec<&'static str> {
 
 #[test]
 fn flag_is_off_by_default() {
-    let _g = FLAG_LOCK.lock().unwrap();
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     assert!(
         !virtual_keyed_ops_enabled(),
         "ADR-026 iteration 1 ships dark; the client cannot apply these ops yet"
@@ -83,7 +83,7 @@ fn flag_is_off_by_default() {
 
 #[test]
 fn with_flag_off_a_virtual_parent_diffs_exactly_like_a_plain_one() {
-    let _g = FLAG_LOCK.lock().unwrap();
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_virtual_keyed_ops(false);
 
     let v_old = virtual_list(&["a", "b", "c"]);
@@ -112,7 +112,7 @@ fn with_flag_off_a_virtual_parent_diffs_exactly_like_a_plain_one() {
 
 #[test]
 fn insert_at_front_is_key_addressed_with_a_before_key() {
-    let _g = FLAG_LOCK.lock().unwrap();
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_virtual_keyed_ops(true);
 
     let old = virtual_list(&["b", "c"]);
@@ -141,7 +141,7 @@ fn insert_at_front_is_key_addressed_with_a_before_key() {
 
 #[test]
 fn append_at_tail_has_no_before_key() {
-    let _g = FLAG_LOCK.lock().unwrap();
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_virtual_keyed_ops(true);
     let patches = diff_nodes(&virtual_list(&["a"]), &virtual_list(&["a", "b"]), &[]);
     set_virtual_keyed_ops(false);
@@ -160,7 +160,7 @@ fn append_at_tail_has_no_before_key() {
 
 #[test]
 fn a_removed_key_produces_virtual_remove() {
-    let _g = FLAG_LOCK.lock().unwrap();
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_virtual_keyed_ops(true);
     let patches = diff_nodes(
         &virtual_list(&["a", "b", "c"]),
@@ -182,7 +182,7 @@ fn a_removed_key_produces_virtual_remove() {
 #[test]
 fn no_index_addressed_child_ops_for_a_virtual_parent() {
     // The whole point: index ops are meaningless for a windowed parent.
-    let _g = FLAG_LOCK.lock().unwrap();
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_virtual_keyed_ops(true);
     let patches = diff_nodes(
         &virtual_list(&["a", "b", "c"]),
@@ -201,7 +201,7 @@ fn no_index_addressed_child_ops_for_a_virtual_parent() {
 
 #[test]
 fn a_plain_parent_is_unaffected_even_with_the_flag_on() {
-    let _g = FLAG_LOCK.lock().unwrap();
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_virtual_keyed_ops(true);
     let patches = diff_nodes(&plain_list(&["a", "b"]), &plain_list(&["b", "a"]), &[]);
     set_virtual_keyed_ops(false);
@@ -288,7 +288,7 @@ fn append_to_a_large_list_emits_one_op_not_n() {
     // single append to a 50-item list produced 50 moves. On the 10k-row feeds
     // dj-virtual exists for that is 10k ops for one new row — which defeats
     // virtualising at all. LIS keeps the untouched run stable.
-    let _g = FLAG_LOCK.lock().unwrap();
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_virtual_keyed_ops(true);
     let old_keys: Vec<String> = (0..50).map(|i| format!("k{i}")).collect();
     let mut new_keys = old_keys.clone();
@@ -310,5 +310,101 @@ fn append_to_a_large_list_emits_one_op_not_n() {
     assert_eq!(
         moves, 0,
         "an append moves nothing; got {moves} moves for 50 unchanged rows"
+    );
+}
+
+/// Applies the emitted ops the way the client will: `before_key` names an
+/// anchor that must already be present, else the item lands at the tail.
+fn apply_ops(start: &[&str], patches: &[Patch]) -> Vec<String> {
+    let mut list: Vec<String> = start.iter().map(|s| s.to_string()).collect();
+    for p in patches {
+        match p {
+            Patch::VirtualRemove { key, .. } => list.retain(|k| k != key),
+            Patch::VirtualInsert {
+                key, before_key, ..
+            }
+            | Patch::VirtualMove {
+                key, before_key, ..
+            } => {
+                list.retain(|k| k != key);
+                match before_key
+                    .as_deref()
+                    .and_then(|b| list.iter().position(|k| k == b))
+                {
+                    Some(at) => list.insert(at, key.clone()),
+                    None => list.push(key.clone()),
+                }
+            }
+            _ => {}
+        }
+    }
+    list
+}
+
+#[test]
+fn two_prepends_land_in_order_not_reversed() {
+    // The first version walked NEW order forward, so it emitted "insert x
+    // before y" while y itself was still an un-applied insert. The client
+    // cannot resolve a missing anchor, falls back to the tail, and the list
+    // came out y,a,b,x. Only a MULTI-insert can see this — every single-op
+    // test passed (#1543).
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_virtual_keyed_ops(true);
+    let patches = diff_nodes(
+        &virtual_list(&["a", "b"]),
+        &virtual_list(&["x", "y", "a", "b"]),
+        &[],
+    );
+    set_virtual_keyed_ops(false);
+
+    assert_eq!(apply_ops(&["a", "b"], &patches), vec!["x", "y", "a", "b"]);
+}
+
+#[test]
+fn a_scramble_replays_to_the_new_order() {
+    // Moves and inserts interleaved, with the LIS leaving some keys untouched.
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_virtual_keyed_ops(true);
+    let old = ["a", "b", "c", "d"];
+    let new = ["d", "b", "z", "a"];
+    let patches = diff_nodes(&virtual_list(&old), &virtual_list(&new), &[]);
+    set_virtual_keyed_ops(false);
+
+    assert_eq!(
+        apply_ops(&old, &patches),
+        new.to_vec(),
+        "replay must reach the new order"
+    );
+}
+
+fn text(t: &str) -> VNode {
+    VNode {
+        tag: "#text".to_string(),
+        attrs: Default::default(),
+        children: vec![],
+        text: Some(t.to_string()),
+        key: None,
+        djust_id: None,
+        cached_html: None,
+    }
+}
+
+#[test]
+fn a_surviving_row_whose_content_changed_still_emits_a_patch() {
+    // The structural ops only reposition. Without recursing into matched
+    // pairs the way reconcile_keyed does, editing a row that does not move
+    // emitted NOTHING and the client would show stale text forever.
+    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_virtual_keyed_ops(true);
+    let mut old = virtual_list(&["a", "b"]);
+    let mut new = virtual_list(&["a", "b"]);
+    old.children[1].children.push(text("before"));
+    new.children[1].children.push(text("EDITED"));
+    let patches = diff_nodes(&old, &new, &[]);
+    set_virtual_keyed_ops(false);
+
+    assert!(
+        !patches.is_empty(),
+        "an in-place content edit inside a [dj-virtual] parent must emit a patch"
     );
 }

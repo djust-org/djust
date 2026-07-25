@@ -538,13 +538,29 @@ fn reconcile_virtual_keyed(
         .filter_map(|si| survivors.get(*si).map(|(k, _)| *k))
         .collect();
 
-    // Walk NEW order so `before_key` is the next new sibling's key — a stable
-    // anchor that does not depend on how many earlier ops the client applied.
-    for (i, key, node) in new_keyed.iter() {
-        let before_key = new_keyed
-            .get(i + 1..)
-            .and_then(|rest| rest.first())
-            .map(|(_, k, _)| (*k).to_string());
+    // Content updates for survivors. Without this a surviving row's text
+    // change emits NOTHING for a [dj-virtual] parent — the structural ops
+    // below only reposition. `reconcile_keyed` recurses for every matched
+    // pair (step 3) and this must too; emitted BEFORE the structural ops to
+    // match that function's phase ordering.
+    for (i, key, new_node) in new_keyed.iter() {
+        let Some(oi) = old_pos.get(*key) else {
+            continue;
+        };
+        let (_, old_node) = old_nb[*oi];
+        let mut child_path = ppath.to_vec();
+        child_path.push(new_nb.get(*i).map(|(abs, _)| *abs).unwrap_or(*i));
+        diff_node_into(old_node, new_node, &child_path, out);
+    }
+
+    // Structural ops, walked in REVERSE new order. `before_key` names the NEXT
+    // new sibling, so that anchor must already be in place when the op is
+    // applied — which reverse order guarantees and forward order does not.
+    // Forward, prepending [x, y] onto [a, b] emits "insert x before y" while y
+    // is still absent: the client cannot find the anchor, falls back to the
+    // tail, and the list ends up y,a,b,x instead of x,y,a,b.
+    for (i, key, node) in new_keyed.iter().rev() {
+        let before_key = new_keyed.get(i + 1).map(|(_, k, _)| (*k).to_string());
 
         if old_pos.contains_key(*key) {
             // Survivor: emit a move ONLY if it is outside the stable run.
