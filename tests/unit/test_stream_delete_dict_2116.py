@@ -103,11 +103,47 @@ def test_dict_without_id_or_pk_is_not_matched_by_another_dict():
     assert len(s.items) == 2
 
 
-@pytest.mark.parametrize("bad", [None, 0, ""])
-def test_falsy_ids_are_handled(bad):
+@pytest.mark.parametrize("bad", [0, ""])
+def test_falsy_ids_are_real_ids(bad):
+    """0 and "" are legitimate ids — truthiness must not be the test."""
     s = _stream([{"id": bad, "t": "keep-me"}, {"id": 99, "t": "other"}])
     s.delete(bad)
     assert [i["t"] for i in s.items] == ["other"]
+
+
+def test_none_id_means_no_identity_yet_not_a_shared_one():
+    """MULTIPLE unsaved items must not collapse to one identity.
+
+    A single-item test structurally cannot see this (#1543): the collision
+    only appears with two or more items whose id is present-but-None. Treating
+    ``None`` as a value gave every unsaved row the same dom_id — three drafts
+    all rendering as id="drafts-None".
+    """
+    a, b, c = {"id": None, "t": "a"}, {"id": None, "t": "b"}, {"id": None, "t": "c"}
+    ids = {Stream._identity(x) for x in (a, b, c)}
+    assert len(ids) == 3, "items with id=None must keep distinct identities"
+
+
+def test_none_id_item_deletes_only_itself():
+    a, b = {"id": None, "t": "a"}, {"id": None, "t": "b"}
+    s = _stream([a, b])
+    s.delete(a)
+    assert [i["t"] for i in s.items] == ["b"]
+
+
+def test_none_attribute_falls_through_to_pk():
+    """An object whose .id is None but has a real .pk must use the pk."""
+
+    class Draft:
+        id = None
+
+        def __init__(self, pk):
+            self.pk = pk
+
+    d1, d2 = Draft(11), Draft(12)
+    s = _stream([d1, d2])
+    s.delete(11)
+    assert s.items == [d2]
 
 
 # --- the PUBLIC entry point must agree with Stream.delete (#1646) ----------

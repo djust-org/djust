@@ -165,7 +165,11 @@ class StreamsMixin:
 
         stream_obj = self._streams[name]
 
-        # Get the DOM id. Same resolution as insert (#2116, #1646): the
+        # Get the DOM id. Matches insert for the DEFAULT dom_id factory
+        # (#2116, #1646). NOTE: a stream created with a custom ``dom_id=``
+        # callable still disagrees — insert uses that callable, this uses the
+        # default resolution. Pre-existing and unchanged here; filed separately
+        # rather than widened into this fix. The
         # pre-fix hasattr chain here meant a dict item produced a dom_id of
         # "<name>-{'id': 1, 't': 'a'}" — the dict's repr — while the same
         # item inserted as "<name>-<address>". Fixing Stream.delete alone

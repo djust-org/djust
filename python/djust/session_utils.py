@@ -211,15 +211,22 @@ class Stream:
         fall through to ``id(item)`` — the CPython object address — which never
         matched a caller's id. Dict items were silently undeletable.
 
-        Key PRESENCE is what matters, not truthiness, so ``{"id": 0}`` and
-        ``{"id": None}`` resolve to their real ids rather than the address.
+        Truthiness is NOT the test — ``{"id": 0}`` resolves to ``0``, not to
+        the address. But ``None`` means "no identity yet" (an unsaved row), so
+        it falls through to the address: treating it as a value would give
+        every unsaved item the SAME identity, colliding their dom_ids. That
+        regression is why this is ``is not None`` rather than ``in item``.
         """
         if isinstance(item, Mapping):
             for key in ("id", "pk"):
-                if key in item:
+                if key in item and item[key] is not None:
                     return item[key]
             return id(item)
-        return getattr(item, "id", getattr(item, "pk", id(item)))
+        for attr in ("id", "pk"):
+            value = getattr(item, attr, None)
+            if value is not None:
+                return value
+        return id(item)
 
     @staticmethod
     def resolve_id(item_or_id: Any) -> Any:
@@ -249,9 +256,13 @@ class Stream:
     def delete(self, item_or_id: Any) -> None:
         """Mark item for deletion.
 
-        Accepts either the item or its bare id, per the parameter name. An
-        item that carries no id/pk resolves to its object address, which
-        matches only that exact object — never a look-alike.
+        Accepts either the item or its bare id, per the parameter name.
+
+        A MAPPING with no usable id/pk resolves to its object address, so a
+        look-alike dict never matches. A non-Mapping object with no id/pk is
+        treated as the id ITSELF (the caller passed a bare id) — so an id-less
+        plain object passed as an item does not delete. That asymmetry is
+        pre-existing and unchanged here.
         """
         item_id = self.resolve_id(item_or_id)
 
