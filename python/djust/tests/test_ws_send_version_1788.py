@@ -384,7 +384,7 @@ def test_every_client_checked_send_path_uses_next_version():
     #     handle_time_travel_component_jump: 1
     #     handle_forward_replay: 1
     #     db_notify: 1
-    #     _run_tick: 1
+    #     _tick_once: 1 (extracted from _run_tick, #2124)
     #   ASSIGNMENT (X = self._next_version_armed(html)), 3:
     #     _run_async_work success arms: 2
     #     server_push: 1 (wire_version)

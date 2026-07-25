@@ -11,7 +11,11 @@ against the CURRENT bespoke ``handle_mount`` path over a real channels
 Every test here:
 
 * drives ``LiveViewConsumer.as_asgi()`` end-to-end (mount → assert on the mount
-  frame / a follow-on frame), so it exercises the WS mount path that 3.3b flips;
+  frame / a follow-on frame), so it exercises the WS mount path that 3.3b flips
+  — EXCEPT the tick behaviour (#4), which is pinned at the ``_tick_once`` and
+  mount-hook seams instead. Waiting on a real timer over a real socket made
+  that test a wall-clock race that failed 2 of 5 runs (#2124); the seam tests
+  assert the same two properties deterministically;
 * PASSES NOW against the bespoke path and must stay green THROUGH the flip — the
   unchanged equivalence IS the parity proof (#1466 / #1780 / #1468);
 * asserts intermediate state and carries a gate-off / contrast sibling (#1468)
@@ -25,8 +29,10 @@ The six behaviors (ADR-022 Iter 3 Phase 3.0):
    Finding B (the sticky_hold frame MUST precede the mount frame).
 3. **Channels group_add server-push reachability** (mount joins the view group →
    a broadcast to that group reaches this session) — Finding B's transport hooks.
-4. **periodic tick started at mount** (``tick_interval`` view → a ``source="tick"``
-   frame arrives without any client event).
+4. **periodic tick started at mount**, split into the rule and the wiring:
+   ``_tick_once`` emits a ``source="tick"`` frame with no client event, and
+   ``WSConsumerTransport.on_view_mounted`` starts the tick task for an opted-in
+   view. Not driven over a real socket — see the note above (#2124).
 5. **optimistic_rules + upload_configs on the mount frame** (the Phase-3.0 grows,
    now characterized against the BESPOKE WS path they already ship from).
 6. **live_redirect re-mount idempotency** (mount A → live_redirect to B → B
@@ -75,6 +81,17 @@ async def _drain_available(communicator, *, max_frames=8, timeout=2):
             break
         frames.append(await communicator.receive_json_from(timeout=timeout))
     return frames
+
+
+class _FakeChannelLayer:
+    """Minimal channel layer for the runtime mount hook's presence/db_notify
+    group joins. Async no-ops — the hook only awaits them."""
+
+    async def group_add(self, group, channel):
+        return None
+
+    async def group_discard(self, group, channel):
+        return None
 
 
 def _consumer_with_view(view_class):
@@ -658,6 +675,64 @@ class TestTickAtMount:
             assert not consumer._tick_task.done(), "the tick task must still be running"
         finally:
             consumer._tick_task.cancel()
+
+    async def test_runtime_mount_hook_starts_the_tick_task(self):
+        """Drives ``WSConsumerTransport.on_view_mounted`` — the REAL wiring.
+
+        The sibling above pins the RULE (which views opt in);
+        this pins that the mount path actually applies it. Both are needed:
+        the first version of this PR had only the rule test, and deleting the
+        call site in ``runtime.py`` left the entire 9948-test suite green while
+        every ``tick_interval`` view silently stopped ticking in production —
+        the #1859 decorative-pin failure the PR cites as its own justification.
+        """
+        from djust.runtime import WSConsumerTransport
+
+        consumer = _consumer_with_view(TickView)
+        consumer.channel_layer = _FakeChannelLayer()
+        consumer.channel_name = "t"
+        consumer.scope = {
+            "session": None,
+            "user": None,
+            "path": "/",
+            "query_string": b"",
+        }
+
+        await WSConsumerTransport(consumer).on_view_mounted(consumer.view_instance)
+
+        try:
+            assert consumer._tick_task is not None, (
+                "the runtime mount hook must start the tick task for a tick_interval view"
+            )
+        finally:
+            if consumer._tick_task is not None:
+                consumer._tick_task.cancel()
+
+    async def test_gate_off_runtime_mount_hook_skips_a_view_without_tick_interval(self):
+        """GATE-OFF (#1468) for the wiring test: the same mount hook on a view
+        that did NOT opt in must start nothing — so the assertion above cannot
+        pass merely because mounting always creates a task."""
+        from djust.runtime import WSConsumerTransport
+
+        consumer = _consumer_with_view(NoTickView)
+        consumer.channel_layer = _FakeChannelLayer()
+        consumer.channel_name = "t"
+        consumer.scope = {
+            "session": None,
+            "user": None,
+            "path": "/",
+            "query_string": b"",
+        }
+
+        await WSConsumerTransport(consumer).on_view_mounted(consumer.view_instance)
+
+        try:
+            assert consumer._tick_task is None, (
+                "a view without tick_interval must not start a tick task"
+            )
+        finally:
+            if consumer._tick_task is not None:
+                consumer._tick_task.cancel()
 
     async def test_gate_off_tick_once_sends_nothing_when_state_is_unchanged(self):
         """GATE-OFF (#1468): the frame comes from ``handle_tick`` CHANGING
