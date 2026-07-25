@@ -19,17 +19,18 @@
 //             dj-hook-value-data='{{ chart_data_json }}'></canvas>
 //
 // Deliberately NO `dj-update="ignore"` here. It looks like the right
-// morph-safety knob, but it is actively wrong for this adapter on both
-// counts:
+// morph-safety knob, but it is wrong for this adapter:
 //
-//   1. It would BREAK updates. The patcher returns early on
-//      dj-update="ignore" (12-vdom-patch.js) — before attribute sync — so
-//      the server could never change dj-hook-value-data, and updated()
-//      would read permanently stale values.
-//   2. It is not needed. A <canvas> has no server-owned children to
+//   1. It is not needed. A <canvas> has no server-owned children to
 //      clobber, and the morph already refuses to remove a canvas's
 //      width/height (12-vdom-patch.js), which is what resets the drawing
 //      context. Wholesale canvas replacement was #1724 and is fixed.
+//   2. It can FREEZE the data. morphElement() returns as soon as it sees
+//      dj-update="ignore" — before attribute sync — so dj-hook-value-*
+//      stops updating and updated() reads permanently stale values. (The
+//      incremental SetAttr patch path does not consult dj-update, so on an
+//      ordinary WS diff the values would still flow; which path runs is
+//      not worth reasoning about per render.)
 //
 // If a specific attribute really is client-owned (Chart.js writes some
 // inline styles), name it in `dj-ignore-attrs` — that is per-attribute and

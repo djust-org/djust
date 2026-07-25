@@ -161,3 +161,29 @@ def test_check_reports_non_list_config():
 @override_settings(DJUST_CONFIG={"extensions": ["charts"], "suppress_checks": ["C015"]})
 def test_check_is_suppressible():
     assert _run_check() == []
+
+
+@override_settings(DJUST_CONFIG={"extensions": ["charts"]})
+def test_c015_is_wired_into_the_real_aggregate_check():
+    """C015 must fire through ``manage.py check``, not just when called directly.
+
+    Every other test here calls ``_check_unknown_extensions`` directly, so all
+    of them stay green if the call site is dropped from ``check_configuration``
+    — the check would be dead in production with a fully green suite. That is
+    the decorative-pin class (#1859): this test is the one that goes red.
+    """
+    from djust.checks.configuration import check_configuration
+
+    ids = [getattr(m, "id", None) for m in check_configuration(app_configs=None)]
+    assert "djust.C015" in ids, (
+        "C015 did not fire through check_configuration() — is the "
+        "_check_unknown_extensions(errors) call site still present?"
+    )
+
+
+@override_settings(DJUST_CONFIG={"extensions": ["chart"]})
+def test_c015_silent_through_aggregate_for_valid_name():
+    from djust.checks.configuration import check_configuration
+
+    ids = [getattr(m, "id", None) for m in check_configuration(app_configs=None)]
+    assert "djust.C015" not in ids

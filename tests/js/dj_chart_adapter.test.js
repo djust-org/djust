@@ -213,10 +213,13 @@ describe('dj-chart adapter — lifecycle', () => {
         const made = createDom(`dj-hook-value-type='"bar"'`);
         loadAdapter(made.dom);
         made.dom.window.djust.mountHooks(made.dom.window.document);
-        const after1 = made.errors.length;
+        // Assert the warning actually fired first — otherwise "count didn't
+        // grow" is satisfied by 0 === 0 and the test passes even with the
+        // hook never registered at all (tautology, #1200).
+        expect(made.errors.length).toBe(1);
         made.dom.window.djust.updateHooks(made.dom.window.document);
         made.dom.window.djust.updateHooks(made.dom.window.document);
-        expect(made.errors.length).toBe(after1);
+        expect(made.errors.length).toBe(1);
     });
 
     it('never sets dj-update="ignore" on the canvas — that would freeze values', () => {

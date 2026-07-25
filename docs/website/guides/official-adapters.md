@@ -88,15 +88,18 @@ class SalesView(LiveView):
 
 ### Do NOT add `dj-update="ignore"`
 
-It looks like the right morph-safety knob. It is the one thing that will break
-this adapter:
+It looks like the right morph-safety knob. It isn't:
 
-- The patcher returns early on `dj-update="ignore"` **before** it syncs
-  attributes, so the server could never change `dj-hook-value-data` and the
-  chart would show its first dataset forever.
-- It isn't needed. A `<canvas>` has no server-owned children, and the morph
+- **It isn't needed.** A `<canvas>` has no server-owned children, and the morph
   already refuses to remove a canvas's `width`/`height` — the attributes whose
   removal resets the drawing context.
+- **It can freeze your data.** On the morph path (`morphElement`, used for
+  full-HTML replacement) the patcher returns as soon as it sees
+  `dj-update="ignore"`, *before* attribute sync — so `dj-hook-value-*` stops
+  updating and the chart shows its first dataset forever. The incremental
+  `SetAttr` patch path used by ordinary WebSocket diffs does *not* consult
+  `dj-update`, so there your values would still flow. Relying on which path
+  runs is not something you want to reason about per render.
 
 If one specific attribute really is client-owned, name it in `dj-ignore-attrs`.
 That's per-attribute and doesn't block the rest of the sync.
@@ -104,7 +107,12 @@ That's per-attribute and doesn't block the rest of the sync.
 ### JS commands
 
 The adapter pre-registers two [`JS.ext`](js-commands.md) commands, so a chart
-can be driven from a server-composed chain:
+can be driven from a server-composed chain.
+
+Assign the chain to `self` (in `mount()` or a handler) — **not** as a class
+attribute. Class-level attributes that aren't JSON-serializable are dropped
+from the template context (#694), and a `JSChain` isn't one, so a class-level
+`refresh = JS.ext.chart_update(...)` would silently never reach the template:
 
 ```python
 from djust import LiveView
@@ -112,13 +120,41 @@ from djust.js import JS
 
 
 class DashboardView(LiveView):
-    refresh = JS.ext.chart_update(to="#sales")
+    template_name = "dashboard.html"
+
+    def mount(self, request, **kwargs):
+        self.refresh = JS.ext.chart_update(to="#sales")
+```
+
+```html
+<canvas id="sales" dj-hook="Chart" dj-hook-value-data='{{ chart_data_json }}'></canvas>
+<button dj-click="{{ refresh }}">Refresh</button>
 ```
 
 | Command | Arguments | Effect |
 |---|---|---|
 | `chart_update` | — | Re-renders the target chart(s) in place |
 | `chart_set_data` | `data` | Replaces the dataset, then re-renders |
+
+### Register your own hooks additively
+
+The adapter installs itself as `window.djust.hooks.Chart`. If your own page JS
+replaces the whole registry, it wipes the adapter out:
+
+```javascript
+// ✗ clobbers Chart if this runs after the adapter's script
+window.djust.hooks = { MyHook: { mounted() {} } };
+
+// ✓ additive — leaves Chart in place
+window.djust.hooks = window.djust.hooks || {};
+window.djust.hooks.MyHook = { mounted() {} };
+```
+
+This matters more than it looks: djust tells you to put page JS *after* your
+`dj-root` (otherwise the mount morph never executes it), which is exactly the
+position where it runs after the adapter tag. The symptom is semi-loud — the
+console reports `No hook registered` for `Chart` — but the chart simply never
+appears.
 
 ### Lifecycle
 
