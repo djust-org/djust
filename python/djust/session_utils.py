@@ -258,11 +258,16 @@ class Stream:
         try:
             self._deleted_ids.add(item_id)
         except TypeError:
-            # Unhashable identity (e.g. an id-less dict resolved to its
-            # address is hashable, but a user-supplied unhashable id is not).
-            # Deletion from ``items`` below still works; the tombstone set is
-            # only an optimisation for the client diff.
-            logger.debug("Stream %r: unhashable delete id, skipping tombstone", self.name)
+            # Unhashable identity (an id-less dict resolves to its hashable
+            # address, but a user-supplied unhashable id does not). Removal
+            # from ``items`` below still works, which is what callers observe.
+            #
+            # NOTE: ``_deleted_ids`` currently has NO readers anywhere in the
+            # codebase — it is written here and cleared in clear(), nothing
+            # else. So skipping an entry cannot break a consumer today. Do not
+            # read this as "the tombstone is optional"; if a client-diff
+            # consumer is ever added, this branch needs revisiting.
+            logger.debug("Stream %s: unhashable delete id, skipping tombstone", self.name)
 
         # Remove from items list if present
         self.items = [item for item in self.items if self._identity(item) != item_id]
