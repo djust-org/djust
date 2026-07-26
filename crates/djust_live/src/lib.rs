@@ -1024,13 +1024,22 @@ impl RustLiveViewBackend {
         let patches_bytes = if let Some(old_vdom) = &self.last_vdom {
             let patches = diff(old_vdom, &new_vdom);
             sync_ids(old_vdom, &mut new_vdom);
+            // `to_vec_named`, NOT `to_vec` (#2130). `Patch` is an internally
+            // tagged enum, and rmp-serde's `to_vec` encodes those as a
+            // POSITIONAL array — so `skip_serializing_if` on the interior `d`
+            // dropped a slot and the bytes could not be read back at all
+            // ("invalid length 2, expected 3 elements"). Every variant was
+            // affected; it went unnoticed because nothing deserializes this
+            // yet. `to_vec_named` emits a map, where an omitted optional is
+            // simply an absent key. See the round-trip pins in
+            // djust_vdom/tests/wire_protocol_snapshot.rs.
             if !patches.is_empty() {
-                let bytes = rmp_serde::to_vec(&patches)
+                let bytes = rmp_serde::to_vec_named(&patches)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
                 Some(PyBytes::new(py, &bytes).into())
             } else {
                 let empty: Vec<djust_vdom::Patch> = Vec::new();
-                let bytes = rmp_serde::to_vec(&empty)
+                let bytes = rmp_serde::to_vec_named(&empty)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
                 Some(PyBytes::new(py, &bytes).into())
             }

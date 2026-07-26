@@ -714,24 +714,99 @@ fn virtual_variants_json_round_trip_in_every_optional_permutation() {
     }
 }
 
+/// Every `Patch` variant, with every optional both present and absent — the
+/// permutations that broke the positional encoding.
+fn every_patch_shape() -> Vec<Patch> {
+    let n = || vnode_leaf("li");
+    vec![
+        Patch::SetText {
+            path: vec![0],
+            d: None,
+            text: "hi".into(),
+        },
+        Patch::SetText {
+            path: vec![0],
+            d: Some("v".into()),
+            text: "hi".into(),
+        },
+        Patch::InsertChild {
+            path: vec![0],
+            d: None,
+            index: 0,
+            node: n(),
+            ref_d: None,
+        },
+        Patch::InsertChild {
+            path: vec![0],
+            d: Some("v".into()),
+            index: 0,
+            node: n(),
+            ref_d: Some("r".into()),
+        },
+        Patch::VirtualInsert {
+            path: vec![0],
+            d: None,
+            key: "k".into(),
+            node: n(),
+            before_key: None,
+        },
+        Patch::VirtualInsert {
+            path: vec![0],
+            d: Some("v".into()),
+            key: "k".into(),
+            node: n(),
+            before_key: Some("k2".into()),
+        },
+        Patch::VirtualMove {
+            path: vec![0],
+            d: None,
+            key: "k".into(),
+            before_key: None,
+        },
+        Patch::VirtualRemove {
+            path: vec![0],
+            d: Some("v".into()),
+            key: "k".into(),
+        },
+    ]
+}
+
 #[test]
-fn msgpack_encodes_patch_positionally_and_is_already_broken() {
-    // Records a PRE-EXISTING fact, not a new defect, and corrects a comment
-    // that was in the tree before this suite: `#[serde(tag = "type")]` does
-    // NOT make `Patch` map-encoded under msgpack. `rmp_serde` writes a
-    // positional array, so `skip_serializing_if` on the interior `d` drops a
-    // slot and the value cannot be read back — the #1541 shape.
-    //
-    // It is latent because `render_binary_diff` (the only msgpack producer)
-    // has no non-test consumer. Pinned here so the next person to reach for
-    // the binary path finds the truth instead of the old comment, and so a
-    // future fix has a test that flips.
-    let existing = Patch::SetText {
+fn msgpack_named_round_trips_every_patch_shape() {
+    // The encoding `render_binary_diff` actually emits (#2130). It must survive
+    // a round-trip for EVERY variant × every optional permutation — the whole
+    // point of the fix is that the bytes can be read back.
+    for patch in every_patch_shape() {
+        let bytes = rmp_serde::to_vec_named(&patch).unwrap();
+        let back: Patch = rmp_serde::from_slice(&bytes)
+            .unwrap_or_else(|e| panic!("named msgpack round-trip failed for {patch:?}: {e}"));
+        assert_eq!(
+            format!("{back:?}"),
+            format!("{patch:?}"),
+            "round-trip must preserve the value, not merely parse"
+        );
+    }
+
+    // And as the Vec the producer actually emits, not just one at a time.
+    let all = every_patch_shape();
+    let bytes = rmp_serde::to_vec_named(&all).unwrap();
+    let back: Vec<Patch> = rmp_serde::from_slice(&bytes).expect("Vec<Patch> must round-trip");
+    assert_eq!(back.len(), all.len());
+}
+
+#[test]
+fn msgpack_positional_is_the_broken_encoding_this_replaced() {
+    // Kept as the REASON the producer uses `to_vec_named`, so nobody
+    // "simplifies" it back (#2130). `#[serde(tag = "type")]` does NOT force a
+    // map encoding under msgpack: `to_vec` writes a positional array, and
+    // `skip_serializing_if` on the interior `d` drops a slot, so the value
+    // cannot be read back. This was true of EVERY variant, not just the newest.
+    let broken = Patch::SetText {
         path: vec![0],
         d: None,
         text: "hi".into(),
     };
-    let bytes = rmp_serde::to_vec(&existing).unwrap();
+    let bytes = rmp_serde::to_vec(&broken).unwrap();
     assert_eq!(
         bytes[0] & 0xf0,
         0x90,
@@ -740,21 +815,39 @@ fn msgpack_encodes_patch_positionally_and_is_already_broken() {
     );
     assert!(
         rmp_serde::from_slice::<Patch>(&bytes).is_err(),
-        "if this now round-trips, the msgpack asymmetry was fixed — update this \
-         test and the wire notes in lib.rs"
+        "if positional now round-trips, rmp-serde changed — re-check whether \
+         to_vec_named is still needed before simplifying the producer"
     );
 
-    // The new variants inherit the same property; they are not a regression.
-    let new = Patch::VirtualRemove {
-        path: vec![0],
-        d: None,
-        key: "k".into(),
-    };
-    let nb = rmp_serde::to_vec(&new).unwrap();
-    assert_eq!(nb[0] & 0xf0, 0x90, "first byte 0x{:02x}", nb[0]);
-    assert!(
-        rmp_serde::from_slice::<Patch>(&nb).is_err(),
-        "the new variants inherit the same asymmetry — assert it fully rather \
-         than only checking the encoding tag"
+    // Named is the fix, on the very same value.
+    let fixed = rmp_serde::to_vec_named(&broken).unwrap();
+    assert_eq!(
+        fixed[0] & 0xf0,
+        0x80,
+        "expected a FIXMAP, got 0x{:02x}",
+        fixed[0]
     );
+    assert!(rmp_serde::from_slice::<Patch>(&fixed).is_ok());
+}
+
+#[test]
+fn vnode_djust_id_is_still_the_trailing_serialized_field() {
+    // The #1538 fix (`default` + `skip_serializing_if` on `djust_id`) is only
+    // sound because that field is LAST in the serialized form — #1541 showed a
+    // leading or interior optional corrupts positional slots instead. A field
+    // added after it would silently break `SerializableViewState`'s live
+    // round-trip, which DOES use positional encoding. `cached_html` is declared
+    // after it but carries `#[serde(skip)]`, so it does not count.
+    //
+    // VNode is serialized positionally on that path, so this pins the property
+    // directly rather than trusting the declaration order.
+    let leaf = vnode_leaf("li");
+    assert!(leaf.djust_id.is_none());
+    let bytes = rmp_serde::to_vec(&leaf).unwrap();
+    let back: VNode = rmp_serde::from_slice(&bytes).expect(
+        "a None djust_id must still round-trip positionally — if this fails, a \
+         serialized field was added AFTER djust_id and #1538's fix no longer holds",
+    );
+    assert_eq!(back.tag, "li");
+    assert!(back.djust_id.is_none());
 }
