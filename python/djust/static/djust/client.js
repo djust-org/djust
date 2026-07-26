@@ -8026,9 +8026,34 @@ function applySinglePatch(patch, rootEl = null) {
                     return false;
                 }
                 let allOk = true;
+                let target = row;
                 for (const inner of patch.patches || []) {
+                    // A Replace at path [] targets the ROW ITSELF, which cannot
+                    // be applied by mutating it — the generic arm reaches for
+                    // `node.parentNode`, which is null off-window (throws) and
+                    // is the SHELL in-window (succeeds, but leaves the pool
+                    // holding the old node, so the change reverts on the next
+                    // scroll — silently, with applyPatches returning true).
+                    // Swap the pool entry instead, which is what the Rust
+                    // simulator has always done for this op.
+                    if (inner.type === 'Replace' && (!inner.path || inner.path.length === 0)) {
+                        const replacement = createNodeFromVNode(inner.node, isInSvgContext(node));
+                        if (!replacement || replacement.nodeType !== 1) {
+                            console.warn('[LiveView] VirtualUpdate: could not build the replacement row for key %s', String(patch.key).slice(0, 80));
+                            allOk = false;
+                            continue;
+                        }
+                        if (!window.djust._virtualReplaceByKey(node, patch.key, replacement)) {
+                            console.warn('[LiveView] VirtualUpdate: could not replace the pool row for key %s', String(patch.key).slice(0, 80));
+                            allOk = false;
+                            continue;
+                        }
+                        // Later inner patches apply to the NEW row.
+                        target = replacement;
+                        continue;
+                    }
                     // The row is the ROOT for these — `path: []` IS the row.
-                    if (!applySinglePatch(inner, row)) {
+                    if (!applySinglePatch(inner, target)) {
                         allOk = false;
                     }
                 }
@@ -8037,8 +8062,8 @@ function applySinglePatch(patch, rootEl = null) {
                 // change and no re-render is needed; an off-window row is
                 // re-read from the pool when it scrolls back. In
                 // variable-height mode a height change is already picked up by
-                // the ResizeObserver (29-virtual-list.js:409, `state.offsets =
-                // null`). I could not construct a case where marking dirty
+                // the ResizeObserver (29-virtual-list.js:214, `state.offsets =
+                // null`; :409 is the NO-ResizeObserver fallback, not the RO). I could not construct a case where marking dirty
                 // here changed any observable outcome — two attempts, both
                 // gate-off-verified at 0 failures — so rather than ship an
                 // unpinned line, it is gone. If a real case turns up, add the
@@ -13752,6 +13777,32 @@ window.djust.bindModelElements = bindModelElements;
         return at === -1 ? null : state.items.at(at) || null;
     }
 
+    /**
+     * Swap the pool entry for `key` with `newNode` (#2136).
+     *
+     * A content diff emits `Replace { path: [] }` when a row changes TAG, and
+     * that op targets the ROW ITSELF — so it cannot be applied by mutating the
+     * row in place. Applying it as an ordinary patch used `node.parentNode`:
+     * off-window (detached) that threw, and IN-window it succeeded against the
+     * shell while `state.items` kept the OLD node — so the change reverted the
+     * moment the row scrolled out and back, with `applyPatches` returning true
+     * and no warning.
+     *
+     * The Rust simulator (`patch.rs`) already did the right thing here
+     * (`*target = node.clone()`), so the two halves of the op disagreed and 26
+     * green Rust binaries could not see it.
+     */
+    function virtualReplaceByKey(container, key, newNode) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return false;
+        const at = indexOfKey(state, key);
+        if (at === -1) return false;
+        state.items.splice(at, 1, newNode);
+        invalidateWindow(state);
+        DIRTY.add(container);
+        return true;
+    }
+
     /** Lists mutated by virtualKeyedOp since the last flush. */
     const DIRTY = new Set();
 
@@ -13795,6 +13846,7 @@ window.djust.bindModelElements = bindModelElements;
     window.djust._virtualInsert = virtualInsert;
     window.djust._virtualKeyedOp = virtualKeyedOp;
     window.djust._virtualNodeForKey = virtualNodeForKey;
+    window.djust._virtualReplaceByKey = virtualReplaceByKey;
     window.djust._flushVirtualKeyedOps = flushKeyedOps;
     window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;

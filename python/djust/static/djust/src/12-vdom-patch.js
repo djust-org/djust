@@ -2166,9 +2166,34 @@ function applySinglePatch(patch, rootEl = null) {
                     return false;
                 }
                 let allOk = true;
+                let target = row;
                 for (const inner of patch.patches || []) {
+                    // A Replace at path [] targets the ROW ITSELF, which cannot
+                    // be applied by mutating it — the generic arm reaches for
+                    // `node.parentNode`, which is null off-window (throws) and
+                    // is the SHELL in-window (succeeds, but leaves the pool
+                    // holding the old node, so the change reverts on the next
+                    // scroll — silently, with applyPatches returning true).
+                    // Swap the pool entry instead, which is what the Rust
+                    // simulator has always done for this op.
+                    if (inner.type === 'Replace' && (!inner.path || inner.path.length === 0)) {
+                        const replacement = createNodeFromVNode(inner.node, isInSvgContext(node));
+                        if (!replacement || replacement.nodeType !== 1) {
+                            console.warn('[LiveView] VirtualUpdate: could not build the replacement row for key %s', String(patch.key).slice(0, 80));
+                            allOk = false;
+                            continue;
+                        }
+                        if (!window.djust._virtualReplaceByKey(node, patch.key, replacement)) {
+                            console.warn('[LiveView] VirtualUpdate: could not replace the pool row for key %s', String(patch.key).slice(0, 80));
+                            allOk = false;
+                            continue;
+                        }
+                        // Later inner patches apply to the NEW row.
+                        target = replacement;
+                        continue;
+                    }
                     // The row is the ROOT for these — `path: []` IS the row.
-                    if (!applySinglePatch(inner, row)) {
+                    if (!applySinglePatch(inner, target)) {
                         allOk = false;
                     }
                 }
@@ -2177,8 +2202,8 @@ function applySinglePatch(patch, rootEl = null) {
                 // change and no re-render is needed; an off-window row is
                 // re-read from the pool when it scrolls back. In
                 // variable-height mode a height change is already picked up by
-                // the ResizeObserver (29-virtual-list.js:409, `state.offsets =
-                // null`). I could not construct a case where marking dirty
+                // the ResizeObserver (29-virtual-list.js:214, `state.offsets =
+                // null`; :409 is the NO-ResizeObserver fallback, not the RO). I could not construct a case where marking dirty
                 // here changed any observable outcome — two attempts, both
                 // gate-off-verified at 0 failures — so rather than ship an
                 // unpinned line, it is gone. If a real case turns up, add the

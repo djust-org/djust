@@ -932,6 +932,32 @@
         return at === -1 ? null : state.items.at(at) || null;
     }
 
+    /**
+     * Swap the pool entry for `key` with `newNode` (#2136).
+     *
+     * A content diff emits `Replace { path: [] }` when a row changes TAG, and
+     * that op targets the ROW ITSELF — so it cannot be applied by mutating the
+     * row in place. Applying it as an ordinary patch used `node.parentNode`:
+     * off-window (detached) that threw, and IN-window it succeeded against the
+     * shell while `state.items` kept the OLD node — so the change reverted the
+     * moment the row scrolled out and back, with `applyPatches` returning true
+     * and no warning.
+     *
+     * The Rust simulator (`patch.rs`) already did the right thing here
+     * (`*target = node.clone()`), so the two halves of the op disagreed and 26
+     * green Rust binaries could not see it.
+     */
+    function virtualReplaceByKey(container, key, newNode) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return false;
+        const at = indexOfKey(state, key);
+        if (at === -1) return false;
+        state.items.splice(at, 1, newNode);
+        invalidateWindow(state);
+        DIRTY.add(container);
+        return true;
+    }
+
     /** Lists mutated by virtualKeyedOp since the last flush. */
     const DIRTY = new Set();
 
@@ -975,6 +1001,7 @@
     window.djust._virtualInsert = virtualInsert;
     window.djust._virtualKeyedOp = virtualKeyedOp;
     window.djust._virtualNodeForKey = virtualNodeForKey;
+    window.djust._virtualReplaceByKey = virtualReplaceByKey;
     window.djust._flushVirtualKeyedOps = flushKeyedOps;
     window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;
