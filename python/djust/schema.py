@@ -459,6 +459,33 @@ DIRECTIVES: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "dj-key",
+        "category": "performance",
+        "description": (
+            "Stable identity for an item in a list, so the VDOM differ can MOVE a "
+            "row instead of destroying and rebuilding it when the list reorders. "
+            "Without it the differ falls back to positional diffing, which "
+            "discards the DOM node — losing focus, input values, scroll position "
+            "and any client-side state attached to it. Read by the Rust template "
+            "parser into VNode.key (crates/djust_vdom/src/parser.rs), where "
+            "`data-key` is accepted as an equivalent spelling. Keys must be "
+            "UNIQUE among siblings: a duplicate is ambiguous, so the differ "
+            "demotes those siblings to positional diffing and warns DJE-051. "
+            "Prefer this over an authored dj-id, which the parser ignores "
+            "(#1253)."
+        ),
+        "value": "unique_value_per_item",
+        "example": '{% for item in items %}<li dj-key="{{ item.id }}">{{ item.name }}</li>{% endfor %}',
+        "related_attributes": ["data-key"],
+        "related_attribute_details": {
+            "data-key": (
+                "Equivalent spelling, accepted by the same parser branch. Also "
+                "the default height-cache key for dj-virtual in variable-height "
+                "mode (see dj-virtual-key-attr)."
+            ),
+        },
+    },
+    {
         "name": "dj-transition",
         "category": "animation",
         "description": "Declarative CSS enter transition. Three-token form 'start active "
