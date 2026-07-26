@@ -806,6 +806,14 @@
     /**
      * The key a patch would address this pool node by.
      *
+     * NOT `itemKey` — that name is taken by the variable-height cache key
+     * above, which returns a PREFIXED string ("k:foo" / "i:3") and falls back
+     * to the index. Declaring a second `itemKey` here silently replaced it for
+     * the whole module (later function declaration wins), and every
+     * variable-height offset computation started reading a bare key or null.
+     * Four existing tests caught it; a run of only the new file would not
+     * have.
+     *
      * Mirrors the Rust parser's rule (crates/djust_vdom/src/parser.rs:433):
      * EITHER `dj-key` or `data-key` becomes `VNode.key`, and that is what the
      * patch names. The list's configured `keyAttr` is consulted first because
@@ -814,7 +822,7 @@
      * reads, so both are checked. Missing either would make every keyed op
      * silently miss on a list that uses the other spelling.
      */
-    function itemKey(state, node) {
+    function patchKeyOf(state, node) {
         if (!node || node.nodeType !== 1) return null;
         return (
             node.getAttribute(state.keyAttr) ||
@@ -826,7 +834,7 @@
     function indexOfKey(state, key) {
         if (key == null) return -1;
         for (let i = 0; i < state.items.length; i++) {
-            if (itemKey(state, state.items[i]) === key) return i;
+            if (patchKeyOf(state, state.items[i]) === key) return i;
         }
         return -1;
     }

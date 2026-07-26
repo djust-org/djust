@@ -2165,7 +2165,7 @@ function applySinglePatch(patch, rootEl = null) {
                     // Materialise the row here rather than in the pool module:
                     // creating nodes is the patcher's job, and the pool stores
                     // nodes, not descriptors.
-                    const created = createElementFromVNode(patch.node);
+                    const created = createNodeFromVNode(patch.node, isInSvgContext(node));
                     if (!created) {
                         console.warn('[LiveView] VirtualInsert could not build a node for key %s', String(patch.key).slice(0, 80));
                         return false;
