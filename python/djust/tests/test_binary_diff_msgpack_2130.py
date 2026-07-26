@@ -92,20 +92,30 @@ def test_every_patch_carries_its_type_tag_as_a_readable_key():
 
 
 def test_omitted_optionals_are_absent_keys_not_dropped_slots():
-    # The mechanism of the bug, stated as a property. Under the positional
-    # encoding a None `d` removed an element and shifted everything after it;
-    # under a map it is simply a key that is not there, and the remaining
-    # fields stay addressable by name.
+    # The mechanism of the bug, stated as a property — and the assertions have
+    # to demonstrate it, not just restate the name. An earlier version asserted
+    # only that `type` was truthy and an addressing field was present, which is
+    # a weaker duplicate of the test above and never showed the actual
+    # property: that an OMITTED optional is an absent key while its siblings
+    # stay addressable BY NAME. Under the positional encoding the omission
+    # removed an element and shifted everything after it.
     payloads = _binary_patches([["a"], ["a", "b"]])
     decoded = msgpack.unpackb(payloads[1], raw=False)
 
-    for patch in decoded:
-        # Whatever the variant, its own non-optional fields must be present and
-        # named — that is what "no dropped slot" means observationally.
+    omitted = [p for p in decoded if "ref_d" not in p or "d" not in p]
+    assert omitted, (
+        f"expected at least one patch with an omitted optional; got {[sorted(p) for p in decoded]}"
+    )
+    for patch in omitted:
+        # The siblings of the omitted key are still there, under their own
+        # names — which is exactly what a dropped positional slot destroys.
         assert patch.get("type"), patch
-        assert "path" in patch or "id" in patch, (
-            f"a patch must retain its addressing field; got keys {sorted(patch)}"
-        )
+        assert "path" in patch, f"`path` must survive the omission; got {sorted(patch)}"
+        if patch["type"] == "InsertChild":
+            assert "index" in patch and "node" in patch, (
+                "`index`/`node` must stay addressable by name when an earlier "
+                f"optional is omitted; got {sorted(patch)}"
+            )
 
 
 def test_an_empty_diff_still_produces_readable_bytes():

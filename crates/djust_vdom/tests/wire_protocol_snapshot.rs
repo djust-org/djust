@@ -840,14 +840,53 @@ fn vnode_djust_id_is_still_the_trailing_serialized_field() {
     // after it but carries `#[serde(skip)]`, so it does not count.
     //
     // VNode is serialized positionally on that path, so this pins the property
-    // directly rather than trusting the declaration order.
+    // by ASSERTING THE ARRAY WIDTH, not by round-tripping a bare leaf.
+    //
+    // The round-trip form was only half load-bearing, and the half it missed
+    // is the likelier one. Dropping `#[serde(skip)]` from `cached_html` makes
+    // it go red — but declaring the new field the way `djust_id` itself is
+    // declared, `#[serde(default, skip_serializing_if = "Option::is_none")]`
+    // (i.e. copying the line directly above, which is what a future author
+    // would do), leaves it GREEN while the corruption is real:
+    //
+    //     orig  djust_id=None  cached_html=Some("<li>cached</li>")
+    //     back  djust_id=Some("<li>cached</li>")  cached_html=None
+    //
+    // `djust_id` silently absorbs the new field's value on the
+    // SerializableViewState restore path. Populating every field and pinning
+    // the element COUNT catches both shapes: a 7th element means a serialized
+    // field now follows `djust_id`, whichever annotation it carries.
+    let v = VNode {
+        tag: "li".to_string(),
+        attrs: Default::default(),
+        children: vec![],
+        text: Some("t".to_string()),
+        key: Some("k".to_string()),
+        djust_id: Some("zz".to_string()),
+        // #[serde(skip)] — must NOT widen the array.
+        cached_html: Some("<li>cached</li>".to_string()),
+    };
+    let bytes = rmp_serde::to_vec(&v).unwrap();
+    let vals: Vec<serde_json::Value> =
+        rmp_serde::from_slice(&bytes).expect("VNode must encode as a positional array");
+    assert_eq!(
+        vals.len(),
+        6,
+        "a 7th element means a SERIALIZED field now follows djust_id, so the \
+         #1538 trailing-optional fix no longer holds and SerializableViewState's \
+         msgpack round-trip is corrupt"
+    );
+    assert_eq!(
+        vals[5],
+        serde_json::json!("zz"),
+        "djust_id must be the LAST serialized field"
+    );
+
+    // And the property #1538 actually fixed: a None djust_id round-trips.
     let leaf = vnode_leaf("li");
     assert!(leaf.djust_id.is_none());
-    let bytes = rmp_serde::to_vec(&leaf).unwrap();
-    let back: VNode = rmp_serde::from_slice(&bytes).expect(
-        "a None djust_id must still round-trip positionally — if this fails, a \
-         serialized field was added AFTER djust_id and #1538's fix no longer holds",
-    );
+    let back: VNode = rmp_serde::from_slice(&rmp_serde::to_vec(&leaf).unwrap())
+        .expect("a None djust_id must still round-trip positionally");
     assert_eq!(back.tag, "li");
     assert!(back.djust_id.is_none());
 }
