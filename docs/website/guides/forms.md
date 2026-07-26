@@ -148,7 +148,9 @@ When a `dj-submit` form is submitted:
        dj-change="validate_field">
 ```
 
-When the user leaves the field, djust sends `validate_field(field_name="email", value="user@example.com")`. The field is validated against the Django Form, and errors update instantly.
+When the user leaves the field, djust sends `validate_field(field="email", value="user@example.com")`. The field is validated against the Django Form, and errors update instantly.
+
+> **Overriding `validate_field`?** The field name arrives as **`field`**, not `field_name` — the client hardcodes that key and reads it from `data-field`, the element's `name`, then its `id`. `field_name` is accepted as a backwards-compatible alias, so `def validate_field(self, field="", value=None, **kwargs)` is the shape to write. This guide previously documented `field_name` as the parameter, which produced overrides that ran on every keystroke and silently received nothing (#2137).
 
 For validation on focus loss specifically, use `dj-blur`:
 

@@ -229,18 +229,25 @@ class AdminFormMixin(FormMixin):
             logger.debug("Failed to get field value for %s", field_name, exc_info=True)
             return default
 
-    def validate_field(self, field_name: str = "", value: Any = None, **kwargs: Any) -> None:
+    def validate_field(
+        self, field: str = "", field_name: str = "", value: Any = None, **kwargs: Any
+    ) -> None:
         """
         Validate a single field in real-time.
 
-        Extends FormMixin.validate_field() to work with ModelAdmin forms.
+        Extends FormMixin.validate_field() to work with ModelAdmin forms, and
+        carries the same ``field`` / ``field_name`` coalesce — the client sends
+        ``field`` (#2137).
 
         Args:
-            field_name: Name of the field to validate
+            field: Name of the field to validate — what the client sends
+            field_name: Legacy alias for ``field``
             value: Current field value
         """
-        if not field_name:
+        name = field or field_name
+        if not name:
             return
+        field_name = name
 
         # Ensure form state is initialized
         if not hasattr(self, "form_data"):
@@ -260,10 +267,13 @@ class AdminFormMixin(FormMixin):
 
         # Validate the specific field
         if field_name in form.fields:
-            field = form.fields[field_name]
+            # `form_field`, not `field` — `field` is a PARAMETER now (the key
+            # the client sends), and rebinding it here shadowed it. See the
+            # note in djust/forms.py.
+            form_field = form.fields[field_name]
             try:
-                cleaned_value = field.clean(value)
-                field.run_validators(cleaned_value)
+                cleaned_value = form_field.clean(value)
+                form_field.run_validators(cleaned_value)
 
                 # Run form's clean method for this field if it exists
                 if not hasattr(form, "cleaned_data"):
