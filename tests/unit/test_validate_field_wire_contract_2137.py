@@ -21,7 +21,6 @@ than which parameter carried the name, so they survive a future rename.
 
 from __future__ import annotations
 
-import pytest
 from django import forms as djforms
 
 from djust.forms import FormMixin
@@ -129,16 +128,82 @@ def test_every_validate_field_accepts_the_client_key():
         )
 
 
-@pytest.mark.parametrize("owner_path", ["djust.forms", "djust.admin_ext.forms"])
-def test_the_coalesce_is_present_not_just_the_parameter(owner_path):
-    # Accepting `field` and then ignoring it would satisfy the signature check
-    # above while leaving the bug in place, so pin the resolution too.
-    import importlib
-    import inspect
+def test_admin_form_mixin_validates_via_the_client_key():
+    # AdminFormMixin had ZERO behavioural coverage anywhere in the repo — its
+    # only pin was a source-grep for the literal `field or field_name`, which
+    # is decorative in both directions (#1859): sabotaging the method while
+    # leaving the string in place passed, and a behaviour-preserving refactor
+    # to a ternary failed. It also would have blocked the obvious future
+    # improvement — extracting the coalesce into one shared helper, which is
+    # the #1646 cure this fix's own rationale praises.
+    from djust.admin_ext.forms import AdminFormMixin
 
-    mod = importlib.import_module(owner_path)
-    cls = mod.FormMixin if owner_path == "djust.forms" else mod.AdminFormMixin
-    src = inspect.getsource(cls.validate_field)
-    assert "field or field_name" in src, (
-        f"{cls.__name__}.validate_field must coalesce the two spellings, not merely accept both"
+    class _AdminView(AdminFormMixin):
+        form_class = _SignupForm
+
+        def __init__(self):
+            self.form_data = {}
+            self.field_errors = {}
+            self._model_instance = None
+
+        def _create_form(self, data=None):
+            return _SignupForm(data) if data else _SignupForm()
+
+    v = _AdminView()
+    v.validate_field(field="email", value="not-an-email")
+
+    assert v.form_data == {"email": "not-an-email"}
+    assert "email" in v.field_errors
+
+
+def test_admin_form_mixin_still_accepts_the_legacy_key():
+    from djust.admin_ext.forms import AdminFormMixin
+
+    class _AdminView(AdminFormMixin):
+        form_class = _SignupForm
+
+        def __init__(self):
+            self.form_data = {}
+            self.field_errors = {}
+            self._model_instance = None
+
+        def _create_form(self, data=None):
+            return _SignupForm(data) if data else _SignupForm()
+
+    v = _AdminView()
+    v.validate_field(field_name="email", value="user@example.com")
+
+    assert v.form_data == {"email": "user@example.com"}
+    assert "email" not in v.field_errors
+
+
+def test_the_admin_adapter_positional_shape_keeps_the_real_value():
+    # `admin_ext/adapters.py` emits `validate_field('<name>', value)` at 8
+    # sites; the bare `value` token arrives as the literal string "value" in
+    # positional slot 1, with the REAL value as a keyword. `field` being first
+    # is what makes the junk land in `field_name` instead of overwriting the
+    # value — which is what it did before this change, so the admin validated
+    # the string "value" on every keystroke.
+    v = _View()
+
+    v.validate_field("email", "value", value="user@example.com")
+
+    assert v.form_data == {"email": "user@example.com"}, (
+        "the real value must survive the adapter's junk positional token"
+    )
+    assert "email" not in v.field_errors
+
+
+def test_two_arg_positional_binds_field_name_not_value():
+    # The cost of that ordering, pinned so it is a known property rather than
+    # a surprise: `validate_field("email", "text")` binds field_name="text"
+    # and leaves value=None, so a filled field reports "required". No in-repo
+    # or in-docs caller uses this shape; the docstring says to use keywords.
+    v = _View()
+
+    v.validate_field("email", "user@example.com")
+
+    assert v.form_data == {"email": None}
+    assert "email" in v.field_errors, (
+        "documents the trap: the second positional is field_name, not value"
     )

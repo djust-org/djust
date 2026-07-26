@@ -174,10 +174,16 @@ class FormMixin:
 
         This is called when a field changes (dj-change / dj-input event).
 
-        The client sends the field name under the key ``field``
-        (``09-event-binding.js`` at its three send sites, and
-        ``20-model-binding.js`` for ``dj-model``), because djust maps
-        ``data-*`` attributes to handler parameters. ``field_name`` is
+        The client sends the field name under the key ``field``, because
+        ``buildFormEventParams`` (``09-event-binding.js:525``) HARDCODES that
+        key, sourcing the value from ``getFieldName`` — ``data-field``, then
+        the element's ``name``, then its ``id``. It merges only ``dj-value-*``;
+        it does NOT collect ``data-*``, which is what ``extractTypedParams``
+        does on the click/poll/mount paths. (An earlier version of this
+        docstring said "djust maps ``data-*`` attributes to handler
+        parameters" — true for those other paths, false for this one, and a
+        maintainer acting on it would expect ``data-foo`` on an input to reach
+        the handler. It does not.) ``field_name`` is
         accepted for backwards compatibility and is what this signature used
         to take EXCLUSIVELY — which meant the client's payload matched nothing,
         ``**kwargs`` swallowed it instead of raising ``TypeError``, and the
@@ -186,6 +192,17 @@ class FormMixin:
 
         ``WizardMixin.validate_field`` already had this coalesce; this is the
         same shape, applied to the two implementations that did not (#1646).
+
+        POSITIONAL CALLERS: ``field`` is the first parameter, so
+        ``validate_field("email", "text")`` binds ``field_name="text"`` and
+        leaves ``value`` as ``None`` — a filled field then reports "required".
+        Call with keywords. The order is deliberate: djust admin's own adapters
+        emit ``validate_field('<name>', value)`` (``admin_ext/adapters.py``, 8
+        sites), whose second positional token is the literal string
+        ``"value"``; with ``field`` first that junk lands in ``field_name`` and
+        the real value survives as a keyword. Under the previous order it
+        overwrote the real value, so the admin validated the string "value" on
+        every change.
 
         Args:
             field: Name of the field to validate — what the client sends

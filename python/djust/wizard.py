@@ -440,9 +440,12 @@ class WizardMixin:
         """Store a field value triggered by as_live_field() dj-change events.
 
         ``as_live_field()`` generates ``dj-change="validate_field"`` and
-        ``data-field="<name>"``.  djust maps data-* attributes to handler
-        parameters, so the field name arrives as ``field``.  The ``field_name``
-        parameter is accepted for backwards compatibility.
+        ``data-field="<name>"``. The name arrives as ``field`` because
+        ``buildFormEventParams`` (``09-event-binding.js:525``) hardcodes that
+        key and reads ``data-field`` first via ``getFieldName`` — NOT because
+        data-* attributes are mapped to parameters generally, which is
+        ``extractTypedParams`` on the click/poll paths (#2137). The
+        ``field_name`` parameter is accepted for backwards compatibility.
         """
         name = field or field_name
         if not name or not self._steps:
