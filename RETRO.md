@@ -357,14 +357,111 @@ issue or be explicitly closed with a reason.
 | 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Closed | **Resolved in v1.1.0-1 (PR #1881):** channel-layer isolation (`backends.clear()`) + deterministic ping/pong openness probe (replaced the wall-clock `receive_nothing`); the systemic test-isolation fixture (#1884) retired the shared-process-global flaky class. |
 | 316 | Propagate the "cap concurrent worktree implementer agents at ~3" rule into the pipeline-run / pipeline-drain skill prompts | v1.1.0-4 retro | — | OUT-OF-REPO | Skill prompts live in `~/.claude/skills/{pipeline-run,pipeline-drain}/SKILL.md` (gitignored, not in this repo). In-repo half DONE: CLAUDE.md "Process canonicalizations from v1.1.0-4 retro arc" rule 2. Trigger: 5 concurrent worktree fixers tripped a transient server-side throttle; ≤3 concurrent prevents it, serial resumption recovers cleanly. |
 | 317 | Transport-parity test for the async-work dispatch path (runtime `_execute_async_task` vs consumer `_run_async_work`) — the #2016 `sync_to_async`/coroutine drift had no guard | PR #2016 / v1.1.0-5 retro | #2020 | Closed | Resolved v1.1.0-6 (PR #2030): the structural cure shipped — one `run_async_callback` in `mixins/async_work.py` both transports delegate to, pinned by 3 structural parity tests (both call it; neither keeps its own `iscoroutinefunction(callback)` branch; single definition) + 4 behavioral (gate-off #1468 = the async-def-through-`sync_to_async` `TypeError`). |
-| 318 | dj-virtual deeper server-side reconcile — automatic `stream_append`→`__djVirtualItems` wiring, VDOM-differ `dj-virtual` awareness (keyed mid-list inserts/removals), out-of-window finalize-patch landing, + a `djustDebug` warning | PR #2018 / v1.1.0-5 retro | #2017 | Open | Deferred from #1988/#1989 per #1079 scope discipline; the client-side self-heal (`structureIntact`/`absorbLooseChildren`) + CSS layout contract shipped in #2018. Also carries the manual real-browser pixel-verification JSDOM couldn't cover. |
+| 318 | dj-virtual deeper server-side reconcile — automatic `stream_append`→`__djVirtualItems` wiring, VDOM-differ `dj-virtual` awareness (keyed mid-list inserts/removals), out-of-window finalize-patch landing, + a `djustDebug` warning | PR #2018 / v1.1.0-5 retro | #2017 | Open | Deferred from #1988/#1989 per #1079 scope discipline; the client-side self-heal (`structureIntact`/`absorbLooseChildren`) + CSS layout contract shipped in #2018. Also carries the manual real-browser pixel-verification JSDOM couldn't cover. **v1.1.0-13 progress**: ADR-026 iteration 1 (differ emits keyed splice ops, dark — PR #2126) and iteration 2 (client applies them via the item pool — PR #2135) both shipped. Iteration 3 (flip the flag) is soak-gated per #1122 AND newly blocked by #2136 — content patches for surviving rows are still index-addressed and silently rewrite the wrong row after a scroll. |
 | 319 | Codify the CHANGELOG-union local-sync step (`git merge origin/main` before GitHub-merge; rebuild bundles from merged src when they conflict) into the pipeline-drain skill | v1.1.0-5 retro | — | OUT-OF-REPO | `CHANGELOG merge=union` is a LOCAL git driver; GitHub's merge button doesn't apply it, so every multi-PR drain re-hits a silent CHANGELOG conflict (checks green, button shows "conflicting"). pipeline-drain skill is gitignored (`~/.claude/skills/`). In-repo-adjacent: memory `reference_changelog_union_vs_github_merge` saved. |
 | 320 | `djust-release` SKILL.md needs a "which branch is the release-of-record" pre-flight when multiple long-lived release branches exist | v1.1.0rc5 retro | #2027 | OUT-OF-REPO | In-repo half DONE + GitHub #2027 CLOSED v1.1.0-6: `make release`/`make release-dry-run` hard-fail if the target tag already exists locally or on origin (Makefile). Remaining skill-prompt half is out-of-repo (gitignored `.claude/skills/djust-release/SKILL.md`). Trigger: `/djust-release 1.1.0rc4` ran against `main`, which had been reverted to 1.0.8 post-#1974/#1975 while the real v1.1 line + the already-tagged/PyPI-live rc4 lived on a separate `1.1` branch. |
 | 321 | Automated pre-commit/CI check pinning already-tagged CHANGELOG.md sections against their tagged content | v1.1.0rc5 retro | #2028 | Closed | Resolved v1.1.0-6 (PR #2029): `scripts/check-changelog-tagged-sections.py` pins every shipped section against the *newest* release tag's snapshot (dogfood #1060 showed pinning against each section's OWN tag floods false positives — rolling-rc sections keep accumulating post-tag; a section is frozen once *superseded*). Wired as a pre-commit hook; empirical canary (#1459) is a permanent test. 119 sections pin clean against v1.1.0rc5. |
 | 322 | CI Python job omits `python/djust/tests/` — a large suite (incl. the RED `TestSetattrChokepoint` CWE-915 guard, and this-repo's #2020/#1977 tests) is un-gated | PR #2031 / v1.1.0-6 retro | #2032 | Closed | Resolved v1.1.0-7 (PR #2035): deliberately re-verified + fixed the stale `_SETATTR_WHITELIST` pins (1213/1215 → 1225/1227, confirmed still the sanctioned DynamicLiveView developer-dict application, not a new client-controlled setattr), and added `python/djust/tests/` to CI as a `continue-on-error` soak step (green on first runner run). Blocking-gate promotion split to #323 (#2034). |
 | 323 | Promote the `python/djust/tests/` CI soak step to a blocking gate + add the dir to the pre-push hook | PR #2035 / v1.1.0-7 retro | #2034 | Closed | Resolved v1.1.0-8 (PR #2039): the soak ran green on the `main` push-CI run at `72d78601` (the awaited precondition), so `continue-on-error` was removed — the step now runs inside `python-tests`, which is in the `test-summary` AND-condition (#1713), so a failure gates the merge; `python/djust/tests/` added to the pre-push `pytest` hook too. Self-validated: PR #2039's own `python-tests (py3.12)` was the first run with the gate live and passed (empirical canary #1459). |
 | 324 | dj_transition `re-runs the sequence` JS test still uses polling `waitForClass` — real-rAF flake (#1830 class) | PR #2077 / v1.1.0-11 retro | #2081 | Open | Surfaced during the #2070 drain (cost one CI cycle); the case wasn't converted to the controllable-rAF stub PR #1839 applied to its sibling. Fix: drive `flushFrame()` + assert an ordering invariant + gate-off sibling. |
-| 325 | Makefile `test-rust`/`bench`/`clippy`/`test-full` share the #2072 `PYO3_PYTHON=$(PYTHON)` pattern — same uv-standalone unembeddable fault | PR #2080 / v1.1.0-11 retro | #2082 | Open | The #2080 fix scoped to the pre-push `cargo-test` hook per #1079; these Makefile targets have the identical failure on a uv-python-build-standalone venv. Route them through `scripts/embeddable-python.sh` too. |
+| 325 | Makefile `test-rust`/`bench`/`clippy`/`test-full` share the #2072 `PYO3_PYTHON=$(PYTHON)` pattern — same uv-standalone unembeddable fault | PR #2080 / v1.1.0-11 retro | #2082 | Closed | The #2080 fix scoped to the pre-push `cargo-test` hook per #1079; these Makefile targets have the identical failure on a uv-python-build-standalone venv. Route them through `scripts/embeddable-python.sh` too. RESOLVED in v1.1.0-12 (PR #2093); GitHub #2082 closed 2026-07-18. Status drift caught by the v1.1.0-13 retro Stage 5 — the row stayed Open for a milestone after the work shipped. |
+| 326 | One source of truth for the client-size figures — three copies describing two artifacts, only one checked | Retro v1.1.0-13 / PR #2134 | #2138 | Open | README pair is enforced against a ±3 KB band; the CLAUDE.md pair was unchecked and had drifted >2× (~87 KB claimed vs ~184 KB actual). Prefer generating the figures at build time over adding a second checker. Note `client.min.js.gz` is gitignored, so the check depends on a local build. |
+| 327 | Detect a red `main` proactively instead of discovering it via a failed push | Retro v1.1.0-13 / PR #2134 | #2139 | Open | Three failing tests on `main` made the pre-push hook reject every branch, including ones unrelated to the failure; took three failed pushes to diagnose. Same argument as #2124 — a persistently red suite trains people to read red as noise. Wants a scheduled main-suite check AND a hook that distinguishes pre-existing merge-base failures from branch-caused ones. |
+| 328 | Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group | Retro v1.1.0-13 (Stage 1) | #2140 | Open | `RETRO.md`'s latest entry before v1.1.0-13 was v1.1.0-11; ~32 PRs have no milestone entry and #2094–#2128 were never bucketed in ROADMAP. Per-PR retros exist as PR comments so the material is recoverable — what was lost is the synthesis and the tracker rows those retros would have produced. |
+
+## v1.1.0-13 — post-12 drain: stream identity, wire format, dj-virtual client applier (PRs #2131, #2132, #2134, #2135)
+
+**Date**: 2026-07-26
+**Scope**: Three-issue drain (#2129, #2130, #2017 iteration 2) plus two issues the drain itself surfaced — #2133 (`main` was RED, blocking every push) and #2136 (filed, blocks ADR-026 iteration 3). All merged, main CI green after each.
+**Tests at close**: 10013 Python + 1903 JS
+
+### What We Learned
+
+**1. When value-by-value fixes stop converging, change the shape of the fix.**
+#2129 took **five review rounds and four 🔴s**, every one silent destructive over-deletion and every one a regression against `main`. Round 1 compared formatted strings, so `5` and `"5"` collapsed. Round 2 fixed that but let a `None` factory key collapse every keyless row. Round 3 special-cased `None` — and eight more spellings (`""`, `[]`, `{}`, `()`, `0`, `False`, shared sentinels) did the same thing. Each round I believed the class was closed; my record at predicting where it hid was **0 for 4**.
+
+What finally worked was not a better guess. Rounds 1–3 patched *values*, and there is no end to the list of values many rows can share. Round 4's rule — *a delete is `identity OR factory`, and the factory arm may remove at most one row* — is about the **operation**, not the data, and it held against inputs nobody enumerated in advance. The reviewer's framing is the durable part: **non-convergence is itself the signal**, and it arrives earlier than any individual counterexample.
+
+**Action taken**: Added to `djust/CLAUDE.md` — "Process canonicalizations from v1.1.0-13 retro arc", rule 1.
+
+**2. A gate-off that doesn't gate is a tautology one level up — and one that reports zero because it broke the build is worse.**
+Three of my own gate-off measurements were wrong in this milestone, all the same family: one reported `0 failed` for a mutation that silently didn't match; one reported `16` because it left an orphan `try {` and measured a `SyntaxError`; one reported `0` because its mutation *did* produce a `SyntaxError` and pytest prints "1 error", not "N failed", for a collection failure. Each looked like evidence.
+
+Gate-off (#1468) is the project's primary defence against tautological tests. It has its own tautology, and nothing was checking it.
+
+**Action taken**: Added to `djust/CLAUDE.md` — "Process canonicalizations from v1.1.0-13 retro arc", rule 2, with the hardened-harness shape (assert each mutation applied AND changed something; count errors as well as failures; refuse to report a number when the module didn't import).
+
+**3. Two mechanisms that fix different halves will shadow each other if every test exercises only one.**
+After #2129's identity-first fix, gating off the at-most-one-row bound stopped failing anything. The shared-key tests deleted by the **item**, so identity resolved it and the factory arm never ran — the invariant I had just been most pleased with was unreachable from the suite. The same shape hit the tolerant-factory test, which included a row whose id matched the argument.
+
+#2135 produced the sharpest version: a test that was green **while destroying what it guarded**. It asserted a `SetText` left the item pool unchanged — which no `SetText` can ever change — and the patch it fired resolved to the virtualization shell and wiped the entire rendered window (4 children → 0) while passing. It survived all nine gate-offs. A test can be worse than absent.
+
+**Action taken**: Added to `djust/CLAUDE.md` — "Process canonicalizations from v1.1.0-13 retro arc", rule 3.
+
+**4. A protocol implemented on both sides of a language boundary needs a cross-boundary differential; neither side's suite can see a divergence.**
+ADR-026 put the reconciler in Rust (iteration 1) and the applier in JS (iteration 2). Each side's tests passed against its own model. Nothing tested them against each other, and a divergence would have been invisible to both.
+
+The #2135 review closed it by dumping **1056 real differ outputs** and replaying each through the real client: all 1056 land on exactly the server's key order, with a gate-off proving the harness non-vacuous. One fidelity detail decided whether it meant anything — iteration 1's Rust helper builds rows with `key` set but no `data-key` attribute, which is fine for a string replay and useless against a client that reads keys off the DOM.
+
+**Action taken**: Added to `djust/CLAUDE.md` — "Process canonicalizations from v1.1.0-13 retro arc", rule 4.
+
+**5. An issue's option list is a hypothesis, not a constraint.**
+#2130 offered three options — delete the API, drop `skip_serializing_if` everywhere (a JSON-shape change every deployed client sees), or keep it broken. All three accepted the positional msgpack encoding as fixed. `rmp_serde::to_vec_named` is a fourth: it encodes structs as maps, fixing the defect in **one line** with no JSON change, no API removal and no compat event. Ten minutes probing the encoder beat accepting the framing.
+
+**Action taken**: Added to `djust/CLAUDE.md` — "Process canonicalizations from v1.1.0-13 retro arc", rule 5.
+
+**6. A drift check that covers one of three copies of a number guarantees the other two drift further.**
+`main` was RED for three doc-snippet tests, so the pre-push hook rejected **every** branch — I hit it on three separate pushes before diagnosing it. The README's client-size claim had drifted across #2114/#2115/#2120 (none crossed the ±3 KB band alone; cumulatively they did). Fixing it surfaced two more figures in `CLAUDE.md` — `~87 KB` against an actual `~184 KB` — which had drifted *much* further precisely because nothing checked them, and which describe a different artifact (the unminified build input, not the shipped bundle).
+
+**Action taken**: Open — tracked in Action Tracker #326 (GitHub #2138).
+
+**7. `main` being red is a shared-cost failure that no single PR owns.**
+The three failing tests blocked every contributor's push, not just mine, and nothing alerted on it — the state was discovered only because a push failed. This is the same argument as #2124: a persistently red suite trains people to read red as noise.
+
+**Action taken**: Open — tracked in Action Tracker #327 (GitHub #2139).
+
+**8. Two milestones shipped without a retro entry, and this skill's own gate is what found it.**
+`RETRO.md`'s latest entry before this one was **v1.1.0-11**. v1.1.0-12 (#2092/#2093) and the entire #2094–#2128 group — ~30 PRs including the scoped-attr and streams chains — have no milestone entry. The per-PR retros exist as PR comments, so the material is recoverable, but the synthesis and the Action Tracker rows were never written.
+
+**Action taken**: Open — tracked in Action Tracker #328 (GitHub #2140).
+
+### Insights
+
+- **Five rounds is not a process failure here — it is the process working on an irreversible operation.** Deletion cannot be un-done by a follow-up release. Every one of the four 🔴s was a regression against `main`, all silent, and none would have been caught by a green suite. The adversarial reviewer earned its cost several times over.
+- **The strongest evidence in the milestone was not a green suite.** For #2129 it was a clean-`origin/main` differential across five shapes showing HEAD byte-identical to main everywhere main was already right; for #2135 it was 1056 real differ outputs replayed through the real client. Both are *comparisons*, not assertions — and both were built by the reviewer, not by me.
+- **The reviewer caught a methodology error in its own earlier passes** (comparisons run against a shared checkout that had since moved onto the branch) and re-ran against a rebuilt clean tree. A wrong baseline is a measurement bug in the same family as the three gate-off bugs above.
+- **Running the full suite rather than the new file caught what the new file could not.** #2135's `itemKey` redefinition — JS hoisting makes the later declaration win module-wide — silently corrupted every variable-height offset, and four *existing* tests caught it.
+- **Two `🟢` findings were deliberately left open** on #2129 rather than papered over: a factory non-deterministic across calls (already broken at insert time), and the arms-disagree shapes where the named dom_id addresses a row that survives — which `main` does identically, and where the inverse rule would break the legitimate stale-row delete. There is no rule right in all shapes; identity-first is the one that adds no new destruction.
+- **SSH kept dropping mid-push.** The pre-push hook runs ~5 minutes and GitHub closes the connection; `ServerAliveInterval` fixed it. Cost several confusing failures that looked like hook rejections.
+
+### Review Stats
+
+| Metric | PR #2131 | PR #2132 | PR #2134 | PR #2135 | Total |
+|--------|----------|----------|----------|----------|-------|
+| Review rounds | 5 | 2 | 0 | 2 | 9 |
+| 🔴 Findings | 4 | 0 | 0 | 0 | 4 |
+| 🟡 Findings | 6 | 1 | 0 | 4 | 11 |
+| 🟢 Findings | 4 | 5 | 0 | 6 | 15 |
+| Findings fixed | 12 | 6 | 0 | 10 | 28 |
+| Tests added | 39 | 6 | 0 | 18 | 63 |
+| Gate-offs run | 11 | 1 | 0 | 10 | 22 |
+| Self-caught defects | 3 | 2 | 0 | 3 | 8 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: new section "Process canonicalizations from v1.1.0-13 retro arc" — five rules (non-convergence signal; gate-off harness hygiene; shadowed mechanisms; cross-language differential; option lists are hypotheses). Client-JS size figures corrected and re-scoped to name which artifact each describes (PR #2134).
+**README.md**: client-size claim corrected in two places (PR #2134).
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+
+### Open Items
+
+- [ ] Single source of truth for the client-size figures — Action Tracker #326 (GitHub #2138)
+- [ ] Alert when `main`'s suite is red rather than discovering it via a failed push — Action Tracker #327 (GitHub #2139)
+- [ ] Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group — Action Tracker #328 (GitHub #2140)
+- [ ] `#2136` — index-addressed content patches for `[dj-virtual]` rows; blocks ADR-026 iteration 3
+- [ ] `#2017` iteration 3 — flip the flag; soak-gated per #1122 and now also blocked by #2136
 
 ## v1.1.0-11 — hygiene drain: test-infra trust + build churn + docs + replay viewer (PRs #2076-#2080, #2083)
 

@@ -1385,6 +1385,94 @@ Two rules from the v1.1.0rc5 release cut, which turned into an unplanned branch-
 
 - **A git 3-way merge of `CHANGELOG.md` across branches that diverged around a release cut can silently misattribute NEW content into an ALREADY-TAGGED, already-released version section — because git has no notion that a version heading is immutable once tagged (#2028).** The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4] - <date>` (resetting Unreleased to empty) when it cut rc4; `main` kept accumulating new entries under the still-named `## [Unreleased]` header. `git merge origin/main` into `1.1` reported **zero conflicts** on `CHANGELOG.md` — diff3 had no anchor telling it the two `## [Unreleased]` headers were now semantically different, so it placed `main`'s ~150 lines of new content (ADR-024, a security fix, 15 other fixes) inside the position that, post-merge, read as `## [1.1.0rc4]`'s body — growing an already-shipped, already-tagged section from 12 lines to 49 and falsely claiming unshipped work had gone out in rc4. Neither `scripts/check-changelog-test-counts.py` nor `make check-adr-status` catches this (both check the *diff*'s own numeric/version-line claims, not whether an already-tagged section changed at all); the full test suite stayed green throughout, because no test exercises CHANGELOG content. Caught only by manually diffing the merged file's `[1.1.0rc4]` section against `git show v1.1.0rc4:CHANGELOG.md` — an ad hoc check, not a gate. **Rule:** after ANY merge combining a branch that cut a release (renamed `Unreleased`→`vX`) with a branch that kept accumulating under `Unreleased`, verify — before committing the merge — that every already-tagged section's body is byte-identical to `git show vX:CHANGELOG.md`'s content for that section. Recipe used to fix it this time: take the older branch's original tagged-section content verbatim, take the newer branch's original Unreleased-section content verbatim, and hand-assemble `Unreleased(empty) → new-version(newer's content) → already-tagged-version(older's original content) → rest-of-history(unchanged)` — do not trust the clean auto-merge. Action Tracker #321 (GitHub #2028) tracks an automated pre-commit/CI check (pin every already-tagged `## [X.Y.Z]` section against its tag's committed content) as the durable fix; this session's manual diff was the stopgap.
 
+## Process canonicalizations from v1.1.0-13 retro arc
+
+Five rules from the v1.1.0-13 drain (PRs #2131, #2132, #2134, #2135 — #2129,
+#2130 and ADR-026 iteration 2). The arc's defining event was #2129 taking
+**five review rounds and four 🔴s**, every one a silent destructive
+over-deletion and every one a regression against `main`.
+
+- **When value-by-value fixes stop converging, change the shape of the fix
+  (#2129).** Rounds 1-3 each patched the reported *values* — formatted-string
+  collapse, then a `None` factory key, then `None` special-cased — and each
+  left a neighbouring value uncovered, because there is no end to the list of
+  values many rows can share (`""`, `[]`, `{}`, `()`, `0`, `False`, a shared
+  sentinel, an `__eq__`-always-True object). What closed it was a rule about
+  the **operation** rather than the data: *a delete is `identity OR factory`,
+  and the factory arm may remove at most one row*. That holds against inputs
+  nobody enumerated in advance.
+
+  **The signal is non-convergence itself, and it arrives earlier than any
+  individual counterexample.** After the second round where a fix in the same
+  class needs another fix in the same class, stop enumerating and ask what
+  invariant the *operation* should satisfy. Corollary for irreversible
+  operations (delete, overwrite, send): prefer the rule that adds no new
+  destruction when two readings disagree — #2129 chose identity-first because
+  the inverse would have broken the legitimate stale-row delete.
+
+- **A gate-off that does not gate is a tautology one level up; one that
+  reports zero because it broke the build is worse, because it looks like
+  evidence (#2129, #2135).** Gate-off (#1468) is the primary defence against
+  tautological tests, and it has its own tautology. Three measurements in this
+  milestone were wrong the same way: a mutation that silently did not match
+  (reported `0 failed`), a mutation that left an orphan `try {` and measured a
+  `SyntaxError` (reported `16`), and a mutation that produced a `SyntaxError`
+  where pytest prints `1 error` rather than `N failed` (reported `0`).
+
+  **A gate-off harness must:** (a) `assert` the mutation text was found; (b)
+  `assert` the mutated source differs from the original; (c) count *errors* as
+  well as failures; and (d) refuse to report a number at all when the module
+  did not import. Reference implementation shape:
+
+  ```python
+  assert old in orig, f"MUTATION TEXT NOT FOUND for {label}"
+  mutated = orig.replace(old, new, 1)
+  assert mutated != orig, f"NO-OP MUTATION for {label}"
+  ...
+  if re.search(r"(\d+) error", out):          # pytest collection failure
+      return "INVALID (the mutation broke the module)"
+  ```
+
+- **Two mechanisms that fix different halves will shadow each other if every
+  test exercises only one (#2129, #2135).** After #2129's identity-first fix,
+  gating off the at-most-one-row bound stopped failing anything: every
+  shared-key test deleted by the ITEM, so identity resolved it and the factory
+  arm never ran. Each case now deletes **twice** — by the item and by a
+  look-alike identity cannot resolve — so both arms are independently
+  reachable. **Check: for each mechanism the fix introduces, name the test
+  that goes red when only that mechanism is removed.** If one mechanism has no
+  such test, it is unreachable from the suite regardless of how green it is.
+
+  The sharpest form is a test that is green **while destroying what it
+  guards**: #2135's `leaves an ordinary keyed list untouched` asserted a
+  `SetText` left the item pool unchanged — which no `SetText` can ever change,
+  since the pool holds node references — while the patch it fired resolved to
+  the virtualization shell and wiped the entire rendered window. It survived
+  all nine gate-offs. A test can be worse than absent.
+
+- **A protocol implemented on both sides of a language boundary needs a
+  cross-boundary differential (#2017 / ADR-026).** Iteration 1 put the
+  reconciler in Rust, iteration 2 the applier in JS. Each side's suite passed
+  against its own model; a divergence would have been invisible to both.
+  Closed by dumping **1056 real differ outputs** (the exhaustive key sweep plus
+  named shapes) and replaying each through the real client, with a gate-off
+  proving the harness non-vacuous.
+
+  **Fidelity is what decides whether the differential means anything**: build
+  the fixtures the way the *production* path builds them. Iteration 1's Rust
+  helper sets `VNode.key` without the `data-key` attribute — fine for a
+  string replay, useless against a client that reads keys off the DOM. Porting
+  it naively would have produced a second tautology rather than a differential.
+
+- **An issue's option list is a hypothesis, not a constraint (#2130).** The
+  issue offered three options — delete the API, drop `skip_serializing_if`
+  from every variant (a JSON-shape change every deployed client sees), or keep
+  it broken. All three accepted the positional msgpack encoding as fixed.
+  `rmp_serde::to_vec_named` is a fourth: it encodes structs as maps, fixing
+  the defect in one line with no JSON change, no API removal and no compat
+  event. **At Stage 4, state the assumption every listed option shares and
+  spend ten minutes attacking it before picking one.**
+
 ## Additional Documentation
 
 - `docs/SECURE_DEFAULTS.md` — secure-by-default pattern catalog (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + how to make a new feature secure-by-default
