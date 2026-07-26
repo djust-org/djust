@@ -166,18 +166,36 @@ class FormMixin:
             return self.form_class(**kwargs)
 
     @event_handler
-    def validate_field(self, field_name: str = "", value: Any = None, **kwargs: Any) -> None:
+    def validate_field(
+        self, field: str = "", field_name: str = "", value: Any = None, **kwargs: Any
+    ) -> None:
         """
         Validate a single field in real-time.
 
-        This is called when a field changes (dj-change event).
+        This is called when a field changes (dj-change / dj-input event).
+
+        The client sends the field name under the key ``field``
+        (``09-event-binding.js`` at its three send sites, and
+        ``20-model-binding.js`` for ``dj-model``), because djust maps
+        ``data-*`` attributes to handler parameters. ``field_name`` is
+        accepted for backwards compatibility and is what this signature used
+        to take EXCLUSIVELY — which meant the client's payload matched nothing,
+        ``**kwargs`` swallowed it instead of raising ``TypeError``, and the
+        handler ran on every keystroke doing nothing at all (#2137). No error,
+        no warning; the form looked live and was inert.
+
+        ``WizardMixin.validate_field`` already had this coalesce; this is the
+        same shape, applied to the two implementations that did not (#1646).
 
         Args:
-            field_name: Name of the field to validate
+            field: Name of the field to validate — what the client sends
+            field_name: Legacy alias for ``field``
             value: Current field value
         """
-        if not field_name:
+        name = field or field_name
+        if not name:
             return
+        field_name = name
 
         # Ensure form state is initialized (defensive check)
         if not hasattr(self, "form_data"):
@@ -201,13 +219,19 @@ class FormMixin:
         # Validate the specific field
         try:
             # Get the field
-            field = form.fields.get(field_name)
-            if field:
+            # `form_field`, not `field`: `field` is now a PARAMETER of this
+            # method (the key the client sends), and rebinding it here shadowed
+            # it — mypy caught it as `"str" has no attribute "clean"`. Nothing
+            # downstream read the parameter, so it was latent rather than
+            # broken, but a later edit that did would have got a form field
+            # where it expected a name.
+            form_field = form.fields.get(field_name)
+            if form_field:
                 # Clean the value
-                cleaned_value = field.clean(value)
+                cleaned_value = form_field.clean(value)
 
                 # Run field-specific validators
-                field.run_validators(cleaned_value)
+                form_field.run_validators(cleaned_value)
 
                 # Set up cleaned_data for custom clean methods
                 if not hasattr(form, "cleaned_data"):
