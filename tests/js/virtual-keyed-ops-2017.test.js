@@ -368,13 +368,34 @@ describe('#2017 iteration 2: applying keyed splice ops', () => {
         const textNode = dom.window.document.createTextNode('not an element');
 
         // Bypass the patcher: put a non-element in the pool, which renderFixed
-        // throws on (it sets .style.height on every item).
+        // throws on (it sets `.style.height` on every item — 29-virtual-list.js
+        // `renderFixed`). That coupling is the one brittle part of this test:
+        // if that line is ever made defensive, the `toThrow()` below fails for
+        // a reason unrelated to the `finally` it is pinning. If that happens,
+        // inject a deterministic throw rather than deleting the test.
         dom.window.djust._virtualKeyedOp(el, { type: 'VirtualInsert', key: 't', before_key: null }, textNode);
         expect(() => dom.window.djust._flushVirtualKeyedOps()).toThrow();
 
         // The failed container is no longer dirty, so a subsequent flush is a
         // no-op rather than a repeat of the same throw.
         expect(dom.window.djust._flushVirtualKeyedOps()).toBe(0);
+    });
+
+    it('names the missing key when an anchor is not in the pool', async () => {
+        // The anchor-miss log is the only signal that the pool has drifted
+        // from the server's model, so it needs a pin like anything else —
+        // gating it off previously failed nothing.
+        const dom = createEnv(2);
+        const logs = [];
+        dom.window.console.log = (...a) => logs.push(a.join(' '));
+        dom.window.djustDebug = true;
+        dom.window.eval('globalThis.djustDebug = true;');
+
+        await apply(dom, [insert('new', 'GHOST')]);
+
+        expect(logs.join(' ')).toMatch(/GHOST/);
+        // Still appends — the recovery is right, it just says so now.
+        expect(poolKeys(dom)).toEqual(['k0', 'k1', 'new']);
     });
 
     it('does not stamp the built node onto the patch object', async () => {
