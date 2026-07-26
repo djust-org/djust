@@ -128,6 +128,23 @@ def test_every_validate_field_accepts_the_client_key():
         )
 
 
+def _make_admin_view():
+    from djust.admin_ext.forms import AdminFormMixin
+
+    class _V(AdminFormMixin):
+        form_class = _SignupForm
+
+        def __init__(self):
+            self.form_data = {}
+            self.field_errors = {}
+            self._model_instance = None
+
+        def _create_form(self, data=None):
+            return _SignupForm(data) if data else _SignupForm()
+
+    return _V()
+
+
 def test_admin_form_mixin_validates_via_the_client_key():
     # AdminFormMixin had ZERO behavioural coverage anywhere in the repo — its
     # only pin was a source-grep for the literal `field or field_name`, which
@@ -136,20 +153,7 @@ def test_admin_form_mixin_validates_via_the_client_key():
     # to a ternary failed. It also would have blocked the obvious future
     # improvement — extracting the coalesce into one shared helper, which is
     # the #1646 cure this fix's own rationale praises.
-    from djust.admin_ext.forms import AdminFormMixin
-
-    class _AdminView(AdminFormMixin):
-        form_class = _SignupForm
-
-        def __init__(self):
-            self.form_data = {}
-            self.field_errors = {}
-            self._model_instance = None
-
-        def _create_form(self, data=None):
-            return _SignupForm(data) if data else _SignupForm()
-
-    v = _AdminView()
+    v = _make_admin_view()
     v.validate_field(field="email", value="not-an-email")
 
     assert v.form_data == {"email": "not-an-email"}
@@ -157,20 +161,7 @@ def test_admin_form_mixin_validates_via_the_client_key():
 
 
 def test_admin_form_mixin_still_accepts_the_legacy_key():
-    from djust.admin_ext.forms import AdminFormMixin
-
-    class _AdminView(AdminFormMixin):
-        form_class = _SignupForm
-
-        def __init__(self):
-            self.form_data = {}
-            self.field_errors = {}
-            self._model_instance = None
-
-        def _create_form(self, data=None):
-            return _SignupForm(data) if data else _SignupForm()
-
-    v = _AdminView()
+    v = _make_admin_view()
     v.validate_field(field_name="email", value="user@example.com")
 
     assert v.form_data == {"email": "user@example.com"}
@@ -184,7 +175,15 @@ def test_the_admin_adapter_positional_shape_keeps_the_real_value():
     # is what makes the junk land in `field_name` instead of overwriting the
     # value — which is what it did before this change, so the admin validated
     # the string "value" on every keystroke.
-    v = _View()
+    #
+    # Asserted against ADMIN, not FormMixin. Those adapters are reached from
+    # `admin_ext/views.py:531` (`ModelDetailView(AdminBaseMixin,
+    # AdminFormMixin, LiveView)`) via `as_live_field`, and
+    # `AdminFormMixin.validate_field` is a full reimplementation rather than a
+    # `super()` call — so a FormMixin instance here would pass without
+    # exercising the class that actually serves the 8 sites. This test IS the
+    # evidence for keeping `field` first, so it has to bind to the right one.
+    v = _make_admin_view()
 
     v.validate_field("email", "value", value="user@example.com")
 
