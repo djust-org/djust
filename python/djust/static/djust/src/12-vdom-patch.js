@@ -2153,26 +2153,38 @@ function applySinglePatch(patch, rootEl = null) {
                 // collection lives in the list's item pool, which is where
                 // these have to land.
                 if (node.nodeType !== 1) {
-                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', String(patch.type).slice(0, 50), node.nodeType);
                     return false;
                 }
                 if (typeof window.djust._virtualKeyedOp !== 'function') {
                     console.warn('[LiveView] %s received but the virtual-list module is absent', String(patch.type).slice(0, 50));
                     return false;
                 }
-                const op = patch;
+                // The node is passed alongside the patch rather than stamped
+                // ONTO it: patch arrays are stored in the @cache LRU and
+                // replayed, so stamping would pin a detached DOM subtree for
+                // the entry's lifetime.
+                let insertNode = null;
                 if (patch.type === 'VirtualInsert') {
                     // Materialise the row here rather than in the pool module:
                     // creating nodes is the patcher's job, and the pool stores
                     // nodes, not descriptors.
                     const created = createNodeFromVNode(patch.node, isInSvgContext(node));
-                    if (!created) {
-                        console.warn('[LiveView] VirtualInsert could not build a node for key %s', String(patch.key).slice(0, 80));
+                    // nodeType, not just truthiness: the pool's renderer sets
+                    // `.style.height` on every item, so a text or comment node
+                    // makes it throw — and that throw escapes the `finally`
+                    // below, so applyPatches REJECTS instead of returning
+                    // false, and DIRTY is never cleared, stranding every other
+                    // list in the batch. Unreachable from the server today
+                    // (the differ refuses unkeyed children), so this is
+                    // defence in depth.
+                    if (!created || created.nodeType !== 1) {
+                        console.warn('[LiveView] VirtualInsert could not build an element for key %s', String(patch.key).slice(0, 80));
                         return false;
                     }
-                    op.__node = created;
+                    insertNode = created;
                 }
-                if (!window.djust._virtualKeyedOp(node, op)) {
+                if (!window.djust._virtualKeyedOp(node, patch, insertNode)) {
                     // Not an initialised virtual list. The server only emits
                     // these for a [dj-virtual] parent, so this means the client
                     // has not mounted the list yet — dropping the op silently

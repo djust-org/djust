@@ -290,11 +290,103 @@ describe('#2017 iteration 2: applying keyed splice ops', () => {
     it('leaves an ordinary keyed list untouched', async () => {
         // Regression guard: the vast majority of lists are not virtualised and
         // must keep using the index-addressed child ops.
-        const dom = createEnv(4);
-        const before = poolKeys(dom);
+        //
+        // The first version of this asserted that a SetText left `poolKeys`
+        // unchanged — which NO SetText can ever change, since the pool holds
+        // node references. It survived all nine gate-offs, and worse, the
+        // patch it fired resolved to the virtualization SHELL and wiped the
+        // entire rendered window (4 children -> 0) while the assertion passed.
+        // A test that is green while destroying the thing it guards.
+        const dom = new JSDOM(
+            '<!DOCTYPE html><html><body><div dj-root dj-view="app.V">' +
+                '<ul id="plain" dj-id="9"><li data-key="a">a</li><li data-key="b">b</li></ul>' +
+                '</div></body></html>',
+            { runScripts: 'dangerously', url: 'http://localhost/' }
+        );
+        dom.window.CSS = { escape: (v) => String(v) };
+        dom.window.console = {
+            log: () => {},
+            warn: () => {},
+            error: () => {},
+            groupCollapsed: () => {},
+            groupEnd: () => {},
+        };
+        dom.window.eval(`
+            window.WebSocket = class { constructor(){this.readyState=0;} send(){} close(){} };
+            window.DJUST_USE_WEBSOCKET = false; window.location.reload = function(){};
+        `);
+        dom.window.eval(clientCode);
+        dom.window.djust.initVirtualLists();
 
-        await apply(dom, [{ type: 'SetText', path: [0, 0], d: null, text: 'changed' }]);
+        const list = dom.window.document.getElementById('plain');
+        const ok = await dom.window.djust.applyPatches(
+            [{ type: 'SetText', path: [0, 0], d: null, text: 'changed' }],
+            dom.window.document.querySelector('[dj-root]')
+        );
 
-        expect(poolKeys(dom)).toEqual(before);
+        expect(ok).toBe(true);
+        // The index-addressed op did its ordinary job: two children, first
+        // one's text replaced. Nothing about the keyed-op path interferes.
+        expect(list.children.length).toBe(2);
+        expect(list.children[0].textContent).toBe('changed');
+        expect(list.children[1].textContent).toBe('b');
+    });
+
+    it('a VirtualInsert carrying a non-element node is refused, not applied', async () => {
+        // Unreachable from the server (the differ refuses unkeyed children),
+        // but the pool's renderer sets .style.height on every item, so a text
+        // node throws — and that throw escapes the flush's finally, so
+        // applyPatches REJECTS instead of returning false and every other
+        // dirty list in the batch is stranded.
+        const dom = createEnv(3);
+        const bad = {
+            type: 'VirtualInsert',
+            path: [],
+            d: '7',
+            key: 'txt',
+            node: { tag: '#text', attrs: {}, children: [], text: 'oops', key: 'txt' },
+            before_key: null,
+        };
+
+        const ok = await apply(dom, [bad]);
+
+        expect(ok).toBe(false);
+        expect(poolKeys(dom)).toEqual(['k0', 'k1', 'k2']);
+    });
+
+    it('a throwing render still clears DIRTY, so the next batch is not stranded', async () => {
+        // The patcher's nodeType guard means nothing reaches the pool that can
+        // make render() throw — so the `finally` around DIRTY.clear() is
+        // unreachable through applyPatches, and a gate-off of it fails
+        // nothing. Reaching the pool seam directly is the only way to pin it.
+        //
+        // What it protects: a render that throws must not leave the container
+        // in DIRTY, because the entry is then retained AND every later batch
+        // re-renders a list that already failed.
+        const dom = createEnv(3);
+        const el = dom.window.document.getElementById('feed');
+        const textNode = dom.window.document.createTextNode('not an element');
+
+        // Bypass the patcher: put a non-element in the pool, which renderFixed
+        // throws on (it sets .style.height on every item).
+        dom.window.djust._virtualKeyedOp(el, { type: 'VirtualInsert', key: 't', before_key: null }, textNode);
+        expect(() => dom.window.djust._flushVirtualKeyedOps()).toThrow();
+
+        // The failed container is no longer dirty, so a subsequent flush is a
+        // no-op rather than a repeat of the same throw.
+        expect(dom.window.djust._flushVirtualKeyedOps()).toBe(0);
+    });
+
+    it('does not stamp the built node onto the patch object', async () => {
+        // Patch arrays are stored in the @cache LRU and replayed, so stamping
+        // the node onto the patch pins a detached DOM subtree for the entry's
+        // lifetime.
+        const dom = createEnv(2);
+        const patch = insert('new', null);
+
+        await apply(dom, [patch]);
+
+        expect(Object.keys(patch)).not.toContain('__node');
+        expect(poolKeys(dom)).toEqual(['k0', 'k1', 'new']);
     });
 });

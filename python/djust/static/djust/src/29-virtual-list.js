@@ -854,7 +854,19 @@
     function insertionIndex(state, beforeKey) {
         if (beforeKey == null) return state.items.length;
         const at = indexOfKey(state, beforeKey);
-        return at === -1 ? state.items.length : at;
+        if (at === -1) {
+            // The differ emits in reverse new order precisely so the anchor is
+            // already placed, so a miss means the pool has DRIFTED from the
+            // server's model — a dropped patch, or a row removed by something
+            // other than these ops. Appending is the right recovery, but doing
+            // it silently hides the one observable signal that the two sides
+            // have diverged.
+            if (globalThis.djustDebug) {
+                console.log('[djust] dj-virtual: anchor %s not in the pool; appending at the tail (pool may have drifted from the server)', String(beforeKey).slice(0, 80));
+            }
+            return state.items.length;
+        }
+        return at;
     }
 
     /**
@@ -868,7 +880,7 @@
      * @returns {boolean} true if this container is a virtual list and the op
      *   was applied; false if the caller should fall back.
      */
-    function virtualKeyedOp(container, op) {
+    function virtualKeyedOp(container, op, insertNode) {
         const state = STATE.get(container);
         if (!state || !state.items) return false;
 
@@ -882,7 +894,7 @@
             const [node] = state.items.splice(from, 1);
             state.items.splice(insertionIndex(state, op.before_key), 0, node);
         } else if (op.type === 'VirtualInsert') {
-            if (!op.__node) return false; // caller must materialise the node
+            if (!insertNode) return false; // caller must materialise the node
             const existing = indexOfKey(state, op.key);
             if (existing !== -1) {
                 // Idempotent: re-inserting a key already present replaces it
@@ -890,7 +902,7 @@
                 // later op addressing it ambiguous.
                 state.items.splice(existing, 1);
             }
-            state.items.splice(insertionIndex(state, op.before_key), 0, op.__node);
+            state.items.splice(insertionIndex(state, op.before_key), 0, insertNode);
         } else {
             return false;
         }
@@ -912,11 +924,16 @@
     function flushKeyedOps() {
         if (DIRTY.size === 0) return 0;
         const touched = DIRTY.size;
-        DIRTY.forEach(function (container) {
-            const state = STATE.get(container);
-            if (state && state.items) render(state);
-        });
-        DIRTY.clear();
+        try {
+            DIRTY.forEach(function (container) {
+                const state = STATE.get(container);
+                if (state && state.items) render(state);
+            });
+        } finally {
+            // Cleared even if a render throws: leaving entries behind strands
+            // every other list in the batch AND retains the containers.
+            DIRTY.clear();
+        }
         return touched;
     }
 

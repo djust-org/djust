@@ -8013,26 +8013,38 @@ function applySinglePatch(patch, rootEl = null) {
                 // collection lives in the list's item pool, which is where
                 // these have to land.
                 if (node.nodeType !== 1) {
-                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', String(patch.type).slice(0, 50), node.nodeType);
                     return false;
                 }
                 if (typeof window.djust._virtualKeyedOp !== 'function') {
                     console.warn('[LiveView] %s received but the virtual-list module is absent', String(patch.type).slice(0, 50));
                     return false;
                 }
-                const op = patch;
+                // The node is passed alongside the patch rather than stamped
+                // ONTO it: patch arrays are stored in the @cache LRU and
+                // replayed, so stamping would pin a detached DOM subtree for
+                // the entry's lifetime.
+                let insertNode = null;
                 if (patch.type === 'VirtualInsert') {
                     // Materialise the row here rather than in the pool module:
                     // creating nodes is the patcher's job, and the pool stores
                     // nodes, not descriptors.
                     const created = createNodeFromVNode(patch.node, isInSvgContext(node));
-                    if (!created) {
-                        console.warn('[LiveView] VirtualInsert could not build a node for key %s', String(patch.key).slice(0, 80));
+                    // nodeType, not just truthiness: the pool's renderer sets
+                    // `.style.height` on every item, so a text or comment node
+                    // makes it throw — and that throw escapes the `finally`
+                    // below, so applyPatches REJECTS instead of returning
+                    // false, and DIRTY is never cleared, stranding every other
+                    // list in the batch. Unreachable from the server today
+                    // (the differ refuses unkeyed children), so this is
+                    // defence in depth.
+                    if (!created || created.nodeType !== 1) {
+                        console.warn('[LiveView] VirtualInsert could not build an element for key %s', String(patch.key).slice(0, 80));
                         return false;
                     }
-                    op.__node = created;
+                    insertNode = created;
                 }
-                if (!window.djust._virtualKeyedOp(node, op)) {
+                if (!window.djust._virtualKeyedOp(node, patch, insertNode)) {
                     // Not an initialised virtual list. The server only emits
                     // these for a [dj-virtual] parent, so this means the client
                     // has not mounted the list yet — dropping the op silently
@@ -13619,7 +13631,19 @@ window.djust.bindModelElements = bindModelElements;
     function insertionIndex(state, beforeKey) {
         if (beforeKey == null) return state.items.length;
         const at = indexOfKey(state, beforeKey);
-        return at === -1 ? state.items.length : at;
+        if (at === -1) {
+            // The differ emits in reverse new order precisely so the anchor is
+            // already placed, so a miss means the pool has DRIFTED from the
+            // server's model — a dropped patch, or a row removed by something
+            // other than these ops. Appending is the right recovery, but doing
+            // it silently hides the one observable signal that the two sides
+            // have diverged.
+            if (globalThis.djustDebug) {
+                console.log('[djust] dj-virtual: anchor %s not in the pool; appending at the tail (pool may have drifted from the server)', String(beforeKey).slice(0, 80));
+            }
+            return state.items.length;
+        }
+        return at;
     }
 
     /**
@@ -13633,7 +13657,7 @@ window.djust.bindModelElements = bindModelElements;
      * @returns {boolean} true if this container is a virtual list and the op
      *   was applied; false if the caller should fall back.
      */
-    function virtualKeyedOp(container, op) {
+    function virtualKeyedOp(container, op, insertNode) {
         const state = STATE.get(container);
         if (!state || !state.items) return false;
 
@@ -13647,7 +13671,7 @@ window.djust.bindModelElements = bindModelElements;
             const [node] = state.items.splice(from, 1);
             state.items.splice(insertionIndex(state, op.before_key), 0, node);
         } else if (op.type === 'VirtualInsert') {
-            if (!op.__node) return false; // caller must materialise the node
+            if (!insertNode) return false; // caller must materialise the node
             const existing = indexOfKey(state, op.key);
             if (existing !== -1) {
                 // Idempotent: re-inserting a key already present replaces it
@@ -13655,7 +13679,7 @@ window.djust.bindModelElements = bindModelElements;
                 // later op addressing it ambiguous.
                 state.items.splice(existing, 1);
             }
-            state.items.splice(insertionIndex(state, op.before_key), 0, op.__node);
+            state.items.splice(insertionIndex(state, op.before_key), 0, insertNode);
         } else {
             return false;
         }
@@ -13677,11 +13701,16 @@ window.djust.bindModelElements = bindModelElements;
     function flushKeyedOps() {
         if (DIRTY.size === 0) return 0;
         const touched = DIRTY.size;
-        DIRTY.forEach(function (container) {
-            const state = STATE.get(container);
-            if (state && state.items) render(state);
-        });
-        DIRTY.clear();
+        try {
+            DIRTY.forEach(function (container) {
+                const state = STATE.get(container);
+                if (state && state.items) render(state);
+            });
+        } finally {
+            // Cleared even if a render throws: leaving entries behind strands
+            // every other list in the batch AND retains the containers.
+            DIRTY.clear();
+        }
         return touched;
     }
 
