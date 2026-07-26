@@ -367,7 +367,9 @@ issue or be explicitly closed with a reason.
 | 325 | Makefile `test-rust`/`bench`/`clippy`/`test-full` share the #2072 `PYO3_PYTHON=$(PYTHON)` pattern — same uv-standalone unembeddable fault | PR #2080 / v1.1.0-11 retro | #2082 | Closed | The #2080 fix scoped to the pre-push `cargo-test` hook per #1079; these Makefile targets have the identical failure on a uv-python-build-standalone venv. Route them through `scripts/embeddable-python.sh` too. RESOLVED in v1.1.0-12 (PR #2093); GitHub #2082 closed 2026-07-18. Status drift caught by the v1.1.0-13 retro Stage 5 — the row stayed Open for a milestone after the work shipped. |
 | 326 | One source of truth for the client-size figures — three copies describing two artifacts, only one checked | Retro v1.1.0-13 / PR #2134 | #2138 | Open | README pair is enforced against a ±3 KB band; the CLAUDE.md pair was unchecked and had drifted >2× (~87 KB claimed vs ~184 KB actual). Prefer generating the figures at build time over adding a second checker. Note `client.min.js.gz` is gitignored, so the check depends on a local build. |
 | 327 | Detect a red `main` proactively instead of discovering it via a failed push | Retro v1.1.0-13 / PR #2134 | #2139 | Open | Three failing tests on `main` made the pre-push hook reject every branch, including ones unrelated to the failure; took three failed pushes to diagnose. Same argument as #2124 — a persistently red suite trains people to read red as noise. Wants a scheduled main-suite check AND a hook that distinguishes pre-existing merge-base failures from branch-caused ones. |
-| 328 | Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group | Retro v1.1.0-13 (Stage 1) | #2140 | Open | `RETRO.md`'s latest entry before v1.1.0-13 was v1.1.0-11; ~32 PRs have no milestone entry and #2094–#2128 were never bucketed in ROADMAP. Per-PR retros exist as PR comments so the material is recoverable — what was lost is the synthesis and the tracker rows those retros would have produced. |
+| 328 | Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group | Retro v1.1.0-13 (Stage 1) | #2140 | Closed | `RETRO.md`'s latest entry before v1.1.0-13 was v1.1.0-11; ~32 PRs have no milestone entry and #2094–#2128 were never bucketed in ROADMAP. Per-PR retros exist as PR comments so the material is recoverable — what was lost is the synthesis and the tracker rows those retros would have produced. RESOLVED 2026-07-26: both milestone entries written (v1.1.0-12, v1.1.0-12b); 3 missing per-PR retros backfilled (#2115, #2117 full form; #2125 minimal Dependabot form per v1.0.0rc6 canon); 2 new tracker rows filed (#329/#330). |
+| 329 | Chain-shaped drains need an estimation convention — a chain discovered one link at a time cannot be estimated up front | Retro v1.1.0-12b | #2142 | Open | Two chains in #2094–#2128 (scoped-attr #2107→#2109→#2111, streams #2113→#2112→#2116→#2119) plus #2129's five rounds in v1.1.0-13. Each link was a real separately-reachable bug, so batching would have merged incomplete diagnoses — the cost today is narrative (chains read as slipped estimates), not correctness. |
+| 330 | Close Action Tracker rows automatically when their GitHub issue closes | Retro v1.1.0-12 | #2143 | Open | Row 325 read Open for a full milestone after GitHub #2082 closed (2026-07-18, PR #2093); caught by chance in the v1.1.0-13 Stage 5 sweep. 69 rows currently read Open and an unknown fraction are stale, so the number is quoted in retros as a health signal and is not trustworthy. Report-only is probably right — the closing REASON matters more than the flag, and a bot cannot write it. |
 
 ## v1.1.0-13 — post-12 drain: stream identity, wire format, dj-virtual client applier (PRs #2131, #2132, #2134, #2135)
 
@@ -462,6 +464,69 @@ The three failing tests blocked every contributor's push, not just mine, and not
 - [ ] Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group — Action Tracker #328 (GitHub #2140)
 - [ ] `#2136` — index-addressed content patches for `[dj-virtual]` rows; blocks ADR-026 iteration 3
 - [ ] `#2017` iteration 3 — flip the flag; soak-gated per #1122 and now also blocked by #2136
+
+## v1.1.0-12b — unbucketed: dependency sweep + scoped-attr chain + streams/dj-virtual chain (PRs #2094–#2128)
+
+**Date**: 2026-07-19 → 2026-07-25 (backfilled 2026-07-26)
+**Scope**: 26 PRs that were never assigned a ROADMAP bucket and never retro'd. Backfilled under Action Tracker #328 (GitHub #2140), which the v1.1.0-13 retro filed after `RETRO.md` was found to jump v1.1.0-11 → v1.1.0-13.
+**Tests at close**: ~9948 Python + 1899 JS
+
+### What We Learned
+
+**1. Two chains, and each link was surfaced by the previous link's review.**
+The scoped-attr chain (#2107 → #2109 → #2111) and the streams chain (#2113/#2115 → #2112/#2117 → #2116/#2118 → #2119/#2122) were not planned as sequences. Each PR's adversarial review found the *next* defect: #2107 scanned the root element but not every root; #2109 refreshed registry entries on value change but the sweep and scan scopes still disagreed; #2111 closed it. The streams chain ran the same way, ending at #2122's aliasing fix.
+
+This is the drain working as intended, but it has a cost worth naming: **a chain discovered one link at a time cannot be estimated up front**, and each link shipped as its own PR because each was a real, separately-reachable bug. The alternative — batching them — would have merged four incomplete diagnoses.
+
+**Action taken**: Open — tracked in Action Tracker #329 (GitHub #2142).
+
+**2. A dependency sweep is not free even when every bump is green.**
+Ten of the 26 PRs (#2095, #2098–#2104, #2106, #2125) were dependency or security bumps. #2125 was *blocking* — the pre-push `cargo audit` hook rejected an unrelated feature branch until it landed. That is the same class as #2133 (a red `main` blocking every push): **a repo-wide gate failing for a repo-wide reason stops everyone**, and nothing distinguishes it from "your branch is broken."
+
+**Action taken**: Closed — the general case is Action Tracker #327 (GitHub #2139), filed by the v1.1.0-13 retro.
+
+**3. `#1543` (single-variant coverage) hit three times in one week.**
+#2118's `Stream.delete` fix covered dict items but its single-item test could not see the `id=None` collision; #2122's context capture aliased the live list; #2115's guard over-suppressed because it was written against one failure mode. Each was found by review, none by the suite.
+
+**Action taken**: Closed — canonicalized in the v1.1.0-13 CLAUDE.md section, rule 3 (mechanisms that shadow each other) and reinforced by #1543 itself.
+
+### Insights
+
+- **17 of 20 sampled PRs had per-PR retros**; the three that did not (#2115, #2117, #2125) were backfilled during this reconstruction. So the per-PR discipline held even while the milestone-level synthesis lapsed — the failure was one level up.
+- The dj-chart adapter (#2105) and the surface manifest (#2096) were the only two PRs in the group that were neither a bug fix nor a dependency bump.
+- Reconstructing this from PR titles and comments took minutes, not hours, **because** the per-PR retros existed. That is the argument for the per-PR gate.
+
+### Open Items
+
+- [ ] Chain-shaped drains need an estimation convention — Action Tracker #329 (GitHub #2142)
+
+## v1.1.0-12 — post-11 follow-up drain: JS test flake + Makefile PYO3_PYTHON parity (PRs #2092, #2093)
+
+**Date**: 2026-07-18 (backfilled 2026-07-26)
+**Scope**: Two scope-disciplined follow-ups filed during the v1.1.0-11 drain, both verbatim mirrors of an existing fix (#1077). Backfilled under Action Tracker #328 (GitHub #2140).
+**Tests at close**: ~9801 Python + 1821 JS
+
+### What We Learned
+
+**1. Both PRs landed clean on first review — because both were lifts, not designs.**
+#2092 converted a flaky `dj_transition` case to the #1839 controllable-rAF stub; #2093 routed the Makefile's six `PYO3_PYTHON` sites through `scripts/embeddable-python.sh`, the #2080 pre-push-hook fix. Neither invented anything. Zero 🔴, zero 🟡, no follow-ups filed.
+
+This is the #1077 pattern (lift the reference implementation first, generalize second) producing its expected result, and it is worth recording as a *positive* control: when a drain item is a verbatim mirror of a shipped fix, one review round is the realistic expectation, and anything more suggests the mirror was not actually verbatim.
+
+**Action taken**: Closed — #1077 is already canon; this milestone is the confirming instance.
+
+**2. The Makefile item sat Open in the tracker for a full milestone after it shipped.**
+Row 325 said `Open` with GitHub #2082, which was closed 2026-07-18 by PR #2093. The v1.1.0-13 retro's Stage 5 sweep caught it. Nothing closes a tracker row when its issue closes.
+
+**Action taken**: Open — tracked in Action Tracker #330 (GitHub #2143).
+
+### Insights
+
+- A two-PR milestone with zero findings is not a milestone that needed no retro — it is the one that most cheaply establishes what "clean" looks like, which is what makes the four-🔴 milestones legible by contrast.
+
+### Open Items
+
+- [ ] Close tracker rows automatically when their GitHub issue closes — Action Tracker #330 (GitHub #2143)
 
 ## v1.1.0-11 — hygiene drain: test-infra trust + build churn + docs + replay viewer (PRs #2076-#2080, #2083)
 
