@@ -189,3 +189,123 @@ def test_a_matching_dom_id_always_means_the_item_is_gone(items, dom_id, arg):
             f"the delete op emitted {deleted[0]!r}, which matches an inserted row, "
             f"but the item survived on the server: {_items(v)!r}"
         )
+
+
+# --- the OTHER failure direction: a non-target must SURVIVE ---------------
+#
+# The first version of this fix had none of these, and shipped silent
+# destructive over-deletion because of it. Every test above asks "did the
+# target get deleted?"; deletion has two failure directions and a suite that
+# exercises one of them is the #1543 shape. Deletion is irreversible, so
+# over-deleting is the worse direction.
+
+
+def test_a_value_that_merely_stringifies_alike_is_not_the_same_row():
+    # The first version compared the FORMATTED dom_id (f"{name}-{value}"), so
+    # any two values with equal str() collapsed: deleting the row keyed 5 also
+    # destroyed the row keyed "5".
+    v = _View()
+    v.stream("rows", [{"id": 5, "t": "a"}, {"id": "5", "t": "b"}], dom_id=lambda m: m["id"])
+
+    v.stream_delete("rows", {"id": 5, "t": "a"})
+
+    assert _items(v) == [{"id": "5", "t": "b"}], "the str-alike row must survive"
+
+
+def test_a_uuid_does_not_destroy_its_own_string_form():
+    # The realistic version of the above — a UUIDField pk alongside the string
+    # that arrives from an event-handler param is ordinary Django.
+    import uuid
+
+    u = uuid.uuid4()
+    v = _View()
+    v.stream("rows", [{"id": u, "t": "a"}, {"id": str(u), "t": "b"}], dom_id=lambda m: m["id"])
+
+    v.stream_delete("rows", {"id": u, "t": "a"})
+
+    assert _items(v) == [{"id": str(u), "t": "b"}]
+
+
+def test_a_bare_id_is_not_compared_against_factory_output():
+    # A bare id never goes through the factory, so comparing the factory's
+    # output against it is comparing different things. Here row id=9 carries
+    # the factory value 5, which must not be destroyed by `delete(5)`.
+    v = _View()
+    v.stream("rows", [{"id": 5, "g": "g1"}, {"id": 9, "g": 5}], dom_id=lambda m: m["g"])
+
+    v.stream_delete("rows", 5)
+
+    assert _items(v) == [{"id": 9, "g": 5}], "the row whose factory value is 5 must survive"
+
+
+def test_deleting_one_row_leaves_every_other_row():
+    # The blunt version of the invariant, over a stream big enough that an
+    # over-match would be obvious.
+    v = _View()
+    rows = [{"slug": f"s{i}"} for i in range(20)]
+    v.stream("rows", rows, dom_id=lambda m: m["slug"])
+
+    v.stream_delete("rows", {"slug": "s7"})
+
+    assert len(_items(v)) == 19
+    assert {"slug": "s7"} not in _items(v)
+
+
+def test_scanning_an_item_the_factory_rejects_stays_silent(caplog):
+    # The scan runs the factory over EVERY item. Warning there emits one record
+    # per unmatched row — a single delete on a stream with many such rows
+    # produced thousands of traceback-bearing warnings inside an event handler.
+    # The caller's own rejected argument is still reported, once, by dom_id_for.
+    import logging
+
+    v = _View()
+    v.stream("rows", [{"id": 1, "slug": "a"}], dom_id=lambda m: m["slug"])
+    v._streams["rows"].items.extend({"id": i} for i in range(2, 60))  # no "slug"
+
+    with caplog.at_level(logging.WARNING, logger="djust"):
+        v.stream_delete("rows", {"id": 1, "slug": "a"})
+
+    assert caplog.text == "", (
+        "scanning factory-rejecting items must not warn per item; got:\n" + caplog.text
+    )
+    assert len(_items(v)) == 58
+
+
+def test_the_target_key_is_computed_once_not_once_per_item():
+    # It does not depend on the item being scanned. Re-deriving it inside the
+    # comprehension made one delete call the user's factory 2n+1 times.
+    calls = []
+
+    def factory(m):
+        calls.append(m)
+        return m["g"]
+
+    v = _View()
+    v.stream("rows", [{"id": i, "g": f"g{i}"} for i in range(50)], dom_id=factory)
+    calls.clear()
+
+    v.stream_delete("rows", {"id": 25, "g": "g25"})
+
+    assert len(calls) <= 51, (
+        f"expected at most one factory call per item plus one for the argument; got {len(calls)}"
+    )
+
+
+def test_a_bare_id_is_not_compared_against_a_TOLERANT_factory_either():
+    # The sibling above only fails the gate because `m["g"]` RAISES on an int,
+    # so the fallback path hides the missing guard. A defensive user factory
+    # that accepts both shapes exposes it: without the _looks_like_item gate,
+    # the argument 5 produces the factory key 5 and destroys the row whose
+    # factory value is 5. Gate-off proved the sibling could not see this.
+    def tolerant(m):
+        return m["g"] if isinstance(m, dict) else m
+
+    v = _View()
+    v.stream("rows", [{"id": 5, "g": "g1"}, {"id": 9, "g": 5}], dom_id=tolerant)
+
+    v.stream_delete("rows", 5)
+
+    assert _items(v) == [{"id": 9, "g": 5}], (
+        "a bare id must be matched by identity only — the factory was never "
+        "applied to it, so comparing its output against one compares different things"
+    )

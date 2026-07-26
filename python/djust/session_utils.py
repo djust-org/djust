@@ -162,6 +162,10 @@ def _setup_autoreload_cache_clear() -> None:
 _setup_autoreload_cache_clear()
 
 
+_NO_FACTORY_KEY = object()
+"""Sentinel: this delete cannot be matched by the custom factory (#2129)."""
+
+
 class Stream:
     """
     A memory-efficient collection for LiveView.
@@ -391,23 +395,62 @@ class Stream:
         # still pass a BARE ID to a custom-factory stream, and the factory
         # cannot be applied to that. Switching outright would have made those
         # deletes stop working — a regression traded for a fix.
+        target_key = self._factory_key_for_argument(item_or_id)
         self.items = [
-            item for item in self.items if not self._is_delete_target(item, item_or_id, item_id)
+            item for item in self.items if not self._is_delete_target(item, item_id, target_key)
         ]
 
-    def _is_delete_target(self, item: Any, item_or_id: Any, item_id: Any) -> bool:
-        """Whether ``item`` is the row that ``item_or_id`` refers to."""
+    def _factory_key_for_argument(self, item_or_id: Any) -> Any:
+        """The custom factory's key for a delete ARGUMENT, or ``_NO_FACTORY_KEY``.
+
+        Computed ONCE per delete rather than per item — it does not depend on
+        the item being scanned, and re-deriving it inside the comprehension
+        made one delete on an n-item stream call the user's factory 2n+1 times.
+
+        Returns the sentinel — meaning "compare by identity only" — when the
+        stream has no custom factory, when the argument is a bare id (the
+        factory cannot be applied to an id, so comparing its output against one
+        would be comparing different things), or when the factory rejects the
+        argument.
+        """
+        if self.dom_id_fn is Stream.default_dom_id:
+            return _NO_FACTORY_KEY
+        if not self._looks_like_item(item_or_id):
+            return _NO_FACTORY_KEY
+        try:
+            return self.dom_id_fn(item_or_id)
+        except Exception:
+            # Already reported by dom_id_for on the op path; a second warning
+            # here would double-report the same argument.
+            logger.debug(
+                "Stream %s: custom dom_id factory rejected the delete argument; "
+                "falling back to identity matching",
+                self.name,
+            )
+            return _NO_FACTORY_KEY
+
+    def _is_delete_target(self, item: Any, item_id: Any, target_key: Any) -> bool:
+        """Whether ``item`` is the row the delete argument refers to."""
         if self._identity(item) == item_id:
             return True
-        if self.dom_id_fn is Stream.default_dom_id:
+        if target_key is _NO_FACTORY_KEY:
             return False
-        # Custom factory: it defines what a row IS, so it also defines when two
-        # references are the same row. Lenient on both sides — an item the
-        # factory rejects simply will not match, which is the same outcome as
-        # not matching for any other reason.
-        return self.dom_id_for(item, allow_factory_fallback=True) == self.dom_id_for(
-            item_or_id, allow_factory_fallback=True
-        )
+        try:
+            key = self.dom_id_fn(item)
+        except Exception:
+            # Scanning, not resolving the caller's argument: an item this
+            # factory cannot process simply is not the target. Deliberately
+            # silent — warning here emits one record per unmatched row, so a
+            # single delete on a stream with many such rows produced thousands
+            # of traceback-bearing warnings inside an event handler.
+            return False
+        # Compare the factory's RAW output, with types, NOT the formatted
+        # dom_id string. Comparing ``f"{name}-{value}"`` collapsed values whose
+        # ``str()`` happens to match — so deleting the row keyed ``5`` also
+        # destroyed the row keyed ``"5"``, and a UUID destroyed its own string
+        # form. Deletion is irreversible and the loss was silent; under-matching
+        # is the safe direction here.
+        return type(key) is type(target_key) and key == target_key
 
     def clear(self) -> None:
         """Clear all items."""
