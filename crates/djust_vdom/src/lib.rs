@@ -681,10 +681,11 @@ pub enum Patch {
     // does NOT force a map encoding under msgpack: `rmp_serde` encodes an
     // internally-tagged enum as a POSITIONAL array with the tag in slot 0.
     // Measured: `SetText { d: None }` -> first byte 0x93 (FIXARRAY), and it
-    // fails its own round-trip with "invalid length 2, expected 3 elements"
+    // fails its own round-trip with "invalid length 2, expected struct variant
+    // Patch::SetText with 3 elements"
     // because `skip_serializing_if` dropped the interior `d` — the exact
     // #1541 shape. That breakage is PRE-EXISTING and affects every variant,
-    // not just these; `render_binary_diff` (djust_live/src/lib.rs:1028) is the
+    // not just these; `render_binary_diff` (djust_live/src/lib.rs, the only
     // only msgpack producer and has no non-test consumer today, which is why
     // it has gone unnoticed. Tracked separately rather than widened into this
     // change (#1079); pinned as-is in `wire_protocol_snapshot.rs` so the
