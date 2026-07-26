@@ -565,3 +565,29 @@ def test_an_ambiguous_dom_id_declines_and_says_so(caplog):
     assert len(_items(v)) == 2, "an ambiguous delete must remove nothing"
     assert "share the dom_id" in caplog.text
     assert "rows" in caplog.text
+
+
+def test_a_factory_that_appends_during_the_scan_terminates():
+    # New surface: calling the user's factory during the scan is what this
+    # change introduced (main never called it in delete() at all). Iterating
+    # `self.items` live meant a factory with an appending side effect grew the
+    # list it was walking and never finished — and a hang inside an event
+    # handler is worse than an exception, because nothing times it out and the
+    # connection simply stops responding.
+    #
+    # The precondition is absurd — such a factory misbehaves at insert too —
+    # but the fix is a shallow copy, so there is no reason to leave it.
+    v = _View()
+
+    def appending(m):
+        stream = v._streams.get("rows")
+        if stream is not None:
+            stream.items.append({"slug": "spawned"})
+        return m.get("slug") if isinstance(m, dict) else None
+
+    v.stream("rows", [{"slug": "a"}], dom_id=appending)
+
+    # Would not return at all before the snapshot.
+    v.stream_delete("rows", {"slug": "no-such-row"})
+
+    assert any(i.get("slug") == "a" for i in _items(v)), "the original row survives"

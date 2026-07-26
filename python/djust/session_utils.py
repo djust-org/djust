@@ -411,7 +411,13 @@ class Stream:
         survivors: list = []
         factory_hits: list = []
         identity_hit = False
-        for item in self.items:
+        # `list(...)`, not `self.items`: the loop calls the USER's factory per
+        # item, so a factory with a side effect that appends to this stream
+        # would iterate a list it is growing and never terminate. A hang inside
+        # an event handler is worse than an exception — nothing times it out,
+        # and the connection just stops responding. Snapshotting costs one
+        # shallow copy of a list of references.
+        for item in list(self.items):
             if self._identity(item) == item_id:
                 identity_hit = True
                 continue
