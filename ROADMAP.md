@@ -19,6 +19,41 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-14 — post-13 drain: form-validation wire contract + dj-virtual content ops + process debt (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-26) of everything except #1561 (priority:low iter C —
+multi-day Redis-store feature, held). Three of the five were filed BY the
+v1.1.0-13 drain's own retro; #2137 is a fresh external report against 1.1.0rc8.
+
+Shape note on #2017: draining #2136 UNBLOCKS iteration 3, but flipping
+`set_virtual_keyed_ops` changes VDOM behaviour for every `[dj-virtual]` user
+and #1122 exists for exactly that. Iteration 3 is taken only if #2136's fix
+plus real browser verification produces evidence worth flipping on — recorded
+here so the decision is visible either way.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | `FormMixin.validate_field` expects `field_name`, client sends `field` (#2137) | The framework's own signature diverges from its own wire contract, and `**kwargs` swallows the mismatch instead of raising — a user overriding the documented signature gets a handler that runs on every keystroke and never receives the field. No error, no warning; the form looks live and is inert. Reported against 1.1.0rc8. | v1.1.0 |
+| **P1** | `[dj-virtual]` content patches for surviving rows are index-addressed (#2136) | `reconcile_virtual_keyed` recurses into survivors with a child path built from the item's ABSOLUTE index, meaningless for a windowed container; the patch carries no dj-id so it resolves positionally. Measured: editing a row after a scroll silently rewrites a DIFFERENT row, `applyPatches` returns true, no warning. Blocks ADR-026 iteration 3. | v1.1.0 |
+| **P2** | One source of truth for the client-size figures (#2138) | Three copies describing two artifacts; only the README pair is checked, and the unchecked CLAUDE.md pair had drifted >2×. Prefer generating the figures at build time over adding a second checker. | v1.1.0 |
+| **P2** | Detect a red `main` proactively (#2139) | Three failing tests on `main` made the pre-push hook reject every branch, including ones unrelated to the failure; took three failed pushes to diagnose. Wants a scheduled main-suite check AND a hook that distinguishes pre-existing merge-base failures from branch-caused ones. | v1.1.0 |
+| **P2** | Backfill milestone retros for v1.1.0-12 and #2094–#2128 (#2140) | `RETRO.md` jumped v1.1.0-11 → v1.1.0-13; ~32 PRs have no milestone entry and #2094–#2128 were never bucketed. Per-PR retros exist as comments, so this is synthesis, not archaeology — what was lost is the Action Tracker rows. | v1.1.0 |
+
+**#2137 — validate_field wire-contract mismatch** — `python/djust/forms.py:169`
+takes `field_name`; `09-event-binding.js` sends `field` at three send sites
+(`:527`, `:977`, `:1774`) and `20-model-binding.js` documents the same `field`
+key for `dj-model`, so the CLIENT is consistent and the Python signature is the
+divergent one. No remap exists between them (grepped `forms.py`,
+`websocket.py`, `runtime.py`). The `**kwargs` in the signature is what turns a
+`TypeError` into silence.
+
+**#2136 — key-address the content ops** — ADR-026 Option A originally sketched
+an `Update(key, …)` op for exactly this; iterations 1 and 2 delivered the
+structural ops only. Two candidate fixes in the issue: key-address content
+patches too, or give the emitted patches a dj-id and extend the #2113 guard.
+Option 1 is the coherent one — it makes the whole `[dj-virtual]` patch surface
+key-addressed rather than half.
+
 ## v1.1.0-13 — post-12 drain: dj-virtual client applier + stream identity + wire-format decision (drain bucket → ships in 1.1.0)
 
 **COMPLETE 3/3 (2026-07-26)** ✅ — #2129 (PR #2131), #2130 (PR #2132), #2017
