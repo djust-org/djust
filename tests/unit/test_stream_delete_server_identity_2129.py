@@ -384,3 +384,102 @@ def test_a_bool_key_does_not_match_an_int_argument():
     v.stream_delete("rows", {"k": 1, "t": "b"})
 
     assert _items(v) == [{"k": True, "t": "a"}]
+
+
+# --- the class, not the spellings ----------------------------------------
+#
+# Three rounds of review found the same silent destructive over-deletion in
+# nine different factory return values. Value-by-value patching was not
+# converging, so the fix became an invariant: a delete op names ONE dom_id,
+# and a dom_id addresses at most one element, so the factory arm may remove at
+# most one row. Ambiguity means "cannot tell which row you meant" — fall back
+# to identity alone.
+
+
+class _Coded:
+    """A row that may or may not carry the attribute a factory reads."""
+
+    def __init__(self, pk, code=None):
+        self.pk = pk
+        self.id = pk
+        if code is not None:
+            self.code = code
+
+    def __repr__(self):
+        return f"_Coded({self.pk})"
+
+
+class _AlwaysEqual:
+    def __eq__(self, other):
+        return True
+
+    def __hash__(self):
+        return 0
+
+
+class _RaisesOnEqual:
+    def __eq__(self, other):
+        raise RuntimeError("comparison exploded")
+
+    def __hash__(self):
+        return 0
+
+
+@pytest.mark.parametrize(
+    "label,default",
+    [
+        ("None", None),
+        ("empty string", ""),
+        ("empty list", []),
+        ("empty dict", {}),
+        ("empty tuple", ()),
+        ("zero", 0),
+        ("False", False),
+        ("a shared string", "unknown"),
+        ("a shared object", _AlwaysEqual()),
+        ("a value whose __eq__ raises", _RaisesOnEqual()),
+    ],
+)
+def test_a_shared_factory_key_never_deletes_more_than_the_target(label, default):
+    # `getattr(m, "code", DEFAULT)` is one idiom; the framework must not treat
+    # its spellings differently. Every one of these gave three rows the same
+    # key, and eight of the ten destroyed all three.
+    v = _View()
+    rows = [_Coded(1, "AAA"), _Coded(2), _Coded(3), _Coded(4)]
+    v.stream("rows", rows, dom_id=lambda m, d=default: getattr(m, "code", d))
+
+    v.stream_delete("rows", rows[1])
+
+    assert [r.pk for r in _items(v)] == [1, 3, 4], (
+        f"factory default {label}: only the targeted row may go; got {_items(v)!r}"
+    )
+
+
+def test_an_unambiguous_shared_value_still_deletes():
+    # The bound is "at most one", not "never". When exactly ONE row carries the
+    # key, the argument and that row genuinely do name the same dom_id and the
+    # delete must land — which is why this is better than special-casing None:
+    # a None-guard would refuse here.
+    v = _View()
+    rows = [_Coded(1, "AAA"), _Coded(2)]  # only Row 2 is keyless
+    v.stream("rows", rows, dom_id=lambda m: getattr(m, "code", None))
+
+    # Delete by a LOOK-ALIKE, so the identity arm cannot be what matches.
+    v.stream_delete("rows", _Coded(99))
+
+    assert [r.pk for r in _items(v)] == [1], (
+        "a uniquely-keyed row must be deletable by its factory key"
+    )
+
+
+def test_a_factory_whose_eq_raises_does_not_abort_the_delete():
+    # `delete` is called from an event handler; a user value with an exploding
+    # __eq__ must not propagate. The comparison lives inside the same try as
+    # the factory call for exactly this reason.
+    v = _View()
+    rows = [_Coded(1, "AAA"), _Coded(2)]
+    v.stream("rows", rows, dom_id=lambda m: getattr(m, "code", _RaisesOnEqual()))
+
+    v.stream_delete("rows", rows[0])  # must not raise
+
+    assert [r.pk for r in _items(v)] == [2]

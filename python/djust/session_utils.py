@@ -389,36 +389,62 @@ class Stream:
         # THIS stream — otherwise the emitted op names a dom_id the client can
         # match while the item survives on the server (#2129).
         #
-        # Matching on EITHER identity rather than switching wholesale to the
-        # factory: a custom factory that reads content (``lambda m: m["slug"]``)
-        # is the only thing that can identify id-less rows, but a caller may
-        # still pass a BARE ID to a custom-factory stream, and the factory
-        # cannot be applied to that. Switching outright would have made those
-        # deletes stop working — a regression traded for a fix.
+        # ONE PASS, and the factory arm removes AT MOST ONE ROW. That bound is
+        # the whole design, and it replaced three rounds of value-by-value
+        # patching that were not converging: a factory like
+        # `getattr(m, "code", DEFAULT)` gives every keyless row the SAME key,
+        # so a factory arm that removes everything it matches destroys them
+        # all. Special-casing `None` fixed one spelling of nine — "", [], {},
+        # (), 0, False, a shared sentinel object, and an `__eq__`-always-True
+        # value all did the same thing.
+        #
+        # The invariant that retires the class instead of enumerating it: a
+        # delete op names ONE dom_id, and a dom_id addresses at most one
+        # element, so the factory arm may remove at most one row. Ambiguity
+        # means "cannot tell which row you meant" — fall back to identity
+        # alone, which is what the caller would have got before a custom
+        # factory existed.
+        #
+        # The identity arm is NOT bounded this way: it is the pre-existing
+        # behaviour, and equal identities genuinely are the same row.
         target_key = self._factory_key_for_argument(item_or_id)
-        self.items = [
-            item for item in self.items if not self._is_delete_target(item, item_id, target_key)
-        ]
+        survivors: list = []
+        factory_hits: list = []
+        for item in self.items:
+            if self._identity(item) == item_id:
+                continue
+            if target_key is not _NO_FACTORY_KEY and self._factory_matches(item, target_key):
+                factory_hits.append(len(survivors))
+            survivors.append(item)
+        if len(factory_hits) == 1:
+            survivors.pop(factory_hits[0])
+        self.items = survivors
 
     def _factory_key_for_argument(self, item_or_id: Any) -> Any:
         """The custom factory's key for a delete ARGUMENT, or ``_NO_FACTORY_KEY``.
 
         Computed ONCE per delete rather than per item — it does not depend on
-        the item being scanned, and re-deriving it inside the comprehension
-        made one delete on an n-item stream call the user's factory 2n+1 times.
+        the item being scanned, and re-deriving it inside the loop made one
+        delete on an n-item stream call the user's factory 2n+1 times.
 
         Returns the sentinel — meaning "compare by identity only" — when the
         stream has no custom factory, when the argument is a bare id (the
         factory cannot be applied to an id, so comparing its output against one
         would be comparing different things), or when the factory rejects the
         argument.
+
+        A ``None`` key is NOT special-cased here. It used to be, and that was
+        the wrong shape: the at-most-one-row bound in :meth:`delete` covers it
+        along with every other value many rows can share, and covers it BETTER
+        — when exactly one row has a ``None`` key, the argument and that row
+        genuinely do name the same dom_id, and the delete should land.
         """
         if self.dom_id_fn is Stream.default_dom_id:
             return _NO_FACTORY_KEY
         if not self._looks_like_item(item_or_id):
             return _NO_FACTORY_KEY
         try:
-            key = self.dom_id_fn(item_or_id)
+            return self.dom_id_fn(item_or_id)
         except Exception:
             # Already reported by dom_id_for on the op path; a second warning
             # here would double-report the same argument.
@@ -428,54 +454,41 @@ class Stream:
                 self.name,
             )
             return _NO_FACTORY_KEY
-        # A None key is "no key yet", never a value to match on. Paired with
-        # the same check in _is_delete_target: EITHER ALONE suffices (measured
-        # — removing one leaves every test green, removing both fails), so
-        # neither is individually pinned. They are kept as a pair deliberately,
-        # because they state the policy from the two ends it can be reached
-        # from; do not delete one as "dead" and the other later as "redundant".
-        return _NO_FACTORY_KEY if key is None else key
 
-    def _is_delete_target(self, item: Any, item_id: Any, target_key: Any) -> bool:
-        """Whether ``item`` is the row the delete argument refers to."""
-        if self._identity(item) == item_id:
-            return True
-        if target_key is _NO_FACTORY_KEY:
-            return False
+    def _factory_matches(self, item: Any, target_key: Any) -> bool:
+        """Whether ``item``'s factory key is the same ROW as ``target_key``.
+
+        Same VALUE and same rendered dom_id. Both halves are load-bearing:
+
+        - ``==`` alone is what the original bug lacked — it compared the
+          FORMATTED ``f"{name}-{value}"``, so values whose ``str()`` matched
+          collapsed and deleting the row keyed ``5`` destroyed the row keyed
+          ``"5"`` (and a UUID destroyed its own string form).
+        - the string half keeps the server consistent with what the CLIENT can
+          match, which is the invariant this whole fix is about. It can only
+          NARROW (it is the right operand of an ``and``), and every pair it
+          narrows renders to different dom_ids — so the client could not have
+          matched them either.
+
+        A ``type() is type()`` guard was tried instead and was wrong in the
+        other direction: it rejects an ``IntEnum`` row against a plain-int
+        argument, and a ``SafeString`` against a ``str`` — both of which emit
+        an IDENTICAL dom_id, so the client would match and the server would
+        keep the row.
+
+        The comparison is inside the ``try`` along with the factory call: a
+        value whose ``__eq__`` or ``__str__`` raises must not propagate out of
+        ``stream_delete`` and abort a handler. Scanning is not the caller's
+        argument — an item that cannot be compared simply is not the target.
+        Deliberately silent: warning here emits one record per unmatched row,
+        so a single delete on a stream with many such rows produced thousands
+        of traceback-bearing warnings inside an event handler.
+        """
         try:
             key = self.dom_id_fn(item)
+            return bool(key == target_key) and f"{key}" == f"{target_key}"
         except Exception:
-            # Scanning, not resolving the caller's argument: an item this
-            # factory cannot process simply is not the target. Deliberately
-            # silent — warning here emits one record per unmatched row, so a
-            # single delete on a stream with many such rows produced thousands
-            # of traceback-bearing warnings inside an event handler.
             return False
-        if key is None:
-            # "no key yet", never a value to match on — the same discipline
-            # `_identity` applies to a None id/pk, and for the same reason: a
-            # `getattr(m, "code", None)`-style factory gives EVERY keyless row
-            # the identical key, so treating None as a value makes deleting one
-            # of them delete all of them. Measured: 3 rows destroyed, 1
-            # targeted. See the paired check in _factory_key_for_argument.
-            return False
-        # Same VALUE and same rendered dom_id. Both halves are load-bearing:
-        #
-        # - ``==`` alone is what the original bug lacked — it compared the
-        #   FORMATTED ``f"{name}-{value}"``, so values whose ``str()`` matched
-        #   collapsed and deleting the row keyed ``5`` destroyed the row keyed
-        #   ``"5"`` (and a UUID destroyed its own string form).
-        # - the string half keeps the server consistent with what the CLIENT
-        #   can match, which is the invariant this whole fix is about: an op
-        #   naming a dom_id the client resolves must remove the row.
-        #
-        # A ``type() is type()`` guard was tried instead and was wrong in the
-        # other direction: it rejects an ``IntEnum`` row against a plain-int
-        # argument, and a ``SafeString`` against a ``str`` — both of which emit
-        # an IDENTICAL dom_id, so the client would match and the server would
-        # keep the row. Ordinary Django types, and a violation of this
-        # module's own invariant.
-        return bool(key == target_key) and f"{key}" == f"{target_key}"
 
     def clear(self) -> None:
         """Clear all items."""
