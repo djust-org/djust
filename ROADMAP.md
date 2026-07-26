@@ -21,6 +21,25 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 ## v1.1.0-13 — post-12 drain: dj-virtual client applier + stream identity + wire-format decision (drain bucket → ships in 1.1.0)
 
+**COMPLETE 3/3 (2026-07-26)** ✅ — #2129 (PR #2131), #2130 (PR #2132), #2017
+iteration 2 (PR #2135), plus two issues the drain itself surfaced: #2133
+(PR #2134, `main` was RED — three doc-snippet tests failing on a clean
+checkout, blocking every push via the pre-push hook) and #2136 (filed, blocks
+ADR-026 iteration 3).
+
+Cost is worth recording: **#2129 took five review rounds and four 🔴s**, every
+one silent destructive over-deletion and every one a regression vs `main`.
+Rounds 1-3 patched VALUES and each left a neighbouring value uncovered; what
+closed it was changing the shape of the fix to a rule about the OPERATION
+(`identity OR factory`, factory bounded to one row). Three of my own gate-off
+measurements were also wrong — two reported 0 for mutations that had silently
+not applied or had broken the module, one reported 16 for a syntax error. The
+hardened harness (asserts each mutation applied AND changed something, counts
+pytest errors as well as failures) is the reusable artifact.
+
+#2017 does NOT close: iteration 3 (flip the flag, wire the Python config) is
+soak-gated per #1122 and now additionally blocked by #2136.
+
 Open-issue drain (2026-07-25) of everything left except #1561 (priority:low iter C —
 multi-day Redis-store feature, held). Two of the three were filed BY the v1.1.0-12
 drain's own PRs, scoped out under #1079 rather than widened into them.
