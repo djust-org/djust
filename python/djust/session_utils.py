@@ -410,14 +410,50 @@ class Stream:
         target_key = self._factory_key_for_argument(item_or_id)
         survivors: list = []
         factory_hits: list = []
+        identity_hit = False
         for item in self.items:
             if self._identity(item) == item_id:
+                identity_hit = True
                 continue
             if target_key is not _NO_FACTORY_KEY and self._factory_matches(item, target_key):
                 factory_hits.append(len(survivors))
             survivors.append(item)
-        if len(factory_hits) == 1:
-            survivors.pop(factory_hits[0])
+
+        # The factory arm is a FALLBACK, not an addition. A delete is
+        # `identity OR factory`, never both: the two arms encode different
+        # notions of "same row", and when they disagree, applying both is the
+        # one choice that is wrong under either reading.
+        #
+        # Concretely, with a perfectly unique factory and no dom_id collision:
+        # rows {"id": 1, "slug": "alpha"} and {"id": 2, "slug": "beta"},
+        # deleting {"id": 1, "slug": "beta"} (row 1 re-read after a rename)
+        # matched row 1 by identity AND row 2 by slug — one op, one dom_id,
+        # two rows destroyed. The comment above claims at most one element;
+        # bounding only the factory arm did not deliver that.
+        #
+        # Identity wins because the factory arm exists to identify rows
+        # identity CANNOT (see _factory_key_for_argument). The inverse —
+        # dom_id authoritative — would break the legitimate stale-row delete,
+        # where the stream holds an old copy and the caller passes the
+        # updated item.
+        if not identity_hit:
+            if len(factory_hits) == 1:
+                survivors.pop(factory_hits[0])
+            elif len(factory_hits) > 1:
+                # Declining is right — the op names one dom_id and cannot say
+                # which row — but silence is not: two rows sharing a dom_id is
+                # an app bug the developer wants to know about, and this fires
+                # once per DELETE, not once per row, so the flood that keeps
+                # the scan silent does not apply here.
+                logger.warning(
+                    "Stream %r: %d items share the dom_id the delete names (%r), so "
+                    "it cannot say which row you meant and removed none. Two rows "
+                    "with the same dom_id is a bug in the dom_id= factory — the "
+                    "client cannot address them separately either.",
+                    self.name,
+                    len(factory_hits),
+                    target_key,
+                )
         self.items = survivors
 
     def _factory_key_for_argument(self, item_or_id: Any) -> Any:

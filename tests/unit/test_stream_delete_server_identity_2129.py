@@ -303,7 +303,11 @@ def test_a_bare_id_is_not_compared_against_a_TOLERANT_factory_either():
         return m["g"] if isinstance(m, dict) else m
 
     v = _View()
-    v.stream("rows", [{"id": 5, "g": "g1"}, {"id": 9, "g": 5}], dom_id=tolerant)
+    # NO row has id 5, deliberately. An earlier version included one, and the
+    # identity arm then matched it first — so `identity_hit` short-circuited
+    # the factory arm and the test passed with the _looks_like_item gate
+    # removed. Isolating the factory arm is the only way to pin it.
+    v.stream("rows", [{"id": 9, "g": 5}], dom_id=tolerant)
 
     v.stream_delete("rows", 5)
 
@@ -444,6 +448,15 @@ def test_a_shared_factory_key_never_deletes_more_than_the_target(label, default)
     # `getattr(m, "code", DEFAULT)` is one idiom; the framework must not treat
     # its spellings differently. Every one of these gave three rows the same
     # key, and eight of the ten destroyed all three.
+    #
+    # Two arguments, because the two arms fix different halves and each
+    # SHADOWS the other if tested alone:
+    #
+    #   by the item itself -> identity resolves it, the factory arm never runs
+    #   by a look-alike    -> identity misses, so the at-most-one bound decides
+    #
+    # An earlier version only did the first, which made the bound unreachable:
+    # gating it off failed nothing.
     v = _View()
     rows = [_Coded(1, "AAA"), _Coded(2), _Coded(3), _Coded(4)]
     v.stream("rows", rows, dom_id=lambda m, d=default: getattr(m, "code", d))
@@ -451,7 +464,20 @@ def test_a_shared_factory_key_never_deletes_more_than_the_target(label, default)
     v.stream_delete("rows", rows[1])
 
     assert [r.pk for r in _items(v)] == [1, 3, 4], (
-        f"factory default {label}: only the targeted row may go; got {_items(v)!r}"
+        f"factory default {label}: identity must resolve the item itself; got {_items(v)!r}"
+    )
+
+    # Now the factory arm alone: an argument identity cannot resolve, whose
+    # key three surviving rows share. Ambiguous, so it must remove none.
+    v2 = _View()
+    rows2 = [_Coded(1, "AAA"), _Coded(2), _Coded(3), _Coded(4)]
+    v2.stream("rows", rows2, dom_id=lambda m, d=default: getattr(m, "code", d))
+
+    v2.stream_delete("rows", _Coded(99))  # no such id; key is the shared default
+
+    assert [r.pk for r in _items(v2)] == [1, 2, 3, 4], (
+        f"factory default {label}: an ambiguous key must remove NOTHING, not "
+        f"an arbitrary row; got {_items(v2)!r}"
     )
 
 
@@ -483,3 +509,59 @@ def test_a_factory_whose_eq_raises_does_not_abort_the_delete():
     v.stream_delete("rows", rows[0])  # must not raise
 
     assert [r.pk for r in _items(v)] == [2]
+
+
+# --- a delete removes at most ONE row, across BOTH arms ------------------
+
+
+def test_identity_and_factory_arms_cannot_both_fire():
+    # The bound governed the factory arm alone, but a delete is
+    # `identity OR factory` — so the total was (identity matches) + (0 or 1),
+    # not 1. No shared keys and no dom_id collision are needed to see it: a
+    # perfectly unique factory and an argument whose id and slug point at
+    # DIFFERENT rows (row 1 re-read after a rename) destroyed both.
+    v = _View()
+    x = {"id": 1, "slug": "alpha"}
+    y = {"id": 2, "slug": "beta"}
+    v.stream("rows", [x, y], dom_id=lambda m: m["slug"])
+
+    v.stream_delete("rows", {"id": 1, "slug": "beta"})
+
+    ids = [o["dom_id"] for o in v._stream_operations if o["type"] == "stream_delete"]
+    assert len(ids) == 1, "one delete op"
+    assert _items(v) == [y], (
+        "one op naming one dom_id must remove at most one row; identity wins "
+        f"because the factory arm exists to identify rows identity cannot. Got {_items(v)!r}"
+    )
+
+
+def test_identity_wins_so_a_stale_row_is_still_deletable():
+    # The inverse rule — dom_id authoritative — would break this: the stream
+    # holds an OLD copy of the row and the caller passes the updated item.
+    # Identity still resolves it, and must keep doing so.
+    v = _View()
+    stale = {"id": 1, "slug": "old-slug"}
+    v.stream("rows", [stale, {"id": 2, "slug": "other"}], dom_id=lambda m: m["slug"])
+
+    v.stream_delete("rows", {"id": 1, "slug": "new-slug"})
+
+    assert _items(v) == [{"id": 2, "slug": "other"}]
+
+
+def test_an_ambiguous_dom_id_declines_and_says_so(caplog):
+    # Declining is right — the op names one dom_id and cannot say which row —
+    # but two rows sharing a dom_id is an app bug the developer wants to know
+    # about. Fires once per DELETE, not once per row, so the flood that keeps
+    # the scan silent does not apply.
+    import logging
+
+    v = _View()
+    rows = [{"slug": "dup", "n": 1}, {"slug": "dup", "n": 2}]
+    v.stream("rows", rows, dom_id=lambda m: m["slug"])
+
+    with caplog.at_level(logging.WARNING, logger="djust"):
+        v.stream_delete("rows", {"slug": "dup", "n": 3})
+
+    assert len(_items(v)) == 2, "an ambiguous delete must remove nothing"
+    assert "share the dom_id" in caplog.text
+    assert "rows" in caplog.text
