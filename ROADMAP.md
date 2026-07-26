@@ -19,6 +19,49 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.0-13 — post-12 drain: dj-virtual client applier + stream identity + wire-format decision (drain bucket → ships in 1.1.0)
+
+Open-issue drain (2026-07-25) of everything left except #1561 (priority:low iter C —
+multi-day Redis-store feature, held). Two of the three were filed BY the v1.1.0-12
+drain's own PRs, scoped out under #1079 rather than widened into them.
+
+Shape note: #2017 does NOT close here. ADR-026 sequences three iterations and
+iteration 1 (the dark differ) shipped in PR #2126. This bucket takes **iteration 2**
+— the client applying the keyed ops, still dark. **Iteration 3** (flipping the flag,
+which changes VDOM behavior for every `[dj-virtual]` user) is soak-gated per #1122
+and stays open deliberately. #2130 is a DECISION, not a fix: two of its three
+options are compat events, so it may close without code.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | `Stream.delete` server-side filtering bypasses a custom `dom_id=` factory (#2129) | The #2121 convergence reached the three dom_id sites but not `Stream.delete`'s `_deleted_ids` resolution; an id-less item under a custom factory emits a matching dom_id yet is never removed from `items` — and id-less items are the canonical reason to have a custom factory | v1.1.0 |
+| **P2** | ADR-026 iteration 2 — client applies the keyed splice ops (#2017) | Teach `12-vdom-patch.js` to apply `VirtualInsert`/`VirtualMove`/`VirtualRemove` through `29-virtual-list.js`'s item pool, reusing `_virtualInsert`/`_virtualPrune` rather than adding a second path (#1646). Emission ORDER is load-bearing — the anchors depend on it, so these must not get natural `_sortPatches` phases | v1.1.0 |
+| **P2** | `Patch` msgpack encoding is positional, so `render_binary_diff` output cannot be deserialized (#2130) | Pre-existing across every variant; `skip_serializing_if` on the interior `d` drops a positional slot (#1541 shape). Latent because the only producer has no non-test consumer. Decide: delete the dead path, drop `skip_serializing_if` everywhere (a client-compat event), or keep documented | v1.1.0 |
+
+**#2129 — Stream.delete's fourth identity resolution** — `dom_id_for()` routes the
+item branch through the user's factory, but `Stream.delete()` still resolves
+`_deleted_ids` via `resolve_id`. For an item with no id/pk under a custom factory the
+two disagree: the emitted op carries the right dom_id while the item survives in
+`stream_obj.items`. Filed from the PR #2127 Stage 11 review with a measured 3-row
+table. Suggested cure is to filter `items` by `dom_id_for(item)` equality so both
+sides share one identity by construction.
+
+**#2017 — ADR-026 iteration 2** — Iteration 1 (PR #2126) added `VirtualInsert` /
+`VirtualMove` / `VirtualRemove` behind `set_virtual_keyed_ops()`, default off, with a
+gate that falls back to index diffing (warning DJE-052) for unkeyed or duplicate
+keys. The client cannot apply them yet. Iteration 2 wires
+`12-vdom-patch.js` → `29-virtual-list.js`'s pool. Constraints established by iteration
+1's review: apply in EMITTED order (`before_key` names an anchor a prior op placed —
+pinned by a Rust test asserting phase-sorting diverges), reuse the existing pool
+helpers, and note the property is scoped to CHILD ops — `InsertSubtree`/`MoveSubtree`
+inside a virtual parent still carry an index.
+
+**#2130 — Patch msgpack positional encoding** — Measured: `SetText { d: None }`
+encodes as `0x93` (FIXARRAY) and fails its own round-trip with *"invalid length 2,
+expected 3 elements"*. `#[serde(tag = "type")]` does NOT force a map encoding under
+`rmp_serde`. Pinned as a fact in `wire_protocol_snapshot.rs` with an assertion that
+flips if it is ever fixed. Decision needed before any code.
+
 ## v1.1.0-12 — post-11 follow-up drain: JS test flake + Makefile PYO3_PYTHON parity (drain bucket → ships in 1.1.0)
 
 **COMPLETE 2/2 (2026-07-18)** ✅ — #2081 (PR #2092), #2082 (PR #2093) both
