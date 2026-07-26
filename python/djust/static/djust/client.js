@@ -7626,6 +7626,19 @@ function _sortPatches(patches) {
             case 'InsertChild':   return 2;
             case 'MoveSubtree':   return 3;
             case 'InsertSubtree': return 3;
+            // The [dj-virtual] keyed ops MUST share one phase and MUST keep
+            // their emitted order (#2017). `before_key` names an anchor that
+            // an EARLIER op placed, so splitting them into natural
+            // Remove/Move/Insert phases breaks the anchors — a Rust test
+            // (virtual_keyed_ops_2017.rs::ops_are_only_correct_in_emitted_order)
+            // pins that phase-sorting them diverges from the correct result.
+            // Listed explicitly rather than falling through to `default` so
+            // the requirement is visible at the place it could be broken;
+            // Array#sort is stable (ES2019+), which is what preserves order
+            // within the phase.
+            case 'VirtualRemove':
+            case 'VirtualMove':
+            case 'VirtualInsert': return 4;
             default:              return 4;
         }
     }
@@ -7991,6 +8004,57 @@ function applySinglePatch(patch, rootEl = null) {
                 break;
             }
 
+            case 'VirtualInsert':
+            case 'VirtualMove':
+            case 'VirtualRemove': {
+                // ADR-026 iteration 2 (#2017 items 2 and 4). A [dj-virtual]
+                // container's children are only the visible WINDOW, so the
+                // differ addresses its rows by KEY instead of index; the full
+                // collection lives in the list's item pool, which is where
+                // these have to land.
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', String(patch.type).slice(0, 50), node.nodeType);
+                    return false;
+                }
+                if (typeof window.djust._virtualKeyedOp !== 'function') {
+                    console.warn('[LiveView] %s received but the virtual-list module is absent', String(patch.type).slice(0, 50));
+                    return false;
+                }
+                // The node is passed alongside the patch rather than stamped
+                // ONTO it: patch arrays are stored in the @cache LRU and
+                // replayed, so stamping would pin a detached DOM subtree for
+                // the entry's lifetime.
+                let insertNode = null;
+                if (patch.type === 'VirtualInsert') {
+                    // Materialise the row here rather than in the pool module:
+                    // creating nodes is the patcher's job, and the pool stores
+                    // nodes, not descriptors.
+                    const created = createNodeFromVNode(patch.node, isInSvgContext(node));
+                    // nodeType, not just truthiness: the pool's renderer sets
+                    // `.style.height` on every item, so a text or comment node
+                    // makes it throw — and that throw escapes the `finally`
+                    // below, so applyPatches REJECTS instead of returning
+                    // false, and DIRTY is never cleared, stranding every other
+                    // list in the batch. Unreachable from the server today
+                    // (the differ refuses unkeyed children), so this is
+                    // defence in depth.
+                    if (!created || created.nodeType !== 1) {
+                        console.warn('[LiveView] VirtualInsert could not build an element for key %s', String(patch.key).slice(0, 80));
+                        return false;
+                    }
+                    insertNode = created;
+                }
+                if (!window.djust._virtualKeyedOp(node, patch, insertNode)) {
+                    // Not an initialised virtual list. The server only emits
+                    // these for a [dj-virtual] parent, so this means the client
+                    // has not mounted the list yet — dropping the op silently
+                    // would strand the row.
+                    console.warn('[LiveView] %s targeted a node that is not an initialised virtual list', String(patch.type).slice(0, 50));
+                    return false;
+                }
+                break;
+            }
+
             default:
                 // Sanitize type for logging
                 const safeType = String(patch.type || 'undefined').slice(0, 50);
@@ -8104,6 +8168,29 @@ async function applyPatches(patches, rootEl = null) {
 }
 
 /**
+ * Synchronous inner patch loop, wrapped so every exit renders the virtual
+ * lists that keyed ops touched (#2017 iteration 2).
+ *
+ * The wrap exists because the raw loop has several returns (small-set success,
+ * small-set failure, batched success, batched failure) and rendering must
+ * happen on all of them, including a throw. Calling the flush from each return
+ * site would be four call sites that can drift apart (#1646); `finally` is
+ * one. The flush is idempotent and a no-op when nothing is dirty.
+ *
+ * It runs INSIDE the View Transition callback, not after it — a render after
+ * `updateCallbackDone` would land past the transition's snapshot.
+ */
+function _applyPatchesInner(patches, rootEl) {
+    try {
+        return _applyPatchesInnerRaw(patches, rootEl);
+    } finally {
+        if (typeof window.djust._flushVirtualKeyedOps === 'function') {
+            window.djust._flushVirtualKeyedOps();
+        }
+    }
+}
+
+/**
  * Synchronous inner patch loop. Extracted from the original sync
  * ``applyPatches`` body — no behavior changes, just renamed. The View
  * Transitions wrap above invokes this from inside the
@@ -8111,7 +8198,7 @@ async function applyPatches(patches, rootEl = null) {
  * unwrapped. Either way, this is the same DOM-mutating loop that has
  * shipped for many releases.
  */
-function _applyPatchesInner(patches, rootEl = null) {
+function _applyPatchesInnerRaw(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -13483,6 +13570,150 @@ window.djust.bindModelElements = bindModelElements;
         return true;
     }
 
+    // ---------------------------------------------------------------
+    // Key-addressed pool ops (ADR-026 iteration 2, #2017 items 2 and 4)
+    //
+    // The differ emits VirtualInsert / VirtualMove / VirtualRemove for a
+    // [dj-virtual] parent instead of index-addressed child ops, because an
+    // index means different things on the two sides: the Nth ITEM to the
+    // server, the Nth VISIBLE item here. These apply them to the pool, which
+    // is the only place the full collection exists.
+    // ---------------------------------------------------------------
+
+    /**
+     * The key a patch would address this pool node by.
+     *
+     * NOT `itemKey` — that name is taken by the variable-height cache key
+     * above, which returns a PREFIXED string ("k:foo" / "i:3") and falls back
+     * to the index. Declaring a second `itemKey` here silently replaced it for
+     * the whole module (later function declaration wins), and every
+     * variable-height offset computation started reading a bare key or null.
+     * Four existing tests caught it; a run of only the new file would not
+     * have.
+     *
+     * Mirrors the Rust parser's rule (crates/djust_vdom/src/parser.rs:433):
+     * EITHER `dj-key` or `data-key` becomes `VNode.key`, and that is what the
+     * patch names. The list's configured `keyAttr` is consulted first because
+     * `dj-virtual-key-attr` may point at a third attribute for height caching
+     * — but a patch key can only ever have come from one of the two the parser
+     * reads, so both are checked. Missing either would make every keyed op
+     * silently miss on a list that uses the other spelling.
+     */
+    function patchKeyOf(state, node) {
+        if (!node || node.nodeType !== 1) return null;
+        return (
+            node.getAttribute(state.keyAttr) ||
+            node.getAttribute('dj-key') ||
+            node.getAttribute('data-key')
+        );
+    }
+
+    function indexOfKey(state, key) {
+        if (key == null) return -1;
+        // `.entries()` rather than an index loop: `state.items[i]` reads as an
+        // object-injection sink to eslint even though `i` is a bounded loop
+        // counter, and avoiding the sink is cleaner than suppressing the rule.
+        for (const [i, node] of state.items.entries()) {
+            if (patchKeyOf(state, node) === key) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Position an item lands at, given the key it must precede.
+     *
+     * A null/absent `before_key` means the tail. A key that is not in the pool
+     * ALSO means the tail: the server anchors to the next NEW sibling, and the
+     * differ emits ops in an order that guarantees the anchor is already
+     * placed — so a miss means the anchor was legitimately dropped, not that
+     * the position is unknown.
+     */
+    function insertionIndex(state, beforeKey) {
+        if (beforeKey == null) return state.items.length;
+        const at = indexOfKey(state, beforeKey);
+        if (at === -1) {
+            // The differ emits in reverse new order precisely so the anchor is
+            // already placed, so a miss means the pool has DRIFTED from the
+            // server's model — a dropped patch, or a row removed by something
+            // other than these ops. Appending is the right recovery, but doing
+            // it silently hides the one observable signal that the two sides
+            // have diverged.
+            if (globalThis.djustDebug) {
+                console.log('[djust] dj-virtual: anchor %s not in the pool; appending at the tail (pool may have drifted from the server)', String(beforeKey).slice(0, 80));
+            }
+            return state.items.length;
+        }
+        return at;
+    }
+
+    /**
+     * Apply one key-addressed op to the pool.
+     *
+     * Does NOT render. Callers batch: a patch set can carry many of these, and
+     * rendering per op re-slices the window each time — and in `variable` mode
+     * recomputes every offset, which is O(items) per op. `flushKeyedOps()`
+     * renders each touched list once.
+     *
+     * @returns {boolean} true if this container is a virtual list and the op
+     *   was applied; false if the caller should fall back.
+     */
+    function virtualKeyedOp(container, op, insertNode) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return false;
+
+        if (op.type === 'VirtualRemove') {
+            const at = indexOfKey(state, op.key);
+            if (at === -1) return true; // already absent — the end state is right
+            state.items.splice(at, 1);
+        } else if (op.type === 'VirtualMove') {
+            const from = indexOfKey(state, op.key);
+            if (from === -1) return true; // nothing to move
+            const [node] = state.items.splice(from, 1);
+            state.items.splice(insertionIndex(state, op.before_key), 0, node);
+        } else if (op.type === 'VirtualInsert') {
+            if (!insertNode) return false; // caller must materialise the node
+            const existing = indexOfKey(state, op.key);
+            if (existing !== -1) {
+                // Idempotent: re-inserting a key already present replaces it
+                // rather than duplicating. A duplicate key would make every
+                // later op addressing it ambiguous.
+                state.items.splice(existing, 1);
+            }
+            state.items.splice(insertionIndex(state, op.before_key), 0, insertNode);
+        } else {
+            return false;
+        }
+
+        invalidateWindow(state);
+        DIRTY.add(container);
+        return true;
+    }
+
+    /** Lists mutated by virtualKeyedOp since the last flush. */
+    const DIRTY = new Set();
+
+    /**
+     * Render every list touched since the last flush, once each.
+     *
+     * Idempotent and safe to call when nothing is dirty, so the patcher can
+     * call it unconditionally from a single `finally`.
+     */
+    function flushKeyedOps() {
+        if (DIRTY.size === 0) return 0;
+        const touched = DIRTY.size;
+        try {
+            DIRTY.forEach(function (container) {
+                const state = STATE.get(container);
+                if (state && state.items) render(state);
+            });
+        } finally {
+            // Cleared even if a render throws: leaving entries behind strands
+            // every other list in the batch AND retains the containers.
+            DIRTY.clear();
+        }
+        return touched;
+    }
+
     /** Force the next render() to re-slice rather than reuse the window. */
     function invalidateWindow(state) {
         state.visibleStart = -1;
@@ -13499,6 +13730,8 @@ window.djust.bindModelElements = bindModelElements;
         return state && state.items ? state.items.slice() : null;
     };
     window.djust._virtualInsert = virtualInsert;
+    window.djust._virtualKeyedOp = virtualKeyedOp;
+    window.djust._flushVirtualKeyedOps = flushKeyedOps;
     window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;
     window.djust.refreshVirtualList = refreshVirtualList;

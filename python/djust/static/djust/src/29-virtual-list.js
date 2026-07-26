@@ -793,6 +793,150 @@
         return true;
     }
 
+    // ---------------------------------------------------------------
+    // Key-addressed pool ops (ADR-026 iteration 2, #2017 items 2 and 4)
+    //
+    // The differ emits VirtualInsert / VirtualMove / VirtualRemove for a
+    // [dj-virtual] parent instead of index-addressed child ops, because an
+    // index means different things on the two sides: the Nth ITEM to the
+    // server, the Nth VISIBLE item here. These apply them to the pool, which
+    // is the only place the full collection exists.
+    // ---------------------------------------------------------------
+
+    /**
+     * The key a patch would address this pool node by.
+     *
+     * NOT `itemKey` — that name is taken by the variable-height cache key
+     * above, which returns a PREFIXED string ("k:foo" / "i:3") and falls back
+     * to the index. Declaring a second `itemKey` here silently replaced it for
+     * the whole module (later function declaration wins), and every
+     * variable-height offset computation started reading a bare key or null.
+     * Four existing tests caught it; a run of only the new file would not
+     * have.
+     *
+     * Mirrors the Rust parser's rule (crates/djust_vdom/src/parser.rs:433):
+     * EITHER `dj-key` or `data-key` becomes `VNode.key`, and that is what the
+     * patch names. The list's configured `keyAttr` is consulted first because
+     * `dj-virtual-key-attr` may point at a third attribute for height caching
+     * — but a patch key can only ever have come from one of the two the parser
+     * reads, so both are checked. Missing either would make every keyed op
+     * silently miss on a list that uses the other spelling.
+     */
+    function patchKeyOf(state, node) {
+        if (!node || node.nodeType !== 1) return null;
+        return (
+            node.getAttribute(state.keyAttr) ||
+            node.getAttribute('dj-key') ||
+            node.getAttribute('data-key')
+        );
+    }
+
+    function indexOfKey(state, key) {
+        if (key == null) return -1;
+        // `.entries()` rather than an index loop: `state.items[i]` reads as an
+        // object-injection sink to eslint even though `i` is a bounded loop
+        // counter, and avoiding the sink is cleaner than suppressing the rule.
+        for (const [i, node] of state.items.entries()) {
+            if (patchKeyOf(state, node) === key) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Position an item lands at, given the key it must precede.
+     *
+     * A null/absent `before_key` means the tail. A key that is not in the pool
+     * ALSO means the tail: the server anchors to the next NEW sibling, and the
+     * differ emits ops in an order that guarantees the anchor is already
+     * placed — so a miss means the anchor was legitimately dropped, not that
+     * the position is unknown.
+     */
+    function insertionIndex(state, beforeKey) {
+        if (beforeKey == null) return state.items.length;
+        const at = indexOfKey(state, beforeKey);
+        if (at === -1) {
+            // The differ emits in reverse new order precisely so the anchor is
+            // already placed, so a miss means the pool has DRIFTED from the
+            // server's model — a dropped patch, or a row removed by something
+            // other than these ops. Appending is the right recovery, but doing
+            // it silently hides the one observable signal that the two sides
+            // have diverged.
+            if (globalThis.djustDebug) {
+                console.log('[djust] dj-virtual: anchor %s not in the pool; appending at the tail (pool may have drifted from the server)', String(beforeKey).slice(0, 80));
+            }
+            return state.items.length;
+        }
+        return at;
+    }
+
+    /**
+     * Apply one key-addressed op to the pool.
+     *
+     * Does NOT render. Callers batch: a patch set can carry many of these, and
+     * rendering per op re-slices the window each time — and in `variable` mode
+     * recomputes every offset, which is O(items) per op. `flushKeyedOps()`
+     * renders each touched list once.
+     *
+     * @returns {boolean} true if this container is a virtual list and the op
+     *   was applied; false if the caller should fall back.
+     */
+    function virtualKeyedOp(container, op, insertNode) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return false;
+
+        if (op.type === 'VirtualRemove') {
+            const at = indexOfKey(state, op.key);
+            if (at === -1) return true; // already absent — the end state is right
+            state.items.splice(at, 1);
+        } else if (op.type === 'VirtualMove') {
+            const from = indexOfKey(state, op.key);
+            if (from === -1) return true; // nothing to move
+            const [node] = state.items.splice(from, 1);
+            state.items.splice(insertionIndex(state, op.before_key), 0, node);
+        } else if (op.type === 'VirtualInsert') {
+            if (!insertNode) return false; // caller must materialise the node
+            const existing = indexOfKey(state, op.key);
+            if (existing !== -1) {
+                // Idempotent: re-inserting a key already present replaces it
+                // rather than duplicating. A duplicate key would make every
+                // later op addressing it ambiguous.
+                state.items.splice(existing, 1);
+            }
+            state.items.splice(insertionIndex(state, op.before_key), 0, insertNode);
+        } else {
+            return false;
+        }
+
+        invalidateWindow(state);
+        DIRTY.add(container);
+        return true;
+    }
+
+    /** Lists mutated by virtualKeyedOp since the last flush. */
+    const DIRTY = new Set();
+
+    /**
+     * Render every list touched since the last flush, once each.
+     *
+     * Idempotent and safe to call when nothing is dirty, so the patcher can
+     * call it unconditionally from a single `finally`.
+     */
+    function flushKeyedOps() {
+        if (DIRTY.size === 0) return 0;
+        const touched = DIRTY.size;
+        try {
+            DIRTY.forEach(function (container) {
+                const state = STATE.get(container);
+                if (state && state.items) render(state);
+            });
+        } finally {
+            // Cleared even if a render throws: leaving entries behind strands
+            // every other list in the batch AND retains the containers.
+            DIRTY.clear();
+        }
+        return touched;
+    }
+
     /** Force the next render() to re-slice rather than reuse the window. */
     function invalidateWindow(state) {
         state.visibleStart = -1;
@@ -809,6 +953,8 @@
         return state && state.items ? state.items.slice() : null;
     };
     window.djust._virtualInsert = virtualInsert;
+    window.djust._virtualKeyedOp = virtualKeyedOp;
+    window.djust._flushVirtualKeyedOps = flushKeyedOps;
     window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;
     window.djust.refreshVirtualList = refreshVirtualList;
