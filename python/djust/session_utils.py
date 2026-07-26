@@ -418,7 +418,7 @@ class Stream:
         if not self._looks_like_item(item_or_id):
             return _NO_FACTORY_KEY
         try:
-            return self.dom_id_fn(item_or_id)
+            key = self.dom_id_fn(item_or_id)
         except Exception:
             # Already reported by dom_id_for on the op path; a second warning
             # here would double-report the same argument.
@@ -428,6 +428,13 @@ class Stream:
                 self.name,
             )
             return _NO_FACTORY_KEY
+        # A None key is "no key yet", never a value to match on. Paired with
+        # the same check in _is_delete_target: EITHER ALONE suffices (measured
+        # — removing one leaves every test green, removing both fails), so
+        # neither is individually pinned. They are kept as a pair deliberately,
+        # because they state the policy from the two ends it can be reached
+        # from; do not delete one as "dead" and the other later as "redundant".
+        return _NO_FACTORY_KEY if key is None else key
 
     def _is_delete_target(self, item: Any, item_id: Any, target_key: Any) -> bool:
         """Whether ``item`` is the row the delete argument refers to."""
@@ -444,13 +451,31 @@ class Stream:
             # single delete on a stream with many such rows produced thousands
             # of traceback-bearing warnings inside an event handler.
             return False
-        # Compare the factory's RAW output, with types, NOT the formatted
-        # dom_id string. Comparing ``f"{name}-{value}"`` collapsed values whose
-        # ``str()`` happens to match — so deleting the row keyed ``5`` also
-        # destroyed the row keyed ``"5"``, and a UUID destroyed its own string
-        # form. Deletion is irreversible and the loss was silent; under-matching
-        # is the safe direction here.
-        return type(key) is type(target_key) and key == target_key
+        if key is None:
+            # "no key yet", never a value to match on — the same discipline
+            # `_identity` applies to a None id/pk, and for the same reason: a
+            # `getattr(m, "code", None)`-style factory gives EVERY keyless row
+            # the identical key, so treating None as a value makes deleting one
+            # of them delete all of them. Measured: 3 rows destroyed, 1
+            # targeted. See the paired check in _factory_key_for_argument.
+            return False
+        # Same VALUE and same rendered dom_id. Both halves are load-bearing:
+        #
+        # - ``==`` alone is what the original bug lacked — it compared the
+        #   FORMATTED ``f"{name}-{value}"``, so values whose ``str()`` matched
+        #   collapsed and deleting the row keyed ``5`` destroyed the row keyed
+        #   ``"5"`` (and a UUID destroyed its own string form).
+        # - the string half keeps the server consistent with what the CLIENT
+        #   can match, which is the invariant this whole fix is about: an op
+        #   naming a dom_id the client resolves must remove the row.
+        #
+        # A ``type() is type()`` guard was tried instead and was wrong in the
+        # other direction: it rejects an ``IntEnum`` row against a plain-int
+        # argument, and a ``SafeString`` against a ``str`` — both of which emit
+        # an IDENTICAL dom_id, so the client would match and the server would
+        # keep the row. Ordinary Django types, and a violation of this
+        # module's own invariant.
+        return bool(key == target_key) and f"{key}" == f"{target_key}"
 
     def clear(self) -> None:
         """Clear all items."""
