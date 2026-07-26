@@ -411,3 +411,78 @@ describe('#2017 iteration 2: applying keyed splice ops', () => {
         expect(poolKeys(dom)).toEqual(['k0', 'k1', 'new']);
     });
 });
+
+describe('#2136: content updates are key-addressed', () => {
+    function update(key, patches) {
+        return { type: 'VirtualUpdate', path: [], d: '7', key, patches };
+    }
+
+    it('applies an inner patch to the row named by key', async () => {
+        const dom = createEnv(4);
+        // `path: []` IS the row; [0] is its first significant child.
+        await apply(dom, [update('k2', [{ type: 'SetText', path: [0], d: null, text: 'EDITED' }])]);
+
+        const items = dom.window.djust._virtualPoolItems(
+            dom.window.document.getElementById('feed')
+        );
+        expect(items[2].textContent).toBe('EDITED');
+        expect(items[1].textContent).toBe('row 1');
+        expect(items[3].textContent).toBe('row 3');
+    });
+
+    it('updates an OFF-WINDOW row, which path-addressing could not', async () => {
+        // The window shows ~2 of 50; row 40 is detached, held only in the
+        // pool. Unreachable by path, findable by key — and mutating a
+        // detached node is fine, the change appears when it scrolls back.
+        const dom = createEnv(50);
+        const el = dom.window.document.getElementById('feed');
+        const before = dom.window.djust._virtualPoolItems(el);
+        expect(dom.window.document.contains(before[40])).toBe(false);
+
+        await apply(dom, [update('k40', [{ type: 'SetText', path: [0], d: null, text: 'OFFSCREEN' }])]);
+
+        const after = dom.window.djust._virtualPoolItems(el);
+        expect(after[40].textContent).toBe('OFFSCREEN');
+    });
+
+    it('does not touch a different row after a scroll', async () => {
+        // The measured symptom: editing k0 after scrolling silently rewrote
+        // k7, because the path counted ITEMS and the DOM held the window.
+        const dom = createEnv(20);
+        const el = dom.window.document.getElementById('feed');
+        el.scrollTop = 200;
+        el.dispatchEvent(new dom.window.Event('scroll'));
+
+        await apply(dom, [update('k0', [{ type: 'SetText', path: [0], d: null, text: 'ZERO' }])]);
+
+        const items = dom.window.djust._virtualPoolItems(el);
+        expect(items[0].textContent).toBe('ZERO');
+        expect(items[7].textContent).toBe('row 7');
+    });
+
+    it('re-renders so an IN-WINDOW row shows its update', async () => {
+        // Every other test here reads the POOL, which the inner patches mutate
+        // directly — so none of them needs the re-render, and gating the
+        // dirty-mark off failed nothing. The visible window is what a user
+        // sees, so assert on the shell.
+        const dom = createEnv(6);
+        const el = dom.window.document.getElementById('feed');
+        const shell = el.querySelector('[data-dj-virtual-shell]');
+
+        await apply(dom, [update('k0', [{ type: 'SetText', path: [0], d: null, text: 'VISIBLE' }])]);
+
+        const rendered = Array.from(shell.children).map((n) => n.textContent);
+        expect(rendered[0]).toBe('VISIBLE');
+    });
+
+    it('reports rather than silently dropping an unknown key', async () => {
+        const dom = createEnv(3);
+        const warnings = [];
+        dom.window.console.warn = (...a) => warnings.push(a.join(' '));
+
+        const ok = await apply(dom, [update('ghost', [{ type: 'SetText', path: [0], d: null, text: 'x' }])]);
+
+        expect(ok).toBe(false);
+        expect(warnings.join(' ')).toMatch(/ghost/);
+    });
+});

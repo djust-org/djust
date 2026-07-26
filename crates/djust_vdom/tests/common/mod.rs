@@ -299,6 +299,13 @@ pub fn assert_handles_resolve(patches: &[Patch], client: &VNode, ctx: &str) {
             Patch::VirtualRemove { d, .. } => {
                 check_handle(d, client, ctx, i, "VirtualRemove.d");
             }
+            Patch::VirtualUpdate { d, .. } => {
+                // The parent handle is checked; the INNER patches address the
+                // row's own subtree relative to it, so their handles belong to
+                // a different frame and are not resolvable against `client`
+                // from here (#2136).
+                check_handle(d, client, ctx, i, "VirtualUpdate.d");
+            }
             Patch::MoveSubtree { d, .. } => {
                 // Boundary id is a marker namespace (exempt); the parent `d`
                 // must resolve in the client tracker, like InsertSubtree.d.

@@ -912,6 +912,26 @@
         return true;
     }
 
+    /**
+     * The pool node for `key`, or null (#2136).
+     *
+     * Exposed so the patcher can apply a VirtualUpdate's inner patches with
+     * the row as their root. The row may be DETACHED — that is the case this
+     * exists for: an off-window row is unreachable by path but findable by
+     * key, and mutating a detached node is fine, the change appears when it
+     * scrolls back into the window.
+     */
+    function virtualNodeForKey(container, key) {
+        const state = STATE.get(container);
+        if (!state || !state.items) return null;
+        const at = indexOfKey(state, key);
+        // `.at()` rather than `state.items[at]`: the bracket form reads as an
+        // object-injection sink to eslint even though `at` came from
+        // indexOfKey and is bounded, and the pre-push hook treats the warning
+        // as a failure.
+        return at === -1 ? null : state.items.at(at) || null;
+    }
+
     /** Lists mutated by virtualKeyedOp since the last flush. */
     const DIRTY = new Set();
 
@@ -954,6 +974,7 @@
     };
     window.djust._virtualInsert = virtualInsert;
     window.djust._virtualKeyedOp = virtualKeyedOp;
+    window.djust._virtualNodeForKey = virtualNodeForKey;
     window.djust._flushVirtualKeyedOps = flushKeyedOps;
     window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;

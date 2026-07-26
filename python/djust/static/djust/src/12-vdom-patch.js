@@ -2144,6 +2144,49 @@ function applySinglePatch(patch, rootEl = null) {
                 break;
             }
 
+            case 'VirtualUpdate': {
+                // #2136. Content for a surviving row, addressed by KEY with
+                // the inner paths relative to the row itself — so an
+                // off-window row (detached, held only in the pool) still gets
+                // its update. Path-addressed content could not: the item index
+                // counts ITEMS while the DOM holds only the visible window,
+                // and the patches carry no dj-id, so they resolved positionally
+                // and silently rewrote a different row after a scroll.
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', String(patch.type).slice(0, 50), node.nodeType);
+                    return false;
+                }
+                if (typeof window.djust._virtualNodeForKey !== 'function') {
+                    console.warn('[LiveView] VirtualUpdate received but the virtual-list module is absent');
+                    return false;
+                }
+                const row = window.djust._virtualNodeForKey(node, patch.key);
+                if (!row) {
+                    console.warn('[LiveView] VirtualUpdate: no pool row for key %s', String(patch.key).slice(0, 80));
+                    return false;
+                }
+                let allOk = true;
+                for (const inner of patch.patches || []) {
+                    // The row is the ROOT for these — `path: []` IS the row.
+                    if (!applySinglePatch(inner, row)) {
+                        allOk = false;
+                    }
+                }
+                // Deliberately does NOT mark the list dirty. An inner patch
+                // mutates the row NODE, so an attached row already shows the
+                // change and no re-render is needed; an off-window row is
+                // re-read from the pool when it scrolls back. In
+                // variable-height mode a height change is already picked up by
+                // the ResizeObserver (29-virtual-list.js:409, `state.offsets =
+                // null`). I could not construct a case where marking dirty
+                // here changed any observable outcome — two attempts, both
+                // gate-off-verified at 0 failures — so rather than ship an
+                // unpinned line, it is gone. If a real case turns up, add the
+                // mark AND the test together.
+                if (!allOk) return false;
+                break;
+            }
+
             case 'VirtualInsert':
             case 'VirtualMove':
             case 'VirtualRemove': {

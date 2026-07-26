@@ -694,6 +694,28 @@ pub enum Patch {
     // These variants therefore keep `skip_serializing_if` to match every
     // sibling variant: the LIVE path is `serde_json` (a named map), where it
     // is genuinely safe and saves wire bytes on every patch.
+    /// Update a keyed item's CONTENT in a `[dj-virtual]` parent's pool.
+    ///
+    /// The inner `patches` are addressed RELATIVE to the item's own root, so
+    /// the client resolves the row by key and applies them with that node as
+    /// the root. That is what makes an off-window update land: the row is
+    /// detached, held only in `state.items`, and mutating a detached node is
+    /// fine — the change appears when it scrolls back into the window.
+    ///
+    /// Without this, survivors' content was emitted as ordinary path-addressed
+    /// patches whose path was the item's ABSOLUTE index. For a windowed
+    /// container that index is meaningless, and the patches carry no dj-id
+    /// (text nodes have none), so they resolved positionally: measured,
+    /// editing row 0 after a scroll silently rewrote row 7 (#2136).
+    VirtualUpdate {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        /// The item's key (from `dj-key`), NOT an index.
+        key: String,
+        /// Patches relative to the item's own root (`path: []` IS the row).
+        patches: Vec<Patch>,
+    },
     /// Insert a keyed item into a `[dj-virtual]` parent's pool.
     VirtualInsert {
         path: Vec<usize>,

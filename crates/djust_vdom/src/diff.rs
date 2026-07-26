@@ -613,17 +613,35 @@ fn reconcile_virtual_keyed(
     // below only reposition. `reconcile_keyed` recurses for every matched
     // pair (step 3) and this must too; emitted BEFORE the structural ops to
     // match that function's phase ordering.
-    for (_, abs, key, new_node) in new_keyed.iter() {
+    for (_, _abs, key, new_node) in new_keyed.iter() {
         let Some(oi) = old_pos.get(*key) else {
             continue;
         };
         let (_, old_node) = old_nb[*oi];
-        let mut child_path = ppath.to_vec();
-        // The ABSOLUTE index in new_nb, not the filtered position — see the
-        // note on new_keyed. Building this from the filtered index rewrites
-        // the wrong child whenever an unkeyed sibling precedes a keyed one.
-        child_path.push(*abs);
-        diff_node_into(old_node, new_node, &child_path, out);
+        // Diff against an EMPTY base path, so the inner patches are relative
+        // to the row's own root, and wrap them in a key-addressed op (#2136).
+        //
+        // These used to be emitted as ordinary patches whose path was the
+        // item's ABSOLUTE index. For a windowed container that index is
+        // meaningless — it counts ITEMS while the DOM holds only the visible
+        // window — and the patches carry no dj-id (text nodes have none), so
+        // they resolved purely positionally. Measured against a real mounted
+        // list: editing row `k0` after a scroll silently rewrote `k7`, with
+        // applyPatches returning true and no warning.
+        //
+        // Key-addressed, the client finds the row in the POOL, which is also
+        // what makes an OFF-WINDOW update land — the row is detached, and
+        // mutating a detached node is fine.
+        let mut inner: Vec<Patch> = Vec::new();
+        diff_node_into(old_node, new_node, &[], &mut inner);
+        if !inner.is_empty() {
+            out.push(Patch::VirtualUpdate {
+                path: ppath.to_vec(),
+                d: pid.map(|s| s.to_string()),
+                key: (*key).to_string(),
+                patches: inner,
+            });
+        }
     }
 
     // Structural ops, walked in REVERSE new order. `before_key` names the NEXT

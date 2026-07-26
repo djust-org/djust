@@ -397,6 +397,24 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
             }
         }
 
+        Patch::VirtualUpdate {
+            path, key, patches, ..
+        } => {
+            // Resolve the row by KEY, then apply the inner patches with that
+            // row as the root — the inner paths are relative to it (#2136).
+            if let Some(parent) = get_node_mut(root, path) {
+                if let Some(idx) = parent
+                    .children
+                    .iter()
+                    .position(|c| c.key.as_deref() == Some(key.as_str()))
+                {
+                    let row = &mut parent.children[idx];
+                    for inner in patches {
+                        apply_patch(row, inner);
+                    }
+                }
+            }
+        }
         Patch::VirtualMove {
             path,
             key,
