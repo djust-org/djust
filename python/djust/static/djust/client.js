@@ -13598,8 +13598,11 @@ window.djust.bindModelElements = bindModelElements;
 
     function indexOfKey(state, key) {
         if (key == null) return -1;
-        for (let i = 0; i < state.items.length; i++) {
-            if (patchKeyOf(state, state.items[i]) === key) return i;
+        // `.entries()` rather than an index loop: `state.items[i]` reads as an
+        // object-injection sink to eslint even though `i` is a bounded loop
+        // counter, and avoiding the sink is cleaner than suppressing the rule.
+        for (const [i, node] of state.items.entries()) {
+            if (patchKeyOf(state, node) === key) return i;
         }
         return -1;
     }
