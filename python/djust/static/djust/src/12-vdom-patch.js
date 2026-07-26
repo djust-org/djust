@@ -1766,6 +1766,19 @@ function _sortPatches(patches) {
             case 'InsertChild':   return 2;
             case 'MoveSubtree':   return 3;
             case 'InsertSubtree': return 3;
+            // The [dj-virtual] keyed ops MUST share one phase and MUST keep
+            // their emitted order (#2017). `before_key` names an anchor that
+            // an EARLIER op placed, so splitting them into natural
+            // Remove/Move/Insert phases breaks the anchors — a Rust test
+            // (virtual_keyed_ops_2017.rs::ops_are_only_correct_in_emitted_order)
+            // pins that phase-sorting them diverges from the correct result.
+            // Listed explicitly rather than falling through to `default` so
+            // the requirement is visible at the place it could be broken;
+            // Array#sort is stable (ES2019+), which is what preserves order
+            // within the phase.
+            case 'VirtualRemove':
+            case 'VirtualMove':
+            case 'VirtualInsert': return 4;
             default:              return 4;
         }
     }
@@ -2131,6 +2144,45 @@ function applySinglePatch(patch, rootEl = null) {
                 break;
             }
 
+            case 'VirtualInsert':
+            case 'VirtualMove':
+            case 'VirtualRemove': {
+                // ADR-026 iteration 2 (#2017 items 2 and 4). A [dj-virtual]
+                // container's children are only the visible WINDOW, so the
+                // differ addresses its rows by KEY instead of index; the full
+                // collection lives in the list's item pool, which is where
+                // these have to land.
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
+                    return false;
+                }
+                if (typeof window.djust._virtualKeyedOp !== 'function') {
+                    console.warn('[LiveView] %s received but the virtual-list module is absent', String(patch.type).slice(0, 50));
+                    return false;
+                }
+                const op = patch;
+                if (patch.type === 'VirtualInsert') {
+                    // Materialise the row here rather than in the pool module:
+                    // creating nodes is the patcher's job, and the pool stores
+                    // nodes, not descriptors.
+                    const created = createElementFromVNode(patch.node);
+                    if (!created) {
+                        console.warn('[LiveView] VirtualInsert could not build a node for key %s', String(patch.key).slice(0, 80));
+                        return false;
+                    }
+                    op.__node = created;
+                }
+                if (!window.djust._virtualKeyedOp(node, op)) {
+                    // Not an initialised virtual list. The server only emits
+                    // these for a [dj-virtual] parent, so this means the client
+                    // has not mounted the list yet — dropping the op silently
+                    // would strand the row.
+                    console.warn('[LiveView] %s targeted a node that is not an initialised virtual list', String(patch.type).slice(0, 50));
+                    return false;
+                }
+                break;
+            }
+
             default:
                 // Sanitize type for logging
                 const safeType = String(patch.type || 'undefined').slice(0, 50);
@@ -2244,6 +2296,29 @@ async function applyPatches(patches, rootEl = null) {
 }
 
 /**
+ * Synchronous inner patch loop, wrapped so every exit renders the virtual
+ * lists that keyed ops touched (#2017 iteration 2).
+ *
+ * The wrap exists because the raw loop has several returns (small-set success,
+ * small-set failure, batched success, batched failure) and rendering must
+ * happen on all of them, including a throw. Calling the flush from each return
+ * site would be four call sites that can drift apart (#1646); `finally` is
+ * one. The flush is idempotent and a no-op when nothing is dirty.
+ *
+ * It runs INSIDE the View Transition callback, not after it — a render after
+ * `updateCallbackDone` would land past the transition's snapshot.
+ */
+function _applyPatchesInner(patches, rootEl) {
+    try {
+        return _applyPatchesInnerRaw(patches, rootEl);
+    } finally {
+        if (typeof window.djust._flushVirtualKeyedOps === 'function') {
+            window.djust._flushVirtualKeyedOps();
+        }
+    }
+}
+
+/**
  * Synchronous inner patch loop. Extracted from the original sync
  * ``applyPatches`` body — no behavior changes, just renamed. The View
  * Transitions wrap above invokes this from inside the
@@ -2251,7 +2326,7 @@ async function applyPatches(patches, rootEl = null) {
  * unwrapped. Either way, this is the same DOM-mutating loop that has
  * shipped for many releases.
  */
-function _applyPatchesInner(patches, rootEl = null) {
+function _applyPatchesInnerRaw(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
