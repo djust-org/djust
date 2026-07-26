@@ -241,16 +241,17 @@ class Stream:
         address of the int ``0``, not ``0`` — so every caller that accepts
         "item or id" must use THIS one (#2116).
         """
-        if isinstance(item_or_id, Mapping):
-            # A mapping is always an ITEM, never a bare id. Previously this
-            # reached ``_deleted_ids.add(dict)`` and raised
-            # ``TypeError: unhashable type: 'dict'``.
+        if Stream._looks_like_item(item_or_id):
+            # An ITEM resolves exactly the way :meth:`_identity` resolves one,
+            # so the two cannot disagree (#2129). They used to: this branch
+            # returned ``.id`` whenever the ATTRIBUTE existed, without
+            # ``_identity``'s ``is not None`` discipline, so an object with
+            # ``id=None, pk=5`` resolved to ``None`` here and to ``5`` there —
+            # and `delete()` compares one against the other, so the item was
+            # never removed. Same for an unsaved row (both None): ``None`` here,
+            # the object address there.
             return Stream._identity(item_or_id)
-        if hasattr(item_or_id, "id"):
-            return item_or_id.id
-        if hasattr(item_or_id, "pk"):
-            return item_or_id.pk
-        # No id/pk and not a mapping — the caller passed the id itself.
+        # Not an item — the caller passed the id itself.
         return item_or_id
 
     @staticmethod
@@ -349,11 +350,20 @@ class Stream:
 
         Accepts either the item or its bare id, per the parameter name.
 
-        A MAPPING with no usable id/pk resolves to its object address, so a
-        look-alike dict never matches. A non-Mapping object with no id/pk is
-        treated as the id ITSELF (the caller passed a bare id) — so an id-less
-        plain object passed as an item does not delete. That asymmetry is
-        pre-existing and unchanged here.
+        Identity follows whatever defines a ROW for this stream (#2129):
+
+        - **Default factory.** An id-less MAPPING resolves to its object
+          address, so a look-alike dict does not match — there is nothing to
+          identify it BY. An object with no ``id``/``pk`` attribute at all is
+          treated as the id ITSELF (the caller passed a bare id), so passing
+          one as an item does not delete. Both are intended.
+        - **Custom factory.** The factory is what supplies the missing
+          identity, so a look-alike DOES match: identifying id-less rows is
+          the canonical reason to supply one.
+
+        A bare id keeps working against a custom-factory stream — the factory
+        cannot be applied to an id, so matching is on EITHER identity rather
+        than switching wholesale to the factory.
         """
         item_id = self.resolve_id(item_or_id)
 
@@ -371,8 +381,33 @@ class Stream:
             # consumer is ever added, this branch needs revisiting.
             logger.debug("Stream %s: unhashable delete id, skipping tombstone", self.name)
 
-        # Remove from items list if present
-        self.items = [item for item in self.items if self._identity(item) != item_id]
+        # Remove from items. Identity here must mean whatever defines a ROW for
+        # THIS stream — otherwise the emitted op names a dom_id the client can
+        # match while the item survives on the server (#2129).
+        #
+        # Matching on EITHER identity rather than switching wholesale to the
+        # factory: a custom factory that reads content (``lambda m: m["slug"]``)
+        # is the only thing that can identify id-less rows, but a caller may
+        # still pass a BARE ID to a custom-factory stream, and the factory
+        # cannot be applied to that. Switching outright would have made those
+        # deletes stop working — a regression traded for a fix.
+        self.items = [
+            item for item in self.items if not self._is_delete_target(item, item_or_id, item_id)
+        ]
+
+    def _is_delete_target(self, item: Any, item_or_id: Any, item_id: Any) -> bool:
+        """Whether ``item`` is the row that ``item_or_id`` refers to."""
+        if self._identity(item) == item_id:
+            return True
+        if self.dom_id_fn is Stream.default_dom_id:
+            return False
+        # Custom factory: it defines what a row IS, so it also defines when two
+        # references are the same row. Lenient on both sides — an item the
+        # factory rejects simply will not match, which is the same outcome as
+        # not matching for any other reason.
+        return self.dom_id_for(item, allow_factory_fallback=True) == self.dom_id_for(
+            item_or_id, allow_factory_fallback=True
+        )
 
     def clear(self) -> None:
         """Clear all items."""
