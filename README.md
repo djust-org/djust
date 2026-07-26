@@ -22,7 +22,7 @@ no JavaScript to write, no bundler, and no build step in your project.
 - **Fast** — Rust-powered template engine and virtual DOM diffing (10–100x faster than plain Django rendering; see [Performance](#performance))
 - **Reactive components** — Phoenix LiveView-style server-side reactivity
 - **Django compatible** — works with existing Django templates and components
-- **No build step** — ~55 KB gzipped client JavaScript, no bundling required
+- **No build step** — ~58 KB gzipped client JavaScript, no bundling required
 - **WebSocket updates** — real-time DOM patches over WebSocket, with HTTP fallback
 - **Minimal payloads** — diffing sends only what changed
 - **Rust core** — performance-critical paths (templates, VDOM, parsing) are written in Rust
@@ -930,7 +930,7 @@ def search(self, query: str = "", **kwargs):
 ```
 ┌─────────────────────────────────────────────┐
 │  Browser                                    │
-│  ├── client.js (~55 KB gz) — events & DOM  │
+│  ├── client.js (~58 KB gz) — events & DOM  │
 │  └── WebSocket connection                   │
 └─────────────────────────────────────────────┘
            ↕ WebSocket (Binary/JSON)
