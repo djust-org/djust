@@ -67,12 +67,19 @@ Where the three iterations from Consequences actually stand:
 |---|---|
 | 1. differ emits keyed splice ops, flag default OFF | shipped, PR #2126 |
 | 2. client applies them to the pool | shipped, PR #2135 |
-| 3. flag flips ON after a soak | **not shipped** |
+| 3. flag flips ON after a soak | **not shipped — blocked on #2164** |
 
-`VIRTUAL_KEYED_OPS` (`crates/djust_vdom/src/diff.rs:167`) still defaults to
-`false`, and its only callers are that crate's tests — it is not exposed
-through the PyO3 bindings and has no `LIVEVIEW_CONFIG` key, so iteration 3 is
-"wire the config *and* change the default", not a one-line flip.
+The config half of iteration 3 shipped in v1.1.0rc9+: `virtual_keyed_ops`
+reaches the differ via `DjustConfig.ready()` (a module-level PyO3 function,
+because `VIRTUAL_KEYED_OPS` at `crates/djust_vdom/src/diff.rs:167` is a
+process global, not per-view state). The DEFAULT half did not: it stays
+`False`.
+
+The browser gate is why. Driven in Chrome against a 60-row list, an edit to
+an off-window row does not land **with the flag on or off** — identical
+results. The differ is correct (it emits `VirtualUpdate` carrying the key);
+the list is simply not windowed at patch time after the WS mount morph, so
+there is no pool for the op to reach. Tracked as #2164.
 
 Gating it: flipping changes VDOM behaviour for every `[dj-virtual]` user, so
 per #1122 it is taken only on evidence from real browser verification — the

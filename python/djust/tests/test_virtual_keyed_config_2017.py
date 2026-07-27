@@ -13,8 +13,8 @@ hook would be last-view-wins.
 **The default stays OFF.** The browser gate recorded on the PR found that with
 the flag on, a keyed update to an off-window row still does not land in a real
 page — the differ emits the right op, but the list is not windowed at patch
-time after the WS mount morph, so there is no pool to apply it to. Flipping the
-default is gated on that being fixed, per ROADMAP.md and #1122.
+time after the WS mount morph, so there is no pool to apply it to (#2164).
+Flipping the default is gated on that being fixed, per ROADMAP.md and #1122.
 """
 
 from __future__ import annotations

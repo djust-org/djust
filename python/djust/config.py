@@ -171,6 +171,11 @@ class LiveViewConfig:
         #
         # Wired to the process-global Rust switch once at startup by
         # `DjustConfig.ready()` — it is not per-view state.
+        #
+        # Default OFF: ADR-026 iteration 3 (the flip) is NOT shipped. The
+        # browser gate found the differ emits the right op but a real page
+        # is not windowed at patch time, so there is no pool to apply it
+        # to — see #2164. Turning this on today changes nothing.
         "virtual_keyed_ops": False,
         # Django-parity template auto-call (ADR-024). When True (default),
         # the Rust engine's sidecar getattr walk invokes callables exactly
