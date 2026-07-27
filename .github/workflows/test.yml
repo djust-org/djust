@@ -599,6 +599,58 @@ jobs:
         env:
           PYTHONPATH: .
 
+  # The benchmark-gated job tests/benchmarks/conftest.py has claimed exists
+  # since it was written (#2156). It did not: a grep for `--benchmark-only`
+  # across all twelve workflows returned nothing.
+  #
+  # That matters because `_assert_benchmark_under` skips its threshold whenever
+  # `benchmark.stats` is unavailable, which is what pytest-benchmark does under
+  # xdist — and every other job here runs `-n auto`. So the thresholds were
+  # enforced only by the serial pre-push hook, i.e. in a process that had just
+  # executed 10,000 tests, where a warm and fragmented heap makes the median
+  # systematically slower. `test_vdom_diff_list_reorder` measures 3.78ms on a
+  # quiet machine against its 5ms target and 7.57ms there — so it blocked every
+  # push on main while measuring the environment rather than the code.
+  #
+  # Serial and alone, which is the whole point: this is the only context in
+  # which a latency number means anything.
+  #
+  # continue-on-error until it has been green on the runner at least once
+  # (canon #1534) — GitHub runners are shared and noisier than a dev machine,
+  # and a new timing gate must prove itself before it can block a merge.
+  # Deliberately NOT in test-summary's AND-condition yet, for the same reason.
+  benchmarks:
+    name: benchmarks (serial, thresholds enforced)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # setup-uv + rust-cache, matching the six other uv jobs and every
+      # Rust-building job in this file. The first version hand-rolled
+      # `pip install uv` from main-health.yml — a second install path for one
+      # project is the parallel-path drift class (#1646), which #2155's own
+      # entry names. The cache also removes most of a ~2m30s build.
+      - uses: astral-sh/setup-uv@v7
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install
+        run: |
+          uv sync --extra dev
+          uv run maturin develop --release
+
+      - name: Run benchmarks serially with thresholds enforced
+        run: |
+          # No -n auto: xdist disables stats collection, which is exactly how
+          # these thresholds came to be unenforced everywhere.
+          uv run python -m pytest tests/benchmarks/ --benchmark-only -q
+
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
