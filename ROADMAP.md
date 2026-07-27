@@ -2574,7 +2574,7 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 9. **Integration with `dj-debounce`/`dj-throttle` shipped in 0.4.0.** `{% live_input "text" handler="search" debounce="300" %}` should just work by passing `dj-debounce="300"` through.
 
-10. **Conservative decision on `data-field_name`.** The Form-based path emits `data-field_name="..."` so a single validate handler can serve many fields. The standalone path has one handler per field, so `data-field_name` is not strictly needed — but worth documenting the omission so users migrating from `FormMixin` know what changes.
+10. **Conservative decision on `data-field_name`.** The Form-based path emits `data-field_name="..."` so a single validate handler can serve many fields. The standalone path has one handler per field, so `data-field_name` is not strictly needed — but worth documenting the omission so users migrating from `FormMixin` know what changes. *(Superseded by #2145: the premise was wrong. The Form-based path's shared validate handler was served by the widget's `name` attribute all along — `getFieldName`, `09-event-binding.js:504` — and no client code ever read `data-field_name`. It has been removed from all three renderers; nothing about the shared-handler capability changes.)*
 
 *Ships the ergonomic primitive developers actually want for the 80% of UI state that doesn't need a Django Form — toggles, search inputs, inline editors, modal fields.*
 
