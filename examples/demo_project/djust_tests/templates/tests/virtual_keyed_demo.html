@@ -1,8 +1,15 @@
-{% extends "base.html" %}
+{% extends "tests/base_test.html" %}
 
 {% block content %}
 <div dj-view="djust_tests.views.virtual_keyed_demo.VirtualKeyedDemoView">
   <h1>dj-virtual — keyed splice ops (#2017 / ADR-026)</h1>
+  <p style="background:#fff3cd;border:1px solid #e0c069;padding:.6rem">
+    <b>This page documents a known failure, not a working feature.</b>
+    An insert at position 5 currently lands at the TAIL of the item pool, with
+    the keyed-ops flag on or off. The server emits the right op
+    (<code>VirtualInsert{key, before_key}</code>); the client applier does not
+    honour it yet — see issue #2164. Use the buttons and watch the pool order.
+  </p>
 
   <p id="log" style="font-family:monospace;background:#eee;padding:.5rem">{{ log }}</p>
   <p>items: <span id="count">{{ count }}</span></p>

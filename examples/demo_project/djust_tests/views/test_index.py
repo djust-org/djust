@@ -20,57 +20,70 @@ class TestIndexView(TemplateView):
     - Link to run the test
     """
 
-    template_name = 'tests/index.html'
+    template_name = "tests/index.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
         # Define all available test pages
         # TODO: Consider auto-discovery of test views in future
-        context['tests'] = [
+        context["tests"] = [
             {
-                'name': '@cache Decorator',
-                'description': 'Automated testing for client-side response caching with TTL and LRU eviction',
-                'url_name': 'tests:cache',
-                'feature': 'Cache Decorator',
-                'phase': 'Phase 5',
-                'status': 'passing',
-                'tests': [
-                    'Cache decorator is invoked',
-                    'Cache hits return instantly without server calls',
-                    'Cache misses call server and cache result',
-                    'TTL expiration works correctly',
-                    'Cache key generation works with key_params',
+                "name": "dj-virtual keyed splice ops (#2017)",
+                "description": "Windowed list exercising ADR-026. Documents a KNOWN FAILURE: an insert at position 5 lands at the tail.",
+                "url_name": "tests:virtual-keyed",
+                "feature": "dj-virtual keyed splice ops",
+                "phase": "ADR-026 iteration 3",
+                "status": "failing",
+                "tests": [
+                    "Server emits VirtualInsert{key, before_key} with the flag on",
+                    "Client applier does not honour it yet (#2164)",
+                    "Watch the item-pool ORDER, not its size",
                 ],
             },
             {
-                'name': 'DraftModeMixin',
-                'description': 'Automated testing for localStorage-based draft auto-save with 500ms debounce',
-                'url_name': 'tests:draft-mode',
-                'feature': 'Draft Mode',
-                'phase': 'Phase 5',
-                'status': 'passing',
-                'tests': [
-                    'localStorage API available',
-                    'Draft key configuration',
-                    'Draft persistence check',
-                    'Auto-save functionality (500ms debounce)',
+                "name": "@cache Decorator",
+                "description": "Automated testing for client-side response caching with TTL and LRU eviction",
+                "url_name": "tests:cache",
+                "feature": "Cache Decorator",
+                "phase": "Phase 5",
+                "status": "passing",
+                "tests": [
+                    "Cache decorator is invoked",
+                    "Cache hits return instantly without server calls",
+                    "Cache misses call server and cache result",
+                    "TTL expiration works correctly",
+                    "Cache key generation works with key_params",
                 ],
             },
             {
-                'name': '@loading Attribute',
-                'description': 'Automated testing for @loading.disable, @loading.class, @loading.show, @loading.hide HTML attributes with scoped loading state',
-                'url_name': 'tests:loading',
-                'feature': 'Loading Attributes',
-                'phase': 'Phase 5',
-                'status': 'passing',
-                'tests': [
-                    'LoadingManager available',
-                    '@loading attributes present in DOM',
-                    'Button disabled during loading',
-                    'Independent button behavior (no cross-contamination)',
-                    'Grouped elements (button + spinner)',
-                    'Multiple modifiers work together',
+                "name": "DraftModeMixin",
+                "description": "Automated testing for localStorage-based draft auto-save with 500ms debounce",
+                "url_name": "tests:draft-mode",
+                "feature": "Draft Mode",
+                "phase": "Phase 5",
+                "status": "passing",
+                "tests": [
+                    "localStorage API available",
+                    "Draft key configuration",
+                    "Draft persistence check",
+                    "Auto-save functionality (500ms debounce)",
+                ],
+            },
+            {
+                "name": "@loading Attribute",
+                "description": "Automated testing for @loading.disable, @loading.class, @loading.show, @loading.hide HTML attributes with scoped loading state",
+                "url_name": "tests:loading",
+                "feature": "Loading Attributes",
+                "phase": "Phase 5",
+                "status": "passing",
+                "tests": [
+                    "LoadingManager available",
+                    "@loading attributes present in DOM",
+                    "Button disabled during loading",
+                    "Independent button behavior (no cross-contamination)",
+                    "Grouped elements (button + spinner)",
+                    "Multiple modifiers work together",
                 ],
             },
             # Add more tests here as they're created
@@ -91,15 +104,9 @@ class TestIndexView(TemplateView):
         ]
 
         # Summary statistics
-        context['total_tests'] = len(context['tests'])
-        context['passing_tests'] = sum(
-            1 for t in context['tests'] if t['status'] == 'passing'
-        )
-        context['failing_tests'] = sum(
-            1 for t in context['tests'] if t['status'] == 'failing'
-        )
-        context['pending_tests'] = sum(
-            1 for t in context['tests'] if t['status'] == 'pending'
-        )
+        context["total_tests"] = len(context["tests"])
+        context["passing_tests"] = sum(1 for t in context["tests"] if t["status"] == "passing")
+        context["failing_tests"] = sum(1 for t in context["tests"] if t["status"] == "failing")
+        context["pending_tests"] = sum(1 for t in context["tests"] if t["status"] == "pending")
 
         return context

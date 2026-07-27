@@ -7,9 +7,12 @@ from .draft_mode_test import DraftModeTestView
 from .loading_test import LoadingTestView
 from .test_index import TestIndexView
 
+from .virtual_keyed_demo import VirtualKeyedDemoView  # noqa: F401
+
 __all__ = [
-    'CacheTestView',
-    'DraftModeTestView',
-    'LoadingTestView',
-    'TestIndexView',
+    "VirtualKeyedDemoView",
+    "CacheTestView",
+    "DraftModeTestView",
+    "LoadingTestView",
+    "TestIndexView",
 ]

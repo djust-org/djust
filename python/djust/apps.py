@@ -40,6 +40,7 @@ class DjustConfig(AppConfig):
         # the auto-enable path itself temporarily clear this env var; see
         # ``_no_pytest_env()`` in
         # ``python/djust/tests/test_auto_hot_reload.py``.)
+
         # Wire LIVEVIEW_CONFIG['virtual_keyed_ops'] -> the process-global Rust
         # switch (ADR-026 iteration 3, #2017). Done HERE rather than in
         # rust_bridge's per-view `_apply_*_flag` hooks because the Rust side is

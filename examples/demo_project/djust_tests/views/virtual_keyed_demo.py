@@ -28,7 +28,7 @@ ROWS = 60
 
 
 class VirtualKeyedDemoView(LiveView):
-    template_name = "djust_tests/virtual_keyed_demo.html"
+    template_name = "tests/virtual_keyed_demo.html"
 
     def mount(self, request, **kwargs):
         self.items = [{"key": f"k{i}", "label": f"row {i}", "note": ""} for i in range(ROWS)]

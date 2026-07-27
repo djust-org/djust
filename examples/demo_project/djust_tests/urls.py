@@ -4,7 +4,6 @@ URL configuration for djust_tests app.
 
 from django.urls import path
 from .views import *
-from .views import virtual_keyed_demo
 
 app_name = 'tests'
 
@@ -18,5 +17,5 @@ urlpatterns = [
     path('loading/', LoadingTestView.as_view(), name='loading'),
 
     # #2017 / ADR-026 iteration-3 browser gate
-    path('virtual-keyed/', virtual_keyed_demo.VirtualKeyedDemoView.as_view(), name='virtual-keyed'),
+    path('virtual-keyed/', VirtualKeyedDemoView.as_view(), name='virtual-keyed'),
 ]

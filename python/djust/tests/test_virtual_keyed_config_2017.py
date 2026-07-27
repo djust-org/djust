@@ -102,10 +102,17 @@ def test_ready_applies_the_config_value_to_rust(monkeypatch):
     passed with `ready()` deleted. Invoking the actual method is the only way
     to know the wiring runs.
     """
+    import logging
+
     from djust.apps import DjustConfig
     from djust.config import get_config
 
     cfg = get_config()
+    # ready() adds a DjustLogSanitizerFilter with no idempotency guard, so
+    # calling it twice leaks filters onto the shared 'djust' logger (#1200's
+    # case study, in the opposite direction). Snapshot and restore.
+    _lg = logging.getLogger("djust")
+    _filters = list(_lg.filters)
 
     for want in (True, False):
         _rust.set_virtual_keyed_ops(not want)  # opposite, so a no-op fails
@@ -120,6 +127,8 @@ def test_ready_applies_the_config_value_to_rust(monkeypatch):
         assert _rust.virtual_keyed_ops_enabled() is want, (
             f"ready() did not apply virtual_keyed_ops={want} to the Rust differ"
         )
+
+    _lg.filters[:] = _filters
 
 
 def test_apps_ready_wires_the_flag():
@@ -137,29 +146,13 @@ def test_apps_ready_wires_the_flag():
     )
 
 
-def test_the_applier_is_not_gated_on_pytest():
-    """The flag must hold the same value in tests as in production.
-
-    `ready()` skips hot-reload under PYTEST_CURRENT_TEST; the flag applier
-    deliberately sits OUTSIDE that guard, or the suite would verify a
-    configuration nobody runs.
-    """
-    import inspect
-
-    from djust.apps import DjustConfig
-
-    src = inspect.getsource(DjustConfig)
-    # Indentation is the real test: a line inside the `if not
-    # os.environ.get("PYTEST_CURRENT_TEST"):` block is indented deeper than the
-    # method body. Textual ORDER is not the property — an earlier unrelated
-    # mention of the env var made the first version of this assert nonsense.
-    line = next(ln for ln in src.splitlines() if "_rust.set_virtual_keyed_ops(" in ln)
-    indent = len(line) - len(line.lstrip())
-    assert indent <= 16, (
-        f"the applier is nested {indent} spaces deep — it must not sit inside "
-        f"the PYTEST_CURRENT_TEST guard, or the suite verifies a configuration "
-        f"nobody runs"
-    )
+# `test_the_applier_is_not_gated_on_pytest` lived here. It asserted
+# `indent <= 16`, and the shipped applier sits at exactly 16 — so relocating
+# it INSIDE the PYTEST_CURRENT_TEST guard also yields 16 and the assertion
+# could not tell the two apart. Proven: that relocation left this test green;
+# only `test_ready_applies_the_config_value_to_rust` caught it. A magic indent
+# threshold with zero margin is a decorative pin, and the protection it
+# claimed is already covered by invoking the real method.
 
 
 # --- the differ honours it --------------------------------------------------
@@ -184,9 +177,11 @@ def test_the_differ_emits_keyed_ops_only_when_enabled():
     before, after = html(""), html("EDITED")
 
     def as_text(v):
-        # diff_html may hand back a JSON string or a parsed structure; a blind
-        # json.dumps double-encodes the string case and every quote assertion
-        # then misses.
+        # diff_html is PyResult<String> (crates/djust_live/src/lib.rs), so this
+        # is always the str branch. Kept as a guard rather than asserting the
+        # type, but the earlier comment claiming it 'may hand back a parsed
+        # structure' was false — and a blind json.dumps double-encoded the
+        # string, which is what made the first version of this test miss.
         return v if isinstance(v, str) else json.dumps(v)
 
     _rust.set_virtual_keyed_ops(False)
