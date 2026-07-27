@@ -48,12 +48,14 @@ def _assert_benchmark_under(benchmark, target_s: float, label: str) -> None:
     5ms target, so it blocked every push on main while measuring the
     environment rather than the code.
 
-    Numbers below are from the enforcing job itself, since that is the only
-    environment where a latency figure means anything. On the runner:
+    Numbers below are medians from ONE run of the enforcing job (Actions job
+    90062542012), since that is the only environment where a latency figure
+    means anything. An earlier version mixed figures from two runs and
+    quoted a mean as a median — in a docstring about preferring the median.
 
-        vdom_diff_list_reorder   median 0.656 ms  target   5 ms  (13% of budget)
-        vdom_diff_list_append    median 0.644 ms  target   5 ms  (13%)
-        websocket_mount_counter  median 11.4  ms  target 100 ms  (11%)
+        vdom_diff_list_reorder   median 0.662 ms  target   5 ms  (13% of budget)
+        vdom_diff_list_append    median 0.653 ms  target   5 ms  (13%)
+        websocket_mount_counter  median 11.89 ms  target 100 ms  (12%)
 
     All 58 pass, so no target was loosened. Reaching for a bigger number is the
     reflex this issue exists to stop: it is what turned a 10ms bound into 100ms

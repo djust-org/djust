@@ -615,10 +615,6 @@ jobs:
   # Serial and alone, which is the whole point: this is the only context in
   # which a latency number means anything.
   #
-  # continue-on-error until it has been green on the runner at least once
-  # (canon #1534) — GitHub runners are shared and noisier than a dev machine,
-  # and a new timing gate must prove itself before it can block a merge.
-  # Deliberately NOT in test-summary's AND-condition yet, for the same reason.
   benchmarks:
     name: benchmarks (serial, thresholds enforced)
     runs-on: ubuntu-latest
