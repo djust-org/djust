@@ -112,6 +112,27 @@ def test_the_failing_ids_are_held_in_an_array():
 # early-exit path and assert it says something.
 
 
+def test_it_does_not_enforce_benchmark_thresholds():
+    # The thresholds are skipped under `-n auto` (pytest-benchmark disables
+    # stats collection under xdist), which is how CI and `make test` run — so
+    # the serial pre-push was the only place enforcing them, after 10,000
+    # tests had already run in the same process. That measures a warm heap,
+    # not the code, and it blocked every push on main.
+    #
+    # --benchmark-disable still executes each benchmark BODY, so a correctness
+    # regression in one blocks a push exactly as before.
+    # NON-COMMENT lines only. Grepping the whole file would pass on the
+    # comment above the invocation that explains the flag — the same hole this
+    # file's other source pins already had to close twice.
+    code = "\n".join(
+        ln for ln in SCRIPT.read_text().splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert "--benchmark-disable" in code, (
+        "the pre-push run must not enforce latency thresholds it measures in "
+        "the least representative environment available"
+    )
+
+
 def test_it_does_not_suggest_no_verify():
     # The whole point is to keep the gate while making it legible. Telling a
     # blocked contributor to bypass it would trade the diagnosis for the

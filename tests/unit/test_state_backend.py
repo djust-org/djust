@@ -11,6 +11,8 @@ Tests cover:
 
 import os
 import time
+from unittest.mock import patch
+
 import pytest
 from djust.state_backend import (
     InMemoryStateBackend,
@@ -383,35 +385,57 @@ class TestRedisBackend:
         html = view2.render()
         assert html == "<div>Redis</div>"
 
-    def test_redis_serialization_performance(self, redis_backend):
-        """Smoke test that JSON/pickle round-trip doesn't catastrophically
-        regress. The 100ms bound is INTENTIONALLY GENEROUS — it catches
-        only catastrophic regressions (e.g. ~10× slowdown from accidental
-        double-serialization), not gradual perf drift. For a real perf
-        SLA, use a benchmark suite with median-based assertions over N
-        runs (pytest-benchmark or similar). Wall-clock 10ms was the
-        original bound but flaked under heavy suite load (pytest
-        scheduling jitter + GC pauses + occasional Redis hiccups);
-        see #1134 retro and #1160 for the bound-vs-claim reconciliation.
+    def test_redis_round_trip_serializes_exactly_once(self, redis_backend):
+        """The property the old wall-clock version was trying to express.
+
+        It asserted `set_time < 0.1` and `get_time < 0.1` to catch "we
+        accidentally serialized via a JSON/pickle round-trip". Its own
+        docstring recorded that the original 10ms bound "flaked under heavy
+        suite load" and had been raised to 100ms — loosening the threshold
+        rather than fixing the class, so it flaked again at 100ms during the
+        v1.1.0 drain.
+
+        This repo's canon is explicit (#1795, and the median-vs-mean rule from
+        the v1.0.6 benchmark fix): never gate a pass/fail on an
+        outlier-sensitive statistic when a robust one measures the same
+        property. Here the property is not "how long did it take" but "how
+        many times was it serialized", which is a call count — exact,
+        load-independent, and a direct statement of the regression being
+        guarded against. A double-serialization regression fails this
+        immediately; a loaded CI machine cannot.
         """
         view = RustLiveView("<div>{{ data }}</div>")
         view.update_state({"data": "x" * 1000})
 
-        # Time serialization
-        start = time.time()
-        redis_backend.set("perf_key", view)
-        set_time = time.time() - start
+        calls = {"ser": 0, "deser": 0}
+        real_ser = type(view).serialize_msgpack
+        real_deser = RustLiveView.deserialize_msgpack
 
-        # Time deserialization
-        start = time.time()
-        result = redis_backend.get("perf_key")
-        get_time = time.time() - start
+        def counting_ser(self, *a, **kw):
+            calls["ser"] += 1
+            return real_ser(self, *a, **kw)
 
-        # Should be fast — 100ms is a generous regression bound that still
-        # catches "we accidentally serialized via JSON/pickle round-trip".
-        assert set_time < 0.1, f"set took {set_time * 1000:.1f}ms"
-        assert get_time < 0.1, f"get took {get_time * 1000:.1f}ms"
+        def counting_deser(*a, **kw):
+            calls["deser"] += 1
+            return real_deser(*a, **kw)
+
+        with (
+            patch.object(type(view), "serialize_msgpack", counting_ser),
+            patch.object(RustLiveView, "deserialize_msgpack", staticmethod(counting_deser)),
+        ):
+            redis_backend.set("perf_key", view)
+            assert calls["ser"] == 1, (
+                f"set() must serialize exactly once; {calls['ser']} means the "
+                "payload is being round-tripped through a second encoder"
+            )
+            result = redis_backend.get("perf_key")
+            assert calls["deser"] == 1, f"get() must deserialize exactly once; got {calls['deser']}"
+
+        # And the round trip must still be correct — a call count alone would
+        # pass on a backend that serialized once and returned garbage.
         assert result is not None
+        view_out, _ = result
+        assert view_out.get_state()["data"] == "x" * 1000
 
     def test_redis_ttl_expiration(self, redis_backend):
         """Test that Redis TTL works."""

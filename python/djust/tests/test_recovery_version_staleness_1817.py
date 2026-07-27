@@ -69,11 +69,56 @@ class _TTRecoveryView(LiveView):
         self.count += 1
 
 
+# Every frame this module receives, in order, for diagnostics only (#2154).
+#
+# This test failed twice during the v1.1.0 drain under `-n auto` and could not
+# be reproduced afterwards in 23 consecutive runs, including at 2x CPU
+# saturation. Both observed failures coincided with concurrent worktree agents,
+# i.e. heavy I/O and database contention rather than CPU alone.
+#
+# Rather than guess at a fix for a cause that has not been pinned — a phantom
+# fix is worse than none — this records what actually arrived so the NEXT
+# occurrence is diagnosable instead of merely repeatable. It changes no
+# behaviour and asserts nothing.
+_FRAME_LOG: list = []
+
+
+def _log_frames() -> str:
+    if not _FRAME_LOG:
+        return "  (no frames were received at all)"
+    return "\n".join(
+        f"  [{i}] type={f.get('type')!r} version={f.get('version')!r}"
+        for i, f in enumerate(_FRAME_LOG)
+    )
+
+
+async def _recv(communicator, timeout):
+    """Receive one frame, recording it, and say what preceded a timeout."""
+    try:
+        frame = await communicator.receive_json_from(timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - re-raised with context below
+        raise AssertionError(
+            f"no frame arrived within {timeout}s ({type(exc).__name__}). "
+            f"Frames received before this point:\n{_log_frames()}\n"
+            "If this is the #2154 flake, that sequence is the evidence needed "
+            "to tell a slow round-trip from a missing frame."
+        ) from exc
+    _FRAME_LOG.append(frame)
+    return frame
+
+
+@pytest.fixture(autouse=True)
+def _reset_frame_log():
+    _FRAME_LOG.clear()
+    yield
+    _FRAME_LOG.clear()
+
+
 async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
     """Drain frames until one whose ``type`` == ``wanted_type`` (or return last seen)."""
     last = None
     for _ in range(tries):
-        last = await communicator.receive_json_from(timeout=timeout)
+        last = await _recv(communicator, timeout)
         if last.get("type") == wanted_type:
             return last
     return last
@@ -103,7 +148,7 @@ async def _connect_and_mount(view_suffix, url):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await _recv(communicator, 2)  # drain connect frame
 
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}.{view_suffix}", "url": url}
@@ -147,7 +192,12 @@ async def test_time_travel_jump_recovery_version_is_current():
             view_suffix="_TTRecoveryView", url="/tt/"
         )
         v_mount = _frame_version(mount_frame)
-        assert v_mount == 1, f"fresh mount baseline must be 1, got {v_mount!r}"
+        assert v_mount == 1, (
+            f"fresh mount baseline must be 1, got {v_mount!r}. A value other "
+            f"than 1 means this was not a fresh mount — session or consumer "
+            f"state leaked from an earlier test (see #2154). Frames so far:\n"
+            f"{_log_frames()}"
+        )
 
         # (2) Arming event: a normal diff. Records time-travel snapshot[0]
         # (state_before={count:0}, state_after={count:1}) AND arms recovery at
@@ -166,7 +216,7 @@ async def test_time_travel_jump_recovery_version_is_current():
         # time_travel_state frame. Capture the render frame's version.
         jump_render = None
         for _ in range(8):
-            frame = await communicator.receive_json_from(timeout=3)
+            frame = await _recv(communicator, 3)
             if frame.get("type") in ("patch", "html_update"):
                 jump_render = frame
                 break

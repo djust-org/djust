@@ -99,6 +99,12 @@ def _make_repo(tmp_path: Path, base_files: dict[str, str], branch_files: dict[st
         'WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath 2>/dev/null || true)"',
         'WT=""',
     )
+    # The fixture runs with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 (it is not a Django
+    # project), so pytest-benchmark is not loaded and --benchmark-disable is an
+    # unrecognized argument here. The flag is about the REAL suite's latency
+    # thresholds (#2156) and has nothing to do with the attribution logic under
+    # test, so the fixture drops it.
+    src = src.replace(" --benchmark-disable", "")
     (repo / "scripts" / "pre-push-pytest.sh").write_text(src)
     # The script requires a built extension to consider the base comparable.
     (repo / "python" / "djust" / "_rust.cpython-000-x.so").write_text("")
