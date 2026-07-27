@@ -24,8 +24,16 @@ Phase 2 implements client-side debounce and throttle functionality in `client.js
 - [ ] @throttle decorator works client-side (limits event frequency)
 - [ ] All JavaScript tests passing
 - [ ] Debug logging helps troubleshoot issues
-- [ ] Client bundle size < 10KB (currently ~5KB)
+- [ ] Client bundle size < 10KB (currently ~5KB) <!-- size-claim: historical -->
 - [ ] No regressions in existing functionality
+
+> **Bundle-size figures in this document are as of 2025-01 and are
+> deliberately not restated.** The `< 10KB` criterion was superseded at
+> v0.6.0 by the pre-minified distribution; the artifact a user downloads
+> is now `client.min.js.gz`. Rewriting these numbers would claim Phase 2
+> set a target it never set. For the current measurement run `make sizes`
+> — `python/djust/static/djust/client-sizes.json` is the single source
+> (#2138).
 
 ---
 
