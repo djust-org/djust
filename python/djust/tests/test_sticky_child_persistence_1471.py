@@ -36,6 +36,8 @@ sticky-child branch off makes it fail.
 
 from __future__ import annotations
 
+import re
+
 import asyncio
 from typing import Any, Dict, List, Optional
 
@@ -344,7 +346,7 @@ class _FakeConsumer(LiveViewConsumer):
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_ws_sticky_child_event_writes_state_under_stable_key():
+async def test_ws_sticky_child_event_writes_state_under_stable_key(generous_save_timeout):
     """A sticky-child WS event must persist the child's state to the session
     under ``liveview_<parent_path>__sticky__<sticky_id>``.
 
@@ -543,7 +545,7 @@ async def test_non_sticky_embed_not_written():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_sticky_ids_index_reflects_rendered_set():
+async def test_sticky_ids_index_reflects_rendered_set(generous_save_timeout):
     """After a save, ``liveview_<path>__sticky_ids`` equals exactly the
     sorted set of rendered sticky_ids. ADR-018 Decision 3.
 
@@ -580,7 +582,7 @@ async def test_sticky_ids_index_reflects_rendered_set():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_orphaned_sticky_entry_pruned_on_next_save():
+async def test_orphaned_sticky_entry_pruned_on_next_save(generous_save_timeout):
     """A ``__sticky__`` entry whose sticky_id is no longer rendered is
     pruned on the next save. ADR-018 Decision 3 (GC ledger).
 
@@ -694,7 +696,7 @@ async def test_both_opt_in_gate_child_in_parent_out():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_no_behavior_change_without_sticky_children():
+async def test_no_behavior_change_without_sticky_children(generous_save_timeout):
     """A plain opted-in parent (no ``{% live_render %}``) still saves its own
     ``liveview_<path>`` state on a normal event and writes NO ``__sticky_ids``
     / ``__sticky__*`` keys.
@@ -779,4 +781,97 @@ def test_http_sticky_child_save():
         ledger = post_session.get("liveview_/dash/__sticky_ids")
         assert ledger == ["counter"], (
             f"the HTTP path must also write the GC ledger, got: {ledger!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The bound the fixture raises must still exist in production (#2154).
+# ---------------------------------------------------------------------------
+
+
+def test_the_event_save_is_still_bounded():
+    """`generous_save_timeout` raises the bound for tests; it must not become
+    a licence to remove it.
+
+    The bound is why the save is best-effort, and best-effort is deliberate
+    (#1475): a slow session backend must never stall event handling. If it were
+    dropped, an unreachable session backend would hang the event path — the
+    failure the timeout was added to prevent — and every test above would still
+    pass, because they raise the value rather than depend on it.
+    """
+    import inspect as _inspect
+
+    from djust import runtime
+
+    assert isinstance(runtime.EVENT_STATE_SAVE_TIMEOUT_S, float)
+    # Pinned to the VALUE, not just a range. The three pre-existing tests that
+    # pinned the literal "timeout=0.150" now accept the symbol instead, so
+    # without this the bound could drift to 0.999s with every pin green — and
+    # a 1s stall on the event path is the failure #1475 exists to prevent.
+    assert runtime.EVENT_STATE_SAVE_TIMEOUT_S == 0.150, (
+        f"the event-save bound is {runtime.EVENT_STATE_SAVE_TIMEOUT_S}s, not "
+        f"0.150s. Changing it is a product decision about how long an event may "
+        f"stall — make it deliberately and update this pin, do not let it drift."
+    )
+    assert 0 < runtime.EVENT_STATE_SAVE_TIMEOUT_S <= 1.0, (
+        f"the event-save bound must stay tight; got "
+        f"{runtime.EVENT_STATE_SAVE_TIMEOUT_S}s. Raising it in production trades "
+        f"a dropped save for a stalled event loop."
+    )
+
+    src = _inspect.getsource(runtime)
+    assert "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in src, (
+        "the save must be wrapped in asyncio.wait_for with the named bound — "
+        "an unbounded save hangs the event path on a slow session backend"
+    )
+    # Exact, not a prefix match: `timeout=EVENT_STATE_SAVE_TIMEOUT_S * 200`
+    # contains the substring and yields an effective 30s bound in production.
+    assert not re.search(r"timeout=EVENT_STATE_SAVE_TIMEOUT_S\s*[*/+-]", src), (
+        "arithmetic on the bound at the call site defeats it — change the "
+        "constant instead, where the pin above can see it"
+    )
+    assert src.count("timeout=EVENT_STATE_SAVE_TIMEOUT_S") == 2, (
+        "both save call sites (the event path and the async-work path) must be "
+        "bounded; one unbounded site is enough to stall"
+    )
+
+
+def test_a_save_that_exceeds_the_bound_is_dropped_not_raised():
+    """Every bounded save site must swallow its TimeoutError, with a warning.
+
+    A timed-out save must never propagate, or a slow session backend becomes a
+    user-visible event failure. And it must never be silent, or the drop is
+    undebuggable.
+
+    The first version of this checked only the FIRST handler
+    (``split(..., 1)[1]``) and only the text BEFORE the log
+    (``split("logger.warning")[0]``). Three mutations survived it: site 2's
+    body replaced with ``pass`` (a completely silent drop), and
+    ``logger.warning(...); raise`` at either site — the most natural way anyone
+    breaks this. That is the same weakness already diagnosed for the count
+    assertion above and left in place here.
+    """
+    import inspect as _inspect
+
+    from djust import runtime
+
+    src = _inspect.getsource(runtime)
+    segments = src.split("except asyncio.TimeoutError:")[1:]
+    assert len(segments) == 2, (
+        f"expected exactly 2 bounded save sites, found {len(segments)}. If a "
+        f"third was added, bound it too and update this count; if the two were "
+        f"merged into one shared helper (the #1646 cure), change this pin to "
+        f"assert the helper is bounded rather than counting sites."
+    )
+    for n, seg in enumerate(segments, start=1):
+        # Bound the window at the NEXT except clause so one site's body cannot
+        # be satisfied by the following site's text.
+        body = seg.split("except Exception")[0][:600]
+        assert "logger.warning" in body, (
+            f"save site {n} drops a timed-out save silently — a dropped save "
+            f"must be observable or it is undebuggable"
+        )
+        assert not re.search(r"^\s*raise\b", body, re.M), (
+            f"save site {n} re-raises a timed-out save; saves must never break "
+            f"event handling (#1475)"
         )

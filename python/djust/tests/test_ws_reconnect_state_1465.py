@@ -307,7 +307,7 @@ def test_save_block_present_in_handle_event_source():
     # need close-time tail latency bounded so a stalled session backend
     # can't recreate the snapshot-poisoning failure mode.
     assert "asyncio.wait_for" in source
-    assert "timeout=0.150" in source
+    assert "timeout=0.150" in source or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in source
     assert "asyncio.TimeoutError" in source
 
     # The GATE (top-level identity + enable_state_snapshot opt-in) lives at the
@@ -398,7 +398,7 @@ class _WSReconnectCounter(LiveView):
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_ws_event_save_block_writes_through_to_session():
+async def test_ws_event_save_block_writes_through_to_session(generous_save_timeout):
     """Drive ``handle_event`` via a real WebsocketCommunicator and assert
     the session contains the post-event state.
 

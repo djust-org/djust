@@ -226,7 +226,7 @@ def _make_db_session():
 @pytest.mark.django_db
 class TestRuntimeSessionStateSave:
     @pytest.mark.asyncio
-    async def test_opt_in_event_writes_state_to_session(self):
+    async def test_opt_in_event_writes_state_to_session(self, generous_save_timeout):
         """An ``enable_state_snapshot=True`` view's event, dispatched through the
         runtime, writes the post-event state to the Django session under
         ``liveview_{path}``.
@@ -281,7 +281,7 @@ class TestRuntimeSessionStateSave:
         )
 
     @pytest.mark.asyncio
-    async def test_private_attrs_saved_under_private_key(self):
+    async def test_private_attrs_saved_under_private_key(self, generous_save_timeout):
         """Opt-in save also persists private attrs under ``{key}__private``
         (mirrors HTTP/WS save order)."""
         from asgiref.sync import sync_to_async
@@ -443,7 +443,12 @@ def test_runtime_save_block_present_and_gated():
     # Failure handling + 150ms bound (WS pin lines 310 + 329-331).
     assert "Failed to save LiveView state after runtime event" in body_collapsed
     assert "asyncio.wait_for" in body_collapsed
-    assert "timeout=0.150" in body_collapsed
+    # #2154 named this bound EVENT_STATE_SAVE_TIMEOUT_S so tests that assert a
+    # save LANDED can raise it instead of racing a 150ms wall clock. Accept
+    # either spelling — what matters is that the save is bounded at all.
+    assert (
+        "timeout=0.150" in body_collapsed or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in body_collapsed
+    )
     assert "asyncio.TimeoutError" in body_collapsed
 
 
@@ -498,7 +503,7 @@ class _StickyOptInParent(LiveView):
 @pytest.mark.django_db
 class TestRuntimeStickyChildSave:
     @pytest.mark.asyncio
-    async def test_view_id_child_event_persists_child_state(self):
+    async def test_view_id_child_event_persists_child_state(self, generous_save_timeout):
         """A ``view_id``-routed sticky-child event persists the CHILD under its
         stable sticky key (both opted in). Reproduce-first: a revert of the
         sticky save would leave the sticky index/child key absent."""
@@ -600,4 +605,7 @@ def test_runtime_sticky_save_present_and_gated():
     assert "write_sticky_index_and_prune" in helper_src
     assert "await save_session.asave()" in helper_src
     assert "asyncio.wait_for" in helper_src
-    assert "timeout=0.150" in helper_src
+    # #2154 named this bound EVENT_STATE_SAVE_TIMEOUT_S so tests that assert a
+    # save LANDED can raise it instead of racing a 150ms wall clock. Accept
+    # either spelling — what matters is that the save is bounded at all.
+    assert "timeout=0.150" in helper_src or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in helper_src

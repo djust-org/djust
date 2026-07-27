@@ -67,6 +67,20 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 
+# How long an event-path state save may take before it is abandoned (#1475).
+#
+# Deliberately bounded: a slow session backend must never stall event handling.
+# The consequence is that a save is BEST-EFFORT, not guaranteed — under enough
+# load the write is dropped and only a warning is logged.
+#
+# It is a named constant rather than two inline literals because a test that
+# asserts a save *landed* is otherwise asserting an unconditional outcome from
+# a time-bounded operation, which makes it pass everywhere except a loaded
+# machine. Such a test should raise this bound so it exercises the save LOGIC
+# rather than racing a wall clock (#2154).
+EVENT_STATE_SAVE_TIMEOUT_S = 0.150
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -3356,7 +3370,7 @@ class ViewRuntime:
             await save_session.asave()
 
         try:
-            await asyncio.wait_for(_save(), timeout=0.150)
+            await asyncio.wait_for(_save(), timeout=EVENT_STATE_SAVE_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.warning(
                 "Runtime event state save exceeded 150ms for %r — session backend "
@@ -3401,7 +3415,7 @@ class ViewRuntime:
             await save_session.asave()
 
         try:
-            await asyncio.wait_for(_save(), timeout=0.150)
+            await asyncio.wait_for(_save(), timeout=EVENT_STATE_SAVE_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.warning(
                 "Runtime event sticky-child state save exceeded 150ms for %r — "
