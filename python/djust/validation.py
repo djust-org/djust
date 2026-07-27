@@ -13,6 +13,7 @@ import inspect
 import logging
 import types
 from decimal import Decimal, InvalidOperation
+from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
 from uuid import UUID
 
@@ -162,6 +163,139 @@ def _coerce_single_value(value: str, expected_type: type) -> Any:
     return value
 
 
+# Framework-injected keys that legitimately reach a handler's **kwargs and must
+# never be reported. Underscore-prefixed keys are covered by the repo's
+# private-name convention and excluded wholesale; these are the routing keys
+# that carry no underscore.
+#
+# `view_id` was found by instrumenting the suppression point and running the
+# full suite: it survives the actor path, where runtime.py:2734 reads it with
+# `.get` rather than the `.pop` at :3457.
+#
+# `component_id` was NOT observed in that sweep — the component path pops it at
+# runtime.py:3644. It is listed because a `component_id` event on a
+# `use_actors` view takes the actor branch instead (runtime.py:2657-2661), and
+# the actor drain at :3169 passes `params` through having popped only `_args`.
+# Reachable by inspection, not by measurement; recorded as such so the
+# distinction is not lost.
+_FRAMEWORK_KWARGS_KEYS = frozenset({"view_id", "component_id"})
+
+# Warn once per (module, handler, key). This fires on @input/@change paths — a
+# warning per keystroke would be worse than no warning at all.
+#
+# Keyed on the module too, because `__qualname__` alone collides: two apps with
+# a same-named view class share one entry, so the second app's identical bug is
+# silenced and neither warning names it.
+#
+# LRU rather than a hard stop. Parameter names come from the client, so the set
+# must be bounded — but a hard stop turns a memory concern into a cheaper and
+# permanent one: ~560 events of novel near-miss keys from a single socket would
+# fill it and blind the diagnostic for every view and every tenant for the rest
+# of the process's life. Evicting the oldest entry keeps memory bounded while
+# leaving the diagnostic alive. The residual trade is that a client cycling
+# keys can be warned about repeatedly; that is noisy rather than blinding, and
+# it is the better failure of the two.
+_NEAR_MISS_WARNED: "OrderedDict[tuple, None]" = OrderedDict()
+_NEAR_MISS_WARNED_CAP = 512
+
+# A name shorter than this is a near miss of far too much: `id`/`uid`, `q`/`qs`
+# and `tab`/`tag` are all one edit apart and virtually never a wire mismatch.
+_MIN_NAME_LEN = 3
+
+
+def _is_near_miss(key: str, candidate: str) -> bool:
+    """Is `key` plausibly a mis-named `candidate`?
+
+    Structural, not a similarity score. An earlier version used
+    ``difflib.get_close_matches(..., cutoff=0.6)``, which is wrong in both
+    directions on short identifiers: it claims `data`/`date`, `from`/`form`,
+    `mode`/`node` and `id`/`uid` are typos of each other — confidently wrong
+    advice on djust's own parameter names — while *missing* `name` against
+    `field_name` (0.571) and `page` against `page_number` (0.533), which are
+    the #2137 class one step further along.
+
+    What a real wire/signature mismatch actually looks like is one of:
+
+    * the same name modulo case and underscores (``item_id`` / ``itemId``) —
+      the classic JS/Python boundary drift;
+    * one name a prefix or suffix of the other (``field`` / ``field_name``,
+      ``checked`` / ``is_checked``, ``value`` / ``val``).
+
+    Anything else is far likelier to be a key deliberately passed through to
+    ``**kwargs``, which is the documented catch-all shape.
+    """
+    a = key.lower().replace("_", "")
+    b = candidate.lower().replace("_", "")
+    if a == b:
+        return True
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) < _MIN_NAME_LEN:
+        return False
+    return long_.startswith(short) or long_.endswith(short)
+
+
+def _warn_on_near_miss_kwargs(
+    handler: Callable,
+    provided: Dict[str, Any],
+    accepted: List[str],
+    event_name: str,
+) -> None:
+    """Warn when a **kwargs handler silently swallowed a near-miss parameter.
+
+    Only *near misses* are reported — see `_is_near_miss`. An unexpected key
+    bearing no resemblance to the signature is the documented catch-all shape
+    (``def on_event(self, **kwargs)`` reading ``kwargs`` directly), and warning
+    about it would make this noise on the very paths that need it quiet.
+    """
+    if not accepted:
+        # Fast path only. A pure `**kwargs` signature is a catch-all by
+        # construction, and the loop below would find no candidate anyway —
+        # this return saves the work, it does not create the behaviour. Noted
+        # because a gate-off of this line does NOT fail the suite, and a reader
+        # should not mistake that for a missing test.
+        return
+
+    unexpected = [k for k in provided if k not in accepted]
+    if not unexpected:
+        return
+
+    name = getattr(handler, "__qualname__", None) or getattr(handler, "__name__", repr(handler))
+    module = getattr(handler, "__module__", "") or ""
+
+    for key in unexpected:
+        if key.startswith("_") or key in _FRAMEWORK_KWARGS_KEYS:
+            continue
+        pair = (module, name, key)
+        if pair in _NEAR_MISS_WARNED:
+            # Checked BEFORE the match below, so the steady state on a
+            # keystroke path is one dict lookup.
+            _NEAR_MISS_WARNED.move_to_end(pair)
+            continue
+        match = next((p for p in accepted if _is_near_miss(key, p)), None)
+        if match is None:
+            continue
+        _NEAR_MISS_WARNED[pair] = None
+        while len(_NEAR_MISS_WARNED) > _NEAR_MISS_WARNED_CAP:
+            _NEAR_MISS_WARNED.popitem(last=False)
+        # %r, not %s, for every client-influenced field. repr() escapes CR/LF,
+        # so a parameter name like "field_name\r\n" cannot forge a second log
+        # record. `key` and `match` need no length cap: a near miss must be a
+        # prefix/suffix of a declared parameter, so neither can be long.
+        # `event_name` can be, hence sanitize_for_log there.
+        logger.warning(
+            "Handler %r (event %r) was sent parameter %r, which it does not "
+            "accept, but its signature declares the similarly-named %r. Because "
+            "the handler takes **kwargs the value was discarded silently rather "
+            "than raising TypeError, so the handler ran and did nothing. "
+            "Rename one side to match. Accepted parameters: %s",
+            sanitize_for_log(name, max_length=100),
+            sanitize_for_log(str(event_name), max_length=100),
+            key,
+            match,
+            sanitize_for_log(", ".join(accepted), max_length=200),
+        )
+
+
 def validate_handler_params(
     handler: Callable,
     params: Dict[str, Any],
@@ -283,6 +417,21 @@ def validate_handler_params(
             "type_errors": None,
             "coerced_params": coerced_params,
         }
+
+    # A handler WITH **kwargs absorbs an unexpected parameter instead of
+    # raising TypeError, so a name mismatch between client and signature is
+    # silent (#2144). That is what #2137 was: the client sent `field`, the
+    # handler took `field_name`, and it ran on every keystroke doing nothing.
+    if has_var_keyword:
+        # Positional-only parameters are excluded from the suggestion pool:
+        # `h(field_name=...)` raises TypeError for `def h(field_name, /)`, so
+        # "rename one side to match" would be advice that cannot be followed.
+        nameable = [
+            n
+            for n in accepted_params
+            if sig.parameters[n].kind is not inspect.Parameter.POSITIONAL_ONLY
+        ]
+        _warn_on_near_miss_kwargs(handler, coerced_params, nameable, event_name)
 
     # Check for unexpected parameters (if no **kwargs)
     if not has_var_keyword:
