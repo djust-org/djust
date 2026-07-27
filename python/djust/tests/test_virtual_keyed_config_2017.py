@@ -70,11 +70,24 @@ def test_the_config_key_is_documented_where_it_is_defined():
 
     from djust import config as config_mod
 
-    src = inspect.getsource(config_mod)
-    i = src.index('"virtual_keyed_ops"')
-    preamble = src[max(0, i - 900) : i]
+    src = inspect.getsource(config_mod).splitlines()
+    idx = next(n for n, ln in enumerate(src) if '"virtual_keyed_ops"' in ln)
+    # Walk back over the CONTIGUOUS comment block above the key. A fixed
+    # character window was the first version and it broke the moment the
+    # comment grew — the property is "the key carries an explanation", not
+    # "the explanation fits in 900 bytes".
+    block = []
+    for n in range(idx - 1, -1, -1):
+        if src[n].strip().startswith("#"):
+            block.append(src[n])
+        elif src[n].strip() == "":
+            continue
+        else:
+            break
+    preamble = "\n".join(block)
     assert "dj-virtual" in preamble and "ADR-026" in preamble, (
-        "a bare flag name in DEFAULT_CONFIG tells a reader nothing about what turning it on does"
+        "a bare flag name in the defaults tells a reader nothing about what "
+        f"turning it on does; comment block found:\n{preamble}"
     )
 
 
