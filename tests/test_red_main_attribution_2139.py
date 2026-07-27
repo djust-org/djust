@@ -10,14 +10,17 @@ The cost is not the lost minutes. It is that a persistently red suite trains
 people to read red as noise and to reach for ``--no-verify`` — the same
 argument as #2124.
 
-These tests exercise the attribution logic in
-``scripts/pre-push-pytest.sh`` against a real scratch worktree, because that
-is the only way to know it attributes correctly rather than confidently.
+These are STRUCTURAL checks over the script and workflow source. They do not
+run the attribution logic, and an earlier version of this docstring claimed
+they did — which read as evidence that the empirical check had been done and
+helped three defects ship. The behavioural coverage lives in
+``test_red_main_attribution_behaviour_2139.py`` (which runs the real script
+against a real merge-base) and ``test_main_health_workflow_2139.py`` (which
+executes the workflow's JavaScript under stubs).
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -98,34 +101,15 @@ def test_the_failing_ids_are_held_in_an_array():
     )
 
 
-def test_every_early_exit_either_answers_or_says_it_cannot():
-    # The property, asserted directly rather than as an arithmetic identity.
-    # A first attempt asserted `count("NOT attributed") >= 3`, which tolerates
-    # losing one — and the path you lose is exactly the one that would then
-    # guess silently. A second attempt tied the count to the number of
-    # `exit "$STATUS"` lines, which is also wrong: two of those exits give a
-    # real ANSWER ("HEAD is the merge-base, so every failure is pre-existing")
-    # rather than bailing.
-    #
-    # What must hold: every early exit is preceded by a line that either
-    # attributes the failures or says it cannot.
-    lines = SCRIPT.read_text().splitlines()
-    ANSWERS = ("NOT attributed", "pre-existing", "no FAILED lines")
-    unexplained = []
-    for i, line in enumerate(lines[:-1]):  # the final exit ends a full report
-        # Match any `exit`, not the exact literal `exit "$STATUS"` — a bare
-        # `exit $STATUS` with no message would otherwise slip past the check
-        # designed to catch exactly that.
-        if not re.match(r"^\s*exit\b", line):
-            continue
-        window = " ".join(lines[max(0, i - 6) : i])
-        if not any(a in window for a in ANSWERS):
-            unexplained.append(i + 1)
-    assert not unexplained, (
-        f"early exit(s) at line(s) {unexplained} neither attribute the failures "
-        f"nor say they cannot — a silent exit leaves the pusher guessing, which "
-        f"is the state this script exists to end"
-    )
+# The former `test_every_early_exit_either_answers_or_says_it_cannot` lived
+# here. It scanned a 6-line window above each `exit` for an explanatory
+# phrase, so an unexplained exit inserted anywhere near an unrelated echo
+# satisfied it — a reviewer defeated it by inserting a bare
+# `[ "$COUNT" -gt 3 ] && exit "$STATUS"` and the suite stayed green. Its
+# docstring had already critiqued two earlier attempts at the same check,
+# and the critique applied to the third. Replaced by behavioural cases in
+# test_red_main_attribution_behaviour_2139.py that run the script down each
+# early-exit path and assert it says something.
 
 
 def test_it_does_not_suggest_no_verify():
