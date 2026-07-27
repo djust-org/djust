@@ -615,14 +615,9 @@ jobs:
   # Serial and alone, which is the whole point: this is the only context in
   # which a latency number means anything.
   #
-  # continue-on-error until it has been green on the runner at least once
-  # (canon #1534) — GitHub runners are shared and noisier than a dev machine,
-  # and a new timing gate must prove itself before it can block a merge.
-  # Deliberately NOT in test-summary's AND-condition yet, for the same reason.
   benchmarks:
     name: benchmarks (serial, thresholds enforced)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
@@ -654,7 +649,7 @@ jobs:
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [rust-tests, python-tests, javascript-tests, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks]
+    needs: [benchmarks, rust-tests, python-tests, javascript-tests, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks]
     if: always()
     steps:
       - name: Check test results
@@ -669,6 +664,7 @@ jobs:
           echo "  Security scan: ${{ needs.security-scan.result }}"
           echo "  Security tests: ${{ needs.security-tests.result }}"
           echo "  Demo checks: ${{ needs.demo-checks.result }}"
+          echo "  Benchmarks: ${{ needs.benchmarks.result }}"
 
           # Core tests must pass (Rust, Python, JavaScript, Browser-smoke,
           # Nav/hooks guard, Security tests, Demo checks). The full
@@ -681,7 +677,8 @@ jobs:
              [ "${{ needs.browser-smoke.result }}" == "success" ] && \
              [ "${{ needs.nav-hooks-guard.result }}" == "success" ] && \
              [ "${{ needs.security-tests.result }}" == "success" ] && \
-             [ "${{ needs.demo-checks.result }}" == "success" ]; then
+             [ "${{ needs.demo-checks.result }}" == "success" ] && \
+             [ "${{ needs.benchmarks.result }}" == "success" ]; then
             echo "All core tests passed!"
             if [ "${{ needs.playwright-tests.result }}" != "success" ]; then
               echo "WARNING: Playwright tests failed (optional, not blocking)"

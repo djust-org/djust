@@ -93,22 +93,43 @@ def test_the_benchmark_job_actually_runs_the_benchmarks():
 # --- a new timing gate must not block a merge until it has proven itself --
 
 
-def test_the_job_is_non_blocking_until_green_on_the_runner():
-    # Canon #1534: a CI job exercising an environment the dev machine cannot
-    # reproduce ships `continue-on-error: true` until it has been green on the
-    # runner at least once. GitHub runners are shared and noisier than a dev
-    # machine, and this is a *timing* gate — the exact class that has now
-    # false-failed twice in this repo.
-    #
-    # When it is promoted, this test should be inverted, not deleted, and the
-    # job added to test-summary's AND-condition (#1713: being in `needs` is
-    # not the same as gating).
+def test_the_job_now_fails_the_aggregate_check():
+    """Inverted at promotion (#2160), as its previous form instructed.
+
+    Deliberately NOT named "blocks the merge". `main` has **no required status
+    checks** — `repos/.../branches/main/protection` has no
+    `required_status_checks` key and the rulesets carry only deletion,
+    non-fast-forward and a review requirement. So a red `test-summary` does not
+    stop a merge here; this job failing fails the aggregate check, and nothing
+    more. Tracked in #2163.
+
+    That is #1713 one level up, and worth stating precisely: the first version
+    of this PR claimed "blocking merge gate" in its title, CHANGELOG, this test
+    name and this docstring, all on the strength of the AND-chain edit — which
+    is necessary and not sufficient.
+
+    What this does buy: `continue-on-error: true` previously made
+    `needs.benchmarks.result == 'success'` even on failure, so the job proved
+    the thresholds could be enforced without enforcing them. Now a threshold
+    breach turns the aggregate red, which is visible and actionable.
+    """
     job = _test_yml()["jobs"]["benchmarks"]
-    assert job.get("continue-on-error") is True, (
-        "promote deliberately: flip this assertion AND add `benchmarks` to "
-        "test-summary's success condition in the same change, or the job is "
-        "in `needs` without gating anything (#1713)"
+    assert job.get("continue-on-error") is not True, (
+        "the benchmarks job must fail the aggregate check; job-level "
+        "continue-on-error would make needs.benchmarks.result 'success' even "
+        "when the thresholds fail"
     )
+    # F2: a STEP-level flag defeats the gate identically, and this repo uses
+    # that idiom four times in this very file (test.yml:456,475,488,492) with
+    # comments recommending it as the way to ship a new check. A pin that sees
+    # only the job-level key is load-bearing on one axis and decorative on the
+    # adjacent one (#1859/#1543).
+    for step in job.get("steps", []):
+        assert step.get("continue-on-error") is not True, (
+            f"step {step.get('name') or step.get('uses')!r} fails soft, so the "
+            f"job still reports success and the AND-chain passes with the "
+            f"thresholds breached"
+        )
 
 
 def _gates_the_merge() -> bool:
