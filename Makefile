@@ -48,6 +48,18 @@ help: ## Display this help message
 
 ##@ Build
 
+.PHONY: sizes
+sizes: ## Print the measured client-size figures (the source for doc claims)
+	@python3 -c "import json,pathlib; \
+m=json.loads(pathlib.Path('python/djust/static/djust/client-sizes.json').read_text()); \
+print(); \
+print('  shipped   client.min.js.gz   %.1f KB  <- quote THIS in README' % m['shipped']['kb']); \
+print('  build in  client.js (gz)     %.1f KB  across %d modules' % (m['unminified']['gz_kb'], m['unminified']['modules'])); \
+print('  build in  client.js (raw)    %.0f KB' % (m['unminified']['bytes']/1024)); \
+print(); \
+print('  Regenerate with: make build-js'); \
+print()" 2>/dev/null || echo "  no client-sizes.json — run 'make build-js' first"
+
 .PHONY: build-js
 build-js: ## Build client.js from source modules
 	@echo "$(GREEN)Building client.js from source modules...$(NC)"

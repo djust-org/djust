@@ -60,7 +60,7 @@ djust/
 │   ├── templatetags/       # Django template tags
 │   ├── tenants/            # Multi-tenant support
 │   ├── backends/           # Presence backends (memory, redis)
-│   └── static/djust/       # Client JS (~58 KB gz minified; 184 KB gz / 727 KB raw unminified, 55 modules)
+│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~58 KB
 ├── crates/
 │   ├── djust/              # PyO3 bindings (entry point for Python)
 │   ├── djust_core/         # Core types, serialization, context
@@ -89,7 +89,22 @@ djust/
 - **Error handling**: Use `Result` types; no `unwrap()` in library code
 
 ### JavaScript
-- Client JS size budget: the SHIPPED artifact is `client.min.js.gz` at **~58 KB** — that is the number `scripts/check-doc-snippets.py` enforces against README (±3 KB band) and the only one a user downloads. Unminified `client.js` is ~184 KB gz / 727 KB raw across 55 modules in `static/djust/src/`; it is a build input, not a deliverable. (These read ~87 KB / 388 KB / 35 modules until #2133 — three stale numbers that had drifted apart because only the README one was checked.) When adding a feature, measure its gzipped delta — aim under 2 KB gzipped per new module. Top 3 modules (`12-vdom-patch.js`, `09-event-binding.js`, `03-websocket.js`) are 42% of the budget; reducing them requires structural care. No new dependencies without discussion.
+- Client JS size budget. Every figure below is generated into
+  `python/djust/static/djust/client-sizes.json` by `scripts/build-client.sh`
+  and enforced by `scripts/check-doc-snippets.py` against the artifact each
+  line names — run `make sizes` to print the current values (#2138).
+  - **Shipped**: `client.min.js.gz` is **~58 KB** gz — what a user downloads,
+    and the only figure that constrains anything.
+  - **Build input**: unminified `client.js` is ~188 KB gz <!-- size-claim: unminified -->
+    across 55 modules in `static/djust/src/`. Not a deliverable; do not quote
+    it as "the client size".
+  - Until #2138 these read ~87 KB gz / 388 KB raw / 35 modules <!-- size-claim: historical -->
+    and had drifted more than 2x, because only the README pair was checked.
+
+  A marker must be on the SAME LINE as the number it governs — the check is
+  per-line, and a marker one line away governs nothing. That is how the first
+  version of this block shipped a decorative marker.
+When adding a feature, measure its gzipped delta — aim under 2 KB gzipped per new module. Top 3 modules (`12-vdom-patch.js`, `09-event-binding.js`, `03-websocket.js`) are 42% of the budget; reducing them requires structural care. No new dependencies without discussion.
 - **No `console.log`** without `if (globalThis.djustDebug)` guard — unguarded logging is auto-rejected
 - New JS feature files in `static/djust/src/` must have corresponding test files in `tests/js/`
 

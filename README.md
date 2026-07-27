@@ -88,7 +88,7 @@ everything click.
 
 | Attribute | Where | Purpose |
 |---|---|---|
-| `{% djust_client_config %}` | `<head>` | Emits client config meta tags; djust auto-injects the ~5KB client runtime into every LiveView response — no manual `<script>` tag needed |
+| `{% djust_client_config %}` | `<head>` | Emits client config meta tags; djust auto-injects the ~58 KB gz client runtime into every LiveView response — no manual `<script>` tag needed |
 | `dj-view="{{ dj_view_id }}"` | `<body>` | Connects page to WebSocket session |
 | `dj-root` | Inner `<div>` | Marks the reactive region; only HTML inside is diffed and patched |
 
@@ -930,7 +930,7 @@ def search(self, query: str = "", **kwargs):
 ```
 ┌─────────────────────────────────────────────┐
 │  Browser                                    │
-│  ├── client.js (~58 KB gz) — events & DOM  │
+│  ├── client.min.js.gz (~58 KB) — events   │
 │  └── WebSocket connection                   │
 └─────────────────────────────────────────────┘
            ↕ WebSocket (Binary/JSON)

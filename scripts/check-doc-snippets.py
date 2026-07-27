@@ -208,12 +208,9 @@ def _imports_from_tree(tree: ast.Module) -> list[tuple[str, list[str]]]:
 def _is_module(tree: ast.Module) -> bool:
     """A block is a 'complete module' if it has >=1 top-level import AND
     >=1 top-level class/def. Otherwise it is a 'fragment'."""
-    has_import = any(
-        isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body
-    )
+    has_import = any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body)
     has_def = any(
-        isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-        for n in tree.body
+        isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) for n in tree.body
     )
     return has_import and has_def
 
@@ -230,9 +227,7 @@ def _resolve_imports(imports: list[tuple[str, list[str]]]) -> list[str]:
         try:
             mod = importlib.import_module(module_name)
         except Exception as exc:  # noqa: BLE001 — surface every failure
-            errors.append(
-                f"unresolvable import `{module_name}` ({type(exc).__name__})"
-            )
+            errors.append(f"unresolvable import `{module_name}` ({type(exc).__name__})")
             continue
         for sym in symbols:
             if hasattr(mod, sym):
@@ -246,8 +241,7 @@ def _resolve_imports(imports: list[tuple[str, list[str]]]) -> list[str]:
                 importlib.import_module(f"{module_name}.{sym}")
             except Exception:  # noqa: BLE001 — not a submodule either → real miss
                 errors.append(
-                    f"`{module_name}` has no attribute `{sym}` "
-                    f"(renamed or removed public symbol?)"
+                    f"`{module_name}` has no attribute `{sym}` (renamed or removed public symbol?)"
                 )
     return errors
 
@@ -336,12 +330,10 @@ def _walk_security_style(code: str) -> tuple[list[str], list[str]]:
         # --- Triggers 1 + 2: print(...) / print(f"...") ---
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id == "print":
-                fstring = bool(node.args) and _joinedstr_interpolates(
-                    node.args[0]
-                )
+                fstring = bool(node.args) and _joinedstr_interpolates(node.args[0])
                 if fstring:
                     errors.append(
-                        f"line {node.lineno}: f-string `print(f\"...\")` — "
+                        f'line {node.lineno}: f-string `print(f"...")` — '
                         f"use the logging module (CLAUDE.md rules 4 + 6)"
                     )
                 else:
@@ -355,14 +347,12 @@ def _walk_security_style(code: str) -> tuple[list[str], list[str]]:
             if _func_name(node.func) == "mark_safe":
                 if node.args and _joinedstr_interpolates(node.args[0]):
                     errors.append(
-                        f"line {node.lineno}: interpolating `mark_safe(f\"...\")` "
+                        f'line {node.lineno}: interpolating `mark_safe(f"...")` '
                         f"— use `format_html()` or `escape()` (CLAUDE.md rule 1)"
                     )
 
         # --- Trigger 5: f-string logging — logger.X(f"...") ---
-        if isinstance(node, ast.Call) and isinstance(
-            node.func, ast.Attribute
-        ):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             attr = node.func
             base = attr.value
             if (
@@ -374,15 +364,13 @@ def _walk_security_style(code: str) -> tuple[list[str], list[str]]:
             ):
                 errors.append(
                     f"line {node.lineno}: f-string logging "
-                    f"`{base.id}.{attr.attr}(f\"...\")` — use %s-style "
+                    f'`{base.id}.{attr.attr}(f"...")` — use %s-style '
                     f"formatting (CLAUDE.md rule 4)"
                 )
 
         # --- Trigger 4: bare `except: pass` / `except E: pass` ---
         if isinstance(node, ast.ExceptHandler):
-            body_is_solely_pass = len(node.body) == 1 and isinstance(
-                node.body[0], ast.Pass
-            )
+            body_is_solely_pass = len(node.body) == 1 and isinstance(node.body[0], ast.Pass)
             if body_is_solely_pass:
                 if node.type is None:
                     errors.append(
@@ -440,9 +428,7 @@ def check_security_style(*docs: Path) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def check_django_floor(
-    pyproject: Path, readme: Path, quickstart: Path
-) -> list[str]:
+def check_django_floor(pyproject: Path, readme: Path, quickstart: Path) -> list[str]:
     """Part (b.1): every stated Django version must match the pyproject floor.
 
     Returns a list of error strings (empty if all claims match).
@@ -476,41 +462,138 @@ def check_django_floor(
     return errors
 
 
+def _load_size_manifest(bundle: Path) -> dict | None:
+    """The generated size manifest, or None if this tree has no build.
+
+    Written by `scripts/build-client.sh` and COMMITTED (#2138). The gzipped
+    bundles themselves are gitignored, so before the manifest existed this
+    check measured a locally-built artifact and warned-and-skipped on a fresh
+    clone — CI and a contributor could disagree about whether a claim was in
+    band. Reading a committed manifest makes them agree.
+    """
+    import json
+
+    manifest = bundle.parent / "client-sizes.json"
+    if not manifest.is_file():
+        return None
+    try:
+        return json.loads(manifest.read_text())
+    except (ValueError, OSError):
+        return None
+
+
+# Which artifact a size claim refers to. EXPLICIT markers only — no keyword
+# guessing (#2138).
+#
+# The first version inferred the artifact from words on the line, with "last
+# hint wins". It was wrong three ways at once: "minified" is a substring of
+# "unminified" and always won on position, so the `unminified` hint could
+# never fire at all; "we minify client.js down to ~58 KB" resolved to the
+# unminified artifact because `client.js` came last; and a path like
+# `src/client.js` in a sentence about the shipped bundle did the same. The
+# real docs passed only by accident of word order.
+#
+# Prose is not a reliable place to infer intent from. A claim about anything
+# other than the SHIPPED bundle must say so on its own line.
+_SIZE_ARTIFACT_MARKERS = {
+    "<!-- size-claim: unminified -->": ("unminified", "gz_kb"),
+    "<!-- size-claim: shipped -->": ("shipped", "kb"),
+}
+_SIZE_DEFAULT_ARTIFACT = ("shipped", "kb")
+_SIZE_HISTORICAL_MARKER = "size-claim: historical"
+# Every file carrying a client-size claim that this repo maintains. Correcting
+# a claim without guarding its file leaves it free to drift straight back —
+# which is a reduced-scale instance of the "N copies, only some checked" class
+# this check exists to retire (#1646/#2138).
+_SIZE_CLAIM_FILES = [
+    "README.md",
+    "CLAUDE.md",
+    "docs/llms.txt",
+    "docs/llms-full.txt",
+    "docs/TEMPLATE_BACKEND.md",
+    "docs/guides/sw-enhancements.md",
+    "docs/website/core-concepts/templates.md",
+    "docs/website/getting-started/core-concepts.md",
+    "docs/website/getting-started/first-liveview.md",
+    "docs/website/guides/template-cheatsheet.md",
+]
+
+# A size claim counts when its line is ABOUT THE CLIENT — not only when it
+# says "gz". Gating on "gz" alone missed `~5KB client runtime` in README and
+# five more copies across docs/, every one wrong by ~11x: the injected file is
+# client.min.js at 58.7 KB gz / 233 KB raw. The most-wrong claims in the repo
+# were the ones the check could not see (#2138).
+_SIZE_CLIENT_CONTEXT_RE = re.compile(
+    r"client[ ._-]?(js|javascript|runtime|bundle)|client\.min\.js|gzip|\bgz\b",
+    re.IGNORECASE,
+)
+
+
+def _artifact_for_line(line: str, filename: str) -> tuple[str, str]:
+    """The artifact a claim on this line describes.
+
+    Defaults to the SHIPPED bundle — the only figure that constrains anything,
+    and the one a reader assumes. Anything else is opt-in per line.
+    """
+    for marker, artifact in _SIZE_ARTIFACT_MARKERS.items():
+        if marker in line:
+            return artifact
+    return _SIZE_DEFAULT_ARTIFACT
+
+
 def check_js_size(bundle: Path, readme: Path) -> tuple[list[str], list[str]]:
     """Part (b.2): every `~NN KB` client-size claim must be within band.
 
-    Returns (errors, warnings). A missing bundle file yields a warning
-    (sub-check skipped), not an error.
+    Returns (errors, warnings). A missing bundle AND missing manifest yields a
+    warning (sub-check skipped), not an error.
     """
     errors: list[str] = []
     warnings: list[str] = []
 
-    if not bundle.is_file():
-        warnings.append(
-            f"bundle {bundle} not found — JS size check skipped "
-            f"(run scripts/build-client.sh to generate it)"
-        )
-        return errors, warnings
+    manifest = _load_size_manifest(bundle)
+    root = readme.parent
 
-    measured_kb = bundle.stat().st_size / 1024
-    low = measured_kb - _SIZE_TOLERANCE_KB
-    high = measured_kb + _SIZE_TOLERANCE_KB
+    if manifest is None:
+        if not bundle.is_file():
+            warnings.append(
+                f"bundle {bundle} not found and no client-sizes.json — JS size "
+                f"check skipped (run scripts/build-client.sh to generate both)"
+            )
+            return errors, warnings
+        # Fall back to measuring, for a tree built before the manifest existed.
+        manifest = {"shipped": {"kb": bundle.stat().st_size / 1024}}
 
-    text = readme.read_text()
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        lower = line.lower()
-        if "gz" not in lower and "gzip" not in lower:
-            continue  # only size claims qualified with a gzip context
-        for cm in _SIZE_CLAIM_RE.finditer(line):
-            stated = float(cm.group(1))
-            if not (low <= stated <= high):
-                errors.append(
-                    f"{readme.name}:{lineno} — client-size claim "
-                    f"`~{cm.group(1)} KB` is outside the tolerance band "
-                    f"[{low:.1f}, {high:.1f}] KB "
-                    f"(measured {measured_kb:.1f} KB, "
-                    f"+/-{_SIZE_TOLERANCE_KB:.0f} KB)"
-                )
+    for filename in _SIZE_CLAIM_FILES:
+        doc = root / filename
+        if not doc.is_file():
+            continue
+        for lineno, line in enumerate(doc.read_text().splitlines(), start=1):
+            if not _SIZE_CLIENT_CONTEXT_RE.search(line):
+                continue  # only claims whose line is about the client bundle
+            if _SIZE_HISTORICAL_MARKER in line:
+                continue  # a figure quoted precisely to say it was wrong
+            section, field = _artifact_for_line(line, filename)
+            measured = (manifest.get(section) or {}).get(field)
+            if measured is None:
+                continue
+            low = measured - _SIZE_TOLERANCE_KB
+            high = measured + _SIZE_TOLERANCE_KB
+            for cm in _SIZE_CLAIM_RE.finditer(line):
+                stated = float(cm.group(1))
+                if not (low <= stated <= high):
+                    artifact = (manifest.get(section) or {}).get("artifact", section)
+                    errors.append(
+                        f"{filename}:{lineno} — client-size claim "
+                        f"`~{cm.group(1)} KB` is outside the tolerance band "
+                        f"[{low:.1f}, {high:.1f}] KB (measured {measured:.1f} KB "
+                        f"for {artifact}, +/-{_SIZE_TOLERANCE_KB:.0f} KB). "
+                        f"Run `make sizes` for the current figures. If this "
+                        f"claim is about the unminified build input, mark the "
+                        f"line `<!-- size-claim: unminified -->`; if it is a "
+                        f"historical figure quoted to say it WAS wrong, mark "
+                        f"it `<!-- {_SIZE_HISTORICAL_MARKER} -->`. A marker "
+                        f"governs its own line only."
+                    )
     return errors, warnings
 
 
@@ -549,9 +632,7 @@ def run(
         lines.append(f"WARNING: {w}")
 
     if all_errors:
-        lines.append(
-            f"Found {len(all_errors)} doc-snippet/claim issue(s):"
-        )
+        lines.append(f"Found {len(all_errors)} doc-snippet/claim issue(s):")
         for e in all_errors:
             lines.append(f"  {e}")
         return 1, "\n".join(lines)
@@ -613,22 +694,12 @@ def main(argv=None):
     args = build_arg_parser().parse_args(argv)
 
     readme = Path(args.readme) if args.readme else (ROOT / "README.md")
-    quickstart = (
-        Path(args.quickstart) if args.quickstart else (ROOT / "QUICKSTART.md")
-    )
-    pyproject = (
-        Path(args.pyproject) if args.pyproject else (ROOT / "pyproject.toml")
-    )
+    quickstart = Path(args.quickstart) if args.quickstart else (ROOT / "QUICKSTART.md")
+    pyproject = Path(args.pyproject) if args.pyproject else (ROOT / "pyproject.toml")
     bundle = (
-        Path(args.bundle)
-        if args.bundle
-        else (ROOT / "python/djust/static/djust/client.min.js.gz")
+        Path(args.bundle) if args.bundle else (ROOT / "python/djust/static/djust/client.min.js.gz")
     )
-    guides_dir = (
-        Path(args.guides_dir)
-        if args.guides_dir
-        else (ROOT / "docs/website/guides")
-    )
+    guides_dir = Path(args.guides_dir) if args.guides_dir else (ROOT / "docs/website/guides")
 
     # An explicitly-passed input file that does not exist is a usage error.
     # The bundle is intentionally exempt — its absence is a graceful skip.

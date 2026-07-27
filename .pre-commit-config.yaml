@@ -91,7 +91,7 @@ repos:
 
       - id: build-js
         name: build client.js from src/ modules
-        entry: bash -c 'bash scripts/build-client.sh && git add python/djust/static/djust/client.js python/djust/static/djust/debug-panel.js'
+        entry: bash -c 'bash scripts/build-client.sh && git add python/djust/static/djust/client.js python/djust/static/djust/debug-panel.js python/djust/static/djust/client-sizes.json'
         language: system
         files: ^python/djust/static/djust/src/
         types: [javascript]
@@ -189,7 +189,7 @@ repos:
         name: check doc snippets + version/size claims (#1500, #1707)
         entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh scripts/check-doc-snippets.py'
         language: system
-        files: ^(README|QUICKSTART)\.md$|^pyproject\.toml$|^docs/website/guides/.*\.md$
+        files: ^(README|QUICKSTART|CLAUDE)\.md$|^pyproject\.toml$|^docs/website/guides/.*\.md$|^python/djust/static/djust/client-sizes\.json$
         pass_filenames: false
 
   # Lockfile self-entry version sync — catches the drift class #1487 cited

@@ -115,7 +115,7 @@ def my_view(request):
 | Feature | DjustTemplateBackend | LiveView |
 |---------|---------------------|----------|
 | **Rendering** | Rust (10-100x faster) | Rust (10-100x faster) |
-| **Client.js** | ❌ No (smaller pages) | ✅ Yes (~63KB) |
+| **Client.js** | ❌ No (smaller pages) | ✅ Yes (~58 KB gz) |
 | **WebSocket** | ❌ No | ✅ Yes |
 | **Interactivity** | ❌ Static only | ✅ Real-time updates |
 | **Use Case** | Static content pages | Interactive features |
