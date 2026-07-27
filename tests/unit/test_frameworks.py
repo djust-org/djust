@@ -249,6 +249,148 @@ class TestDjChangeAttribute:
         assert "dj-change" not in html
 
 
+# --- #2145: no data-field_name, and the `name` that replaced it ---
+
+
+class TestNoDataFieldNameAttribute:
+    """The adapters must not emit ``data-field_name`` (#2145).
+
+    Until #2145 all three widget renderers set ``data-field_name="<name>"``
+    next to ``dj-change="validate_field"``, commented *"so event handler knows
+    which field changed"*. Nothing read it, and the misleading appearance that
+    it did is what produced #2137. These tests are the mechanical guard: they
+    go red the moment any renderer re-adds it.
+
+    Three renderer sites emit the binding, so all three are covered
+    individually (#1104) — ``_render_input`` (text/email/textarea/select),
+    ``_render_checkbox``, and ``_render_radio``.
+    """
+
+    @pytest.fixture(params=["bootstrap5", "tailwind", "plain"])
+    def adapter(self, request):
+        return get_adapter(request.param)
+
+    # --- site 1: _render_input (text, email, textarea, select branches) ---
+
+    def test_text_input_has_no_data_field_name(self, adapter):
+        field = forms.CharField()
+        html = adapter.render_field(field, "email", "", [])
+        assert "data-field_name" not in html
+
+    def test_email_input_has_no_data_field_name(self, adapter):
+        field = forms.EmailField()
+        html = adapter.render_field(field, "email", "", [])
+        assert "data-field_name" not in html
+
+    def test_textarea_has_no_data_field_name(self, adapter):
+        field = forms.CharField(widget=forms.Textarea)
+        html = adapter.render_field(field, "bio", "", [])
+        assert "data-field_name" not in html
+
+    def test_select_has_no_data_field_name(self, adapter):
+        field = forms.ChoiceField(choices=[("a", "A"), ("b", "B")])
+        html = adapter.render_field(field, "role", "", [])
+        assert "data-field_name" not in html
+
+    # --- site 2: _render_checkbox ---
+
+    def test_checkbox_has_no_data_field_name(self, adapter):
+        field = forms.BooleanField(required=False)
+        html = adapter.render_field(field, "agree", False, [])
+        assert "data-field_name" not in html
+
+    # --- site 3: _render_radio ---
+
+    def test_radio_has_no_data_field_name(self, adapter):
+        field = forms.ChoiceField(choices=[("a", "A"), ("b", "B")], widget=forms.RadioSelect)
+        html = adapter.render_field(field, "priority", "", [])
+        assert "data-field_name" not in html
+
+    def test_radio_had_it_outside_the_auto_validate_guard(self, adapter):
+        """The radio site emitted it even with ``auto_validate=False``.
+
+        ``frameworks.py``'s radio branch had the assignment one indent level
+        OUT of the ``if auto_validate:`` block that the other two sites kept
+        it inside, so a radio rendered with ``auto_validate=False`` carried
+        ``data-field_name`` on an element with **no djust directive at all** —
+        the sharpest demonstration that nothing consumed it.
+        """
+        field = forms.ChoiceField(choices=[("a", "A"), ("b", "B")], widget=forms.RadioSelect)
+        html = adapter.render_field(field, "priority", "", [], auto_validate=False)
+        assert "dj-change" not in html
+        assert "data-field_name" not in html
+
+    # --- the attribute that actually carries the name ---
+
+    @pytest.mark.parametrize(
+        "field,field_name",
+        [
+            (forms.CharField(), "name"),
+            (forms.EmailField(), "email"),
+            (forms.CharField(widget=forms.Textarea), "bio"),
+            (forms.ChoiceField(choices=[("a", "A")]), "role"),
+            (forms.BooleanField(required=False), "agree"),
+            (forms.ChoiceField(choices=[("a", "A")], widget=forms.RadioSelect), "priority"),
+        ],
+        ids=["text", "email", "textarea", "select", "checkbox", "radio"],
+    )
+    def test_every_widget_carries_name(self, adapter, field, field_name):
+        """``name`` is why deleting ``data-field_name`` was safe.
+
+        The client's ``getFieldName`` (``09-event-binding.js:504``) resolves
+        the field name as ``data-field`` → ``name`` → ``id``. The adapters
+        never emitted ``data-field``, so the live path already ran on the
+        ``name`` branch; the reconnect path (``_processFormRecovery``,
+        ``:1773``) reads ``field.name || field.id`` and never looked at
+        ``data-*`` either. If a renderer ever stops setting ``name``, the
+        field name stops reaching the handler — hence this test.
+        """
+        html = adapter.render_field(field, field_name, "", [])
+        assert f'name="{field_name}"' in html
+
+    def test_no_directive_that_would_collect_data_attributes(self, adapter):
+        """Pins the reachability chain that made removal safe.
+
+        ``data-*`` is collected by exactly two client functions:
+        ``extractTypedParams`` (``08-event-parsing.js:248``), which runs only
+        for ``dj-click`` / ``dj-poll`` / ``dj-mounted`` / ``dj-click-away`` /
+        ``dj-shortcut`` / ``dj-window-*`` / ``dj-document-*``; and
+        ``_processAutoRecover`` (``09-event-binding.js:1684``), which reads the
+        ``dj-auto-recover`` container's own ``data-*``. The adapters emit none
+        of those, which is why ``data-field_name`` could never be read.
+
+        If a renderer ever grows one of these directives, the analysis above
+        stops holding and this test goes red so it gets redone. Note the
+        caller-controlled escape hatch it does NOT cover: ``dom_event=`` and
+        ``widget.attrs`` can put an arbitrary directive on the element.
+        """
+        collecting_directives = [
+            "dj-click",
+            "dj-poll",
+            "dj-mounted",
+            "dj-click-away",
+            "dj-shortcut",
+            "dj-window-",
+            "dj-document-",
+            "dj-auto-recover",
+        ]
+        fields = [
+            (forms.CharField(), "name"),
+            (forms.CharField(widget=forms.Textarea), "bio"),
+            (forms.ChoiceField(choices=[("a", "A")]), "role"),
+            (forms.BooleanField(required=False), "agree"),
+            (forms.ChoiceField(choices=[("a", "A")], widget=forms.RadioSelect), "priority"),
+        ]
+        for field, field_name in fields:
+            html = adapter.render_field(field, field_name, "", [])
+            for directive in collecting_directives:
+                assert directive not in html, (
+                    f"{field_name} now renders {directive!r} — an element carrying it "
+                    "DOES have its data-* collected, so the #2145 reachability "
+                    "analysis must be redone before trusting it."
+                )
+
+
 # --- XSS escaping in adapters ---
 
 

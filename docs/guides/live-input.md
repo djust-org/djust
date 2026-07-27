@@ -137,7 +137,7 @@ break the XSS matrix**.
 | Requires a Django `Form` class | **Yes** | No |
 | Requires `FormMixin` or `WizardMixin` | **Yes** | No |
 | Error display integration | **Yes** (via `form_errors`) | No (caller handles errors) |
-| `data-field_name` attribute | **Yes** (for shared validate handlers) | **No** (one handler per field) |
+| One handler serving many fields | **Yes** — the handler reads `field`, which the client resolves from the widget's `name` attribute | Not the intent (one handler per field); `name` defaults to the handler name |
 | Per-field validation on blur | **Yes** (auto) | No (caller wires it up) |
 | Lightweight for single-input state | Heavy | **Yes** |
 

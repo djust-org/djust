@@ -44,6 +44,28 @@ class BaseAdapter(FrameworkAdapter):
     Subclasses override class attributes to customize per-framework behavior.
     CSS classes are resolved via ``config.get_framework_class()`` so the user's
     LIVEVIEW_CONFIG is respected automatically.
+
+    **How the field name reaches the handler — do not add a ``data-*``
+    attribute for it (#2145).** These renderers bind ``dj-change`` (or the
+    caller's ``dom_event``) and set ``name="<field_name>"``. The client's
+    ``buildFormEventParams`` (``09-event-binding.js:525``) hardcodes the key
+    ``field`` and sources it from ``getFieldName`` (``:504``) — ``data-field``,
+    then the element's ``name``, then its ``id``. It merges only
+    ``dj-value-*``; it does **not** collect ``data-*``. The ``name`` these
+    renderers already set is what carries the field name, on both the live
+    event path and the reconnect path (``_processFormRecovery``, ``:1773``,
+    reads ``field.name || field.id``).
+
+    Until #2145 this code also emitted ``data-field_name="<field_name>"``,
+    commented *"so event handler knows which field changed"*. Nothing read
+    it: ``data-*`` is collected only by ``extractTypedParams``
+    (``08-event-parsing.js:248``) and by ``_processAutoRecover``
+    (``09-event-binding.js:1684``), and neither runs on an element whose only
+    djust directive is ``dj-change``/``dj-input``. The attribute was inert —
+    but it made the false mechanism *"djust maps ``data-*`` to handler
+    parameters"* look true, which is the belief that produced #2137 (the
+    ``validate_field`` signature taking ``field_name`` while the client sends
+    ``field``). Adding one back would re-arm that trap.
     """
 
     # Framework-specific markers — override in subclasses
@@ -235,8 +257,6 @@ class BaseAdapter(FrameworkAdapter):
             attrs["required"] = "required"
         if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
             attrs[kwargs.get("dom_event", "dj-change")] = kwargs.get("event_name", "validate_field")
-            # Pass field_name so event handler knows which field changed
-            attrs["data-field_name"] = field_name
 
         if field_type == "textarea":
             # Merge widget.attrs (placeholder, rows, cols, etc.) — existing
@@ -287,8 +307,6 @@ class BaseAdapter(FrameworkAdapter):
             attrs["required"] = "required"
         if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
             attrs[kwargs.get("dom_event", "dj-change")] = kwargs.get("event_name", "validate_field")
-            # Pass field_name so event handler knows which field changed
-            attrs["data-field_name"] = field_name
 
         # Merge widget.attrs before building the tag
         self._merge_widget_attrs(field, attrs)
@@ -345,8 +363,6 @@ class BaseAdapter(FrameworkAdapter):
                 attrs[kwargs.get("dom_event", "dj-change")] = kwargs.get(
                     "event_name", "validate_field"
                 )
-            # Pass field_name so event handler knows which field changed
-            attrs["data-field_name"] = field_name
             # Merge widget.attrs (data-*, custom classes, etc.)
             self._merge_widget_attrs(field, attrs)
 
