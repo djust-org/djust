@@ -37,13 +37,22 @@ def test_the_hook_uses_the_wrapper():
     )
 
 
-def test_the_wrapper_passes_a_green_run_straight_through():
-    # It must add nothing on the happy path — no extra worktree, no extra
-    # suite run. Verified by source: the merge-base work is unreachable
-    # before the early exit.
-    src = SCRIPT.read_text()
-    body = src[: src.index("# Collect the failing node ids.")]
-    assert 'STATUS" -eq 0 ] && exit 0' in body, "a green run must exit before any merge-base work"
+def test_a_green_run_does_no_merge_base_work():
+    # Property, not a string. The first version asserted a literal appeared in
+    # a slice of the source bounded by a COMMENT — renaming the comment
+    # changed the test's meaning, and work added above the marker went
+    # unnoticed. Assert instead that nothing expensive precedes the early exit.
+    lines = SCRIPT.read_text().splitlines()
+    exit_line = next(i for i, ln in enumerate(lines) if 'STATUS" -eq 0 ] && exit 0' in ln)
+    # Non-comment lines only: the header explains the merge-base machinery,
+    # and a check that cannot tell mentioning from doing would fail on its own
+    # documentation.
+    before = "\n".join(ln for ln in lines[:exit_line] if not ln.lstrip().startswith("#"))
+    for expensive in ("git worktree", "mktemp -d", "merge-base"):
+        assert expensive not in before, (
+            f"a green run must not reach `{expensive}` — the happy path has to "
+            "stay free, or every contributor pays for a diagnostic they do not need"
+        )
 
 
 def test_it_copies_every_python_abi_not_just_one():
@@ -59,16 +68,34 @@ def test_it_copies_every_python_abi_not_just_one():
     assert "head -1" not in src.split("# Collect")[0] or "_rust*.so" in src
 
 
-def test_pre_existing_means_explicitly_failed_at_the_base():
-    # A test that passed at the base, errored on collection, or did not exist
-    # is NEW. Attributing to the contributor is the conservative direction —
-    # they will investigate; the reverse dismisses a real regression.
+def test_each_failing_id_is_checked_individually_at_the_base():
+    # This test previously asserted `--continue-on-collection-errors` was
+    # present and documented it as making absent tests survivable. It does
+    # not: pytest resolves every argument BEFORE collecting, so one
+    # unresolvable id aborts the session with "no tests ran" and zero results.
+    # The test certified a mechanism that did not work, and the behavioural
+    # suite (test_red_main_attribution_behaviour_2139.py) is what caught it.
+    #
+    # The property that actually holds: one invocation per id, so no single
+    # id can poison the others.
     src = SCRIPT.read_text()
-    assert "--continue-on-collection-errors" in src, (
-        "a test absent at the merge-base is a collection error, not a failure; "
-        "without this flag the run aborts and nothing is attributed"
+    assert 'for _id in "${FAILED_IDS[@]}"' in src, (
+        "each failing id must be checked on its own; passing the whole set in "
+        "one pytest invocation lets one absent id abort the run and report "
+        "every pre-existing failure as new"
     )
-    assert re.search(r"PRE=\$\(grep -E '\^FAILED '", src)
+    assert '"$_id" -q' in src, "the per-id run must pass exactly that one id"
+
+
+def test_the_failing_ids_are_held_in_an_array():
+    # `$FAILED` unquoted meant a parametrized id containing a space
+    # (`test_x[a b]`) split into two unresolvable args and poisoned the whole
+    # merge-base run. pytest does not sanitise ids.
+    src = SCRIPT.read_text()
+    assert "FAILED_IDS=()" in src and 'FAILED_IDS+=("$_line")' in src, (
+        "failing ids must be read into an array; word-splitting a string of "
+        "ids breaks on any id containing a space"
+    )
 
 
 def test_every_early_exit_either_answers_or_says_it_cannot():
@@ -86,7 +113,10 @@ def test_every_early_exit_either_answers_or_says_it_cannot():
     ANSWERS = ("NOT attributed", "pre-existing", "no FAILED lines")
     unexplained = []
     for i, line in enumerate(lines[:-1]):  # the final exit ends a full report
-        if line.strip() != 'exit "$STATUS"':
+        # Match any `exit`, not the exact literal `exit "$STATUS"` — a bare
+        # `exit $STATUS` with no message would otherwise slip past the check
+        # designed to catch exactly that.
+        if not re.match(r"^\s*exit\b", line):
             continue
         window = " ".join(lines[max(0, i - 6) : i])
         if not any(a in window for a in ANSWERS):

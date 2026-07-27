@@ -84,6 +84,11 @@ jobs:
   report:
     name: open or update the tracking issue
     needs: suite
+    # ALWAYS. Without this, a job-level failure — a broken `uv venv`, a
+    # network blip during install — skips the report entirely and nobody is
+    # told. "Nothing alerted" is the failure mode this workflow exists to
+    # remove, so it must not reproduce it when its own setup breaks.
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Open, update, or close the main-health issue
@@ -91,18 +96,32 @@ jobs:
         env:
           FAILED: ${{ needs.suite.outputs.failed }}
           SUMMARY: ${{ needs.suite.outputs.summary }}
+          SUITE_RESULT: ${{ needs.suite.result }}
         with:
           script: |
-            const failed = process.env.FAILED === 'true';
+            // Three states, not two: green, red, and "the check could not
+            // run". Reporting an infrastructure failure as "main is RED"
+            // sends people hunting for a test regression that does not exist.
+            const outcome = process.env.SUITE_RESULT;
+            const ranAtAll = outcome === 'success';
+            const failed = !ranAtAll || process.env.FAILED === 'true';
+            const infraFailure = !ranAtAll;
             const summary = process.env.SUMMARY || '(no summary captured)';
             const LABEL = 'main-health';
-            const TITLE = 'main is RED — the full suite fails on main';
+            const TITLE = infraFailure
+              ? 'main-health check could not run'
+              : 'main is RED — the full suite fails on main';
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-            const existing = (await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: LABEL,
-            })).data.find(i => i.title === TITLE);
+            // Match on TITLE, not on the label. Labels can be dropped
+            // silently (GitHub drops unknown labels for actors without push
+            // access, and the label can simply be deleted), and a re-find that
+            // depends on one turns this into a daily duplicate-issue
+            // generator with nothing ever closed.
+            const all = (await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open',
+            })).data;
+            const existing = all.find(i => i.title === TITLE);
 
             if (!failed) {
               if (existing) {
@@ -123,7 +142,13 @@ jobs:
             // the reader most likely to open this is someone whose unrelated
             // push just bounced, and the first thing they need to know is
             // that it was not them.
-            const body = [
+            const body = infraFailure ? [
+              '**The main-health check could not run** — the job failed before or during setup',
+              '(dependency install, toolchain, or runner). This is NOT evidence that main is red;',
+              'it is evidence that we currently cannot tell.',
+              '',
+              `Run: ${run}`,
+            ].join('\n') : [
               '**Every push is blocked while this is open.** The pre-push hook runs the full suite,',
               'so a red `main` rejects branches that have nothing to do with the failure.',
               '',

@@ -408,8 +408,18 @@ class TestWorktreePythonpath:
                 candidate = token.strip("'\"")
                 if candidate.endswith(".sh"):
                     script = REPO_ROOT / candidate
-                    if script.is_file() and "--worktree-pythonpath" in script.read_text():
-                        return True
+                    if not script.is_file():
+                        continue
+                    # NON-COMMENT lines only. Grepping the whole file would
+                    # pass on a comment mentioning the flag — the exact hole
+                    # this docstring disclaims one level up, reintroduced one
+                    # level down. Gate-off proved it: flag moved into a
+                    # comment with the plumbing gone, and the test stayed green.
+                    for sline in script.read_text().splitlines():
+                        if sline.lstrip().startswith("#"):
+                            continue
+                        if "--worktree-pythonpath" in sline:
+                            return True
             return False
 
         assert any(_carries_flag(ln) for ln in entry_lines), (

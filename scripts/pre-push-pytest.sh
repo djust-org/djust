@@ -30,14 +30,22 @@ bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q 2>&1 | tee "$REP
 STATUS=${PIPESTATUS[0]}
 [ "$STATUS" -eq 0 ] && exit 0
 
-# Collect the failing node ids.
-FAILED=$(grep -E '^FAILED ' "$REPORT" | sed 's/^FAILED //' | sed 's/ - .*//' | sort -u)
-if [ -z "$FAILED" ]; then
+# Collect the failing node ids into an ARRAY, not a whitespace-split string.
+# pytest does not sanitise ids: `@pytest.mark.parametrize("v", ["a b"])` yields
+# `test_x[a b]`, and word-splitting that into two unresolvable args poisons the
+# whole merge-base run (see below). Also strip only the LAST ` - ` so an id
+# containing that sequence survives.
+FAILED_IDS=()
+while IFS= read -r _line; do
+    [ -n "$_line" ] && FAILED_IDS+=("$_line")
+done < <(grep -E '^FAILED ' "$REPORT" | sed 's/^FAILED //' | sed 's/ - [^-]*$//' | sort -u)
+FAILED=$(printf '%s\n' "${FAILED_IDS[@]+"${FAILED_IDS[@]}"}")
+if [ "${#FAILED_IDS[@]}" -eq 0 ]; then
     echo
     echo "pytest failed but reported no FAILED lines — see the output above."
     exit "$STATUS"
 fi
-COUNT=$(printf '%s\n' "$FAILED" | wc -l | tr -d ' ')
+COUNT=${#FAILED_IDS[@]}
 
 echo
 echo "──────────────────────────────────────────────────────────────────────"
@@ -86,33 +94,42 @@ fi
 # or every test errors on import and everything looks "pre-existing".
 cp python/djust/_rust*.so "$SCRATCH/python/djust/" 2>/dev/null || true
 
-BASE_REPORT="$(mktemp)"
 REPO_ROOT=$(pwd)
-(
-    cd "$SCRATCH" || exit 1
-    PYTHONPATH="$SCRATCH/python:$SCRATCH" \
-        "$REPO_ROOT/.venv/bin/python" -m pytest $FAILED -q \
-        --continue-on-collection-errors 2>&1
-) > "$BASE_REPORT" 2>&1
+# ONE INVOCATION PER ID, deliberately. pytest resolves every argument before
+# collecting, so a SINGLE id that does not exist at the merge-base — a test the
+# branch adds, renames, or re-parametrizes — aborts the entire session with
+# "no tests ran" and zero results. Passing the whole set therefore reports
+# every genuinely pre-existing failure as "new on this branch": the confidently
+# wrong answer this script's header calls worse than none, delivered in exactly
+# the mixed case the script exists for.
+#
+# An earlier version passed them all at once and then WHITELISTED "no tests
+# ran" as usable signal, which turned a safe non-answer into an unsafe wrong
+# one. N is the number of failures, so per-id is cheap.
+PRE_IDS=()
+UNRESOLVED=0
+for _id in "${FAILED_IDS[@]}"; do
+    _out=$(
+        cd "$SCRATCH" || exit 1
+        PYTHONPATH="$SCRATCH/python:$SCRATCH" \
+            "$REPO_ROOT/.venv/bin/python" -m pytest "$_id" -q 2>&1
+    )
+    if printf '%s' "$_out" | grep -qE '^FAILED '; then
+        PRE_IDS+=("$_id")
+    elif printf '%s' "$_out" | grep -qE '[0-9]+ passed'; then
+        : # passed at the base -> new on this branch
+    elif printf '%s' "$_out" | grep -qE 'no tests ran|not found'; then
+        : # absent at the base -> new by definition
+    else
+        # Could not tell for this id (import error, venv mismatch). Count it
+        # so the report can say so rather than silently calling it new.
+        UNRESOLVED=$((UNRESOLVED + 1))
+    fi
+done
 
-# A test that does not EXIST at the merge-base is new by definition — pytest
-# reports it as a collection error, not a failure, and treating that as "did
-# not complete" would refuse to attribute the most common case (a branch that
-# adds a test). Only bail when the run produced no usable signal at all.
-if ! grep -qE '([0-9]+ (passed|failed|error|deselected))|no tests ran' "$BASE_REPORT"; then
-    echo "  The merge-base run produced no usable result (likely a build or"
-    echo "  venv mismatch), so these failures are NOT attributed."
-    rm -f "$BASE_REPORT"
-    exit "$STATUS"
-fi
-
-# PRE-EXISTING means "explicitly failed at the merge-base". A test that
-# passed there, errored on collection, or did not exist is NEW on this branch
-# — attributing to the contributor is the conservative direction.
-PRE=$(grep -E '^FAILED ' "$BASE_REPORT" | sed 's/^FAILED //' | sed 's/ - .*//' | sort -u)
-rm -f "$BASE_REPORT"
-PRE_COUNT=$(printf '%s' "$PRE" | grep -c . || true)
-YOURS=$(comm -23 <(printf '%s\n' "$FAILED") <(printf '%s\n' "$PRE") | grep -c . || true)
+PRE=$(printf '%s\n' "${PRE_IDS[@]+"${PRE_IDS[@]}"}")
+PRE_COUNT=${#PRE_IDS[@]}
+YOURS=$((COUNT - PRE_COUNT - UNRESOLVED))
 
 echo
 if [ "$PRE_COUNT" -gt 0 ] && [ "$YOURS" -eq 0 ]; then
@@ -124,10 +141,21 @@ if [ "$PRE_COUNT" -gt 0 ] && [ "$YOURS" -eq 0 ]; then
 elif [ "$PRE_COUNT" -gt 0 ]; then
     echo "  $PRE_COUNT of $COUNT failure(s) are PRE-EXISTING at the merge-base;"
     echo "  $YOURS are new on this branch:"
-    comm -23 <(printf '%s\n' "$FAILED") <(printf '%s\n' "$PRE") | sed 's/^/    /'
+    for _id in "${FAILED_IDS[@]}"; do
+        _is_pre=0
+        for _p in "${PRE_IDS[@]+"${PRE_IDS[@]}"}"; do
+            [ "$_id" = "$_p" ] && _is_pre=1 && break
+        done
+        [ "$_is_pre" -eq 0 ] && echo "    $_id"
+    done
 else
     echo "  None of these fail at the merge-base — all $COUNT are new on this"
     echo "  branch."
+fi
+if [ "$UNRESOLVED" -gt 0 ]; then
+    echo
+    echo "  ($UNRESOLVED could not be checked at the merge-base and are NOT"
+    echo "  attributed — treat them as unknown, not as yours.)"
 fi
 echo "──────────────────────────────────────────────────────────────────────"
 
