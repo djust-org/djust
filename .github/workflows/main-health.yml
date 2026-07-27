@@ -1,0 +1,154 @@
+name: main health
+
+# Detect a red `main` proactively, instead of discovering it via a failed push
+# (#2139).
+#
+# `main` carried three failing doc-snippet tests until #2134. Because the
+# pre-push hook runs the full suite, EVERY contributor's push was rejected —
+# on branches that had nothing to do with the failure. Nothing alerted; the
+# state was found only because a push failed, and it took three failed pushes
+# to diagnose.
+#
+# The cost is not the lost minutes. It is that a persistently red suite trains
+# people to read red as noise, and to reach for `--no-verify` — the same
+# argument as #2124.
+
+on:
+  schedule:
+    # 07:00 UTC daily — before the working day in most contributor timezones,
+    # so a red main is known before anyone tries to push into it.
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: main-health
+  cancel-in-progress: false
+
+jobs:
+  suite:
+    name: full suite on main
+    runs-on: ubuntu-latest
+    outputs:
+      failed: ${{ steps.run.outputs.failed }}
+      summary: ${{ steps.run.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          uv venv
+          uv pip install -e ".[dev]" || uv pip install -e .
+          .venv/bin/pip install maturin
+          .venv/bin/maturin develop --release || true
+
+      - name: Run the suite
+        id: run
+        run: |
+          set +e
+          .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -q \
+            > /tmp/suite.txt 2>&1
+          STATUS=$?
+          set -e
+          tail -40 /tmp/suite.txt
+
+          # The failing test IDs are what a reader needs; the summary line
+          # alone does not say WHICH tests, and that is the information the
+          # pre-push hook also buries.
+          FAILED=$(grep -E '^FAILED ' /tmp/suite.txt | sed 's/ - .*//' | head -25 || true)
+          SUMMARY=$(grep -E '[0-9]+ (passed|failed)' /tmp/suite.txt | tail -1 || true)
+
+          {
+            echo "failed=$([ "$STATUS" -eq 0 ] && echo false || echo true)"
+            echo "summary<<EOF"
+            echo "$SUMMARY"
+            echo ""
+            echo "$FAILED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+
+  report:
+    name: open or update the tracking issue
+    needs: suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open, update, or close the main-health issue
+        uses: actions/github-script@v8
+        env:
+          FAILED: ${{ needs.suite.outputs.failed }}
+          SUMMARY: ${{ needs.suite.outputs.summary }}
+        with:
+          script: |
+            const failed = process.env.FAILED === 'true';
+            const summary = process.env.SUMMARY || '(no summary captured)';
+            const LABEL = 'main-health';
+            const TITLE = 'main is RED — the full suite fails on main';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const existing = (await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: LABEL,
+            })).data.find(i => i.title === TITLE);
+
+            if (!failed) {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number,
+                  body: `main is green again as of ${run}. Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number, state: 'closed',
+                });
+              }
+              return;
+            }
+
+            // Why the body leads with the blast radius rather than the trace:
+            // the reader most likely to open this is someone whose unrelated
+            // push just bounced, and the first thing they need to know is
+            // that it was not them.
+            const body = [
+              '**Every push is blocked while this is open.** The pre-push hook runs the full suite,',
+              'so a red `main` rejects branches that have nothing to do with the failure.',
+              '',
+              'If your push just bounced: run `bash scripts/pre-push-pytest.sh` — it re-runs only',
+              'the failing tests against your merge-base and tells you which failures are yours.',
+              'Do **not** reach for `--no-verify`.',
+              '',
+              '```',
+              summary,
+              '```',
+              '',
+              `Run: ${run}`,
+              '',
+              '_Opened automatically by `.github/workflows/main-health.yml` (#2139). It updates this',
+              'issue on each subsequent red run and closes it when main goes green._',
+            ].join('\n');
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: TITLE, labels: [LABEL], body,
+              });
+            }
