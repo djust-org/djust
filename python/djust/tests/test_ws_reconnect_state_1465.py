@@ -398,7 +398,7 @@ class _WSReconnectCounter(LiveView):
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_ws_event_save_block_writes_through_to_session():
+async def test_ws_event_save_block_writes_through_to_session(generous_save_timeout):
     """Drive ``handle_event`` via a real WebsocketCommunicator and assert
     the session contains the post-event state.
 

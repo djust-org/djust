@@ -67,3 +67,27 @@ def make_staff_user(
     user.has_perm = lambda p: p in perm_set  # type: ignore[assignment]
     user.has_perms = lambda ps: all(p in perm_set for p in ps)  # type: ignore[assignment]
     return user
+
+
+@pytest.fixture
+def generous_save_timeout(monkeypatch):
+    """Raise the event-save bound so save assertions test logic, not the clock.
+
+    The save is bounded by ``asyncio.wait_for(..., EVENT_STATE_SAVE_TIMEOUT_S)``
+    (``runtime.py``, #1475) — deliberately, so a slow session backend cannot
+    stall event handling. That makes a save BEST-EFFORT: under enough load the
+    DB write exceeds 150ms, the TimeoutError is swallowed, only a warning is
+    logged, and ``liveview_<path>`` never appears.
+
+    A test asserting the key IS there is therefore asserting an unconditional
+    outcome from a time-bounded operation. It passed on every quiet machine and
+    failed on a loaded one — reproduced deterministically with 24 CPU spinners
+    and 3 IO writers on 12 cores (#2154).
+
+    These tests exist to check WHICH keys the save writes, not how fast the
+    session backend is, so they raise the bound. `test_the_event_save_is_still
+    _bounded` keeps the production bound itself honest.
+    """
+    from djust import runtime
+
+    monkeypatch.setattr(runtime, "EVENT_STATE_SAVE_TIMEOUT_S", 30.0)

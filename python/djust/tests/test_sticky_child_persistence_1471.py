@@ -36,6 +36,8 @@ sticky-child branch off makes it fail.
 
 from __future__ import annotations
 
+import re
+
 import asyncio
 from typing import Any, Dict, List, Optional
 
@@ -692,30 +694,6 @@ async def test_both_opt_in_gate_child_in_parent_out():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def generous_save_timeout(monkeypatch):
-    """Raise the event-save bound so save assertions test logic, not the clock.
-
-    The save is bounded by ``asyncio.wait_for(..., EVENT_STATE_SAVE_TIMEOUT_S)``
-    (``runtime.py``, #1475) — deliberately, so a slow session backend cannot
-    stall event handling. That makes a save BEST-EFFORT: under enough load the
-    DB write exceeds 150ms, the TimeoutError is swallowed, only a warning is
-    logged, and ``liveview_<path>`` never appears.
-
-    A test asserting the key IS there is therefore asserting an unconditional
-    outcome from a time-bounded operation. It passed on every quiet machine and
-    failed on a loaded one — reproduced deterministically with 24 CPU spinners
-    and 3 IO writers on 12 cores (#2154).
-
-    These tests exist to check WHICH keys the save writes, not how fast the
-    session backend is, so they raise the bound. `test_the_event_save_is_still
-    _bounded` keeps the production bound itself honest.
-    """
-    from djust import runtime
-
-    monkeypatch.setattr(runtime, "EVENT_STATE_SAVE_TIMEOUT_S", 30.0)
-
-
 @pytest.mark.django_db
 @pytest.mark.asyncio
 async def test_no_behavior_change_without_sticky_children(generous_save_timeout):
@@ -826,6 +804,15 @@ def test_the_event_save_is_still_bounded():
     from djust import runtime
 
     assert isinstance(runtime.EVENT_STATE_SAVE_TIMEOUT_S, float)
+    # Pinned to the VALUE, not just a range. The three pre-existing tests that
+    # pinned the literal "timeout=0.150" now accept the symbol instead, so
+    # without this the bound could drift to 0.999s with every pin green — and
+    # a 1s stall on the event path is the failure #1475 exists to prevent.
+    assert runtime.EVENT_STATE_SAVE_TIMEOUT_S == 0.150, (
+        f"the event-save bound is {runtime.EVENT_STATE_SAVE_TIMEOUT_S}s, not "
+        f"0.150s. Changing it is a product decision about how long an event may "
+        f"stall — make it deliberately and update this pin, do not let it drift."
+    )
     assert 0 < runtime.EVENT_STATE_SAVE_TIMEOUT_S <= 1.0, (
         f"the event-save bound must stay tight; got "
         f"{runtime.EVENT_STATE_SAVE_TIMEOUT_S}s. Raising it in production trades "
@@ -837,6 +824,12 @@ def test_the_event_save_is_still_bounded():
         "the save must be wrapped in asyncio.wait_for with the named bound — "
         "an unbounded save hangs the event path on a slow session backend"
     )
+    # Exact, not a prefix match: `timeout=EVENT_STATE_SAVE_TIMEOUT_S * 200`
+    # contains the substring and yields an effective 30s bound in production.
+    assert not re.search(r"timeout=EVENT_STATE_SAVE_TIMEOUT_S\s*[*/+-]", src), (
+        "arithmetic on the bound at the call site defeats it — change the "
+        "constant instead, where the pin above can see it"
+    )
     assert src.count("timeout=EVENT_STATE_SAVE_TIMEOUT_S") == 2, (
         "both save call sites (the event path and the async-work path) must be "
         "bounded; one unbounded site is enough to stall"
@@ -844,31 +837,41 @@ def test_the_event_save_is_still_bounded():
 
 
 def test_a_save_that_exceeds_the_bound_is_dropped_not_raised():
-    """The behaviour the fixture exists to work around, asserted directly.
+    """Every bounded save site must swallow its TimeoutError, with a warning.
 
-    A timed-out save must be swallowed with a warning — never propagated — or
-    a slow session backend becomes a user-visible event failure. This is what
-    makes `liveview_<path>` absent under load, and it is correct.
+    A timed-out save must never propagate, or a slow session backend becomes a
+    user-visible event failure. And it must never be silent, or the drop is
+    undebuggable.
+
+    The first version of this checked only the FIRST handler
+    (``split(..., 1)[1]``) and only the text BEFORE the log
+    (``split("logger.warning")[0]``). Three mutations survived it: site 2's
+    body replaced with ``pass`` (a completely silent drop), and
+    ``logger.warning(...); raise`` at either site — the most natural way anyone
+    breaks this. That is the same weakness already diagnosed for the count
+    assertion above and left in place here.
     """
     import inspect as _inspect
 
     from djust import runtime
 
     src = _inspect.getsource(runtime)
-    # BOTH bounded call sites must swallow it. `in` alone passes while one of
-    # the two re-raises — the mutation that first exposed this pin as too
-    # weak changed one site and the assertion still found the other.
-    assert src.count("except asyncio.TimeoutError:") == 2, (
-        "each bounded save site must catch its own TimeoutError; one "
-        "uncaught site turns a slow session backend into a user-visible "
-        "event failure"
+    segments = src.split("except asyncio.TimeoutError:")[1:]
+    assert len(segments) == 2, (
+        f"expected exactly 2 bounded save sites, found {len(segments)}. If a "
+        f"third was added, bound it too and update this count; if the two were "
+        f"merged into one shared helper (the #1646 cure), change this pin to "
+        f"assert the helper is bounded rather than counting sites."
     )
-    # The handler must log rather than re-raise: a dropped save is a warning,
-    # not an error the event handler surfaces.
-    after = src.split("except asyncio.TimeoutError:", 1)[1][:400]
-    assert "logger.warning" in after, (
-        "a timed-out save must be logged, or the drop is completely silent"
-    )
-    assert "raise" not in after.split("logger.warning")[0], (
-        "a timed-out save must not propagate — saves must never break event handling"
-    )
+    for n, seg in enumerate(segments, start=1):
+        # Bound the window at the NEXT except clause so one site's body cannot
+        # be satisfied by the following site's text.
+        body = seg.split("except Exception")[0][:600]
+        assert "logger.warning" in body, (
+            f"save site {n} drops a timed-out save silently — a dropped save "
+            f"must be observable or it is undebuggable"
+        )
+        assert not re.search(r"^\s*raise\b", body, re.M), (
+            f"save site {n} re-raises a timed-out save; saves must never break "
+            f"event handling (#1475)"
+        )

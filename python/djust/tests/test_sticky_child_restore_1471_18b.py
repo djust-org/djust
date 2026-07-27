@@ -180,7 +180,7 @@ class _ReplayParent(LiveView):
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_sticky_child_state_restored_on_next_render():
+async def test_sticky_child_state_restored_on_next_render(generous_save_timeout):
     """A sticky child whose state was saved (via 18a's WS save path) must have
     that state restored when the parent re-renders {% live_render %} — instead
     of the child's mount() re-initializing it to count=0.
@@ -251,7 +251,7 @@ async def test_sticky_child_state_restored_on_next_render():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_sticky_child_private_state_restored():
+async def test_sticky_child_private_state_restored(generous_save_timeout):
     """After a child event sets the user-private ``_note`` attr, a re-render
     restores it via ``_restore_private_state`` (reads the ``__private`` key).
 
@@ -292,7 +292,7 @@ async def test_sticky_child_private_state_restored():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_ws_round_trip_restore():
+async def test_ws_round_trip_restore(generous_save_timeout):
     """Full WS round-trip: a child ``increment`` event (18a saves) followed by
     a fresh parent re-render against the same session restores the child.
 
@@ -406,7 +406,7 @@ def test_http_round_trip_restore():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_mount_skipped_when_saved_state_present():
+async def test_mount_skipped_when_saved_state_present(generous_save_timeout):
     """When saved state is present, the child's ``mount()`` must NOT run — the
     restore is IN LIEU OF mount() state-init (ADR-018 Decision 2).
 
@@ -443,7 +443,7 @@ async def test_mount_skipped_when_saved_state_present():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_restore_star_replay_runs_for_restored_child():
+async def test_restore_star_replay_runs_for_restored_child(generous_save_timeout):
     """A restored sticky child runs the Decision-6 ``_restore_*`` replay.
 
     ``_ReplayChild`` overrides ``_restore_presence`` to set a marker; after a

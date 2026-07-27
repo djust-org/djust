@@ -226,7 +226,7 @@ def _make_db_session():
 @pytest.mark.django_db
 class TestRuntimeSessionStateSave:
     @pytest.mark.asyncio
-    async def test_opt_in_event_writes_state_to_session(self):
+    async def test_opt_in_event_writes_state_to_session(self, generous_save_timeout):
         """An ``enable_state_snapshot=True`` view's event, dispatched through the
         runtime, writes the post-event state to the Django session under
         ``liveview_{path}``.
@@ -281,7 +281,7 @@ class TestRuntimeSessionStateSave:
         )
 
     @pytest.mark.asyncio
-    async def test_private_attrs_saved_under_private_key(self):
+    async def test_private_attrs_saved_under_private_key(self, generous_save_timeout):
         """Opt-in save also persists private attrs under ``{key}__private``
         (mirrors HTTP/WS save order)."""
         from asgiref.sync import sync_to_async
@@ -503,7 +503,7 @@ class _StickyOptInParent(LiveView):
 @pytest.mark.django_db
 class TestRuntimeStickyChildSave:
     @pytest.mark.asyncio
-    async def test_view_id_child_event_persists_child_state(self):
+    async def test_view_id_child_event_persists_child_state(self, generous_save_timeout):
         """A ``view_id``-routed sticky-child event persists the CHILD under its
         stable sticky key (both opted in). Reproduce-first: a revert of the
         sticky save would leave the sticky index/child key absent."""
