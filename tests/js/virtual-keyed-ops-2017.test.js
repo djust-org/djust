@@ -558,6 +558,32 @@ describe('#2136: every inner-patch kind a content diff can emit', () => {
         expect(poolKeys(dom)).toEqual(['k0', 'k1', 'k2', 'k3', 'k4', 'k5']);
     });
 
+    it('an in-window Replace actually appears — the re-render is load-bearing', async () => {
+        // The two lines that make the swap work — `invalidateWindow` +
+        // `DIRTY.add` inside virtualReplaceByKey — had NO test. Every other
+        // case here reads the pool, and the pool is right either way; gating
+        // them off failed 0 of 30 and 18 of 18 differential cases.
+        //
+        // What actually happens without them: the pool holds the new
+        // <section>, the shell keeps showing the old <div>, and an in-window
+        // row that changes tag never appears until some unrelated event
+        // re-renders. That is the #2135 shape exactly — a test green while
+        // destroying what it guards.
+        const dom = createEnv(6);
+        const el = dom.window.document.getElementById('feed');
+        const shell = el.querySelector('[data-dj-virtual-shell]');
+
+        await apply(dom, [update('k1', [{ type: 'Replace', path: [], d: null,
+            node: { tag: 'section', attrs: { 'data-key': 'k1' },
+                    children: [{ tag: '#text', attrs: {}, children: [], text: 'SHOWN', key: null }],
+                    text: null, key: 'k1' } }])]);
+
+        const row = dom.window.djust._virtualPoolItems(el)[1];
+        expect(dom.window.document.contains(row)).toBe(true);
+        expect(Array.from(shell.children).map((n) => n.tagName)).toContain('SECTION');
+        expect(shell.textContent).toContain('SHOWN');
+    });
+
     it('Replace survives a scroll — the pool is the source of truth', async () => {
         // The silent half of the bug: in-window it LOOKED right until the row
         // scrolled out and back, because render() re-appends the pool node.

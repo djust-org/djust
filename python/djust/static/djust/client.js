@@ -8057,7 +8057,13 @@ function applySinglePatch(patch, rootEl = null) {
                         allOk = false;
                     }
                 }
-                // Deliberately does NOT mark the list dirty. An inner patch
+                // Deliberately does NOT mark the list dirty — EXCEPT via the
+                // root-Replace branch above, which swaps node IDENTITY and so
+                // must re-render (an in-window row would otherwise never
+                // appear). Do not harmonize the two: they differ because
+                // mutating a node and replacing it are different operations.
+                //
+                // For the mutating path: an inner patch
                 // mutates the row NODE, so an attached row already shows the
                 // change and no re-render is needed; an off-window row is
                 // re-read from the pool when it scrolls back. In
@@ -8068,6 +8074,14 @@ function applySinglePatch(patch, rootEl = null) {
                 // gate-off-verified at 0 failures — so rather than ship an
                 // unpinned line, it is gone. If a real case turns up, add the
                 // mark AND the test together.
+                //
+                // One of those attempts argued JSDOM cannot discriminate,
+                // because it does no layout so measured heights are all 0.
+                // That is FALSE as a general claim — a driven ResizeObserver
+                // stub discriminates cleanly (#1830), and is exactly how the
+                // root-Replace branch's re-render got pinned. No such case
+                // exists for THIS branch, but "JSDOM can't" was the wrong
+                // reason to believe it.
                 if (!allOk) return false;
                 break;
             }
