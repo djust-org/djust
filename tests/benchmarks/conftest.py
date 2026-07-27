@@ -36,8 +36,27 @@ def _assert_benchmark_under(benchmark, target_s: float, label: str) -> None:
     pytest-benchmark's stats collection is disabled when running under
     pytest-xdist (the `-n auto` CI invocation), so `benchmark.stats[...]`
     raises because `stats` is empty. In that case the function is still
-    executed for correctness, but the threshold assertion is skipped —
-    the benchmark-gated CI job (`--benchmark-only` serial) enforces it.
+    executed for correctness, but the threshold assertion is skipped — the
+    ``benchmarks`` job in `.github/workflows/test.yml` (serial,
+    ``--benchmark-only``) enforces it.
+
+    That sentence used to name a job that **did not exist** (#2156). Every
+    other CI job runs ``-n auto``, so nothing enforced these thresholds except
+    the serial pre-push hook — in a process that had just executed 10,000
+    tests, where a warm and fragmented heap makes the median systematically
+    slower. ``test_vdom_diff_list_reorder`` measures 3.78ms on a quiet machine
+    against its 5ms target and 7.57ms there, so it blocked every push on main
+    while measuring the environment rather than the code.
+
+    The targets themselves are sound — all 58 benchmarks pass serially on a
+    quiet machine — so none were loosened. Reaching for a bigger number is the
+    reflex this issue exists to stop: it is what turned a 10ms bound into 100ms
+    in ``test_redis_serialization_performance``, which then flaked again.
+    ``test_vdom_diff_list_reorder`` has the tightest margin in the suite (32%
+    headroom), so it is the one that will flip first if a real regression lands.
+
+    `test_benchmark_enforcement_2156.py` pins the job's existence, so this
+    docstring cannot quietly become a false claim a second time.
     """
     if getattr(benchmark, "disabled", False):
         return
