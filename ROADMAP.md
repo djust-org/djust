@@ -43,6 +43,7 @@ here so the decision is visible either way.
 | **P2** | ~~Finish the client-size sweep (#2148)~~ ✅ | 24 corrections across 14 files, all ~11× wrong; plus a coverage pin that makes "guarded" mechanical rather than an act of diligence. | Shipped (PR #2152) |
 | **P2** | ~~Close Action Tracker rows when their issue closes (#2143)~~ ✅ | 65 of 70 `Open` rows were already resolved — the health signal retros quote was wrong by an order of magnitude. | Shipped (PR #2153) |
 | **P2** | ~~Chain-shaped drains need an estimation convention (#2142)~~ ✅ | Codified in CLAUDE.md: mark chain-suspected at Stage 4, file link N+1 immediately, count a chain as one finding and N PRs — and do not estimate one up front. | Shipped (PR #2153) |
+| **P2** | Detect a red `main` proactively (#2139) — flaky test surfaced by the drain (#2154) | `test_time_travel_jump_recovery_version_is_current` fails ~1 in 5 under `-n auto`, passes 3/3 in isolation, and appeared on two branches touching neither the module nor its path. Order- or timing-dependent. | v1.1.0 |
 
 **#2137 — validate_field wire-contract mismatch** — `python/djust/forms.py:169`
 takes `field_name`; `09-event-binding.js` sends `field` at three send sites
