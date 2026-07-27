@@ -40,6 +40,27 @@ class DjustConfig(AppConfig):
         # the auto-enable path itself temporarily clear this env var; see
         # ``_no_pytest_env()`` in
         # ``python/djust/tests/test_auto_hot_reload.py``.)
+
+        # Wire LIVEVIEW_CONFIG['virtual_keyed_ops'] -> the process-global Rust
+        # switch (ADR-026 iteration 3, #2017). Done HERE rather than in
+        # rust_bridge's per-view `_apply_*_flag` hooks because the Rust side is
+        # a process-global AtomicBool, and applying a global from a per-view
+        # hook is last-view-wins.
+        #
+        # Unconditional (not gated on PYTEST_CURRENT_TEST): the flag must hold
+        # the same value in tests as in production, or the suite verifies a
+        # configuration nobody runs.
+        try:
+            from djust import _rust
+            from djust.config import config as _cfg
+
+            if hasattr(_rust, "set_virtual_keyed_ops"):
+                _rust.set_virtual_keyed_ops(bool(_cfg.get("virtual_keyed_ops", False)))
+        except Exception:  # noqa: BLE001 - never let a flag break startup
+            logging.getLogger("djust").exception(
+                "[djust] applying virtual_keyed_ops to the Rust differ failed"
+            )
+
         import os
 
         if not os.environ.get("PYTEST_CURRENT_TEST"):

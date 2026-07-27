@@ -161,6 +161,22 @@ class LiveViewConfig:
         # variable; bodies using {% if %}/{% cycle %}/nested loops/forloop or
         # outer-context reads are auto-excluded (correct by construction).
         "loop_render_cache_enabled": True,
+        # `[dj-virtual]` keyed splice ops in the VDOM differ (ADR-026, #2017
+        # items 2-4). A windowed list holds off-window rows DETACHED, so the
+        # index-addressed ops the differ normally emits are meaningless for it:
+        # index 7 means "the 8th item" to the differ and "the 8th VISIBLE item"
+        # to the DOM. These ops address items by KEY instead, so an insert in
+        # the middle, a removal, or an update to an off-window row all land
+        # correctly instead of at the tail.
+        #
+        # Wired to the process-global Rust switch once at startup by
+        # `DjustConfig.ready()` — it is not per-view state.
+        #
+        # Default OFF: ADR-026 iteration 3 (the flip) is NOT shipped. The
+        # browser gate found the differ emits the right op but a real page
+        # is not windowed at patch time, so there is no pool to apply it
+        # to — see #2164. Turning this on today changes nothing.
+        "virtual_keyed_ops": False,
         # Django-parity template auto-call (ADR-024). When True (default),
         # the Rust engine's sidecar getattr walk invokes callables exactly
         # like Django's Variable._resolve_lookup ({{ user.get_full_name }},

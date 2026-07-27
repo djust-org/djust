@@ -1,0 +1,40 @@
+{% extends "tests/base_test.html" %}
+
+{% block content %}
+<div dj-view="djust_tests.views.virtual_keyed_demo.VirtualKeyedDemoView">
+  <h1>dj-virtual — keyed splice ops (#2017 / ADR-026)</h1>
+  <p style="background:#fff3cd;border:1px solid #e0c069;padding:.6rem">
+    <b>This page documents a known failure, not a working feature.</b>
+    An insert at position 5 currently lands at the TAIL of the item pool, with
+    the keyed-ops flag on or off. The server emits the right op
+    (<code>VirtualInsert{key, before_key}</code>); the client applier does not
+    honour it yet — see issue #2164. Use the buttons and watch the pool order.
+  </p>
+
+  <p id="log" style="font-family:monospace;background:#eee;padding:.5rem">{{ log }}</p>
+  <p>items: <span id="count">{{ count }}</span></p>
+
+  <div style="display:flex;gap:.5rem;margin:.75rem 0">
+    <button dj-click="edit_first" id="btn-edit">Edit row 0</button>
+    <button dj-click="insert_middle" id="btn-insert">Insert at 5</button>
+    <button dj-click="remove_middle" id="btn-remove">Remove at 3</button>
+    <button dj-click="reorder" id="btn-reorder">Reverse</button>
+  </div>
+
+  <div dj-virtual="items"
+       id="vlist"
+       dj-virtual-item-height="32"
+       style="height:320px;overflow-y:auto;border:1px solid #999;display:flex;flex-direction:column">
+    {% for item in items %}
+      <div dj-key="{{ item.key }}"
+           class="vrow"
+           data-key="{{ item.key }}"
+           style="height:32px;line-height:32px;border-bottom:1px solid #ddd;padding:0 .5rem">
+        <span class="vkey">{{ item.key }}</span> ·
+        <span class="vlabel">{{ item.label }}</span>
+        <b class="vnote">{{ item.note }}</b>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

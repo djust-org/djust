@@ -222,6 +222,17 @@ def compute_template_hash(source: str) -> str:
     """
     ...
 
+def set_virtual_keyed_ops(enabled: bool) -> None:
+    """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
+
+    Process-global, unlike the per-view `set_loop_render_cache_enabled`.
+    Django applies it once at startup from
+    `LIVEVIEW_CONFIG['virtual_keyed_ops']`; see `DjustConfig.ready`.
+    """
+
+def virtual_keyed_ops_enabled() -> bool:
+    """Current `[dj-virtual]` keyed-splice-ops setting."""
+
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -1022,4 +1033,6 @@ __all__ = [
     "RustTextArea",
     "RustToast",
     "RustTooltip",
+    "set_virtual_keyed_ops",
+    "virtual_keyed_ops_enabled",
 ]

@@ -1433,6 +1433,32 @@ fn render_markdown_py(
 }
 
 /// Fast template rendering
+/// Enable or disable the `[dj-virtual]` keyed splice ops in the VDOM differ
+/// (ADR-026, #2017 items 2-4).
+///
+/// This is a PROCESS-GLOBAL switch (`djust_vdom::diff::VIRTUAL_KEYED_OPS`), not
+/// per-view state, which is why it is a module function rather than a
+/// `RustLiveView` method like `set_loop_render_cache_enabled`. Applying a
+/// process global from a per-view hook would be last-view-wins.
+///
+/// Django wires it once at startup from `LIVEVIEW_CONFIG['virtual_keyed_ops']`
+/// (see `DjustConfig.ready`). The Rust default stays OFF so a non-Django
+/// embedder of this crate is never silently changed; the Python config default
+/// is what carries iteration 3's flip.
+#[pyfunction]
+fn set_virtual_keyed_ops(enabled: bool) {
+    djust_vdom::diff::set_virtual_keyed_ops(enabled);
+}
+
+/// Read the current `[dj-virtual]` keyed-splice-ops setting.
+///
+/// Exposed so the Python side can ASSERT the wiring took effect rather than
+/// assume it — a setter with no getter cannot be tested end to end.
+#[pyfunction]
+fn virtual_keyed_ops_enabled() -> bool {
+    djust_vdom::diff::virtual_keyed_ops_enabled()
+}
+
 #[pyfunction]
 fn render_template(template_source: String, context: HashMap<String, Value>) -> PyResult<String> {
     // Get template from cache or parse and cache it
@@ -3292,6 +3318,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
+    m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
 
     // Actor system exports

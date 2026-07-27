@@ -162,8 +162,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// is a pure free function reached from several entry points; threading config
 /// through every signature would touch far more surface than the flag is worth
 /// while it is still dark. Set once at startup from
-/// a `LIVEVIEW_CONFIG` key — that wiring is iteration 3's job and no such
-/// setting exists yet (`grep` finds none); do not cite it as if it does.
+/// a `LIVEVIEW_CONFIG` key — that wiring SHIPPED in the #2017 iteration-3 PR
+/// (`virtual_keyed_ops`, applied once by `DjustConfig.ready()`). The DEFAULT
+/// is still OFF: the browser gate found the client applier does not achieve
+/// keyed positioning even though this differ emits the right op — see #2164.
 static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(false);
 
 /// Enable/disable `[dj-virtual]` keyed splice ops. Wired from Python config.
