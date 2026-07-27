@@ -638,6 +638,31 @@ fn virtual_insert_json_shape_is_key_addressed() {
 }
 
 #[test]
+fn virtual_update_json_shape_nests_its_inner_patches() {
+    let p = Patch::VirtualUpdate {
+        path: vec![0, 2],
+        d: Some("v1".into()),
+        key: "row-7".into(),
+        patches: vec![Patch::SetText {
+            path: vec![0],
+            d: None,
+            text: "edited".into(),
+        }],
+    };
+    let json = serde_json::to_string(&p).unwrap();
+    assert!(json.contains(r#""type":"VirtualUpdate""#), "{json}");
+    assert!(json.contains(r#""key":"row-7""#), "{json}");
+    // The inner list is a nested array of tagged patches, and the inner path
+    // is relative to the ROW — `[0]` is its first child, not an index into
+    // the virtual parent.
+    assert!(json.contains(r#""patches":[{"type":"SetText""#), "{json}");
+    assert!(!json.contains(r#""index":"#), "{json}");
+
+    let back: Patch = serde_json::from_str(&json).unwrap();
+    assert_eq!(serde_json::to_string(&back).unwrap(), json);
+}
+
+#[test]
 fn virtual_move_and_remove_json_shape() {
     let m = serde_json::to_string(&Patch::VirtualMove {
         path: vec![1],
@@ -767,6 +792,28 @@ fn every_patch_shape() -> Vec<Patch> {
             path: vec![0],
             d: Some("v".into()),
             key: "k".into(),
+        },
+        // The first RECURSIVE Patch payload — a patch list nested inside a
+        // patch — which is exactly why it is worth pinning (#2136).
+        Patch::VirtualUpdate {
+            path: vec![0],
+            d: None,
+            key: "k".into(),
+            patches: vec![Patch::SetText {
+                path: vec![0],
+                d: None,
+                text: "t".into(),
+            }],
+        },
+        Patch::VirtualUpdate {
+            path: vec![0],
+            d: Some("v".into()),
+            key: "k".into(),
+            patches: vec![Patch::Replace {
+                path: vec![],
+                d: None,
+                node: vnode_leaf("section"),
+            }],
         },
     ]
 }

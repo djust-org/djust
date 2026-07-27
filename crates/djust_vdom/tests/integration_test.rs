@@ -397,6 +397,7 @@ fn test_patches_include_djust_id() {
         djust_vdom::Patch::VirtualInsert { d, .. } => d.is_some(),
         djust_vdom::Patch::VirtualMove { d, .. } => d.is_some(),
         djust_vdom::Patch::VirtualRemove { d, .. } => d.is_some(),
+        djust_vdom::Patch::VirtualUpdate { d, .. } => d.is_some(),
         djust_vdom::Patch::MoveChild { d, .. } => d.is_some(),
         // Text nodes don't have djust_ids
         djust_vdom::Patch::SetText { .. } => false,

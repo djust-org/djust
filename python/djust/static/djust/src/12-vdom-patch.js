@@ -2144,6 +2144,88 @@ function applySinglePatch(patch, rootEl = null) {
                 break;
             }
 
+            case 'VirtualUpdate': {
+                // #2136. Content for a surviving row, addressed by KEY with
+                // the inner paths relative to the row itself — so an
+                // off-window row (detached, held only in the pool) still gets
+                // its update. Path-addressed content could not: the item index
+                // counts ITEMS while the DOM holds only the visible window,
+                // and the patches carry no dj-id, so they resolved positionally
+                // and silently rewrote a different row after a scroll.
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', String(patch.type).slice(0, 50), node.nodeType);
+                    return false;
+                }
+                if (typeof window.djust._virtualNodeForKey !== 'function') {
+                    console.warn('[LiveView] VirtualUpdate received but the virtual-list module is absent');
+                    return false;
+                }
+                const row = window.djust._virtualNodeForKey(node, patch.key);
+                if (!row) {
+                    console.warn('[LiveView] VirtualUpdate: no pool row for key %s', String(patch.key).slice(0, 80));
+                    return false;
+                }
+                let allOk = true;
+                let target = row;
+                for (const inner of patch.patches || []) {
+                    // A Replace at path [] targets the ROW ITSELF, which cannot
+                    // be applied by mutating it — the generic arm reaches for
+                    // `node.parentNode`, which is null off-window (throws) and
+                    // is the SHELL in-window (succeeds, but leaves the pool
+                    // holding the old node, so the change reverts on the next
+                    // scroll — silently, with applyPatches returning true).
+                    // Swap the pool entry instead, which is what the Rust
+                    // simulator has always done for this op.
+                    if (inner.type === 'Replace' && (!inner.path || inner.path.length === 0)) {
+                        const replacement = createNodeFromVNode(inner.node, isInSvgContext(node));
+                        if (!replacement || replacement.nodeType !== 1) {
+                            console.warn('[LiveView] VirtualUpdate: could not build the replacement row for key %s', String(patch.key).slice(0, 80));
+                            allOk = false;
+                            continue;
+                        }
+                        if (!window.djust._virtualReplaceByKey(node, patch.key, replacement)) {
+                            console.warn('[LiveView] VirtualUpdate: could not replace the pool row for key %s', String(patch.key).slice(0, 80));
+                            allOk = false;
+                            continue;
+                        }
+                        // Later inner patches apply to the NEW row.
+                        target = replacement;
+                        continue;
+                    }
+                    // The row is the ROOT for these — `path: []` IS the row.
+                    if (!applySinglePatch(inner, target)) {
+                        allOk = false;
+                    }
+                }
+                // Deliberately does NOT mark the list dirty — EXCEPT via the
+                // root-Replace branch above, which swaps node IDENTITY and so
+                // must re-render (an in-window row would otherwise never
+                // appear). Do not harmonize the two: they differ because
+                // mutating a node and replacing it are different operations.
+                //
+                // For the mutating path: an inner patch
+                // mutates the row NODE, so an attached row already shows the
+                // change and no re-render is needed; an off-window row is
+                // re-read from the pool when it scrolls back. In
+                // variable-height mode a height change is already picked up by
+                // the ResizeObserver (29-virtual-list.js:214, `state.offsets =
+                // null`; :409 is the NO-ResizeObserver fallback, not the RO). I could not construct a case where marking dirty
+                // here changed any observable outcome — two attempts, both
+                // gate-off-verified at 0 failures — so rather than ship an
+                // unpinned line, it is gone. If a real case turns up, add the
+                // mark AND the test together.
+                //
+                // One of those attempts argued JSDOM cannot discriminate,
+                // because it does no layout so measured heights are all 0.
+                // That is FALSE as a general claim — a driven ResizeObserver
+                // stub discriminates cleanly (#1830), and is exactly how the
+                // root-Replace branch's re-render got pinned. No such case
+                // exists for THIS branch, but "JSDOM can't" was the wrong
+                // reason to believe it.
+                if (!allOk) return false;
+                break;
+            }
+
             case 'VirtualInsert':
             case 'VirtualMove':
             case 'VirtualRemove': {

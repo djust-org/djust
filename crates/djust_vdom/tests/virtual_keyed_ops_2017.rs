@@ -508,24 +508,20 @@ fn comment(text: &str) -> VNode {
 }
 
 #[test]
-fn a_content_patch_targets_the_right_child_index() {
-    // DEFENSE IN DEPTH, not a reproduction of the shipped defect — worth
-    // being precise about. The real defect needed an UNKEYED entry inside
-    // new_nb, and the gate above now makes that unreachable; the pre-fix
-    // expression indexed new_nb and so was correct whenever new_nb is
-    // entirely keyed. Restoring it verbatim passes all of these.
+fn a_content_change_is_key_addressed_with_row_relative_paths() {
+    // #2136. This test used to pin the ABSOLUTE-index arithmetic for
+    // path-addressed content patches — and that arithmetic is exactly what
+    // was wrong: for a windowed container the item index counts ITEMS while
+    // the DOM holds only the visible window, and the patch carries no dj-id
+    // (text nodes have none), so it resolved purely positionally. Measured
+    // against a real mounted list, editing row k0 after a scroll silently
+    // rewrote k7.
     //
-    // What this pins is the arithmetic itself: the child path must come from
-    // the ABSOLUTE index, never the filtered position. Those diverge whenever
-    // a child is EXCLUDED from sibling reconciliation — which a dj-if
-    // boundary pair is, by construction (`find_top_level_boundaries` masks
-    // the open marker through the close marker inclusive).
-    //
-    // Here the boundary occupies absolute indices 0..=1, so the two keyed rows
-    // sit at absolute 2 and 3 while their filtered positions are 0 and 1. A
-    // patch built from the filtered position targets index 0 — the dj-if OPEN
-    // MARKER — and the patch carries no dj-id fallback, so the client resolves
-    // purely by path and rewrites the wrong node.
+    // Content is now wrapped in a key-addressed VirtualUpdate whose inner
+    // paths are relative to the ROW, so no index into the parent appears at
+    // all. The dj-if boundary that used to make abs != filtered-position is
+    // kept in the fixture: under the old scheme it was the shape that
+    // diverged, and under this one it must simply not matter.
     let _g = FlagGuard::on();
     let build = |second: &str| {
         let mut n = el(
@@ -544,26 +540,68 @@ fn a_content_patch_targets_the_right_child_index() {
     };
     let patches = diff_nodes(&build("before"), &build("EDITED"), &[]);
 
-    let paths: Vec<&Vec<usize>> = patches
+    // No path-addressed content op for a virtual parent, at all.
+    assert!(
+        !patches
+            .iter()
+            .any(|p| matches!(p, Patch::SetText { .. } | Patch::SetAttr { .. })),
+        "content must be key-addressed, not path-addressed; got {:?}",
+        kinds(&patches)
+    );
+
+    let updates: Vec<&Patch> = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::VirtualUpdate { .. }))
+        .collect();
+    assert_eq!(updates.len(), 1, "one edited row -> one VirtualUpdate");
+
+    match updates[0] {
+        Patch::VirtualUpdate { key, patches, .. } => {
+            assert_eq!(key, "b", "addressed by the row's KEY");
+            assert!(!patches.is_empty(), "the inner patches carry the edit");
+            // Relative to the row: the row itself is [], its first child [0].
+            for inner in patches {
+                if let Patch::SetText { path, .. } = inner {
+                    assert_eq!(
+                        path,
+                        &vec![0usize],
+                        "inner paths are relative to the ROW, so the text child \
+                         is [0] — not an index into the virtual parent"
+                    );
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn an_off_window_row_still_gets_its_content_update() {
+    // The point of key-addressing: a row the client is holding DETACHED (out
+    // of the visible window) is unreachable by path but findable by key, so
+    // its update lands in the pool and appears when it scrolls back.
+    let _g = FlagGuard::on();
+    let keys: Vec<String> = (0..50).map(|i| format!("k{i}")).collect();
+    let kv: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
+    let mut old = virtual_list(&kv);
+    let mut new = virtual_list(&kv);
+    old.children[49].children.push(text("before"));
+    new.children[49].children.push(text("EDITED"));
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    let keyed: Vec<&str> = patches
         .iter()
         .filter_map(|p| match p {
-            Patch::SetText { path, .. } => Some(path),
+            Patch::VirtualUpdate { key, .. } => Some(key.as_str()),
             _ => None,
         })
         .collect();
-    assert!(
-        !paths.is_empty(),
-        "the edit must emit a SetText; got {:?}",
-        kinds(&patches)
+    assert_eq!(
+        keyed,
+        vec!["k49"],
+        "the 50th row — far outside any window — must be addressed by key"
     );
-    for path in paths {
-        assert_eq!(
-            path.first(),
-            Some(&3),
-            "the patch must target absolute child 3 (row b), not the filtered \
-             position; got {path:?}"
-        );
-    }
 }
 
 #[test]

@@ -411,3 +411,221 @@ describe('#2017 iteration 2: applying keyed splice ops', () => {
         expect(poolKeys(dom)).toEqual(['k0', 'k1', 'new']);
     });
 });
+
+describe('#2136: content updates are key-addressed', () => {
+    function update(key, patches) {
+        return { type: 'VirtualUpdate', path: [], d: '7', key, patches };
+    }
+
+    it('applies an inner patch to the row named by key', async () => {
+        const dom = createEnv(4);
+        // `path: []` IS the row; [0] is its first significant child.
+        await apply(dom, [update('k2', [{ type: 'SetText', path: [0], d: null, text: 'EDITED' }])]);
+
+        const items = dom.window.djust._virtualPoolItems(
+            dom.window.document.getElementById('feed')
+        );
+        expect(items[2].textContent).toBe('EDITED');
+        expect(items[1].textContent).toBe('row 1');
+        expect(items[3].textContent).toBe('row 3');
+    });
+
+    it('updates an OFF-WINDOW row, which path-addressing could not', async () => {
+        // The window shows ~2 of 50; row 40 is detached, held only in the
+        // pool. Unreachable by path, findable by key — and mutating a
+        // detached node is fine, the change appears when it scrolls back.
+        const dom = createEnv(50);
+        const el = dom.window.document.getElementById('feed');
+        const before = dom.window.djust._virtualPoolItems(el);
+        expect(dom.window.document.contains(before[40])).toBe(false);
+
+        await apply(dom, [update('k40', [{ type: 'SetText', path: [0], d: null, text: 'OFFSCREEN' }])]);
+
+        const after = dom.window.djust._virtualPoolItems(el);
+        expect(after[40].textContent).toBe('OFFSCREEN');
+    });
+
+    it('does not touch a different row after a scroll', async () => {
+        // The measured symptom: editing k0 after scrolling silently rewrote
+        // k7, because the path counted ITEMS and the DOM held the window.
+        const dom = createEnv(20);
+        const el = dom.window.document.getElementById('feed');
+        el.scrollTop = 200;
+        el.dispatchEvent(new dom.window.Event('scroll'));
+
+        // A NON-ZERO key deliberately: the key-ignoring gate-off returns
+        // items[0], so targeting k0 would stay green under it and the test
+        // would not pin the symptom it names.
+        await apply(dom, [update('k3', [{ type: 'SetText', path: [0], d: null, text: 'THREE' }])]);
+
+        const items = dom.window.djust._virtualPoolItems(el);
+        expect(items[3].textContent).toBe('THREE');
+        expect(items[0].textContent).toBe('row 0');
+        expect(items[7].textContent).toBe('row 7');
+    });
+
+    it('an IN-WINDOW row shows its update in the rendered shell', async () => {
+        // Named for what it actually checks. It CANNOT pin a re-render — the
+        // shell child IS the pool node, so mutating the node is visible with
+        // no render at all, which is why the dirty-mark could not be pinned
+        // and was removed. What this does pin is that the user-visible path
+        // agrees with the pool.
+        const dom = createEnv(6);
+        const el = dom.window.document.getElementById('feed');
+        const shell = el.querySelector('[data-dj-virtual-shell]');
+
+        await apply(dom, [update('k0', [{ type: 'SetText', path: [0], d: null, text: 'VISIBLE' }])]);
+
+        const rendered = Array.from(shell.children).map((n) => n.textContent);
+        expect(rendered[0]).toBe('VISIBLE');
+    });
+
+    it('reports rather than silently dropping an unknown key', async () => {
+        const dom = createEnv(3);
+        const warnings = [];
+        dom.window.console.warn = (...a) => warnings.push(a.join(' '));
+
+        const ok = await apply(dom, [update('ghost', [{ type: 'SetText', path: [0], d: null, text: 'x' }])]);
+
+        expect(ok).toBe(false);
+        expect(warnings.join(' ')).toMatch(/ghost/);
+    });
+});
+
+describe('#2136: every inner-patch kind a content diff can emit', () => {
+    // The first version of these tests used ONE shape — SetText path:[0],
+    // d:null. `diff_node_into(old, new, &[])` emits SetAttr, RemoveAttr,
+    // InsertChild, RemoveChild and Replace too, and Replace at path [] was
+    // the one that broke (#1543 again: single-variant coverage of a
+    // multi-variant surface, and the uncovered variant is the one that failed).
+    function update(key, patches) {
+        return { type: 'VirtualUpdate', path: [], d: '7', key, patches };
+    }
+    function poolAt(dom, i) {
+        return dom.window.djust._virtualPoolItems(dom.window.document.getElementById('feed'))[i];
+    }
+
+    it('SetAttr on the ROW itself (path [], the querySelector trap)', async () => {
+        // `getNodeByPath` does `scope.querySelector('[dj-id=…]')`, and
+        // querySelector never matches the scope element — so a row targeting
+        // ITSELF by dj-id would miss. It works only because of the
+        // `path.length === 0 -> return node` early return, which nothing
+        // pinned until now.
+        const dom = createEnv(6);
+        await apply(dom, [update('k2', [{ type: 'SetAttr', path: [], d: null, key: 'class', value: 'HIT' }])]);
+
+        expect(poolAt(dom, 2).getAttribute('class')).toBe('HIT');
+        expect(poolAt(dom, 3).getAttribute('class')).toBeNull();
+    });
+
+    it('getNodeByPath([], id, row) resolves to the row', async () => {
+        // The early return, pinned directly — it is load-bearing now.
+        const dom = createEnv(3);
+        const row = poolAt(dom, 1);
+        expect(dom.window.djust._getNodeByPath([], row.getAttribute('dj-id'), row)).toBe(row);
+    });
+
+    it('RemoveAttr, InsertChild and RemoveChild all apply to a row', async () => {
+        const dom = createEnv(4);
+        const row = poolAt(dom, 1);
+        row.setAttribute('data-doomed', '1');
+
+        await apply(dom, [
+            update('k1', [{ type: 'RemoveAttr', path: [], d: null, key: 'data-doomed' }]),
+            update('k2', [{ type: 'InsertChild', path: [], d: null, index: 0, ref_d: null,
+                node: { tag: 'span', attrs: {}, children: [{ tag: '#text', attrs: {}, children: [], text: 'ADDED', key: null }], text: null, key: null } }]),
+        ]);
+
+        expect(poolAt(dom, 1).hasAttribute('data-doomed')).toBe(false);
+        expect(poolAt(dom, 2).textContent).toContain('ADDED');
+    });
+
+    it('Replace at path [] swaps the POOL entry, not the DOM node', async () => {
+        // THE bug. Applying it as an ordinary patch reached for
+        // node.parentNode: null off-window (throws), the shell in-window
+        // (succeeds, pool keeps the old node, change reverts on scroll —
+        // silently, applyPatches returning true).
+        const dom = createEnv(6);
+        const ok = await apply(dom, [update('k1', [{ type: 'Replace', path: [], d: null,
+            node: { tag: 'section', attrs: { 'data-key': 'k1' },
+                    children: [{ tag: '#text', attrs: {}, children: [], text: 'REPLACED', key: null }],
+                    text: null, key: 'k1' } }])]);
+
+        expect(ok).toBe(true);
+        expect(poolAt(dom, 1).tagName).toBe('SECTION');
+        expect(poolAt(dom, 1).textContent).toBe('REPLACED');
+        // Order preserved — a replace is not a move.
+        expect(poolKeys(dom)).toEqual(['k0', 'k1', 'k2', 'k3', 'k4', 'k5']);
+    });
+
+    it('an in-window Replace actually appears — the re-render is load-bearing', async () => {
+        // The two lines that make the swap work — `invalidateWindow` +
+        // `DIRTY.add` inside virtualReplaceByKey — had NO test. Every other
+        // case here reads the pool, and the pool is right either way; gating
+        // them off failed 0 of 30 and 18 of 18 differential cases.
+        //
+        // What actually happens without them: the pool holds the new
+        // <section>, the shell keeps showing the old <div>, and an in-window
+        // row that changes tag never appears until some unrelated event
+        // re-renders. That is the #2135 shape exactly — a test green while
+        // destroying what it guards.
+        const dom = createEnv(6);
+        const el = dom.window.document.getElementById('feed');
+        const shell = el.querySelector('[data-dj-virtual-shell]');
+
+        await apply(dom, [update('k1', [{ type: 'Replace', path: [], d: null,
+            node: { tag: 'section', attrs: { 'data-key': 'k1' },
+                    children: [{ tag: '#text', attrs: {}, children: [], text: 'SHOWN', key: null }],
+                    text: null, key: 'k1' } }])]);
+
+        const row = dom.window.djust._virtualPoolItems(el)[1];
+        expect(dom.window.document.contains(row)).toBe(true);
+        expect(Array.from(shell.children).map((n) => n.tagName)).toContain('SECTION');
+        expect(shell.textContent).toContain('SHOWN');
+    });
+
+    it('Replace survives a scroll — the pool is the source of truth', async () => {
+        // The silent half of the bug: in-window it LOOKED right until the row
+        // scrolled out and back, because render() re-appends the pool node.
+        const dom = createEnv(20);
+        const el = dom.window.document.getElementById('feed');
+        await apply(dom, [update('k1', [{ type: 'Replace', path: [], d: null,
+            node: { tag: 'section', attrs: { 'data-key': 'k1' },
+                    children: [{ tag: '#text', attrs: {}, children: [], text: 'STICKS', key: null }],
+                    text: null, key: 'k1' } }])]);
+
+        el.scrollTop = 400;
+        el.dispatchEvent(new dom.window.Event('scroll'));
+        el.scrollTop = 0;
+        el.dispatchEvent(new dom.window.Event('scroll'));
+
+        expect(poolAt(dom, 1).tagName).toBe('SECTION');
+        expect(poolAt(dom, 1).textContent).toBe('STICKS');
+    });
+
+    it('Replace on an OFF-WINDOW row does not throw', async () => {
+        // Detached: node.parentNode is null, so the generic arm threw
+        // `Cannot read properties of null (reading 'replaceChild')`.
+        const dom = createEnv(50);
+        const ok = await apply(dom, [update('k40', [{ type: 'Replace', path: [], d: null,
+            node: { tag: 'article', attrs: { 'data-key': 'k40' },
+                    children: [{ tag: '#text', attrs: {}, children: [], text: 'FAR', key: null }],
+                    text: null, key: 'k40' } }])]);
+
+        expect(ok).toBe(true);
+        expect(poolAt(dom, 40).tagName).toBe('ARTICLE');
+        expect(poolAt(dom, 40).textContent).toBe('FAR');
+    });
+
+    it('a patch after a Replace applies to the NEW row', async () => {
+        const dom = createEnv(4);
+        await apply(dom, [update('k1', [
+            { type: 'Replace', path: [], d: null,
+              node: { tag: 'section', attrs: { 'data-key': 'k1' }, children: [], text: null, key: 'k1' } },
+            { type: 'SetAttr', path: [], d: null, key: 'class', value: 'AFTER' },
+        ])]);
+
+        expect(poolAt(dom, 1).tagName).toBe('SECTION');
+        expect(poolAt(dom, 1).getAttribute('class')).toBe('AFTER');
+    });
+});
