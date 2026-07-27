@@ -64,11 +64,30 @@ def test_the_2137_shape_is_reported(caplog):
     assert "validate_field" in msgs[0]
 
 
+def test_the_message_names_the_HANDLER_not_just_the_event(caplog):
+    # The handler name and the event name are usually the same string, so an
+    # assertion on that string cannot tell whether the message named the
+    # handler or merely echoed the event — replacing the handler name with a
+    # constant left the suite green. Give them different names.
+    def on_field_changed(field_name: str = "", **kwargs):
+        pass
+
+    with caplog.at_level(logging.WARNING):
+        validate_handler_params(on_field_changed, {"field": "x"}, "some_event")
+
+    msg = _warnings(caplog)[0]
+    assert "on_field_changed" in msg, (
+        "the message must name the handler; with two apps able to share a "
+        "qualname this is the field a reader needs most"
+    )
+    assert "some_event" in msg
+
+
 def test_the_message_says_what_to_do_about_it(caplog):
     # A diagnostic that names a problem without naming a fix gets skimmed.
     # Asserted against the EMITTED message, not the source — a source grep
     # would pass on the text sitting in a docstring nobody logs.
-    def validate_field(field_name: str = "", **kwargs):
+    def validate_field(field_name: str = "", debounce_ms: int = 0, **kwargs):
         pass
 
     with caplog.at_level(logging.WARNING):
@@ -77,7 +96,10 @@ def test_the_message_says_what_to_do_about_it(caplog):
     msg = _warnings(caplog)[0]
     assert "Rename one side to match" in msg
     assert "**kwargs" in msg, "it must say WHY it was silent, or the reader cannot generalise"
-    assert "field_name" in msg, "and list what the handler does accept"
+    # `debounce_ms`, not `field_name`: field_name is also the SUGGESTION, so
+    # asserting it cannot distinguish "listed the accepted params" from
+    # "named the near miss".
+    assert "debounce_ms" in msg, "it must list what the handler does accept"
 
 
 # --- silence where silence is correct -------------------------------------
@@ -196,9 +218,10 @@ def test_a_hostile_parameter_name_is_sanitised(caplog):
         pass
 
     # The payload has to be a near miss or the rule never fires and the test
-    # passes vacuously — the first version of this test used a long injection
-    # string that resembled nothing, so it asserted nothing.
-    hostile = "field_nam\r\n"
+    # passes vacuously — the first version used a long injection string that
+    # resembled nothing, so it asserted nothing. `field_name\r\n` has the
+    # declared name as a prefix, so it does fire.
+    hostile = "field_name\r\n"
     with caplog.at_level(logging.WARNING):
         validate_handler_params(handler, {hostile: "x"}, "e")
 
@@ -255,3 +278,109 @@ def test_deliberate_passthrough_keys_stay_silent(caplog, sent):
     with caplog.at_level(logging.WARNING):
         validate_handler_params(handler, {sent: "x"}, "e")
     assert _warnings(caplog) == [], f"{sent!r} resembles nothing declared"
+
+
+# --- the discriminator is structural, not a similarity score ---------------
+
+
+@pytest.mark.parametrize(
+    "declared,sent",
+    [
+        ("field_name", "name"),  # #2137 one step further; difflib scored 0.571 and stayed silent
+        ("page_number", "page"),  # 0.533, also silent
+        ("itemId", "item_id"),  # the JS/Python boundary
+        ("is_checked", "checked"),
+        ("val", "value"),
+    ],
+)
+def test_prefix_suffix_and_case_drift_are_caught(caplog, declared, sent):
+    handler = eval(f"lambda {declared}='', **kwargs: None")  # noqa: S307
+    with caplog.at_level(logging.WARNING):
+        validate_handler_params(handler, {sent: "x"}, "e")
+    assert len(_warnings(caplog)) == 1, f"{sent!r} vs {declared!r} should be reported"
+
+
+@pytest.mark.parametrize(
+    "declared,sent",
+    [
+        ("form", "from"),  # a transposition of unrelated words
+        ("date", "data"),
+        ("mode", "node"),
+        ("tag", "tab"),
+        ("uid", "id"),  # too short to mean anything
+        ("pid", "id"),
+        ("qs", "q"),
+    ],
+)
+def test_one_edit_apart_but_structurally_unrelated_stays_silent(caplog, declared, sent):
+    # These all scored above difflib's 0.6 cutoff, so the previous version
+    # claimed `data` was a typo of `date` and `from` of `form` — confidently
+    # wrong advice about djust's own parameter names. A similarity score cannot
+    # tell a wire mismatch from two different words that happen to be close.
+    handler = eval(f"lambda {declared}='', **kwargs: None")  # noqa: S307
+    with caplog.at_level(logging.WARNING):
+        validate_handler_params(handler, {sent: "x"}, "e")
+    assert _warnings(caplog) == [], f"{sent!r} and {declared!r} are different words"
+
+
+# --- the cache must not silence a second app's identical bug --------------
+
+
+def test_two_handlers_sharing_a_qualname_both_warn(caplog):
+    # `__qualname__` carries no module, so two apps with a same-named view
+    # class shared one cache entry: the second app's identical bug was silenced
+    # and neither warning named it.
+    def make(module):
+        def validate_field(field_name: str = "", **kwargs):
+            pass
+
+        validate_field.__qualname__ = "MyView.validate_field"
+        validate_field.__module__ = module
+        return validate_field
+
+    with caplog.at_level(logging.WARNING):
+        validate_handler_params(make("app_a.views"), {"field": "x"}, "e")
+        validate_handler_params(make("app_b.views"), {"field": "x"}, "e")
+
+    assert len(_warnings(caplog)) == 2, (
+        "two apps with a same-named view class must each be told about their own bug"
+    )
+
+
+def test_the_cache_evicts_rather_than_switching_itself_off(caplog):
+    # A hard stop turned a memory concern into a cheaper and permanent one:
+    # ~560 events of novel near-miss keys from ONE socket filled the cache and
+    # blinded the diagnostic for every view and tenant for the process's life.
+    def handler(field_name: str = "", **kwargs):
+        pass
+
+    with caplog.at_level(logging.WARNING):
+        for i in range(validation._NEAR_MISS_WARNED_CAP + 200):
+            validate_handler_params(handler, {f"field_name{i}": "x"}, "e")
+        caplog.clear()
+        # A genuine, unrelated bug AFTER the flood must still be reported.
+        validate_handler_params(handler, {"field": "x"}, "e")
+
+    assert len(validation._NEAR_MISS_WARNED) <= validation._NEAR_MISS_WARNED_CAP, (
+        "the cache must stay bounded — names come from the client"
+    )
+    assert len(_warnings(caplog)) == 1, (
+        "a flood of novel keys must not permanently disable the diagnostic for "
+        "everyone; evict instead of switching off"
+    )
+
+
+# --- advice that cannot be followed is worse than none --------------------
+
+
+def test_a_positional_only_parameter_is_never_suggested(caplog):
+    # `h(field_name=...)` raises TypeError for a positional-only parameter, so
+    # "rename one side to match" would be impossible to act on.
+    ns: dict = {}
+    exec("def h(field_name='', /, **kwargs): pass", ns)  # noqa: S102
+    with caplog.at_level(logging.WARNING):
+        validate_handler_params(ns["h"], {"field": "x"}, "e")
+    assert _warnings(caplog) == [], (
+        "a positional-only parameter cannot be passed by name, so suggesting "
+        "it is advice that cannot be followed"
+    )
