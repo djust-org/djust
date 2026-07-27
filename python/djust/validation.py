@@ -9,6 +9,7 @@ Provides runtime validation of event handler signatures including:
 - Clear error message generation
 """
 
+import difflib
 import inspect
 import logging
 import types
@@ -162,6 +163,90 @@ def _coerce_single_value(value: str, expected_type: type) -> Any:
     return value
 
 
+# Framework-injected keys that legitimately reach a handler's **kwargs and must
+# never be reported. Underscore-prefixed keys are covered by the repo's
+# private-name convention and excluded wholesale; these two are the routing keys
+# that carry no underscore. Both were found by instrumenting the suppression
+# point and running the full suite (10,058 tests) rather than by reading call
+# sites: `_cacheRequestId` survives the request-mixin path and `view_id`
+# survives the actor path, where it is read with `.get` rather than popped
+# (python/djust/runtime.py:2734 vs the `.pop` at :3457).
+_FRAMEWORK_KWARGS_KEYS = frozenset({"view_id", "component_id"})
+
+# Warn once per (handler, key). This fires on @input/@change paths — a warning
+# per keystroke would be worse than no warning at all.
+#
+# The cap matters for more than tidiness: parameter names come from the client,
+# so an unbounded cache is a memory-exhaustion vector for anyone who can open a
+# socket. On reaching it the diagnostic switches off rather than degrading to
+# per-event logging, which is the failure mode it exists to avoid.
+_NEAR_MISS_WARNED: set = set()
+_NEAR_MISS_WARNED_CAP = 512
+
+
+def _warn_on_near_miss_kwargs(
+    handler: Callable,
+    provided: Dict[str, Any],
+    accepted: List[str],
+    event_name: str,
+) -> None:
+    """Warn when a **kwargs handler silently swallowed a near-miss parameter.
+
+    Only *near misses* are reported — a provided key that closely resembles a
+    parameter the handler declares. An unexpected key bearing no resemblance to
+    the signature is the documented catch-all shape (``def on_event(self,
+    **kwargs)`` reading ``kwargs`` directly), and warning about it would make
+    this noise on the very paths that need it quiet.
+
+    Measured rather than assumed: across the full suite the rule fires on 0 of
+    110 keys that reach a ``**kwargs`` handler, and it reports #2137's exact
+    shape (``field`` against ``field_name``).
+    """
+    if not accepted:
+        # Fast path only. A pure `**kwargs` signature is a catch-all by
+        # construction, and `difflib.get_close_matches(k, [])` already returns
+        # [] for it — this return saves the work, it does not create the
+        # behaviour. Noted because a gate-off of this line does NOT fail the
+        # suite, and a reader should not mistake that for a missing test.
+        return
+
+    unexpected = [k for k in provided if k not in accepted]
+    if not unexpected:
+        return
+
+    name = getattr(handler, "__qualname__", None) or getattr(handler, "__name__", repr(handler))
+
+    for key in unexpected:
+        if key.startswith("_") or key in _FRAMEWORK_KWARGS_KEYS:
+            continue
+        close = difflib.get_close_matches(key, accepted, n=1, cutoff=0.6)
+        if not close:
+            continue
+        pair = (name, key)
+        if pair in _NEAR_MISS_WARNED:
+            continue
+        if len(_NEAR_MISS_WARNED) >= _NEAR_MISS_WARNED_CAP:
+            return
+        _NEAR_MISS_WARNED.add(pair)
+        # %r, not %s, for every client-influenced field. repr() escapes CR/LF,
+        # so a parameter name like "field_nam\r\n" cannot forge a second log
+        # record. sanitize_for_log additionally caps length — which is only
+        # reachable for event_name, since a key long enough to matter can never
+        # be a near miss of a short parameter.
+        logger.warning(
+            "Handler %r (event %r) was sent parameter %r, which it does not "
+            "accept, but its signature declares the similarly-named %r. Because "
+            "the handler takes **kwargs the value was discarded silently rather "
+            "than raising TypeError, so the handler ran and did nothing. "
+            "Rename one side to match. Accepted parameters: %s",
+            sanitize_for_log(name, max_length=100),
+            sanitize_for_log(str(event_name), max_length=100),
+            sanitize_for_log(key, max_length=100),
+            sanitize_for_log(close[0], max_length=100),
+            sanitize_for_log(", ".join(accepted), max_length=200),
+        )
+
+
 def validate_handler_params(
     handler: Callable,
     params: Dict[str, Any],
@@ -283,6 +368,13 @@ def validate_handler_params(
             "type_errors": None,
             "coerced_params": coerced_params,
         }
+
+    # A handler WITH **kwargs absorbs an unexpected parameter instead of
+    # raising TypeError, so a name mismatch between client and signature is
+    # silent (#2144). That is what #2137 was: the client sent `field`, the
+    # handler took `field_name`, and it ran on every keystroke doing nothing.
+    if has_var_keyword:
+        _warn_on_near_miss_kwargs(handler, coerced_params, accepted_params, event_name)
 
     # Check for unexpected parameters (if no **kwargs)
     if not has_var_keyword:
