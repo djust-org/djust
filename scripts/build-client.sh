@@ -156,15 +156,40 @@ fi
 write_size_manifest() {
     local manifest="$STATIC_DIR/client-sizes.json"
     local min_gz min_raw raw gz modules
+
+    # NEVER write a number we could not measure. The first version emitted 0
+    # for a missing .gz and called `gzip` unguarded, so running this script
+    # WITHOUT terser (which it explicitly supports — see the skip message
+    # above) or without gzip produced a valid JSON manifest full of zeros.
+    # The doc check then read it, computed a band of [-3, +3] KB, and rejected
+    # every correct claim in README and CLAUDE.md — a strictly worse
+    # reproduction of the #2133 wall this manifest exists to remove, reachable
+    # by running `make build-js`.
+    if [ ! -f "$STATIC_DIR/client.min.js.gz" ]; then
+        echo "  sizes → SKIPPED (no client.min.js.gz; needs terser + gzip)" >&2
+        echo "          keeping the existing manifest rather than zeroing it" >&2
+        return 0
+    fi
+    if ! command -v gzip >/dev/null 2>&1; then
+        echo "  sizes → SKIPPED (gzip not available)" >&2
+        return 0
+    fi
+
     min_raw=$(wc -c < "$STATIC_DIR/client.min.js" | tr -d ' ')
     raw=$(wc -c < "$STATIC_DIR/client.js" | tr -d ' ')
     modules=$(ls "$SRC_DIR"/[0-9]*.js 2>/dev/null | wc -l | tr -d ' ')
-    if [ -f "$STATIC_DIR/client.min.js.gz" ]; then
-        min_gz=$(wc -c < "$STATIC_DIR/client.min.js.gz" | tr -d ' ')
-    else
-        min_gz=0
-    fi
+    min_gz=$(wc -c < "$STATIC_DIR/client.min.js.gz" | tr -d ' ')
     gz=$(gzip -n -9 -c "$STATIC_DIR/client.js" | wc -c | tr -d ' ')
+
+    # Belt and braces: a zero here means a measurement silently failed, and a
+    # zeroed manifest is worse than none because the checker trusts it.
+    for v in "$min_raw" "$raw" "$modules" "$min_gz" "$gz"; do
+        if [ -z "$v" ] || [ "$v" -eq 0 ] 2>/dev/null; then
+            echo "ERROR: refusing to write a size manifest with a zero measurement" >&2
+            echo "       (min_raw=$min_raw raw=$raw modules=$modules min_gz=$min_gz gz=$gz)" >&2
+            return 1
+        fi
+    done
 
     cat > "$manifest" <<JSON
 {
@@ -182,7 +207,7 @@ write_size_manifest() {
     "gz_bytes": $gz,
     "gz_kb": $(python3 -c "print(round($gz/1024, 1))"),
     "modules": $modules,
-    "note": "A build INPUT, not a deliverable. CLAUDE.md's figures describe this one."
+    "note": "A build INPUT, not a deliverable. Claims about it need <!-- size-claim: unminified --> on the line."
   }
 }
 JSON

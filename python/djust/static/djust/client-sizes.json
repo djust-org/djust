@@ -13,6 +13,6 @@
     "gz_bytes": 192629,
     "gz_kb": 188.1,
     "modules": 55,
-    "note": "A build INPUT, not a deliverable. CLAUDE.md's figures describe this one."
+    "note": "A build INPUT, not a deliverable. Claims about it need <!-- size-claim: unminified --> on the line."
   }
 }

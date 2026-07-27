@@ -6,7 +6,7 @@ How djust works, and when to use it.
 
 djust brings [Phoenix LiveView](https://hexdocs.pm/phoenix_live_view/)-style reactive server-side rendering to Django. Instead of writing JavaScript to update the UI, you write Python. The server renders HTML; the client patches the DOM.
 
-**Key idea:** State lives on the server. Events travel up from the browser; HTML patches travel down. The client is a thin WebSocket layer (~5KB of JS).
+**Key idea:** State lives on the server. Events travel up from the browser; HTML patches travel down. The client is a thin WebSocket layer (~58 KB gz of JS).
 
 ## The LiveView Lifecycle
 

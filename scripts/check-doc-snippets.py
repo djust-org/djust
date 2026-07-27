@@ -482,33 +482,48 @@ def _load_size_manifest(bundle: Path) -> dict | None:
         return None
 
 
-# Which artifact a size claim refers to, resolved PER LINE rather than per
-# file — a single doc legitimately cites both (#2138). The line must name the
-# artifact; a claim that names neither is checked against the file's default,
-# and a claim on a line carrying _SIZE_HISTORICAL_MARKER is skipped, because
-# prose sometimes quotes a figure precisely to say it was WRONG.
-_SIZE_ARTIFACT_HINTS = [
-    ("client.min.js", "shipped", "kb"),
-    ("minified", "shipped", "kb"),
-    ("shipped", "shipped", "kb"),
-    ("client.js", "unminified", "gz_kb"),
-    ("unminified", "unminified", "gz_kb"),
-]
-_SIZE_FILE_DEFAULTS = {"README.md": ("shipped", "kb"), "CLAUDE.md": ("shipped", "kb")}
+# Which artifact a size claim refers to. EXPLICIT markers only — no keyword
+# guessing (#2138).
+#
+# The first version inferred the artifact from words on the line, with "last
+# hint wins". It was wrong three ways at once: "minified" is a substring of
+# "unminified" and always won on position, so the `unminified` hint could
+# never fire at all; "we minify client.js down to ~58 KB" resolved to the
+# unminified artifact because `client.js` came last; and a path like
+# `src/client.js` in a sentence about the shipped bundle did the same. The
+# real docs passed only by accident of word order.
+#
+# Prose is not a reliable place to infer intent from. A claim about anything
+# other than the SHIPPED bundle must say so on its own line.
+_SIZE_ARTIFACT_MARKERS = {
+    "<!-- size-claim: unminified -->": ("unminified", "gz_kb"),
+    "<!-- size-claim: shipped -->": ("shipped", "kb"),
+}
+_SIZE_DEFAULT_ARTIFACT = ("shipped", "kb")
 _SIZE_HISTORICAL_MARKER = "size-claim: historical"
 _SIZE_CLAIM_FILES = ["README.md", "CLAUDE.md"]
 
+# A size claim counts when its line is ABOUT THE CLIENT — not only when it
+# says "gz". Gating on "gz" alone missed `~5KB client runtime` in README and
+# five more copies across docs/, every one wrong by ~11x: the injected file is
+# client.min.js at 58.7 KB gz / 233 KB raw. The most-wrong claims in the repo
+# were the ones the check could not see (#2138).
+_SIZE_CLIENT_CONTEXT_RE = re.compile(
+    r"client[ ._-]?(js|javascript|runtime|bundle)|client\.min\.js|gzip|\bgz\b",
+    re.IGNORECASE,
+)
+
 
 def _artifact_for_line(line: str, filename: str) -> tuple[str, str]:
-    lower = line.lower()
-    # Last hint wins, so a line naming both reads left-to-right sensibly.
-    best = _SIZE_FILE_DEFAULTS.get(filename, ("shipped", "kb"))
-    pos = -1
-    for needle, section, field in _SIZE_ARTIFACT_HINTS:
-        at = lower.rfind(needle)
-        if at > pos:
-            pos, best = at, (section, field)
-    return best
+    """The artifact a claim on this line describes.
+
+    Defaults to the SHIPPED bundle — the only figure that constrains anything,
+    and the one a reader assumes. Anything else is opt-in per line.
+    """
+    for marker, artifact in _SIZE_ARTIFACT_MARKERS.items():
+        if marker in line:
+            return artifact
+    return _SIZE_DEFAULT_ARTIFACT
 
 
 def check_js_size(bundle: Path, readme: Path) -> tuple[list[str], list[str]]:
@@ -538,9 +553,8 @@ def check_js_size(bundle: Path, readme: Path) -> tuple[list[str], list[str]]:
         if not doc.is_file():
             continue
         for lineno, line in enumerate(doc.read_text().splitlines(), start=1):
-            lower = line.lower()
-            if "gz" not in lower and "gzip" not in lower:
-                continue  # only size claims qualified with a gzip context
+            if not _SIZE_CLIENT_CONTEXT_RE.search(line):
+                continue  # only claims whose line is about the client bundle
             if _SIZE_HISTORICAL_MARKER in line:
                 continue  # a figure quoted precisely to say it was wrong
             section, field = _artifact_for_line(line, filename)

@@ -80,7 +80,13 @@ def test_the_manifest_matches_the_files_on_disk():
     assert (static / "client.min.js").stat().st_size == m["minified_raw"]["bytes"]
     gz = static / "client.min.js.gz"
     if gz.is_file():
-        assert gz.stat().st_size == m["shipped"]["bytes"]
+        # Tolerance, not equality. build-client.sh:20-25 gitignores the .gz
+        # precisely because gzip is an unpinned system tool whose output can
+        # differ byte-for-byte across contributor toolchains — so asserting
+        # exact bytes would either fail on a different machine or reintroduce
+        # the per-PR diff noise #2054 removed. The KB figure is what prose
+        # quotes, so that is what must agree.
+        assert abs(gz.stat().st_size / 1024 - m["shipped"]["kb"]) < 1.0
 
 
 def test_the_module_count_matches_the_source_tree():
@@ -132,11 +138,11 @@ _M = {
 
 def test_a_claim_is_checked_against_the_artifact_its_line_names(tmp_path):
     # The heart of it. 58 is right for the shipped bundle and wildly wrong for
-    # the unminified input; which one applies depends on the line, not the file.
+    # the unminified input; which one applies depends on the line's MARKER.
     out = _run_checker(
         tmp_path,
         readme="- ~58 KB gzipped client JavaScript\n",
-        claude="- unminified `client.js` is ~58 KB gz\n",
+        claude="- client.js is ~58 KB gz <!-- size-claim: unminified -->\n",
         manifest=_M,
     )
     assert "CLAUDE.md" in out, "the unminified claim of ~58 KB must be caught"
@@ -147,10 +153,26 @@ def test_a_correct_unminified_claim_passes(tmp_path):
     out = _run_checker(
         tmp_path,
         readme="- ~58 KB gzipped client JavaScript\n",
-        claude="- unminified `client.js` is ~188 KB gz\n",
+        claude="- client.js is ~188 KB gz <!-- size-claim: unminified -->\n",
         manifest=_M,
     )
     assert "outside the tolerance band" not in out, out
+
+
+def test_an_unminified_claim_without_its_marker_is_checked_as_shipped(tmp_path):
+    # The contract stated as a consequence: no marker means the SHIPPED
+    # bundle, whatever words happen to be on the line. The previous resolver
+    # guessed from keywords, and the real docs passed by accident of word
+    # order — this makes "you must say so" explicit rather than implied.
+    out = _run_checker(
+        tmp_path,
+        readme="- ~58 KB gzipped client JavaScript\n",
+        claude="- the unminified client.js is ~188 KB gz\n",
+        manifest=_M,
+    )
+    assert "outside the tolerance band" in out, (
+        "without a marker the 188 KB claim must be read as a SHIPPED claim and rejected"
+    )
 
 
 def test_a_historical_figure_can_be_marked_rather_than_forced_current(tmp_path):
@@ -182,3 +204,107 @@ def test_the_real_docs_pass_against_the_real_manifest():
     # drifted out of band and nothing caught the other two.
     r = subprocess.run([sys.executable, str(CHECKER)], capture_output=True, text=True, cwd=ROOT)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- the manifest must never lie ------------------------------------------
+
+
+def test_no_measurement_in_the_manifest_is_zero():
+    # A zeroed manifest is worse than none, because the checker TRUSTS it: a
+    # 0 KB "shipped" figure produces a band of [-3, +3] and rejects every
+    # correct claim in README and CLAUDE.md. That is a strictly worse version
+    # of the #2133 wall this manifest exists to remove — and the first version
+    # of build-client.sh produced exactly that when run without terser (a
+    # path the script explicitly supports) or without gzip.
+    m = _manifest()
+    zeros = []
+    for section, body in m.items():
+        if not isinstance(body, dict):
+            continue
+        for field, value in body.items():
+            if isinstance(value, (int, float)) and value == 0:
+                zeros.append(f"{section}.{field}")
+    assert not zeros, f"zeroed measurements in client-sizes.json: {zeros}"
+
+
+def test_the_build_refuses_to_write_a_zeroed_manifest(tmp_path):
+    # The guard itself, exercised against the real script: with no
+    # client.min.js.gz present the manifest must be left ALONE, not zeroed.
+    import shutil
+
+    static = tmp_path / "python/djust/static/djust"
+    (static / "src").mkdir(parents=True)
+    shutil.copy(ROOT / "python/djust/static/djust/client.js", static / "client.js")
+    shutil.copy(ROOT / "python/djust/static/djust/client.min.js", static / "client.min.js")
+    (static / "src" / "01-x.js").write_text("// x\n")
+    good = {"shipped": {"kb": 58.7, "bytes": 60128}}
+    (static / "client-sizes.json").write_text(json.dumps(good))
+    # deliberately NO client.min.js.gz
+
+    script = (ROOT / "scripts/build-client.sh").read_text()
+    fn = script[
+        script.index("write_size_manifest() {") : script.index(
+            '\nif [ -f "$STATIC_DIR/client.min.js" ]; then'
+        )
+    ]
+    runner = tmp_path / "run.sh"
+    runner.write_text(f'STATIC_DIR="{static}"\nSRC_DIR="{static}/src"\n{fn}\nwrite_size_manifest\n')
+    subprocess.run(["bash", str(runner)], capture_output=True, text=True)
+
+    after = json.loads((static / "client-sizes.json").read_text())
+    assert after == good, (
+        "the manifest must be preserved when a measurement is unavailable, "
+        f"not overwritten with zeros; got {after}"
+    )
+
+
+# --- the checker resolves artifacts EXPLICITLY, never by guessing ---------
+
+
+def test_the_artifact_is_resolved_by_marker_not_by_keywords():
+    # The first resolver inferred the artifact from words on the line with
+    # "last hint wins". "minified" is a substring of "unminified" and always
+    # won on position, so the unminified hint could never fire at all; and
+    # "we minify client.js down to ~58 KB" resolved to the UNMINIFIED artifact
+    # because `client.js` came last. The real docs passed by accident of word
+    # order. Prose is not a reliable place to infer intent from.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("c", CHECKER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    cases = [
+        ("- unminified `client.js` is ~188 KB gz <!-- size-claim: unminified -->", "unminified"),
+        ("- we minify client.js down to ~58 KB gz", "shipped"),
+        ("- the 55 modules in `static/djust/src/client.js` compile to ~58 KB gz", "shipped"),
+        ("- ~58 KB gzipped client JavaScript", "shipped"),
+    ]
+    for line, expected in cases:
+        assert mod._artifact_for_line(line, "CLAUDE.md")[0] == expected, line
+
+
+def test_a_client_claim_without_the_word_gz_is_still_checked(tmp_path):
+    # The gate used to be `"gz" in line`, which missed `~5KB client runtime`
+    # in README and five more copies across docs — every one wrong by ~11x,
+    # i.e. the most-wrong claims in the repo were the ones the check could not
+    # see.
+    out = _run_checker(
+        tmp_path,
+        readme="| djust auto-injects the ~5KB client runtime into every response |\n",
+        claude="# c\n",
+        manifest=_M,
+    )
+    assert "outside the tolerance band" in out, out
+
+
+def test_a_non_client_size_claim_is_not_checked(tmp_path):
+    # The widened gate must not false-positive on unrelated sizes — memory,
+    # page weight, test fixtures.
+    out = _run_checker(
+        tmp_path,
+        readme="- the panel uses ~10 KB memory per 50 events\n- a ~16 KB Tailwind fixture\n",
+        claude="# c\n",
+        manifest=_M,
+    )
+    assert "outside the tolerance band" not in out, out

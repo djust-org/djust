@@ -67,7 +67,7 @@ Create `myapp/templates/myapp/counter.html`:
 
 **Template requirements:**
 
-- `{% load live_tags %}` and `{% djust_client_config %}` emit client config meta tags; djust auto-injects the client JS (~5KB) into every LiveView response
+- `{% load live_tags %}` and `{% djust_client_config %}` emit client config meta tags; djust auto-injects the client JS (~58 KB gz) into every LiveView response
 - `dj-view="{{ dj_view_id }}"` on `<body>` connects the page to the WebSocket session
 - `dj-root` marks the reactive region — only this subtree is patched on updates
 - `dj-click="increment"` binds a click event to the `increment` handler
