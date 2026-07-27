@@ -159,26 +159,48 @@ for _id in "${FAILED_IDS[@]}"; do
         cd "$SCRATCH" || exit 1
         PYTHONPATH="$SCRATCH/python:$SCRATCH" "$PYBIN" -m pytest "$_id" -q 2>&1
     )
-    if printf '%s' "$_out" | grep -qE '^FAILED '; then
-        PRE_IDS+=("$_id")
-    elif printf '%s' "$_out" | grep -qE '[0-9]+ passed'; then
-        NEW_IDS+=("$_id")
-    elif printf '%s' "$_out" | grep -qE 'no tests ran|not found'; then
-        # Absent at the merge-base usually means the branch added it. But it
-        # ALSO means the id was parsed wrongly — and a mis-parsed id is
-        # indistinguishable from a new test at this point. It just failed in
-        # THIS tree, so it must be collectible here; if it is not, the parse is
-        # what is broken, and calling it "new" would blame the pusher for a
-        # bug in this script.
-        if "$PYBIN" -m pytest --collect-only "$_id" -q >/dev/null 2>&1; then
-            NEW_IDS+=("$_id")
-        else
-            UNRESOLVED=$((UNRESOLVED + 1))
-        fi
-    else
-        # Could not tell for this id (import error, venv mismatch).
-        UNRESOLVED=$((UNRESOLVED + 1))
-    fi
+    _rc=$?
+    # Classify on the EXIT CODE, not on grepping the output text.
+    #
+    # Grepping was wrong in a way no additional string would have fixed. It
+    # matched `no tests ran|not found` to mean "absent at the base" — but
+    # pytest emits "fixture 'x' not found", and any `pytest.fail("… not
+    # found")` in a test's own message matches too, so a test that was BROKEN
+    # at the merge-base was announced as new on this branch. It also had no
+    # arm at all for a test that ERRORED rather than failed.
+    #
+    #   0  passed at the base            -> new on this branch
+    #   1  failed OR errored at the base -> pre-existing
+    #   4  id/file did not resolve       -> absent (or unimportable, below)
+    #   5  nothing collected             -> absent
+    #   2/3 interrupted / internal       -> cannot tell
+    #
+    # rc 4 covers two different things, so it is split on pytest's OWN
+    # message: `ERROR: not found:` / `ERROR: file or directory not found:` is
+    # arg resolution failing to find the id or its file,
+    # while `found no collectors` is a module that would not import. A test's
+    # assertion text cannot forge either, because a failing test exits 1.
+    case "$_rc" in
+        0) NEW_IDS+=("$_id") ;;
+        1) PRE_IDS+=("$_id") ;;
+        4 | 5)
+            if [ "$_rc" -eq 4 ] && ! printf '%s' "$_out" | grep -qE '^ERROR: (file or directory )?not found:'; then
+                # Unimportable at the base, not absent. Not comparable.
+                UNRESOLVED=$((UNRESOLVED + 1))
+            elif "$PYBIN" -m pytest --collect-only "$_id" -q >/dev/null 2>&1; then
+                # Absent at the merge-base usually means the branch added it.
+                # But it is also what a MIS-PARSED id looks like, and the two
+                # are indistinguishable here. It just failed in THIS tree, so
+                # if it cannot be collected here the parse is what is broken —
+                # and calling it new would blame the pusher for this script's
+                # own defect, which both earlier parsing bugs did.
+                NEW_IDS+=("$_id")
+            else
+                UNRESOLVED=$((UNRESOLVED + 1))
+            fi
+            ;;
+        *) UNRESOLVED=$((UNRESOLVED + 1)) ;;
+    esac
 done
 
 PRE_COUNT=${#PRE_IDS[@]}
@@ -195,11 +217,23 @@ if [ "$RESOLVED" -eq 0 ]; then
     echo "  None of these could be checked at the merge-base, so they are NOT"
     echo "  attributed. Treat them as unknown rather than as yours."
 elif [ "$PRE_COUNT" -gt 0 ] && [ "$YOURS" -eq 0 ]; then
-    echo "  ALL $PRE_COUNT checked failure(s) ALSO fail at the merge-base."
-    echo "  Your branch did not cause them — main is red."
-    echo
-    echo "  This push is still blocked, which is deliberate. Fix main (or wait"
-    echo "  for the fix to land) rather than reaching for --no-verify."
+    # "Your branch did not cause them" is a statement about ALL the failures,
+    # so it may only be made when all of them were actually checked. With
+    # anything unresolved or skipped for the cap, the unexamined ones could be
+    # the pusher's own regression — and telling them to go wait for someone
+    # else to fix main is then the worst available advice.
+    printf '%s\n' "${PRE_IDS[@]}" | sed 's/^/    /'
+    if [ "$UNRESOLVED" -eq 0 ] && [ "$SKIPPED_FOR_CAP" -eq 0 ]; then
+        echo "  ALL $PRE_COUNT failure(s) ALSO fail at the merge-base."
+        echo "  Your branch did not cause them — main is red."
+        echo
+        echo "  This push is still blocked, which is deliberate. Fix main (or wait"
+        echo "  for the fix to land) rather than reaching for --no-verify."
+    else
+        echo "  The $PRE_COUNT failure(s) above ALSO fail at the merge-base, so"
+        echo "  your branch did not cause THOSE. The rest were not checked, so"
+        echo "  do not read this as main being the only problem."
+    fi
 elif [ "$PRE_COUNT" -gt 0 ]; then
     echo "  $PRE_COUNT of $RESOLVED checked failure(s) are PRE-EXISTING at the"
     echo "  merge-base; $YOURS are new on this branch:"
@@ -216,9 +250,9 @@ if [ "$UNRESOLVED" -gt 0 ]; then
 fi
 if [ "$SKIPPED_FOR_CAP" -gt 0 ]; then
     echo
-    echo "  (Checked the first $MAX_ATTRIBUTED only; $SKIPPED_FOR_CAP more were"
-    echo "  not attributed. With this many failures the first few are usually"
-    echo "  representative.)"
+    echo "  ($SKIPPED_FOR_CAP more were NOT checked: the cap is"
+    echo "  $MAX_ATTRIBUTED and the ids are sorted, so these are the"
+    echo "  alphabetically-first $MAX_ATTRIBUTED, not the most relevant ones.)"
 fi
 echo "──────────────────────────────────────────────────────────────────────"
 

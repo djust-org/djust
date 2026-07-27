@@ -32,7 +32,34 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/pre-push-pytest.sh"
-VENV_PY = ROOT / ".venv/bin/python"
+
+
+def _venv_python() -> Path:
+    """Resolve the interpreter the way the script under test now does.
+
+    Hardcoding ``ROOT / ".venv/bin/python"`` was the exact defect this file
+    verifies the script no longer has: a linked worktree has no ``.venv``, so
+    the skipif below silently skipped every behavioural case — 19 of them —
+    and any gate-off run in a worktree read 0 and looked like evidence. The
+    test asserting the wrapper works from a worktree was itself among the
+    skipped.
+    """
+    try:
+        out = subprocess.run(
+            ["bash", "scripts/run-with-venv-python.sh", "--print"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+        if out and Path(out).is_file():
+            return Path(out)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ROOT / ".venv/bin/python"
+
+
+VENV_PY = _venv_python()
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -387,3 +414,108 @@ def test_the_merge_base_run_does_not_hardcode_a_venv_path():
     assert "--print" in src, "the merge-base interpreter must come from the wrapper"
     body = src[src.index("PYBIN=") :]
     assert '"$PYBIN" -m pytest' in body, "the per-id run must use the resolved interpreter"
+
+
+# --- classification is by exit code, not by grepping the output -----------
+
+
+def test_a_test_that_ERRORS_at_the_base_is_pre_existing_not_yours(tmp_path):
+    # The chain used to grep the merge-base OUTPUT for `no tests ran|not
+    # found`. But "not found" is not exclusive to "absent": any
+    # `pytest.fail("… not found")` in a test's own message matched, and there
+    # was no arm at all for a test that ERRORED rather than failed. A test
+    # broken in BOTH trees was announced as new on this branch.
+    #
+    # The exit code answers exactly: 1 means failed-or-errored, whatever the
+    # message says.
+    repo = _make_repo(
+        tmp_path,
+        {
+            "test_pre.py": (
+                "import pytest\ndef test_pre():\n    pytest.fail('config file not found')\n"
+            )
+        },
+        {"test_unrelated.py": "def test_unrelated(): assert True\n"},
+    )
+    out = _run(repo)
+    assert "ALSO fail at the merge-base" in out, out
+    assert "are new on this branch" not in out, (
+        f"a test broken at the base is not the pusher's, whatever its message says\n{out}"
+    )
+
+
+def test_a_module_that_will_not_import_at_the_base_is_unresolved(tmp_path):
+    # Distinct from absent: rc 4 covers both, so it is split on pytest's own
+    # message. Unimportable is not comparable, so it must not be called new.
+    repo = _make_repo(
+        tmp_path,
+        {"test_x.py": "import totally_missing_module_xyz\ndef test_x(): pass\n"},
+        {"test_x.py": "def test_x(): assert False\n"},
+    )
+    out = _run(repo)
+    assert "could not be checked" in out, out
+    assert "are new on this branch" not in out, out
+
+
+# --- a global verdict needs a global sample ------------------------------
+
+
+def test_it_does_not_say_main_is_red_when_some_failures_were_not_checked(tmp_path):
+    # "Your branch did not cause them" is a claim about ALL the failures. With
+    # one unresolvable alongside one pre-existing, the unexamined one may be
+    # the pusher's own regression — and telling them to go wait for someone
+    # else to fix main is then the worst available advice.
+    repo = _make_repo(
+        tmp_path,
+        {
+            "test_pre.py": "def test_pre(): assert False\n",
+            "test_u.py": "import totally_missing_module_xyz\ndef test_u(): pass\n",
+        },
+        {"test_u.py": "def test_u(): assert False\n"},
+    )
+    out = _run(repo)
+    assert "could not be checked" in out, out
+    assert "Your branch did not cause them — main is red." not in out, (
+        f"a global verdict may not be issued from a partial sample\n{out}"
+    )
+    assert "did not cause THOSE" in out, out
+
+
+def test_the_all_pre_existing_arm_lists_the_ids_it_covers(tmp_path):
+    # It was the only arm that did not, which is what made the gap invisible.
+    repo = _make_repo(
+        tmp_path,
+        {"test_pre.py": "def test_pre(): assert False\n"},
+        {"test_unrelated.py": "def test_unrelated(): assert True\n"},
+    )
+    out = _run(repo)
+    assert "Your branch did not cause them" in out, out
+    # Scoped to the arm's OWN section. Counting occurrences anywhere passes on
+    # the banner and the echoed pytest output, so it could not tell whether
+    # the arm listed anything.
+    section = out.split("already fail at the merge-base")[-1].split("ALSO fail at")[0]
+    assert "tests/test_pre.py::test_pre" in section, (
+        f"the arm must list the ids it is making a claim about, not just count "
+        f"them; section was:\n{section}"
+    )
+
+
+# --- the cap ------------------------------------------------------------
+
+
+def test_the_per_id_cap_is_honoured_and_disclosed(tmp_path):
+    # Uncapped, a systemic break (one bad import -> hundreds of failures) adds
+    # minutes of silent wait while `git push` blocks. Capped silently, the
+    # report would imply a completeness it does not have.
+    base = {f"test_p{i}.py": f"def test_p{i}(): assert False\n" for i in range(6)}
+    repo = _make_repo(tmp_path, base, {"test_z.py": "def test_z(): assert True\n"})
+    script = (repo / "scripts" / "pre-push-pytest.sh").read_text()
+    script = script.replace("MAX_ATTRIBUTED=40", "MAX_ATTRIBUTED=2")
+    (repo / "scripts" / "pre-push-pytest.sh").write_text(script)
+
+    out = _run(repo)
+    assert "were NOT checked" in out, f"the cap must be disclosed, not silent\n{out}"
+    assert "alphabetically-first" in out, (
+        "ids are sorted, so the cap takes the alphabetically-first N — the "
+        "report must not imply they are the most relevant ones"
+    )

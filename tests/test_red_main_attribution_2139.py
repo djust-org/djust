@@ -129,7 +129,13 @@ def test_the_workflow_runs_on_a_schedule_and_can_be_triggered():
 
     wf = yaml.safe_load(WORKFLOW.read_text())
     on = wf.get("on") or wf.get(True)  # PyYAML parses bare `on:` as True
-    assert "schedule" in on, "a red main must be found before someone pushes into it"
+    # Not just the KEY: dropping the cron entry leaves `{'schedule': None}`,
+    # which passes a membership check while the workflow never fires again —
+    # and nothing alerts, which is the failure this exists to remove.
+    assert on.get("schedule"), "a red main must be found before someone pushes into it"
+    assert all(e.get("cron") for e in on["schedule"]), (
+        f"every schedule entry needs a cron expression; got {on['schedule']!r}"
+    )
     assert "workflow_dispatch" in on, "and be checkable on demand"
 
 
