@@ -367,7 +367,7 @@ class StatusChangeFormView(FormMixin, LiveView):
 | **Validation** | Client + Server | Server-only |
 | **State Management** | React client-side | Server-side |
 | **Real-time Updates** | React setState | WebSocket VDOM |
-| **Bundle Size** | Large (React + config) | Tiny (~5KB) |
+| **Bundle Size** | Large (React + config) | Tiny (~58 KB gz client JS) |
 | **Abstraction Level** | High | Low (standard Django) |
 | **Learning Curve** | Steep | Gentle |
 | **Flexibility** | Very flexible UI | More constrained |
@@ -405,7 +405,7 @@ class StatusChangeFormView(FormMixin, LiveView):
 - Validation: Client-side instant, server round-trip on submit
 
 ### Djust LiveView
-- Initial page load: ~50-100ms (server render + ~5KB client)
+- Initial page load: ~50-100ms (server render + ~58 KB gz client JS)
 - Interactions: ~2-8ms (WebSocket VDOM patches)
 - Validation: Real-time server-side on every change
 

@@ -332,7 +332,7 @@ class StatusChangeFormView(FormMixin, LiveView):
 | **Updates** | React setState | WebSocket VDOM patches |
 | **Code Volume** | ~2000 LOC | ~800 LOC |
 | **Learning Curve** | High (React + custom DSL) | Low (if you know Django) |
-| **Bundle Size** | Large (React + config) | Tiny (~5KB client.js) |
+| **Bundle Size** | Large (React + config) | Tiny (~58 KB gz `client.min.js`) |
 | **Abstraction Level** | High | Low (explicit) |
 
 ---
@@ -395,7 +395,7 @@ class StatusChangeFormView(FormMixin, LiveView):
 - ✅ Server-side state management
 - ✅ Real-time updates (~2-8ms)
 - ✅ Python-only (no JS required)
-- ✅ Tiny bundle (~5KB)
+- ✅ Tiny bundle (~58 KB gz)
 - ✅ Simple mental model
 
 ### Djust LiveView Cons
@@ -410,7 +410,7 @@ class StatusChangeFormView(FormMixin, LiveView):
 
 ### Initial Page Load
 - **React Declarative**: ~300-500ms (React bundle + hydration)
-- **Djust LiveView**: ~50-100ms (server render + ~5KB client)
+- **Djust LiveView**: ~50-100ms (server render + ~58 KB gz client JS)
 - **Winner**: Djust LiveView
 
 ### Interactions

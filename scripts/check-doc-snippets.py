@@ -495,27 +495,72 @@ def _load_size_manifest(bundle: Path) -> dict | None:
 #
 # Prose is not a reliable place to infer intent from. A claim about anything
 # other than the SHIPPED bundle must say so on its own line.
-_SIZE_ARTIFACT_MARKERS = {
-    "<!-- size-claim: unminified -->": ("unminified", "gz_kb"),
-    "<!-- size-claim: shipped -->": ("shipped", "kb"),
+#
+# ONE rule for all three markers (#2148). The first version had two families
+# with two different matching rules: the artifact markers were dict keys
+# matched byte-for-byte, so `<!--size-claim: unminified-->` or
+# `<!-- SIZE-CLAIM: UNMINIFIED -->` silently fell back to the default, while
+# the historical marker was a bare substring and *was* tolerant. Nothing about
+# a marker's meaning justifies that difference. One case-insensitive regex,
+# whitespace-flexible, covers every spelling for every marker.
+#
+# Mitigating context for the record: no mis-spelling ever passed SILENTLY —
+# an unrecognised artifact marker fell back to `shipped` and a wrong-artifact
+# claim then failed loudly. This was an ergonomics defect, not a hole.
+#
+# The regex matches ANY value deliberately, and the VALUE SET is the bound.
+# Restricting the alternation instead would have been decorative: both lookups
+# below are membership tests, so an unrecognised value resolves identically
+# either way — the gate-off found the test asserting it to be tautological
+# (#1200/#1468). Making the bound load-bearing means REPORTING the unknown
+# value, so `<!-- size-claim: histrical -->` is named at its file:line instead
+# of silently governing nothing. A marker that governs nothing is the exact
+# failure this check exists to catch — CLAUDE.md shipped two of them.
+_SIZE_MARKER_RE = re.compile(r"<!--\s*size-claim:\s*([\w-]+)\s*-->", re.IGNORECASE)
+_SIZE_ARTIFACT_BY_MARKER = {
+    "unminified": ("unminified", "gz_kb"),
+    "shipped": ("shipped", "kb"),
 }
-_SIZE_DEFAULT_ARTIFACT = ("shipped", "kb")
 _SIZE_HISTORICAL_MARKER = "size-claim: historical"
+_SIZE_MARKER_VALUES = frozenset({*_SIZE_ARTIFACT_BY_MARKER, "historical"})
+_SIZE_DEFAULT_ARTIFACT = ("shipped", "kb")
 # Every file carrying a client-size claim that this repo maintains. Correcting
 # a claim without guarding its file leaves it free to drift straight back —
 # which is a reduced-scale instance of the "N copies, only some checked" class
 # this check exists to retire (#1646/#2138).
+#
+# The `examples/demo_project/` entries are deliberate (#2148). They are demo
+# copy in a churn-heavy tree, which is an argument against — but the guard is
+# an explicit FILE list, not a glob, so its blast radius is these named files
+# and, within them, only lines that both mention the client and state a
+# `~N KB` figure. Demo-template churn does not touch those lines, and this is
+# the copy that drifted ~11x across four releases precisely because nobody
+# looked at it.
 _SIZE_CLAIM_FILES = [
     "README.md",
     "CLAUDE.md",
+    "ROADMAP.md",
     "docs/llms.txt",
     "docs/llms-full.txt",
     "docs/TEMPLATE_BACKEND.md",
     "docs/guides/sw-enhancements.md",
+    "docs/state-management/IMPLEMENTATION_PHASE2.md",
     "docs/website/core-concepts/templates.md",
     "docs/website/getting-started/core-concepts.md",
     "docs/website/getting-started/first-liveview.md",
     "docs/website/guides/template-cheatsheet.md",
+    "examples/demo_project/FORM_PATTERNS_COMPARISON.md",
+    "examples/demo_project/REACT_TO_DJUST_TRANSLATION.md",
+    "examples/demo_project/demo_app/forms_djust_example.py",
+    "examples/demo_project/demo_app/templates/forms/status_change_djust.html",
+    "examples/demo_project/djust_demos/templates/demos/index_design3.html",
+    "examples/demo_project/djust_demos/templates/demos/index_design_hybrid.html",
+    "examples/demo_project/djust_demos/templates/demos/index_shadcn.html",
+    "examples/demo_project/djust_docs/templates/docs/docs.html",
+    "examples/demo_project/djust_forms/templates/forms/status_change_djust.html",
+    "examples/demo_project/djust_homepage/templates/homepage/index.html",
+    "examples/demo_project/templates/docs.html",
+    "examples/demo_project/templates/index.html",
 ]
 
 # A size claim counts when its line is ABOUT THE CLIENT — not only when it
@@ -529,15 +574,39 @@ _SIZE_CLIENT_CONTEXT_RE = re.compile(
 )
 
 
+def _size_marker(line: str) -> str | None:
+    """The RECOGNISED `size-claim` marker on this line, lowercased, or None.
+
+    One rule for every marker: case-insensitive, whitespace-flexible, and the
+    `<!-- ... -->` delimiters required. A marker governs its own line only.
+    An unrecognised value yields None here and is reported separately, so it
+    cannot quietly behave as "no marker at all".
+    """
+    for m in _SIZE_MARKER_RE.finditer(line):
+        value = m.group(1).lower()
+        if value in _SIZE_MARKER_VALUES:
+            return value
+    return None
+
+
+def _unknown_size_markers(line: str) -> list[str]:
+    """Marker values on this line that mean nothing to the check."""
+    return [
+        m.group(1)
+        for m in _SIZE_MARKER_RE.finditer(line)
+        if m.group(1).lower() not in _SIZE_MARKER_VALUES
+    ]
+
+
 def _artifact_for_line(line: str, filename: str) -> tuple[str, str]:
     """The artifact a claim on this line describes.
 
     Defaults to the SHIPPED bundle — the only figure that constrains anything,
     and the one a reader assumes. Anything else is opt-in per line.
     """
-    for marker, artifact in _SIZE_ARTIFACT_MARKERS.items():
-        if marker in line:
-            return artifact
+    marker = _size_marker(line)
+    if marker is not None and marker in _SIZE_ARTIFACT_BY_MARKER:
+        return _SIZE_ARTIFACT_BY_MARKER[marker]
     return _SIZE_DEFAULT_ARTIFACT
 
 
@@ -568,9 +637,20 @@ def check_js_size(bundle: Path, readme: Path) -> tuple[list[str], list[str]]:
         if not doc.is_file():
             continue
         for lineno, line in enumerate(doc.read_text().splitlines(), start=1):
+            # Checked BEFORE the context gate: a marker is only ever written
+            # for this check, so a value it does not understand is a defect
+            # wherever it sits — and a typo'd `historical` on a line the gate
+            # skips would otherwise be invisible in both directions.
+            for unknown in _unknown_size_markers(line):
+                errors.append(
+                    f"{filename}:{lineno} — unknown size-claim marker "
+                    f"`{unknown}`; expected one of "
+                    f"{', '.join(sorted(_SIZE_MARKER_VALUES))}. A marker with an "
+                    f"unrecognised value governs nothing."
+                )
             if not _SIZE_CLIENT_CONTEXT_RE.search(line):
                 continue  # only claims whose line is about the client bundle
-            if _SIZE_HISTORICAL_MARKER in line:
+            if _size_marker(line) == "historical":
                 continue  # a figure quoted precisely to say it was wrong
             section, field = _artifact_for_line(line, filename)
             measured = (manifest.get(section) or {}).get(field)

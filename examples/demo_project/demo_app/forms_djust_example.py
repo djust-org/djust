@@ -428,7 +428,7 @@ class StatusChangeFormView(FormMixin, LiveView):
 │ Validation               │ Client + Server    │ Server-side            │
 │ Real-time Updates        │ React setState     │ WebSocket VDOM patches │
 │ Form State               │ Client-side        │ Server-side            │
-│ Bundle Size              │ Large (React)      │ Tiny (~5KB client.js)  │
+│ Bundle Size              │ Large (React)      │ Tiny (~58 KB gz client)│
 │ Learning Curve           │ High               │ Low (Django devs)      │
 └──────────────────────────┴────────────────────┴────────────────────────┘
 
