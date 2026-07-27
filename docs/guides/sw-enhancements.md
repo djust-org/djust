@@ -184,7 +184,7 @@ The client maintains a Set of prefetched URLs (`window.djust._prefetch._prefetch
 
 ### Problem
 
-djust's client JS (~5KB), CSS, and icons are small but loaded on every page. Django's `ManifestStaticFilesStorage` uses content hashes, making cache invalidation safe but still requiring a network check.
+djust's client JS (~58 KB gz), CSS, and icons are small but loaded on every page. Django's `ManifestStaticFilesStorage` uses content hashes, making cache invalidation safe but still requiring a network check.
 
 ### Solution
 

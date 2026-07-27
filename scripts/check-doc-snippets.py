@@ -501,7 +501,22 @@ _SIZE_ARTIFACT_MARKERS = {
 }
 _SIZE_DEFAULT_ARTIFACT = ("shipped", "kb")
 _SIZE_HISTORICAL_MARKER = "size-claim: historical"
-_SIZE_CLAIM_FILES = ["README.md", "CLAUDE.md"]
+# Every file carrying a client-size claim that this repo maintains. Correcting
+# a claim without guarding its file leaves it free to drift straight back —
+# which is a reduced-scale instance of the "N copies, only some checked" class
+# this check exists to retire (#1646/#2138).
+_SIZE_CLAIM_FILES = [
+    "README.md",
+    "CLAUDE.md",
+    "docs/llms.txt",
+    "docs/llms-full.txt",
+    "docs/TEMPLATE_BACKEND.md",
+    "docs/guides/sw-enhancements.md",
+    "docs/website/core-concepts/templates.md",
+    "docs/website/getting-started/core-concepts.md",
+    "docs/website/getting-started/first-liveview.md",
+    "docs/website/guides/template-cheatsheet.md",
+]
 
 # A size claim counts when its line is ABOUT THE CLIENT — not only when it
 # says "gz". Gating on "gz" alone missed `~5KB client runtime` in README and
@@ -572,8 +587,12 @@ def check_js_size(bundle: Path, readme: Path) -> tuple[list[str], list[str]]:
                         f"`~{cm.group(1)} KB` is outside the tolerance band "
                         f"[{low:.1f}, {high:.1f}] KB (measured {measured:.1f} KB "
                         f"for {artifact}, +/-{_SIZE_TOLERANCE_KB:.0f} KB). "
-                        f"Run `make sizes`; if the figure is a historical one, "
-                        f"mark the line `{_SIZE_HISTORICAL_MARKER}`."
+                        f"Run `make sizes` for the current figures. If this "
+                        f"claim is about the unminified build input, mark the "
+                        f"line `<!-- size-claim: unminified -->`; if it is a "
+                        f"historical figure quoted to say it WAS wrong, mark "
+                        f"it `<!-- {_SIZE_HISTORICAL_MARKER} -->`. A marker "
+                        f"governs its own line only."
                     )
     return errors, warnings
 
