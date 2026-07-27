@@ -930,7 +930,7 @@ def search(self, query: str = "", **kwargs):
 ```
 ┌─────────────────────────────────────────────┐
 │  Browser                                    │
-│  ├── client.js (~58 KB gz) — events & DOM  │
+│  ├── client.min.js.gz (~58 KB) — events   │
 │  └── WebSocket connection                   │
 └─────────────────────────────────────────────┘
            ↕ WebSocket (Binary/JSON)
