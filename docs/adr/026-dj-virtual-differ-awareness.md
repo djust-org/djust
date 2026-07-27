@@ -1,6 +1,6 @@
 # ADR-026: `dj-virtual` differ awareness — reconciling a server-rendered list against a client-windowed DOM
 
-**Status**: Proposed — no implementation yet
+**Status**: Accepted — Option A taken; iterations 1-2 shipped in v1.1.0rc9 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)). Iteration 3 — the flag flip — is NOT shipped; the differ path is still dark by default.
 **Date**: 2026-07-25
 **Deciders**: Project maintainers
 **Related**:
@@ -52,11 +52,32 @@ corrupting. What they do not do is make a mid-window update *land*.
 
 ## Decision
 
-**Not yet.** This ADR records the options and recommends one; it does not
-authorise implementation. Rationale for deferring is in Consequences.
+**Option A — keyed splice ops for `[dj-virtual]` subtrees.**
 
-The recommended direction, when taken, is **Option A — keyed splice ops for
-`[dj-virtual]` subtrees**.
+This section read "**Not yet.** This ADR records the options and recommends
+one; it does not authorise implementation" until v1.1.0rc9, by which point two
+of its three iterations had shipped. Recorded plainly because that is the
+#1867 class — a prose invariant nobody had run against the code — and
+`make check-adr-status` did not catch it: it audits status/version-line
+*consistency*, not whether a status matches reality.
+
+Where the three iterations from Consequences actually stand:
+
+| iteration | state |
+|---|---|
+| 1. differ emits keyed splice ops, flag default OFF | shipped, PR #2126 |
+| 2. client applies them to the pool | shipped, PR #2135 |
+| 3. flag flips ON after a soak | **not shipped** |
+
+`VIRTUAL_KEYED_OPS` (`crates/djust_vdom/src/diff.rs:167`) still defaults to
+`false`, and its only callers are that crate's tests — it is not exposed
+through the PyO3 bindings and has no `LIVEVIEW_CONFIG` key, so iteration 3 is
+"wire the config *and* change the default", not a one-line flip.
+
+Gating it: flipping changes VDOM behaviour for every `[dj-virtual]` user, so
+per #1122 it is taken only on evidence from real browser verification — the
+#1988/#1989 failure class was DOM state that unit tests structurally cannot
+see. #2136 (PR #2146), the other recorded blocker, is now cleared.
 
 ## Options considered
 

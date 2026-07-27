@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0rc9] - 2026-07-27
+
 ### Changed
 
 - **The benchmarks job now fails the aggregate `test-summary` check (#2160).** It shipped `continue-on-error: true` under canon #1534 — a CI job exercising an environment the dev machine cannot reproduce stays non-gating until green on the runner — and has since been green **six consecutive times across four refs, two of them `main` pushes**, at ~13% of budget (`vdom_diff_list_reorder` median 662 µs against its 5 ms target, *more* headroom than a dev machine has). One green run satisfies #1534's letter; six independent ones satisfy its intent. This matters because job-level `continue-on-error` makes `needs.benchmarks.result == 'success'` **even on failure**, so until now the job proved the thresholds *could* be enforced without enforcing them. Promotion is all-or-nothing: the flag removed, the job added to `test-summary`'s `needs` **and to its AND-chain** (the load-bearing step — in `needs` alone it looks enforced and gates nothing, #1713), and the non-blocking pin inverted rather than deleted. **Deliberately not described as "blocking the merge"**: review found that `main` has *no required status checks at all*, so a red `test-summary` does not stop a merge for any check in this repo — #1713 one level up, filed as #2163 rather than changed as a side effect of a benchmark PR. The pin also now rejects a **step-level** `continue-on-error`, which defeats the gate identically and is an idiom this same workflow uses four times.
