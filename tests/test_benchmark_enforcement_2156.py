@@ -23,9 +23,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
+import yaml  # hard import, deliberately
 
-yaml = pytest.importorskip("yaml")
+# NOT `pytest.importorskip`. PyYAML is not a declared dependency — it arrives
+# transitively via `uvicorn[standard]` — so an importorskip made all seven pins
+# report `1 skipped` and the suite stay green with zero signal. "Nothing was
+# checked" reading as "all clean" is the failure this repo's own tooling exits
+# 2 to avoid, and the sibling pin in test_main_health_workflow_2139.py already
+# uses a hard import.
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
@@ -75,10 +80,12 @@ def test_the_benchmark_job_runs_serially():
     )
 
 
-def test_no_ci_job_that_could_enforce_thresholds_uses_xdist_silently():
-    # Any OTHER job running the benchmarks under -n auto is fine — it just
-    # executes the bodies. The failure this pins is the inverse: the benchmark
-    # job losing its serial invocation in a later edit.
+def test_the_benchmark_job_actually_runs_the_benchmarks():
+    # Renamed: the old name claimed a global property ("no CI job uses xdist
+    # silently") that the body never checked and that is false anyway —
+    # test.yml's python-tests runs `pytest tests/ ... -n auto`, and `tests/`
+    # contains `tests/benchmarks/`. That is harmless (it just executes the
+    # bodies); the failure worth pinning is this job losing its target path.
     run = "\n".join(s.get("run", "") for s in _test_yml()["jobs"]["benchmarks"]["steps"])
     assert "tests/benchmarks" in run, "the job must actually run the benchmarks"
 
@@ -104,19 +111,47 @@ def test_the_job_is_non_blocking_until_green_on_the_runner():
     )
 
 
+def _gates_the_merge() -> bool:
+    """Is `benchmarks` in test-summary's AND-chain — the thing that fails the run?
+
+    A whole-file scan for `needs.benchmarks.result` is wrong in both
+    directions, and the first version of this test used one. The summary's
+    *echo* block mentions every job, so the scan reported "gating" for a job
+    that only appeared in a status line; and a comment naming the string made
+    it report gating with nothing changed at all. Only the `if [ ... ] && [
+    ... ]` chain decides whether the run fails (#1713).
+    """
+    steps = _test_yml()["jobs"]["test-summary"]["steps"]
+    run = code_only("\n".join(s.get("run", "") for s in steps))
+    if "if [" not in run:
+        return False
+    and_chain = run.split("if [", 1)[1].split("; then", 1)[0]
+    return "needs.benchmarks.result" in and_chain
+
+
 def test_promotion_is_all_or_nothing():
     # The half-promoted state is the trap: a job in `needs` and echoed in the
-    # summary, but absent from the AND-condition, looks enforced and is not.
+    # summary, but absent from the AND-condition, looks enforced and gates
+    # nothing.
+    #
+    # The first version of this test could not see that state. A reviewer
+    # shipped it in full — continue-on-error removed, job added to `needs`,
+    # echoed in the summary, absent from the AND-chain — and the suite stayed
+    # green (0 failed / 7 passed). That is #1859: a decorative pin, and it was
+    # this PR's headline safety claim.
     wf = _test_yml()
-    gating = "needs.benchmarks.result" in TEST_YML.read_text()
+    gating = _gates_the_merge()
     non_blocking = wf["jobs"]["benchmarks"].get("continue-on-error") is True
     assert non_blocking != gating, (
         "`benchmarks` must be either non-blocking and absent from the gate, or "
         "blocking and present in it — never continue-on-error while also being "
-        "read as a merge condition"
+        "read as a merge condition, and never in `needs` without being in the "
+        "AND-chain"
     )
     if gating:
-        assert "benchmarks" in wf["jobs"]["test-summary"]["needs"]
+        assert "benchmarks" in wf["jobs"]["test-summary"]["needs"], (
+            "a job read in the AND-chain must also be in `needs`, or the expression is always empty"
+        )
 
 
 # --- the targets were not loosened ---------------------------------------

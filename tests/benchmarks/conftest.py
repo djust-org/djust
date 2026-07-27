@@ -44,16 +44,25 @@ def _assert_benchmark_under(benchmark, target_s: float, label: str) -> None:
     other CI job runs ``-n auto``, so nothing enforced these thresholds except
     the serial pre-push hook — in a process that had just executed 10,000
     tests, where a warm and fragmented heap makes the median systematically
-    slower. ``test_vdom_diff_list_reorder`` measures 3.78ms on a quiet machine
-    against its 5ms target and 7.57ms there, so it blocked every push on main
-    while measuring the environment rather than the code.
+    slower. ``test_vdom_diff_list_reorder`` measured 7.57ms there against its
+    5ms target, so it blocked every push on main while measuring the
+    environment rather than the code.
 
-    The targets themselves are sound — all 58 benchmarks pass serially on a
-    quiet machine — so none were loosened. Reaching for a bigger number is the
+    Numbers below are from the enforcing job itself, since that is the only
+    environment where a latency figure means anything. On the runner:
+
+        vdom_diff_list_reorder   median 0.656 ms  target   5 ms  (13% of budget)
+        vdom_diff_list_append    median 0.644 ms  target   5 ms  (13%)
+        websocket_mount_counter  median 11.4  ms  target 100 ms  (11%)
+
+    All 58 pass, so no target was loosened. Reaching for a bigger number is the
     reflex this issue exists to stop: it is what turned a 10ms bound into 100ms
     in ``test_redis_serialization_performance``, which then flaked again.
-    ``test_vdom_diff_list_reorder`` has the tightest margin in the suite (32%
-    headroom), so it is the one that will flip first if a real regression lands.
+
+    Do NOT tune these against a local run. The same benchmark spans roughly
+    11x across environments (0.656 ms on the runner, ~3.8 ms on a contended
+    laptop, 7.57 ms after 10,000 tests in-process), which is the entire finding
+    of #2156.
 
     `test_benchmark_enforcement_2156.py` pins the job's existence, so this
     docstring cannot quietly become a false claim a second time.
