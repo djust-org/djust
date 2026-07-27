@@ -221,6 +221,33 @@ def test_the_script_is_syntactically_valid():
 # --- the suite job's own guards ------------------------------------------
 
 
+def test_the_install_mirrors_the_proven_ci_recipe():
+    # The hand-rolled install failed on the workflow's first scheduled run:
+    # `uv venv` does not create a `pip`, so `.venv/bin/pip install maturin`
+    # had no interpreter — and maturin is already a dev dependency, so the
+    # line was redundant as well as broken (#2155). A second, divergent
+    # install recipe for the same project is the drift class (#1646); this
+    # pins it to the one CI already proves every run.
+    # NON-COMMENT lines only. The comment above the install explains the bug
+    # by naming `.venv/bin/pip`, so a whole-file scan fails on its own
+    # documentation. This is the FOURTH time this exact hole has appeared in
+    # this PR's pins — a source-grep assertion should default to stripping
+    # comments rather than have it remembered case by case.
+    src = "\n".join(
+        ln for ln in WORKFLOW.read_text().splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert "uv sync --extra dev" in src, "must use the same install as test.yml"
+    assert "uv run maturin develop --release" in src
+    assert ".venv/bin/pip" not in src, (
+        "`uv venv` creates no pip; invoking .venv/bin/pip fails the job and "
+        "reports 'could not run' every single day"
+    )
+    test_yml = (ROOT / ".github/workflows/test.yml").read_text()
+    assert "uv sync --extra dev" in test_yml and "uv run maturin develop --release" in test_yml, (
+        "this pin is only meaningful while test.yml still uses that recipe"
+    )
+
+
 def test_a_failed_rust_build_fails_the_job_rather_than_reporting_a_red_main():
     # `maturin develop --release || true` swallowed the failure, so a broken
     # build produced hundreds of import errors that were then reported as
