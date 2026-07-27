@@ -69,17 +69,38 @@ Where the three iterations from Consequences actually stand:
 | 2. client applies them to the pool | shipped, PR #2135 |
 | 3. flag flips ON after a soak | **not shipped — blocked on #2164** |
 
-The config half of iteration 3 shipped in v1.1.0rc9+: `virtual_keyed_ops`
-reaches the differ via `DjustConfig.ready()` (a module-level PyO3 function,
+The config half of iteration 3 is on `main` (unreleased at time of
+writing): `virtual_keyed_ops` reaches the differ via `DjustConfig.ready()` (a module-level PyO3 function,
 because `VIRTUAL_KEYED_OPS` at `crates/djust_vdom/src/diff.rs:167` is a
 process global, not per-view state). The DEFAULT half did not: it stays
 `False`.
 
-The browser gate is why. Driven in Chrome against a 60-row list, an edit to
-an off-window row does not land **with the flag on or off** — identical
-results. The differ is correct (it emits `VirtualUpdate` carrying the key);
-the list is simply not windowed at patch time after the WS mount morph, so
-there is no pool for the op to reach. Tracked as #2164.
+The browser gate is why, though not for the reason first recorded here.
+
+Measured against a 60-row list, inserting at server position 5 with `k0`
+scrolled out of the window:
+
+| | flag OFF | flag ON |
+|---|---|---|
+| pool index of the new row | 60 (tail) | 60 (tail) |
+| expected | 5 | 5 |
+
+The OFF arm landing at the tail is exactly what this ADR predicts, so the
+A/B is capable of distinguishing — and it shows the flag does not change
+the outcome.
+
+The differ is NOT at fault. With the flag on it emits
+`VirtualInsert { key: "ins0", before_key: "k5" }` — the keyed positioning
+this ADR designed. Iteration 1 is correct. **Iteration 2's client applier
+is what does not honour it**, appending at the tail instead of splicing
+before `k5`. Tracked as #2164.
+
+A first pass recorded the cause as "the list is not windowed at patch
+time". That was wrong: it came from an A/B whose CONTROL arm also failed,
+which cannot distinguish "the flag does nothing" from "a shared upstream
+failure masks it" — and the control failure was an artifact of the test's
+own scroll step. Recorded because a permanent ADR asserting a cause the
+experiment could not support is worse than one that says "inconclusive".
 
 Gating it: flipping changes VDOM behaviour for every `[dj-virtual]` user, so
 per #1122 it is taken only on evidence from real browser verification — the
