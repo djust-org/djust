@@ -189,8 +189,11 @@ class WizardMixin:
         """Render a form field as HTML with djust event bindings.
 
         Returns an HTML string containing the widget markup with
-        ``<dom_event>="<event_name>"`` and ``data-field="<field_name>"``
-        attributes so the field participates in real-time validation.
+        ``<dom_event>="<event_name>"`` and ``name="<field_name>"`` so the
+        field participates in real-time validation. (The name reaches the
+        handler through ``name`` — ``getFieldName``'s second fallback. This
+        docstring used to claim ``data-field="<field_name>"``; the adapters
+        never emitted it, see ``BaseAdapter`` in ``frameworks.py`` — #2145.)
 
         ``dom_event`` is auto-picked from the field's widget class:
 
@@ -424,7 +427,10 @@ class WizardMixin:
         """Store a single field value for the current step.
 
         Called by dj-change events on form inputs.  The ``field`` parameter
-        comes from the ``data-field`` HTML attribute set by ``as_live_field()``.
+        comes from ``getFieldName`` (``09-event-binding.js:504``) — the
+        ``data-field`` attribute if the template author wrote one, otherwise
+        the element's ``name``, which is what ``as_live_field()`` sets.
+        ``as_live_field()`` does not emit ``data-field`` (#2145).
         """
         if not field or not self._steps:
             return
@@ -440,9 +446,11 @@ class WizardMixin:
         """Store a field value triggered by as_live_field() dj-change events.
 
         ``as_live_field()`` generates ``dj-change="validate_field"`` and
-        ``data-field="<name>"``. The name arrives as ``field`` because
+        ``name="<name>"``. The name arrives as ``field`` because
         ``buildFormEventParams`` (``09-event-binding.js:525``) hardcodes that
-        key and reads ``data-field`` first via ``getFieldName`` — NOT because
+        key and resolves it via ``getFieldName`` — ``data-field`` if present,
+        then the element's ``name`` (the branch that fires here, since the
+        adapters emit ``name`` and not ``data-field``, #2145) — NOT because
         data-* attributes are mapped to parameters generally, which is
         ``extractTypedParams`` on the click/poll paths (#2137). The
         ``field_name`` parameter is accepted for backwards compatibility.
