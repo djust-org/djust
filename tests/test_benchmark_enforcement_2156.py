@@ -93,21 +93,25 @@ def test_the_benchmark_job_actually_runs_the_benchmarks():
 # --- a new timing gate must not block a merge until it has proven itself --
 
 
-def test_the_job_is_non_blocking_until_green_on_the_runner():
-    # Canon #1534: a CI job exercising an environment the dev machine cannot
-    # reproduce ships `continue-on-error: true` until it has been green on the
-    # runner at least once. GitHub runners are shared and noisier than a dev
-    # machine, and this is a *timing* gate — the exact class that has now
-    # false-failed twice in this repo.
-    #
-    # When it is promoted, this test should be inverted, not deleted, and the
-    # job added to test-summary's AND-condition (#1713: being in `needs` is
-    # not the same as gating).
+def test_the_job_now_blocks_the_merge():
+    """Inverted at promotion (#2160), as its previous form instructed.
+
+    It shipped `continue-on-error: true` under canon #1534 — a CI job
+    exercising an environment the dev machine cannot reproduce stays
+    non-gating until green on the runner. It then ran green six consecutive
+    times at ~13% of budget (`vdom_diff_list_reorder` medians 656us against a
+    5ms target — more headroom than a dev machine has). One green run
+    satisfies #1534's letter; six satisfy its intent.
+
+    `continue-on-error: true` also made `needs.benchmarks.result == 'success'`
+    even on failure, so before this the job proved the thresholds COULD be
+    enforced without enforcing them: its only signal was an X in the checks
+    list that nothing read.
+    """
     job = _test_yml()["jobs"]["benchmarks"]
-    assert job.get("continue-on-error") is True, (
-        "promote deliberately: flip this assertion AND add `benchmarks` to "
-        "test-summary's success condition in the same change, or the job is "
-        "in `needs` without gating anything (#1713)"
+    assert job.get("continue-on-error") is not True, (
+        "the benchmarks job is a merge gate now; continue-on-error would make "
+        "needs.benchmarks.result 'success' even when the thresholds fail"
     )
 
 
