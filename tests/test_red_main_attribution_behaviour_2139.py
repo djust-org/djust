@@ -525,3 +525,33 @@ def test_the_per_id_cap_is_honoured_and_disclosed(tmp_path):
         "ids are sorted, so the cap takes the alphabetically-first N — the "
         "report must not imply they are the most relevant ones"
     )
+
+
+def test_a_backstop_that_cannot_run_does_not_demote_a_new_test(tmp_path):
+    # The backstop distinguishes a genuinely-new test from a mis-parsed id by
+    # re-collecting it in the current tree. But that is a second pytest
+    # invocation in an environment we do not control, and on CI it failed for
+    # reasons unrelated to the id — demoting a real branch-local failure to
+    # "not attributed", which is a worse answer than the one it replaced.
+    #
+    # Simulated by pointing the backstop at an interpreter that cannot run
+    # pytest at all. Only pytest's own "cannot resolve this id" codes (4/5)
+    # may demote; anything else means the check could not execute, and a check
+    # that cannot execute must not make the answer worse.
+    repo = _make_repo(
+        tmp_path,
+        {"test_ok.py": "def test_ok(): assert True\n"},
+        {"test_new.py": "def test_new(): assert False\n"},
+    )
+    script = (repo / "scripts" / "pre-push-pytest.sh").read_text()
+    script = script.replace(
+        '"$PYBIN" -m pytest --collect-only "$_id" -q >/dev/null 2>&1',
+        '/nonexistent/python -m pytest --collect-only "$_id" -q >/dev/null 2>&1',
+    )
+    (repo / "scripts" / "pre-push-pytest.sh").write_text(script)
+
+    out = _run(repo)
+    assert "are new on this branch" in out, (
+        f"a broken backstop must leave the classification as it was, not "
+        f"demote a real branch-local failure to unattributed\n{out}"
+    )

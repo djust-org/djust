@@ -202,16 +202,26 @@ for _id in "${FAILED_IDS[@]}"; do
             if [ "$_rc" -eq 4 ] && ! printf '%s' "$_out" | grep -qE '^ERROR: (file or directory )?not found:'; then
                 # Unimportable at the base, not absent. Not comparable.
                 UNRESOLVED=$((UNRESOLVED + 1))
-            elif "$PYBIN" -m pytest --collect-only "$_id" -q >/dev/null 2>&1; then
+            else
                 # Absent at the merge-base usually means the branch added it.
                 # But it is also what a MIS-PARSED id looks like, and the two
                 # are indistinguishable here. It just failed in THIS tree, so
                 # if it cannot be collected here the parse is what is broken —
                 # and calling it new would blame the pusher for this script's
                 # own defect, which both earlier parsing bugs did.
-                NEW_IDS+=("$_id")
-            else
-                UNRESOLVED=$((UNRESOLVED + 1))
+                "$PYBIN" -m pytest --collect-only "$_id" -q >/dev/null 2>&1
+                _crc=$?
+                # Only pytest's OWN "cannot resolve this id" codes demote to
+                # unresolved. Any OTHER non-zero means the backstop itself
+                # could not run — a plugin, a rootdir, an environment we do not
+                # control — and a check that cannot execute must not make the
+                # answer worse than it was without it. CI hit exactly this:
+                # a genuinely-new test came back unattributed because the
+                # second pytest failed for reasons unrelated to the id.
+                case "$_crc" in
+                    4 | 5) UNRESOLVED=$((UNRESOLVED + 1)) ;;
+                    *) NEW_IDS+=("$_id") ;;
+                esac
             fi
             ;;
         *) UNRESOLVED=$((UNRESOLVED + 1)) ;;
