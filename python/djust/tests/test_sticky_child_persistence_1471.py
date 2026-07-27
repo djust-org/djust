@@ -344,7 +344,7 @@ class _FakeConsumer(LiveViewConsumer):
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_ws_sticky_child_event_writes_state_under_stable_key():
+async def test_ws_sticky_child_event_writes_state_under_stable_key(generous_save_timeout):
     """A sticky-child WS event must persist the child's state to the session
     under ``liveview_<parent_path>__sticky__<sticky_id>``.
 
@@ -543,7 +543,7 @@ async def test_non_sticky_embed_not_written():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_sticky_ids_index_reflects_rendered_set():
+async def test_sticky_ids_index_reflects_rendered_set(generous_save_timeout):
     """After a save, ``liveview_<path>__sticky_ids`` equals exactly the
     sorted set of rendered sticky_ids. ADR-018 Decision 3.
 
@@ -580,7 +580,7 @@ async def test_sticky_ids_index_reflects_rendered_set():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_orphaned_sticky_entry_pruned_on_next_save():
+async def test_orphaned_sticky_entry_pruned_on_next_save(generous_save_timeout):
     """A ``__sticky__`` entry whose sticky_id is no longer rendered is
     pruned on the next save. ADR-018 Decision 3 (GC ledger).
 
@@ -692,9 +692,33 @@ async def test_both_opt_in_gate_child_in_parent_out():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def generous_save_timeout(monkeypatch):
+    """Raise the event-save bound so save assertions test logic, not the clock.
+
+    The save is bounded by ``asyncio.wait_for(..., EVENT_STATE_SAVE_TIMEOUT_S)``
+    (``runtime.py``, #1475) — deliberately, so a slow session backend cannot
+    stall event handling. That makes a save BEST-EFFORT: under enough load the
+    DB write exceeds 150ms, the TimeoutError is swallowed, only a warning is
+    logged, and ``liveview_<path>`` never appears.
+
+    A test asserting the key IS there is therefore asserting an unconditional
+    outcome from a time-bounded operation. It passed on every quiet machine and
+    failed on a loaded one — reproduced deterministically with 24 CPU spinners
+    and 3 IO writers on 12 cores (#2154).
+
+    These tests exist to check WHICH keys the save writes, not how fast the
+    session backend is, so they raise the bound. `test_the_event_save_is_still
+    _bounded` keeps the production bound itself honest.
+    """
+    from djust import runtime
+
+    monkeypatch.setattr(runtime, "EVENT_STATE_SAVE_TIMEOUT_S", 30.0)
+
+
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_no_behavior_change_without_sticky_children():
+async def test_no_behavior_change_without_sticky_children(generous_save_timeout):
     """A plain opted-in parent (no ``{% live_render %}``) still saves its own
     ``liveview_<path>`` state on a normal event and writes NO ``__sticky_ids``
     / ``__sticky__*`` keys.
@@ -780,3 +804,71 @@ def test_http_sticky_child_save():
         assert ledger == ["counter"], (
             f"the HTTP path must also write the GC ledger, got: {ledger!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# The bound the fixture raises must still exist in production (#2154).
+# ---------------------------------------------------------------------------
+
+
+def test_the_event_save_is_still_bounded():
+    """`generous_save_timeout` raises the bound for tests; it must not become
+    a licence to remove it.
+
+    The bound is why the save is best-effort, and best-effort is deliberate
+    (#1475): a slow session backend must never stall event handling. If it were
+    dropped, an unreachable session backend would hang the event path — the
+    failure the timeout was added to prevent — and every test above would still
+    pass, because they raise the value rather than depend on it.
+    """
+    import inspect as _inspect
+
+    from djust import runtime
+
+    assert isinstance(runtime.EVENT_STATE_SAVE_TIMEOUT_S, float)
+    assert 0 < runtime.EVENT_STATE_SAVE_TIMEOUT_S <= 1.0, (
+        f"the event-save bound must stay tight; got "
+        f"{runtime.EVENT_STATE_SAVE_TIMEOUT_S}s. Raising it in production trades "
+        f"a dropped save for a stalled event loop."
+    )
+
+    src = _inspect.getsource(runtime)
+    assert "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in src, (
+        "the save must be wrapped in asyncio.wait_for with the named bound — "
+        "an unbounded save hangs the event path on a slow session backend"
+    )
+    assert src.count("timeout=EVENT_STATE_SAVE_TIMEOUT_S") == 2, (
+        "both save call sites (the event path and the async-work path) must be "
+        "bounded; one unbounded site is enough to stall"
+    )
+
+
+def test_a_save_that_exceeds_the_bound_is_dropped_not_raised():
+    """The behaviour the fixture exists to work around, asserted directly.
+
+    A timed-out save must be swallowed with a warning — never propagated — or
+    a slow session backend becomes a user-visible event failure. This is what
+    makes `liveview_<path>` absent under load, and it is correct.
+    """
+    import inspect as _inspect
+
+    from djust import runtime
+
+    src = _inspect.getsource(runtime)
+    # BOTH bounded call sites must swallow it. `in` alone passes while one of
+    # the two re-raises — the mutation that first exposed this pin as too
+    # weak changed one site and the assertion still found the other.
+    assert src.count("except asyncio.TimeoutError:") == 2, (
+        "each bounded save site must catch its own TimeoutError; one "
+        "uncaught site turns a slow session backend into a user-visible "
+        "event failure"
+    )
+    # The handler must log rather than re-raise: a dropped save is a warning,
+    # not an error the event handler surfaces.
+    after = src.split("except asyncio.TimeoutError:", 1)[1][:400]
+    assert "logger.warning" in after, (
+        "a timed-out save must be logged, or the drop is completely silent"
+    )
+    assert "raise" not in after.split("logger.warning")[0], (
+        "a timed-out save must not propagate — saves must never break event handling"
+    )

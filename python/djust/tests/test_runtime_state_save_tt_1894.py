@@ -443,7 +443,12 @@ def test_runtime_save_block_present_and_gated():
     # Failure handling + 150ms bound (WS pin lines 310 + 329-331).
     assert "Failed to save LiveView state after runtime event" in body_collapsed
     assert "asyncio.wait_for" in body_collapsed
-    assert "timeout=0.150" in body_collapsed
+    # #2154 named this bound EVENT_STATE_SAVE_TIMEOUT_S so tests that assert a
+    # save LANDED can raise it instead of racing a 150ms wall clock. Accept
+    # either spelling — what matters is that the save is bounded at all.
+    assert (
+        "timeout=0.150" in body_collapsed or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in body_collapsed
+    )
     assert "asyncio.TimeoutError" in body_collapsed
 
 
@@ -600,4 +605,7 @@ def test_runtime_sticky_save_present_and_gated():
     assert "write_sticky_index_and_prune" in helper_src
     assert "await save_session.asave()" in helper_src
     assert "asyncio.wait_for" in helper_src
-    assert "timeout=0.150" in helper_src
+    # #2154 named this bound EVENT_STATE_SAVE_TIMEOUT_S so tests that assert a
+    # save LANDED can raise it instead of racing a 150ms wall clock. Accept
+    # either spelling — what matters is that the save is bounded at all.
+    assert "timeout=0.150" in helper_src or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in helper_src

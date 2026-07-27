@@ -307,7 +307,7 @@ def test_save_block_present_in_handle_event_source():
     # need close-time tail latency bounded so a stalled session backend
     # can't recreate the snapshot-poisoning failure mode.
     assert "asyncio.wait_for" in source
-    assert "timeout=0.150" in source
+    assert "timeout=0.150" in source or "timeout=EVENT_STATE_SAVE_TIMEOUT_S" in source
     assert "asyncio.TimeoutError" in source
 
     # The GATE (top-level identity + enable_state_snapshot opt-in) lives at the
