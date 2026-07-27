@@ -221,7 +221,12 @@ repos:
         # #2034 — include python/djust/tests/ so the pre-push suite matches the
         # (now-blocking) CI Python job; the explicit paths override pyproject's
         # testpaths, which is how this dir was historically absent from both.
-        entry: bash -c 'WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath)"; PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ python/djust/tests/ -q'
+        # Wrapped (#2139): on failure the wrapper re-runs ONLY the failing
+        # tests against the merge-base and says which are pre-existing. When
+        # main is red, every branch's push bounces for a reason that is not
+        # the branch's, and that distinction is the only thing the pusher
+        # needs. It cost three failed pushes to derive by hand last time.
+        entry: bash scripts/pre-push-pytest.sh
         language: system
         types: [python]
         pass_filenames: false

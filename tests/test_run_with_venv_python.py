@@ -374,27 +374,59 @@ class TestWorktreePythonpath:
         assert linked.resolve() == (main / "python" / "djust" / so_name).resolve()
 
     def test_config_pytest_hook_uses_worktree_pythonpath(self) -> None:
-        """Source-pin: the pre-push pytest hook must wire in the worktree
+        """Source-pin: the pre-push pytest path must wire in the worktree
         shadow (#1810). Gate-off self-test (#1468): a future edit that drops
         the ``--worktree-pythonpath`` plumbing fails this assertion.
 
-        We match on the hook's ``entry:`` LINE specifically (not the whole
-        file) so an explanatory comment mentioning the flag can't make this
-        pass on its own — the load-bearing wiring is the entry command.
+        The wiring MOVED in #2139. The hook's entry used to inline the whole
+        command; it now calls ``scripts/pre-push-pytest.sh``, which runs the
+        suite and, on failure, re-runs only the failing tests against the
+        merge-base so a blocked push can tell whose failures blocked it. The
+        worktree plumbing went with it.
+
+        So this follows the wiring rather than the line it used to sit on:
+        find whatever the hook actually invokes, and assert the flag is there.
+        Pinning the old entry shape would fail on a refactor that KEPT the
+        behaviour, and asserting against the whole config would pass on a
+        comment alone.
         """
         config = (REPO_ROOT / ".pre-commit-config.yaml").read_text()
         entry_lines = [
             ln
             for ln in config.splitlines()
-            if ln.lstrip().startswith("entry:") and "pytest tests/" in ln
+            if ln.lstrip().startswith("entry:")
+            and ("pytest tests/" in ln or "pre-push-pytest.sh" in ln)
         ]
         assert entry_lines, "Could not find the pytest pre-push hook entry line."
-        assert any("--worktree-pythonpath" in ln for ln in entry_lines), (
-            "The pre-push pytest hook ENTRY must prepend the worktree's "
-            "python/ to PYTHONPATH via "
-            "`run-with-venv-python.sh --worktree-pythonpath` so a worktree "
-            "push tests the worktree's source (#1810). Found entry line(s): "
-            f"{entry_lines!r}"
+
+        def _carries_flag(line: str) -> bool:
+            # Either the entry carries the flag itself, or it delegates to a
+            # script that does.
+            if "--worktree-pythonpath" in line:
+                return True
+            for token in line.split():
+                candidate = token.strip("'\"")
+                if candidate.endswith(".sh"):
+                    script = REPO_ROOT / candidate
+                    if not script.is_file():
+                        continue
+                    # NON-COMMENT lines only. Grepping the whole file would
+                    # pass on a comment mentioning the flag — the exact hole
+                    # this docstring disclaims one level up, reintroduced one
+                    # level down. Gate-off proved it: flag moved into a
+                    # comment with the plumbing gone, and the test stayed green.
+                    for sline in script.read_text().splitlines():
+                        if sline.lstrip().startswith("#"):
+                            continue
+                        if "--worktree-pythonpath" in sline:
+                            return True
+            return False
+
+        assert any(_carries_flag(ln) for ln in entry_lines), (
+            "The pre-push pytest hook must prepend the worktree's python/ to "
+            "PYTHONPATH via `run-with-venv-python.sh --worktree-pythonpath` so "
+            "a worktree push tests the worktree's source (#1810) — either in "
+            f"its entry line or in the script it delegates to. Found: {entry_lines!r}"
         )
 
 
