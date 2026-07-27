@@ -60,6 +60,10 @@ print(); \
 print('  Regenerate with: make build-js'); \
 print()" 2>/dev/null || echo "  no client-sizes.json — run 'make build-js' first"
 
+.PHONY: check-tracker
+check-tracker: ## Report Action Tracker rows whose GitHub issue is already closed
+	@python3 scripts/check-action-tracker.py
+
 .PHONY: build-js
 build-js: ## Build client.js from source modules
 	@echo "$(GREEN)Building client.js from source modules...$(NC)"
