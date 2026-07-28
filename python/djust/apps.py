@@ -51,11 +51,24 @@ class DjustConfig(AppConfig):
         # the same value in tests as in production, or the suite verifies a
         # configuration nobody runs.
         try:
-            from djust import _rust
-            from djust.config import config as _cfg
+            from django.conf import settings as _settings
 
+            from djust import _rust
+
+            # Read Django settings DIRECTLY, not `djust.config.config`.
+            #
+            # That singleton is constructed at MODULE IMPORT time and loads
+            # settings exactly once, in `__init__`. Under a real ASGI server
+            # `djust.config` is imported while the app registry is still
+            # populating, so the singleton captures defaults and never
+            # re-reads — measured: `False` at import, still `False` after
+            # `django.setup()`. Reading it here made the whole config path
+            # inert in production while every test passed, because the tests
+            # monkeypatch `_config` directly and never exercise the import
+            # order a server actually has (#2164).
+            _live = getattr(_settings, "LIVEVIEW_CONFIG", None) or {}
             if hasattr(_rust, "set_virtual_keyed_ops"):
-                _rust.set_virtual_keyed_ops(bool(_cfg.get("virtual_keyed_ops", False)))
+                _rust.set_virtual_keyed_ops(bool(_live.get("virtual_keyed_ops", False)))
         except Exception:  # noqa: BLE001 - never let a flag break startup
             logging.getLogger("djust").exception(
                 "[djust] applying virtual_keyed_ops to the Rust differ failed"

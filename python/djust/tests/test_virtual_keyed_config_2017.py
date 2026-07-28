@@ -104,31 +104,62 @@ def test_ready_applies_the_config_value_to_rust(monkeypatch):
     """
     import logging
 
-    from djust.apps import DjustConfig
-    from djust.config import get_config
+    from django.test import override_settings
 
-    cfg = get_config()
-    # ready() adds a DjustLogSanitizerFilter with no idempotency guard, so
-    # calling it twice leaks filters onto the shared 'djust' logger (#1200's
-    # case study, in the opposite direction). Snapshot and restore.
+    from djust.apps import DjustConfig
+
+    # Patch DJANGO SETTINGS, not `config._config`. The previous version patched
+    # the singleton — the very object the applier must NOT read — so it passed
+    # while production was inert (#2164). Patching what a real deployment sets
+    # is the only version that could have caught it.
     _lg = logging.getLogger("djust")
     _filters = list(_lg.filters)
 
     for want in (True, False):
         _rust.set_virtual_keyed_ops(not want)  # opposite, so a no-op fails
-        monkeypatch.setitem(cfg._config, "virtual_keyed_ops", want)
-
-        app = DjustConfig.__new__(DjustConfig)  # no AppConfig __init__ needed
-        try:
-            app.ready()
-        except Exception:  # unrelated startup work may need Django
-            pass
-
+        with override_settings(LIVEVIEW_CONFIG={"virtual_keyed_ops": want}):
+            app = DjustConfig.__new__(DjustConfig)
+            try:
+                app.ready()
+            except Exception:  # unrelated startup work
+                pass
         assert _rust.virtual_keyed_ops_enabled() is want, (
-            f"ready() did not apply virtual_keyed_ops={want} to the Rust differ"
+            f"ready() did not apply virtual_keyed_ops={want} from Django settings"
         )
 
     _lg.filters[:] = _filters
+
+
+def test_the_applier_does_not_read_the_stale_config_singleton():
+    """The defect that made the whole config path inert in production (#2164).
+
+    `djust.config.config` is constructed at MODULE IMPORT time and loads Django
+    settings once, in `__init__`. Under a real ASGI server `djust.config` is
+    imported while the app registry is still populating, so the singleton
+    captures defaults and never re-reads:
+
+        at import ................ False
+        after django.setup() ..... False   <- never refreshes
+
+    Reading it in `ready()` meant `LIVEVIEW_CONFIG['virtual_keyed_ops'] = True`
+    was silently ignored by every real server, while every test passed — the
+    tests monkeypatch `_config` directly and so never exercise the import order
+    a server actually has. Measured end to end: the differ emitted
+    `InsertChild` instead of `VirtualInsert` with the flag "on".
+    """
+    import inspect
+
+    from djust.apps import DjustConfig
+
+    src = inspect.getsource(DjustConfig)
+    block = src[src.index("set_virtual_keyed_ops") - 1200 : src.index("set_virtual_keyed_ops")]
+    assert "LIVEVIEW_CONFIG" in block and "_settings" in block, (
+        "the applier must read django.conf.settings directly; the "
+        "djust.config singleton is stale by construction under ASGI"
+    )
+    assert "from djust.config import config" not in block, (
+        "reading the import-time singleton here is the #2164 defect"
+    )
 
 
 def test_apps_ready_wires_the_flag():
