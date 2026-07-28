@@ -302,6 +302,14 @@ class LiveViewConfig:
 
     def __init__(self) -> None:
         self._config: Dict[str, Any] = self._defaults.copy()
+        # #2164/#2166: Django settings can be UNREADABLE at the moment this
+        # module is imported — a project whose ``asgi.py`` imports djust before
+        # it sets ``DJANGO_SETTINGS_MODULE`` gets ``ImproperlyConfigured`` from
+        # the ``getattr`` below, which the broad ``except`` then swallows. The
+        # singleton would keep pure defaults FOREVER, silently, so every
+        # ``LIVEVIEW_CONFIG`` key a reader consults is wrong in that process.
+        # Record whether the load actually happened so ``ready()`` can recover.
+        self._settings_loaded = False
         self._load_from_settings()
 
     def _load_from_settings(self) -> None:
@@ -354,6 +362,8 @@ class LiveViewConfig:
                 sw_cfg["vdom_cache_max_entries"] = int(settings.DJUST_VDOM_CACHE_MAX_ENTRIES)
             if hasattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED"):
                 sw_cfg["state_snapshot_enabled"] = bool(settings.DJUST_STATE_SNAPSHOT_ENABLED)
+            # Reached only if every settings read above succeeded.
+            self._settings_loaded = True
         except ImportError:
             # Django not installed
             pass
@@ -502,9 +512,38 @@ class LiveViewConfig:
         result = self.get(f"{framework}.{class_type}", "")
         return str(result) if result is not None else ""
 
+    def ensure_settings_loaded(self) -> bool:
+        """Re-read Django settings if the import-time load could not (#2164/#2166).
+
+        Called once from :meth:`djust.apps.DjustConfig.ready`, which Django runs
+        strictly after settings are resolved. Returns ``True`` only when a
+        recovery load actually happened.
+
+        Deliberately NOT :meth:`reset` — ``reset()`` restores ``_defaults``
+        first, which would discard any programmatic ``config.update(...)`` made
+        between import and ``ready()`` (another app's ``AppConfig.ready()``
+        ordered before djust's, for instance). This is a no-op whenever the
+        import-time load succeeded, so the healthy path cannot be clobbered:
+        the only process that re-reads is one that got nothing the first time.
+        """
+        if self._settings_loaded:
+            return False
+        self._load_from_settings()
+        if self._settings_loaded:
+            logger.warning(
+                "djust: Django settings were unreadable when djust.config was "
+                "imported, so LIVEVIEW_CONFIG was ignored; recovered at app "
+                "startup. This happens when asgi.py/wsgi.py imports djust "
+                "BEFORE setting DJANGO_SETTINGS_MODULE — move the "
+                "os.environ.setdefault('DJANGO_SETTINGS_MODULE', ...) above "
+                "the djust imports to close the window."
+            )
+        return self._settings_loaded
+
     def reset(self) -> None:
         """Reset configuration to defaults"""
         self._config = self._defaults.copy()
+        self._settings_loaded = False
         self._load_from_settings()
 
     def update(self, config_dict: Dict[str, Any]) -> None:
