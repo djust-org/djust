@@ -10,11 +10,18 @@ process-global ``AtomicBool``, unlike ``set_loop_render_cache_enabled`` (#1967)
 which is per-``RustLiveView`` state. Driving a process global from a per-view
 hook would be last-view-wins.
 
-**The default stays OFF.** The browser gate recorded on the PR found that with
-the flag on, a keyed update to an off-window row still does not land in a real
-page — the differ emits the right op, but the list is not windowed at patch
-time after the WS mount morph, so there is no pool to apply it to (#2164).
-Flipping the default is gated on that being fixed, per ROADMAP.md and #1122.
+**The default stays OFF.** Not for the reason this docstring gave for two
+revisions: it claimed the browser gate had proven the list "is not windowed at
+patch time after the WS mount morph, so there is no pool to apply it to". That
+was a wrong diagnosis of #2164 — twice. The differ and the client applier were
+both correct; the config never reached the Rust flag, so the browser was
+running the feature OFF while the settings said ON. With that fixed, an insert
+at server position 5 lands at pool index 5.
+
+The default stays OFF because flipping it changes VDOM behaviour for every
+`[dj-virtual]` user, which is what #1122 exists to gate, and the browser
+evidence so far covers `VirtualInsert` only — one variant of a multi-variant
+op set. Extending it to Move/Remove/Update is ADR-026 iteration 3 (#2017).
 """
 
 from __future__ import annotations
@@ -95,40 +102,56 @@ def test_the_config_key_is_documented_where_it_is_defined():
 
 
 def test_ready_applies_the_config_value_to_rust(monkeypatch):
-    """Drives the REAL `DjustConfig.ready()` with a patched config value.
+    """Drives the REAL `DjustConfig.ready()` and checks the flag actually moves.
 
-    The first version of this test evaluated `want if True else cfg.get(...)`,
-    which sets the flag to whatever the test already decided — it would have
-    passed with `ready()` deleted. Invoking the actual method is the only way
-    to know the wiring runs.
+    An earlier version evaluated `want if True else cfg.get(...)`, setting the
+    flag to whatever the test had already decided — it would have passed with
+    `ready()` deleted. Invoking the real method is the only way to know the
+    wiring runs.
+
+    Patches the SINGLETON, which is what `ready()` reads. That was the wrong
+    thing to patch while `ready()` bypassed it (#2164) — the test passed on a
+    path no deployment had. It is the right thing to patch now that `ready()`
+    recovers the singleton first, and the singleton's own correctness under a
+    hostile import order is pinned separately, in
+    `test_config_settings_recovery_2166.py`. Neither test is sufficient alone:
+    this one proves the value is forwarded, that one proves the value is real.
     """
     import logging
 
-    from djust.apps import DjustConfig
-    from djust.config import get_config
+    from djust.config import config
 
-    cfg = get_config()
-    # ready() adds a DjustLogSanitizerFilter with no idempotency guard, so
-    # calling it twice leaks filters onto the shared 'djust' logger (#1200's
-    # case study, in the opposite direction). Snapshot and restore.
+    from djust.apps import DjustConfig
+
     _lg = logging.getLogger("djust")
     _filters = list(_lg.filters)
-
-    for want in (True, False):
-        _rust.set_virtual_keyed_ops(not want)  # opposite, so a no-op fails
-        monkeypatch.setitem(cfg._config, "virtual_keyed_ops", want)
-
-        app = DjustConfig.__new__(DjustConfig)  # no AppConfig __init__ needed
-        try:
+    try:
+        for want in (True, False):
+            _rust.set_virtual_keyed_ops(not want)  # opposite, so a no-op fails
+            monkeypatch.setitem(config._config, "virtual_keyed_ops", want)
+            app = DjustConfig.__new__(DjustConfig)
             app.ready()
-        except Exception:  # unrelated startup work may need Django
-            pass
+            assert _rust.virtual_keyed_ops_enabled() is want, (
+                f"ready() did not forward virtual_keyed_ops={want} to the differ"
+            )
+    finally:
+        # In a `finally` so a mid-loop assertion failure cannot leak a filter
+        # into every later test in the session.
+        _lg.filters[:] = _filters
 
-        assert _rust.virtual_keyed_ops_enabled() is want, (
-            f"ready() did not apply virtual_keyed_ops={want} to the Rust differ"
-        )
 
-    _lg.filters[:] = _filters
+# `test_the_applier_does_not_read_the_stale_config_singleton` lived here. It
+# was a source-grep over a fixed 1200-character window, and the Stage 11 review
+# measured it as a decorative pin (#1859): it stayed GREEN against three
+# reintroductions of the defect in different shapes (`get_config()`, a module-
+# attribute read, and one where only a COMMENT carried the tokens it searched
+# for — the `code_only` hole, 7th recurrence), while going RED against correct
+# code whose comment merely mentioned the banned string. Every case it caught
+# was already caught by `test_ready_applies_the_config_value_to_rust`, so it was
+# a strict subset with false-positive hazards.
+#
+# The property it was reaching for is now tested behaviourally, against the real
+# import order, in `test_config_settings_recovery_2166.py`.
 
 
 def test_apps_ready_wires_the_flag():
