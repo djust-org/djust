@@ -265,7 +265,25 @@ def _warn_on_near_miss_kwargs(
     for key in unexpected:
         if key.startswith("_") or key in _FRAMEWORK_KWARGS_KEYS:
             continue
-        pair = (module, name, key)
+        # Cap the client-supplied name ONCE, for both the memo key and the log
+        # record (#2579). An earlier version of this code capped neither, on the
+        # stated grounds that "a near miss must be a prefix/suffix of a declared
+        # parameter, so neither can be long". That is false, by three routes
+        # through `_is_near_miss`, because it normalises before it compares:
+        #   1. it strips underscores from both sides, so `field_name` matches
+        #      `f_i_e_l_d_n_a_m_e` + 20_000 underscores via the `a == b` branch;
+        #   2. when the key is the longer side it becomes `long_`, so
+        #      `field_name` + 20_000 of anything matches via `startswith`;
+        #   3. likewise `fieldname` + 20_000 digits, with no underscore at all.
+        # Uncapped, that is an unbounded client-controlled write to the log on
+        # every event. The warn-once memo is no defence — its key includes
+        # `key`, so varying the padding mints a fresh entry each time and only
+        # evicts. Capping the memo key too keeps 512 entries from retaining
+        # 20 KB apiece. `_is_near_miss` still sees the FULL key, so matching
+        # semantics are unchanged; for a normal identifier `sanitize_for_log`
+        # is the identity, so the common path is unaffected.
+        safe_key = sanitize_for_log(key, max_length=100)
+        pair = (module, name, safe_key)
         if pair in _NEAR_MISS_WARNED:
             # Checked BEFORE the match below, so the steady state on a
             # keystroke path is one dict lookup.
@@ -279,9 +297,10 @@ def _warn_on_near_miss_kwargs(
             _NEAR_MISS_WARNED.popitem(last=False)
         # %r, not %s, for every client-influenced field. repr() escapes CR/LF,
         # so a parameter name like "field_name\r\n" cannot forge a second log
-        # record. `key` and `match` need no length cap: a near miss must be a
-        # prefix/suffix of a declared parameter, so neither can be long.
-        # `event_name` can be, hence sanitize_for_log there.
+        # record — but repr() does not bound LENGTH, which is what the
+        # sanitize_for_log calls add. `match` is the only field here that is not
+        # client-influenced: it comes from `accepted`, the handler's own
+        # declared parameters, so it is bounded by the source file.
         logger.warning(
             "Handler %r (event %r) was sent parameter %r, which it does not "
             "accept, but its signature declares the similarly-named %r. Because "
@@ -290,7 +309,7 @@ def _warn_on_near_miss_kwargs(
             "Rename one side to match. Accepted parameters: %s",
             sanitize_for_log(name, max_length=100),
             sanitize_for_log(str(event_name), max_length=100),
-            key,
+            safe_key,
             match,
             sanitize_for_log(", ".join(accepted), max_length=200),
         )
