@@ -235,8 +235,10 @@ def test_a_hostile_parameter_name_is_sanitised(caplog):
 
 def test_a_long_event_name_is_truncated(caplog):
     # The length cap is the part `sanitize_for_log` contributes that `%r` does
-    # not. It is reachable only via event_name: a KEY long enough to matter can
-    # never be a near miss of a short parameter, so capping the key is inert.
+    # not. Reachable via event_name — and, as the tests below show, via the KEY
+    # too. An earlier version of this comment claimed capping the key was
+    # "inert" because a long key could never be a near miss. That was false;
+    # see `test_a_long_parameter_name_is_truncated`.
     def handler(field_name: str = "", **kwargs):
         pass
 
@@ -247,6 +249,73 @@ def test_a_long_event_name_is_truncated(caplog):
     assert len(msg) < 1_000, (
         "a client-supplied event name must not be able to write an arbitrarily "
         f"long log line; got {len(msg)} chars"
+    )
+
+
+@pytest.mark.parametrize(
+    "label,hostile",
+    [
+        # `_is_near_miss` strips underscores from BOTH sides before comparing,
+        # so any amount of underscore padding still compares equal to the
+        # declared name -- the `a == b` branch.
+        ("underscore padding", "f_i_e_l_d_n_a_m_e" + "_" * 20_000),
+        # When the key is the LONGER side it becomes `long_`, and the rule
+        # accepts it if it merely STARTS WITH the declared name.
+        ("suffix padding", "field_name" + "X" * 20_000),
+        # Same branch, reached without any underscore in the payload at all.
+        ("normalised prefix", "fieldname" + "9" * 20_000),
+    ],
+)
+def test_a_long_parameter_name_is_truncated(caplog, label, hostile):
+    """A near-miss KEY can be arbitrarily long, so it needs the same cap (#2579).
+
+    The code and this file both used to assert the opposite -- that a near miss
+    "must be a prefix/suffix of a declared parameter, so neither can be long".
+    Three routes falsify it, one per case above. Parameter names come straight
+    off the wire, so an uncapped one is an unbounded client-controlled write to
+    the log on every event, and the warn-once memo does not help: its key is
+    ``(module, qualname, key)``, so changing the padding produces a fresh entry
+    every time.
+    """
+
+    def handler(field_name: str = "", **kwargs):
+        pass
+
+    with caplog.at_level(logging.WARNING):
+        validate_handler_params(handler, {hostile: "x"}, "e")
+
+    msgs = _warnings(caplog)
+    assert len(msgs) == 1, (
+        f"precondition ({label}): the long name must actually BE a near miss, "
+        "or this test passes vacuously without exercising the cap"
+    )
+    assert len(msgs[0]) < 1_000, (
+        f"a client-supplied parameter name ({label}) must not be able to write "
+        f"an arbitrarily long log line; got {len(msgs[0])} chars"
+    )
+
+
+def test_the_cache_stores_bounded_keys_not_client_sized_ones(caplog):
+    """Bounding the entry COUNT is not enough if each entry is unbounded (#2579).
+
+    `test_the_cache_is_bounded_against_client_controlled_names` pins the count
+    at `_NEAR_MISS_WARNED_CAP`, but it uses short names, so 512 entries holding
+    20 KB keys each would satisfy it while still being the memory-exhaustion
+    vector that test exists to close.
+    """
+
+    def handler(field_name: str = "", **kwargs):
+        pass
+
+    with caplog.at_level(logging.WARNING):
+        for i in range(5):
+            validate_handler_params(handler, {f"field_name{i}" + "X" * 20_000: "x"}, "e")
+
+    assert validation._NEAR_MISS_WARNED, "precondition: the payloads must be near misses"
+    widest = max(len(pair[2]) for pair in validation._NEAR_MISS_WARNED)
+    assert widest < 1_000, (
+        "the memo must not retain a client-sized parameter name; the widest "
+        f"stored key was {widest} chars"
     )
 
 
