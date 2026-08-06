@@ -11972,10 +11972,15 @@ window.djust.bindModelElements = bindModelElements;
 
 (function () {
 
-    // CSS.escape fallback for environments that don't support it (e.g., older browsers)
-    const cssEscape = (typeof CSS !== 'undefined' && CSS.escape)
-        ? CSS.escape
-        : function (s) { return s.replace(/([^\w-])/g, '\\$1'); };
+    // CSS.escape fallback for environments that don't support it (e.g., older browsers).
+    // Called through a wrapper, NOT stored as a detached `CSS.escape` reference:
+    // jsdom >= 30 generates `CSS` from WebIDL and brand-checks the receiver, so a
+    // detached call throws "'escape' called on an object that is not a valid
+    // instance of CSS". Matches `03-websocket.js` and `45-child-view.js`, which
+    // both already call it as a method — this module was the odd one out.
+    const cssEscape = (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
+        ? function (s) { return CSS.escape(s); }
+        : function (s) { return String(s).replace(/([^\w-])/g, '\\$1'); };
 
     /**
      * Handle a page metadata command from the server.
