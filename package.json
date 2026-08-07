@@ -17,7 +17,7 @@
     "eslint": "^10.8.0",
     "eslint-plugin-security": "^4.0.1",
     "happy-dom": "^20.11.1",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "terser": "^5.49.0",
     "vitest": "^4.1.10"
   },
