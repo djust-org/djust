@@ -1,6 +1,15 @@
 # djust Roadmap
 
-> Current version: **0.9.7** (released 2026-05-16) — Last roadmap refresh: 2026-05-17 (v1.0.0 milestone scoped via `/pipeline-strategy` deep session — Path 3: Accessibility-in, Dead-View-out).
+> Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-10 (v1.1.0 final cut).
+>
+> **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
+> deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
+> iteration 3 — the flag ships wired but OFF, per #1122 split-foundation) and **#1561**
+> (bug-capture iter C, `priority:low`). Both are recorded as deferred in their buckets below.
+>
+> Note: individual table rows in the completed `v1.1.0-N` sections below are not all struck
+> through; the authoritative per-bucket status is the **COMPLETE n/n ✅** line under each
+> heading. Row-level cleanup is tracked separately.
 
 This roadmap outlines what has been built, what is actively being worked on, and where djust is headed. Priorities are shaped by real-world usage across [djust.org](https://djust.org) and [djustlive](https://djustlive.com), and by feature parity goals with Phoenix LiveView 1.0 and React 19-level interactivity.
 
