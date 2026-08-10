@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-10
+
 ### Fixed
 
 - **`postcss` 8.5.20 → 8.5.25, closing a source-map path traversal (GHSA-fxqj-rqcc-2cmp, Dependabot #147).** An incomplete fix of GHSA-6g55-p6wh-862q: an attacker-controlled `sourceMappingURL` reads arbitrary `.map` files when `from` is unset. Dev-scope — postcss reaches the tree only as a transitive dependency of `vite` (via vitest), whose `^8.5.16` range already admits the patched version, so nothing else moves. Folded into this PR rather than shipped separately because it edits the same `package-lock.json` and would otherwise conflict for no benefit.
