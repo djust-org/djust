@@ -1,0 +1,107 @@
+name: Tests (docs-only shim)
+
+# Makes `test-summary` reportable on a docs-only PR so it can safely be a
+# REQUIRED status check (#2163).
+#
+# The problem this exists for: `test.yml` filters with `paths-ignore` for
+# `**.md`, `docs/**` and `CHANGELOG.md`. When every changed file matches that
+# list the whole workflow is skipped, and a skipped WORKFLOW never creates its
+# check runs at all — unlike a skipped JOB, which does report and which branch
+# protection treats as satisfied. A required `test-summary` would therefore sit
+# at "Expected — Waiting for status to be reported" forever on a docs-only PR.
+#
+# Measured on this repo, not assumed: PR #2182 (ROADMAP.md only) produced
+# exactly ONE check and no `test-summary`; PR #2183 (ROADMAP.md + a .py file)
+# produced 14 including `test-summary`. This repo's two-commit convention
+# (impl+tests / docs+CHANGELOG) makes docs-only PRs a routine shape.
+#
+# Why the two-job shape rather than a bare "always succeed" job: `paths` here
+# and `paths-ignore` in test.yml are NOT mutually exclusive. A PR touching both
+# a .md and a .py triggers BOTH workflows, and a shim that unconditionally
+# reported success would put a second, always-green `test-summary` alongside
+# the real one — masking a genuine failure, which is precisely the class of bug
+# #2163 is about. So the reporting job is gated on a real docs-only computation:
+#
+#   docs-only PR  -> test.yml skipped;  shim reports test-summary = success
+#   mixed PR      -> test.yml reports;  shim job SKIPPED (never green-washes)
+#   code-only PR  -> test.yml reports;  shim not triggered at all
+#
+# The `detect` job's own check run is incidental and must NOT be made required.
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: Detect docs-only change
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify the changed files
+        id: check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Use the merge-base so the comparison matches what the PR actually
+          # changes, not everything main gained since the branch point.
+          MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          FILES=$(git diff --name-only "$MERGE_BASE" "$HEAD_SHA")
+
+          echo "Changed files:"
+          echo "$FILES" | sed 's/^/  /'
+
+          # Mirrors test.yml's paths-ignore EXACTLY. If that list changes and
+          # this one does not, the guard test in
+          # python/djust/tests/test_ci_docs_shim_2163.py fails.
+          DOCS_ONLY=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              *.md|docs/*|CHANGELOG.md) ;;
+              *) DOCS_ONLY=false; echo "  -> non-docs file: $f" ;;
+            esac
+          done <<< "$FILES"
+
+          # An empty diff must NOT be classified as docs-only: there is nothing
+          # to vouch for, and test.yml may still have run.
+          if [ -z "$(echo "$FILES" | tr -d '[:space:]')" ]; then
+            DOCS_ONLY=false
+            echo "  -> empty diff, refusing to vouch"
+          fi
+
+          echo "docs_only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
+          echo "docs_only=$DOCS_ONLY"
+
+  # MUST be named `test-summary` — it stands in for test.yml's job of the same
+  # name, which is the required status check.
+  test-summary:
+    name: test-summary
+    needs: detect
+    if: needs.detect.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Docs-only change — full suite not applicable
+        run: |
+          echo "Every changed file matches test.yml's paths-ignore"
+          echo "(**.md, docs/**, CHANGELOG.md), so the full suite did not run."
+          echo "Reporting test-summary so a required check is not left pending (#2163)."
