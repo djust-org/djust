@@ -163,9 +163,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// through every signature would touch far more surface than the flag is worth
 /// while it is still dark. Set once at startup from
 /// a `LIVEVIEW_CONFIG` key — that wiring SHIPPED in the #2017 iteration-3 PR
-/// (`virtual_keyed_ops`, applied once by `DjustConfig.ready()`). The DEFAULT
-/// is still OFF: the browser gate found the client applier does not achieve
-/// keyed positioning even though this differ emits the right op — see #2164.
+/// (`virtual_keyed_ops`, applied once by `DjustConfig.ready()`).
+///
+/// The DEFAULT is still OFF, but NOT for the reason this comment used to give.
+/// It claimed "the client applier does not achieve keyed positioning even
+/// though this differ emits the right op — see #2164". That was #2164's SECOND
+/// diagnosis and it was WITHDRAWN: PR #2167 established the differ and the
+/// applier were both correct all along, and the flag simply never reached Rust
+/// because the config read returned a default.
+///
+/// Re-measured in a browser (2026-08-11) with the flag ON and the list
+/// confirmed initialised before acting: insert at server position 5 lands at
+/// pool index 5, remove drops the right key with no duplicates, reverse is an
+/// exact reversal, and an edit lands on its own row only — every case reporting
+/// "Patches applied successfully" with no recovery round-trip.
+///
+/// What still keeps it OFF is #2185: `[dj-virtual]` initialisation is
+/// intermittently lost on page load (the #1610 mount morph re-creates the
+/// dj-root subtree and nothing re-runs `initVirtualLists`). On such a load the
+/// flag OFF degrades silently, whereas ON emits `VirtualInsert` at an
+/// uninitialised container — a failed patch plus a full HTML recovery. Flip
+/// the default once #2185 is fixed.
 static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(false);
 
 /// Enable/disable `[dj-virtual]` keyed splice ops. Wired from Python config.
