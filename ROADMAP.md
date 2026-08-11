@@ -28,6 +28,37 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.1-1 — post-1.1.0 process drain: merge-gate enforcement + roadmap accuracy (drain bucket → ships in 1.1.1)
+
+Opened 2026-08-10, immediately after the 1.1.0 final cut (PR #2180). Both items
+are process/CI debt surfaced BY that release prep — neither changes framework
+behaviour, which is why they bucket into a patch release rather than 1.2.0.
+
+Deferred and NOT in this bucket: **#2017** (dj-virtual ADR-026 iteration 3 — the
+flag ships wired but OFF; flipping it changes VDOM behaviour for every
+`[dj-virtual]` user and #1122 exists for exactly that) and **#1561**
+(bug-capture iter C, `priority:low`, multi-day Redis-store feature).
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P2** | `main` has no required status checks (#2163) | Branch protection sets `required_status_checks: null`, so the entire `test-summary` aggregate — rust, python, javascript, browser-smoke, nav-hooks-guard, security-tests, demo-checks, benchmarks — can be red and the merge button stays live. #1713 one level up: being in `needs` is not the same as gating. Blocked on a prerequisite: `test.yml` carries `paths-ignore` for `**.md`/`docs/**`/`CHANGELOG.md`, so a required `test-summary` would leave docs-only PRs permanently unmergeable. | v1.1.1 |
+| **P2** | 113 shipped ROADMAP rows are not struck through (#2181) | 134 `**Pn**` rows in completed `v1.1.0-N` buckets carry no `~~`/✅; of the 128 issues they reference, 113 are closed and only #2017/#1561 are open. Cosmetic today because each bucket carries an authoritative `COMPLETE n/n ✅` line, but `/pipeline-next` reads these rows to pick work. | v1.1.1 |
+
+**#2163 — required status checks** — Verified 2026-08-10:
+`gh api repos/djust-org/djust/branches/main/protection -q .required_status_checks`
+returns `null`, `enforce_admins` is `false`, and the two active rulesets
+contribute **0** rules to `main`, so classic branch protection is the only
+mechanism in play. The prerequisite is load-bearing: a *required* check that
+never reports leaves a PR at "Expected — Waiting for status to be reported"
+forever, and this repo's two-commit convention (impl+tests / docs+CHANGELOG)
+makes docs-only PRs a normal shape, not a rarity. Order: land an
+always-reporting companion job first, confirm the context name on a green
+`main` run, then add `test-summary` to required checks.
+
+**#2181 — roadmap row accuracy** — Single-script transformation per #1312, not
+incremental edits: for each `**Pn**` row whose referenced issue is CLOSED, wrap
+the summary cell in `~~…~~` and append ` ✅`, leaving #2017 and #1561 alone.
+
 ## v1.1.0-14 — post-13 drain: form-validation wire contract + dj-virtual content ops + process debt (drain bucket → ships in 1.1.0)
 
 Open-issue drain (2026-07-26) of everything except #1561 (priority:low iter C —
