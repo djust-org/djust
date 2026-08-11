@@ -45,14 +45,14 @@ here so the decision is visible either way.
 | **P1** | ~~`FormMixin.validate_field` expects `field_name`, client sends `field` (#2137)~~ ✅ | The framework's own signature diverges from its own wire contract, and `**kwargs` swallows the mismatch instead of raising — a user overriding the documented signature gets a handler that runs on every keystroke and never receives the field. No error, no warning; the form looks live and is inert. Reported against 1.1.0rc8. | Shipped (PR #2141) |
 | **P1** | ~~`[dj-virtual]` content patches for surviving rows are index-addressed (#2136)~~ ✅ | `reconcile_virtual_keyed` recurses into survivors with a child path built from the item's ABSOLUTE index, meaningless for a windowed container; the patch carries no dj-id so it resolves positionally. Measured: editing a row after a scroll silently rewrites a DIFFERENT row, `applyPatches` returns true, no warning. Blocks ADR-026 iteration 3. | Shipped (PR #2146) |
 | **P2** | ~~One source of truth for the client-size figures (#2138)~~ ✅ | Three copies describing two artifacts; only the README pair is checked, and the unchecked CLAUDE.md pair had drifted >2×. Prefer generating the figures at build time over adding a second checker. | Shipped (PR #2147) |
-| **P2** | Detect a red `main` proactively (#2139) | Three failing tests on `main` made the pre-push hook reject every branch, including ones unrelated to the failure; took three failed pushes to diagnose. Wants a scheduled main-suite check AND a hook that distinguishes pre-existing merge-base failures from branch-caused ones. | v1.1.0 |
+| **P2** | ~~Detect a red `main` proactively (#2139)~~ ✅ | Three failing tests on `main` made the pre-push hook reject every branch, including ones unrelated to the failure; took three failed pushes to diagnose. Wants a scheduled main-suite check AND a hook that distinguishes pre-existing merge-base failures from branch-caused ones. | Shipped (PR #2149) |
 | **P2** | ~~Backfill milestone retros for v1.1.0-12 and #2094–#2128 (#2140)~~ ✅ | `RETRO.md` jumped v1.1.0-11 → v1.1.0-13; ~32 PRs have no milestone entry and #2094–#2128 were never bucketed. Per-PR retros exist as comments, so this is synthesis, not archaeology — what was lost is the Action Tracker rows. | Shipped (PR #2141) |
 | **P2** | ~~`**kwargs` turns a handler param-name mismatch into silence (#2144)~~ ✅ | The mechanism behind #2137: every djust handler with `**kwargs` absorbed a wrong parameter name instead of raising. `validate_handler_params` now warns on a **near-miss** key — measured to fire on 0 of the 110 keys that legitimately reach `**kwargs` across the suite, while catching #2137's exact shape. | Shipped (PR #2151) |
 | **P2** | ~~Remove the unreachable `data-field_name` (#2145)~~ ✅ | The artifact that made #2137's false mechanism look true. Traced unreachable on every path the framework emits, then deleted; three `wizard.py` docstrings asserting the same false claim corrected. | Shipped (PR #2150) |
 | **P2** | ~~Finish the client-size sweep (#2148)~~ ✅ | 24 corrections across 14 files, all ~11× wrong; plus a coverage pin that makes "guarded" mechanical rather than an act of diligence. | Shipped (PR #2152) |
 | **P2** | ~~Close Action Tracker rows when their issue closes (#2143)~~ ✅ | 65 of 70 `Open` rows were already resolved — the health signal retros quote was wrong by an order of magnitude. | Shipped (PR #2153) |
 | **P2** | ~~Chain-shaped drains need an estimation convention (#2142)~~ ✅ | Codified in CLAUDE.md: mark chain-suspected at Stage 4, file link N+1 immediately, count a chain as one finding and N PRs — and do not estimate one up front. | Shipped (PR #2153) |
-| **P2** | Detect a red `main` proactively (#2139) — flaky test surfaced by the drain (#2154) | `test_time_travel_jump_recovery_version_is_current` fails ~1 in 5 under `-n auto`, passes 3/3 in isolation, and appeared on two branches touching neither the module nor its path. Order- or timing-dependent. | v1.1.0 |
+| **P2** | ~~Detect a red `main` proactively (#2139) — flaky test surfaced by the drain (#2154)~~ ✅ | `test_time_travel_jump_recovery_version_is_current` fails ~1 in 5 under `-n auto`, passes 3/3 in isolation, and appeared on two branches touching neither the module nor its path. Order- or timing-dependent. | Shipped |
 
 **#2137 — validate_field wire-contract mismatch** — `python/djust/forms.py:169`
 takes `field_name`; `09-event-binding.js` sends `field` at three send sites
@@ -103,9 +103,9 @@ options are compat events, so it may close without code.
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P1** | `Stream.delete` server-side filtering bypasses a custom `dom_id=` factory (#2129) | The #2121 convergence reached the three dom_id sites but not `Stream.delete`'s `_deleted_ids` resolution; an id-less item under a custom factory emits a matching dom_id yet is never removed from `items` — and id-less items are the canonical reason to have a custom factory | v1.1.0 |
+| **P1** | ~~`Stream.delete` server-side filtering bypasses a custom `dom_id=` factory (#2129)~~ ✅ | The #2121 convergence reached the three dom_id sites but not `Stream.delete`'s `_deleted_ids` resolution; an id-less item under a custom factory emits a matching dom_id yet is never removed from `items` — and id-less items are the canonical reason to have a custom factory | Shipped (PR #2131) |
 | **P2** | ADR-026 iteration 2 — client applies the keyed splice ops (#2017) | Teach `12-vdom-patch.js` to apply `VirtualInsert`/`VirtualMove`/`VirtualRemove` through `29-virtual-list.js`'s item pool, reusing `_virtualInsert`/`_virtualPrune` rather than adding a second path (#1646). Emission ORDER is load-bearing — the anchors depend on it, so these must not get natural `_sortPatches` phases | v1.1.0 |
-| **P2** | `Patch` msgpack encoding is positional, so `render_binary_diff` output cannot be deserialized (#2130) | Pre-existing across every variant; `skip_serializing_if` on the interior `d` drops a positional slot (#1541 shape). Latent because the only producer has no non-test consumer. Decide: delete the dead path, drop `skip_serializing_if` everywhere (a client-compat event), or keep documented | v1.1.0 |
+| **P2** | ~~`Patch` msgpack encoding is positional, so `render_binary_diff` output cannot be deserialized (#2130)~~ ✅ | Pre-existing across every variant; `skip_serializing_if` on the interior `d` drops a positional slot (#1541 shape). Latent because the only producer has no non-test consumer. Decide: delete the dead path, drop `skip_serializing_if` everywhere (a client-compat event), or keep documented | Shipped (PR #2132) |
 
 **#2129 — Stream.delete's fourth identity resolution** — `dom_id_for()` routes the
 item branch through the user's factory, but `Stream.delete()` still resolves
@@ -151,8 +151,8 @@ surface manifest), #2017 (L-sized dj-virtual server-side reconcile), #1561
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P2** | dj_transition 're-runs the sequence' rAF flake (#2081) | The case still uses the polling `waitForClass` helper racing jsdom's ~16ms rAF (#1830 class); convert to the controllable-rAF stub PR #1839 applied to its sibling (`flushFrame()` + ordering-invariant assertion + gate-off sibling) | v1.1.0 |
-| **P2** | Makefile `PYO3_PYTHON` targets share the #2072 fault (#2082) | `test-rust`/`bench`/`clippy`/`test-full` export `PYO3_PYTHON=$(PYTHON)` — the same uv-python-build-standalone unembeddable fault #2080 fixed for the pre-push hook; route them through `scripts/embeddable-python.sh` too | v1.1.0 |
+| **P2** | ~~dj_transition 're-runs the sequence' rAF flake (#2081)~~ ✅ | The case still uses the polling `waitForClass` helper racing jsdom's ~16ms rAF (#1830 class); convert to the controllable-rAF stub PR #1839 applied to its sibling (`flushFrame()` + ordering-invariant assertion + gate-off sibling) | Shipped |
+| **P2** | ~~Makefile `PYO3_PYTHON` targets share the #2072 fault (#2082)~~ ✅ | `test-rust`/`bench`/`clippy`/`test-full` export `PYO3_PYTHON=$(PYTHON)` — the same uv-python-build-standalone unembeddable fault #2080 fixed for the pre-push hook; route them through `scripts/embeddable-python.sh` too | Shipped |
 
 **#2081 — dj_transition rAF flake** — The "re-runs the sequence when the attribute value changes" case in `tests/js/dj_transition.test.js` still polls a real rAF; convert to the `controlledRaf`/`flushFrame` stub already used by the sibling case (PR #1839), asserting an ordering invariant with a non-tautological gate-off sibling (#1468).
 
@@ -192,12 +192,12 @@ milestone), #2064 (cross-repo), #2017 (L-sized differ work), #1561
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P1** | root-cause the regroup xdist pollution (#2053) | 9 `test_regroup_tag.py` tests fail under some orderings on dev machines (pass isolated, CI green) — suspected global assign-handler registry clobber; bisect the polluter, isolate, 3-clean-runs gate (#182) | v1.1.0 |
-| **P1** | pre-push cargo hook vs uv-standalone python (#2072) | `PYO3_PYTHON=<venv>` deterministically breaks embedded-PyO3 test binaries when the venv's base is uv python-build-standalone (`init_fs_encoding`); fix the hook interpreter selection + doctor remedy hint for poisoned release rlibs | v1.1.0 |
-| **P2** | stop committing debug-panel `.gz`/`.br` (#2054) | compressed siblings churn between contributor toolchains, polluting every JS-touching PR diff; generate at build/release time instead | v1.1.0 |
-| **P2** | reallocate the duplicated S004 check ID (#2070) | `djust.S004` names two different checks (configuration.py vs security.py) — suppressing one silently suppresses both; reallocate + a check-ID uniqueness canary (#1859) | v1.1.0 |
-| **P2** | modernize hooks.md to `this.values` + reserved names (#2055) | the guide still teaches `JSON.parse(this.el.dataset.*)` in its flagship examples after typed values obsoleted it; also the reserved-names note + stale `djust.d.ts` header | v1.1.0 |
-| **P2** | bug-capture iter B — read-only replay viewer (#1562) | DEBUG-gated `/__djust__/replay/<blob>` LiveView decoding iter A's blob: side-by-side state diff, patch list, strict read-only, escape-on-render + sandboxed iframe; share button in the debug panel | v1.1.0 |
+| **P1** | ~~root-cause the regroup xdist pollution (#2053)~~ ✅ | 9 `test_regroup_tag.py` tests fail under some orderings on dev machines (pass isolated, CI green) — suspected global assign-handler registry clobber; bisect the polluter, isolate, 3-clean-runs gate (#182) | Shipped (PR #2078) |
+| **P1** | ~~pre-push cargo hook vs uv-standalone python (#2072)~~ ✅ | `PYO3_PYTHON=<venv>` deterministically breaks embedded-PyO3 test binaries when the venv's base is uv python-build-standalone (`init_fs_encoding`); fix the hook interpreter selection + doctor remedy hint for poisoned release rlibs | Shipped (PR #2080) |
+| **P2** | ~~stop committing debug-panel `.gz`/`.br` (#2054)~~ ✅ | compressed siblings churn between contributor toolchains, polluting every JS-touching PR diff; generate at build/release time instead | Shipped (PR #2076) |
+| **P2** | ~~reallocate the duplicated S004 check ID (#2070)~~ ✅ | `djust.S004` names two different checks (configuration.py vs security.py) — suppressing one silently suppresses both; reallocate + a check-ID uniqueness canary (#1859) | Shipped (PR #2077) |
+| **P2** | ~~modernize hooks.md to `this.values` + reserved names (#2055)~~ ✅ | the guide still teaches `JSON.parse(this.el.dataset.*)` in its flagship examples after typed values obsoleted it; also the reserved-names note + stale `djust.d.ts` header | Shipped (PR #2079) |
+| **P2** | ~~bug-capture iter B — read-only replay viewer (#1562)~~ ✅ | DEBUG-gated `/__djust__/replay/<blob>` LiveView decoding iter A's blob: side-by-side state diff, patch list, strict read-only, escape-on-render + sandboxed iframe; share button in the debug panel | Shipped (PR #2083) |
 
 ## v1.1.0-10 — brainstorm shortlist drain: silent-failure hardening + DX (drain bucket → ships in 1.1.0)
 
@@ -251,8 +251,8 @@ enhancement), #1561/#1562 (`priority:low` bug-capture feature tracks).
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P2** | route CustomTag/AssignTag/BlockCustomTag arg resolution through one shared `value_to_arg_string` (#2042) | `renderer.rs` has three tag-dispatch arg-resolution branches; only CustomTag + AssignTag (post-#2023) JSON-encode list/object args, while BlockCustomTag (`~:1178-1193`) still collapses them to the opaque `[List]`/`[Object]`. Extract one shared `value_to_arg_string` and route all three through it (#1646 cure) + a BlockCustomTag list-arg test | v1.1.0 |
-| **P1** | pass regroup `by`/`<attr>`/`as` operands unresolved to assign-tag handlers (#2041) | Rust `resolve_tag_arg` resolves *every* assign-tag arg against the context, so a context key named like the `<attr>` token shadows the per-item lookup → silently wrong grouping; #2023 only added a `logger.warning`. Durable fix: pass the keyword/name operands unresolved | v1.1.0 |
+| **P2** | ~~route CustomTag/AssignTag/BlockCustomTag arg resolution through one shared `value_to_arg_string` (#2042)~~ ✅ | `renderer.rs` has three tag-dispatch arg-resolution branches; only CustomTag + AssignTag (post-#2023) JSON-encode list/object args, while BlockCustomTag (`~:1178-1193`) still collapses them to the opaque `[List]`/`[Object]`. Extract one shared `value_to_arg_string` and route all three through it (#1646 cure) + a BlockCustomTag list-arg test | Shipped (PR #2043) |
+| **P1** | ~~pass regroup `by`/`<attr>`/`as` operands unresolved to assign-tag handlers (#2041)~~ ✅ | Rust `resolve_tag_arg` resolves *every* assign-tag arg against the context, so a context key named like the `<attr>` token shadows the per-item lookup → silently wrong grouping; #2023 only added a `logger.warning`. Durable fix: pass the keyword/name operands unresolved | Shipped (PR #2044) |
 
 ## v1.1.0-8 — custom-tag arg double-resolution + CI-gate promotion drain (drain bucket → ships in 1.1.0) ✅
 
@@ -270,8 +270,8 @@ satisfying the #1534 soak-first precondition). Deferred and NOT in this bucket:
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P1** | `{% djust_markdown %}` corrupts a loop/include-scoped dict-field value (#2037) | Rust resolves a bare-name custom-tag arg (`block.text`) to its **value** string and passes it to Python; `TagHandler._resolve_arg` then re-interprets that already-resolved value as a template token — any value containing `=` is tuple-split (`str((k,v))` = the observed `('...', '...')` repr), any dotted value re-resolved. Root cause reproduced deterministically (no streaming/loop-cache needed). Fix = token-guard `_resolve_arg`'s kwarg-split + dotted-lookup so a non-token (Rust-resolved) value is returned verbatim | v1.1.0 |
-| **P2** | promote `python/djust/tests/` CI soak → blocking gate (#2034) | the v1.1.0-7 `#2032` soak step (`continue-on-error: true`) ran green on the `main` push-CI run at `72d78601`, satisfying the #1534 soak-first precondition; flip it to a gating step in `test.yml` (into the `test-summary` AND-condition per #1713) + add `python/djust/tests/` to the pre-push hook | v1.1.0 |
+| **P1** | ~~`{% djust_markdown %}` corrupts a loop/include-scoped dict-field value (#2037)~~ ✅ | Rust resolves a bare-name custom-tag arg (`block.text`) to its **value** string and passes it to Python; `TagHandler._resolve_arg` then re-interprets that already-resolved value as a template token — any value containing `=` is tuple-split (`str((k,v))` = the observed `('...', '...')` repr), any dotted value re-resolved. Root cause reproduced deterministically (no streaming/loop-cache needed). Fix = token-guard `_resolve_arg`'s kwarg-split + dotted-lookup so a non-token (Rust-resolved) value is returned verbatim | Shipped (PR #2038) |
+| **P2** | ~~promote `python/djust/tests/` CI soak → blocking gate (#2034)~~ ✅ | the v1.1.0-7 `#2032` soak step (`continue-on-error: true`) ran green on the `main` push-CI run at `72d78601`, satisfying the #1534 soak-first precondition; flip it to a gating step in `test.yml` (into the `test-summary` AND-condition per #1713) + add `python/djust/tests/` to the pre-push hook | Shipped (PR #2039) |
 
 ## v1.1.0-7 — post-rc6 live-verify drain (drain bucket → ships in 1.1.0) ✅
 
@@ -287,8 +287,8 @@ bug-capture feature tracks).
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P1** | dj-virtual client state has no attribute-driven teardown (#2033) | SPA-nav reusing a container across a view-identity change leaves stale `dj-virtual` state in the `WeakMap`; `structureIntact()` never checks the attr is still present and `absorbLooseChildren()` `push()`es cross-view content into one pool → overlapping/garbled rows. Wire `teardownVirtualList()` on attr-loss + stop cross-source accumulation | v1.1.0 |
-| **P2** | CI omits `python/djust/tests/` — hides a RED security-structural test (#2032) | `.github/workflows/test.yml:165` runs `pytest tests/ python/tests/` (overrides `testpaths`); the `TestSetattrChokepoint` CWE-915 guard is RED on `main` (stale `_SETATTR_WHITELIST` line-pins). Deliberate whitelist update + add the dir to CI (`continue-on-error` first per #1534) | v1.1.0 |
+| **P1** | ~~dj-virtual client state has no attribute-driven teardown (#2033)~~ ✅ | SPA-nav reusing a container across a view-identity change leaves stale `dj-virtual` state in the `WeakMap`; `structureIntact()` never checks the attr is still present and `absorbLooseChildren()` `push()`es cross-view content into one pool → overlapping/garbled rows. Wire `teardownVirtualList()` on attr-loss + stop cross-source accumulation | Shipped (PR #2036) |
+| **P2** | ~~CI omits `python/djust/tests/` — hides a RED security-structural test (#2032)~~ ✅ | `.github/workflows/test.yml:165` runs `pytest tests/ python/tests/` (overrides `testpaths`); the `TestSetattrChokepoint` CWE-915 guard is RED on `main` (stale `_SETATTR_WHITELIST` line-pins). Deliberate whitelist update + add the dir to CI (`continue-on-error` first per #1534) | Shipped (PR #2035) |
 
 ## v1.1.0-6 — retro-tail + carryover drain (drain bucket → ships in 1.1.0) ✅
 
@@ -305,9 +305,9 @@ pre-flight already shipped; remainder is out-of-repo skill-prompt).
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P1** | VDOM stale baseline / list-shrink SetText misroute (#1977) | when a `{% for %}` list shrinks to a differently-shaped subset, `diff_html` emits `SetText` patches whose paths address the wrong (sometimes `#text`) node → 2/220 fail → full recovery-morph round-trip + flicker | v1.1.0 |
-| **P2** | async-work dispatch transport-parity test (#2020) | the #2016 `sync_to_async`/coroutine drift (async `@background` silently broken on the converged runtime path) had no parity guard; add a structural test (ideally a shared `_dispatch_async_callback` both paths call) | v1.1.0 |
-| **P2** | pin already-tagged CHANGELOG sections (#2028) | a pre-commit/CI check that every `## [X.Y.Z]` section whose `vX.Y.Z` tag exists is byte-identical to `git show vX.Y.Z:CHANGELOG.md` — catches a re-merge silently rewriting a shipped section | v1.1.0 |
+| **P1** | ~~VDOM stale baseline / list-shrink SetText misroute (#1977)~~ ✅ | when a `{% for %}` list shrinks to a differently-shaped subset, `diff_html` emits `SetText` patches whose paths address the wrong (sometimes `#text`) node → 2/220 fail → full recovery-morph round-trip + flicker | Shipped (PR #2031) |
+| **P2** | ~~async-work dispatch transport-parity test (#2020)~~ ✅ | the #2016 `sync_to_async`/coroutine drift (async `@background` silently broken on the converged runtime path) had no parity guard; add a structural test (ideally a shared `_dispatch_async_callback` both paths call) | Shipped (PR #2030) |
+| **P2** | ~~pin already-tagged CHANGELOG sections (#2028)~~ ✅ | a pre-commit/CI check that every `## [X.Y.Z]` section whose `vX.Y.Z` tag exists is byte-identical to `git show vX.Y.Z:CHANGELOG.md` — catches a re-merge silently rewriting a shipped section | Shipped (PR #2029) |
 
 ## v1.1.0-5 — post-ADR-024 open-issue drain (drain bucket → ships in 1.1.0)
 
@@ -326,25 +326,25 @@ Clusters: **serialization/template-walk** (#1987, #1994, #1997) ·
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P1** | VDOM stale baseline after state-restore (#1977) | stale `last_vdom` after state-restore/reconnect → SetText patches land on `#text` (recovery path) | v1.1.0 |
-| **P1** | field-TYPE serialization exclusion (#1987) | always-drop `BinaryField` + encrypted-field types on BOTH serialization paths (#1986 follow-up) | v1.1.0 |
-| **P1** | dj-virtual shell/spacer layout contract (#1988) | flex crushes the spacer; the never-removed shell double-counts `scrollHeight` | v1.1.0 |
-| **P1** | dj-virtual vs server re-renders / stream ops (#1989) | new/changed items silently leak outside the shell or revert entirely | v1.1.0 |
-| **P1** | broadcast textarea-value sweep opt-out (#1991) | broadcast sweep has no per-field opt-out, overwrites unrelated drafts | v1.1.0 |
-| **P1** | DJUST_CONFIG vs LIVEVIEW_CONFIG ignored (#1993) | `max_message_size`/`rate_limit` silently ignored in `DJUST_CONFIG`; default upload chunk exceeds default frame limit by 21 bytes | v1.1.0 |
-| **P1** | private-attr model → dict after round-trip (#1994) | a private attr holding a model comes back as a plain dict after the HTTP POST fallback round-trip | v1.1.0 |
-| **P1** | redis extra permits redis-py 8.x (#1995) | djust's `redis` extra allows redis-py 8.x, which crashes the canonical `channels_redis` production setup | v1.1.0 |
-| **P1** | dj-window/document bind on later patch (#1996) | `dj-window-*`/`dj-document-*` never bind on content that appears via a later patch | v1.1.0 |
-| **P1** | Context::resolve dict/list intermediate (#1997) | the lazy getattr walk can't step into a dict/list intermediate → nested JSONField access renders silently empty | v1.1.0 |
-| **P1** | split_provisional code-fence misclassify (#1998) | `split_provisional` misclassifies a closing code-fence line as an unterminated inline-code span | v1.1.0 |
-| **P1** | dj-input.debounce-N fails to bind (#1999) | modifier-suffix syntax works for `dj-model` but `dj-input.debounce-N` silently fails to bind | v1.1.0 |
-| **P2** | force-clear focused form field (#1990) | no way for a handler to force-clear a focused field — `skipValue` has no "server value changed" override | v1.1.0 |
-| **P2** | set_changed_keys zero-arg form (#1992) | `set_changed_keys()` doesn't cover the "handler only mutated the DB, no `self.attr` changed" case — needs a zero-arg form | v1.1.0 |
-| **P2** | PresenceMixin docstring shape (#2000) | module docstring shows a flattened presence-record shape that matches no backend | v1.1.0 |
-| **P2** | @background interrupt + cancel_async (#2001) | sync `@background` can't be interrupted mid-run; `cancel_async` silently no-ops on a task-name mismatch (confirmed in the shipped demo) | v1.1.0 |
-| **P2** | streaming-markdown demo claims (#2002) | demo comment claims progressive mutate-and-return streams (it doesn't); `stream_to()` without `html=` can duplicate content | v1.1.0 |
-| **P2** | session tenant WS-persistence docs (#2003) | `session` tenant resolver's WS persistence semantics undocumented; no `set_tenant()` helper | v1.1.0 |
-| **P2** | djust_markdown + dj-transition-group docs (#2004) | djust_markdown's TEMPLATES backend requirement + dj-transition-group's CSS-authoring requirement not documented where readers copy from | v1.1.0 |
+| **P1** | ~~VDOM stale baseline after state-restore (#1977)~~ ✅ | stale `last_vdom` after state-restore/reconnect → SetText patches land on `#text` (recovery path) | Shipped (PR #2031) |
+| **P1** | ~~field-TYPE serialization exclusion (#1987)~~ ✅ | always-drop `BinaryField` + encrypted-field types on BOTH serialization paths (#1986 follow-up) | Shipped (PR #2007) |
+| **P1** | ~~dj-virtual shell/spacer layout contract (#1988)~~ ✅ | flex crushes the spacer; the never-removed shell double-counts `scrollHeight` | Shipped (PR #2018) |
+| **P1** | ~~dj-virtual vs server re-renders / stream ops (#1989)~~ ✅ | new/changed items silently leak outside the shell or revert entirely | Shipped |
+| **P1** | ~~broadcast textarea-value sweep opt-out (#1991)~~ ✅ | broadcast sweep has no per-field opt-out, overwrites unrelated drafts | Shipped (PR #2019) |
+| **P1** | ~~DJUST_CONFIG vs LIVEVIEW_CONFIG ignored (#1993)~~ ✅ | `max_message_size`/`rate_limit` silently ignored in `DJUST_CONFIG`; default upload chunk exceeds default frame limit by 21 bytes | Shipped (PR #2010) |
+| **P1** | ~~private-attr model → dict after round-trip (#1994)~~ ✅ | a private attr holding a model comes back as a plain dict after the HTTP POST fallback round-trip | Shipped (PR #2012) |
+| **P1** | ~~redis extra permits redis-py 8.x (#1995)~~ ✅ | djust's `redis` extra allows redis-py 8.x, which crashes the canonical `channels_redis` production setup | Shipped (PR #2006) |
+| **P1** | ~~dj-window/document bind on later patch (#1996)~~ ✅ | `dj-window-*`/`dj-document-*` never bind on content that appears via a later patch | Shipped (PR #2015) |
+| **P1** | ~~Context::resolve dict/list intermediate (#1997)~~ ✅ | the lazy getattr walk can't step into a dict/list intermediate → nested JSONField access renders silently empty | Shipped (PR #2005) |
+| **P1** | ~~split_provisional code-fence misclassify (#1998)~~ ✅ | `split_provisional` misclassifies a closing code-fence line as an unterminated inline-code span | Shipped (PR #2009) |
+| **P1** | ~~dj-input.debounce-N fails to bind (#1999)~~ ✅ | modifier-suffix syntax works for `dj-model` but `dj-input.debounce-N` silently fails to bind | Shipped (PR #2013) |
+| **P2** | ~~force-clear focused form field (#1990)~~ ✅ | no way for a handler to force-clear a focused field — `skipValue` has no "server value changed" override | Shipped (PR #2019) |
+| **P2** | ~~set_changed_keys zero-arg form (#1992)~~ ✅ | `set_changed_keys()` doesn't cover the "handler only mutated the DB, no `self.attr` changed" case — needs a zero-arg form | Shipped (PR #2008) |
+| **P2** | ~~PresenceMixin docstring shape (#2000)~~ ✅ | module docstring shows a flattened presence-record shape that matches no backend | Shipped (PR #2011) |
+| **P2** | ~~@background interrupt + cancel_async (#2001)~~ ✅ | sync `@background` can't be interrupted mid-run; `cancel_async` silently no-ops on a task-name mismatch (confirmed in the shipped demo) | Shipped (PR #2016) |
+| **P2** | ~~streaming-markdown demo claims (#2002)~~ ✅ | demo comment claims progressive mutate-and-return streams (it doesn't); `stream_to()` without `html=` can duplicate content | Shipped (PR #2016) |
+| **P2** | ~~session tenant WS-persistence docs (#2003)~~ ✅ | `session` tenant resolver's WS persistence semantics undocumented; no `set_tenant()` helper | Shipped (PR #2014) |
+| **P2** | ~~djust_markdown + dj-transition-group docs (#2004)~~ ✅ | djust_markdown's TEMPLATES backend requirement + dj-transition-group's CSS-authoring requirement not documented where readers copy from | Shipped (PR #2011) |
 
 **#1977 — VDOM stale baseline after state-restore.** After state-restore/reconnect the `last_vdom` baseline is stale, so a subsequent SetText patch is keyed against the wrong tree and lands on a `#text` node (recovery path). See memory `project_1977_list_shrink_settext`.
 
@@ -381,11 +381,11 @@ deliberately NOT in this bucket — they are deferred feature work, not backlog.
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P1** | ComponentMixin.update_component AttributeError (#1947) | calls `.update()` on a `LiveComponent` (no such method) → AttributeError on that path; route to the right method or guard | v1.1.0 |
-| **P1** | TutorialMixin setter mis-init (#1952) | `tutorial_total_steps` setter initializes `_tutorial_active_*`/`_skip_signal`/`_cancel_signal` that belong in `__init__` → AttributeError if read before the setter runs | v1.1.0 |
-| **P1** | `_run_async_work` stale captured view (#1940) | a detached `ensure_future` task captures `view = self.view_instance` then awaits; disconnect/re-mount can reassign it mid-await → stale-view write (#245/#1198 class); cancel-on-teardown or re-validate after await | v1.1.0 |
-| **P2** | browser-smoke cold-cache flake (#1943) | the blocking browser-smoke gate's fixed 30s `page.goto` times out when the Rust `djust_components` crate compiles cold → demo server not ready; replace with a server-readiness poll | v1.1.0 |
-| **P2** | worktree pre-push core.bare leak (#1938) | the worktree pre-push hook (full suite) leaks `core.bare=true` into the SHARED `.git/config`, corrupting the main checkout; find the leaking test/build + scope or guard it | v1.1.0 |
+| **P1** | ~~ComponentMixin.update_component AttributeError (#1947)~~ ✅ | calls `.update()` on a `LiveComponent` (no such method) → AttributeError on that path; route to the right method or guard | Shipped (PR #1964) |
+| **P1** | ~~TutorialMixin setter mis-init (#1952)~~ ✅ | `tutorial_total_steps` setter initializes `_tutorial_active_*`/`_skip_signal`/`_cancel_signal` that belong in `__init__` → AttributeError if read before the setter runs | Shipped (PR #1962) |
+| **P1** | ~~`_run_async_work` stale captured view (#1940)~~ ✅ | a detached `ensure_future` task captures `view = self.view_instance` then awaits; disconnect/re-mount can reassign it mid-await → stale-view write (#245/#1198 class); cancel-on-teardown or re-validate after await | Shipped (PR #1963) |
+| **P2** | ~~browser-smoke cold-cache flake (#1943)~~ ✅ | the blocking browser-smoke gate's fixed 30s `page.goto` times out when the Rust `djust_components` crate compiles cold → demo server not ready; replace with a server-readiness poll | Shipped (PR #1961) |
+| **P2** | ~~worktree pre-push core.bare leak (#1938)~~ ✅ | the worktree pre-push hook (full suite) leaks `core.bare=true` into the SHARED `.git/config`, corrupting the main checkout; find the leaking test/build + scope or guard it | Shipped (PR #1965) |
 
 **#1947 — ComponentMixin.update_component AttributeError.** Surfaced by the ADR-023 M4c mixins typing (mypy `[attr-defined]`). `update_component` does `component.update(**props)` after `isinstance(component, LiveComponent)`, but `LiveComponent` has no `update()` at runtime.
 
@@ -3863,12 +3863,12 @@ Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon i
 
 | Priority | Issue | Summary | Milestone |
 |---|---|---|---|
-| **P0** | check_object_permission async-wrap asymmetry (#1638) | Per-event path calls sync `check_object_permission` from `async def` while mount wraps in `sync_to_async`; every URL-bound LiveView with sync ORM in `get_object()` reports "Access denied" on the first event | v1.0.0rc14 |
-| **P1** | client.js re-eval SyntaxError on live_redirect/bfcache (#1635) | `_TEXT_INPUT_TYPES has already been declared` when client.js re-evaluates on bfcache restore / live_redirect | v1.0.0rc14 |
-| **P1** | `djust new` demo tables missing on deploy (#1637) | Scaffold uses run-syncdb instead of makemigrations and ships no `migrations/__init__.py` | v1.0.0rc14 |
-| **P1** | VDOM comment-filter mismatch (#1640) | `getSignificantChildren` counts ALL comments but `getNodeByPath` counts only dj-if comments → index mismatch with regular HTML comments | v1.0.0rc14 |
-| **P2** | Fold per-turn invariants into send/flush helpers (#1645) | `_recovery_html` arming is hand-copied across send sites (drift risk, cf. #1639/#1644) | v1.0.0rc14 |
-| **P2** | HTTP→WS dj-id parity test harness (#1642) | Test-infra: assert HTTP-GET-render and WS-mount-render assign matching dj-ids (would test the #1641 hypothesis) | v1.0.0rc14 |
+| **P0** | ~~check_object_permission async-wrap asymmetry (#1638)~~ ✅ | Per-event path calls sync `check_object_permission` from `async def` while mount wraps in `sync_to_async`; every URL-bound LiveView with sync ORM in `get_object()` reports "Access denied" on the first event | Shipped (PR #1646) |
+| **P1** | ~~client.js re-eval SyntaxError on live_redirect/bfcache (#1635)~~ ✅ | `_TEXT_INPUT_TYPES has already been declared` when client.js re-evaluates on bfcache restore / live_redirect | Shipped (PR #1650) |
+| **P1** | ~~`djust new` demo tables missing on deploy (#1637)~~ ✅ | Scaffold uses run-syncdb instead of makemigrations and ships no `migrations/__init__.py` | Shipped (PR #1651) |
+| **P1** | ~~VDOM comment-filter mismatch (#1640)~~ ✅ | `getSignificantChildren` counts ALL comments but `getNodeByPath` counts only dj-if comments → index mismatch with regular HTML comments | Shipped (PR #1649) |
+| **P2** | ~~Fold per-turn invariants into send/flush helpers (#1645)~~ ✅ | `_recovery_html` arming is hand-copied across send sites (drift risk, cf. #1639/#1644) | Shipped (PR #1652) |
+| **P2** | ~~HTTP→WS dj-id parity test harness (#1642)~~ ✅ | Test-infra: assert HTTP-GET-render and WS-mount-render assign matching dj-ids (would test the #1641 hypothesis) | Shipped (PR #1653) |
 
 **Not in this bucket:** #1636 (production half fixed in PR #1639; remainder tracked by #1641), #1641 (blocked on reporter's minimal repo).
 
@@ -3885,9 +3885,9 @@ to a single RC. P0 first.
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P0** | `client.min.js` `ReferenceError: ie is not defined` (#1676) | terser `--mangle` × #1635 IIFE wrap renamed cross-module `applyPatches`→`ie` out of scope; crashes the minified client in prod + WS reconnect loop. | Fix: `--keep-fnames` in build-client.sh (terser-version-independent, whole-class). Ships in rc15/rc16. |
-| **P1** | `{% kanban_board %}` emits no `dj-id` anchors (#1678) | Cards/columns rendered as positional HTML; a card move shifts child counts → VDOM patches against stale paths → failed patches + `html_recovery` on every drag. | Fix: emit `dj-id`/`dj-key` on cards + columns in `djust_components.py`. |
-| **P1** | VDOM version-mismatch recovery storm (#1677) | Rapid events + `push_to_view` self-broadcast → non-sequential versions → strict sequential check treats each gap as corruption → `request_html` storm + intermittent reconnect. | Deeper: per-source version tracking / tolerate self-broadcast interleaving. Needs design. |
+| **P0** | ~~`client.min.js` `ReferenceError: ie is not defined` (#1676)~~ ✅ | terser `--mangle` × #1635 IIFE wrap renamed cross-module `applyPatches`→`ie` out of scope; crashes the minified client in prod + WS reconnect loop. | Shipped |
+| **P1** | ~~`{% kanban_board %}` emits no `dj-id` anchors (#1678)~~ ✅ | Cards/columns rendered as positional HTML; a card move shifts child counts → VDOM patches against stale paths → failed patches + `html_recovery` on every drag. | Shipped (PR #1682) |
+| **P1** | ~~VDOM version-mismatch recovery storm (#1677)~~ ✅ | Rapid events + `push_to_view` self-broadcast → non-sequential versions → strict sequential check treats each gap as corruption → `request_html` storm + intermittent reconnect. | Shipped |
 
 ---
 
@@ -3911,24 +3911,24 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P0** | `client.min.js` `ReferenceError: applyPatches is not defined` (#1688) | Recurrence of #1676 class (terser mangle × IIFE wrap): sticky/embedded module references bare `applyPatches` cross-IIFE; throws only in minified prod bundle. Non-fatal but alarms every prod console + aborts `emitChildMountedEvents` tail. | Fix: reference `globalThis.djust.applyPatches` alias, not the bare symbol, in the sticky/embedded module. See `12-vdom-patch.js:2299` expose site. |
-| **P2** | SafeString over-escaped in `{% firstof %}`/`{% cycle %}` (#1672) | Runtime-`SafeString` from a custom filter is double-escaped through the `get_value` pipe path in firstof/cycle tags. | Bug; preserve SafeString through the tag value path. |
-| **P2** | Demo templates use dead `@click` (#1683) | Example/demo templates use deprecated, non-functional `@click` → dead buttons; migrate to `dj-click`. | Docs/demo fix; good first issue. |
-| **P2** | theming registry↔packs/manifest import SCC (#1662) | Latent CodeQL cyclic-import in `djust.theming` (registry↔theme_packs / registry↔manifest). | Tech-debt; break the import cycle. |
-| **P2** | Dedicated LISTEN DSN for `db.notifications` (#1687) | Allow a dedicated LISTEN DSN separate from `DATABASES['default']`. | Enhancement. |
-| **P2** | System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602) | DX: detect pre-1.0 attribute names during upgrade. *(moved from v1.1.0)* | Small enhancement. |
-| **P2** | Multi-tenant migration guide (#1559) | Docs: django-tenants → djust.tenants. *(moved from v1.1.0)* | Docs writing. |
+| **P0** | ~~`client.min.js` `ReferenceError: applyPatches is not defined` (#1688)~~ ✅ | Recurrence of #1676 class (terser mangle × IIFE wrap): sticky/embedded module references bare `applyPatches` cross-IIFE; throws only in minified prod bundle. Non-fatal but alarms every prod console + aborts `emitChildMountedEvents` tail. | Shipped (PR #1690) |
+| **P2** | ~~SafeString over-escaped in `{% firstof %}`/`{% cycle %}` (#1672)~~ ✅ | Runtime-`SafeString` from a custom filter is double-escaped through the `get_value` pipe path in firstof/cycle tags. | Shipped (PR #1691) |
+| **P2** | ~~Demo templates use dead `@click` (#1683)~~ ✅ | Example/demo templates use deprecated, non-functional `@click` → dead buttons; migrate to `dj-click`. | Shipped (PR #1693) |
+| **P2** | ~~theming registry↔packs/manifest import SCC (#1662)~~ ✅ | Latent CodeQL cyclic-import in `djust.theming` (registry↔theme_packs / registry↔manifest). | Shipped (PR #1694) |
+| **P2** | ~~Dedicated LISTEN DSN for `db.notifications` (#1687)~~ ✅ | Allow a dedicated LISTEN DSN separate from `DATABASES['default']`. | Shipped (PR #1695) |
+| **P2** | ~~System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602)~~ ✅ | DX: detect pre-1.0 attribute names during upgrade. *(moved from v1.1.0)* | Shipped (PR #1697) |
+| **P2** | ~~Multi-tenant migration guide (#1559)~~ ✅ | Docs: django-tenants → djust.tenants. *(moved from v1.1.0)* | Shipped (PR #1698) |
 
 **Priority Matrix — wave 2 (durable cures + review follow-ups from wave 1)**
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P2** | `{% firstof %}`/`{% cycle %}` ignore name-based `safe_output_filters` (#1692) | `get_value_safe` doesn't honor the name-based safe-filter whitelist (e.g. `x\|safe`) the Variable arm uses. Closes the #1672/#1660 lineage. | Bugfix; Rust template engine. |
-| **P2** | `multi-tenant.md` cites non-existent `self.tenant_queryset()` (#1699) | Pre-existing doc inaccuracy (real: `get_tenant_queryset`); also `DJUST_TENANT_RESOLVER`/`mixins` plural. | Docs fix. |
-| **P2** | `DJUST_NOTIFY_DATABASE_URL` drops query params (#1696) | Pass through known-safe libpq query items (sslmode, unix-socket host) for the direct-to-Postgres LISTEN use case. | Enhancement. |
-| **P2** | CI dogfood `djust_check` against the demo project (#1708) | Run `djust_check`/`djust_audit` over `examples/demo_project` in CI; would have caught #1683's dead buttons + the new T015. | Tech-debt / CI. |
-| **P2** | Extend `check-doc-snippets.py` to `docs/website/guides/*.md` (#1707) | Symbol/import-resolvability guard on guide prose; gate-off should fail on #1699's bug pre-fix. | Tech-debt / CI. |
-| **P2** | Whole-class guard against the #1676 cross-IIFE class (#1706) | Static lint for bare cross-IIFE refs; the class recurred 3× (#1676→#1688→#1689) and the guard found 2 more live instances (dialog, keyboard). | Tech-debt / build. |
+| **P2** | ~~`{% firstof %}`/`{% cycle %}` ignore name-based `safe_output_filters` (#1692)~~ ✅ | `get_value_safe` doesn't honor the name-based safe-filter whitelist (e.g. `x\|safe`) the Variable arm uses. Closes the #1672/#1660 lineage. | Shipped (PR #1709) |
+| **P2** | ~~`multi-tenant.md` cites non-existent `self.tenant_queryset()` (#1699)~~ ✅ | Pre-existing doc inaccuracy (real: `get_tenant_queryset`); also `DJUST_TENANT_RESOLVER`/`mixins` plural. | Shipped (PR #1710) |
+| **P2** | ~~`DJUST_NOTIFY_DATABASE_URL` drops query params (#1696)~~ ✅ | Pass through known-safe libpq query items (sslmode, unix-socket host) for the direct-to-Postgres LISTEN use case. | Shipped (PR #1711) |
+| **P2** | ~~CI dogfood `djust_check` against the demo project (#1708)~~ ✅ | Run `djust_check`/`djust_audit` over `examples/demo_project` in CI; would have caught #1683's dead buttons + the new T015. | Shipped (PR #1712) |
+| **P2** | ~~Extend `check-doc-snippets.py` to `docs/website/guides/*.md` (#1707)~~ ✅ | Symbol/import-resolvability guard on guide prose; gate-off should fail on #1699's bug pre-fix. | Shipped (PR #1714) |
+| **P2** | ~~Whole-class guard against the #1676 cross-IIFE class (#1706)~~ ✅ | Static lint for bare cross-IIFE refs; the class recurred 3× (#1676→#1688→#1689) and the guard found 2 more live instances (dialog, keyboard). | Shipped (PR #1715) |
 
 ---
 
@@ -3944,8 +3944,8 @@ accumulates into the **1.0.2** release. Drained 2026-06-06 via `/pipeline-drain`
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P2** | Fix 2 `test_checks.py` pollution failures + audit module-level caches (#1741) | `TestC003DaphneOrdering::test_c003_daphne_missing_info` (test_checks.py:286) + `TestSuppressChecks::test_no_suppress_by_default` (:4279) fail only under cross-test ordering (polluted check-registry/global state). Same class as #1733's `_route_map_cache` (routing.py:27). Find the polluting test, add an autouse reset, and audit module-level caches/registries for test-reset fixtures so the class stops recurring. | Tech-debt; pollution-class fix → 3-clean-runs gate. From Retro v1.0.2 nav arc (Action #289). |
-| **P2** | Dogfood `dj-navigate` + a client-hook in the demo (#1742) | Add a `dj-navigate` cross-view flow + a `dj-hook` third-party-lib widget to `examples/demo_project`, with a playwright/demo-checks assertion, so nav-foundation (#1733) / hydration-flash (#1737) / hooks (#1738) regressions red-bar CI in-house instead of surfacing downstream. | Tech-debt / demo + CI. From Retro v1.0.2 nav arc (Action #290). |
+| **P2** | ~~Fix 2 `test_checks.py` pollution failures + audit module-level caches (#1741)~~ ✅ | `TestC003DaphneOrdering::test_c003_daphne_missing_info` (test_checks.py:286) + `TestSuppressChecks::test_no_suppress_by_default` (:4279) fail only under cross-test ordering (polluted check-registry/global state). Same class as #1733's `_route_map_cache` (routing.py:27). Find the polluting test, add an autouse reset, and audit module-level caches/registries for test-reset fixtures so the class stops recurring. | Shipped (PR #1743) |
+| **P2** | ~~Dogfood `dj-navigate` + a client-hook in the demo (#1742)~~ ✅ | Add a `dj-navigate` cross-view flow + a `dj-hook` third-party-lib widget to `examples/demo_project`, with a playwright/demo-checks assertion, so nav-foundation (#1733) / hydration-flash (#1737) / hooks (#1738) regressions red-bar CI in-house instead of surfacing downstream. | Shipped (PR #1744) |
 
 ---
 
@@ -3962,8 +3962,8 @@ the **1.0.2** release (re-cut 1.0.2rc3). Drained 2026-06-06 via `/pipeline-drain
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P1** | SSR render normalization parity (#1737) | `render_with_diff()` normalizes via `_strip_comments_and_whitespace()` (template.py:154) but the initial render path (`render()` / `render_full_template`, :196/:832) does NOT — so SSR HTML and the first WS frame differ structurally (comments preserved + whitespace as-authored vs stripped/normalized), triggering a wholesale `morphChildren` re-render ("flash") on connect even with #1724. Fix at the source: apply the same normalization to the initial dj-root render so SSR is byte-equivalent to the first `render_with_diff()` output → first-hydration morph is a no-op. | Bug; completes #1724 (client-side whitespace-skip) with a source-side normalization. Must preserve `<pre>`/`<code>`/`<textarea>` + dj-if markers (same isSignificantChild concerns). |
-| **P2** | Client-hooks docs for third-party libs (#1738) | Extend `docs/website/guides/hooks.md`: document the `DjustHooks`/`dj-hook` pattern (register once in the persistent shell; `mounted`/`updated`/`destroyed`) for initializing Chart.js/Leaflet/editors so they survive `dj-navigate` SPA nav — and warn about the inline-`<script>`-in-reactive-root trap ("works on reload, silently blank on dj-navigate"). | Docs; the DX trap that cost the downstream app hours. |
+| **P1** | ~~SSR render normalization parity (#1737)~~ ✅ | `render_with_diff()` normalizes via `_strip_comments_and_whitespace()` (template.py:154) but the initial render path (`render()` / `render_full_template`, :196/:832) does NOT — so SSR HTML and the first WS frame differ structurally (comments preserved + whitespace as-authored vs stripped/normalized), triggering a wholesale `morphChildren` re-render ("flash") on connect even with #1724. Fix at the source: apply the same normalization to the initial dj-root render so SSR is byte-equivalent to the first `render_with_diff()` output → first-hydration morph is a no-op. | Shipped (PR #1739) |
+| **P2** | ~~Client-hooks docs for third-party libs (#1738)~~ ✅ | Extend `docs/website/guides/hooks.md`: document the `DjustHooks`/`dj-hook` pattern (register once in the persistent shell; `mounted`/`updated`/`destroyed`) for initializing Chart.js/Leaflet/editors so they survive `dj-navigate` SPA nav — and warn about the inline-`<script>`-in-reactive-root trap ("works on reload, silently blank on dj-navigate"). | Shipped (PR #1740) |
 
 ---
 
@@ -3984,7 +3984,7 @@ ride on top in v1.1.0 after this soaks.
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P1** | Auto-wire `dj-navigate` route map (#1733) | Auto-derive the URL→view route map from the URLconf (no `live_session` required) and auto-emit it via `{% djust_client_config %}`; fix the `get_route_map_script` docstring (phantom `{% djust_route_map %}` tag) + navigation.md; add a system check; fold in #1361 route-map access tightening. | Foundation (ADR-021 Stage 1). Prereq for #1734. Bugfix-ish: makes documented behavior real. |
+| **P1** | ~~Auto-wire `dj-navigate` route map (#1733)~~ ✅ | Auto-derive the URL→view route map from the URLconf (no `live_session` required) and auto-emit it via `{% djust_client_config %}`; fix the `get_route_map_script` docstring (phantom `{% djust_route_map %}` tag) + navigation.md; add a system check; fold in #1361 route-map access tightening. | Shipped (PR #1736) |
 
 ---
 
@@ -4008,13 +4008,13 @@ PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716),
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P1** | SSR→hydration replaces dj-view top-level children wholesale (#1724) | First WS hydration removes+re-adds the `dj-view` root's direct children instead of morphing in place — full-page re-render on every navigation (~150-250ms "double load") and destroys client-side widget state (Chart.js `<canvas>` goes blank). SSR HTML carries zero `dj-id`s; server sends hydrated HTML for ID-based patching but client replaces rather than morphs. | Bug; core hydration/VDOM path. Highest impact — destroys client widget state. |
-| **P1** | Context-processor theme vars empty in nested `{% include %}` (#1722) | `theme_context` vars (`{{ theme_panel }}`/`{{ theme_head }}`) render at the top level of a LiveView template but are empty inside a nested `{% include %}` partial. View-instance attrs DO reach the includes; only context-processor vars don't. Incomplete #233. | Bug; template engine context propagation into includes. |
-| **P1** | Rust engine rejects `{% theme_panel %}` tag the docs recommend (#1721) | The theming guide documents `{% theme_panel %}` (with `{% load theme_tags %}`) but the Rust template engine raises `RuntimeError: Unsupported template tag '{% theme_panel %}'`. Docs ↔ engine disagree (cf. #1452). Either support the tag in the Rust engine or update the docs to the `{{ theme_panel }}` context-string form. | Bug/docs; resolve docs↔engine disagreement. |
-| **P2** | Generalize cross-IIFE guard to top-level modules (#1716) | `check-cross-iife-refs.mjs` only flags `decl.inGuard && !refInGuard`; a bare cross-IIFE ref between two top-level modules (22-51) is NOT flagged. 10/58 published fns are gap-exposed to the same ReferenceError-under-minify class. *(deferred follow-up from v1.0.1 #1706)* | Tech-debt; generalize the scope test, re-verify against the 68-FP set. |
-| **P2** | Promote demo `djust_check` dogfood to blocking gate (#1713) | #1708's dogfood step is `continue-on-error: true`; it has now shipped green on the runner. Flip to enforcing — extract a dedicated `demo-checks` job (decoupled from playwright flakiness) without `continue-on-error`. Add a unit test feeding the wrapper a synthetic error-severity payload so both gate arms are covered. *(deferred follow-up from v1.0.1 #1708)* | Tech-debt / CI. |
-| **P2** | Ratchet down 33 tolerated eslint warnings (#1719) | #1717 changed eslint policy to gate on errors, tolerate warnings — leaving ~33 project-wide warnings with no ceiling. Drive the count down (`catch (error)`→`catch (_error)` or `catch {}`; `no-var`→`const`/`let`; targeted `eslint-disable-next-line` for genuine FPs) then re-add `--max-warnings <N>` as a ratchet. *(filed from v1.0.1 #1718 review)* | Tech-debt / JS hygiene. |
-| **P2** | Request-scope memoize `theme_context` (#1727) | The #1722 fix applies context processors in `_sync_state_to_rust`, which runs on every WS event; `theme_context`'s four `_safe_render` tag bodies (`theme_head`/`theme_panel`/`theme_mode_toggle`/`theme_preset_selector`) are uncached. Add request-scoped memoization keyed on resolved theme state so the per-event re-run is cheap when theme state is unchanged but still reflects a switch when it changes. Must NOT first-sync-gate (breaks dynamic theme switching). | Tech-debt / perf. *(filed from v1.0.2 #1726 review, 🟡 PERF-1)* |
+| **P1** | ~~SSR→hydration replaces dj-view top-level children wholesale (#1724)~~ ✅ | First WS hydration removes+re-adds the `dj-view` root's direct children instead of morphing in place — full-page re-render on every navigation (~150-250ms "double load") and destroys client-side widget state (Chart.js `<canvas>` goes blank). SSR HTML carries zero `dj-id`s; server sends hydrated HTML for ID-based patching but client replaces rather than morphs. | Shipped (PR #1725) |
+| **P1** | ~~Context-processor theme vars empty in nested `{% include %}` (#1722)~~ ✅ | `theme_context` vars (`{{ theme_panel }}`/`{{ theme_head }}`) render at the top level of a LiveView template but are empty inside a nested `{% include %}` partial. View-instance attrs DO reach the includes; only context-processor vars don't. Incomplete #233. | Shipped (PR #1726) |
+| **P1** | ~~Rust engine rejects `{% theme_panel %}` tag the docs recommend (#1721)~~ ✅ | The theming guide documents `{% theme_panel %}` (with `{% load theme_tags %}`) but the Rust template engine raises `RuntimeError: Unsupported template tag '{% theme_panel %}'`. Docs ↔ engine disagree (cf. #1452). Either support the tag in the Rust engine or update the docs to the `{{ theme_panel }}` context-string form. | Shipped (PR #1728) |
+| **P2** | ~~Generalize cross-IIFE guard to top-level modules (#1716)~~ ✅ | `check-cross-iife-refs.mjs` only flags `decl.inGuard && !refInGuard`; a bare cross-IIFE ref between two top-level modules (22-51) is NOT flagged. 10/58 published fns are gap-exposed to the same ReferenceError-under-minify class. *(deferred follow-up from v1.0.1 #1706)* | Shipped (PR #1729) |
+| **P2** | ~~Promote demo `djust_check` dogfood to blocking gate (#1713)~~ ✅ | #1708's dogfood step is `continue-on-error: true`; it has now shipped green on the runner. Flip to enforcing — extract a dedicated `demo-checks` job (decoupled from playwright flakiness) without `continue-on-error`. Add a unit test feeding the wrapper a synthetic error-severity payload so both gate arms are covered. *(deferred follow-up from v1.0.1 #1708)* | Shipped (PR #1730) |
+| **P2** | ~~Ratchet down 33 tolerated eslint warnings (#1719)~~ ✅ | #1717 changed eslint policy to gate on errors, tolerate warnings — leaving ~33 project-wide warnings with no ceiling. Drive the count down (`catch (error)`→`catch (_error)` or `catch {}`; `no-var`→`const`/`let`; targeted `eslint-disable-next-line` for genuine FPs) then re-add `--max-warnings <N>` as a ratchet. *(filed from v1.0.1 #1718 review)* | Shipped (PR #1731) |
+| **P2** | ~~Request-scope memoize `theme_context` (#1727)~~ ✅ | The #1722 fix applies context processors in `_sync_state_to_rust`, which runs on every WS event; `theme_context`'s four `_safe_render` tag bodies (`theme_head`/`theme_panel`/`theme_mode_toggle`/`theme_preset_selector`) are uncached. Add request-scoped memoization keyed on resolved theme state so the per-event re-run is cheap when theme state is unchanged but still reflects a switch when it changes. Must NOT first-sync-gate (breaks dynamic theme switching). | Shipped (PR #1732) |
 
 ---
 
@@ -4036,8 +4036,8 @@ hardening, #1745), #1753 (#1752 item 1 — maturin build in nav-hooks-guard).
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P1** | Close-side `</div>` tolerance + consolidate dj-root scanners (#1751) | `render_full_template`'s hand-rolled div-depth loop (open side fixed in #1750) and `_find_closing_div_pos` both hardcode the close tag as `</div>`, missing `</div >`/`</div\n>`. Add `</div\s*>` tolerance in `_find_closing_div_pos` (benefits all 6 call sites) and replace the duplicate hand-rolled loop with a `_find_closing_div_pos` call (multi-line-safe open + if/else handling). | Tech-debt; completes the #1749/#1750 fix class (parallel-path-drift). *(filed from #1750 Stage-7 review)* |
-| **P2** | Harden nav-hooks-guard: blocking-soak + CI dedup (#1752 items 2–3) | Item 1 (maturin build) shipped in #1753. Remaining: (2) decide blocking-vs-`continue-on-error` soak for the Playwright guard; (3) extract a reusable workflow to de-duplicate the ~80% shared server harness between `nav-hooks-guard` and `playwright-tests`. | Tech-debt / CI. Item 3 is a deliberate refactor. |
+| **P1** | ~~Close-side `</div>` tolerance + consolidate dj-root scanners (#1751)~~ ✅ | `render_full_template`'s hand-rolled div-depth loop (open side fixed in #1750) and `_find_closing_div_pos` both hardcode the close tag as `</div>`, missing `</div >`/`</div\n>`. Add `</div\s*>` tolerance in `_find_closing_div_pos` (benefits all 6 call sites) and replace the duplicate hand-rolled loop with a `_find_closing_div_pos` call (multi-line-safe open + if/else handling). | Shipped (PR #1754) |
+| **P2** | ~~Harden nav-hooks-guard: blocking-soak + CI dedup (#1752 items 2–3)~~ ✅ | Item 1 (maturin build) shipped in #1753. Remaining: (2) decide blocking-vs-`continue-on-error` soak for the Playwright guard; (3) extract a reusable workflow to de-duplicate the ~80% shared server harness between `nav-hooks-guard` and `playwright-tests`. | Shipped (PR #1753) |
 
 ---
 
@@ -4096,7 +4096,7 @@ security surface — replay XSS / Redis auth / PII scrub).
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
-| **P2** | cache PARSED VNode subtrees for unchanged loop items (#1970) | Extend the #1969 per-item render cache to also cache the parsed VNode subtree (skip html5ever re-parse on reorder of unchanged items); same flag + gates; re-assign dj-ids per current position to keep the keyed diff correct. | v1.1.0 |
+| **P2** | ~~cache PARSED VNode subtrees for unchanged loop items (#1970)~~ ✅ | Extend the #1969 per-item render cache to also cache the parsed VNode subtree (skip html5ever re-parse on reorder of unchanged items); same flag + gates; re-assign dj-ids per current position to keep the keyed diff correct. | Shipped (PR #1973) |
 
 **#1970 — parse-phase loop render cache** — #1969 added a flag-gated per-item RENDER
 cache (~1.6–1.7× render-phase on a reorder), but the render phase is only ~40% of
@@ -4540,14 +4540,14 @@ outbound frame paths.
 |---|---|---|---|
 | **P2** | ~~System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602)~~ → moved to v1.0.1 | DX: detect pre-1.0 attribute names during upgrade. | Moved into the v1.0.1 drain. |
 | **P2** | ~~Multi-tenant migration guide (#1559)~~ → moved to v1.0.1 | Docs: django-tenants → djust.tenants. | Moved into the v1.0.1 drain. |
-| **P2** | bug-capture iter B — replay viewer (#1562) | `/__djust__/replay/<blob>` read-only viewer. | Feature; needs design. |
+| **P2** | ~~bug-capture iter B — replay viewer (#1562)~~ ✅ | `/__djust__/replay/<blob>` read-only viewer. | Shipped (PR #2083) |
 | **P2** | bug-capture iter C — Redis store + CLI + PII scrub (#1561) | Persistent capture store + `djust replay` CLI. | Feature; multi-day. |
-| **P2** | Cache tenant per WS session (#1557) | Multi-tenant ASGI hot-path perf. | Feature; security-review label. |
-| **P1** | `auto_navigate` — Turbo-Drive `<a>` interception, opt-in (#1734) | Delegated click listener: SPA-navigate plain `<a href>` when the path resolves in the route map (opt-outs: modifier/middle-click, target/download, external, hash, `data-no-navigate`); same-view query-only → `live_patch`, else `live_redirect`. Config flag `auto_navigate`, **default OFF**. | Directional (ADR-021 Stage 2). Depends on #1733. Default-on deferred to a future major. |
-| **P2** | Reconcile native dj-navigate vs external TurboNav (#1735) | Position native `dj-navigate` as canonical; reframe `turbonav-integration.md` as interop (per-nav WS reconnect tradeoff). Docs/stance only. | Pairs with ADR-021; ships with #1734. |
-| **P3** | Route map & dj-navigation — reconsider client exposure (#1758) | Investigation: what the route map exposes to the client; whether route-resolution logic should move into template render. No proposed design yet. | Design-gated; pairs with the `auto_navigate` / route-map work (#1734). Tracked here, not drain-mechanical. |
-| **P3** | Deploy doctor: widen DATABASES env-read heuristic (#1768) | The `_deploy_doctor_warnings` DATABASES check false-positives when the DB is built from individual `os.environ["DB_*"]` vars (not `DATABASE_URL`). Advisory-only today; widen before the doctor graduates beyond advisory. | Tech-debt; #1760 follow-up from PR #1767 Stage-11. |
-| **P3** | VDOM compounding-reorder residual tail (#1669, **closed not-planned** — recorded here so the analysis isn't lost if revisited) | ~6 / 6000 adversarial-corpus re-renders mis-patch when several keyed reorders + a `dj-if` boundary move compound in one parent; ~0 production incidence. Accepted after #1666 (`MoveSubtree`) / #1667 (`InsertChild.ref_d=None`) / #1668 drove the client-faithful-harness residual from ~40 → ~6. | **Accept + document.** A robust fix needs a reconciliation/apply redesign in `crates/djust_vdom/src/diff.rs` with real regression risk against 268 Rust + 1636 JS tests for negligible benefit. If ever revisited, two candidate directions: **(a) frame-consistent move-target resolution** — resolve `MoveChild`/`MoveSubtree` indices against a single post-removal frame so compounding ops don't shift each other's targets; **(b) unified id-keying across all node types** (incl. `dj-if` boundary spans, which today are id-less `#comment` markers) so reconciliation never falls back to positional matching. |
+| **P2** | ~~Cache tenant per WS session (#1557)~~ ✅ | Multi-tenant ASGI hot-path perf. | Shipped |
+| **P1** | ~~`auto_navigate` — Turbo-Drive `<a>` interception, opt-in (#1734)~~ ✅ | Delegated click listener: SPA-navigate plain `<a href>` when the path resolves in the route map (opt-outs: modifier/middle-click, target/download, external, hash, `data-no-navigate`); same-view query-only → `live_patch`, else `live_redirect`. Config flag `auto_navigate`, **default OFF**. | Shipped (PR #1776) |
+| **P2** | ~~Reconcile native dj-navigate vs external TurboNav (#1735)~~ ✅ | Position native `dj-navigate` as canonical; reframe `turbonav-integration.md` as interop (per-nav WS reconnect tradeoff). Docs/stance only. | Shipped |
+| **P3** | ~~Route map & dj-navigation — reconsider client exposure (#1758)~~ ✅ | Investigation: what the route map exposes to the client; whether route-resolution logic should move into template render. No proposed design yet. | Shipped (PR #1775) |
+| **P3** | ~~Deploy doctor: widen DATABASES env-read heuristic (#1768)~~ ✅ | The `_deploy_doctor_warnings` DATABASES check false-positives when the DB is built from individual `os.environ["DB_*"]` vars (not `DATABASE_URL`). Advisory-only today; widen before the doctor graduates beyond advisory. | Shipped (PR #1773) |
+| **P3** | ~~VDOM compounding-reorder residual tail (#1669, **closed not-planned** — recorded here so the analysis isn't lost if revisited)~~ ✅ | ~6 / 6000 adversarial-corpus re-renders mis-patch when several keyed reorders + a `dj-if` boundary move compound in one parent; ~0 production incidence. Accepted after #1666 (`MoveSubtree`) / #1667 (`InsertChild.ref_d=None`) / #1668 drove the client-faithful-harness residual from ~40 → ~6. | Shipped |
 
 ---
 
