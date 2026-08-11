@@ -18,10 +18,20 @@ both correct; the config never reached the Rust flag, so the browser was
 running the feature OFF while the settings said ON. With that fixed, an insert
 at server position 5 lands at pool index 5.
 
-The default stays OFF because flipping it changes VDOM behaviour for every
-`[dj-virtual]` user, which is what #1122 exists to gate, and the browser
-evidence so far covers `VirtualInsert` only — one variant of a multi-variant
-op set. Extending it to Move/Remove/Update is ADR-026 iteration 3 (#2017).
+The default stays OFF, but the reason above is now superseded too. That
+"browser evidence covers VirtualInsert only" line was true when written; the
+2026-08-11 gate run extended it to the whole op set — insert (lands at pool
+index 5), remove (drops the right key, no duplicates), reverse (exact), and a
+content edit (lands on its own row only), each reporting "Patches applied
+successfully" with no recovery round-trip.
+
+What keeps it OFF is #2185: `[dj-virtual]` initialisation is intermittently
+lost on page load, because the #1610 mount morph re-creates the `dj-root`
+subtree and nothing re-runs `initVirtualLists`. On an affected load the flag
+OFF degrades silently — the server sends an ordinary `InsertChild`, which
+applies — whereas ON sends `VirtualInsert` at an uninitialised container,
+failing the patch and forcing a full HTML recovery. #1122 still governs the
+flip itself; #2185 is the blocker.
 """
 
 from __future__ import annotations

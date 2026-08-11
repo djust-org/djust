@@ -113,7 +113,21 @@ scrolled out of the window:
 > uninitialised container, failing the patch and forcing a full HTML
 > recovery. Flip the default once #2185 is fixed.
 >
-> The original text is kept below for the record.
+> **The superseded text, verbatim, for the record:**
+>
+> > The OFF arm landing at the tail is exactly what this ADR predicts, so the
+> > A/B is capable of distinguishing — and it shows the flag does not change
+> > the outcome.
+> >
+> > The differ is NOT at fault. With the flag on it emits
+> > `VirtualInsert { key: "ins0", before_key: "k5" }` — the keyed positioning
+> > this ADR designed. Iteration 1 is correct. **Iteration 2's client applier
+> > is what does not honour it**, appending at the tail instead of splicing
+> > before `k5`. Tracked as #2164.
+>
+> (The A/B table above is retained in place rather than moved; the paragraph
+> below this block concerns a still-earlier withdrawn diagnosis and is
+> unrelated to this supersession.)
 
 A first pass recorded the cause as "the list is not windowed at patch
 time". That was wrong: it came from an A/B whose CONTROL arm also failed,
