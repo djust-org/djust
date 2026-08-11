@@ -172,10 +172,23 @@ class LiveViewConfig:
         # Wired to the process-global Rust switch once at startup by
         # `DjustConfig.ready()` — it is not per-view state.
         #
-        # Default OFF: ADR-026 iteration 3 (the flip) is NOT shipped. The
-        # browser gate found the differ emits the right op but a real page
-        # is not windowed at patch time, so there is no pool to apply it
-        # to — see #2164. Turning this on today changes nothing.
+        # Default OFF: ADR-026 iteration 3 (the flip) is NOT shipped.
+        #
+        # This comment used to say "a real page is not windowed at patch time,
+        # so there is no pool to apply it to — see #2164. Turning this on today
+        # changes nothing." That was #2164's FIRST diagnosis; it was withdrawn
+        # (its own control arm had failed too), and the claim that the flag
+        # changes nothing is false — see below.
+        #
+        # Re-measured in a browser 2026-08-11 with the flag ON and the list
+        # confirmed initialised first: insert at server position 5 lands at pool
+        # index 5, remove drops the right key, reverse is exact. The ops work.
+        #
+        # What keeps it OFF is #2185: [dj-virtual] initialisation is
+        # intermittently lost on page load. On an affected load OFF degrades
+        # silently (the server sends an ordinary InsertChild, which applies),
+        # while ON sends VirtualInsert at an uninitialised container — a failed
+        # patch plus a full HTML recovery. Flip once #2185 is fixed.
         "virtual_keyed_ops": False,
         # Django-parity template auto-call (ADR-024). When True (default),
         # the Rust engine's sidecar getattr walk invokes callables exactly
