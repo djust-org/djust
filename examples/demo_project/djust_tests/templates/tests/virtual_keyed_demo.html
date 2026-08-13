@@ -4,11 +4,19 @@
 <div dj-view="djust_tests.views.virtual_keyed_demo.VirtualKeyedDemoView">
   <h1>dj-virtual — keyed splice ops (#2017 / ADR-026)</h1>
   <p style="background:#fff3cd;border:1px solid #e0c069;padding:.6rem">
-    <b>This page documents a known failure, not a working feature.</b>
-    An insert at position 5 currently lands at the TAIL of the item pool, with
-    the keyed-ops flag on or off. The server emits the right op
-    (<code>VirtualInsert{key, before_key}</code>); the client applier does not
-    honour it yet — see issue #2164. Use the buttons and watch the pool order.
+    <b>The keyed ops work; the flag is still OFF for a different reason.</b>
+    This banner used to say an insert at position 5 lands at the TAIL with the
+    flag on or off — that was issue #2164's withdrawn second diagnosis, and it
+    is false. PR #2167 showed the differ and the applier were both correct and
+    the flag simply never reached Rust. Re-measured 2026-08-11 with the flag ON:
+    an insert at 5 lands at pool index 5, a remove drops the right key, and a
+    reverse is exact.
+    <br><br>
+    What keeps the default OFF is <b>#2185</b>: <code>[dj-virtual]</code>
+    initialisation is intermittently lost on page load, and on such a load a
+    <code>VirtualInsert</code> hits an uninitialised container and forces a full
+    HTML recovery. If the list below shows all 60 rows instead of a ~13-row
+    window, you are on an affected load — that is #2185, not the keyed ops.
   </p>
 
   <p id="log" style="font-family:monospace;background:#eee;padding:.5rem">{{ log }}</p>

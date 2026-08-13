@@ -30,15 +30,15 @@ class TestIndexView(TemplateView):
         context["tests"] = [
             {
                 "name": "dj-virtual keyed splice ops (#2017)",
-                "description": "Windowed list exercising ADR-026. Documents a KNOWN FAILURE: an insert at position 5 lands at the tail.",
+                "description": "Windowed list exercising ADR-026. The keyed ops work; the flag stays OFF because of #2185.",
                 "url_name": "tests:virtual-keyed",
                 "feature": "dj-virtual keyed splice ops",
                 "phase": "ADR-026 iteration 3",
-                "status": "failing",
+                "status": "passing",
                 "tests": [
                     "Server emits VirtualInsert{key, before_key} with the flag on",
-                    "Client applier does not honour it yet (#2164)",
-                    "Watch the item-pool ORDER, not its size",
+                    "Client splices it at the keyed position (insert@5 -> pool index 5)",
+                    "Default stays OFF pending #2185 (dj-virtual init lost on some loads)",
                 ],
             },
             {

@@ -67,7 +67,7 @@ Where the three iterations from Consequences actually stand:
 |---|---|
 | 1. differ emits keyed splice ops, flag default OFF | shipped, PR #2126 |
 | 2. client applies them to the pool | shipped, PR #2135 |
-| 3. flag flips ON after a soak | **not shipped — blocked on #2164** |
+| 3. flag flips ON after a soak | **not shipped — blocked on #2185** (was #2164; that diagnosis was withdrawn) |
 
 The config half of iteration 3 is on `main` (unreleased at time of
 writing): `virtual_keyed_ops` reaches the differ via `DjustConfig.ready()` (a module-level PyO3 function,
@@ -85,15 +85,49 @@ scrolled out of the window:
 | pool index of the new row | 60 (tail) | 60 (tail) |
 | expected | 5 | 5 |
 
-The OFF arm landing at the tail is exactly what this ADR predicts, so the
-A/B is capable of distinguishing — and it shows the flag does not change
-the outcome.
-
-The differ is NOT at fault. With the flag on it emits
-`VirtualInsert { key: "ins0", before_key: "k5" }` — the keyed positioning
-this ADR designed. Iteration 1 is correct. **Iteration 2's client applier
-is what does not honour it**, appending at the tail instead of splicing
-before `k5`. Tracked as #2164.
+> **SUPERSEDED 2026-08-11 — this table and the paragraphs that followed it
+> were wrong, twice over.** The measurement itself was taken while the flag
+> never actually reached Rust (the config read returned a default — #2164 /
+> #2166, fixed in PR #2167), so BOTH arms above are really the OFF arm. The
+> conclusion drawn from it — "iteration 2's client applier does not honour
+> `before_key`" — was #2164's second diagnosis and is withdrawn.
+>
+> Re-measured in a browser with the flag genuinely ON and the list confirmed
+> initialised before acting:
+>
+> | | flag OFF | flag ON |
+> |---|---|---|
+> | pool index of the new row | n/a (ordinary patch path) | **5** |
+> | remove at 3 | — | k3 dropped, no duplicates |
+> | reverse | — | exact reversal, no lost keys |
+> | edit row 0 | — | lands on `k0` only |
+>
+> Every ON case reported `Patches applied successfully` with no recovery
+> round-trip. **Iterations 1 and 2 are both correct.**
+>
+> Iteration 3 is now blocked on **#2185**: `[dj-virtual]` initialisation is
+> intermittently lost on page load (the #1610 mount morph re-creates the
+> `dj-root` subtree and nothing re-runs `initVirtualLists`). On an affected
+> load the flag OFF degrades silently — the server sends an ordinary
+> `InsertChild`, which applies — while ON sends `VirtualInsert` at an
+> uninitialised container, failing the patch and forcing a full HTML
+> recovery. Flip the default once #2185 is fixed.
+>
+> **The superseded text, verbatim, for the record:**
+>
+> > The OFF arm landing at the tail is exactly what this ADR predicts, so the
+> > A/B is capable of distinguishing — and it shows the flag does not change
+> > the outcome.
+> >
+> > The differ is NOT at fault. With the flag on it emits
+> > `VirtualInsert { key: "ins0", before_key: "k5" }` — the keyed positioning
+> > this ADR designed. Iteration 1 is correct. **Iteration 2's client applier
+> > is what does not honour it**, appending at the tail instead of splicing
+> > before `k5`. Tracked as #2164.
+>
+> (The A/B table above is retained in place rather than moved; the paragraph
+> below this block concerns a still-earlier withdrawn diagnosis and is
+> unrelated to this supersession.)
 
 A first pass recorded the cause as "the list is not windowed at patch
 time". That was wrong: it came from an A/B whose CONTROL arm also failed,

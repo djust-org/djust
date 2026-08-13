@@ -1321,12 +1321,10 @@ impl RustLiveViewBackend {
             std::collections::HashMap::with_capacity(expected);
         for &h in &placeholder_hashes {
             // get_parsed clones the cached roots (and bumps parse_hits).
-            match loop_cache.get_parsed(h) {
-                Some(roots) => {
-                    subtrees.entry(h).or_insert(roots);
-                }
-                None => return None, // cache miss for a placeholder → fall back
-            }
+            // `?` is the cache-miss fall-back: a miss for any placeholder means
+            // the reduced-parse path cannot be completed, so bail to a full parse.
+            let roots = loop_cache.get_parsed(h)?;
+            subtrees.entry(h).or_insert(roots);
         }
 
         // Parse the reduced html. Use continue (no reset) — the re-walk fixes

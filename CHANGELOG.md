@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`cargo clippy` failed the whole workspace on Rust 1.97, blocking every commit.** Two pre-existing sites tripped lints that only became errors on the newer toolchain: `useless_borrows_in_formatting` on a `&self.content` inside a `format!` (`crates/djust_components/src/simple/tooltip.rs:62`) and `question_mark` on a `match` whose arms were only `Some(x) => {…}` / `None => return None` (`crates/djust_live/src/lib.rs:1324`, now `let roots = loop_cache.get_parsed(h)?;`). Both are behaviour-preserving — `get_parsed` returns an owned clone, so `?` changes neither the borrow shape nor how often `parse_hits` is bumped. This is not a local-only nuisance: the pre-commit hook runs `cargo clippy --all-targets --all-features -- -D warnings`, so **no commit can land** on a 1.97 toolchain (it silently swallowed three before the full hook output was read), and CI pins `toolchain: stable` (`.github/workflows/test.yml:35`, `:109`), so it becomes a CI failure the moment the runner's stable advances. Surfaced by repairing a broken local toolchain — Homebrew rust 1.93's `librustc_driver` linked libLLVM 21.1.8 while `/opt/homebrew/opt/llvm` had moved to 22.1.8, so `rustc -vV` itself aborted.
+
+### Changed
+
+- **Six artifacts asserting a withdrawn `[dj-virtual]` diagnosis now record the real state (#2017, #2185).** `crates/djust_vdom/src/diff.rs`, `python/djust/config.py`, `docs/adr/026-dj-virtual-differ-awareness.md`, `python/djust/tests/test_virtual_keyed_config_2017.py`, the demo page banner and the demo index card all still told readers the keyed splice ops were broken — variously "the client applier does not honour it yet", "a real page is not windowed at patch time … turning this on today changes nothing", and a red **FAILING** badge captioned "KNOWN FAILURE". Those were #2164's first and second diagnoses; PR #2167 withdrew both, having found the differ and the applier were correct all along and the flag simply never reached Rust. Re-measured in a browser with the flag genuinely ON and the list confirmed initialised first: an insert at server position 5 lands at pool index 5, a remove drops the right key with no duplicates, a reverse is exact, and an edit lands on its own row only — every case `Patches applied successfully`, no recovery round-trip. The default stays **OFF**, but now for the actual reason: **#2185**, `[dj-virtual]` initialisation is intermittently lost on page load, and on such a load `VirtualInsert` hits an uninitialised container and forces a full HTML recovery, where the OFF path degrades silently — measured by forcing that state with `teardownVirtualList` and confirming the server falls back to an ordinary `InsertChild` that applies with no console errors. No behaviour change.
+
 ## [1.1.0] - 2026-08-10
 
 ### Fixed
