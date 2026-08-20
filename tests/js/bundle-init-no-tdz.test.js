@@ -97,12 +97,18 @@ describe('bundle-init: no TDZ ReferenceError on bootstrap (#1370)', () => {
         // synchronously inside `eval`. If `_activeHooks` is `let`-declared
         // AFTER the bootstrap call site, the TDZ ReferenceError propagates
         // out of `eval()` directly.
+        // #2185: bootstrap is now deferred by one microtask (queueMicrotask),
+        // so a throw from djustInit no longer propagates out of eval(). Capture
+        // it from the window instead and drain the microtask queue, or this
+        // guard silently stops guarding.
         let initError = null;
+        dom.window.addEventListener('error', (ev) => { initError = initError || ev.error || ev.message; });
         try {
             dom.window.eval(clientCode);
         } catch (e) {
             initError = e;
         }
+        await new Promise(resolve => setTimeout(resolve, 0));
 
         if (initError) {
             const message = String(initError.message || initError);
@@ -127,11 +133,14 @@ describe('bundle-init: no TDZ ReferenceError on bootstrap (#1370)', () => {
         );
 
         let initError = null;
+        dom.window.addEventListener('error', (ev) => { initError = initError || ev.error || ev.message; });
         try {
             dom.window.eval(clientCode);
         } catch (e) {
             initError = e;
         }
+        await new Promise(resolve => setTimeout(resolve, 0));
+
         expect(initError).toBeNull();
         expect(dom.window.djustInitialized).toBe(true);
     });

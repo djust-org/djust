@@ -156,7 +156,39 @@ function djustInit() {
 }
 
 if (document.readyState === 'loading') {
+    // Deferred to DOMContentLoaded, by which point the whole bundle has run.
     document.addEventListener('DOMContentLoaded', djustInit);
 } else {
-    djustInit();
+    // #2185: do NOT call djustInit() synchronously here. This file is module
+    // 14 of 55 and the bundle is a single concatenated IIFE, so at this point
+    // every LATER module is still unexecuted and has not yet published its
+    // `window.djust.*` API. djustInit() calls three of them through existence
+    // guards:
+    //
+    //     if (window.djust.extractColocatedHooks) ...   -> 32-colocated-hooks.js
+    //     if (window.djust.initVirtualLists) ...        -> 29-virtual-list.js
+    //     if (window.djust.initInfiniteScroll) ...      -> 30-infinite-scroll.js
+    //
+    // Those guards make the skip SILENT: dj-virtual never virtualizes,
+    // infinite-scroll observers never attach, colocated hooks never register —
+    // with no error, and no self-heal until some later patch happens to run
+    // reinitAfterDOMUpdate().
+    //
+    // It is intermittent because it depends on `readyState` at this instant:
+    // a cold parse during HTML streaming is 'loading' (safe branch), while a
+    // warm/cached load is already 'interactive' and takes this one. Measured
+    // on a failing load: readyState "interactive",
+    // typeof window.djust.initVirtualLists === "undefined".
+    //
+    // A microtask is sufficient and is the smallest correct delay: the rest of
+    // the bundle is synchronous, so it is guaranteed to finish before any
+    // microtask drains — no frame is lost and nothing paints in between.
+    //
+    // `queueMicrotask`, NOT `Promise.resolve().then(djustInit)`. The promise
+    // form turns any exception thrown during init into a silent unhandled
+    // rejection; queueMicrotask lets it surface as a normal uncaught error.
+    // That matters here specifically: the #1370 TDZ crash was a throw from
+    // inside djustInit, and tests/js/bundle-init-no-tdz.test.js exists to
+    // catch that class. Swallowing it would disarm that guard.
+    queueMicrotask(djustInit);
 }
