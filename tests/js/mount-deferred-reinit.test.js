@@ -47,14 +47,26 @@ describe('#619 — defer reinitAfterDOMUpdate on pre-rendered mount', () => {
         // The skipMountHtml branch must use rAF when it is available.
         expect(source).toMatch(/if \(this\.skipMountHtml\) \{/);
         expect(source).toMatch(/typeof requestAnimationFrame === ['"]function['"]/);
-        expect(source).toMatch(/requestAnimationFrame\(runPostMount\)/);
+        // #2194: the callback is now `once` (an idempotent wrapper around
+        // runPostMount) so an rAF/timeout race cannot run post-mount twice.
+        // #619's contract is that the VISIBLE path still defers past the paint,
+        // which `requestAnimationFrame(once)` satisfies.
+        expect(source).toMatch(/requestAnimationFrame\((?:runPostMount|once)\)/);
+        expect(source).toMatch(/const once = \(\) => \{ if \(!done\) \{ done = true; runPostMount\(\); \} \};/);
     });
 
     it('falls back to synchronous execution when requestAnimationFrame is unavailable', () => {
         // The fallback branch must still call runPostMount() directly so
         // JSDOM tests (and exotic non-browser environments) don't regress.
-        const fallbackPattern = /if \(typeof requestAnimationFrame === ['"]function['"]\) \{\s*requestAnimationFrame\(runPostMount\);\s*\} else \{\s*runPostMount\(\);\s*\}/s;
-        expect(source).toMatch(fallbackPattern);
+        //
+        // #2194 added a `document.hidden` branch ahead of the rAF check,
+        // because rAF never fires in a hidden tab and post-mount work was
+        // being lost entirely. Pin the INVARIANT — every path reaches
+        // runPostMount — rather than one literal if/else shape, which is what
+        // made this assertion brittle in the first place.
+        expect(source).toMatch(/if \(document\.hidden\) \{\s*runPostMount\(\);/s);
+        expect(source).toMatch(/typeof requestAnimationFrame === ['"]function['"]/);
+        expect(source).toMatch(/\} else \{\s*runPostMount\(\);\s*\}/s);
     });
 
     it('names the post-mount closure runPostMount (stable call site for future debugging)', () => {
