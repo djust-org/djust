@@ -22,13 +22,14 @@ ROADMAP = pathlib.Path("ROADMAP.md")
 DRY = "--apply" not in sys.argv
 
 state, closer = {}, {}
-for line in open("/tmp/closers.tsv"):
-    if line.startswith("#"):
-        continue
-    num, st, pr = (line.rstrip("\n").split("\t") + ["", ""])[:3]
-    state[num] = st
-    if pr.strip():
-        closer[num] = pr.strip()
+with open("/tmp/closers.tsv") as fh:
+    for line in fh:
+        if line.startswith("#"):
+            continue
+        num, st, pr = (line.rstrip("\n").split("\t") + ["", ""])[:3]
+        state[num] = st
+        if pr.strip():
+            closer[num] = pr.strip()
 
 ROW = re.compile(r"^\|\s*\*\*P\d\*\*")
 # Split on unescaped pipes only. A naive split('|') treats the `\|` inside a
@@ -38,7 +39,7 @@ ROW = re.compile(r"^\|\s*\*\*P\d\*\*")
 CELL = re.compile(r"(?<!\\)\|")
 out, struck, skipped_open, skipped_unknown = [], [], [], []
 
-for lineno, line in enumerate(open(ROADMAP), 1):
+for lineno, line in enumerate(ROADMAP.read_text().splitlines(keepends=True), 1):
     if not ROW.match(line) or "~~" in line:
         out.append(line)
         continue
