@@ -101,7 +101,12 @@ describe('#1610 — WS-mount HTML applied to prerendered DOM via morphChildren',
         // existing invariant; we re-pin it because the fix touches
         // the same branch.
         expect(branch).toMatch(/typeof requestAnimationFrame === ['"]function['"]/);
-        expect(branch).toMatch(/requestAnimationFrame\(runPostMount\)/);
+        // #2194: the scheduled callback is now `once`, an idempotent wrapper
+        // around runPostMount, so an rAF/timeout race cannot double-run it.
+        // #619's contract — the VISIBLE path defers past the paint — holds.
+        expect(branch).toMatch(/requestAnimationFrame\((?:runPostMount|once)\)/);
+        // ...and the hidden case must NOT be left to rAF, which never fires there.
+        expect(branch).toMatch(/if \(document\.hidden\) \{\s*runPostMount\(\);/s);
     });
 
     it('the morph call uses the temp div built from data.html as the source argument', () => {

@@ -1266,8 +1266,36 @@ class LiveViewWebSocket {
                             }
                         }
                     };
-                    if (typeof requestAnimationFrame === 'function') {
-                        requestAnimationFrame(runPostMount);
+                    // #2194: rAF callbacks do NOT fire while the tab is
+                    // hidden, and a page can easily be hidden at mount time —
+                    // opened in a background tab, restored with the session, or
+                    // prerendered. Scheduling the ONLY path to
+                    // reinitAfterDOMUpdate()/_mountReady/form-recovery through
+                    // rAF therefore leaves such a page permanently
+                    // un-initialised: measured on a hidden tab, a queued rAF was
+                    // still pending seconds later, _mountReady stayed undefined,
+                    // and the #1610 mount morph had already wiped the
+                    // [dj-virtual] shell with nothing to restore it.
+                    //
+                    // When the document is hidden there is no paint in progress,
+                    // so FIX #619's reason for deferring (avoiding a mid-paint
+                    // layout recalc that flashes) does not apply — run it now.
+                    // The visible path is left exactly as it was, so #619 is
+                    // unaffected.
+                    if (document.hidden) {
+                        runPostMount();
+                    } else if (typeof requestAnimationFrame === 'function') {
+                        // Belt-and-braces: a tab can also be occluded or
+                        // minimised without `hidden` being true, and some
+                        // browsers throttle rAF in those states too. Whichever
+                        // of the two fires first wins; `done` makes it exactly
+                        // once. The timeout is deliberately longer than a frame
+                        // (~16ms) so rAF wins in the normal visible case and
+                        // #619's paint ordering is preserved.
+                        let done = false;
+                        const once = () => { if (!done) { done = true; runPostMount(); } };
+                        requestAnimationFrame(once);
+                        setTimeout(once, 250);
                     } else {
                         runPostMount();
                     }

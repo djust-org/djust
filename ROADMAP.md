@@ -42,7 +42,24 @@ flag ships wired but OFF; flipping it changes VDOM behaviour for every
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
 | **P2** | `main` has no required status checks (#2163) | Branch protection sets `required_status_checks: null`, so the entire `test-summary` aggregate — rust, python, javascript, browser-smoke, nav-hooks-guard, security-tests, demo-checks, benchmarks — can be red and the merge button stays live. #1713 one level up: being in `needs` is not the same as gating. Blocked on a prerequisite: `test.yml` carries `paths-ignore` for `**.md`/`docs/**`/`CHANGELOG.md`, so a required `test-summary` would leave docs-only PRs permanently unmergeable. | v1.1.1 |
+| **P1** | post-mount reinit is gated behind `requestAnimationFrame` (#2194) | `03-websocket.js:628` schedules ALL post-mount work — `reinitAfterDOMUpdate()`, `_mountReady`, form recovery, `dj-auto-recover` — through rAF, which browsers do not fire in a hidden tab. Measured: `visibilityState "hidden"` → no reinit at all, so the #1610 mount morph wipes the `[dj-virtual]` shell with nothing to restore it. Hidden-at-load is ordinary (background-tab open, session restore, prerender). Open question that decides severity: does a queued rAF fire on refocus (self-heals) or not (permanent)? | v1.1.1 |
+| **P2** | xdist order-dependent test flake (#2187) | A test failed on a first `-n auto` run, then passed in isolation and on re-run, with `main` clean — the signature of sharding/order pollution, not a regression. Needs the failing test id captured on the next sighting; then the #2053 playbook (pin the distribution, bisect the polluter, fix at source, gate with 3 consecutive clean runs per #182). | v1.1.1 |
 | **P2** | 113 shipped ROADMAP rows are not struck through (#2181) | 134 `**Pn**` rows in completed `v1.1.0-N` buckets carry no `~~`/✅; of the 128 issues they reference, 113 are closed and only #2017/#1561 are open. Cosmetic today because each bucket carries an authoritative `COMPLETE n/n ✅` line, but `/pipeline-next` reads these rows to pick work. | v1.1.1 |
+
+**#2194 — post-mount reinit vs. hidden tabs** — Split out of #2185, whose
+init-order half shipped in PR #2195. Both halves wore one symptom. rAF is the
+right tool for the paint-timing reason it was chosen (FIX #619 — avoiding a
+mid-paint layout recalc that flashes on pre-rendered pages) and the wrong tool
+as the ONLY path to correctness-critical work. Three candidate shapes are in
+the issue; the smallest is to keep rAF for the visual work and run
+`reinitAfterDOMUpdate()` unconditionally, since it is idempotent
+(`initVirtualLists` checks `STATE` + `structureIntact`). Confirm the flash came
+from layout-reading work rather than re-init before assuming that is free.
+
+**#2187 — xdist flake** — Deliberately NOT a code task yet: the failing test id
+was not captured when it was seen. The first step is observational (record the
+id on the next occurrence), which is why this sits below #2194 despite both
+being open. Related scar tissue: #2053, #1159, and the 3-clean-runs gate (#182).
 
 **#2163 — required status checks** — Verified 2026-08-10:
 `gh api repos/djust-org/djust/branches/main/protection -q .required_status_checks`
