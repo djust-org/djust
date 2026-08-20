@@ -207,6 +207,20 @@ repos:
         files: ^(pyproject\.toml|Cargo\.toml|uv\.lock|Cargo\.lock)$
         pass_filenames: false
 
+  # Refuse a uv.lock that records a developer-local package index. `uv lock`
+  # writes whichever index it resolved against, so a global ~/.config/uv/uv.toml
+  # mirror leaks machine-local URLs into a shared file. It fails silently — uv
+  # installs from the per-wheel `url` fields, so CI stays green — which is why
+  # it has now leaked twice (e39a9242, then 5fe74931).
+  - repo: local
+    hooks:
+      - id: check-lockfile-registry
+        name: check uv.lock records a public index
+        entry: python scripts/check-lockfile-registry.py
+        language: python
+        files: ^uv\.lock$
+        pass_filenames: false
+
   # Pre-push hooks (slower checks that run before git push)
   - repo: local
     hooks:
