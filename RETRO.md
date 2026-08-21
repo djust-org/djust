@@ -462,8 +462,12 @@ The three failing tests blocked every contributor's push, not just mine, and not
 - [ ] Single source of truth for the client-size figures — Action Tracker #326 (GitHub #2138)
 - [ ] Alert when `main`'s suite is red rather than discovering it via a failed push — Action Tracker #327 (GitHub #2139)
 - [ ] Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group — Action Tracker #328 (GitHub #2140)
-- [ ] `#2136` — index-addressed content patches for `[dj-virtual]` rows; blocks ADR-026 iteration 3
-- [ ] `#2017` iteration 3 — flip the flag; soak-gated per #1122 and now also blocked by #2136
+- [x] `#2136` — index-addressed content patches for `[dj-virtual]` rows — **resolved (PR #2146)**
+- [x] `#2017` iteration 3 — flip the flag — **shipped in 1.1.1 (PR #2197)**. It stayed blocked
+      longer than #2136 alone implied: the browser gate could not produce evidence because the
+      CONTROL arm was as broken as the test arm, and #2185 + #2194 had to ship before an A/B
+      meant anything. Until then every comparison was OFF against OFF — the source of this
+      feature's four withdrawn diagnoses.
 
 ## v1.1.0-12b — unbucketed: dependency sweep + scoped-attr chain + streams/dj-virtual chain (PRs #2094–#2128)
 
