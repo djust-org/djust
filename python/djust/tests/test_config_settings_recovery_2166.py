@@ -177,9 +177,14 @@ def test_recovery_reloads_and_reports_when_the_import_time_load_failed():
     cfg._config = cfg._defaults.copy()
     cfg._settings_loaded = False
 
-    with override_settings(LIVEVIEW_CONFIG={"virtual_keyed_ops": True}):
+    # False, not True: the DEFAULT is now True, so overriding to True would make
+    # "recovered" and "kept the default" indistinguishable — the same tautology
+    # the probe block at the top of this file warns about, recurring here.
+    with override_settings(LIVEVIEW_CONFIG={"virtual_keyed_ops": False}):
         assert cfg.ensure_settings_loaded() is True, "must report it recovered"
-    assert cfg.get("virtual_keyed_ops") is True
+    assert cfg.get("virtual_keyed_ops") is False, (
+        "recovery must have re-read settings; True would mean it kept _defaults"
+    )
     assert cfg._settings_loaded is True
     # Second call is now a no-op.
     assert cfg.ensure_settings_loaded() is False

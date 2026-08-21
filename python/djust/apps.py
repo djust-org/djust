@@ -88,7 +88,11 @@ class DjustConfig(AppConfig):
             # fixing. It also keeps `_defaults` the single source of the default
             # (ADR-026 iteration 3 flips it there, and this must follow).
             if hasattr(_rust, "set_virtual_keyed_ops"):
-                _rust.set_virtual_keyed_ops(bool(_cfg.get("virtual_keyed_ops", False)))
+                # No literal fallback here on purpose: `_defaults` is the single
+                # source of the default (the comment above says so), and a second
+                # hardcoded value silently wins if the key is ever missing —
+                # which is how a default drifts out of sync with itself.
+                _rust.set_virtual_keyed_ops(bool(_cfg.get("virtual_keyed_ops")))
         except Exception:  # noqa: BLE001 - never let a flag break startup
             logging.getLogger("djust").exception(
                 "[djust] applying virtual_keyed_ops to the Rust differ failed"

@@ -69,13 +69,18 @@ Where the three iterations from Consequences actually stand:
 | 2. client applies them to the pool | shipped, PR #2135 |
 | 3. flag flips ON after a soak | **shipped, 1.1.1** — gate passed once #2185 + #2194 gave a valid control arm |
 
-The config half of iteration 3 is on `main` (unreleased at time of
-writing): `virtual_keyed_ops` reaches the differ via `DjustConfig.ready()` (a module-level PyO3 function,
-because `VIRTUAL_KEYED_OPS` at `crates/djust_vdom/src/diff.rs:167` is a
-process global, not per-view state). The DEFAULT half did not: it stays
-`False`.
+Both halves of iteration 3 have now shipped. `virtual_keyed_ops` reaches the
+differ via `DjustConfig.ready()` (a module-level PyO3 function, because
+`VIRTUAL_KEYED_OPS` in `crates/djust_vdom/src/diff.rs` is a process global, not
+per-view state), and the Python default flipped to `True` in 1.1.1.
 
-The browser gate is why, though not for the reason first recorded here.
+The Rust static itself stays `false` deliberately: `ready()` applies the Python
+value on every startup, so Python is the single source of truth, and leaving the
+static off means an embedder that never runs Django fails safe rather than
+fail-open.
+
+The browser gate is why this took as long as it did, though not for the reason
+first recorded here.
 
 Measured against a 60-row list, inserting at server position 5 with `k0`
 scrolled out of the window:
@@ -111,7 +116,8 @@ scrolled out of the window:
 > load the flag OFF degrades silently — the server sends an ordinary
 > `InsertChild`, which applies — while ON sends `VirtualInsert` at an
 > uninitialised container, failing the patch and forcing a full HTML
-> recovery. Flip the default once #2185 is fixed.
+> recovery. (#2185 and #2194 were both fixed — PRs #2195 and #2196 — and the
+> default flipped ON in 1.1.1.)
 >
 > **The superseded text, verbatim, for the record:**
 >
