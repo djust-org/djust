@@ -172,24 +172,34 @@ class LiveViewConfig:
         # Wired to the process-global Rust switch once at startup by
         # `DjustConfig.ready()` — it is not per-view state.
         #
-        # Default OFF: ADR-026 iteration 3 (the flip) is NOT shipped.
+        # ADR-026 iteration 3: default ON since 1.1.1.
         #
-        # This comment used to say "a real page is not windowed at patch time,
-        # so there is no pool to apply it to — see #2164. Turning this on today
-        # changes nothing." That was #2164's FIRST diagnosis; it was withdrawn
-        # (its own control arm had failed too), and the claim that the flag
-        # changes nothing is false — see below.
+        # Gated on real browser evidence (ROADMAP), and the A/B that finally
+        # produced it needed BOTH #2185 and #2194 fixed first — until then the
+        # list was intermittently never initialised, so the control arm was as
+        # broken as the test arm and no comparison meant anything. Measured on
+        # a healthy, initialised [dj-virtual] list, same start state, flag the
+        # only variable:
         #
-        # Re-measured in a browser 2026-08-11 with the flag ON and the list
-        # confirmed initialised first: insert at server position 5 lands at pool
-        # index 5, remove drops the right key, reverse is exact. The ops work.
+        #                              OFF                       ON
+        #   insert at position 5   pool index 60 (tail)      pool index 5
+        #   remove at 3            size unchanged, k3 kept   k3 gone, no dupes
+        #   reverse                not reordered             exact reversal
+        #   edit a scrolled row    correct                   correct
         #
-        # What keeps it OFF is #2185: [dj-virtual] initialisation is
-        # intermittently lost on page load. On an affected load OFF degrades
-        # silently (the server sends an ordinary InsertChild, which applies),
-        # while ON sends VirtualInsert at an uninitialised container — a failed
-        # patch plus a full HTML recovery. Flip once #2185 is fixed.
-        "virtual_keyed_ops": False,
+        # So OFF is broken for every mid-list structural mutation on a windowed
+        # list, and ON fixes all three without regressing the one case OFF got
+        # right. 0 console errors, no VirtualInsert/Move/Remove warnings.
+        #
+        # Scope: the ops are emitted ONLY for a container carrying `dj-virtual`
+        # (`emits_virtual_ops` in crates/djust_vdom/src/diff.rs), so a project
+        # that does not use dj-virtual sees no wire change at all.
+        #
+        # Version skew: a cached PRE-1.1.0 client bundle talking to a 1.1.1+
+        # server receives Virtual* ops its applier does not know. That degrades
+        # to the existing patch-failure path — the client requests recovery HTML
+        # and morphs — rather than breaking. Set this to False to opt out.
+        "virtual_keyed_ops": True,
         # Django-parity template auto-call (ADR-024). When True (default),
         # the Rust engine's sidecar getattr walk invokes callables exactly
         # like Django's Variable._resolve_lookup ({{ user.get_full_name }},

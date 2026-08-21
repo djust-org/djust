@@ -69,16 +69,38 @@ def test_the_setter_actually_moves_the_flag():
 # --- the config key ---------------------------------------------------------
 
 
-def test_the_config_default_is_off():
-    """Iteration 3 is NOT shipped. If this flips, it must be a deliberate
-    change carrying the browser evidence ROADMAP.md asks for — not a drift."""
+def test_the_config_default_is_on():
+    """Iteration 3 shipped in 1.1.1. This pin is now the inverse of what it was.
+
+    It spent several releases asserting ``is False`` with the message "the
+    evidence did not support it". The evidence now does, and it is recorded
+    here so a future reader can tell a deliberate flip from a drift — which is
+    the only reason this pin exists.
+
+    Measured on a healthy, initialised ``[dj-virtual]`` list (which required
+    #2185 and #2194 to be fixed first — before those, the list was
+    intermittently never initialised, so BOTH arms of every earlier A/B were
+    really the OFF arm). Same start state, flag the only variable:
+
+    ==========================  =======================  ==================
+    case                        OFF                      ON
+    ==========================  =======================  ==================
+    insert at position 5        pool index 60 (tail)     pool index 5
+    remove at 3                 size unchanged, k3 kept  k3 gone, no dupes
+    reverse                     not reordered            exact reversal
+    edit a scrolled row         correct                  correct
+    ==========================  =======================  ==================
+
+    OFF fails every mid-list structural mutation; ON fixes all three and
+    regresses none. If this ever flips back, that too must carry evidence.
+    """
     from djust.config import LiveViewConfig
 
-    assert LiveViewConfig._defaults["virtual_keyed_ops"] is False, (
-        "the dj-virtual keyed splice ops default ON. That changes VDOM "
-        "behaviour for every [dj-virtual] user and is gated per #1122 on real "
-        "browser evidence — see the #2017 iteration-3 PR for why the evidence "
-        "did not support it."
+    assert LiveViewConfig._defaults["virtual_keyed_ops"] is True, (
+        "the dj-virtual keyed splice ops default OFF again. ON is the shipped "
+        "behaviour since 1.1.1 (ADR-026 iteration 3) — turning it back off "
+        "reintroduces tail-landing inserts, dropped removals and ignored "
+        "reorders on every windowed list. Revert deliberately, with evidence."
     )
 
 

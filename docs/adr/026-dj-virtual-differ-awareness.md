@@ -67,7 +67,7 @@ Where the three iterations from Consequences actually stand:
 |---|---|
 | 1. differ emits keyed splice ops, flag default OFF | shipped, PR #2126 |
 | 2. client applies them to the pool | shipped, PR #2135 |
-| 3. flag flips ON after a soak | **not shipped — blocked on #2185** (was #2164; that diagnosis was withdrawn) |
+| 3. flag flips ON after a soak | **shipped, 1.1.1** — gate passed once #2185 + #2194 gave a valid control arm |
 
 The config half of iteration 3 is on `main` (unreleased at time of
 writing): `virtual_keyed_ops` reaches the differ via `DjustConfig.ready()` (a module-level PyO3 function,
