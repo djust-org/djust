@@ -4,8 +4,9 @@
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
 > deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
-> iteration 3 — the flag ships wired but OFF, per #1122 split-foundation) and **#1561**
-> (bug-capture iter C, `priority:low`). Both are recorded as deferred in their buckets below.
+> iteration 3) and **#1561** (bug-capture iter C, `priority:low`). #2017 has since
+> SHIPPED in 1.1.1 — the flag defaults ON — once #2185 and #2194 gave its browser
+> gate a working control arm. #1561 remains deferred.
 >
 > Note: individual table rows in the completed `v1.1.0-N` sections below are not all struck
 > through; the authoritative per-bucket status is the **COMPLETE n/n ✅** line under each
@@ -34,14 +35,17 @@ Opened 2026-08-10, immediately after the 1.1.0 final cut (PR #2180). Both items
 are process/CI debt surfaced BY that release prep — neither changes framework
 behaviour, which is why they bucket into a patch release rather than 1.2.0.
 
-Deferred and NOT in this bucket: **#2017** (dj-virtual ADR-026 iteration 3 — the
-flag ships wired but OFF; flipping it changes VDOM behaviour for every
-`[dj-virtual]` user and #1122 exists for exactly that) and **#1561**
+**#2017 was deferred out of this bucket and then taken into it.** It was held
+because flipping the flag changes VDOM behaviour for every `[dj-virtual]` user
+and #1122 exists for exactly that. What unblocked it was not new appetite but a
+working experiment: #2185 and #2194 both had to ship before the browser gate had
+a control arm that was not itself broken. Still deferred: **#1561**
 (bug-capture iter C, `priority:low`, multi-day Redis-store feature).
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
 | **P2** | `main` has no required status checks (#2163) | Branch protection sets `required_status_checks: null`, so the entire `test-summary` aggregate — rust, python, javascript, browser-smoke, nav-hooks-guard, security-tests, demo-checks, benchmarks — can be red and the merge button stays live. #1713 one level up: being in `needs` is not the same as gating. Blocked on a prerequisite: `test.yml` carries `paths-ignore` for `**.md`/`docs/**`/`CHANGELOG.md`, so a required `test-summary` would leave docs-only PRs permanently unmergeable. | v1.1.1 |
+| **P1** | ~~ADR-026 iteration 3 — flip `virtual_keyed_ops` ON (#2017)~~ ✅ | The gate the ROADMAP set (real browser evidence) could not be met until #2185 and #2194 shipped, because until then the CONTROL arm was as broken as the test arm and every A/B compared OFF against OFF — the source of this feature's four withdrawn diagnoses. With a healthy list: an insert at server position 5 lands at pool index **60 (tail)** with the flag off and **5** with it on; a removal leaves the pool unchanged off and drops the right key on; a reverse is ignored off and exact on. | Shipped (PR #2197) |
 | **P1** | post-mount reinit is gated behind `requestAnimationFrame` (#2194) | `03-websocket.js:628` schedules ALL post-mount work — `reinitAfterDOMUpdate()`, `_mountReady`, form recovery, `dj-auto-recover` — through rAF, which browsers do not fire in a hidden tab. Measured: `visibilityState "hidden"` → no reinit at all, so the #1610 mount morph wipes the `[dj-virtual]` shell with nothing to restore it. Hidden-at-load is ordinary (background-tab open, session restore, prerender). Open question that decides severity: does a queued rAF fire on refocus (self-heals) or not (permanent)? | v1.1.1 |
 | **P2** | xdist order-dependent test flake (#2187) | A test failed on a first `-n auto` run, then passed in isolation and on re-run, with `main` clean — the signature of sharding/order pollution, not a regression. Needs the failing test id captured on the next sighting; then the #2053 playbook (pin the distribution, bisect the polluter, fix at source, gate with 3 consecutive clean runs per #182). | v1.1.1 |
 | **P2** | 113 shipped ROADMAP rows are not struck through (#2181) | 134 `**Pn**` rows in completed `v1.1.0-N` buckets carry no `~~`/✅; of the 128 issues they reference, 113 are closed and only #2017/#1561 are open. Cosmetic today because each bucket carries an authoritative `COMPLETE n/n ✅` line, but `/pipeline-next` reads these rows to pick work. | v1.1.1 |

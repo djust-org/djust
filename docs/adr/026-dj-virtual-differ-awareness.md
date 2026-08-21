@@ -1,6 +1,6 @@
 # ADR-026: `dj-virtual` differ awareness — reconciling a server-rendered list against a client-windowed DOM
 
-**Status**: Accepted — Option A taken; iterations 1-2 shipped in v1.1.0rc9 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)). Iteration 3 — the flag flip — is NOT shipped; the differ path is still dark by default.
+**Status**: Accepted — Option A taken. Iterations 1-2 shipped in v1.1.0rc9 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)); iteration 3 — the flag flipped ON by default — shipped in 1.1.1 once #2185 and #2194 gave the browser gate a working control arm.
 **Date**: 2026-07-25
 **Deciders**: Project maintainers
 **Related**:
@@ -67,15 +67,20 @@ Where the three iterations from Consequences actually stand:
 |---|---|
 | 1. differ emits keyed splice ops, flag default OFF | shipped, PR #2126 |
 | 2. client applies them to the pool | shipped, PR #2135 |
-| 3. flag flips ON after a soak | **not shipped — blocked on #2185** (was #2164; that diagnosis was withdrawn) |
+| 3. flag flips ON after a soak | **shipped, 1.1.1** — gate passed once #2185 + #2194 gave a valid control arm |
 
-The config half of iteration 3 is on `main` (unreleased at time of
-writing): `virtual_keyed_ops` reaches the differ via `DjustConfig.ready()` (a module-level PyO3 function,
-because `VIRTUAL_KEYED_OPS` at `crates/djust_vdom/src/diff.rs:167` is a
-process global, not per-view state). The DEFAULT half did not: it stays
-`False`.
+Both halves of iteration 3 have now shipped. `virtual_keyed_ops` reaches the
+differ via `DjustConfig.ready()` (a module-level PyO3 function, because
+`VIRTUAL_KEYED_OPS` in `crates/djust_vdom/src/diff.rs` is a process global, not
+per-view state), and the Python default flipped to `True` in 1.1.1.
 
-The browser gate is why, though not for the reason first recorded here.
+The Rust static itself stays `false` deliberately: `ready()` applies the Python
+value on every startup, so Python is the single source of truth, and leaving the
+static off means an embedder that never runs Django fails safe rather than
+fail-open.
+
+The browser gate is why this took as long as it did, though not for the reason
+first recorded here.
 
 Measured against a 60-row list, inserting at server position 5 with `k0`
 scrolled out of the window:
@@ -105,13 +110,14 @@ scrolled out of the window:
 > Every ON case reported `Patches applied successfully` with no recovery
 > round-trip. **Iterations 1 and 2 are both correct.**
 >
-> Iteration 3 is now blocked on **#2185**: `[dj-virtual]` initialisation is
+> Iteration 3 WAS blocked on **#2185** (fixed in PR #2195) and **#2194** (PR #2196): `[dj-virtual]` initialisation is
 > intermittently lost on page load (the #1610 mount morph re-creates the
 > `dj-root` subtree and nothing re-runs `initVirtualLists`). On an affected
 > load the flag OFF degrades silently — the server sends an ordinary
 > `InsertChild`, which applies — while ON sends `VirtualInsert` at an
 > uninitialised container, failing the patch and forcing a full HTML
-> recovery. Flip the default once #2185 is fixed.
+> recovery. (#2185 and #2194 were both fixed — PRs #2195 and #2196 — and the
+> default flipped ON in 1.1.1.)
 >
 > **The superseded text, verbatim, for the record:**
 >

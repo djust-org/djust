@@ -61,7 +61,7 @@ Because the shell is absolutely positioned, the container is made a positioned a
 - **Full re-render** (the container's children reverted to the raw list): the managed shell/spacer are detected as clobbered and the container is transparently re-virtualized against the fresh children — no manual `teardownVirtualList` + re-init needed.
 - **Appended row** (e.g. a new chat message landing outside the wrapper): the loose element is absorbed into the item pool (at the tail) so it renders inside the shell and receives subsequent patches, instead of leaking as a stray sibling.
 
-Scope note: absorb is **append-only** (a new row lands at the tail — correct for chat/feeds). Keyed mid-list inserts, removals, and finalize-patch landing for an item scrolled OUT of the current window need differ-level `dj-virtual` awareness — tracked in the follow-up to this work. For explicit control you can still set `container.__djVirtualItems` to an array of `HTMLElement` before `refreshVirtualList` to replace the pool wholesale.
+Scope note: the client-side *absorb* fallback is **append-only** (a loose row lands at the tail — correct for chat/feeds). Keyed mid-list inserts, removals and reorders no longer rely on it: since 1.1.1 the differ is `dj-virtual`-aware and emits keyed splice ops, so a server-side insert at position 5 lands at position 5 rather than the tail (`LIVEVIEW_CONFIG['virtual_keyed_ops']`, default **on**; set it to `False` to opt out). Finalize-patch landing for an item scrolled OUT of the current window is still open. For explicit control you can still set `container.__djVirtualItems` to an array of `HTMLElement` before `refreshVirtualList` to replace the pool wholesale.
 
 ### Limitations (v0.5.0)
 

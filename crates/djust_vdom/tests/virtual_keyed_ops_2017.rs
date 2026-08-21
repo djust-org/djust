@@ -101,7 +101,9 @@ fn flag_is_off_by_default() {
     let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     assert!(
         !virtual_keyed_ops_enabled(),
-        "ADR-026 iteration 1 ships dark; the client cannot apply these ops yet"
+        "the Rust static must stay OFF: Python's _defaults carries the ON default \
+         and DjustConfig.ready() applies it, so an embedder that never runs Django \
+         fails safe rather than fail-open"
     );
 }
 

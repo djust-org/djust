@@ -153,10 +153,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Emit KEY-addressed splice ops for `[dj-virtual]` parents (ADR-026).
 ///
-/// Default OFF. Iteration 1 of the ADR ships the differ side dark: the ops are
-/// emitted only when this is enabled, so `main` behaviour is byte-identical
-/// until the client half (iteration 2) can apply them and the flag is flipped
-/// after a soak (iteration 3).
+/// Default ON since 1.1.1 (iteration 3). Iteration 1 shipped the differ side
+/// dark — the ops are emitted only when this is enabled — so that `main`
+/// behaviour stayed byte-identical until the client half (iteration 2) could
+/// apply them. Both landed, the browser gate passed, and the default flipped.
 ///
 /// A process-global atomic rather than a threaded parameter because `diff_nodes`
 /// is a pure free function reached from several entry points; threading config
@@ -165,25 +165,41 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// a `LIVEVIEW_CONFIG` key — that wiring SHIPPED in the #2017 iteration-3 PR
 /// (`virtual_keyed_ops`, applied once by `DjustConfig.ready()`).
 ///
-/// The DEFAULT is still OFF, but NOT for the reason this comment used to give.
-/// It claimed "the client applier does not achieve keyed positioning even
-/// though this differ emits the right op — see #2164". That was #2164's SECOND
-/// diagnosis and it was WITHDRAWN: PR #2167 established the differ and the
-/// applier were both correct all along, and the flag simply never reached Rust
-/// because the config read returned a default.
+/// The DEFAULT is ON since 1.1.1 (ADR-026 iteration 3).
 ///
-/// Re-measured in a browser (2026-08-11) with the flag ON and the list
-/// confirmed initialised before acting: insert at server position 5 lands at
-/// pool index 5, remove drops the right key with no duplicates, reverse is an
-/// exact reversal, and an edit lands on its own row only — every case reporting
-/// "Patches applied successfully" with no recovery round-trip.
+/// Getting there took four wrong mechanisms, which is worth recording because
+/// the shape repeated: #2164 filed two diagnoses that were both withdrawn
+/// (the list "is not windowed at patch time", then "the client applier ignores
+/// before_key"), and two more were added during the iteration-3 gate itself.
+/// Every one was asserted from a partial read rather than traced to a call
+/// site. The real story is duller — the flag never reached Rust (#2166), and
+/// the list was intermittently never initialised (#2185, #2194), so BOTH arms
+/// of every earlier A/B were really the OFF arm.
 ///
-/// What still keeps it OFF is #2185: `[dj-virtual]` initialisation is
-/// intermittently lost on page load (the #1610 mount morph re-creates the
-/// dj-root subtree and nothing re-runs `initVirtualLists`). On such a load the
-/// flag OFF degrades silently, whereas ON emits `VirtualInsert` at an
-/// uninitialised container — a failed patch plus a full HTML recovery. Flip
-/// the default once #2185 is fixed.
+/// With those fixed, the A/B is finally valid. Same healthy initialised list,
+/// same start state, flag the only variable:
+///
+/// |                        | OFF                     | ON               |
+/// |------------------------|-------------------------|------------------|
+/// | insert at position 5   | pool index 60 (tail)    | pool index 5     |
+/// | remove at 3            | size unchanged, k3 kept | k3 gone, no dupes|
+/// | reverse                | not reordered           | exact reversal   |
+/// | edit a scrolled row    | correct                 | correct          |
+///
+/// Opt out with `LIVEVIEW_CONFIG['virtual_keyed_ops'] = False`.
+///
+/// NOTE the static below stays `false`, and that is deliberate — the ON default
+/// lives in Python's `_defaults` ONLY. `DjustConfig.ready()` applies
+/// `set_virtual_keyed_ops(config.get("virtual_keyed_ops"))` unconditionally on
+/// every startup, so Python is the single source of truth and flipping this
+/// static would change nothing in production.
+///
+/// What it WOULD change is every path where Python never runs: a non-Django
+/// embedding using this crate directly, a process where `ready()` did not fire,
+/// or a stale compiled `.so`. Those go from fail-safe-OFF to fail-open-ON with
+/// no way to opt out. Keeping it `false` means the unwired state is the safe
+/// one, which is also what `flag_is_off_by_default` in
+/// tests/virtual_keyed_ops_2017.rs pins.
 static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(false);
 
 /// Enable/disable `[dj-virtual]` keyed splice ops. Wired from Python config.

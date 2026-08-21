@@ -3,20 +3,20 @@
 {% block content %}
 <div dj-view="djust_tests.views.virtual_keyed_demo.VirtualKeyedDemoView">
   <h1>dj-virtual — keyed splice ops (#2017 / ADR-026)</h1>
-  <p style="background:#fff3cd;border:1px solid #e0c069;padding:.6rem">
-    <b>The keyed ops work; the flag is still OFF for a different reason.</b>
-    This banner used to say an insert at position 5 lands at the TAIL with the
-    flag on or off — that was issue #2164's withdrawn second diagnosis, and it
-    is false. PR #2167 showed the differ and the applier were both correct and
-    the flag simply never reached Rust. Re-measured 2026-08-11 with the flag ON:
-    an insert at 5 lands at pool index 5, a remove drops the right key, and a
-    reverse is exact.
+  <p style="background:#e7f5e7;border:1px solid #7ab77a;padding:.6rem">
+    <b>Keyed splice ops are ON by default since 1.1.1</b> (ADR-026 iteration 3).
+    Use the buttons and watch the pool ORDER, not its size.
     <br><br>
-    What keeps the default OFF is <b>#2185</b>: <code>[dj-virtual]</code>
-    initialisation is intermittently lost on page load, and on such a load a
-    <code>VirtualInsert</code> hits an uninitialised container and forces a full
-    HTML recovery. If the list below shows all 60 rows instead of a ~13-row
-    window, you are on an affected load — that is #2185, not the keyed ops.
+    With the flag OFF, an insert at position 5 lands at the TAIL, a removal
+    does not land at all, and a reverse is ignored — the append-only absorb
+    heuristic cannot express mid-list structure. With it ON, the insert lands
+    at index 5, the removal drops the right key, and the reverse is exact.
+    <br><br>
+    That A/B only became measurable once <b>#2185</b> and <b>#2194</b> were
+    fixed: before them the list was intermittently never initialised, so both
+    arms were really the OFF arm — which is how this feature accumulated four
+    withdrawn diagnoses. Opt out with
+    <code>LIVEVIEW_CONFIG['virtual_keyed_ops'] = False</code>.
   </p>
 
   <p id="log" style="font-family:monospace;background:#eee;padding:.5rem">{{ log }}</p>

@@ -221,6 +221,20 @@ repos:
         files: ^uv\.lock$
         pass_filenames: false
 
+  # Pin documented flag defaults to the real default in config.py. The
+  # virtual_keyed_ops flip (#2017) needed FIVE manual doc sweeps, each of which
+  # under-counted — and the misses were sentences a few lines from ones just
+  # edited. Structural check, not a grep: it reads the actual default and
+  # requires each registered doc site to state the same value.
+  - repo: local
+    hooks:
+      - id: check-flag-default-consistency
+        name: check documented flag defaults match the code
+        entry: python scripts/check-flag-default-consistency.py
+        language: python
+        files: ^(python/djust/config\.py|crates/djust_vdom/src/diff\.rs|docs/adr/.*\.md|scripts/check-flag-default-consistency\.py)$
+        pass_filenames: false
+
   # Pre-push hooks (slower checks that run before git push)
   - repo: local
     hooks:

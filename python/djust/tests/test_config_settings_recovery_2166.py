@@ -36,7 +36,7 @@ SECRET_KEY = "config-recovery-probe"
 INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.auth", "djust"]
 DATABASES = {}
 LIVEVIEW_CONFIG = {
-    "virtual_keyed_ops": True,          # default False
+    "virtual_keyed_ops": False,         # default True since 1.1.1 (ADR-026 iter 3)
     "loop_render_cache_enabled": False,  # default True  (shipped kill-switch)
     "template_auto_call": False,         # default True
     "filter_bridge_warm": False,         # default True
@@ -83,11 +83,20 @@ import djust.config
 )
 
 EXPECTED = {
-    "virtual_keyed_ops": True,
+    # False, because the probe sets it False and the DEFAULT is now True — so
+    # this key still distinguishes "settings were read" from "defaults kept".
+    # It briefly stopped doing so when iteration 3 flipped the default to True
+    # while the probe still said True: the two became indistinguishable and the
+    # gate-off went quiet on this key AND on rust_flag (pytest reported
+    # "Omitting 2 identical items"), losing the only end-to-end proof that the
+    # flag reaches Rust through real startup order.
+    "virtual_keyed_ops": False,
     "loop_render_cache_enabled": False,
     "template_auto_call": False,
     "filter_bridge_warm": False,
-    "rust_flag": True,
+    # Follows virtual_keyed_ops: ready() applies config.get() to the Rust
+    # static unconditionally, so a False in settings must land as False here.
+    "rust_flag": False,
 }
 
 
@@ -168,9 +177,14 @@ def test_recovery_reloads_and_reports_when_the_import_time_load_failed():
     cfg._config = cfg._defaults.copy()
     cfg._settings_loaded = False
 
-    with override_settings(LIVEVIEW_CONFIG={"virtual_keyed_ops": True}):
+    # False, not True: the DEFAULT is now True, so overriding to True would make
+    # "recovered" and "kept the default" indistinguishable — the same tautology
+    # the probe block at the top of this file warns about, recurring here.
+    with override_settings(LIVEVIEW_CONFIG={"virtual_keyed_ops": False}):
         assert cfg.ensure_settings_loaded() is True, "must report it recovered"
-    assert cfg.get("virtual_keyed_ops") is True
+    assert cfg.get("virtual_keyed_ops") is False, (
+        "recovery must have re-read settings; True would mean it kept _defaults"
+    )
     assert cfg._settings_loaded is True
     # Second call is now a no-op.
     assert cfg.ensure_settings_loaded() is False
