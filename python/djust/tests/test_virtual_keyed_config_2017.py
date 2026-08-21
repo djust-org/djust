@@ -27,13 +27,13 @@ index 5), remove (drops the right key, no duplicates), reverse (exact), and a
 content edit (lands on its own row only), each reporting "Patches applied
 successfully" with no recovery round-trip.
 
-What keeps it OFF is #2185: `[dj-virtual]` initialisation is intermittently
-lost on page load, because the #1610 mount morph re-creates the `dj-root`
-subtree and nothing re-runs `initVirtualLists`. On an affected load the flag
-OFF degrades silently — the server sends an ordinary `InsertChild`, which
-applies — whereas ON sends `VirtualInsert` at an uninitialised container,
-failing the patch and forcing a full HTML recovery. #1122 still governs the
-flip itself; #2185 is the blocker.
+What kept it OFF was #2185 — `[dj-virtual]` initialisation intermittently lost
+on page load — together with #2194, post-mount reinit being rAF-only so a
+hidden tab never recovered. Both shipped (PRs #2195, #2196), and only then did
+the browser gate have a working control arm: before that, every A/B compared
+OFF against OFF, which is how this feature accumulated four withdrawn
+diagnoses. With them fixed the gate passed and the default flipped ON in 1.1.1
+(#1122 governed the flip itself).
 """
 
 from __future__ import annotations

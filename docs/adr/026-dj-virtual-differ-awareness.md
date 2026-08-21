@@ -1,6 +1,6 @@
 # ADR-026: `dj-virtual` differ awareness — reconciling a server-rendered list against a client-windowed DOM
 
-**Status**: Accepted — Option A taken; iterations 1-2 shipped in v1.1.0rc9, iteration 3 (default ON) in 1.1.1 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)). Iteration 3 — the flag flip — is NOT shipped; the differ path is still dark by default.
+**Status**: Accepted — Option A taken. Iterations 1-2 shipped in v1.1.0rc9 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)); iteration 3 — the flag flipped ON by default — shipped in 1.1.1 once #2185 and #2194 gave the browser gate a working control arm.
 **Date**: 2026-07-25
 **Deciders**: Project maintainers
 **Related**:
@@ -105,7 +105,7 @@ scrolled out of the window:
 > Every ON case reported `Patches applied successfully` with no recovery
 > round-trip. **Iterations 1 and 2 are both correct.**
 >
-> Iteration 3 is now blocked on **#2185**: `[dj-virtual]` initialisation is
+> Iteration 3 WAS blocked on **#2185** (fixed in PR #2195) and **#2194** (PR #2196): `[dj-virtual]` initialisation is
 > intermittently lost on page load (the #1610 mount morph re-creates the
 > `dj-root` subtree and nothing re-runs `initVirtualLists`). On an affected
 > load the flag OFF degrades silently — the server sends an ordinary

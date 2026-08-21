@@ -153,10 +153,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Emit KEY-addressed splice ops for `[dj-virtual]` parents (ADR-026).
 ///
-/// Default OFF. Iteration 1 of the ADR ships the differ side dark: the ops are
-/// emitted only when this is enabled, so `main` behaviour is byte-identical
-/// until the client half (iteration 2) can apply them and the flag is flipped
-/// after a soak (iteration 3).
+/// Default ON since 1.1.1 (iteration 3). Iteration 1 shipped the differ side
+/// dark — the ops are emitted only when this is enabled — so that `main`
+/// behaviour stayed byte-identical until the client half (iteration 2) could
+/// apply them. Both landed, the browser gate passed, and the default flipped.
 ///
 /// A process-global atomic rather than a threaded parameter because `diff_nodes`
 /// is a pure free function reached from several entry points; threading config
