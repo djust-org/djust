@@ -68,9 +68,11 @@ reconciles the container automatically:
 - If a re-render appended a new row outside the wrapper (e.g. a streamed chat message), the
   row is absorbed into the virtual item pool at the tail so it renders inside the shell.
 
-The absorb is **append-only** — a new row lands at the end. Keyed mid-list inserts/removals and
-finalize-patch landing for an item scrolled out of the current window are deferred to
-differ-level `dj-virtual` awareness (tracked as a follow-up). For explicit control, set
+The absorb fallback is **append-only** — a loose row lands at the end. Keyed mid-list
+inserts/removals/reorders no longer depend on it: since 1.1.1 the differ is `dj-virtual`-aware
+and emits keyed splice ops, so a mid-list insert lands at its keyed position
+(`LIVEVIEW_CONFIG['virtual_keyed_ops']`, default **on**; set `False` to opt out).
+Finalize-patch landing for an item scrolled out of the current window is still open. For explicit control, set
 `container.__djVirtualItems` to an array of `HTMLElement` before `djust.refreshVirtualList(container)`
 to replace the pool wholesale.
 

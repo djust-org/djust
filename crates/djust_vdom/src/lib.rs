@@ -674,7 +674,9 @@ pub enum Patch {
     // These variants address items by KEY instead, so the client can apply
     // them to the pool without the DOM being the source of truth. Emitted only
     // when the parent carries `dj-virtual` AND the feature flag is on
-    // (`diff::set_virtual_keyed_ops`, default OFF).
+    // (`diff::set_virtual_keyed_ops`). Default ON since 1.1.1 via Python's
+    // LIVEVIEW_CONFIG; the Rust static itself stays false so an unwired
+    // embedding fails safe — see the note on VIRTUAL_KEYED_OPS in diff.rs.
     //
     // Wire note (corrected — the first version of this comment was wrong, and
     // so is the older one on `MoveSubtree` below). `#[serde(tag = "type")]`

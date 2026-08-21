@@ -10,7 +10,8 @@ process-global ``AtomicBool``, unlike ``set_loop_render_cache_enabled`` (#1967)
 which is per-``RustLiveView`` state. Driving a process global from a per-view
 hook would be last-view-wins.
 
-**The default stays OFF.** Not for the reason this docstring gave for two
+**The default is ON since 1.1.1.** It was OFF for several releases, and not for
+the reason this docstring gave for two
 revisions: it claimed the browser gate had proven the list "is not windowed at
 patch time after the WS mount morph, so there is no pool to apply it to". That
 was a wrong diagnosis of #2164 — twice. The differ and the client applier were
@@ -18,7 +19,8 @@ both correct; the config never reached the Rust flag, so the browser was
 running the feature OFF while the settings said ON. With that fixed, an insert
 at server position 5 lands at pool index 5.
 
-The default stays OFF, but the reason above is now superseded too. That
+Both OFF-rationales above are superseded. The later one said that
+
 "browser evidence covers VirtualInsert only" line was true when written; the
 2026-08-11 gate run extended it to the whole op set — insert (lands at pool
 index 5), remove (drops the right key, no duplicates), reverse (exact), and a

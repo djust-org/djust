@@ -187,7 +187,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// | edit a scrolled row    | correct                 | correct          |
 ///
 /// Opt out with `LIVEVIEW_CONFIG['virtual_keyed_ops'] = False`.
-static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(true);
+///
+/// NOTE the static below stays `false`, and that is deliberate — the ON default
+/// lives in Python's `_defaults` ONLY. `DjustConfig.ready()` applies
+/// `set_virtual_keyed_ops(config.get("virtual_keyed_ops"))` unconditionally on
+/// every startup, so Python is the single source of truth and flipping this
+/// static would change nothing in production.
+///
+/// What it WOULD change is every path where Python never runs: a non-Django
+/// embedding using this crate directly, a process where `ready()` did not fire,
+/// or a stale compiled `.so`. Those go from fail-safe-OFF to fail-open-ON with
+/// no way to opt out. Keeping it `false` means the unwired state is the safe
+/// one, which is also what `flag_is_off_by_default` in
+/// tests/virtual_keyed_ops_2017.rs pins.
+static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(false);
 
 /// Enable/disable `[dj-virtual]` keyed splice ops. Wired from Python config.
 pub fn set_virtual_keyed_ops(enabled: bool) {

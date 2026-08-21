@@ -1,6 +1,6 @@
 # ADR-026: `dj-virtual` differ awareness — reconciling a server-rendered list against a client-windowed DOM
 
-**Status**: Accepted — Option A taken; iterations 1-2 shipped in v1.1.0rc9 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)). Iteration 3 — the flag flip — is NOT shipped; the differ path is still dark by default.
+**Status**: Accepted — Option A taken; iterations 1-2 shipped in v1.1.0rc9, iteration 3 (default ON) in 1.1.1 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)). Iteration 3 — the flag flip — is NOT shipped; the differ path is still dark by default.
 **Date**: 2026-07-25
 **Deciders**: Project maintainers
 **Related**:
