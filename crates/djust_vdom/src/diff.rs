@@ -153,7 +153,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Emit KEY-addressed splice ops for `[dj-virtual]` parents (ADR-026).
 ///
-/// Default ON since 1.1.1 (iteration 3). Iteration 1 shipped the differ side
+/// Default ON since 1.1.0 (iteration 3). Iteration 1 shipped the differ side
 /// dark — the ops are emitted only when this is enabled — so that `main`
 /// behaviour stayed byte-identical until the client half (iteration 2) could
 /// apply them. Both landed, the browser gate passed, and the default flipped.
@@ -165,7 +165,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// a `LIVEVIEW_CONFIG` key — that wiring SHIPPED in the #2017 iteration-3 PR
 /// (`virtual_keyed_ops`, applied once by `DjustConfig.ready()`).
 ///
-/// The DEFAULT is ON since 1.1.1 (ADR-026 iteration 3).
+/// The DEFAULT is ON since 1.1.0 (ADR-026 iteration 3).
 ///
 /// Getting there took four wrong mechanisms, which is worth recording because
 /// the shape repeated: #2164 filed two diagnoses that were both withdrawn

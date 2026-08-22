@@ -85,11 +85,13 @@ def test_flipping_the_code_default_fails(sandbox: pathlib.Path) -> None:
 
 def test_reverting_one_doc_site_fails(sandbox: pathlib.Path) -> None:
     """The real #2017 drift shape: code moved on, one doc did not."""
+    # Version-agnostic anchors: pinning the release number here broke these
+    # fixtures on the 1.1.1 -> 1.1.0 rename, and would break again every bump.
     sub(
         sandbox,
         "docs/adr/026-dj-virtual-differ-awareness.md",
-        "| 3. flag flips ON after a soak | **shipped, 1.1.1**",
-        "| 3. flag flips ON after a soak | **not shipped — blocked on #2185**",
+        "| 3. flag flips ON after a soak | **shipped",
+        "| 3. flag flips ON after a soak | **not shipped",
     )
     r = run(sandbox)
     assert r.returncode == 1
@@ -105,7 +107,7 @@ def test_a_silently_unmatched_pattern_fails(sandbox: pathlib.Path) -> None:
     sub(
         sandbox,
         "crates/djust_vdom/src/diff.rs",
-        "/// Default ON since 1.1.1",
+        "/// Default ON since",
         "/// (statement removed)",
     )
     r = run(sandbox)

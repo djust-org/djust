@@ -10,7 +10,7 @@ process-global ``AtomicBool``, unlike ``set_loop_render_cache_enabled`` (#1967)
 which is per-``RustLiveView`` state. Driving a process global from a per-view
 hook would be last-view-wins.
 
-**The default is ON since 1.1.1.** It was OFF for several releases, and not for
+**The default is ON since 1.1.0.** It was OFF for several releases, and not for
 the reason this docstring gave for two
 revisions: it claimed the browser gate had proven the list "is not windowed at
 patch time after the WS mount morph, so there is no pool to apply it to". That
@@ -32,7 +32,7 @@ on page load — together with #2194, post-mount reinit being rAF-only so a
 hidden tab never recovered. Both shipped (PRs #2195, #2196), and only then did
 the browser gate have a working control arm: before that, every A/B compared
 OFF against OFF, which is how this feature accumulated four withdrawn
-diagnoses. With them fixed the gate passed and the default flipped ON in 1.1.1
+diagnoses. With them fixed the gate passed and the default flipped ON in 1.1.0
 (#1122 governed the flip itself).
 """
 
@@ -72,7 +72,7 @@ def test_the_setter_actually_moves_the_flag():
 
 
 def test_the_config_default_is_on():
-    """Iteration 3 shipped in 1.1.1. This pin is now the inverse of what it was.
+    """Iteration 3 shipped in 1.1.0. This pin is now the inverse of what it was.
 
     It spent several releases asserting ``is False`` with the message "the
     evidence did not support it". The evidence now does, and it is recorded
@@ -100,7 +100,7 @@ def test_the_config_default_is_on():
 
     assert LiveViewConfig._defaults["virtual_keyed_ops"] is True, (
         "the dj-virtual keyed splice ops default OFF again. ON is the shipped "
-        "behaviour since 1.1.1 (ADR-026 iteration 3) — turning it back off "
+        "behaviour since 1.1.0 (ADR-026 iteration 3) — turning it back off "
         "reintroduces tail-landing inserts, dropped removals and ignored "
         "reorders on every windowed list. Revert deliberately, with evidence."
     )
