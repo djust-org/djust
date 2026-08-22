@@ -172,7 +172,7 @@ class LiveViewConfig:
         # Wired to the process-global Rust switch once at startup by
         # `DjustConfig.ready()` — it is not per-view state.
         #
-        # ADR-026 iteration 3: default ON since 1.1.1.
+        # ADR-026 iteration 3: default ON since 1.1.0.
         #
         # Gated on real browser evidence (ROADMAP), and the A/B that finally
         # produced it needed BOTH #2185 and #2194 fixed first — until then the
@@ -195,7 +195,7 @@ class LiveViewConfig:
         # (`emits_virtual_ops` in crates/djust_vdom/src/diff.rs), so a project
         # that does not use dj-virtual sees no wire change at all.
         #
-        # Version skew: a cached PRE-1.1.0 client bundle talking to a 1.1.1+
+        # Version skew: a cached PRE-1.1.0 client bundle talking to a 1.1.0+
         # server receives Virtual* ops its applier does not know. That degrades
         # to the existing patch-failure path — the client requests recovery HTML
         # and morphs — rather than breaking. Set this to False to opt out.

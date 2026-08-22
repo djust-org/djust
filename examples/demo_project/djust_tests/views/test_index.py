@@ -30,7 +30,7 @@ class TestIndexView(TemplateView):
         context["tests"] = [
             {
                 "name": "dj-virtual keyed splice ops (#2017)",
-                "description": "Windowed list exercising ADR-026. Keyed splice ops are ON by default since 1.1.1.",
+                "description": "Windowed list exercising ADR-026. Keyed splice ops are ON by default since 1.1.0.",
                 "url_name": "tests:virtual-keyed",
                 "feature": "dj-virtual keyed splice ops",
                 "phase": "ADR-026 iteration 3",
@@ -38,7 +38,7 @@ class TestIndexView(TemplateView):
                 "tests": [
                     "Server emits VirtualInsert{key, before_key} with the flag on",
                     "Client splices it at the keyed position (insert@5 -> pool index 5)",
-                    "Default ON since 1.1.1 — OFF lands a middle insert at the tail",
+                    "Default ON since 1.1.0 — OFF lands a middle insert at the tail",
                 ],
             },
             {

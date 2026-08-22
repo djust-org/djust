@@ -1,6 +1,6 @@
 # ADR-026: `dj-virtual` differ awareness — reconciling a server-rendered list against a client-windowed DOM
 
-**Status**: Accepted — Option A taken. Iterations 1-2 shipped in v1.1.0rc9 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)); iteration 3 — the flag flipped ON by default — shipped in 1.1.1 once #2185 and #2194 gave the browser gate a working control arm.
+**Status**: Accepted — Option A taken. Iterations 1-2 shipped in v1.1.0rc9 (PRs [#2126](https://github.com/djust-org/djust/pull/2126), [#2135](https://github.com/djust-org/djust/pull/2135), fix [#2146](https://github.com/djust-org/djust/pull/2146)); iteration 3 — the flag flipped ON by default — shipped in 1.1.0 once #2185 and #2194 gave the browser gate a working control arm.
 **Date**: 2026-07-25
 **Deciders**: Project maintainers
 **Related**:
@@ -67,12 +67,12 @@ Where the three iterations from Consequences actually stand:
 |---|---|
 | 1. differ emits keyed splice ops, flag default OFF | shipped, PR #2126 |
 | 2. client applies them to the pool | shipped, PR #2135 |
-| 3. flag flips ON after a soak | **shipped, 1.1.1** — gate passed once #2185 + #2194 gave a valid control arm |
+| 3. flag flips ON after a soak | **shipped, 1.1.0** — gate passed once #2185 + #2194 gave a valid control arm |
 
 Both halves of iteration 3 have now shipped. `virtual_keyed_ops` reaches the
 differ via `DjustConfig.ready()` (a module-level PyO3 function, because
 `VIRTUAL_KEYED_OPS` in `crates/djust_vdom/src/diff.rs` is a process global, not
-per-view state), and the Python default flipped to `True` in 1.1.1.
+per-view state), and the Python default flipped to `True` in 1.1.0.
 
 The Rust static itself stays `false` deliberately: `ready()` applies the Python
 value on every startup, so Python is the single source of truth, and leaving the
@@ -117,7 +117,7 @@ scrolled out of the window:
 > `InsertChild`, which applies — while ON sends `VirtualInsert` at an
 > uninitialised container, failing the patch and forcing a full HTML
 > recovery. (#2185 and #2194 were both fixed — PRs #2195 and #2196 — and the
-> default flipped ON in 1.1.1.)
+> default flipped ON in 1.1.0.)
 >
 > **The superseded text, verbatim, for the record:**
 >
