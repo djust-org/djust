@@ -49,7 +49,53 @@ trap 'rm -f "$REPORT"' EXIT
 # tests/benchmarks/conftest.py's own docstring already names the intended
 # enforcement point: "the benchmark-gated CI job (--benchmark-only serial)".
 # This makes that true instead of aspirational. See #2156.
-bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q --benchmark-disable 2>&1 | tee "$REPORT"
+#
+# -n auto: 330s -> 84s, measured on this suite (10,260 tests). The gap is
+# bigger than the core count explains, because ~120s of the serial 330s is
+# spent BLOCKED rather than computing — `user`+`sys` total only ~210s. Most of
+# that wait is the eleven tests in python/tests/test_deploy_cli.py, each of
+# which stands up a real loopback HTTPServer for the OAuth callback flow.
+#
+# This run was serial only by inheritance. The reason it needed to be —
+# enforcing benchmark thresholds — was removed directly above, and nothing
+# replaced it: no test declares `xdist_group` or a serial marker, the FAILED-id
+# parsing below is unaffected by sharding, and .github/workflows/test.yml
+# already runs `-n auto` over these same paths, so parallel is the configuration
+# CI has been proving all along.
+#
+# What serial DID still provide, undocumented: pytest-randomly is not installed,
+# so a serial run executes in deterministic definition order — a genuinely
+# different ordering from xdist's sharding, and order-dependent bugs hide from
+# one ordering while surfacing under the other (#2187 is an open instance).
+# That coverage is NOT lost here: .github/workflows/main-health.yml runs this
+# same suite serially every day at 07:00 UTC. Definition order therefore still
+# runs daily, just not on the push path — which is the right place for it,
+# since an ordering flake is a property of `main` rather than of the branch
+# being pushed, and blocking a push on one tells the pusher nothing actionable.
+#
+# So: if main-health ever gains `-n auto`, definition order stops being
+# exercised anywhere and this trade silently stops holding.
+#
+# Probed rather than assumed. xdist is a dev dependency, so it is present after
+# `uv sync --extra dev` — but "should be installed" is not "is installed", and
+# passing `-n auto` to a pytest without it does not degrade, it ABORTS:
+#
+#   __main__.py: error: unrecognized arguments: -n
+#
+# The suite never runs, and the pusher gets an argparse usage dump instead of
+# test results — from a hook whose entire purpose is making a blocked push
+# legible. A partial install is exactly the situation where you least want the
+# error to be about the harness. Falling back to serial is slower and correct;
+# aborting is neither.
+#
+# This is not hypothetical: tests/test_red_main_attribution_behaviour_2139.py
+# drives this script against a synthetic repo under a minimal interpreter, and
+# all 22 of its cases failed this way when the flag was added unconditionally.
+PARALLEL=()
+if bash scripts/run-with-venv-python.sh -c 'import xdist' >/dev/null 2>&1; then
+    PARALLEL=(-n auto)
+fi
+bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q "${PARALLEL[@]+"${PARALLEL[@]}"}" --benchmark-disable 2>&1 | tee "$REPORT"
 STATUS=${PIPESTATUS[0]}
 [ "$STATUS" -eq 0 ] && exit 0
 

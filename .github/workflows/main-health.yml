@@ -69,6 +69,24 @@ jobs:
         id: run
         run: |
           set +e
+          # DELIBERATELY SERIAL — do not add `-n auto` here.
+          #
+          # pytest-randomly is not installed, so a serial run executes in
+          # deterministic definition order. That is a different ordering from
+          # xdist's sharding, and an order-dependent bug (a leaked singleton,
+          # a module-global mutated by an earlier test) can hide under one
+          # while surfacing under the other. #2187 is an open instance.
+          #
+          # .github/workflows/test.yml runs `-n auto`, and scripts/pre-push-pytest.sh
+          # was switched to `-n auto` for wall-clock (330s -> 84s). This job is
+          # therefore the ONLY place definition order is still exercised.
+          # Parallelising it would close that gap everywhere at once, and the
+          # loss would be invisible — the suite would simply keep passing.
+          #
+          # This is also the right home for it: an ordering flake is a property
+          # of `main`, not of whatever branch someone is pushing, so a daily
+          # scheduled run reports it to the person who can act on it instead of
+          # blocking an unrelated push.
           uv run python -m pytest tests/ python/tests/ python/djust/tests/ -q \
             > /tmp/suite.txt 2>&1
           STATUS=$?
