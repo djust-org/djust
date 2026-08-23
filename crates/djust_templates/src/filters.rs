@@ -59,9 +59,55 @@ pub fn apply_filter_full_safe(
     context: Option<&Context>,
     arg_was_quoted: bool,
 ) -> Result<(Value, bool)> {
+    // #2202: Django resolves a bare-identifier filter argument as a context
+    // variable (`Variable(arg).resolve(context)`); only a QUOTED argument is a
+    // literal. The custom-filter path already does this
+    // (``filter_registry::apply_custom_filter``, which resolves to a Python
+    // object); the built-in dispatch table did not, so `{{ x|default:fallback }}`
+    // rendered the literal text "fallback". Same parallel-path-drift class as
+    // #1646, on the filter-argument axis.
+    //
+    // Resolved ONCE here rather than inside each affected arm: TWENTY-SIX
+    // built-ins take an argument, and per-arm fixes would be twenty-six more
+    // places to drift from — which is the bug this is. The dispatch table stays
+    // arg-source-agnostic.
+    //
+    // ``arg_was_quoted`` gates it, so a quoted literal is never looked up even
+    // when a context key of that name exists. ``apply_filter_with_context``
+    // passes ``true`` (documented there as "assume callers pre-resolved"), so
+    // that classic call site keeps its current behaviour; only the renderer
+    // path — which computes the real quoting hint at ``renderer.rs`` — changes.
+    //
+    // ``Context::resolve`` distinguishes two outcomes, and they are NOT treated
+    // alike:
+    //
+    //   * ``Ok(None)`` — a lookup MISS. Falls back to the raw string via
+    //     ``.or(arg)``, matching the custom-filter path and preserving templates
+    //     that rely on the accident (`{{ n|pluralize:es }}` renders "es" because
+    //     `es` does not resolve). Numeric args (`add:7`) take the same path.
+    //     This is a DELIBERATE divergence from Django, which raises
+    //     ``VariableDoesNotExist`` here — raising would turn a silent
+    //     wrong-output bug into a site-wide 500 on upgrade.
+    //
+    //   * ``Err`` — an exception raised INSIDE a method auto-called during
+    //     resolution (ADR-024). Propagated with ``?``. Django propagates it
+    //     (verified: a raising method in a filter arg 500s exactly as in value
+    //     position), ``filter_registry.rs`` propagates it on the custom-filter
+    //     path, and ``renderer.rs`` propagates it on the main variable path.
+    //     Swallowing it here would leave `{{ x|default:obj.raising_method }}`
+    //     rendering the literal text "obj.raising_method" into the page — the
+    //     exact silent-wrong-output failure this fix exists to remove,
+    //     reintroduced on the error branch. Converging the resolver but not its
+    //     error policy would still be #1646 drift, just subtler.
+    let resolved_arg: Option<String> = match (arg, arg_was_quoted, context) {
+        (Some(a), false, Some(ctx)) => ctx.resolve(a)?.map(|v| v.to_string()),
+        _ => None,
+    };
+    let builtin_arg = resolved_arg.as_deref().or(arg);
+
     // Built-ins take precedence over custom filters (mirrors the original
     // dispatch order). A built-in hit is never runtime-safe.
-    if let Some(builtin) = apply_builtin_filter(filter_name, value, arg, context) {
+    if let Some(builtin) = apply_builtin_filter(filter_name, value, builtin_arg, context) {
         return builtin.map(|v| (v, false));
     }
     // Built-in match miss — fall through to the custom filter registry for

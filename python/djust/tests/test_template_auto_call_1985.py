@@ -686,3 +686,35 @@ class TestEagerSiteGuards:
 
         assert not executed, "generated serializer executed an alters_data method"
         assert "get_marker" not in result
+
+
+@pytest.mark.django_db
+class TestFilterArgErrorPolicy2202:
+    """A resolution error in FILTER-ARG position propagates (#2202 review).
+
+    #2202 made built-in filters resolve a bare-identifier argument against the
+    context. Its first pass used ``.ok().flatten()``, which discarded the one
+    thing ``Context::resolve`` returns ``Err`` for: an exception raised inside
+    a method auto-called during resolution (ADR-024). A lookup MISS is
+    ``Ok(None)`` and is unaffected.
+
+    Swallowing it would have left ``{{ x|default:obj.raising }}`` rendering the
+    literal text ``obj.raising`` into the page — the exact silent-wrong-output
+    failure #2202 exists to remove, reintroduced on the error branch. Three
+    sibling paths propagate: the custom-filter path
+    (``filter_registry.rs``), the main variable path (``renderer.rs``), and
+    Django itself.
+    """
+
+    def test_exception_in_a_filter_arg_method_propagates(self):
+        # The value position already propagates (test_other_exceptions_propagate).
+        # This pins the FILTER-ARG position, which is the path #2202 added.
+        with pytest.raises(Exception, match="must propagate"):
+            _render("<div>{{ blank|default:probe.raises_valueerror }}</div>")
+
+    def test_a_lookup_miss_in_a_filter_arg_still_falls_back(self):
+        # The miss is Ok(None), NOT an error — it must keep falling back to the
+        # argument's raw text. If the fix had propagated both outcomes, this
+        # would raise instead, turning `{{ n|pluralize:es }}` into a 500.
+        html, _ = _render("<div>{{ blank|default:nosuchvariable }}</div>")
+        assert "nosuchvariable" in html

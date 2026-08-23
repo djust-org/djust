@@ -526,3 +526,35 @@ class TestUnorderedListFilter:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestBuiltinFilterArgResolution2202:
+    """Bare-identifier filter arguments resolve against the context (#2202).
+
+    Django resolves a filter argument as a variable unless it is quoted;
+    djust's built-in filters used the raw argument text instead, so
+    ``{{ x|default:fallback }}`` rendered the literal string ``fallback``.
+
+    Most of the affected filters are pinned in the Rust suite
+    (``crates/djust_templates/tests/test_builtin_filter_arg_resolution_2202.rs``).
+    ``date`` lives here because it needs a real ``datetime`` object to
+    exercise — the Rust ``Value`` enum has no date variant, and an ISO
+    string passes through the filter unformatted, so a Rust-level case
+    would assert nothing about argument resolution.
+    """
+
+    def test_date_resolves_a_bare_identifier_arg(self):
+        import datetime
+
+        template = "{{ d|date:fmt }}"
+        context = {"d": datetime.date(2026, 8, 22), "fmt": "Y"}
+        assert render_template(template, context) == "2026"
+
+    def test_date_quoted_arg_stays_literal(self):
+        import datetime
+
+        # A quoted format string must not be looked up, even when a context
+        # key of that name exists.
+        template = '{{ d|date:"Y" }}'
+        context = {"d": datetime.date(2026, 8, 22), "Y": "WRONG"}
+        assert render_template(template, context) == "2026"
