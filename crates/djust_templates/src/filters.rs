@@ -59,9 +59,40 @@ pub fn apply_filter_full_safe(
     context: Option<&Context>,
     arg_was_quoted: bool,
 ) -> Result<(Value, bool)> {
+    // #2202: Django resolves a bare-identifier filter argument as a context
+    // variable (`Variable(arg).resolve(context)`); only a QUOTED argument is a
+    // literal. The custom-filter path already does this
+    // (``filter_registry::apply_custom_filter``, which resolves to a Python
+    // object); the built-in dispatch table did not, so `{{ x|default:fallback }}`
+    // rendered the literal text "fallback". Same parallel-path-drift class as
+    // #1646, on the filter-argument axis.
+    //
+    // Resolved ONCE here rather than inside each affected arm: nine built-ins
+    // take an argument, and nine independent fixes would be nine more places to
+    // drift from — which is the bug this is. The dispatch table stays
+    // arg-source-agnostic.
+    //
+    // ``arg_was_quoted`` gates it, so a quoted literal is never looked up even
+    // when a context key of that name exists. ``apply_filter_with_context``
+    // passes ``true`` (documented there as "assume callers pre-resolved"), so
+    // that classic call site keeps its current behaviour; only the renderer
+    // path — which computes the real quoting hint at ``renderer.rs`` — changes.
+    //
+    // A miss falls back to the raw string via ``.or(arg)``, matching the
+    // custom-filter path and preserving templates that rely on the accident
+    // (`{{ n|pluralize:es }}` renders "es" because `es` does not resolve).
+    // Numeric args (`add:7`) work through that same fallback, and a resolve
+    // ERROR is folded into it by ``.ok().flatten()`` — an unresolvable filter
+    // argument is not a render error in Django either.
+    let resolved_arg: Option<String> = match (arg, arg_was_quoted, context) {
+        (Some(a), false, Some(ctx)) => ctx.resolve(a).ok().flatten().map(|v| v.to_string()),
+        _ => None,
+    };
+    let builtin_arg = resolved_arg.as_deref().or(arg);
+
     // Built-ins take precedence over custom filters (mirrors the original
     // dispatch order). A built-in hit is never runtime-safe.
-    if let Some(builtin) = apply_builtin_filter(filter_name, value, arg, context) {
+    if let Some(builtin) = apply_builtin_filter(filter_name, value, builtin_arg, context) {
         return builtin.map(|v| (v, false));
     }
     // Built-in match miss — fall through to the custom filter registry for
