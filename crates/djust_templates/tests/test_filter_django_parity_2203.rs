@@ -94,6 +94,33 @@ fn an_rfc3339_value_still_works() {
 }
 
 #[test]
+fn a_datetime_local_form_value_is_parsed() {
+    // `<input type="datetime-local">` submits `YYYY-MM-DDTHH:MM` — `T`
+    // separator, seconds omitted. This is the no-seconds case that actually
+    // occurs in practice.
+    //
+    // The first pass of this fix got it backwards: it accepted
+    // `"2026-08-22 14:30"` (space, no seconds), which Python never produces —
+    // `str(datetime(...,14,30))` is `"2026-08-22 14:30:00"` and
+    // `str(time(14,30))` is `"14:30:00"`, both with seconds — while leaving the
+    // `T` form unhandled. Caught by disconfirming the comment that justified it.
+    let ctx = ctx_with("v", Value::String("2026-08-22T14:30".into()));
+    assert_eq!(render(r#"{{ v|date:"H:i" }}"#, &ctx), "14:30");
+    assert_eq!(render(r#"{{ v|date:"Y-m-d" }}"#, &ctx), "2026-08-22");
+}
+
+#[test]
+fn a_timezone_aware_datetime_is_parsed() {
+    // Django defaults to USE_TZ=True, so an aware datetime is the common case:
+    // `str(aware)` is `"2026-08-22 14:30:00+00:00"` — space separator WITH an
+    // offset. Pinned because it is the most likely production input and
+    // nothing else in this file covers the space-plus-offset shape.
+    let ctx = ctx_with("v", Value::String("2026-08-22 14:30:00+00:00".into()));
+    assert_eq!(render(r#"{{ v|time:"H:i" }}"#, &ctx), "14:30");
+    assert_eq!(render(r#"{{ v|date:"Y-m-d" }}"#, &ctx), "2026-08-22");
+}
+
+#[test]
 fn an_unparseable_value_is_still_returned_unchanged() {
     // Guard: the fail-soft contract. A parse failure must keep returning the
     // input rather than raising or emitting an empty string.
@@ -155,4 +182,39 @@ fn add_still_adds_plain_integers() {
     // Guard: the one case that already worked.
     let ctx = ctx_with("v", Value::Integer(5));
     assert_eq!(render("{{ v|add:2 }}", &ctx), "7");
+}
+
+#[test]
+fn add_does_not_overflow() {
+    // Python's ints are arbitrary-precision, so Django cannot overflow here.
+    // `i64` can, and plain `+` PANICS in a debug build while silently WRAPPING
+    // in release — `{{ max|add:1 }}` produced a negative number. Widening the
+    // coercion to floats and numeric strings widened that surface:
+    // `f64::INFINITY as i64` saturates to `i64::MAX`, so `{{ 5|add:inf }}`
+    // wrapped to -9223372036854775804 in release and panicked in debug.
+    //
+    // This test would PANIC rather than fail without `checked_add`, since the
+    // test profile has debug assertions on — which is precisely how it was
+    // found.
+    let ctx = ctx_with("v", Value::Integer(i64::MAX));
+    let out = render("{{ v|add:1 }}", &ctx);
+    assert!(
+        !out.starts_with('-'),
+        "adding 1 to i64::MAX produced a negative number: {out}"
+    );
+    assert_eq!(
+        out,
+        i64::MAX.to_string(),
+        "overflow should leave the value unchanged"
+    );
+
+    // Same via the widened float path.
+    let mut c2 = Context::new();
+    c2.set("v".to_string(), Value::Integer(5));
+    c2.set("inf".to_string(), Value::Float(f64::INFINITY));
+    let out2 = render("{{ v|add:inf }}", &c2);
+    assert!(
+        !out2.starts_with('-'),
+        "float overflow wrapped negative: {out2}"
+    );
 }

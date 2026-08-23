@@ -243,8 +243,19 @@ fn apply_builtin_filter(
                 }
             };
             let arg_value = arg.map(|s| Value::String(s.to_string()));
+            // `checked_add`, not `+`. Python's ints are arbitrary-precision so
+            // Django cannot overflow here; `i64` can, and plain `+` PANICS in a
+            // debug build ("attempt to add with overflow") while silently
+            // wrapping in release — `{{ max|add:1 }}` returned a NEGATIVE
+            // number. Widening the coercion above (floats, numeric strings)
+            // widened that surface: `f64::INFINITY as i64` saturates to
+            // `i64::MAX`, so `{{ 5|add:inf }}` wrapped to -9223372036854775804.
+            //
+            // On overflow, fall through to the branch below and return the
+            // value unchanged — the same fail-soft posture `date` takes on an
+            // unparseable input, and honest about not being able to compute it.
             match (as_int(value), arg_value.as_ref().and_then(as_int)) {
-                (Some(a), Some(b)) => Ok(Value::Integer(a + b)),
+                (Some(a), Some(b)) if a.checked_add(b).is_some() => Ok(Value::Integer(a + b)),
                 _ => match (value, arg) {
                     // Concatenation branch.
                     (Value::String(s), Some(a)) => Ok(Value::String(format!("{s}{a}"))),
@@ -890,18 +901,27 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             // takes the date-only branch, so the failure is invisible unless the
             // value is a datetime.
             //
-            // Seconds are optional: `datetime` omits them when they are zero
-            // under some formats, and a `TimeField` does the same.
-            chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), "%Y-%m-%d %H:%M:%S")
-                .or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), "%Y-%m-%d %H:%M")
-                })
-                // The `T` separator without an offset is not RFC3339, so it
-                // misses the first branch too.
-                .or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), "%Y-%m-%dT%H:%M:%S")
-                })
-                .map(|ndt| ndt.and_utc().fixed_offset())
+            // Both separators, with and without seconds. The `T` variants are
+            // not RFC3339 without an offset, so they miss the branch above too.
+            //
+            // Seconds are optional for a reason worth naming, because the
+            // obvious one is wrong: Python ALWAYS emits them
+            // (`str(datetime(...,14,30))` is `"2026-08-22 14:30:00"`, and
+            // `str(time(14,30))` is `"14:30:00"`). The real source is an HTML
+            // `<input type="datetime-local">`, whose submitted value is
+            // `YYYY-MM-DDTHH:MM` with seconds omitted — so the no-seconds case
+            // that actually occurs is the `T` one, which a first pass here
+            // missed while covering the space variant that never occurs.
+            [
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M",
+                "%Y-%m-%d %H:%M",
+            ]
+            .iter()
+            .find_map(|fmt| chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), fmt).ok())
+            .ok_or(())
+            .map(|ndt| ndt.and_utc().fixed_offset())
         })
         .or_else(|_| {
             // Date-only: "2026-03-15" → midnight UTC (#719)
