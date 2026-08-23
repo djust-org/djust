@@ -432,7 +432,12 @@ class TestTruncateHtmlFilters:
         template = "{{ html|truncatechars_html:11|safe }}"
         context = {"html": "<p>Hello <b>world</b> this is long</p>"}
         result = render_template(template, context)
-        assert "..." in result
+        # `…` not `...` — #2203. Django renders exactly
+        # `<p>Hello <b>worl…</b></p>` for this input; djust now matches byte
+        # for byte. The _html twins kept the old three-dot ellipsis after the
+        # plain-text ones were fixed, so the two disagreed on the same page.
+        assert "…" in result
+        assert "..." not in result
         assert "<p>" in result
 
     def test_truncatewords_html_preserves_tags(self):
@@ -443,7 +448,9 @@ class TestTruncateHtmlFilters:
         assert "one" in result
         assert "two" in result
         assert "three" in result
-        assert "..." in result
+        # `…` not `...` — #2203. Django renders `<p>one two <b>three …</b></p>`.
+        assert "…" in result
+        assert "..." not in result
 
 
 class TestLinenumbersFilter:

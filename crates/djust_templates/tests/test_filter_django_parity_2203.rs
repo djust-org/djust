@@ -110,14 +110,30 @@ fn a_datetime_local_form_value_is_parsed() {
 }
 
 #[test]
-fn a_timezone_aware_datetime_is_parsed() {
-    // Django defaults to USE_TZ=True, so an aware datetime is the common case:
-    // `str(aware)` is `"2026-08-22 14:30:00+00:00"` — space separator WITH an
-    // offset. Pinned because it is the most likely production input and
-    // nothing else in this file covers the space-plus-offset shape.
-    let ctx = ctx_with("v", Value::String("2026-08-22 14:30:00+00:00".into()));
+fn a_timezone_aware_datetime_keeps_its_offset() {
+    // Django defaults to USE_TZ=True, so an aware datetime is the common case.
+    //
+    // A NON-UTC offset is deliberate. The first version used `+00:00`, which
+    // pins nothing: the naive branch's `.and_utc()` also yields `+00:00`, so
+    // the assertion passed identically whether the offset was honoured or
+    // discarded — decorative by the #1859 test ("would this go red if the thing
+    // it pins actually drifted?"). With `+05:00` the two answers differ.
+    //
+    // chrono's `parse_from_rfc3339` accepts a SPACE separator, so an
+    // offset-bearing string never reaches the naive parsers; and if it did,
+    // `NaiveDateTime::parse_from_str` rejects the trailing offset as `TooLong`,
+    // so the failure mode is fail-soft rather than a silent wrong time.
+    let ctx = ctx_with("v", Value::String("2026-08-22 14:30:00+05:00".into()));
     assert_eq!(render(r#"{{ v|time:"H:i" }}"#, &ctx), "14:30");
     assert_eq!(render(r#"{{ v|date:"Y-m-d" }}"#, &ctx), "2026-08-22");
+
+    // Separately and pre-existing: Django's `date`/`time` are
+    // `expects_localtime=True` and convert to `settings.TIME_ZONE`, which
+    // `format_date` never does — it reads wall-clock fields directly. Harmless
+    // for every format code this engine supports (there is no timezone code),
+    // but it means "Django parity for aware datetimes" holds only when
+    // TIME_ZONE is UTC. Out of scope here; recorded so the claim is not
+    // overstated.
 }
 
 #[test]
@@ -216,5 +232,112 @@ fn add_does_not_overflow() {
     assert!(
         !out2.starts_with('-'),
         "float overflow wrapped negative: {out2}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cases added after Stage 11 review — each closes a gap the first pass left.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_datetime_with_microseconds_is_parsed() {
+    // The shape production actually emits. djust serializes datetimes with
+    // `.isoformat()` (python/djust/serialization.py:311), and
+    // `datetime.now().isoformat()` carries microseconds —
+    // "2026-08-23T01:31:25.488631". None of the first pass's four formats had a
+    // fractional-seconds directive, and chrono rejects trailing input, so the
+    // parse failed and the filter returned its input verbatim: exactly the bug
+    // this file exists to fix, still live for every `auto_now_add` timestamp.
+    //
+    // Aware datetimes were fine already (RFC3339 handles fractions), which is
+    // why every other test here passed.
+    for v in [
+        "2026-08-22T14:30:00.123456",
+        "2026-08-22 14:30:00.123456",
+        "2026-08-22T14:30:00.5",
+    ] {
+        let ctx = ctx_with("v", Value::String(v.into()));
+        assert_eq!(
+            render(r#"{{ v|date:"Y-m-d" }}"#, &ctx),
+            "2026-08-22",
+            "for {v}"
+        );
+        assert_eq!(render(r#"{{ v|time:"H:i" }}"#, &ctx), "14:30", "for {v}");
+    }
+}
+
+#[test]
+fn add_concatenates_a_quoted_float_string_like_django() {
+    // Python's `int("1.5")` RAISES, so Django falls through to concatenation:
+    // `{{ "1.5"|add:"1.5" }}` is "1.51.5", not 3. A first pass accepted "1.5"
+    // via an f64 fallback and returned 2 — a FABRICATED number where Django
+    // produces text, which is worse than the inert wrong answer it replaced.
+    //
+    // Quoting is what separates the two: a quoted "1.5" is a string to int(),
+    // an unquoted 1.5 is a float literal.
+    let ctx = ctx_with("v", Value::String("1.5".into()));
+    assert_eq!(render(r#"{{ v|add:"1.5" }}"#, &ctx), "1.51.5");
+}
+
+#[test]
+fn add_truncates_a_float_value_like_int() {
+    // The mechanism behind this PR's largest silent change to rendered output:
+    // `{{ 1.5|add:2 }}` was 3.5 before and is 3 now. Django says 3, so the new
+    // value is correct — but review found NOTHING pinned it. Neutering the
+    // Float arm of `as_int` left the whole suite green.
+    let ctx = ctx_with("v", Value::Float(1.5));
+    assert_eq!(render("{{ v|add:2 }}", &ctx), "3");
+}
+
+#[test]
+fn add_coerces_bools_like_int() {
+    // `int(True)` is 1, so Django's first branch handles bools.
+    let mut c = Context::new();
+    c.set("t".to_string(), Value::Bool(true));
+    c.set("f".to_string(), Value::Bool(false));
+    assert_eq!(render("{{ t|add:1 }}", &c), "2");
+    assert_eq!(render("{{ f|add:1 }}", &c), "1");
+}
+
+#[test]
+fn truncatechars_zero_yields_nothing() {
+    // Django's `Truncator.chars` opens with `if length <= 0: return ""`, so a
+    // limit of 0 yields nothing — not a bare ellipsis.
+    let ctx = ctx_with("v", Value::String("abcdefghij".into()));
+    assert_eq!(render("{{ v|truncatechars:0 }}", &ctx), "");
+    // Guard the neighbour, which Django DOES render as a lone ellipsis.
+    assert_eq!(render("{{ v|truncatechars:1 }}", &ctx), "…");
+}
+
+#[test]
+fn the_html_truncators_use_the_same_ellipsis_as_their_plain_twins() {
+    // #1646: `truncatechars` and `truncatechars_html` are the same filter for
+    // different input, and disagreed on the same page — the _html pair kept
+    // both halves of the bug (wrong glyph AND a three-character reservation).
+    //
+    // The reservation is the subtle one: `"…".len()` is 3 BYTES, exactly like
+    // `"..."`, so swapping the constant alone silently preserves the old
+    // arithmetic. This asserts the CHARACTER count, which is what would catch
+    // that.
+    let ctx = ctx_with(
+        "v",
+        Value::String("<p>Hello <b>world</b> this is long</p>".into()),
+    );
+    let out = render("{{ v|truncatechars_html:11 }}", &ctx);
+    assert!(out.contains('…'), "expected the ellipsis char in {out:?}");
+    assert!(
+        !out.contains("..."),
+        "three-dot ellipsis survived in {out:?}"
+    );
+
+    let ctx2 = ctx_with(
+        "v",
+        Value::String("<p>one two <b>three four</b> five six</p>".into()),
+    );
+    let out2 = render("{{ v|truncatewords_html:3 }}", &ctx2);
+    assert!(out2.contains('…'), "expected the ellipsis char in {out2:?}");
+    assert!(
+        !out2.contains("..."),
+        "three-dot ellipsis survived in {out2:?}"
     );
 }
