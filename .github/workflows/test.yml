@@ -26,6 +26,31 @@ jobs:
   # Rust tests - runs in parallel
   rust-tests:
     runs-on: ubuntu-latest
+    # Build the TEST binaries without LTO and with parallel codegen.
+    #
+    # `[profile.release]` in Cargo.toml carries `lto = true` + `codegen-units = 1`,
+    # which are right for a shipped wheel — compiled once, users pay nothing —
+    # and expensive for a binary CI throws away. Measured on this workspace:
+    #
+    #   profile                       compile   run    total
+    #   release (lto, cgu=1)             62s     14s     76s
+    #   debug                            31s    186s    217s
+    #   release, no LTO, cgu=16          26s     10s     36s
+    #
+    # `opt-level = 3` is what makes these tests fast — they are compute-heavy
+    # (VDOM diffing, template rendering, html5ever parsing), so debug runs them
+    # 13x slower and is a net LOSS despite compiling quicker. LTO and
+    # `codegen-units = 1` buy almost nothing at run time and cost 2.4x at
+    # compile. This job was 234s compiling against 73s running.
+    #
+    # Set via CARGO_PROFILE_* rather than editing Cargo.toml, so the profile
+    # the published wheel is built with is untouched and bit-identical.
+    #
+    # NOT applied to the `benchmarks` job: it enforces latency thresholds, so it
+    # must measure the same binary users get, LTO included.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: false
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
     steps:
       - uses: actions/checkout@v7
 
@@ -100,6 +125,12 @@ jobs:
       matrix:
         python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     name: python-tests (py${{ matrix.python-version }})
+    # See rust-tests for the measurements. This job spent 118s of its 347s in
+    # `maturin develop --release`; the same override applies, and for the same
+    # reason — the extension is built to be tested and discarded, not shipped.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: false
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
     steps:
       - uses: actions/checkout@v7
 
@@ -216,6 +247,10 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     name: python-tests (py3.14t free-threaded)
+    # See rust-tests for the measurements.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: false
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
     steps:
       - uses: actions/checkout@v7
 
