@@ -156,11 +156,17 @@ class TestTruncatewordsFilter:
     """Tests for truncatewords filter."""
 
     def test_truncatewords(self):
-        """Test truncatewords filter limits words."""
+        """Test truncatewords filter limits words.
+
+        The ellipsis is `…` (U+2026), not `...` — #2203. Django's
+        `django.template.defaultfilters.truncatewords` returns exactly
+        ``"This is a long sentence …"`` for this input; the expected value
+        here is taken from Django rather than from djust's own output.
+        """
         template = "{{ text|truncatewords:5 }}"
         context = {"text": "This is a long sentence with many words"}
         result = render_template(template, context)
-        assert result == "This is a long sentence..."
+        assert result == "This is a long sentence …"
 
 
 class TestJoinFilter:

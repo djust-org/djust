@@ -215,12 +215,46 @@ fn apply_builtin_filter(
             }
         }
         "add" => {
-            // add filter: adds argument to value (for numbers)
-            let arg_val = arg.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-            match value {
-                Value::Integer(n) => Ok(Value::Integer(n + arg_val)),
-                Value::Float(f) => Ok(Value::Float(f + arg_val as f64)),
-                _ => Ok(value.clone()),
+            // Django's `add` is a three-branch chain (#2203):
+            //
+            //     try:    return int(value) + int(arg)
+            //     except: try:    return value + arg
+            //             except: return ""
+            //
+            // The previous implementation was only a partial first branch: it
+            // parsed the argument as `i64` and **defaulted to 0** on failure,
+            // so `{{ n|add:1.5 }}` silently added nothing, and it had no
+            // concatenation branch at all, so `{{ "a"|add:"b" }}` returned "a".
+            //
+            // Branch order is load-bearing: the int branch runs FIRST, so
+            // `{{ "4"|add:"3" }}` is 7, not "43". Both sides are coerced —
+            // a numeric string counts as an integer.
+            let as_int = |v: &Value| -> Option<i64> {
+                match v {
+                    Value::Integer(n) => Some(*n),
+                    // `int()` truncates toward zero, so int(1.5) == 1.
+                    Value::Float(f) => Some(*f as i64),
+                    Value::String(s) => s
+                        .trim()
+                        .parse::<i64>()
+                        .ok()
+                        .or_else(|| s.trim().parse::<f64>().ok().map(|f| f as i64)),
+                    _ => None,
+                }
+            };
+            let arg_value = arg.map(|s| Value::String(s.to_string()));
+            match (as_int(value), arg_value.as_ref().and_then(as_int)) {
+                (Some(a), Some(b)) => Ok(Value::Integer(a + b)),
+                _ => match (value, arg) {
+                    // Concatenation branch.
+                    (Value::String(s), Some(a)) => Ok(Value::String(format!("{s}{a}"))),
+                    // Django's third branch returns "". djust returns the value
+                    // unchanged instead: turning a rendered value into silent
+                    // emptiness on upgrade is the silent-wrong-output class this
+                    // engine keeps having to fix. Documented divergence, not an
+                    // oversight.
+                    _ => Ok(value.clone()),
+                },
             }
         }
         "pluralize" => {
@@ -649,12 +683,19 @@ pub fn html_escape_attr(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Django's truncation ellipsis: U+2026, ONE character (#2203).
+///
+/// django.utils.text.Truncator appends `…`, not `...`. The distinction is not
+/// cosmetic for `truncate_chars` — see below.
+const ELLIPSIS: &str = "…";
+
 fn truncate_words(text: &str, num_words: usize) -> String {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.len() <= num_words {
         text.to_string()
     } else {
-        words[..num_words].join(" ") + "..."
+        // Django separates the ellipsis with a space: "one two …".
+        words[..num_words].join(" ") + " " + ELLIPSIS
     }
 }
 
@@ -662,10 +703,13 @@ fn truncate_chars(text: &str, num_chars: usize) -> String {
     if text.chars().count() <= num_chars {
         text.to_string()
     } else {
+        // Django counts the ellipsis as ONE character inside the limit, so
+        // `truncatechars:5` keeps 4 characters plus `…`. Reserving three (for
+        // `...`) kept only 2 and rendered "ab..." where Django gives "abcd…".
         text.chars()
-            .take(num_chars.saturating_sub(3))
+            .take(num_chars.saturating_sub(1))
             .collect::<String>()
-            + "..."
+            + ELLIPSIS
     }
 }
 
@@ -835,7 +879,32 @@ fn format_filesize(bytes: i64) -> String {
 fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
     let dt = DateTime::parse_from_rfc3339(datetime_str)
         .or_else(|_| {
-            // Try date-only: "2026-03-15" → midnight UTC (#719)
+            // Naive datetime: "2026-08-22 14:30:00" → that instant, UTC (#2203).
+            //
+            // This is how a Python `datetime` arrives — space-separated, no
+            // offset — so it matched NEITHER branch below and `date`/`time`
+            // returned their input unchanged. `{{ post.created_at|date:"Y-m-d" }}`,
+            // the commonest use of this filter, rendered a raw datetime string.
+            //
+            // It survived because a `DateField` stringifies to "2026-08-22" and
+            // takes the date-only branch, so the failure is invisible unless the
+            // value is a datetime.
+            //
+            // Seconds are optional: `datetime` omits them when they are zero
+            // under some formats, and a `TimeField` does the same.
+            chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), "%Y-%m-%d %H:%M:%S")
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), "%Y-%m-%d %H:%M")
+                })
+                // The `T` separator without an offset is not RFC3339, so it
+                // misses the first branch too.
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), "%Y-%m-%dT%H:%M:%S")
+                })
+                .map(|ndt| ndt.and_utc().fixed_offset())
+        })
+        .or_else(|_| {
+            // Date-only: "2026-03-15" → midnight UTC (#719)
             chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d")
                 .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset())
         })
@@ -1671,14 +1740,19 @@ mod tests {
     fn test_truncatewords_filter() {
         let value = Value::String("This is a long sentence with many words".to_string());
         let result = apply_filter("truncatewords", &value, Some("5")).unwrap();
-        assert_eq!(result.to_string(), "This is a long sentence...");
+        // `… ` not `...` — #2203. Value taken from Django itself
+        // (`django.template.defaultfilters.truncatewords`), not from what this
+        // implementation happens to produce.
+        assert_eq!(result.to_string(), "This is a long sentence …");
     }
 
     #[test]
     fn test_truncatechars_filter() {
         let value = Value::String("This is a long string".to_string());
         let result = apply_filter("truncatechars", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "This is...");
+        // 9 characters + `…` = the limit of 10. Django reserves ONE character
+        // for the ellipsis, not three (#2203). Value taken from Django itself.
+        assert_eq!(result.to_string(), "This is a…");
     }
 
     #[test]
