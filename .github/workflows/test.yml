@@ -199,25 +199,36 @@ jobs:
             exit 1
           fi
 
+      # ONE invocation over all three roots, not two sequential ones.
+      #
+      # This was two steps — `tests/ python/tests/` then `python/djust/tests/`.
+      # Splitting them costs real wall-clock, because each invocation pays its
+      # own startup and collection AND drains its own worker pool: at the end of
+      # each run the remaining stragglers hold one worker while the other three
+      # idle. Merged, xdist balances stragglers from either set against all four
+      # workers. Measured at `-n 4` (what the runner gives):
+      #
+      #   split:  93s + 43s = 136s
+      #   merged:            109s
+      #
+      # Collection parity was checked before merging, not assumed:
+      # 5085 + 5404 = 10489 either way.
+      #
+      # #2032 / #2034 — python/djust/tests/ MUST stay in this list. It was
+      # historically absent from the gating Python step: the explicit paths
+      # override pyproject's `testpaths` (which DOES list it), so a large suite
+      # (V008 checks, mount-chokepoint structural pins, restore tests) ran in
+      # NEITHER CI nor the pre-push hook — and a RED TestSetattrChokepoint
+      # CWE-915 guard sat undetected on main. It shipped first as a #1534 SOAK
+      # step (continue-on-error), ran GREEN on the main push-CI run at 72d78601,
+      # and was promoted to BLOCKING (#2034): a failure here fails python-tests
+      # -> fails the test-summary AND-gate (the #1713 promote-into-the-AND rule).
+      # Merging the steps preserves that — same invocation, same gate — and
+      # tests/test_ci_python_test_roots.py pins all three roots so the omission
+      # cannot silently return.
       - name: Run Python tests (parallel with pytest-xdist)
         run: |
-          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -v -n auto
-
-      # #2032 / #2034 — python/djust/tests/ was historically absent from the
-      # gating Python step: the explicit `tests/ python/tests/` paths override
-      # pyproject's `testpaths` (which DOES list python/djust/tests), so a large
-      # suite (V008 checks, mount-chokepoint structural pins, restore tests) ran
-      # in NEITHER CI nor the pre-push hook — and a RED TestSetattrChokepoint
-      # CWE-915 guard sat undetected on main. It first shipped as a #1534 SOAK
-      # step (continue-on-error) and ran GREEN on the main push-CI run at
-      # 72d78601, satisfying the "green-on-runner-first" precondition. It is now
-      # a BLOCKING step (#2034): a failure here fails python-tests → fails the
-      # test-summary AND-gate (per the #1713 promote-into-the-AND-condition
-      # rule). The matching pre-push hook coverage is added in
-      # .pre-commit-config.yaml's pytest hook.
-      - name: Run djust-package tests (python/djust/tests — #2032/#2034)
-        run: |
-          PYTHONPATH=. .venv/bin/python -m pytest python/djust/tests/ -v -n auto
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto
 
       - name: Run Python linter
         run: uv run ruff check python/
