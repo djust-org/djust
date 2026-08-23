@@ -125,12 +125,20 @@ jobs:
       matrix:
         python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     name: python-tests (py${{ matrix.python-version }})
-    # See rust-tests for the measurements. This job spent 118s of its 347s in
-    # `maturin develop --release`; the same override applies, and for the same
-    # reason — the extension is built to be tested and discarded, not shipped.
-    env:
-      CARGO_PROFILE_RELEASE_LTO: false
-      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+    # NOT given rust-tests' CARGO_PROFILE_* override — measured, and it is a
+    # LOSS here. Tried on this job and reverted: the build step did drop
+    # 118s -> 89s, but the test steps rose 104 -> 112s and 72 -> 91s, so the
+    # job went 347s -> 355s.
+    #
+    # The difference from rust-tests is the ratio. rust-tests is
+    # compile-dominated (234s compiling / 73s running), so cheapening the
+    # compile wins outright. This job is TEST-dominated (118s building / 176s
+    # testing), and its tests run THROUGH the Rust extension — so an extension
+    # built without LTO makes every one of them slower, and that costs more
+    # than the build saves.
+    #
+    # Same trade as debug-vs-release, just milder: optimization matters here
+    # because the work happens inside Rust.
     steps:
       - uses: actions/checkout@v7
 
@@ -247,10 +255,9 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     name: python-tests (py3.14t free-threaded)
-    # See rust-tests for the measurements.
-    env:
-      CARGO_PROFILE_RELEASE_LTO: false
-      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+    # No CARGO_PROFILE_* override, for the same reason as python-tests above.
+    # Measured either way: 86s before, 85s with it — no signal, and this job is
+    # not on the critical path.
     steps:
       - uses: actions/checkout@v7
 

@@ -42,8 +42,16 @@ CARGO = ROOT / "Cargo.toml"
 
 OVERRIDE_KEYS = ("CARGO_PROFILE_RELEASE_LTO", "CARGO_PROFILE_RELEASE_CODEGEN_UNITS")
 
-# Jobs that build Rust purely to test it, and so should relax the profile.
-TEST_JOBS = ("rust-tests", "python-tests", "python-free-threaded")
+# Only COMPILE-DOMINATED jobs benefit. `rust-tests` spends 234s compiling
+# against 73s running, so cheapening the compile wins outright: 407s -> 187s.
+COMPILE_BOUND_JOBS = ("rust-tests",)
+
+# Jobs that build Rust but are TEST-dominated. Measured on both, and the
+# override is a loss: `python-tests` builds for 118s and then tests for 176s,
+# and its tests run THROUGH the extension — so a no-LTO build made the build
+# 29s cheaper and the tests 27s dearer, taking the job 347s -> 355s.
+# `python-free-threaded` showed no signal either way (86s -> 85s).
+TEST_BOUND_JOBS = ("python-tests", "python-free-threaded")
 
 
 def _jobs() -> dict:
@@ -60,13 +68,32 @@ def _job_env(name: str) -> dict:
     return {str(k): str(v) for k, v in (jobs[name].get("env") or {}).items()}
 
 
-@pytest.mark.parametrize("job", TEST_JOBS)
+@pytest.mark.parametrize("job", COMPILE_BOUND_JOBS)
 @pytest.mark.parametrize("key", OVERRIDE_KEYS)
-def test_test_jobs_relax_the_release_profile(job: str, key: str) -> None:
+def test_compile_bound_jobs_relax_the_release_profile(job: str, key: str) -> None:
     assert key in _job_env(job), (
         f"{job} lost {key}. That restores full LTO + codegen-units=1 for a "
-        f"binary CI discards; measured cost is ~2.4x on compile, and this job "
-        f"was already 234s compiling against 73s running."
+        f"binary CI discards. Measured: this job was 407s with it and 187s "
+        f"without — 234s of it was compiling against 73s running."
+    )
+
+
+@pytest.mark.parametrize("job", TEST_BOUND_JOBS)
+def test_test_bound_jobs_do_not_get_the_override(job: str) -> None:
+    """The override is not a global good — on these jobs it made things worse.
+
+    It is tempting to apply it everywhere that builds Rust. It was, and the
+    measurement said no: `python-tests` went 347s -> 355s, because its tests
+    run through the extension and a no-LTO build slows every one of them by
+    more than the cheaper build saves.
+    """
+    env = _job_env(job)
+    leaked = sorted(k for k in OVERRIDE_KEYS if k in env)
+    assert not leaked, (
+        f"{job} gained {leaked}. This job is TEST-dominated, not "
+        f"compile-dominated: its tests execute Rust, so relaxing the profile "
+        f"costs more in test time than it saves in build time. Measured "
+        f"347s -> 355s. Only compile-dominated jobs benefit."
     )
 
 
