@@ -107,7 +107,12 @@ pub fn apply_filter_full_safe(
 
     // Built-ins take precedence over custom filters (mirrors the original
     // dispatch order). A built-in hit is never runtime-safe.
-    if let Some(builtin) = apply_builtin_filter(filter_name, value, builtin_arg, context) {
+    // `arg_was_quoted` reaches the dispatch table because `add` needs it: a
+    // quoted "1.5" is a STRING to Python's int() (which raises), while an
+    // unquoted 1.5 is a float literal (which truncates). See that arm (#2203).
+    if let Some(builtin) =
+        apply_builtin_filter(filter_name, value, builtin_arg, context, arg_was_quoted)
+    {
         return builtin.map(|v| (v, false));
     }
     // Built-in match miss — fall through to the custom filter registry for
@@ -140,6 +145,7 @@ fn apply_builtin_filter(
     value: &Value,
     arg: Option<&str>,
     context: Option<&Context>,
+    arg_was_quoted: bool,
 ) -> Option<Result<Value>> {
     let result: Result<Value> = match filter_name {
         "upper" => Ok(Value::String(value.to_string().to_uppercase())),
@@ -215,12 +221,77 @@ fn apply_builtin_filter(
             }
         }
         "add" => {
-            // add filter: adds argument to value (for numbers)
-            let arg_val = arg.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-            match value {
-                Value::Integer(n) => Ok(Value::Integer(n + arg_val)),
-                Value::Float(f) => Ok(Value::Float(f + arg_val as f64)),
-                _ => Ok(value.clone()),
+            // Django's `add` is a three-branch chain (#2203):
+            //
+            //     try:    return int(value) + int(arg)
+            //     except: try:    return value + arg
+            //             except: return ""
+            //
+            // The previous implementation was only a partial first branch: it
+            // parsed the argument as `i64` and **defaulted to 0** on failure,
+            // so `{{ n|add:1.5 }}` silently added nothing, and it had no
+            // concatenation branch at all, so `{{ "a"|add:"b" }}` returned "a".
+            //
+            // Branch order is load-bearing: the int branch runs FIRST, so
+            // `{{ "4"|add:"3" }}` is 7, not "43".
+            //
+            // But `int()` is stricter than "looks numeric", and the difference
+            // decides which branch wins. `int("1.5")` RAISES in Python, so
+            // Django falls through and CONCATENATES: `{{ "1.5"|add:"1.5" }}` is
+            // "1.51.5", not 3. A first pass here accepted "1.5" via an `f64`
+            // fallback and returned **2** — not merely a different answer but a
+            // fabricated number where Django produces text, which is worse than
+            // the bug it replaced.
+            //
+            // A float LITERAL is different: `{{ n|add:1.5 }}` passes Python a
+            // float, and `int(1.5)` is 1. The template layer distinguishes the
+            // two by quoting, so `arg_was_quoted` is what separates them —
+            // `float_ok` is false for a quoted argument, mirroring `int(str)`.
+            let as_int = |v: &Value, float_ok: bool| -> Option<i64> {
+                match v {
+                    Value::Integer(n) => Some(*n),
+                    // `int()` truncates toward zero, so int(1.5) == 1.
+                    Value::Float(f) => Some(*f as i64),
+                    // `int(True)` is 1 in Python, so Django's first branch
+                    // handles bools: `{{ True|add:1 }}` is 2.
+                    Value::Bool(b) => Some(i64::from(*b)),
+                    Value::String(s) => s.trim().parse::<i64>().ok().or_else(|| {
+                        float_ok
+                            .then(|| s.trim().parse::<f64>().ok().map(|f| f as i64))
+                            .flatten()
+                    }),
+                    _ => None,
+                }
+            };
+            let arg_value = arg.map(|s| Value::String(s.to_string()));
+            // `checked_add`, not `+`. Python's ints are arbitrary-precision so
+            // Django cannot overflow here; `i64` can, and plain `+` PANICS in a
+            // debug build ("attempt to add with overflow") while silently
+            // wrapping in release — `{{ max|add:1 }}` returned a NEGATIVE
+            // number. Widening the coercion above (floats, numeric strings)
+            // widened that surface: `f64::INFINITY as i64` saturates to
+            // `i64::MAX`, so `{{ 5|add:inf }}` wrapped to -9223372036854775804.
+            //
+            // On overflow, fall through to the branch below and return the
+            // value unchanged — the same fail-soft posture `date` takes on an
+            // unparseable input, and honest about not being able to compute it.
+            // The VALUE is a real typed value, never a template literal, so its
+            // float coercion is always allowed. Only the ARGUMENT's quoting is
+            // in question.
+            let lhs = as_int(value, true);
+            let rhs = arg_value.as_ref().and_then(|a| as_int(a, !arg_was_quoted));
+            match lhs.zip(rhs).and_then(|(a, b)| a.checked_add(b)) {
+                Some(sum) => Ok(Value::Integer(sum)),
+                None => match (value, arg) {
+                    // Concatenation branch.
+                    (Value::String(s), Some(a)) => Ok(Value::String(format!("{s}{a}"))),
+                    // Django's third branch returns "". djust returns the value
+                    // unchanged instead: turning a rendered value into silent
+                    // emptiness on upgrade is the silent-wrong-output class this
+                    // engine keeps having to fix. Documented divergence, not an
+                    // oversight.
+                    _ => Ok(value.clone()),
+                },
             }
         }
         "pluralize" => {
@@ -649,23 +720,38 @@ pub fn html_escape_attr(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Django's truncation ellipsis: U+2026, ONE character (#2203).
+///
+/// django.utils.text.Truncator appends `…`, not `...`. The distinction is not
+/// cosmetic for `truncate_chars` — see below.
+const ELLIPSIS: &str = "…";
+
 fn truncate_words(text: &str, num_words: usize) -> String {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.len() <= num_words {
         text.to_string()
     } else {
-        words[..num_words].join(" ") + "..."
+        // Django separates the ellipsis with a space: "one two …".
+        words[..num_words].join(" ") + " " + ELLIPSIS
     }
 }
 
 fn truncate_chars(text: &str, num_chars: usize) -> String {
+    // Django's `Truncator.chars` opens with `if length <= 0: return ""`, so a
+    // limit of 0 yields nothing at all — not a bare ellipsis (#2203 review).
+    if num_chars == 0 {
+        return String::new();
+    }
     if text.chars().count() <= num_chars {
         text.to_string()
     } else {
+        // Django counts the ellipsis as ONE character inside the limit, so
+        // `truncatechars:5` keeps 4 characters plus `…`. Reserving three (for
+        // `...`) kept only 2 and rendered "ab..." where Django gives "abcd…".
         text.chars()
-            .take(num_chars.saturating_sub(3))
+            .take(num_chars.saturating_sub(1))
             .collect::<String>()
-            + "..."
+            + ELLIPSIS
     }
 }
 
@@ -835,7 +921,43 @@ fn format_filesize(bytes: i64) -> String {
 fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
     let dt = DateTime::parse_from_rfc3339(datetime_str)
         .or_else(|_| {
-            // Try date-only: "2026-03-15" → midnight UTC (#719)
+            // Naive datetime: "2026-08-22 14:30:00" → that instant, UTC (#2203).
+            //
+            // This is how a Python `datetime` arrives — space-separated, no
+            // offset — so it matched NEITHER branch below and `date`/`time`
+            // returned their input unchanged. `{{ post.created_at|date:"Y-m-d" }}`,
+            // the commonest use of this filter, rendered a raw datetime string.
+            //
+            // It survived because a `DateField` stringifies to "2026-08-22" and
+            // takes the date-only branch, so the failure is invisible unless the
+            // value is a datetime.
+            //
+            // Both separators, with and without seconds. The `T` variants are
+            // not RFC3339 without an offset, so they miss the branch above too.
+            //
+            // Seconds are optional for a reason worth naming, because the
+            // obvious one is wrong: Python ALWAYS emits them
+            // (`str(datetime(...,14,30))` is `"2026-08-22 14:30:00"`, and
+            // `str(time(14,30))` is `"14:30:00"`). The real source is an HTML
+            // `<input type="datetime-local">`, whose submitted value is
+            // `YYYY-MM-DDTHH:MM` with seconds omitted — so the no-seconds case
+            // that actually occurs is the `T` one, which a first pass here
+            // missed while covering the space variant that never occurs.
+            [
+                // `%.f` makes the fractional part OPTIONAL, so each of these
+                // covers both "…:00" and "…:00.123456".
+                "%Y-%m-%dT%H:%M:%S%.f",
+                "%Y-%m-%d %H:%M:%S%.f",
+                "%Y-%m-%dT%H:%M",
+                "%Y-%m-%d %H:%M",
+            ]
+            .iter()
+            .find_map(|fmt| chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), fmt).ok())
+            .ok_or(())
+            .map(|ndt| ndt.and_utc().fixed_offset())
+        })
+        .or_else(|_| {
+            // Date-only: "2026-03-15" → midnight UTC (#719)
             chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d")
                 .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset())
         })
@@ -1516,12 +1638,20 @@ fn truncate_chars_html(text: &str, limit: usize) -> String {
         return String::new();
     }
 
-    let ellipsis = "...";
+    // #2203: the HTML twins carried BOTH halves of the bug their plain-text
+    // counterparts just had — the wrong glyph and a three-character reservation
+    // — so `truncatechars` and `truncatechars_html` disagreed on the same page
+    // (#1646).
+    //
+    // `.chars().count()`, NOT `.len()`. `"…".len()` is 3 BYTES, exactly like
+    // `"..."`, so swapping the constant alone keeps reserving three and looks
+    // correct while silently preserving the arithmetic bug.
+    let ellipsis = ELLIPSIS;
     let mut visible_count = 0;
     let mut tracker = HtmlTagTracker::new();
     let mut result = String::new();
     let mut chars = text.chars().peekable();
-    let target = limit.saturating_sub(ellipsis.len());
+    let target = limit.saturating_sub(ellipsis.chars().count());
 
     while let Some(c) = chars.next() {
         if c == '<' {
@@ -1546,7 +1676,9 @@ fn truncate_words_html(text: &str, limit: usize) -> String {
         return String::new();
     }
 
-    let ellipsis = " ...";
+    // #2203 — Django's `truncatewords` passes `truncate=" …"` explicitly, so the
+    // leading space is genuine here (unlike `truncatechars`, which has none).
+    let ellipsis = concat!(" ", "…");
     let mut word_count = 0;
     let mut in_word = false;
     let mut tracker = HtmlTagTracker::new();
@@ -1671,14 +1803,19 @@ mod tests {
     fn test_truncatewords_filter() {
         let value = Value::String("This is a long sentence with many words".to_string());
         let result = apply_filter("truncatewords", &value, Some("5")).unwrap();
-        assert_eq!(result.to_string(), "This is a long sentence...");
+        // `… ` not `...` — #2203. Value taken from Django itself
+        // (`django.template.defaultfilters.truncatewords`), not from what this
+        // implementation happens to produce.
+        assert_eq!(result.to_string(), "This is a long sentence …");
     }
 
     #[test]
     fn test_truncatechars_filter() {
         let value = Value::String("This is a long string".to_string());
         let result = apply_filter("truncatechars", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "This is...");
+        // 9 characters + `…` = the limit of 10. Django reserves ONE character
+        // for the ellipsis, not three (#2203). Value taken from Django itself.
+        assert_eq!(result.to_string(), "This is a…");
     }
 
     #[test]
@@ -2553,7 +2690,9 @@ mod tests {
         let s = result.to_string();
         // Should preserve tags, count only visible chars, and close open tags
         assert!(s.contains("<p>"));
-        assert!(s.contains("..."));
+        // `…` not `...` — #2203. Django renders
+        // `<p>Hello <b>worl…</b></p>` for this input.
+        assert!(s.contains("…"));
         // Open tags should be closed
         assert!(s.ends_with("</p>") || s.ends_with("</b></p>"));
 
@@ -2572,7 +2711,9 @@ mod tests {
         assert!(s.contains("one"));
         assert!(s.contains("two"));
         assert!(s.contains("three"));
-        assert!(s.contains("..."));
+        // `…` not `...` — #2203. Django renders
+        // `<p>one two <b>three …</b></p>` for this input.
+        assert!(s.contains("…"));
 
         // Short text unchanged
         let value = Value::String("<b>one two</b>".to_string());
