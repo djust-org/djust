@@ -172,3 +172,77 @@ fn both_missing_and_none_stay_falsy() {
     assert!(!Value::Missing.is_truthy());
     assert!(!Value::None.is_truthy());
 }
+
+// ---------------------------------------------------------------------------
+// The kill-switch. Gate-off found the flag gate itself was untested: removing
+// it failed nothing, because every test above runs on the default-ON path.
+// A flag with no OFF-path test is decorative (#1859) — it can stop working and
+// the suite stays green.
+// ---------------------------------------------------------------------------
+
+/// Serial guard: the flag is process-global, so tests that toggle it must not
+/// interleave. Mirrors `djust_vdom/tests/virtual_keyed_ops_2017.rs`.
+static FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Holds the lock AND restores the default, even if the test panics — without
+/// this, one genuine failure leaves the flag OFF and cascades into unrelated
+/// ones.
+struct FlagGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+impl FlagGuard {
+    fn off() -> Self {
+        let g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        djust_core::set_django_value_repr(false);
+        FlagGuard(g)
+    }
+}
+
+impl Drop for FlagGuard {
+    fn drop(&mut self) {
+        djust_core::set_django_value_repr(true);
+    }
+}
+
+#[test]
+fn the_flag_restores_the_previous_rendering_verbatim() {
+    let _g = FlagGuard::off();
+    // Exactly what djust rendered before #2203 — this is the escape hatch for
+    // a template interpolating a bool into a script block, where `True` is a
+    // JS ReferenceError.
+    assert_eq!(Value::Bool(true).to_string(), "true");
+    assert_eq!(Value::Bool(false).to_string(), "false");
+    assert_eq!(Value::None.to_string(), "");
+    assert_eq!(Value::Missing.to_string(), "");
+    assert_eq!(Value::Float(1.0).to_string(), "1");
+    assert_eq!(
+        Value::List(vec![Value::Integer(1), Value::Integer(2)]).to_string(),
+        "[List]"
+    );
+    assert_eq!(
+        Value::Tuple(vec![Value::Integer(1), Value::Integer(2)]).to_string(),
+        "[List]"
+    );
+    let mut m = IndexMap::new();
+    m.insert("a".to_string(), Value::Integer(1));
+    assert_eq!(Value::Object(m).to_string(), "[Object]");
+}
+
+#[test]
+fn the_flag_getter_reports_what_the_setter_set() {
+    // A setter with no getter cannot be tested end to end (#2017).
+    let _g = FlagGuard::off();
+    assert!(!djust_core::django_value_repr());
+    djust_core::set_django_value_repr(true);
+    assert!(djust_core::django_value_repr());
+}
+
+#[test]
+fn a_dunder_str_object_renders_the_same_either_way() {
+    // Guard: a model instance must render via `__str__` regardless of the flag,
+    // so flipping it never changes how `{{ obj }}` shows a model.
+    let mut m = IndexMap::new();
+    m.insert("__str__".to_string(), Value::String("Model object".into()));
+    assert_eq!(Value::Object(m.clone()).to_string(), "Model object");
+    let _g = FlagGuard::off();
+    assert_eq!(Value::Object(m).to_string(), "Model object");
+}
