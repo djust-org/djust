@@ -97,7 +97,7 @@ def _assert_auth_ui_present(html):
     assert "csrfmiddlewaretoken" in html, f"csrf token missing/blanked: {html!r}"
     assert "user=alice" in html, f"{{ user.username }} missing/blanked: {html!r}"
     # The Rust template engine renders booleans lowercase (true/false).
-    assert "auth=true" in html, f"{{ user.is_authenticated }} missing/blanked: {html!r}"
+    assert "auth=True" in html, f"{{ user.is_authenticated }} missing/blanked: {html!r}"
 
 
 class TestCsrfUserSurviveWsRerender:

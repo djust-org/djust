@@ -29,6 +29,7 @@
 
 use djust_core::{Context, Value};
 use djust_templates::Template;
+use indexmap::IndexMap;
 use std::collections::HashSet;
 
 fn render(source: &str, ctx: &Context) -> String {
@@ -267,10 +268,10 @@ fn for_if_iteration_unique_id_1832() {
     let template =
         "{% for i in items %}{% if i.show %}<div>{{ i.name }}</div>{% endif %}{% endfor %}";
     let mut c = Context::new();
-    let mut item1 = std::collections::HashMap::new();
+    let mut item1 = IndexMap::new();
     item1.insert("show".to_string(), Value::Bool(true));
     item1.insert("name".to_string(), Value::String("a".to_string()));
-    let mut item2 = std::collections::HashMap::new();
+    let mut item2 = IndexMap::new();
     item2.insert("show".to_string(), Value::Bool(true));
     item2.insert("name".to_string(), Value::String("b".to_string()));
     c.set(

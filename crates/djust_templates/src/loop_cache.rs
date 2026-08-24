@@ -592,7 +592,11 @@ fn is_foster_unsafe_tag(tag: &str) -> bool {
 fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
     use djust_core::Value;
     match value {
-        Value::Null => 0u8.hash(hasher),
+        Value::Missing => 0u8.hash(hasher),
+        // A DISTINCT tag from Missing (#2203): the two now render differently
+        // ("" vs "None"), so sharing a tag would let a cached fragment rendered
+        // from one be served for the other.
+        Value::None => 7u8.hash(hasher),
         Value::Bool(b) => {
             1u8.hash(hasher);
             b.hash(hasher);
@@ -617,6 +621,15 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             4u8.hash(hasher);
             s.hash(hasher);
         }
+        Value::Tuple(items) => {
+            // Distinct from List: a tuple renders "(1, 2)" where a list renders
+            // "[1, 2]", so they must not share a cache key (#2203).
+            8u8.hash(hasher);
+            items.len().hash(hasher);
+            for item in items {
+                hash_value(item, hasher);
+            }
+        }
         Value::List(items) => {
             5u8.hash(hasher);
             items.len().hash(hasher);
@@ -627,12 +640,15 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
         Value::Object(map) => {
             6u8.hash(hasher);
             map.len().hash(hasher);
-            // Sort keys for a deterministic, order-independent hash.
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            for k in keys {
+            // INSERTION order, not sorted (#2203). Sorting was correct while
+            // dict order could not affect output, but `Object` is now an
+            // IndexMap that RENDERS in insertion order — so two dicts with the
+            // same pairs in different orders render differently. An
+            // order-independent hash would let a fragment cached from one be
+            // served for the other: a stale hit producing wrong output.
+            for (k, v) in map.iter() {
                 k.hash(hasher);
-                hash_value(&map[k], hasher);
+                hash_value(v, hasher);
             }
         }
     }

@@ -64,28 +64,32 @@ class TestModelDictStrKey:
 
 
 class TestPlainDictFallback:
-    """Dicts WITHOUT a string ``"__str__"`` key keep rendering ``[Object]``
+    """Dicts WITHOUT a string ``"__str__"`` key render Python dict repr
     — non-model data (context dict passed directly, etc.) was never meant
     to hit ``__str__`` semantics."""
 
+    # #2203: `[Object]`/`[List]` were placeholders, not renderings. Django
+    # renders Python's `str()`; these expectations come from Django, not from
+    # djust's output. `TestBackwardsCompatibility` is retained but now pins the
+    # NEW contract — the old one was the bug.
     def test_plain_dict_no_str_key(self):
         out = render_template("{{ x }}", {"x": {"a": 1, "b": 2}})
-        assert out == "[Object]"
+        assert out == "{&#x27;a&#x27;: 1, &#x27;b&#x27;: 2}"
 
     def test_empty_dict(self):
         out = render_template("{{ x }}", {"x": {}})
-        assert out == "[Object]"
+        assert out == "{}"
 
     def test_str_key_is_none(self):
-        """``"__str__": None`` → treat as absent; fall back to ``[Object]``."""
+        """``"__str__": None`` → treat as absent; fall back to dict repr."""
         out = render_template("{{ x }}", {"x": {"__str__": None, "id": 1}})
-        assert out == "[Object]"
+        assert out == "{&#x27;__str__&#x27;: None, &#x27;id&#x27;: 1}"
 
     def test_str_key_is_integer(self):
         """``"__str__": 42`` → not a String variant; fall back. Guards
         against Display emitting coerced type names."""
         out = render_template("{{ x }}", {"x": {"__str__": 42}})
-        assert out == "[Object]"
+        assert out == "{&#x27;__str__&#x27;: 42}"
 
 
 class TestStrKeyEdgeCases:
@@ -93,7 +97,7 @@ class TestStrKeyEdgeCases:
 
     def test_empty_str_value_renders_empty(self):
         """Django semantic: if ``str(obj) == ''`` the template renders
-        empty. Rust engine must match — not fall back to ``[Object]``."""
+        empty. Rust engine must match — not fall back to dict repr."""
         out = render_template("{{ x }}", {"x": {"__str__": ""}})
         assert out == ""
 
@@ -123,21 +127,24 @@ class TestBackwardsCompatibility:
         assert out == "My Custom Str"
 
     def test_list_still_renders_list_placeholder(self):
-        """``[List]`` fallback for lists unchanged — only `Value::Object`
+        """Lists render Python list repr (#2203) — only `Value::Object`
         was touched."""
         out = render_template("{{ x }}", {"x": [1, 2, 3]})
-        assert out == "[List]"
+        assert out == "[1, 2, 3]"
 
     def test_scalar_types_unchanged(self):
         """Sanity: integer/bool/string/null Display unchanged.
 
         Note: Rust's built-in ``{}`` format for bool emits lowercase
-        ``true`` / ``false`` — pre-existing djust behavior, out of
-        scope for #968. This test locks the current (pre-fix) behavior
-        so #968's change to the `Object` arm doesn't accidentally
-        regress any other variant.
+        #2203 updated these to Django's own renderings: `True`/`False`, and
+        `None` for a Python None (an ABSENT variable still renders empty —
+        Django's `string_if_invalid`, and the reason `Value::Missing` and
+        `Value::None` are separate variants). Values taken from Django, not
+        from djust's output.
         """
         assert render_template("{{ x }}", {"x": 42}) == "42"
-        assert render_template("{{ x }}", {"x": True}) == "true"
+        assert render_template("{{ x }}", {"x": True}) == "True"
         assert render_template("{{ x }}", {"x": "hello"}) == "hello"
-        assert render_template("{{ x }}", {"x": None}) == ""
+        # Python None -> "None". An ABSENT variable is the empty case:
+        assert render_template("{{ x }}", {"x": None}) == "None"
+        assert render_template("{{ absent }}", {}) == ""

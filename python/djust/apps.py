@@ -87,6 +87,10 @@ class DjustConfig(AppConfig):
             # differ ran OFF — a NEW silent asymmetry, the exact class this is
             # fixing. It also keeps `_defaults` the single source of the default
             # (ADR-026 iteration 3 flips it there, and this must follow).
+            # Same reasoning for django_value_repr (#2203): a process-global
+            # AtomicBool behind `impl Display for Value`, wired once here.
+            if hasattr(_rust, "set_django_value_repr"):
+                _rust.set_django_value_repr(bool(_cfg.get("django_value_repr")))
             if hasattr(_rust, "set_virtual_keyed_ops"):
                 # No literal fallback here on purpose: `_defaults` is the single
                 # source of the default (the comment above says so), and a second

@@ -154,7 +154,7 @@ fn apply_builtin_filter(
         "length" => {
             let len = match value {
                 Value::String(s) => s.len(),
-                Value::List(l) => l.len(),
+                Value::List(l) | Value::Tuple(l) => l.len(),
                 _ => 0,
             };
             Ok(Value::Integer(len as i64))
@@ -170,24 +170,24 @@ fn apply_builtin_filter(
         "escape" => Ok(value.clone()), // No-op: auto-escaping at render time handles this
         "safe" => Ok(value.clone()),   // No-op: renderer checks for |safe to skip auto-escaping
         "first" => match value {
-            Value::List(l) => Ok(l.first().cloned().unwrap_or(Value::Null)),
+            Value::List(l) | Value::Tuple(l) => Ok(l.first().cloned().unwrap_or(Value::Missing)),
             Value::String(s) => Ok(Value::String(
                 s.chars().next().map(|c| c.to_string()).unwrap_or_default(),
             )),
-            _ => Ok(Value::Null),
+            _ => Ok(Value::Missing),
         },
         "last" => match value {
-            Value::List(l) => Ok(l.last().cloned().unwrap_or(Value::Null)),
+            Value::List(l) | Value::Tuple(l) => Ok(l.last().cloned().unwrap_or(Value::Missing)),
             Value::String(s) => Ok(Value::String(
                 s.chars().last().map(|c| c.to_string()).unwrap_or_default(),
             )),
-            _ => Ok(Value::Null),
+            _ => Ok(Value::Missing),
         },
         "join" => {
             // join with separator argument
             let separator = arg.unwrap_or(", ");
             match value {
-                Value::List(items) => {
+                Value::List(items) | Value::Tuple(items) => {
                     let strings: Vec<String> = items.iter().map(|v| v.to_string()).collect();
                     Ok(Value::String(strings.join(separator)))
                 }
@@ -305,7 +305,7 @@ fn apply_builtin_filter(
                         Ok(Value::String(suffix.to_string()))
                     }
                 }
-                Value::List(l) => {
+                Value::List(l) | Value::Tuple(l) => {
                     if l.len() == 1 {
                         Ok(Value::String(String::new()))
                     } else {
@@ -341,7 +341,7 @@ fn apply_builtin_filter(
             let result = match value {
                 Value::Bool(true) => yes_str,
                 Value::Bool(false) => no_str,
-                Value::Null => maybe_str,
+                Value::Missing => maybe_str,
                 Value::String(s) if s.is_empty() => maybe_str,
                 _ => {
                     if value.is_truthy() {
@@ -398,7 +398,7 @@ fn apply_builtin_filter(
         "random" => {
             // random filter: returns random item from list
             match value {
-                Value::List(items) if !items.is_empty() => {
+                Value::List(items) | Value::Tuple(items) if !items.is_empty() => {
                     // Use simple pseudo-random selection based on list length
                     // For deterministic testing, we'll use first item
                     // In production, you'd want to use rand crate
@@ -415,7 +415,7 @@ fn apply_builtin_filter(
                     let random_index = (hasher.finish() as usize) % items.len();
                     Ok(items[random_index].clone())
                 }
-                Value::List(_) => Ok(Value::Null),
+                Value::List(_) | Value::Tuple(_) => Ok(Value::Missing),
                 _ => Ok(value.clone()),
             }
         }
@@ -501,7 +501,9 @@ fn apply_builtin_filter(
             // dictsort filter: sorts list of dicts by key
             let sort_key = arg.unwrap_or("name");
             match value {
-                Value::List(items) => Ok(Value::List(sort_dicts_by_key(items, sort_key))),
+                Value::List(items) | Value::Tuple(items) => {
+                    Ok(Value::List(sort_dicts_by_key(items, sort_key)))
+                }
                 _ => Ok(value.clone()),
             }
         }
@@ -509,7 +511,7 @@ fn apply_builtin_filter(
             // dictsortreversed filter: sorts list of dicts by key in reverse
             let sort_key = arg.unwrap_or("name");
             match value {
-                Value::List(items) => {
+                Value::List(items) | Value::Tuple(items) => {
                     let mut sorted = sort_dicts_by_key(items, sort_key);
                     sorted.reverse();
                     Ok(Value::List(sorted))
@@ -530,9 +532,20 @@ fn apply_builtin_filter(
             Ok(Value::String(apply_stringformat(value, spec)))
         }
         "default_if_none" => {
-            // default_if_none filter: fallback only when value is None/Null (not empty string)
+            // Fallback only when the value is None or absent — never for an
+            // empty string. BOTH variants (#2203 review): matching only
+            // `Missing` inverted the filter, firing on an absent variable while
+            // rendering the literal text "None" for the one input it is named
+            // for.
             match value {
-                Value::Null => Ok(Value::String(arg.unwrap_or("").to_string())),
+                // `None` ONLY — not `Missing`. Django substitutes
+                // `string_if_invalid` ("") for an absent variable BEFORE the
+                // filter runs, so the filter never sees None there and returns
+                // the empty string rather than the fallback. Matching `Missing`
+                // too made `{{ absent|default_if_none:'NA' }}` render "NA"
+                // where Django renders "" — a pre-existing divergence this PR
+                // is in the right place to close (#2203 review).
+                Value::None => Ok(Value::String(arg.unwrap_or("").to_string())),
                 _ => Ok(value.clone()),
             }
         }
@@ -629,7 +642,7 @@ fn apply_builtin_filter(
         "escapeseq" => {
             // escapeseq filter: apply HTML escaping to each item in a sequence
             match value {
-                Value::List(items) => {
+                Value::List(items) | Value::Tuple(items) => {
                     let escaped: Vec<Value> = items
                         .iter()
                         .map(|item| Value::String(html_escape(&item.to_string())))
@@ -651,7 +664,9 @@ fn apply_builtin_filter(
         "unordered_list" => {
             // unordered_list filter: recursively render nested lists as <li>/<ul>
             match value {
-                Value::List(items) => Ok(Value::String(unordered_list(items, 1))),
+                Value::List(items) | Value::Tuple(items) => {
+                    Ok(Value::String(unordered_list(items, 1)))
+                }
                 _ => Ok(value.clone()),
             }
         }
@@ -774,7 +789,7 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
                 Ok(Value::String(String::new()))
             }
         }
-        Value::List(items) => {
+        Value::List(items) | Value::Tuple(items) => {
             let len = items.len() as isize;
             let (start, end) = parse_slice_indices(&parts, len);
             let start = start.max(0) as usize;
@@ -1098,8 +1113,8 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
 
 fn get_dict_value(value: &Value, key: &str) -> Value {
     match value {
-        Value::Object(map) => map.get(key).cloned().unwrap_or(Value::Null),
-        _ => Value::Null,
+        Value::Object(map) => map.get(key).cloned().unwrap_or(Value::Missing),
+        _ => Value::Missing,
     }
 }
 
@@ -1286,7 +1301,8 @@ fn json_escape_for_script(s: &str) -> String {
 
 fn value_to_json(value: &Value) -> String {
     match value {
-        Value::Null => "null".to_string(),
+        // Both are JSON `null`: JSON cannot distinguish absent from None.
+        Value::Missing | Value::None => "null".to_string(),
         Value::Bool(b) => {
             if *b {
                 "true".to_string()
@@ -1306,7 +1322,8 @@ fn value_to_json(value: &Value) -> String {
                 .replace('\t', "\\t");
             format!("\"{escaped}\"")
         }
-        Value::List(items) => {
+        // JSON has no tuple; Python's `json.dumps` emits an array for one.
+        Value::List(items) | Value::Tuple(items) => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();
             format!("[{}]", parts.join(", "))
         }
@@ -1318,7 +1335,13 @@ fn value_to_json(value: &Value) -> String {
                     format!("{}: {}", key_json, value_to_json(v))
                 })
                 .collect();
-            parts.sort(); // Deterministic output
+            // Kept sorted. The stated reason ("deterministic output") no longer
+            // applies — `Object` is an IndexMap since #2203, so iteration order
+            // is already deterministic — but changing it would alter every
+            // existing `json_script` payload's key order. Python's
+            // `json.dumps` preserves insertion order, so this is a remaining
+            // divergence, deliberately left alone here (#1079).
+            parts.sort();
             format!("{{{}}}", parts.join(", "))
         }
     }
@@ -1413,15 +1436,29 @@ fn phone2numeric(s: &str) -> String {
 
 fn pprint_value(value: &Value) -> String {
     match value {
-        Value::Null => "None".to_string(),
+        // `pprint` already rendered Python repr before #2203 — it was `Display`
+        // that was the outlier. Both variants print "None" here to preserve
+        // this filter's existing output exactly.
+        Value::Missing | Value::None => "None".to_string(),
         Value::Bool(true) => "True".to_string(),
         Value::Bool(false) => "False".to_string(),
         Value::Integer(n) => n.to_string(),
         Value::Float(f) => format!("{f}"),
         Value::String(s) => format!("'{s}'"),
+        // List-only: `pprint` renders a tuple with parentheses, so the arm
+        // below must stay reachable. (A blanket Tuple twin here made it dead
+        // code — caught by clippy's unreachable_patterns.)
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(pprint_value).collect();
             format!("[{}]", parts.join(", "))
+        }
+        Value::Tuple(items) => {
+            let parts: Vec<String> = items.iter().map(pprint_value).collect();
+            if parts.len() == 1 {
+                format!("({},)", parts[0])
+            } else {
+                format!("({})", parts.join(", "))
+            }
         }
         Value::Object(map) => {
             let mut parts: Vec<String> = map
@@ -1743,6 +1780,7 @@ pub mod tags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
 
     #[test]
     fn test_upper_filter() {
@@ -1871,7 +1909,7 @@ mod tests {
         let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
         assert_eq!(result.to_string(), "nope");
 
-        let value = Value::Null;
+        let value = Value::Missing;
         let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
         assert_eq!(result.to_string(), "dunno");
     }
@@ -1952,7 +1990,7 @@ mod tests {
         // Empty list should return Null
         let empty = Value::List(vec![]);
         let result = apply_filter("random", &empty, None).unwrap();
-        assert!(matches!(result, Value::Null));
+        assert!(matches!(result, Value::Missing));
     }
 
     #[test]
@@ -2100,13 +2138,12 @@ mod tests {
     #[test]
     fn test_date_filter_uses_context_date_format() {
         use chrono::TimeZone;
-        use std::collections::HashMap;
 
         let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
         let value = Value::String(dt.to_rfc3339());
 
         // With DATE_FORMAT in context and no explicit arg, should use context format
-        let ctx = Context::from_dict(HashMap::from([(
+        let ctx = Context::from_dict(IndexMap::from([(
             "DATE_FORMAT".to_string(),
             Value::String("Y-m-d".to_string()),
         )]));
@@ -2125,13 +2162,12 @@ mod tests {
     #[test]
     fn test_time_filter_uses_context_time_format() {
         use chrono::TimeZone;
-        use std::collections::HashMap;
 
         let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
         let value = Value::String(dt.to_rfc3339());
 
         // With TIME_FORMAT in context and no explicit arg, should use context format
-        let ctx = Context::from_dict(HashMap::from([(
+        let ctx = Context::from_dict(IndexMap::from([(
             "TIME_FORMAT".to_string(),
             Value::String("H:i".to_string()),
         )]));
@@ -2149,18 +2185,16 @@ mod tests {
 
     #[test]
     fn test_dictsort_filter() {
-        use std::collections::HashMap;
-
         // Create list of dicts
-        let mut dict1 = HashMap::new();
+        let mut dict1 = IndexMap::new();
         dict1.insert("name".to_string(), Value::String("Charlie".to_string()));
         dict1.insert("age".to_string(), Value::Integer(30));
 
-        let mut dict2 = HashMap::new();
+        let mut dict2 = IndexMap::new();
         dict2.insert("name".to_string(), Value::String("Alice".to_string()));
         dict2.insert("age".to_string(), Value::Integer(25));
 
-        let mut dict3 = HashMap::new();
+        let mut dict3 = IndexMap::new();
         dict3.insert("name".to_string(), Value::String("Bob".to_string()));
         dict3.insert("age".to_string(), Value::Integer(35));
 
@@ -2185,12 +2219,10 @@ mod tests {
 
     #[test]
     fn test_dictsortreversed_filter() {
-        use std::collections::HashMap;
-
-        let mut dict1 = HashMap::new();
+        let mut dict1 = IndexMap::new();
         dict1.insert("name".to_string(), Value::String("Alice".to_string()));
 
-        let mut dict2 = HashMap::new();
+        let mut dict2 = IndexMap::new();
         dict2.insert("name".to_string(), Value::String("Bob".to_string()));
 
         let value = Value::List(vec![Value::Object(dict1), Value::Object(dict2)]);
@@ -2289,9 +2321,12 @@ mod tests {
 
     #[test]
     fn test_default_if_none_with_null() {
-        let value = Value::Null;
-        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
-        assert_eq!(result.to_string(), "fallback");
+        // `None` fires the fallback; `Missing` (an ABSENT variable) does not —
+        // Django substitutes "" for it before the filter runs (#2203).
+        let none = apply_filter("default_if_none", &Value::None, Some("NA")).unwrap();
+        assert_eq!(none.to_string(), "NA");
+        let missing = apply_filter("default_if_none", &Value::Missing, Some("NA")).unwrap();
+        assert_eq!(missing.to_string(), "");
     }
 
     #[test]
@@ -2396,7 +2431,7 @@ mod tests {
         let value = Value::String("abc".to_string());
         let result = apply_filter("make_list", &value, None).unwrap();
         match result {
-            Value::List(items) => {
+            Value::List(items) | Value::Tuple(items) => {
                 assert_eq!(items.len(), 3);
                 assert_eq!(items[0].to_string(), "a");
                 assert_eq!(items[1].to_string(), "b");
@@ -2565,7 +2600,7 @@ mod tests {
         assert_eq!(result.to_string(), "True");
 
         // Null
-        let value = Value::Null;
+        let value = Value::Missing;
         let result = apply_filter("pprint", &value, None).unwrap();
         assert_eq!(result.to_string(), "None");
     }

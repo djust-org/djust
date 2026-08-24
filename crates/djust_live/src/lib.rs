@@ -1457,6 +1457,30 @@ fn virtual_keyed_ops_enabled() -> bool {
     djust_vdom::diff::virtual_keyed_ops_enabled()
 }
 
+/// Django-parity value rendering (#2203).
+///
+/// A process global for the same reason as `set_virtual_keyed_ops` above:
+/// `impl Display for Value` has nowhere to thread per-render config through.
+///
+/// Django wires it once at startup from
+/// `LIVEVIEW_CONFIG['django_value_repr']` (see `DjustConfig.ready`). Unlike
+/// `virtual_keyed_ops`, the RUST default is ON — an embedder of this crate
+/// with no Django settings should get the correct rendering, and the legacy
+/// output is the opt-out rather than the baseline.
+#[pyfunction]
+fn set_django_value_repr(enabled: bool) {
+    djust_core::set_django_value_repr(enabled);
+}
+
+/// Read the current value-rendering mode.
+///
+/// Exposed so the Python side can ASSERT the wiring took effect rather than
+/// assume it — a setter with no getter cannot be tested end to end.
+#[pyfunction]
+fn django_value_repr_enabled() -> bool {
+    djust_core::django_value_repr()
+}
+
 #[pyfunction]
 fn render_template(template_source: String, context: HashMap<String, Value>) -> PyResult<String> {
     // Get template from cache or parse and cache it
@@ -2002,6 +2026,17 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::String(s));
     }
 
+    // Boolean BEFORE Integer (#2203 review). PyO3 0.29 extracts a Python
+    // `True` as i64 `1`, so with the integer arm first the bool arm was DEAD
+    // CODE and a bool arriving through this converter rendered as `1` —
+    // neither `True` nor the legacy `true`. That reaches actor mount/event
+    // params and component props. Mirrors djust_core's `FromPyObject`, which
+    // has always checked bool first; the two converters must agree or the same
+    // object renders differently by path (#1646).
+    if let Ok(b) = obj.extract::<bool>() {
+        return Ok(Value::Bool(b));
+    }
+
     // Integer
     if let Ok(i) = obj.extract::<i64>() {
         return Ok(Value::Integer(i));
@@ -2012,14 +2047,21 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::Float(f));
     }
 
-    // Boolean
-    if let Ok(b) = obj.extract::<bool>() {
-        return Ok(Value::Bool(b));
+    // None — `Value::None`, NOT `Missing` (#2203). This is a SECOND
+    // Python->Value converter alongside `FromPyObject for Value` in
+    // djust_core; both must agree, or the same Python object renders
+    // differently depending on which path it took (#1646).
+    if obj.is_none() {
+        return Ok(Value::None);
     }
 
-    // None
-    if obj.is_none() {
-        return Ok(Value::Null);
+    // Tuple — before List, since a tuple is also a sequence (#2203).
+    if let Ok(tuple) = obj.cast::<PyTuple>() {
+        let mut vec = Vec::new();
+        for item in tuple.iter() {
+            vec.push(python_to_value(&item)?);
+        }
+        return Ok(Value::Tuple(vec));
     }
 
     // List
@@ -2033,7 +2075,9 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 
     // Dict - recursively convert nested values
     if let Ok(dict) = obj.cast::<PyDict>() {
-        let mut map = HashMap::new();
+        // IndexMap: PyDict iterates in Python's insertion order, and that
+        // order is now observable in rendered output (#2203).
+        let mut map = indexmap::IndexMap::new();
         for (key, value) in dict.iter() {
             let key_str = key.extract::<String>()?;
             map.insert(key_str, python_to_value(&value)?);
@@ -3317,6 +3361,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
+    m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
+    m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
 

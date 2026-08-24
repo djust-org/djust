@@ -17,6 +17,7 @@
 
 use djust_core::{Context, Value};
 use djust_templates::Template;
+use indexmap::IndexMap;
 use std::collections::HashSet;
 
 fn render(source: &str, ctx: &Context) -> String {
@@ -34,7 +35,7 @@ fn open_marker_ids(rendered: &str) -> Vec<String> {
 }
 
 fn obj(pairs: &[(&str, Value)]) -> Value {
-    let mut m = std::collections::HashMap::new();
+    let mut m = IndexMap::new();
     for (k, v) in pairs {
         m.insert((*k).to_string(), v.clone());
     }

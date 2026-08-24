@@ -200,6 +200,29 @@ class LiveViewConfig:
         # to the existing patch-failure path — the client requests recovery HTML
         # and morphs — rather than breaking. Set this to False to opt out.
         "virtual_keyed_ops": True,
+        # Django-parity value rendering (#2203). When True (default), a value
+        # interpolated with `{{ }}` renders as Python's `str()` does — which is
+        # what Django does:
+        #
+        #     {{ flag }}   -> True      (was: true)
+        #     {{ none }}   -> None      (was: empty; an ABSENT variable still
+        #                                renders empty, as Django's
+        #                                string_if_invalid does)
+        #     {{ 1.0 }}    -> 1.0       (was: 1)
+        #     {{ [1, 2] }} -> [1, 2]    (was: the placeholder [List])
+        #     {{ {'a':1} }}-> {'a': 1}  (was: the placeholder [Object])
+        #     {{ (1, 2) }} -> (1, 2)    (was: [List])
+        #
+        # This is not only cosmetic: `Display` is the lookup key for
+        # `{% if x in some_dict %}`, so `{% if True in d %}` used to MISS where
+        # Django hits.
+        #
+        # Set to False if a template interpolates a bool directly into a script
+        # block — `var f = {{ flag }};` renders valid JS today and becomes a
+        # ReferenceError under Django semantics. Django has the same hazard; its
+        # answers are `|yesno:"true,false"` and `{{ data|json_script:"id" }}`,
+        # and those work here too.
+        "django_value_repr": True,
         # Django-parity template auto-call (ADR-024). When True (default),
         # the Rust engine's sidecar getattr walk invokes callables exactly
         # like Django's Variable._resolve_lookup ({{ user.get_full_name }},

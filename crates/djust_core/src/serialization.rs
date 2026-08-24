@@ -27,6 +27,7 @@ pub fn from_msgpack(bytes: &[u8]) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
 
     #[test]
     fn test_json_roundtrip() {
@@ -57,15 +58,15 @@ mod tests {
     /// because the untagged deserializer tried variants in declaration order.
     #[test]
     fn test_msgpack_dict_roundtrip_not_list() {
-        use std::collections::HashMap;
+        use indexmap::IndexMap;
 
-        let mut map = HashMap::new();
+        let mut map = IndexMap::new();
         map.insert("key1".to_string(), Value::String("value1".to_string()));
         map.insert("key2".to_string(), Value::Integer(42));
         map.insert(
             "nested".to_string(),
             Value::Object({
-                let mut inner = HashMap::new();
+                let mut inner = IndexMap::new();
                 inner.insert("a".to_string(), Value::Bool(true));
                 inner
             }),
@@ -120,9 +121,7 @@ mod tests {
     /// Dict with dict values round-trips correctly through JSON too.
     #[test]
     fn test_json_dict_roundtrip() {
-        use std::collections::HashMap;
-
-        let mut map = HashMap::new();
+        let mut map = IndexMap::new();
         map.insert("name".to_string(), Value::String("test".to_string()));
         map.insert("count".to_string(), Value::Integer(5));
         let original = Value::Object(map);

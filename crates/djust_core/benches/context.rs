@@ -8,14 +8,14 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use djust_core::{Context, Value};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::hint::black_box;
 
 fn create_test_value(depth: usize, width: usize) -> Value {
     if depth == 0 {
         Value::String("leaf".to_string())
     } else {
-        let mut obj = HashMap::new();
+        let mut obj = IndexMap::new();
         for i in 0..width {
             obj.insert(format!("field_{i}"), create_test_value(depth - 1, width));
         }
@@ -45,18 +45,18 @@ fn bench_context_nested_get(c: &mut Criterion) {
     let mut group = c.benchmark_group("context_nested_get");
 
     // Create nested object: user.profile.settings.theme
-    let mut theme = HashMap::new();
+    let mut theme = IndexMap::new();
     theme.insert("name".to_string(), Value::String("dark".to_string()));
 
-    let mut settings = HashMap::new();
+    let mut settings = IndexMap::new();
     settings.insert("theme".to_string(), Value::Object(theme));
     settings.insert("notifications".to_string(), Value::Bool(true));
 
-    let mut profile = HashMap::new();
+    let mut profile = IndexMap::new();
     profile.insert("settings".to_string(), Value::Object(settings));
     profile.insert("bio".to_string(), Value::String("Developer".to_string()));
 
-    let mut user = HashMap::new();
+    let mut user = IndexMap::new();
     user.insert("profile".to_string(), Value::Object(profile));
     user.insert("name".to_string(), Value::String("John".to_string()));
 
@@ -145,7 +145,7 @@ fn bench_context_from_dict(c: &mut Criterion) {
     let mut group = c.benchmark_group("context_from_dict");
 
     for size in [5, 10, 25, 50].iter() {
-        let mut dict = HashMap::new();
+        let mut dict = IndexMap::new();
         for i in 0..*size {
             dict.insert(format!("key_{i}"), Value::String(format!("value_{i}")));
         }
@@ -164,7 +164,7 @@ fn bench_value_truthy(c: &mut Criterion) {
     let mut group = c.benchmark_group("value_truthy");
 
     let values = vec![
-        ("null", Value::Null),
+        ("null", Value::Missing),
         ("bool_true", Value::Bool(true)),
         ("bool_false", Value::Bool(false)),
         ("integer_nonzero", Value::Integer(42)),
@@ -188,7 +188,7 @@ fn bench_value_display(c: &mut Criterion) {
     let mut group = c.benchmark_group("value_display");
 
     let values = vec![
-        ("null", Value::Null),
+        ("null", Value::Missing),
         ("bool", Value::Bool(true)),
         ("integer", Value::Integer(12345)),
         ("float", Value::Float(123.456)),

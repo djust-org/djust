@@ -29,9 +29,9 @@ use djust_core::{Context, Value};
 use djust_templates::parser::Node;
 use djust_templates::registry;
 use djust_templates::renderer::render_nodes;
+use indexmap::IndexMap;
 use pyo3::ffi::c_str;
 use pyo3::prelude::*;
-use std::collections::HashMap;
 
 /// Build the context shared by every case: a list, an object, and two scalars.
 fn block_ctx() -> Context {
@@ -44,7 +44,7 @@ fn block_ctx() -> Context {
             Value::Integer(3),
         ]),
     );
-    let mut obj = HashMap::new();
+    let mut obj = IndexMap::new();
     obj.insert("key".to_string(), Value::String("val".to_string()));
     ctx.set("obj".to_string(), Value::Object(obj));
     ctx.set("count".to_string(), Value::Integer(42));

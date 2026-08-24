@@ -27,6 +27,7 @@
 
 use djust_core::{Context, Value};
 use djust_templates::Template;
+use indexmap::IndexMap;
 
 fn render(source: &str, ctx: &Context) -> String {
     let t = Template::new(source).expect("template should parse");
@@ -61,7 +62,11 @@ fn default_resolves_a_bare_identifier_arg() {
 
 #[test]
 fn default_if_none_resolves_a_bare_identifier_arg() {
-    let ctx = ctx_with("e", Value::Null, Value::String("X".into()));
+    // `Value::None`, not `Missing` (#2203): the filter fires for a present
+    // Python None. `Missing` is an ABSENT variable, which Django renders as ""
+    // before the filter ever runs. This test is about ARGUMENT resolution, so
+    // it needs a value that actually triggers the fallback.
+    let ctx = ctx_with("e", Value::None, Value::String("X".into()));
     assert_eq!(render("{{ e|default_if_none:v }}", &ctx), "X");
 }
 
@@ -164,7 +169,7 @@ fn a_dotted_path_arg_resolves() {
     // Django resolves dotted paths in filter args. This is the exact shape the
     // djust.org bug had: `{{ post.featured_image_alt|default:post.title }}`.
     let mut c = Context::new();
-    let mut post = std::collections::HashMap::new();
+    let mut post = IndexMap::new();
     post.insert("alt".to_string(), Value::String(String::new()));
     post.insert("title".to_string(), Value::String("The Title".into()));
     c.set("post".to_string(), Value::Object(post));
