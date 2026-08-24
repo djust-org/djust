@@ -313,6 +313,7 @@ version = "1.1.0"
 dependencies = [
  "ahash",
  "criterion",
+ "indexmap",
  "once_cell",
  "pyo3",
  "rmp-serde",
@@ -357,6 +358,7 @@ dependencies = [
  "djust_components",
  "djust_core",
  "djust_vdom",
+ "indexmap",
  "once_cell",
  "pulldown-cmark",
  "pyo3",

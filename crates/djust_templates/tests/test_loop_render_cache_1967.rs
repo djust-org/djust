@@ -13,11 +13,11 @@ use djust_templates::loop_cache::{
     body_is_cacheable, body_is_position_dependent, content_hash, LoopCacheGuard, LoopRenderCache,
 };
 use djust_templates::Template;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 /// Build a `Value::Object` from `(key, string-value)` pairs.
 fn obj(pairs: &[(&str, &str)]) -> Value {
-    let mut m = HashMap::new();
+    let mut m = IndexMap::new();
     for (k, v) in pairs {
         m.insert(k.to_string(), Value::String(v.to_string()));
     }
@@ -153,12 +153,12 @@ fn nested_loops_byte_identical() {
     // composes the dj-if loop path from the outer index), so caching is
     // disabled — but output must still match.
     let src = "{% for row in rows %}<div>{% for c in row.cells %}<span>{{ c.v }}</span>{% endfor %}</div>{% endfor %}";
-    let mut m1 = HashMap::new();
+    let mut m1 = IndexMap::new();
     m1.insert(
         "cells".to_string(),
         Value::List(vec![obj(&[("v", "a")]), obj(&[("v", "b")])]),
     );
-    let mut m2 = HashMap::new();
+    let mut m2 = IndexMap::new();
     m2.insert("cells".to_string(), Value::List(vec![obj(&[("v", "c")])]));
     let rows = Value::List(vec![Value::Object(m1), Value::Object(m2)]);
 

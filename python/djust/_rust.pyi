@@ -233,6 +233,19 @@ def set_virtual_keyed_ops(enabled: bool) -> None:
 def virtual_keyed_ops_enabled() -> bool:
     """Current `[dj-virtual]` keyed-splice-ops setting."""
 
+def set_django_value_repr(enabled: bool) -> None:
+    """Enable/disable Django-parity value rendering (#2203).
+
+    When True (the default), `{{ }}` renders values as Python's `str()` does:
+    `True`, `None`, `1.0`, `[1, 2]`, `{'a': 1}`, `(1, 2)`. Process-global, for
+    the same reason as `set_virtual_keyed_ops` — `impl Display for Value` has
+    nowhere to thread per-render config. Django applies it once at startup from
+    `LIVEVIEW_CONFIG['django_value_repr']`; see `DjustConfig.ready`.
+    """
+
+def django_value_repr_enabled() -> bool:
+    """Current Django-parity value-rendering setting."""
+
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -1034,5 +1047,7 @@ __all__ = [
     "RustToast",
     "RustTooltip",
     "set_virtual_keyed_ops",
+    "set_django_value_repr",
+    "django_value_repr_enabled",
     "virtual_keyed_ops_enabled",
 ]

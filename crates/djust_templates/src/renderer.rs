@@ -224,7 +224,9 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
 /// #1646, issue #2042).
 fn value_to_arg_string(v: &Value) -> String {
     match v {
-        Value::List(_) | Value::Object(_) => {
+        // Tuple included: a structured arg must be JSON-encoded, not collapsed
+        // to its Display form — the #2042 `[List]`-collapse class (#2203).
+        Value::List(_) | Value::Tuple(_) | Value::Object(_) => {
             serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
         }
         _ => v.to_string(),
@@ -471,7 +473,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // to the context (e.g. Django model instances). The `?`
             // propagates exceptions raised inside an auto-called method
             // (ADR-024 Django parity); lookup misses stay `Ok(None)`.
-            let mut value = context.resolve(var_name)?.unwrap_or(Value::Null);
+            let mut value = context.resolve(var_name)?.unwrap_or(Value::Missing);
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             //
@@ -677,10 +679,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let iterable_value = context
                 .resolve(iterable)?
                 .or_else(|| context.get(iterable).cloned())
-                .unwrap_or(Value::Null);
+                .unwrap_or(Value::Missing);
 
             match iterable_value {
-                Value::List(items) => {
+                Value::List(items) | Value::Tuple(items) => {
                     // If list is empty, render the {% empty %} block
                     if items.is_empty() {
                         return render_nodes_with_loader(empty_nodes, context, loader);
@@ -764,14 +766,14 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             // Multiple variables: {% for key, value in items %}
                             // Expect item to be a list/tuple
                             match &item {
-                                Value::List(tuple_items) => {
+                                Value::List(tuple_items) | Value::Tuple(tuple_items) => {
                                     // Unpack tuple items into separate variables
                                     for (i, var_name) in var_names.iter().enumerate() {
                                         if i < tuple_items.len() {
                                             ctx.set(var_name.clone(), tuple_items[i].clone());
                                         } else {
                                             // If tuple has fewer items than var names, set to Null
-                                            ctx.set(var_name.clone(), Value::Null);
+                                            ctx.set(var_name.clone(), Value::Missing);
                                         }
                                     }
                                 }
@@ -779,7 +781,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                     // If item is not a list, set all vars to Null except first
                                     ctx.set(var_names[0].clone(), item.clone());
                                     for var_name in &var_names[1..] {
-                                        ctx.set(var_name.clone(), Value::Null);
+                                        ctx.set(var_name.clone(), Value::Missing);
                                     }
                                 }
                             }
@@ -1186,7 +1188,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Variable/InlineIf arms (#1660). `runtime_safe` is true ONLY when
             // the LAST filter produced a genuine SafeString → fail-safe.
             let (resolved, runtime_safe) = get_value_safe(val.trim(), context)?;
-            let output = if matches!(resolved, Value::Null) {
+            let output = if matches!(resolved, Value::Missing) {
                 // Unresolved variable — output the raw name (Django behavior)
                 filters::html_escape(val.trim())
             } else if runtime_safe {
@@ -1981,7 +1983,9 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
             let needle = get_value(parts[0], context)?;
             let haystack = get_value(parts[1], context)?;
             return match haystack {
-                Value::List(items) => Ok(items.iter().any(|item| values_equal(&needle, item))),
+                Value::List(items) | Value::Tuple(items) => {
+                    Ok(items.iter().any(|item| values_equal(&needle, item)))
+                }
                 Value::String(s) => {
                     if let Value::String(n) = &needle {
                         Ok(s.contains(n.as_str()))
@@ -2120,7 +2124,10 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         return Ok((Value::Bool(false), false));
     }
     if expr == "None" || expr == "none" {
-        return Ok((Value::Null, false));
+        // `Value::None`, not `Missing` (#2203). The literal in
+        // `{% if x is None %}` denotes Python's None singleton; `Missing`
+        // denotes an ABSENT variable, which Django treats separately.
+        return Ok((Value::None, false));
     }
 
     if let Ok(i) = expr.parse::<i64>() {
@@ -2138,12 +2145,12 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         return Ok((Value::String(expr[1..expr.len() - 1].to_string()), false));
     }
 
-    Ok((Value::Null, false))
+    Ok((Value::Missing, false))
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Null, Value::Null) => true,
+        (Value::Missing, Value::Missing) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
@@ -2162,7 +2169,13 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 /// [`values_equal`].
 fn values_identity(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Null, Value::Null) => true,
+        // `Missing` and `None` are DIFFERENT values (#2203) but both satisfy
+        // `is None`. Django reaches the same place from the other side: an
+        // absent variable resolves to `None` in its expression machinery, so
+        // `{% if absent is None %}` is true there too. Keeping them distinct
+        // for RENDERING while equating them for `is None` is what preserves
+        // both behaviours.
+        (Value::Missing | Value::None, Value::Missing | Value::None) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         // Non-singletons: Python `is` is not identity-stable; treat as false.
         _ => false,
@@ -2206,7 +2219,7 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
         }
         (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
         // Null comparisons
-        (Value::Null, Value::Null) => 0,
+        (Value::Missing, Value::Missing) => 0,
         // Incomparable types return 0 (treated as equal, so < and > fail)
         _ => 0,
     }
@@ -2349,6 +2362,7 @@ mod tests {
     use super::*;
     use crate::lexer::tokenize;
     use crate::parser::parse;
+    use indexmap::IndexMap;
 
     #[test]
     fn test_render_text() {
@@ -2752,7 +2766,7 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         let mut context = Context::new();
 
-        let mut map = std::collections::HashMap::new();
+        let mut map = IndexMap::new();
         map.insert("2".to_string(), Value::Bool(true));
         map.insert("5".to_string(), Value::String("hello".to_string()));
         context.set("mydict".to_string(), Value::Object(map));
@@ -2780,7 +2794,7 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         let mut context = Context::new();
 
-        let mut map = std::collections::HashMap::new();
+        let mut map = IndexMap::new();
         map.insert("42".to_string(), Value::Bool(true));
         context.set("mydict".to_string(), Value::Object(map));
 
@@ -3096,7 +3110,7 @@ mod tests {
         let tokens = tokenize("{% firstof user.name \"anonymous\" %}").unwrap();
         let nodes = parse(&tokens).unwrap();
         let mut context = Context::new();
-        let mut user = std::collections::HashMap::new();
+        let mut user = IndexMap::new();
         user.insert("name".to_string(), Value::String("Alice".to_string()));
         context.set("user".to_string(), Value::Object(user));
         let result = render_nodes(&nodes, &context).unwrap();
@@ -3343,7 +3357,7 @@ mod tests {
     #[test]
     fn test_value_object_serializes_as_json() {
         // value_to_arg_string should serialize Value::Object as JSON
-        let mut map = std::collections::HashMap::new();
+        let mut map = IndexMap::new();
         map.insert("key".to_string(), Value::String("val".to_string()));
         let obj = Value::Object(map);
         let json = serde_json::to_string(&obj).unwrap();
@@ -3354,7 +3368,8 @@ mod tests {
     fn test_value_scalar_to_string_not_json() {
         // Scalars should use to_string(), not JSON serialization
         assert_eq!(Value::Integer(42).to_string(), "42");
-        assert_eq!(Value::Bool(true).to_string(), "true");
+        // `True`, not `"true"` — Python's `str(True)` (#2203).
+        assert_eq!(Value::Bool(true).to_string(), "True");
         assert_eq!(Value::String("hello".to_string()).to_string(), "hello");
     }
 
@@ -3376,7 +3391,7 @@ mod tests {
                 Value::Integer(3),
             ]),
         );
-        let mut obj = std::collections::HashMap::new();
+        let mut obj = IndexMap::new();
         obj.insert("key".to_string(), Value::String("val".to_string()));
         ctx.set("obj".to_string(), Value::Object(obj));
         ctx.set("count".to_string(), Value::Integer(42));
@@ -3390,11 +3405,12 @@ mod tests {
         // scalars -> Display.
         let list = Value::List(vec![Value::Integer(1), Value::Integer(2)]);
         assert_eq!(value_to_arg_string(&list), "[1,2]");
-        let mut map = std::collections::HashMap::new();
+        let mut map = IndexMap::new();
         map.insert("key".to_string(), Value::String("val".to_string()));
         assert_eq!(value_to_arg_string(&Value::Object(map)), r#"{"key":"val"}"#);
         assert_eq!(value_to_arg_string(&Value::Integer(42)), "42");
-        assert_eq!(value_to_arg_string(&Value::Bool(true)), "true");
+        // Scalars go through Display, so this follows it to `True` (#2203).
+        assert_eq!(value_to_arg_string(&Value::Bool(true)), "True");
         assert_eq!(value_to_arg_string(&Value::String("hi".to_string())), "hi");
     }
 
@@ -3498,10 +3514,19 @@ mod tests {
     #[test]
     fn test_get_value_none_literal() {
         let context = Context::new();
+        // The literal denotes Python's None singleton, so it resolves to
+        // `Value::None` — NOT `Missing`, which means an ABSENT variable
+        // (#2203). Both still satisfy `is None`; see `values_identity`.
         let val = get_value("None", &context).unwrap();
-        assert!(matches!(val, Value::Null), "None should resolve to Null");
+        assert!(
+            matches!(val, Value::None),
+            "None literal should be Value::None"
+        );
         let val = get_value("none", &context).unwrap();
-        assert!(matches!(val, Value::Null), "none should resolve to Null");
+        assert!(
+            matches!(val, Value::None),
+            "none literal should be Value::None"
+        );
     }
 
     #[test]
@@ -3528,14 +3553,14 @@ mod tests {
     #[test]
     fn test_values_identity() {
         // Null/Null -> true (Python `None is None`)
-        assert!(values_identity(&Value::Null, &Value::Null));
+        assert!(values_identity(&Value::Missing, &Value::Missing));
         // Bool/Bool -> matches value (Python `True is True`, `False is False`)
         assert!(values_identity(&Value::Bool(true), &Value::Bool(true)));
         assert!(values_identity(&Value::Bool(false), &Value::Bool(false)));
         assert!(!values_identity(&Value::Bool(true), &Value::Bool(false)));
         // Mismatched singletons -> false
-        assert!(!values_identity(&Value::Null, &Value::Bool(false)));
-        assert!(!values_identity(&Value::Bool(true), &Value::Null));
+        assert!(!values_identity(&Value::Missing, &Value::Bool(false)));
+        assert!(!values_identity(&Value::Bool(true), &Value::Missing));
         // Non-singletons -> always false (CPython interning is not contractual)
         assert!(!values_identity(&Value::Integer(5), &Value::Integer(5)));
         assert!(!values_identity(&Value::Float(1.0), &Value::Float(1.0)));
@@ -3549,7 +3574,7 @@ mod tests {
     fn test_if_is_none_true() {
         let result = render_if(
             "{% if val is None %}empty{% else %}filled{% endif %}",
-            vec![("val", Value::Null)],
+            vec![("val", Value::Missing)],
         );
         assert_eq!(result, "empty");
     }
@@ -3577,7 +3602,7 @@ mod tests {
     fn test_if_is_not_none_false() {
         let result = render_if(
             "{% if val is not None %}set{% else %}unset{% endif %}",
-            vec![("val", Value::Null)],
+            vec![("val", Value::Missing)],
         );
         assert_eq!(result, "unset");
     }
@@ -3624,7 +3649,7 @@ mod tests {
         // `is` / `is not` compose with the lower-precedence `and`.
         let result = render_if(
             "{% if a is not None and b is None %}match{% else %}nomatch{% endif %}",
-            vec![("a", Value::Integer(7)), ("b", Value::Null)],
+            vec![("a", Value::Integer(7)), ("b", Value::Missing)],
         );
         assert_eq!(result, "match");
     }

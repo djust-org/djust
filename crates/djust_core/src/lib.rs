@@ -3,12 +3,14 @@
 //! This crate provides foundational data structures and utilities used across
 //! the djust ecosystem.
 
+use indexmap::IndexMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyList};
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod context;
 pub mod errors;
@@ -27,13 +29,28 @@ pub use errors::{DjangoRustError, Result};
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Value {
-    Null,
+    /// An absent key or attribute. Renders as `""` — Django's
+    /// `string_if_invalid` — and is DISTINCT from Python `None` (#2203).
+    ///
+    /// This variant was `Null` and carried both meanings. It is also what
+    /// `CallOutcome::Empty` resolves to, so an `alters_data` refusal or a
+    /// serialization-floor denial lands here: those must keep rendering
+    /// nothing, never the literal text "None".
+    Missing,
+    /// Python `None`. Renders as `"None"`, as `str(None)` does (#2203).
+    None,
     Bool(bool),
     Integer(i64),
     Float(f64),
     String(String),
     List(Vec<Value>),
-    Object(HashMap<String, Value>),
+    /// A Python tuple. Separate from `List` only so it can render with
+    /// parentheses, which `str()` distinguishes (#2203).
+    Tuple(Vec<Value>),
+    /// Insertion-ordered, NOT a `HashMap`: Rust randomises `HashMap` iteration
+    /// per process, so dict repr would differ between renders of the same
+    /// template. Python dicts are insertion-ordered (#2203).
+    Object(IndexMap<String, Value>),
 }
 
 /// Custom Deserialize that uses the deserializer's type hints to distinguish
@@ -56,14 +73,14 @@ impl<'de> Deserialize<'de> for Value {
             where
                 E: de::Error,
             {
-                Ok(Value::Null)
+                Ok(Value::Missing)
             }
 
             fn visit_none<E>(self) -> std::result::Result<Value, E>
             where
                 E: de::Error,
             {
-                Ok(Value::Null)
+                Ok(Value::Missing)
             }
 
             fn visit_some<D>(self, deserializer: D) -> std::result::Result<Value, D::Error>
@@ -130,7 +147,7 @@ impl<'de> Deserialize<'de> for Value {
             where
                 A: MapAccess<'de>,
             {
-                let mut obj = HashMap::new();
+                let mut obj = IndexMap::new();
                 while let Some((key, value)) = map.next_entry()? {
                     obj.insert(key, value);
                 }
@@ -145,12 +162,15 @@ impl<'de> Deserialize<'de> for Value {
 impl Value {
     pub fn is_truthy(&self) -> bool {
         match self {
-            Value::Null => false,
+            Value::Missing => false,
+            // Python `None` is falsy, same as an absent value.
+            Value::None => false,
             Value::Bool(b) => *b,
             Value::Integer(i) => *i != 0,
             Value::Float(f) => *f != 0.0,
             Value::String(s) => !s.is_empty(),
             Value::List(l) => !l.is_empty(),
+            Value::Tuple(t) => !t.is_empty(),
             Value::Object(o) => !o.is_empty(),
         }
     }
@@ -172,18 +192,113 @@ impl Value {
 // implementation checks for a `"__str__"` entry first and renders
 // its string value when present, falling back to `"[Object]"` only
 // for dicts that weren't produced by the model serializer.
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+/// Django-parity value rendering (#2203).
+///
+/// A process-global rather than a per-render parameter because `Display` has no
+/// place to thread config through — the same reason `virtual_keyed_ops` is one
+/// (#2017). Applied once from `DjustConfig.ready()`.
+///
+/// Default ON: `{{ flag }}` renders `True`, matching Django. Set
+/// `LIVEVIEW_CONFIG['django_value_repr'] = False` to restore the pre-1.2
+/// rendering — the escape hatch for a template that embeds a bool directly in
+/// a script block, where `True` is a JS `ReferenceError`. (Django has the same
+/// hazard; the Django-correct forms are `|yesno:"true,false"` and
+/// `json_script`.)
+pub static DJANGO_VALUE_REPR: AtomicBool = AtomicBool::new(true);
+
+/// Set the rendering mode. Called once at startup from Python config.
+pub fn set_django_value_repr(enabled: bool) {
+    DJANGO_VALUE_REPR.store(enabled, Ordering::Relaxed);
+}
+
+/// Read the rendering mode. Exposed so the setter can be tested end to end —
+/// a setter alone cannot be (#2017).
+pub fn django_value_repr() -> bool {
+    DJANGO_VALUE_REPR.load(Ordering::Relaxed)
+}
+
+impl Value {
+    /// Python `repr()`, used for values NESTED inside a container.
+    ///
+    /// `str(['a'])` is `"['a']"` while `str('a')` is `"a"` — a nested string is
+    /// quoted, a top-level one is not. Containers therefore cannot reuse
+    /// `Display` for their elements.
+    fn py_repr(&self) -> String {
         match self {
-            Value::Null => write!(f, ""),
+            Value::String(s) => {
+                format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+            }
+            other => other.to_string(),
+        }
+    }
+
+    /// The pre-#2203 rendering, kept verbatim for the flag's OFF path.
+    fn legacy_display(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Missing | Value::None => write!(f, ""),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Integer(i) => write!(f, "{i}"),
             Value::Float(fl) => write!(f, "{fl}"),
             Value::String(s) => write!(f, "{s}"),
-            Value::List(_) => write!(f, "[List]"),
+            Value::List(_) | Value::Tuple(_) => write!(f, "[List]"),
             Value::Object(o) => match o.get("__str__") {
                 Some(Value::String(s)) => write!(f, "{s}"),
                 _ => write!(f, "[Object]"),
+            },
+        }
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !django_value_repr() {
+            return self.legacy_display(f);
+        }
+        match self {
+            // Django's `string_if_invalid` — an ABSENT value renders nothing.
+            // Distinct from `None`, and the reason the old `Null` was split:
+            // `CallOutcome::Empty` (an `alters_data` refusal or a
+            // serialization-floor denial) lands here and must stay silent.
+            Value::Missing => write!(f, ""),
+            Value::None => write!(f, "None"),
+            Value::Bool(b) => write!(f, "{}", if *b { "True" } else { "False" }),
+            Value::Integer(i) => write!(f, "{i}"),
+            Value::Float(fl) => {
+                // Python keeps the `.0` on an integral float; Rust's Display
+                // drops it. Guarded on `is_finite` and a magnitude below 2^53
+                // so `inf`, `NaN` and values already in exponent form keep
+                // their own formatting.
+                if fl.is_finite() && fl.fract() == 0.0 && fl.abs() < 1e16 {
+                    write!(f, "{fl:.1}")
+                } else {
+                    write!(f, "{fl}")
+                }
+            }
+            Value::String(s) => write!(f, "{s}"),
+            Value::List(items) => {
+                let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
+                write!(f, "[{}]", inner.join(", "))
+            }
+            Value::Tuple(items) => {
+                let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
+                // Python renders a 1-tuple as `(1,)`.
+                if items.len() == 1 {
+                    write!(f, "({},)", inner[0])
+                } else {
+                    write!(f, "({})", inner.join(", "))
+                }
+            }
+            Value::Object(o) => match o.get("__str__") {
+                // A model instance carries `__str__`; that keeps winning over
+                // dict repr, which is how `{{ obj }}` renders a model.
+                Some(Value::String(s)) => write!(f, "{s}"),
+                _ => {
+                    let inner: Vec<String> = o
+                        .iter()
+                        .map(|(k, v)| format!("'{}': {}", k.replace('\'', "\\'"), v.py_repr()))
+                        .collect();
+                    write!(f, "{{{}}}", inner.join(", "))
+                }
             },
         }
     }
@@ -197,7 +312,9 @@ impl<'py> FromPyObject<'_, 'py> for Value {
     type Error = PyErr;
     fn extract(ob: pyo3::Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         if ob.is_none() {
-            Ok(Value::Null)
+            // Python `None` — NOT `Missing`. An absent key never reaches this
+            // conversion; it arrives as `Option::None` from the resolver (#2203).
+            Ok(Value::None)
         } else if let Ok(b) = ob.extract::<bool>() {
             Ok(Value::Bool(b))
         } else if let Ok(i) = ob.extract::<i64>() {
@@ -206,10 +323,32 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             Ok(Value::Float(f))
         } else if let Ok(s) = ob.extract::<String>() {
             Ok(Value::String(s))
+        } else if let Ok(tuple) = ob.cast::<pyo3::types::PyTuple>() {
+            // BEFORE the sequence arm: a tuple extracts as `Vec<Value>` too, so
+            // checking after it would render every tuple as a list (#2203).
+            let items: Vec<Value> = tuple.extract()?;
+            Ok(Value::Tuple(items))
         } else if let Ok(list) = ob.extract::<Vec<Value>>() {
             Ok(Value::List(list))
-        } else if let Ok(dict) = ob.extract::<HashMap<String, Value>>() {
-            Ok(Value::Object(dict))
+        } else if let Some(map) = ob.cast::<PyDict>().ok().and_then(|d| {
+            // Iterated by hand rather than `extract::<IndexMap<..>>()`, because
+            // extraction is exactly where Python's insertion order would be
+            // lost — and no later re-sort can recover it (#2203). PyDict
+            // iteration yields entries in insertion order.
+            //
+            // Returns None (rather than propagating) when a key is not a
+            // string, so the arm simply does not match and the conversion falls
+            // through to the object handling below — precisely what the previous
+            // `extract::<HashMap<String, Value>>()` did. Propagating instead
+            // turned a context containing `{1: "a"}` from "renders something"
+            // into a hard TypeError, which is a regression (#2203 self-review).
+            let mut m = IndexMap::with_capacity(d.len());
+            for (k, v) in d.iter() {
+                m.insert(k.extract::<String>().ok()?, v.extract::<Value>().ok()?);
+            }
+            Some(m)
+        }) {
+            Ok(Value::Object(map))
         } else {
             // #1986: a djust sidecar proxy exposes `__djust_serialize__()`,
             // returning a DENYLIST-FILTERED dict (via the same eager serializer
@@ -261,7 +400,7 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // callers to manually convert to dicts.
             if let Ok(obj_dict) = ob.getattr("__dict__") {
                 if let Ok(items) = obj_dict.extract::<HashMap<String, pyo3::Bound<'py, PyAny>>>() {
-                    let mut map = HashMap::new();
+                    let mut map: IndexMap<String, Value> = IndexMap::new();
                     for (k, v) in items {
                         // Skip private/dunder attrs and Django's internal _state
                         if k.starts_with('_') {
@@ -289,7 +428,9 @@ impl<'py> IntoPyObject<'py> for Value {
 
     fn into_pyobject(self, py: Python<'py>) -> std::result::Result<Self::Output, Self::Error> {
         match self {
-            Value::Null => Ok(py.None().into_bound(py)),
+            // Both map to Python `None`: `Missing` has no Python counterpart,
+            // and round-tripping it as None matches the old `Null` behaviour.
+            Value::Missing | Value::None => Ok(py.None().into_bound(py)),
             Value::Bool(b) => Ok(b.into_pyobject(py)?.to_owned().into_any()),
             Value::Integer(i) => Ok(i.into_pyobject(py)?.to_owned().into_any()),
             Value::Float(f) => Ok(f.into_pyobject(py)?.to_owned().into_any()),
@@ -300,6 +441,15 @@ impl<'py> IntoPyObject<'py> for Value {
                     py_list.append(item.into_pyobject(py)?)?;
                 }
                 Ok(py_list.into_any())
+            }
+            Value::Tuple(t) => {
+                // Round-trips back to a real Python tuple, so a tuple that
+                // crosses into Rust and back does not silently become a list.
+                let items: Vec<_> = t
+                    .into_iter()
+                    .map(|item| item.into_pyobject(py))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(pyo3::types::PyTuple::new(py, items)?.into_any())
             }
             Value::Object(o) => {
                 let py_dict = PyDict::new(py);
@@ -329,7 +479,7 @@ mod tests {
 
     #[test]
     fn test_value_truthy() {
-        assert!(!Value::Null.is_truthy());
+        assert!(!Value::Missing.is_truthy());
         assert!(Value::Bool(true).is_truthy());
         assert!(!Value::Bool(false).is_truthy());
         assert!(Value::Integer(1).is_truthy());
@@ -345,7 +495,7 @@ mod tests {
     /// Rust Display impl previously dropped it and emitted `[Object]`.
     #[test]
     fn test_display_object_with_str_key() {
-        let mut map = HashMap::new();
+        let mut map: IndexMap<String, Value> = IndexMap::new();
         map.insert("id".to_string(), Value::Integer(1));
         map.insert(
             "__str__".to_string(),
@@ -361,11 +511,13 @@ mod tests {
     /// semantics.
     #[test]
     fn test_display_object_without_str_key() {
-        let mut map = HashMap::new();
+        let mut map: IndexMap<String, Value> = IndexMap::new();
         map.insert("a".to_string(), Value::Integer(1));
         map.insert("b".to_string(), Value::Integer(2));
         let obj = Value::Object(map);
-        assert_eq!(obj.to_string(), "[Object]");
+        // Was `"[Object]"`. Django renders `str({'a': 1, 'b': 2})` (#2203),
+        // in insertion order — which is why `Object` is an IndexMap.
+        assert_eq!(obj.to_string(), "{'a': 1, 'b': 2}");
     }
 
     /// Edge: `"__str__"` key present but not a `String` (e.g. an
@@ -373,10 +525,12 @@ mod tests {
     /// `"[Object]"` rather than emit `null` or crash.
     #[test]
     fn test_display_object_str_key_non_string_falls_back() {
-        let mut map = HashMap::new();
-        map.insert("__str__".to_string(), Value::Null);
+        let mut map: IndexMap<String, Value> = IndexMap::new();
+        map.insert("__str__".to_string(), Value::Missing);
         let obj = Value::Object(map);
-        assert_eq!(obj.to_string(), "[Object]");
+        // Falls back to dict repr rather than emitting the bad `__str__`.
+        // The map has one entry, so this is the single-pair rendering.
+        assert_eq!(obj.to_string(), "{'__str__': }");
     }
 
     /// Empty string `"__str__"` is still a valid override — Django
@@ -384,7 +538,7 @@ mod tests {
     /// and the Rust engine must match.
     #[test]
     fn test_display_object_empty_str_key() {
-        let mut map = HashMap::new();
+        let mut map: IndexMap<String, Value> = IndexMap::new();
         map.insert("__str__".to_string(), Value::String("".to_string()));
         let obj = Value::Object(map);
         assert_eq!(obj.to_string(), "");
@@ -392,8 +546,10 @@ mod tests {
 
     /// Regression-lock: bare `[List]` fallback for lists unchanged.
     #[test]
-    fn test_display_list_unchanged() {
+    fn test_display_list_renders_python_repr() {
+        // Was `"[List]"` — a placeholder, not a rendering. Django renders
+        // `str([1, 2])` (#2203).
         let list = Value::List(vec![Value::Integer(1), Value::Integer(2)]);
-        assert_eq!(list.to_string(), "[List]");
+        assert_eq!(list.to_string(), "[1, 2]");
     }
 }

@@ -29,12 +29,12 @@ use djust_core::{Context, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
 use djust_templates::Template;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::fs;
 use tempfile::TempDir;
 
 fn obj(pairs: &[(&str, &str)]) -> Value {
-    let mut m = HashMap::new();
+    let mut m = IndexMap::new();
     for (k, v) in pairs {
         m.insert((*k).to_string(), Value::String((*v).to_string()));
     }

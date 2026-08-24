@@ -15,6 +15,7 @@
 
 use djust_core::{Context, Value};
 use djust_templates::Template;
+use indexmap::IndexMap;
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -581,7 +582,11 @@ fn html_escape_boolean_values() {
     let mut ctx = Context::new();
     ctx.set("flag".to_string(), Value::Bool(true));
     let result = render("{{ flag }}", &ctx);
-    assert_eq!(result, "true");
+    // `True`, matching Django's `str(True)` (#2203). Still HTML-safe: the
+    // point of this test is that a bool needs no escaping, which holds either
+    // way. A bool destined for a JS context needs `|yesno:"true,false"` or
+    // `json_script` — under Django too.
+    assert_eq!(result, "True");
 }
 
 #[test]
@@ -677,7 +682,7 @@ fn safe_filter_works_for_nested_dict_in_list() {
     // Simulate: self.items = [{"id": 1, "body_html": mark_safe("<strong>bold</strong>")}]
     // Template: {% for item in items %}{{ item.body_html|safe }}{% endfor %}
     let mut ctx = Context::new();
-    let mut obj = std::collections::HashMap::new();
+    let mut obj = IndexMap::new();
     obj.insert("id".to_string(), Value::Integer(1));
     obj.insert(
         "body_html".to_string(),
@@ -700,7 +705,7 @@ fn safe_filter_works_for_nested_dict_in_list() {
 fn safe_filter_nested_dict_without_safe_escapes() {
     // Same as above but WITHOUT |safe — should auto-escape
     let mut ctx = Context::new();
-    let mut obj = std::collections::HashMap::new();
+    let mut obj = IndexMap::new();
     obj.insert(
         "body_html".to_string(),
         Value::String("<strong>bold</strong>".to_string()),

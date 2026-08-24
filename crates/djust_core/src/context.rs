@@ -83,7 +83,11 @@ impl Context {
         }
     }
 
-    pub fn from_dict(dict: HashMap<String, Value>) -> Self {
+    /// Accepts any map of pairs — `HashMap` or the `IndexMap` that now backs
+    /// `Value::Object` (#2203). Frames are `AHashMap`, so ordering is not
+    /// meaningful here; this is generic only to avoid forcing callers to
+    /// convert.
+    pub fn from_dict<M: IntoIterator<Item = (String, Value)>>(dict: M) -> Self {
         let mut map = AHashMap::new();
         for (k, v) in dict {
             map.insert(k, v);
@@ -193,7 +197,7 @@ impl Context {
                 if let Ok(index) = part.parse::<usize>() {
                     // Try to access as list index
                     match current {
-                        Value::List(list) => {
+                        Value::List(list) | Value::Tuple(list) => {
                             current = list.get(index)?;
                         }
                         _ => return None,
@@ -304,7 +308,7 @@ impl Context {
             // ({{ obj.get_settings.theme }}).
             current = match self.maybe_call(py, current, key)? {
                 CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
-                CallOutcome::Empty => return Ok(Some(Value::Null)),
+                CallOutcome::Empty => return Ok(Some(Value::Missing)),
             };
             current = self.protect_sidecar(py, current);
             for part in &parts[1..] {
@@ -339,7 +343,7 @@ impl Context {
                 }
                 current = match self.maybe_call(py, current, key)? {
                     CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
-                    CallOutcome::Empty => return Ok(Some(Value::Null)),
+                    CallOutcome::Empty => return Ok(Some(Value::Missing)),
                 };
                 current = self.protect_sidecar(py, current);
             }
@@ -542,6 +546,7 @@ fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
 
     #[test]
     fn test_context_simple_get() {
@@ -555,7 +560,7 @@ mod tests {
     #[test]
     fn test_context_nested_get() {
         let mut ctx = Context::new();
-        let mut user = HashMap::new();
+        let mut user = IndexMap::new();
         user.insert("name".to_string(), Value::String("John".to_string()));
         user.insert("age".to_string(), Value::Integer(30));
 

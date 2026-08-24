@@ -14,7 +14,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use djust_core::{Context, Value};
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
 use djust_templates::Template;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::hint::black_box;
 
 const SRC: &str =
@@ -23,7 +23,7 @@ const SRC: &str =
 fn make_items(n: usize) -> Vec<Value> {
     (0..n)
         .map(|i| {
-            let mut m = HashMap::new();
+            let mut m = IndexMap::new();
             m.insert("id".to_string(), Value::Integer(i as i64));
             m.insert("name".to_string(), Value::String(format!("item-{i}")));
             m.insert("detail".to_string(), Value::String(format!("detail-{i}")));

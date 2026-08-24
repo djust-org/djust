@@ -14,10 +14,10 @@
 use djust_core::{Context, Value};
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
 use djust_templates::Template;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 fn obj(pairs: &[(&str, &str)]) -> Value {
-    let mut m = HashMap::new();
+    let mut m = IndexMap::new();
     for (k, v) in pairs {
         m.insert((*k).to_string(), Value::String((*v).to_string()));
     }
