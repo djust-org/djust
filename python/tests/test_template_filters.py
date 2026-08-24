@@ -184,11 +184,14 @@ class TestDefaultIfNoneFilter:
     """Tests for default_if_none filter."""
 
     def test_default_if_none_with_none(self):
-        """Test default_if_none returns fallback for None/missing values."""
-        template = "{{ missing|default_if_none:'fallback' }}"
-        context = {}
-        result = render_template(template, context)
-        assert result == "fallback"
+        """Fallback fires for a present None; an ABSENT variable renders empty.
+
+        #2203: Django substitutes `string_if_invalid` ("") for an absent
+        variable BEFORE the filter runs, so the filter never sees None there.
+        Both expectations verified against Django.
+        """
+        assert render_template("{{ v|default_if_none:'fallback' }}", {"v": None}) == "fallback"
+        assert render_template("{{ missing|default_if_none:'fallback' }}", {}) == ""
 
     def test_default_if_none_with_empty_string(self):
         """Test default_if_none does NOT replace empty strings."""

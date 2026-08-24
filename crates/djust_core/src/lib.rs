@@ -8,7 +8,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyList};
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -226,7 +225,15 @@ impl Value {
     fn py_repr(&self) -> String {
         match self {
             Value::String(s) => {
-                format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+                // Python's `repr` rule: single quotes, UNLESS the string
+                // contains a `'` and no `"` — then double quotes, with the `'`
+                // left unescaped. `repr("a'b")` is `"a'b"`, not `'a\'b'`.
+                let escaped = s.replace('\\', "\\\\");
+                if escaped.contains('\'') && !escaped.contains('"') {
+                    format!("\"{escaped}\"")
+                } else {
+                    format!("'{}'", escaped.replace('\'', "\\'"))
+                }
             }
             other => other.to_string(),
         }
@@ -295,7 +302,13 @@ impl fmt::Display for Value {
                 _ => {
                     let inner: Vec<String> = o
                         .iter()
-                        .map(|(k, v)| format!("'{}': {}", k.replace('\'', "\\'"), v.py_repr()))
+                        // Keys go through `py_repr` too (#2203 review): a hand-rolled
+                        // escaper here missed the BACKSLASH, so a key like `a\`
+                        // emitted `{'a\': 1}` where the closing quote reads as
+                        // escaped. Two escapers, one wrong.
+                        .map(|(k, v)| {
+                            format!("{}: {}", Value::String(k.clone()).py_repr(), v.py_repr())
+                        })
                         .collect();
                     write!(f, "{{{}}}", inner.join(", "))
                 }
@@ -399,9 +412,19 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // like `{{ obj.name }}` or `{{ obj.path }}` work without requiring
             // callers to manually convert to dicts.
             if let Ok(obj_dict) = ob.getattr("__dict__") {
-                if let Ok(items) = obj_dict.extract::<HashMap<String, pyo3::Bound<'py, PyAny>>>() {
+                // Iterated as a PyDict, NOT via `extract::<HashMap<..>>()`
+                // (#2203 review). A std `HashMap` randomises iteration order
+                // PER INSTANCE, and a fresh one is built on every conversion —
+                // so extracting through one made `{{ obj }}` reorder on every
+                // render, not merely between restarts. That is the exact
+                // non-determinism the PyDict arm above exists to avoid, and a
+                // first pass reintroduced it sixty lines later.
+                if let Ok(items) = obj_dict.cast::<PyDict>() {
                     let mut map: IndexMap<String, Value> = IndexMap::new();
-                    for (k, v) in items {
+                    for (k, v) in items.iter() {
+                        let Ok(k) = k.extract::<String>() else {
+                            continue;
+                        };
                         // Skip private/dunder attrs and Django's internal _state
                         if k.starts_with('_') {
                             continue;

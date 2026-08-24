@@ -63,6 +63,7 @@ fn django_expectations() -> Vec<(Value, &'static str)> {
 
 #[test]
 fn scalars_render_exactly_as_django_renders_them() {
+    let _g = FlagGuard::on();
     for (value, expected) in django_expectations() {
         assert_eq!(value.to_string(), expected, "for {value:?}");
     }
@@ -70,6 +71,7 @@ fn scalars_render_exactly_as_django_renders_them() {
 
 #[test]
 fn a_list_renders_as_a_python_list() {
+    let _g = FlagGuard::on();
     assert_eq!(
         Value::List(vec![Value::Integer(1), Value::Integer(2)]).to_string(),
         "[1, 2]"
@@ -79,6 +81,7 @@ fn a_list_renders_as_a_python_list() {
 
 #[test]
 fn strings_inside_a_container_are_repr_quoted() {
+    let _g = FlagGuard::on();
     // `str(['a'])` is `"['a']"` — a nested string gets quoted even though a
     // top-level one does not. That str/repr distinction is the whole reason
     // containers cannot simply reuse `Display` for their elements.
@@ -90,6 +93,7 @@ fn strings_inside_a_container_are_repr_quoted() {
 
 #[test]
 fn a_nested_container_renders_recursively() {
+    let _g = FlagGuard::on();
     assert_eq!(
         Value::List(vec![
             Value::List(vec![Value::Integer(1)]),
@@ -102,6 +106,7 @@ fn a_nested_container_renders_recursively() {
 
 #[test]
 fn a_tuple_renders_with_parentheses() {
+    let _g = FlagGuard::on();
     // Python distinguishes `(1, 2)` from `[1, 2]`; a single `List` variant
     // could not, so a tuple rendered as a list.
     assert_eq!(
@@ -112,6 +117,7 @@ fn a_tuple_renders_with_parentheses() {
 
 #[test]
 fn a_dict_renders_in_insertion_order() {
+    let _g = FlagGuard::on();
     // The reason `Object` had to stop being a `HashMap`: its iteration order is
     // randomised per process, so dict repr was non-deterministic — the same
     // template could render `{'a': 1, 'b': 2}` and `{'b': 2, 'a': 1}` on
@@ -130,6 +136,7 @@ fn a_dict_renders_in_insertion_order() {
 
 #[test]
 fn dict_rendering_is_stable_across_repeated_construction() {
+    let _g = FlagGuard::on();
     // Guard against a regression to `HashMap`: with one, this loop produced a
     // different string on most iterations.
     let build = || {
@@ -147,6 +154,7 @@ fn dict_rendering_is_stable_across_repeated_construction() {
 
 #[test]
 fn an_object_with_a_dunder_str_still_uses_it() {
+    let _g = FlagGuard::on();
     // Guard: a Django model instance carries `__str__`, and that must keep
     // winning over dict repr — it is how `{{ obj }}` renders a model.
     let mut m = IndexMap::new();
@@ -157,6 +165,7 @@ fn an_object_with_a_dunder_str_still_uses_it() {
 
 #[test]
 fn missing_and_none_are_distinct_values() {
+    let _g = FlagGuard::on();
     // The distinction the split exists for. If these ever collapse again, the
     // security-denial path (`CallOutcome::Empty` -> Missing) starts rendering
     // the literal text "None" where it used to render nothing.
@@ -167,6 +176,7 @@ fn missing_and_none_are_distinct_values() {
 
 #[test]
 fn both_missing_and_none_stay_falsy() {
+    let _g = FlagGuard::on();
     // Guard: `{% if %}` semantics must not shift. Python's `None` is falsy and
     // so is an absent variable, so both remain false regardless of rendering.
     assert!(!Value::Missing.is_truthy());
@@ -180,8 +190,16 @@ fn both_missing_and_none_stay_falsy() {
 // the suite stays green.
 // ---------------------------------------------------------------------------
 
-/// Serial guard: the flag is process-global, so tests that toggle it must not
-/// interleave. Mirrors `djust_vdom/tests/virtual_keyed_ops_2017.rs`.
+/// Serial guard: the flag is process-global, so EVERY test that reads `Display`
+/// must hold it — not only the ones that toggle. Rust runs a binary's tests on
+/// parallel threads, so a default-ON test that skipped the lock would read the
+/// global while an OFF test held it false.
+///
+/// A first pass took the lock only in `off()` and was RED on roughly 1 run in 3,
+/// a different test each time — including `dict_rendering_is_stable_...`, the
+/// determinism guard, failing non-deterministically. The reference this file
+/// cites (`djust_vdom/tests/virtual_keyed_ops_2017.rs`) locks both states; only
+/// half the pattern had been lifted (#2203 review).
 static FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Holds the lock AND restores the default, even if the test panics — without
@@ -190,6 +208,13 @@ static FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 struct FlagGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
 
 impl FlagGuard {
+    /// Hold the lock at the DEFAULT (on) state — for tests that only read.
+    fn on() -> Self {
+        let g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        djust_core::set_django_value_repr(true);
+        FlagGuard(g)
+    }
+
     fn off() -> Self {
         let g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         djust_core::set_django_value_repr(false);
@@ -238,11 +263,17 @@ fn the_flag_getter_reports_what_the_setter_set() {
 
 #[test]
 fn a_dunder_str_object_renders_the_same_either_way() {
+    // ONE guard for the whole body — `FLAG_LOCK` is a plain `Mutex`, so taking
+    // it twice in a single test deadlocks. Toggle the flag directly instead of
+    // constructing a second guard.
+    let _g = FlagGuard::on();
     // Guard: a model instance must render via `__str__` regardless of the flag,
     // so flipping it never changes how `{{ obj }}` shows a model.
     let mut m = IndexMap::new();
     m.insert("__str__".to_string(), Value::String("Model object".into()));
     assert_eq!(Value::Object(m.clone()).to_string(), "Model object");
-    let _g = FlagGuard::off();
+
+    djust_core::set_django_value_repr(false);
     assert_eq!(Value::Object(m).to_string(), "Model object");
+    // `_g`'s Drop restores the default.
 }

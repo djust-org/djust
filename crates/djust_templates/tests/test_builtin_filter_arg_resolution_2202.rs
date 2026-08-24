@@ -62,7 +62,11 @@ fn default_resolves_a_bare_identifier_arg() {
 
 #[test]
 fn default_if_none_resolves_a_bare_identifier_arg() {
-    let ctx = ctx_with("e", Value::Missing, Value::String("X".into()));
+    // `Value::None`, not `Missing` (#2203): the filter fires for a present
+    // Python None. `Missing` is an ABSENT variable, which Django renders as ""
+    // before the filter ever runs. This test is about ARGUMENT resolution, so
+    // it needs a value that actually triggers the fallback.
+    let ctx = ctx_with("e", Value::None, Value::String("X".into()));
     assert_eq!(render("{{ e|default_if_none:v }}", &ctx), "X");
 }
 

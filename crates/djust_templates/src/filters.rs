@@ -532,9 +532,20 @@ fn apply_builtin_filter(
             Ok(Value::String(apply_stringformat(value, spec)))
         }
         "default_if_none" => {
-            // default_if_none filter: fallback only when value is None/Null (not empty string)
+            // Fallback only when the value is None or absent — never for an
+            // empty string. BOTH variants (#2203 review): matching only
+            // `Missing` inverted the filter, firing on an absent variable while
+            // rendering the literal text "None" for the one input it is named
+            // for.
             match value {
-                Value::Missing => Ok(Value::String(arg.unwrap_or("").to_string())),
+                // `None` ONLY — not `Missing`. Django substitutes
+                // `string_if_invalid` ("") for an absent variable BEFORE the
+                // filter runs, so the filter never sees None there and returns
+                // the empty string rather than the fallback. Matching `Missing`
+                // too made `{{ absent|default_if_none:'NA' }}` render "NA"
+                // where Django renders "" — a pre-existing divergence this PR
+                // is in the right place to close (#2203 review).
+                Value::None => Ok(Value::String(arg.unwrap_or("").to_string())),
                 _ => Ok(value.clone()),
             }
         }
@@ -2310,9 +2321,12 @@ mod tests {
 
     #[test]
     fn test_default_if_none_with_null() {
-        let value = Value::Missing;
-        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
-        assert_eq!(result.to_string(), "fallback");
+        // `None` fires the fallback; `Missing` (an ABSENT variable) does not —
+        // Django substitutes "" for it before the filter runs (#2203).
+        let none = apply_filter("default_if_none", &Value::None, Some("NA")).unwrap();
+        assert_eq!(none.to_string(), "NA");
+        let missing = apply_filter("default_if_none", &Value::Missing, Some("NA")).unwrap();
+        assert_eq!(missing.to_string(), "");
     }
 
     #[test]

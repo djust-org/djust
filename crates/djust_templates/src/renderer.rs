@@ -2150,7 +2150,14 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Missing, Value::Missing) => true,
+        // BOTH variants, same as `values_identity` below (#2203 review). The
+        // `None` literal resolves to `Value::None` and Python None converts to
+        // it, so an arm matching only `Missing` made `{% if x == None %}`
+        // unconditionally FALSE — a regression against Django and against the
+        // previous release. `values_identity` got this arm and `values_equal`,
+        // nineteen lines above it in the same file, did not: #1646 drift
+        // between two functions one commit touched.
+        (Value::Missing | Value::None, Value::Missing | Value::None) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,

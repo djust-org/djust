@@ -2026,6 +2026,17 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::String(s));
     }
 
+    // Boolean BEFORE Integer (#2203 review). PyO3 0.29 extracts a Python
+    // `True` as i64 `1`, so with the integer arm first the bool arm was DEAD
+    // CODE and a bool arriving through this converter rendered as `1` —
+    // neither `True` nor the legacy `true`. That reaches actor mount/event
+    // params and component props. Mirrors djust_core's `FromPyObject`, which
+    // has always checked bool first; the two converters must agree or the same
+    // object renders differently by path (#1646).
+    if let Ok(b) = obj.extract::<bool>() {
+        return Ok(Value::Bool(b));
+    }
+
     // Integer
     if let Ok(i) = obj.extract::<i64>() {
         return Ok(Value::Integer(i));
@@ -2034,11 +2045,6 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     // Float
     if let Ok(f) = obj.extract::<f64>() {
         return Ok(Value::Float(f));
-    }
-
-    // Boolean
-    if let Ok(b) = obj.extract::<bool>() {
-        return Ok(Value::Bool(b));
     }
 
     // None — `Value::None`, NOT `Missing` (#2203). This is a SECOND
