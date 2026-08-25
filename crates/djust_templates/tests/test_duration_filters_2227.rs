@@ -26,6 +26,11 @@
 use djust_core::{Context, Value};
 use djust_templates::Template;
 
+/// Django joins a count and its unit with U+00A0 so the pair never wraps
+/// (#2228). Asserting the codepoint matters: a test written with an ordinary
+/// space reads identically and passes while shipping the wrong byte.
+const NBSP: char = '\u{a0}';
+
 fn render(source: &str, value: &str) -> String {
     let mut ctx = Context::new();
     ctx.set("v".to_string(), Value::String(value.to_string()));
@@ -51,7 +56,10 @@ fn aware_hours_ago(hours: i64) -> String {
 fn a_naive_datetime_is_measured_instead_of_echoed() {
     // The reported bug. Pre-fix this rendered the ISO string itself.
     let out = render("{{ v|timesince }}", &naive_hours_ago(30));
-    assert_eq!(out, "1 day", "got {out:?}");
+    assert!(
+        out.starts_with(&format!("1{NBSP}day")),
+        "expected a measured duration, got {out:?}"
+    );
     assert!(!out.contains('T'), "the raw input leaked into the output");
 }
 
@@ -69,7 +77,8 @@ fn a_naive_datetime_is_compared_against_local_now_not_utc() {
     // boundary, where any offset at all crosses it.
     let just_under_a_day = render("{{ v|timesince }}", &naive_hours_ago(23));
     assert_eq!(
-        just_under_a_day, "23 hours",
+        just_under_a_day,
+        format!("23{NBSP}hours"),
         "a naive value must be compared against LOCAL now; an off-by-offset \
          comparison lands in a different bucket. Got {just_under_a_day:?}"
     );
@@ -78,8 +87,11 @@ fn a_naive_datetime_is_compared_against_local_now_not_utc() {
 #[test]
 fn an_aware_datetime_still_works() {
     // Guard: the path that already worked must not have moved.
-    assert_eq!(render("{{ v|timesince }}", &aware_hours_ago(30)), "1 day");
-    assert_eq!(render("{{ v|timesince }}", &aware_hours_ago(5)), "5 hours");
+    assert!(render("{{ v|timesince }}", &aware_hours_ago(30)).starts_with(&format!("1{NBSP}day")));
+    assert_eq!(
+        render("{{ v|timesince }}", &aware_hours_ago(5)),
+        format!("5{NBSP}hours")
+    );
 }
 
 #[test]
@@ -90,7 +102,12 @@ fn a_date_only_value_is_measured_too() {
     let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
-    assert_eq!(render("{{ v|timesince }}", &yesterday), "1 day");
+    // Depth-2 adds an hours component that moves through the day, so pin the
+    // leading unit rather than the whole string (#1795).
+    assert!(
+        render("{{ v|timesince }}", &yesterday).starts_with(&format!("1{NBSP}day")),
+        "a DateField is one of timesince's commonest inputs and must parse"
+    );
 }
 
 #[test]
@@ -114,14 +131,14 @@ fn timeuntil_gets_the_same_parse_and_the_same_refusal() {
     // would have been the very drift this consolidation retires.
     assert_eq!(
         render("{{ v|timeuntil }}", &naive_hours_ago(30)),
-        "0 minutes"
+        format!("0{NBSP}minutes")
     );
     assert_eq!(render("{{ v|timeuntil }}", "09:30:00"), "09:30:00");
 
     let future = (chrono::Local::now().naive_local() + chrono::Duration::hours(30))
         .format("%Y-%m-%dT%H:%M:%S%.f")
         .to_string();
-    assert_eq!(render("{{ v|timeuntil }}", &future), "1 day");
+    assert!(render("{{ v|timeuntil }}", &future).starts_with(&format!("1{NBSP}day")));
 }
 
 #[test]
@@ -131,6 +148,6 @@ fn a_past_value_reads_zero_for_timeuntil() {
     // negating the wrong side is an easy slip.
     assert_eq!(
         render("{{ v|timeuntil }}", &aware_hours_ago(5)),
-        "0 minutes"
+        format!("0{NBSP}minutes")
     );
 }
