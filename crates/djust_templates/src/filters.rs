@@ -1278,6 +1278,81 @@ fn is_dst(stamped: &Stamped) -> bool {
     }
 }
 
+/// Django's `N`: month in Associated Press style (`django.utils.dates.MONTHS_AP`).
+///
+/// NOT `%b` plus a period, which is what this was. AP does not abbreviate the
+/// short months at all — March, April, May, June and July are spelled out — and
+/// September is `Sept.`, not `Sep.`. So five of twelve months were wrong, plus
+/// September: **half the year**.
+///
+/// It survived because the three values in the format-code parity table are
+/// January, August and February, and all three happen to be months where
+/// `%b` + `.` is correct. A randomized sweep over 400 (date, code) pairs found
+/// it in seconds. Three carefully chosen values are still a sample.
+const MONTHS_AP: [&str; 12] = [
+    "Jan.", "Feb.", "March", "April", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.",
+    "Dec.",
+];
+
+/// English ordinal suffix for a day of the month (#2217).
+///
+/// The 11th/12th/13th exception is why this is a function and not
+/// `["th","st","nd","rd"][n % 10]`: those end in 1/2/3 but take `th`.
+fn ordinal_suffix(day: u32) -> &'static str {
+    match (day % 100, day % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    }
+}
+
+/// Django's `L`: a real leap-year test, unlike the February-28 clamp in
+/// `timesince` which Django itself does not leap-adjust.
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+/// Django's `t`: days in the month, leap-aware — February 2028 is 29.
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
+/// 12-hour clock, with midnight and noon reading as 12 rather than 0.
+fn twelve_hour(hour: u32) -> u32 {
+    match hour % 12 {
+        0 => 12,
+        h => h,
+    }
+}
+
+/// Django's `c`: ISO 8601, with microseconds only when non-zero.
+///
+/// A bare time renders just the time part — Django's `TimeFormat` has no date
+/// to emit, and a borrowed epoch anchor must not leak (#2216).
+fn iso_8601(dt: &DateTime<chrono::FixedOffset>, time_only: bool) -> String {
+    let micros = dt.timestamp_subsec_micros();
+    if time_only {
+        return if micros == 0 {
+            dt.format("%H:%M:%S").to_string()
+        } else {
+            dt.format("%H:%M:%S%.6f").to_string()
+        };
+    }
+    if micros == 0 {
+        dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
+    } else {
+        dt.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string()
+    }
+}
+
 /// Does this format string use a code a bare `datetime.time` cannot answer?
 ///
 /// The set is Django's, enumerated by running all 38 format characters against a
@@ -1375,11 +1450,7 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             'l' => result.push_str(&dt.format("%A").to_string()), // Monday
             'F' => result.push_str(&dt.format("%B").to_string()), // January
             'M' => result.push_str(&dt.format("%b").to_string()), // Jan
-            'N' => {
-                // Django: "Jan.", "Feb.", etc.
-                let month = dt.format("%b").to_string();
-                result.push_str(&format!("{month}."));
-            }
+            'N' => result.push_str(MONTHS_AP[(dt.month() - 1) as usize]),
             // Time format codes
             'G' => result.push_str(&dt.hour().to_string()), // 0-23 (24-hour, no leading zero)
             'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
@@ -1457,6 +1528,47 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                         result.push_str(&format!("{display_hour}:{minute:02} {ampm}"));
                     }
                 }
+            }
+            // The remaining Django format codes (#2217). Before this they fell
+            // through the catch-all and rendered as THEIR OWN LETTER, so
+            // `{{ v|date:"jS F Y" }}` produced `22S August 2026`.
+            //
+            // Quiet for a structural reason: rendering an unknown character as
+            // itself is also the CORRECT behaviour for a literal, so an
+            // unimplemented code is indistinguishable from an intentional one
+            // without a differential against Django. Every expectation below
+            // came from running all 38 characters through Django's own engine.
+            'b' => result.push_str(&dt.format("%b").to_string().to_lowercase()), // aug
+            'S' => result.push_str(ordinal_suffix(dt.day())),                    // nd
+            'w' => result.push_str(&dt.weekday().num_days_from_sunday().to_string()), // 0=Sun
+            'z' => result.push_str(&dt.ordinal().to_string()), // day of year, 1-based
+            't' => result.push_str(&days_in_month(dt.year(), dt.month()).to_string()),
+            'L' => {
+                // Python's `bool` repr, not `true`/`false` — Django renders the
+                // object, so the template shows `True`/`False`.
+                result.push_str(if is_leap_year(dt.year()) {
+                    "True"
+                } else {
+                    "False"
+                });
+            }
+            'o' => result.push_str(&dt.iso_week().year().to_string()), // ISO week-year
+            'W' => result.push_str(&dt.iso_week().week().to_string()), // ISO week number
+            'u' => result.push_str(&format!("{:06}", dt.timestamp_subsec_micros())),
+            'f' => {
+                // 12-hour time, minutes elided when zero: `7:30`, but plain `7`
+                // on the hour. Django's own shorthand for "time, tersely".
+                let hour = twelve_hour(dt.hour());
+                if dt.minute() == 0 {
+                    result.push_str(&hour.to_string());
+                } else {
+                    result.push_str(&format!("{}:{:02}", hour, dt.minute()));
+                }
+            }
+            'c' => result.push_str(&iso_8601(&dt, stamped.time_only)),
+            'r' => {
+                // RFC 5322, e.g. `Sat, 22 Aug 2026 19:30:45 -0400`.
+                result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string());
             }
             // Timezone codes (#2209). Before the active-zone plumbing existed
             // these had no answer to give, so they fell through to the
@@ -2628,8 +2740,11 @@ mod tests {
         // The |date filter must handle this by parsing as NaiveDate.
         let value = Value::String("2026-03-15".to_string());
 
+        // `N` is Associated Press style, and AP spells March out in full —
+        // this asserted "Mar. 15, 2026" until #2217, pinning the wrong answer
+        // for six of twelve months. Verified against Django: 'March 15, 2026'.
         let result = apply_filter("date", &value, Some("N j, Y")).unwrap();
-        assert_eq!(result.to_string(), "Mar. 15, 2026");
+        assert_eq!(result.to_string(), "March 15, 2026");
 
         let result = apply_filter("date", &value, Some("Y-m-d")).unwrap();
         assert_eq!(result.to_string(), "2026-03-15");
