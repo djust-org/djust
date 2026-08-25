@@ -2338,7 +2338,16 @@ fn serialize_queryset_py(
 /// - Lists/tuples: recursively serialize
 /// - Dicts: recursively serialize
 /// - Components: call .render() and wrap in {"render": ...}
-/// - Django types (datetime, Decimal, UUID): convert to strings
+/// - Django types (datetime, UUID): convert to strings
+/// - `Decimal`: **converts to a float, not a string** (#2214). The branch below
+///   intends a string and is dead, because `extract::<f64>()` above it honours
+///   `Decimal.__float__`. So a `DecimalField` reaches the client as a binary
+///   float and `Decimal('12345678901234567890.123456789')` arrives as
+///   `1.2345678901234567e+19`. Documented here rather than fixed because the
+///   one-line move regresses `{{ p|floatformat }}` and `{% if p > 10 %}` —
+///   this value goes back into the TEMPLATE CONTEXT, not only onto the wire,
+///   so it needs numeric semantics as well as precision. Tracked in #2214 and
+///   pinned by `python/tests/test_dead_special_case_converters_2214.py`.
 #[pyfunction(name = "serialize_context")]
 fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<PyDict>> {
     let result_dict = PyDict::new(py);
