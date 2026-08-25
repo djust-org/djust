@@ -370,6 +370,157 @@ issue or be explicitly closed with a reason.
 | 328 | Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group | Retro v1.1.0-13 (Stage 1) | #2140 | Closed | `RETRO.md`'s latest entry before v1.1.0-13 was v1.1.0-11; ~32 PRs have no milestone entry and #2094–#2128 were never bucketed in ROADMAP. Per-PR retros exist as PR comments so the material is recoverable — what was lost is the synthesis and the tracker rows those retros would have produced. RESOLVED 2026-07-26: both milestone entries written (v1.1.0-12, v1.1.0-12b); 3 missing per-PR retros backfilled (#2115, #2117 full form; #2125 minimal Dependabot form per v1.0.0rc6 canon); 2 new tracker rows filed (#329/#330). |
 | 329 | Chain-shaped drains need an estimation convention — a chain discovered one link at a time cannot be estimated up front | Retro v1.1.0-12b | #2142 | Closed | Two chains in #2094–#2128 (scoped-attr #2107→#2109→#2111, streams #2113→#2112→#2116→#2119) plus #2129's five rounds in v1.1.0-13. Each link was a real separately-reachable bug, so batching would have merged incomplete diagnoses — the cost today is narrative (chains read as slipped estimates), not correctness. |
 | 330 | Close Action Tracker rows automatically when their GitHub issue closes | Retro v1.1.0-12 | #2143 | Closed | Row 325 read Open for a full milestone after GitHub #2082 closed (2026-07-18, PR #2093); caught by chance in the v1.1.0-13 Stage 5 sweep. 69 rows currently read Open and an unknown fraction are stale, so the number is quoted in retros as a health signal and is not trustworthy. Report-only is probably right — the closing REASON matters more than the flag, and a bot cannot write it. |
+| 331 | Audit test reset fixtures for over-broad resets that leak Django global state | Retro v1.1.1-2 | #2234 | Open | Concrete instance fixed in PR #2233: a fixture called `translation.deactivate_all()`, which leaves `get_language()` as None so `get_format` falls back to `global_settings` where `NUMBER_GROUPING` is 0 — grouping silently off for every later test in the worker. `deactivate()` restores the default. A leaky reset fixture is doubly quiet: nobody suspects the cleanup. Sweep for siblings. |
+| 332 | Decide Decimal's wire representation — `Value` variant vs accepted precision limit | Retro v1.1.1-2 | #2214 | Open | The issue's one-line fix (hoist the branch) was MEASURED to regress `{{ p\|floatformat }}` and `{% if p > 10 %}`, because `serialize_python_value`'s output goes back into the TEMPLATE CONTEXT and not only onto the wire. Needs a design call, not a patch; three options are on the issue. PR #2224 shipped the structural guard with a strict xfail that reddens when this is fixed. |
+| 333 | Reproduce the #1882 wire-version pollution flake | Retro v1.1.1-2 | #2215 | Open | Investigated for a session: serial runs across the whole root are clean, so it needs xdist; 25 xdist runs produced zero reproductions. Working `_next_version()` stack instrumentation is recorded on the issue. Two of my own sample-size estimates about this flake have now been wrong in opposite directions — treat any rate claim about it as unestablished. |
+
+## v1.1.1-2 — Django-parity drain: timezone, locale, datetime filters (PRs #2213–#2233)
+
+**Date**: 2026-08-25
+**Scope**: Twelve PRs closing the Django-parity gap in the Rust template engine —
+timezone conversion, number localization, the whole `date` format-code surface,
+the datetime-parse chain, plus a session-engine fix and two tracker-hygiene fixes.
+**Tests at close**: 10,357 Python + 1,068 Rust
+
+### What We Learned
+
+**1. An issue's proposed REMEDY has the same epistemic status as its cited location.**
+Six of twelve PRs corrected a premise stated in the issue itself, and twice that
+premise was the *suggested fix*. #2209 gave the wrong reason for rejecting the
+obvious fix (the serializer is already Python, so there is no GIL crossing — the
+real objection is that it corrupts transported state). #2210 was wrong about the
+symptom, the site count, and the `signed_cookies` recommendation. #2221 was framed
+as a German-locale `floatformat` bug and is a default-English, every-number bug.
+#2227 guessed a 500 and it is the silent echo. And #2214's one-line fix was
+**measured to regress two template behaviours** — shipping it would have closed
+the issue and traded a precision bug nobody had reported for two behaviour bugs
+in common idioms. The existing triage rule says to distrust the reporter's cited
+path; this drain says the same applies to their diagnosis and their remedy,
+including when you wrote the issue yourself.
+
+**Action taken**: Added "An issue's proposed REMEDY has the same epistemic status
+as its cited location" to `CLAUDE.md`, section "Process canonicalizations from
+v1.1.1-2 retro arc (Django-parity drain)", with the six-row evidence table.
+
+**2. A curated table samples one axis and blinds you on the next.**
+PR #2231's parity table enumerated **all 38** format codes — explicitly invoking
+the enumerate-every-variant rule — and then sampled **three values per code**.
+Three defects survived it: `N` (Associated Press month style, wrong for six of
+twelve months), and gate-off mutations of `W` and `o` that those three values
+could not distinguish from correct. A 3,000-case randomized differential against
+Django found `N` in seconds. The same shape produced PR #2230's 1,600-case sweep
+and PR #2222's locale matrix. Django, PyO3 and `chrono` are all callable from a
+test, so "what does the reference actually do" is a subprocess away.
+
+**Action taken**: Added "pair a curated table with a randomized differential
+whenever a reference implementation is available" to `CLAUDE.md`, same section.
+
+**3. Gate-off has three failure modes and only one was in canon.**
+#2129/#2135 cover a mutation that fails to apply or breaks the build. Two more
+surfaced here, and both report the same green as a genuinely missing test: a
+**valid mutation that is semantically a no-op** for the tested inputs (PR #2230's
+February clamp), and **two mechanisms shadowing each other** (PR #2233 excluded
+`as_view` by name *and* guarded reads, so a mutation re-introducing the original
+bug left the whole suite green). A surviving mutation is a question, not a pass —
+and the three answers have opposite remedies.
+
+**Action taken**: Added "Gate-off has three failure modes" to `CLAUDE.md`, same
+section, with both new modes and the "delete the redundant mechanism rather than
+testing around it" rule.
+
+**4. Enumerating the call sites I know about is reliably one short.**
+Three PRs shipped incomplete and were corrected by a later sweep: #2218 (a second
+render path, found in self-review of a PR whose own docstring argued against this
+exact failure), #2223 (a third — the Django-template backend), and the
+#2203 → #2216 → #2227 → #2228 chain, where each link extended one filter's parse
+list while the neighbouring filters went unchecked. What worked every time was
+grepping for the **sink** rather than for the callers I expected.
+
+**Action taken**: Added "Grep for the SINK, not for the callers you expect" to
+`CLAUDE.md`, same section, paired with the set-pin requirement (#1125).
+
+**5. I introduced a pollution bug of the exact class I spent the drain fixing.**
+PR #2222's reset fixture used `translation.deactivate_all()`, which leaves
+`get_language()` as `None` so `get_format` falls back to `global_settings` where
+`NUMBER_GROUPING` is **0** — number grouping silently off for every later test in
+the worker. It poisoned a test two PRs later and was caught only because that test
+landed in the same worker. `deactivate_all()` reads like the *more thorough*
+choice and is the one that leaks. A reset fixture is written to prevent pollution,
+so a leaky one is doubly quiet.
+
+**Action taken**: Open — tracked in Action Tracker #331 (GitHub #2234).
+
+**6. Two of my sample-size claims about the same flake were wrong, in opposite
+directions.** First "3/3 green locally, so it needs CI sharding" — then it fired
+locally. Then "~1 run in 6" from that single sighting — then 25 runs produced
+zero. Each correction replaced one under-sampled conclusion with another. The
+investigation's real output is a negative result plus working instrumentation,
+which is worth recording precisely so nobody re-derives it.
+
+**Action taken**: Open — tracked in Action Tracker #333 (GitHub #2215).
+
+**7. `Decimal` reaches the client as a lossy float, and the obvious fix is worse.**
+`extract::<f64>()` sits above the `Decimal` stringify branch, so that branch is
+dead and `Decimal('12345678901234567890.123456789')` arrives as
+`1.2345678901234567e+19`. Hoisting the branch regresses `{{ p|floatformat }}` and
+`{% if p > 10 %}`, because that value goes back into the *template context* and
+not only onto the wire. It needs a design decision, not a patch.
+
+**Action taken**: Open — tracked in Action Tracker #332 (GitHub #2214). PR #2224
+shipped the structural guard with a strict `xfail` that reddens when this is fixed.
+
+### Insights
+
+- **The drain found more than it was given.** Nine issues were filed *during* it,
+  and six of the twelve PRs fixed a defect the issue did not describe. The
+  differential harness is why: once Django's own output is a subprocess call away,
+  every fix comes with a free audit of its neighbours.
+- **Reproduce-first paid every time it was applied, and twice it changed the plan
+  rather than confirming it.** #2210's runtime reproduction changed the symptom,
+  the site count and the recommendation. #2227's exposed a second bug the parse
+  fix would have shipped *underneath itself* — making a broken path reachable is
+  its own risk, and only the reproduction shows it.
+- **Chains are the normal shape here, not a slipped estimate.** #2203 → #2216 →
+  #2227 → #2228 ran four links, each surfaced by fixing the previous. The
+  chain-shaped-issues convention (#2142) held: file link N+1 immediately, count it
+  as one diagnosis refined four times. It ended structurally — one shared parser —
+  rather than by running out of instances.
+- **Declining to fix was the right call twice.** #2214's remedy regresses, and
+  #2163's required-status-check is theatre while `--admin` is the convention. Both
+  are documented rather than silently left open, which is the same disease #2200
+  was about.
+- **The one thing I would change about my own process:** three PRs shipped a
+  caller set that a one-command grep would have completed. The habit is not
+  missing — it is applied at self-review instead of before opening the PR.
+
+### Review Stats
+
+| Metric | Total |
+|---|---|
+| PRs merged | 12 |
+| Issues closed | **13** — 11 with code, 2 without (#2163 a policy decision, #2187 a duplicate of #2215) |
+| Issues filed during the drain | 9 |
+| Gate-off mutations run | **72** across 9 PRs (2 more used empirical canaries; #2213's was run by its reviewer) |
+| Gate-off mutations that initially survived | 4 — every one turned out to be a real gap or a redundant mechanism, none a harness error |
+| Randomized differential cases | **4,600** (#2230 1,600 + #2231 3,000), plus a curated locale matrix on #2222 |
+| Python tests | **10,278 → 10,357** |
+| Rust tests at close | 1,068 |
+| CI failures | 1 (a pre-existing pollution flake, #2215) |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New section "Process canonicalizations from v1.1.1-2 retro arc
+(Django-parity drain)" — four rules (remedy-epistemics, curated-table sampling,
+gate-off's three failure modes, grep-the-sink).
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+
+### Open Items
+
+- [ ] Audit test reset fixtures for over-broad Django-global resets — Action Tracker #331 (GitHub #2234)
+- [ ] Decide `Decimal`'s wire representation — Action Tracker #332 (GitHub #2214)
+- [ ] Reproduce the #1882 wire-version pollution flake — Action Tracker #333 (GitHub #2215)
 
 ## v1.1.0-13 — post-12 drain: stream identity, wire format, dj-virtual client applier (PRs #2131, #2132, #2134, #2135)
 

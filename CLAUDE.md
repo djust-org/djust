@@ -1531,6 +1531,80 @@ and re-created the class one step over — a `sed` that fixed ids containing
 ` - ` broke every id whose *message* contained a hyphen. Write the round down
 in the commit and the CHANGELOG, because the pattern is the finding.
 
+## Process canonicalizations from v1.1.1-2 retro arc (Django-parity drain)
+
+Four rules from the 12-PR Django-parity drain (#2212, #2209, #2210, #2221,
+#2214, #2223, #2216, #2227, #2228, #2217, #2200, #2219). The drain's defining
+statistic: **six of the twelve PRs corrected a premise stated in the issue
+itself** — and in two cases the premise was the *recommended fix*.
+
+- **An issue's proposed REMEDY has the same epistemic status as its cited
+  location — check it before building on it.** The Bug-report triage section
+  above says to distrust the reporter's cited code path. This drain showed the
+  same applies to the reporter's *diagnosis, severity, site count and
+  suggested fix*, including when you wrote the issue yourself:
+
+  | issue | what the issue said | what running it showed |
+  |---|---|---|
+  | #2209 | "the naive fix costs a GIL crossing" | the serializer is already Python — the real objection is that it corrupts transported state |
+  | #2210 | "empty session"; two call sites; refuse `signed_cookies` | `OperationalError`; **four** sites; reads work, only writes cannot persist |
+  | #2214 | "move the branch above the numeric extracts" | **regresses** `{{ p\|floatformat }}` and `{% if p > 10 %}` |
+  | #2221 | "German projects: `floatformat`" | **default-English**, and every bare `{{ n }}` |
+  | #2227 | "may be a 500 — confirm first" | the silent echo, which is worse |
+
+  Each check cost minutes. Two of them would have shipped a regression. The
+  operational form: before implementing an issue's suggested fix, state what
+  it assumes and run the case that would falsify it — this is the #1516
+  active-falsification rule applied to the remedy rather than the environment.
+
+- **A curated table samples one axis and blinds you on the next; pair it with a
+  randomized differential whenever a reference implementation is available.**
+  PR #2231's parity table enumerated **all 38** Django format codes and then
+  sampled **three values per code** — and three defects survived it: `N` (AP
+  month style, wrong for half the year), and gate-off mutations of `W` and `o`
+  that the three values could not distinguish from correct. A 3,000-case
+  randomized sweep against Django found `N` in seconds. Same shape in PR #2230
+  (1,600 cases) and #2222.
+
+  Django, PyO3 and `chrono` are all callable from a test, so "what does the
+  reference actually do" is a subprocess away and is worth preferring to
+  reasoning every time. Enumerate-every-variant (v1.0.0rc4 finding #1) applies
+  to **every axis of the surface**, not the one you happened to notice.
+
+- **Gate-off has three failure modes; only one was in canon.** #2129/#2135
+  cover a mutation that fails to apply or breaks the build. Two more surfaced
+  here, and both report the same green as a genuinely missing test:
+
+  1. **A valid mutation that is semantically a no-op for the tested inputs.**
+     PR #2230's `MONTHS_DAYS[..].min(d.day())` → `d.day().min(28)` changes the
+     source and computes the identical answer for every value under test.
+     Asserting the mutation text changed is not asserting the behaviour did.
+  2. **Two mechanisms shadowing each other.** PR #2233 excluded `as_view` by
+     name *and* guarded reads with `try/except AttributeError`; a mutation
+     re-introducing the **original bug** left the whole suite green, because
+     the guard silently covered for it. Belt-and-braces on the same half is one
+     fix plus one decoration, and no test can separate them while both exist.
+
+  So: **a surviving mutation is a question, not a pass.** Ask whether the
+  mutation was equivalent, whether two mechanisms overlap, or whether coverage
+  is genuinely missing — they look identical from the harness and have opposite
+  remedies. When two mechanisms overlap, delete the redundant one rather than
+  testing around it.
+
+- **Grep for the SINK, not for the callers you expect.** Three PRs in this
+  drain shipped with an incomplete set of call sites and were corrected only
+  by a later sweep: #2218 (a second render path found in self-review), #2223 (a
+  third — the Django-template backend), and the #2203 → #2216 → #2227 → #2228
+  chain, where each link extended one filter's parse list while the
+  neighbouring filters with their own parse went unchecked.
+
+  Enumerating "the places I know call X" is reliably one short. Grepping for
+  the *sink* — `_render_fn`, `render_template`, `parse_from_rfc3339` — is one
+  command and finds the ones you did not think of. Pair it with a structural
+  test that pins the caller **set** (not a floor, #1125) so the next omission
+  fails loudly: `test_both_render_paths_call_the_same_timezone_function` grew
+  2 → 3 exactly because a real path was missing.
+
 ## Additional Documentation
 
 - `docs/SECURE_DEFAULTS.md` — secure-by-default pattern catalog (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + how to make a new feature secure-by-default
