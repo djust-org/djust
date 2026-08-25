@@ -830,13 +830,124 @@ fn parse_slice_indices(parts: &[&str], len: isize) -> (isize, isize) {
     (start, end)
 }
 
-fn format_timesince(datetime_str: &str) -> Result<String> {
-    // Parse ISO datetime string
-    let dt = DateTime::parse_from_rfc3339(datetime_str)
-        .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {e}")))?;
+/// The one place a serialized Python datetime is parsed (#2227).
+///
+/// Four filters need this and three of them grew their own copy, one value
+/// shape at a time: `date`/`time` learned datetimes in #2203 and bare times in
+/// #2216, while `timesince`/`timeuntil` still accepted only RFC3339 — so a
+/// NAIVE datetime, the normal shape under `USE_TZ = False`, did not parse and
+/// the filter returned its input verbatim into the page.
+///
+/// Three instances of one class in three releases, each found by fixing the
+/// previous. The cure is this function rather than a third correct copy
+/// (#1646).
+///
+/// Returns the instant plus the two facts callers need about how it was
+/// obtained: whether the input carried an offset (`aware`), and whether it was
+/// a bare time with no date at all (`time_only`).
+///
+/// `allow_time_only` exists because the two consumers genuinely differ. A bare
+/// time is formattable — `{{ v|time:"H:i" }}` is meaningful — but it has no
+/// instant, so measuring elapsed time against it is not: it is anchored on an
+/// arbitrary epoch date, and `timesince` would happily report the decades since
+/// 1970. Django raises there. Passing `false` keeps that branch unreachable
+/// from the duration filters rather than trusting them not to call it.
+fn parse_serialized_datetime(
+    datetime_str: &str,
+    allow_time_only: bool,
+) -> Option<(DateTime<chrono::FixedOffset>, bool, bool)> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(datetime_str) {
+        return Some((dt, true, false));
+    }
+    // Naive datetime: "2026-08-22 14:30:00" -> that instant, UTC (#2203).
+    //
+    // This is how a Python `datetime` arrives -- space-separated, no offset --
+    // so it matched NEITHER the RFC3339 branch nor the date-only one below.
+    //
+    // Both separators, with and without seconds. The `T` variants are not
+    // RFC3339 without an offset, so they miss the branch above too. Seconds are
+    // optional for a reason worth naming, because the obvious one is wrong:
+    // Python ALWAYS emits them. The real source is an HTML
+    // `<input type="datetime-local">`, whose submitted value is
+    // `YYYY-MM-DDTHH:MM` -- so the no-seconds case that actually occurs is the
+    // `T` one, which a first pass missed while covering the space variant that
+    // never occurs.
+    //
+    // `%.f` makes the fractional part OPTIONAL, so each covers both "...:00"
+    // and "...:00.123456".
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), fmt) {
+            return Some((ndt.and_utc().fixed_offset(), false, false));
+        }
+    }
+    // Date-only: "2026-03-15" -> midnight UTC (#719).
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d") {
+        return Some((
+            d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset(),
+            false,
+            false,
+        ));
+    }
+    if allow_time_only {
+        // Time-only (#2216). Anchored on an arbitrary epoch date so the
+        // `Timelike` accessors work unchanged; `time_only` is what stops that
+        // borrowed date from ever being rendered -- and why the duration
+        // filters must not reach this branch at all.
+        for fmt in ["%H:%M:%S%.f", "%H:%M"] {
+            if let Ok(t) = chrono::NaiveTime::parse_from_str(datetime_str.trim(), fmt) {
+                return Some((
+                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                        .unwrap()
+                        .and_time(t)
+                        .and_utc()
+                        .fixed_offset(),
+                    false,
+                    true,
+                ));
+            }
+        }
+    }
+    None
+}
 
-    let now = Utc::now();
-    let duration = now.signed_duration_since(dt.with_timezone(&Utc));
+/// Elapsed time from `dt` to now, choosing the "now" Django would (#2227).
+///
+/// The half of the parse fix that is easy to miss, and it produces a
+/// *plausible* wrong answer rather than an obvious one. An AWARE value is an
+/// instant, so `Utc::now()` is right. A NAIVE value is not — Django's
+/// `timesince` compares it against `datetime.now()`, which is naive LOCAL time,
+/// so comparing it against UTC is off by the local offset.
+///
+/// Measured before fixing: a naive datetime two hours old reported **six**
+/// hours in a UTC-4 zone. Plausible enough to ship, and only visible against
+/// Django's own answer.
+fn duration_since(dt: DateTime<chrono::FixedOffset>, aware: bool) -> chrono::Duration {
+    if aware {
+        Utc::now().signed_duration_since(dt.with_timezone(&Utc))
+    } else {
+        // Both sides naive: compare the wall clocks directly, which is exactly
+        // what Python does when neither value carries a tzinfo.
+        chrono::Local::now()
+            .naive_local()
+            .signed_duration_since(dt.naive_utc())
+    }
+}
+
+fn format_timesince(datetime_str: &str) -> Result<String> {
+    // `allow_time_only = false`: a bare time has no instant to measure from
+    // (#2227). Django raises there; this returns the input unchanged, which is
+    // djust's fail-soft convention for an unparseable value.
+    let (dt, aware, _time_only) =
+        parse_serialized_datetime(datetime_str, false).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
+        })?;
+
+    let duration = duration_since(dt, aware);
 
     let seconds = duration.num_seconds();
 
@@ -867,12 +978,13 @@ fn format_timesince(datetime_str: &str) -> Result<String> {
 }
 
 fn format_timeuntil(datetime_str: &str) -> Result<String> {
-    // Parse ISO datetime string
-    let dt = DateTime::parse_from_rfc3339(datetime_str)
-        .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {e}")))?;
+    // See the note in `format_timesince` on `allow_time_only = false` (#2227).
+    let (dt, aware, _time_only) =
+        parse_serialized_datetime(datetime_str, false).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
+        })?;
 
-    let now = Utc::now();
-    let duration = dt.with_timezone(&Utc).signed_duration_since(now);
+    let duration = -duration_since(dt, aware);
 
     let seconds = duration.num_seconds();
 
@@ -1130,79 +1242,11 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
     // the way to `apply_active_timezone` because Django applies `localtime` to
     // aware values ONLY — converting a naive one would move every timestamp in
     // a `USE_TZ = False` project.
-    let mut aware = true;
-    // A bare `datetime.time` — `"23:30:00"`, no date at all (#2216). Before
-    // this, no parse branch matched such a value, so `date`/`time` returned
-    // their INPUT VERBATIM: `{{ v|time:"H:i" }}` on a `TimeField` rendered
-    // `23:30:00` where Django renders `23:30`. Exactly the class #2203 fixed
-    // for datetimes, still live for a different type.
-    let mut time_only = false;
-    let dt = DateTime::parse_from_rfc3339(datetime_str)
-        .or_else(|_| {
-            // Naive datetime: "2026-08-22 14:30:00" → that instant, UTC (#2203).
-            //
-            // This is how a Python `datetime` arrives — space-separated, no
-            // offset — so it matched NEITHER branch below and `date`/`time`
-            // returned their input unchanged. `{{ post.created_at|date:"Y-m-d" }}`,
-            // the commonest use of this filter, rendered a raw datetime string.
-            //
-            // It survived because a `DateField` stringifies to "2026-08-22" and
-            // takes the date-only branch, so the failure is invisible unless the
-            // value is a datetime.
-            //
-            // Both separators, with and without seconds. The `T` variants are
-            // not RFC3339 without an offset, so they miss the branch above too.
-            //
-            // Seconds are optional for a reason worth naming, because the
-            // obvious one is wrong: Python ALWAYS emits them
-            // (`str(datetime(...,14,30))` is `"2026-08-22 14:30:00"`, and
-            // `str(time(14,30))` is `"14:30:00"`). The real source is an HTML
-            // `<input type="datetime-local">`, whose submitted value is
-            // `YYYY-MM-DDTHH:MM` with seconds omitted — so the no-seconds case
-            // that actually occurs is the `T` one, which a first pass here
-            // missed while covering the space variant that never occurs.
-            [
-                // `%.f` makes the fractional part OPTIONAL, so each of these
-                // covers both "…:00" and "…:00.123456".
-                "%Y-%m-%dT%H:%M:%S%.f",
-                "%Y-%m-%d %H:%M:%S%.f",
-                "%Y-%m-%dT%H:%M",
-                "%Y-%m-%d %H:%M",
-            ]
-            .iter()
-            .find_map(|fmt| chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), fmt).ok())
-            .ok_or(())
-            .map(|ndt| {
-                aware = false;
-                ndt.and_utc().fixed_offset()
-            })
-        })
-        .or_else(|_| {
-            // Date-only: "2026-03-15" → midnight UTC (#719)
-            chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d").map(|d| {
-                aware = false;
-                d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset()
-            })
-        })
-        .or_else(|_| {
-            // Time-only (#2216). Anchored on an arbitrary epoch date so the
-            // existing `Timelike` accessors work unchanged; `time_only` is what
-            // stops that borrowed date from ever being rendered.
-            ["%H:%M:%S%.f", "%H:%M"]
-                .iter()
-                .find_map(|fmt| chrono::NaiveTime::parse_from_str(datetime_str.trim(), fmt).ok())
-                .ok_or(())
-                .map(|t| {
-                    aware = false;
-                    time_only = true;
-                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .unwrap()
-                        .and_time(t)
-                        .and_utc()
-                        .fixed_offset()
-                })
-        })
-        .map_err(|_| {
+    // One shared parser for every filter that takes a serialized datetime
+    // (#2227). `allow_time_only = true` here: formatting a bare time is
+    // meaningful, unlike measuring a duration against one.
+    let (dt, aware, time_only) =
+        parse_serialized_datetime(datetime_str, true).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
         })?;
 
@@ -2079,6 +2123,93 @@ fn is_void_element(tag: &str) -> bool {
 
 pub mod tags {
     // Placeholder for custom tags
+}
+
+#[cfg(test)]
+mod parse_shape_tests_2227 {
+    //! One parser for every filter that takes a serialized datetime (#2227).
+    //!
+    //! Three filters grew their own copy, one value shape at a time — `date`
+    //! and `time` learned datetimes in #2203 and bare times in #2216, while
+    //! `timesince`/`timeuntil` still accepted only RFC3339. Three instances of
+    //! one class in three releases, each found by fixing the previous. These
+    //! cases pin the shared parser so the fourth filter does not start a fourth
+    //! copy.
+
+    use super::parse_serialized_datetime;
+
+    /// Every shape a serialized Python value actually arrives in, and what the
+    /// parser must report about each.
+    const SHAPES: &[(&str, bool, bool)] = &[
+        // (input, aware, time_only)
+        ("2026-08-22T23:30:00+00:00", true, false), // aware datetime, isoformat
+        ("2026-08-22 23:30:00+00:00", true, false), // aware datetime, str()
+        ("2026-08-22T23:30:00", false, false),      // NAIVE — the #2227 case
+        ("2026-08-22 23:30:00", false, false),
+        ("2026-08-22T23:30:00.123456", false, false), // microseconds
+        ("2026-08-22T23:30", false, false),           // <input type=datetime-local>
+        ("2026-08-22 23:30", false, false),
+        ("2026-08-22", false, false), // date only
+    ];
+
+    #[test]
+    fn every_serialized_shape_parses() {
+        for (input, aware, time_only) in SHAPES {
+            let got = parse_serialized_datetime(input, true);
+            let (_, got_aware, got_time_only) =
+                got.unwrap_or_else(|| panic!("{input:?} should parse"));
+            assert_eq!(got_aware, *aware, "aware for {input:?}");
+            assert_eq!(got_time_only, *time_only, "time_only for {input:?}");
+        }
+    }
+
+    #[test]
+    fn the_naive_shapes_are_reported_as_naive() {
+        // The distinction the whole timezone fix rests on (#2209): an aware
+        // value is converted to the active zone, a naive one is not. A parser
+        // that reported everything as aware would silently shift every naive
+        // datetime.
+        let (_, aware, _) = parse_serialized_datetime("2026-08-22T23:30:00", true).unwrap();
+        assert!(!aware);
+        let (_, aware, _) = parse_serialized_datetime("2026-08-22T23:30:00+00:00", true).unwrap();
+        assert!(aware);
+    }
+
+    #[test]
+    fn a_bare_time_parses_only_when_the_caller_allows_it() {
+        // The reason the flag exists. A bare time is formattable but has no
+        // instant, so it is anchored on an arbitrary epoch date — and
+        // `timesince` against that anchor would report the decades since 1970.
+        // Django raises there; keeping the branch unreachable is safer than
+        // trusting the duration filters not to call it.
+        let (_, _, time_only) = parse_serialized_datetime("23:30:00", true).unwrap();
+        assert!(time_only);
+        assert!(
+            parse_serialized_datetime("23:30:00", false).is_none(),
+            "a duration filter must NOT be handed a bare time"
+        );
+        assert!(parse_serialized_datetime("23:30", false).is_none());
+    }
+
+    #[test]
+    fn a_date_is_still_a_date_when_time_only_is_disallowed() {
+        // Guard: `allow_time_only = false` must narrow ONLY the time branch.
+        // Rejecting date-only values too would re-break `timesince` on a
+        // `DateField`, which is one of its commonest inputs.
+        let (_, _, time_only) = parse_serialized_datetime("2026-08-22", false).unwrap();
+        assert!(!time_only);
+        assert!(parse_serialized_datetime("2026-08-22T23:30:00", false).is_some());
+    }
+
+    #[test]
+    fn garbage_is_rejected_rather_than_guessed_at() {
+        for junk in ["", "not a date", "2026-13-45", "23:99:99", "hello 2026"] {
+            assert!(
+                parse_serialized_datetime(junk, true).is_none(),
+                "{junk:?} should not parse"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
