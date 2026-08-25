@@ -774,6 +774,22 @@ class DjustTemplate:
         # Render with Rust engine (use resolved template with inheritance resolved)
         # Pass template directories to support {% include %} tags
         try:
+            # Per-render Django settings the Rust engine cannot read for itself:
+            # the active timezone (#2209) and number format (#2221). This is a
+            # TOP-LEVEL render path — a plain Django template rendered through
+            # djust's backend — and it was the third one, unwired while the two
+            # LiveView paths were fixed (#2223). On a fresh worker thread it
+            # rendered `1234567|23:30` where Django renders `1,234,567|19:30`.
+            #
+            # Here rather than inside `_rust.render_template*` deliberately:
+            # measured at ~12us against ~15us for a small render, so pushing on
+            # every call — including the many NESTED component renders that
+            # already inherit a correct thread-local from their enclosing
+            # render — would be ~78% overhead for no gain. Top-level entries
+            # pay it once; nested ones inherit.
+            from ..render_env import apply_render_env
+
+            apply_render_env()
             template_dirs = [str(d) for d in self.backend.template_dirs]
             html = self.backend._render_fn_with_dirs(
                 resolved_template,

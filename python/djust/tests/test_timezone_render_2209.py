@@ -234,8 +234,20 @@ def test_both_render_paths_call_the_same_timezone_function():
     A behavioural test proves each path converts today. It cannot prove they
     still SHARE the mechanism tomorrow — someone could inline a second copy into
     either and both tests would stay green while the two drifted apart. This
-    asserts the single source of truth directly, and would go red the moment a
-    third render path appeared without wiring (#1125: pin the set, not a floor).
+    asserts the single source of truth directly (#1125: pin the set, not a
+    floor).
+
+    It has already earned that: the set was two entries until #2223, when
+    ``template/rendering.py`` — the Django-template BACKEND, a genuine
+    top-level render path — turned out to be unwired and rendering both the
+    UTC timestamps and the unseparated numbers the other two paths had been
+    fixed for.
+
+    Deliberately NOT in the set: the nested ``_rust.render_template`` calls in
+    ``components/base.py`` and elsewhere. Those inherit a correct thread-local
+    from whichever top-level render encloses them, and pushing again costs
+    ~12us against a ~15us small render — ~78% overhead for no gain. If one of
+    them ever becomes reachable WITHOUT an enclosing render, it joins this set.
     """
     import ast
     import pathlib
@@ -259,7 +271,11 @@ def test_both_render_paths_call_the_same_timezone_function():
             ):
                 callers.add(path.relative_to(root).as_posix())
 
-    assert callers == {"mixins/rust_bridge.py", "simple_live_view.py"}, (
+    assert callers == {
+        "mixins/rust_bridge.py",
+        "simple_live_view.py",
+        "template/rendering.py",
+    }, (
         "the set of render paths pushing per-render settings to Rust changed. Add the "
         "new path here once it calls apply_render_env() — and if a path "
         "was REMOVED from this set, check it did not grow its own private copy "
