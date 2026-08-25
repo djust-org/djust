@@ -203,29 +203,34 @@ def test_use_tz_false_clears_the_zone_rather_than_leaving_a_stale_one():
 # ---------------------------------------------------------------------------
 
 
-def test_the_simple_live_view_path_is_wired_but_currently_unreachable():
-    """``simple_live_view`` gets the same handoff, and cannot be exercised.
+@override_settings(USE_TZ=True, TIME_ZONE="America/New_York")
+def test_the_simple_live_view_path_converts_too():
+    """The second render path, now reachable (#2219).
 
-    That module's class — itself named ``LiveView``, a different one from
-    ``djust.LiveView``, which is why grepping for "SimpleLiveView" finds
-    nothing — renders through ``render_template_with_dirs`` and shares no base
-    with ``RustBridgeMixin``. So it is a genuine second render path and would
-    have kept rendering UTC while ``LiveView`` rendered correctly. It calls the
-    shared function for that reason.
+    This test used to assert the OPPOSITE — that ``get_context_data`` raises —
+    because ``simple_live_view`` could not render at all: it walked
+    ``dir(self)`` and ``getattr``-ed Django's ``View.as_view``, a
+    ``classonlymethod`` that raises on an instance. It was written to fail the
+    moment someone fixed the module, which is the signal to put the real
+    behavioural case here. #2219 fixed it, so here it is.
 
-    It cannot get a behavioural test, because the module does not work at all:
-    ``get_context_data`` walks ``dir(self)`` and ``getattr``s each name, which
-    reaches Django's ``View.as_view`` — a ``classonlymethod`` that raises
-    ``AttributeError`` on any INSTANCE. Every render through it therefore fails
-    before reaching a template. Asserted below rather than described, so this
-    test starts failing the moment someone fixes the module — at which point
-    the real behavioural case belongs here. Filed as #2219.
+    Worth keeping in THIS file rather than moving: that module shares no base
+    with ``RustBridgeMixin`` and renders through ``render_template_with_dirs``,
+    so it is a genuine second render path and would happily render every
+    timestamp in UTC on its own.
     """
-    from djust.simple_live_view import LiveView as SimpleLiveView
+    from djust.simple_live_view import SimpleLiveView
 
-    view = SimpleLiveView()
-    with pytest.raises(AttributeError, match="only on the class"):
-        view.get_context_data()
+    class _SimpleStamp(SimpleLiveView):
+        template = '<div>{{ created|date:"Y-m-d H:i" }}</div>'
+
+        def mount(self, request, **kwargs):
+            self.created = AWARE_SUMMER
+
+    view = _SimpleStamp()
+    view.mount(RequestFactory().get("/"))
+    out = view.render_template()
+    assert "2026-08-22 19:30" in out, f"expected the New York time, got {out!r}"
 
 
 def test_both_render_paths_call_the_same_timezone_function():

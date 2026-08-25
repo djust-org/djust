@@ -53,9 +53,30 @@ def _render(value=1234.5, template=None):
 
 @pytest.fixture(autouse=True)
 def _reset_language():
-    translation.deactivate_all()
+    """``deactivate()``, NOT ``deactivate_all()`` — the difference leaks.
+
+    ``deactivate_all()`` installs a ``NullTranslations`` and leaves
+    ``get_language()`` returning ``None``, which makes ``get_format`` skip the
+    locale modules and fall back to ``global_settings``. There,
+    ``NUMBER_GROUPING`` is **0** — so grouping is silently off for every later
+    test in the same worker:
+
+        fresh                  get_language()='en-us'  NUMBER_GROUPING=3
+        after deactivate()     get_language()='en-us'  NUMBER_GROUPING=3
+        after deactivate_all() get_language()=None     NUMBER_GROUPING=0
+
+    This file shipped with ``deactivate_all()`` and poisoned a later test in
+    ``test_simple_live_view_2219.py``, which then rendered `1234567` where it
+    expected `1,234,567`. Caught only because that test happened to land in the
+    same worker — the ordering-dependent flake class this repo keeps paying for
+    (#2215, #2187), introduced by the very PR that added these cases.
+
+    ``deactivate()`` restores ``settings.LANGUAGE_CODE``, which is what
+    "reset the language" should mean.
+    """
+    translation.deactivate()
     yield
-    translation.deactivate_all()
+    translation.deactivate()
 
 
 # ---------------------------------------------------------------------------
