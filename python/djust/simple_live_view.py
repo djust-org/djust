@@ -25,9 +25,9 @@ without anyone noticing it was a live render path (#2223). The class is now
 ``from djust.simple_live_view import LiveView`` keeps working.
 """
 
+import logging
 from typing import Any, Dict, Optional, Set
 
-from django.conf import settings
 from django.http import HttpRequest, HttpResponse
 from django.views import View
 
@@ -40,6 +40,8 @@ except ImportError:
 
 from .render_env import apply_render_env
 from .utils import get_template_dirs
+
+logger = logging.getLogger(__name__)
 
 #: Django ``View`` machinery a template has no use for, excluded so the context
 #: is the view's own state rather than its plumbing.
@@ -120,9 +122,35 @@ class SimpleLiveView(View):
                 apply_render_env()
                 context = self.get_context_data()
                 return str(render_template_with_dirs(self.template, context, get_template_dirs()))
-            except Exception as e:
-                if settings.DEBUG:
-                    return f"<div>Template error: {e}</div>"
+            except Exception:
+                # The exception detail goes to the LOG, never to the response
+                # (CodeQL `py/stack-trace-exposure`, alert #2596; CWE-209).
+                #
+                # This used to render `f"<div>Template error: {e}</div>"` when
+                # `DEBUG` was on. Two separate defects; CodeQL names the
+                # SECOND, and the first was found only by reading the line it
+                # pointed at:
+                #
+                # 1. The message was interpolated **unescaped**, so an
+                #    exception carrying a `<` — and template errors routinely
+                #    echo the offending value — injected markup straight into
+                #    the page (CWE-79). `websocket.py:549` fixed exactly this
+                #    shape with `escape(str(e))`, and its comment says it
+                #    "mirrors the DEBUG gate in simple_live_view" — the copy
+                #    was fixed and the original it was modelled on was not
+                #    (#1646).
+                # 2. The detail flowed into the response at all — the
+                #    information-exposure rule CodeQL actually fired on.
+                #    Escaping fixes (1) and would have left (2) untouched, so
+                #    copying the sibling's fix verbatim would have closed the
+                #    real bug and left the alert open.
+                #
+                # `logger.exception` is strictly better for the developer this
+                # was meant to serve: a full traceback in the log rather than a
+                # one-line `str(e)` in a div. Nothing is DEBUG-gated any more,
+                # so dev and production return the same static string and there
+                # is no mode-dependent leak to reason about.
+                logger.exception("[SimpleLiveView] template render failed")
                 return "<div>An error occurred rendering this view.</div>"
         return "<div>Rust backend not available</div>"
 
