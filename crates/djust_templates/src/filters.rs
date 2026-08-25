@@ -915,26 +915,169 @@ fn parse_serialized_datetime(
     None
 }
 
-/// Elapsed time from `dt` to now, choosing the "now" Django would (#2227).
+/// Django's `timesince` / `timeuntil`, ported from `django/utils/timesince.py`
+/// rather than approximated (#2228).
 ///
-/// The half of the parse fix that is easy to miss, and it produces a
-/// *plausible* wrong answer rather than an obvious one. An AWARE value is an
-/// instant, so `Utc::now()` is right. A NAIVE value is not — Django's
-/// `timesince` compares it against `datetime.now()`, which is naive LOCAL time,
-/// so comparing it against UTC is off by the local offset.
+/// The previous implementation diverged from Django on **every** input,
+/// including the aware values that always parsed:
 ///
-/// Measured before fixing: a naive datetime two hours old reported **six**
-/// hours in a UTC-4 zone. Plausible enough to ship, and only visible against
-/// Django's own answer.
-fn duration_since(dt: DateTime<chrono::FixedOffset>, aware: bool) -> chrono::Duration {
-    if aware {
-        Utc::now().signed_duration_since(dt.with_timezone(&Utc))
+/// | elapsed | Django | before |
+/// |---|---|---|
+/// | 30 s | `0 minutes` | `30 seconds` |
+/// | 2 h 30 m | `2 hours, 30 minutes` | `2 hours` |
+/// | 10 d | `1 week, 3 days` | `1 week` |
+/// | 400 d | `1 year, 1 month` | `1 year` |
+///
+/// Three separate defects: the separator between a count and its unit is a
+/// NO-BREAK SPACE (so the pair never wraps across a line), up to **two
+/// adjacent** units are shown, and the smallest unit is the MINUTE — Django
+/// ignores seconds entirely.
+///
+/// Years and months are **calendar-aware**, which is the part an approximation
+/// cannot reach: Django's own docstring notes there is exactly "1 year, 1
+/// month" between 2013-02-10 and 2014-03-10 *and* between 2007-08-10 and
+/// 2008-09-10, though the deltas are 393 and 397 days. Dividing by a fixed
+/// 2629746 seconds gets both wrong.
+///
+/// `MONTHS_DAYS` is Django's own table, February included — it carries 28 with
+/// no leap-year case, so the pivot for a source date late in the month clamps
+/// to the 28th even in a leap year. A quirk rather than a design, reproduced
+/// because parity is the point: changing it here would make djust disagree with
+/// Django on exactly those dates.
+const MONTHS_DAYS: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/// Seconds per week / day / hour / minute — Django's `TIME_CHUNKS`.
+const TIME_CHUNKS: [i64; 4] = [604_800, 86_400, 3_600, 60];
+
+/// Unit names in `partials` order, singular and plural.
+const UNIT_NAMES: [(&str, &str); 6] = [
+    ("year", "years"),
+    ("month", "months"),
+    ("week", "weeks"),
+    ("day", "days"),
+    ("hour", "hours"),
+    ("minute", "minutes"),
+];
+
+/// Django's `avoid_wrapping`: every space in a rendered unit becomes U+00A0, so
+/// the count and its noun cannot break across a line.
+///
+/// A test written with an ordinary space passes while shipping the wrong byte,
+/// which is why the suite asserts the codepoint rather than the look.
+fn nbsp_unit(count: i64, index: usize) -> String {
+    let (singular, plural) = UNIT_NAMES[index];
+    let name = if count == 1 { singular } else { plural };
+    format!("{count}\u{a0}{name}")
+}
+
+fn zero_minutes() -> String {
+    nbsp_unit(0, 5)
+}
+
+/// The shared body of both filters; `timeuntil` is `timesince` with the two
+/// datetimes swapped, exactly as Django implements it (`reversed=True`).
+///
+/// Both filters previously carried near-identical 30-line formatting blocks, so
+/// every change had to be made twice — the #1646 shape that produced this
+/// issue's siblings. One function now.
+#[doc(hidden)]
+/// Test-only re-export of [`django_timesince`]. Not part of the public API.
+///
+/// The filters compare against "now", so a test through them can only assert
+/// coarse buckets and would be a coin flip near a boundary (#1795). Exposing
+/// the pure two-argument function lets the parity suite pin exact strings —
+/// including the calendar cases, which a "now"-relative test could never reach.
+pub fn django_timesince_for_tests(d: chrono::NaiveDateTime, now: chrono::NaiveDateTime) -> String {
+    django_timesince(d, now)
+}
+
+fn django_timesince(d: chrono::NaiveDateTime, now: chrono::NaiveDateTime) -> String {
+    use chrono::{Datelike, Timelike};
+
+    // No swap here, deliberately. A first pass added one so both filters could
+    // share the body, and it silently broke `timesince` on a FUTURE value:
+    // Django returns `0 minutes` there, and a swap turns it into the elapsed
+    // time in the wrong direction. `timeuntil` swaps at its own call site,
+    // which is exactly what Django's `reversed=True` does.
+    if (now - d).num_seconds() <= 0 {
+        return zero_minutes();
+    }
+
+    // Calendar months between the two dates, backed off by one when the
+    // day-of-month (or the time within that day) has not yet come round.
+    let mut total_months = (now.year() - d.year()) * 12 + (now.month() as i32 - d.month() as i32);
+    if d.day() > now.day() || (d.day() == now.day() && d.time() > now.time()) {
+        total_months -= 1;
+    }
+    let years = total_months.div_euclid(12);
+    let months = total_months.rem_euclid(12);
+
+    // The pivot is `d` advanced by whole years and months, so the remainder
+    // below is measured from a real calendar date rather than from a fixed
+    // number of seconds.
+    let pivot = if years != 0 || months != 0 {
+        let mut pivot_year = d.year() + years;
+        let mut pivot_month = d.month() as i32 + months;
+        if pivot_month > 12 {
+            pivot_month -= 12;
+            pivot_year += 1;
+        }
+        let day = MONTHS_DAYS[(pivot_month - 1) as usize].min(d.day());
+        chrono::NaiveDate::from_ymd_opt(pivot_year, pivot_month as u32, day)
+            .and_then(|date| date.and_hms_opt(d.hour(), d.minute(), d.second()))
+            .unwrap_or(d)
     } else {
-        // Both sides naive: compare the wall clocks directly, which is exactly
-        // what Python does when neither value carries a tzinfo.
-        chrono::Local::now()
-            .naive_local()
-            .signed_duration_since(dt.naive_utc())
+        d
+    };
+
+    let mut remaining = (now - pivot).num_seconds();
+    let mut partials = vec![years as i64, months as i64];
+    for chunk in TIME_CHUNKS {
+        let count = remaining.div_euclid(chunk);
+        partials.push(count);
+        remaining -= chunk * count;
+    }
+
+    // First non-zero unit, then up to `DEPTH` ADJACENT units — the walk stops
+    // at the first zero, so `1 year, 0 months` renders as `1 year` and never
+    // reaches down to `1 year, 3 days`.
+    const DEPTH: usize = 2;
+    let Some(first) = partials.iter().position(|v| *v != 0) else {
+        return zero_minutes();
+    };
+    let mut out = Vec::new();
+    let mut i = first;
+    while i < UNIT_NAMES.len() && out.len() < DEPTH {
+        if partials[i] == 0 {
+            break;
+        }
+        out.push(nbsp_unit(partials[i], i));
+        i += 1;
+    }
+    out.join(", ")
+}
+
+/// Both wall clocks, in the frame Django would compare them in.
+///
+/// An AWARE value is an instant, and Django does `datetime.now(d.tzinfo)` — so
+/// "now" is read in the SOURCE value's offset, not the active zone's. A NAIVE
+/// value is compared against `datetime.now()`, naive local time.
+///
+/// Getting this wrong gives a plausible answer rather than an obvious one:
+/// pre-#2227 a naive datetime two hours old reported six hours in a UTC-4 zone,
+/// because it was compared against UTC.
+fn now_and_then(
+    dt: DateTime<chrono::FixedOffset>,
+    aware: bool,
+) -> (chrono::NaiveDateTime, chrono::NaiveDateTime) {
+    if aware {
+        let offset = *dt.offset();
+        (
+            dt.naive_local(),
+            Utc::now().with_timezone(&offset).naive_local(),
+        )
+    } else {
+        (dt.naive_utc(), chrono::Local::now().naive_local())
     }
 }
 
@@ -946,35 +1089,8 @@ fn format_timesince(datetime_str: &str) -> Result<String> {
         parse_serialized_datetime(datetime_str, false).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
         })?;
-
-    let duration = duration_since(dt, aware);
-
-    let seconds = duration.num_seconds();
-
-    // Format like Django's timesince
-    let formatted = if seconds < 60 {
-        format!("{} second{}", seconds, if seconds != 1 { "s" } else { "" })
-    } else if seconds < 3600 {
-        let minutes = seconds / 60;
-        format!("{} minute{}", minutes, if minutes != 1 { "s" } else { "" })
-    } else if seconds < 86400 {
-        let hours = seconds / 3600;
-        format!("{} hour{}", hours, if hours != 1 { "s" } else { "" })
-    } else if seconds < 604800 {
-        let days = seconds / 86400;
-        format!("{} day{}", days, if days != 1 { "s" } else { "" })
-    } else if seconds < 2629746 {
-        let weeks = seconds / 604800;
-        format!("{} week{}", weeks, if weeks != 1 { "s" } else { "" })
-    } else if seconds < 31556952 {
-        let months = seconds / 2629746;
-        format!("{} month{}", months, if months != 1 { "s" } else { "" })
-    } else {
-        let years = seconds / 31556952;
-        format!("{} year{}", years, if years != 1 { "s" } else { "" })
-    };
-
-    Ok(formatted)
+    let (then, now) = now_and_then(dt, aware);
+    Ok(django_timesince(then, now))
 }
 
 fn format_timeuntil(datetime_str: &str) -> Result<String> {
@@ -983,40 +1099,13 @@ fn format_timeuntil(datetime_str: &str) -> Result<String> {
         parse_serialized_datetime(datetime_str, false).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
         })?;
-
-    let duration = -duration_since(dt, aware);
-
-    let seconds = duration.num_seconds();
-
-    // If datetime is in the past, return empty string like Django
-    if seconds < 0 {
-        return Ok("0 minutes".to_string());
+    let (then, now) = now_and_then(dt, aware);
+    // Django's `timeuntil` is `timesince(d, now, reversed=True)` — the same
+    // computation with the arguments swapped. A past value yields `0 minutes`.
+    if then <= now {
+        return Ok(zero_minutes());
     }
-
-    // Format like Django's timeuntil
-    let formatted = if seconds < 60 {
-        format!("{} second{}", seconds, if seconds != 1 { "s" } else { "" })
-    } else if seconds < 3600 {
-        let minutes = seconds / 60;
-        format!("{} minute{}", minutes, if minutes != 1 { "s" } else { "" })
-    } else if seconds < 86400 {
-        let hours = seconds / 3600;
-        format!("{} hour{}", hours, if hours != 1 { "s" } else { "" })
-    } else if seconds < 604800 {
-        let days = seconds / 86400;
-        format!("{} day{}", days, if days != 1 { "s" } else { "" })
-    } else if seconds < 2629746 {
-        let weeks = seconds / 604800;
-        format!("{} week{}", weeks, if weeks != 1 { "s" } else { "" })
-    } else if seconds < 31556952 {
-        let months = seconds / 2629746;
-        format!("{} month{}", months, if months != 1 { "s" } else { "" })
-    } else {
-        let years = seconds / 31556952;
-        format!("{} year{}", years, if years != 1 { "s" } else { "" })
-    };
-
-    Ok(formatted)
+    Ok(django_timesince(now, then))
 }
 
 fn format_filesize(bytes: i64) -> String {
