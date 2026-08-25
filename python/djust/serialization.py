@@ -314,7 +314,9 @@ class DjangoJSONEncoder(json.JSONEncoder):
         if isinstance(obj, UUID):
             return str(obj)
 
-        # Handle Decimal
+        # Handle Decimal — float, not str. Diverges from
+        # ``DjangoJSONEncoder.default`` (which returns ``str(o)``) and loses
+        # precision; see the note in ``normalize_django_value`` below and #2214.
         if isinstance(obj, Decimal):
             return float(obj)
 
@@ -1017,7 +1019,20 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     if isinstance(value, Promise):
         return str(value)
 
-    # Decimal -> float (matches DjangoJSONEncoder.default)
+    # Decimal -> float.
+    #
+    # NOT what DjangoJSONEncoder does, despite what this comment used to claim
+    # (#2214, #1867): Django's encoder returns ``str(o)`` for Decimal, keeping
+    # full precision. Converting to float loses it —
+    # ``Decimal('12345678901234567890.123456789')`` becomes
+    # ``1.2345678901234567e+19``.
+    #
+    # Left as float ON PURPOSE rather than corrected in place, because the
+    # obvious fix is not free: the Rust template engine treats a string as a
+    # string, so switching this to ``str`` regresses ``{{ p|floatformat }}``
+    # and ``{% if p > 10 %}`` — both measured. The three converters that
+    # disagree about this (here, ``__default__`` above, and Rust's
+    # ``serialize_python_value``) need one decision, tracked in #2214.
     if isinstance(value, Decimal):
         return float(value)
 
