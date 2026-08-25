@@ -54,6 +54,14 @@ Globals reset (and why):
   — module-level ``itertools.count`` singletons. Resetting to a fresh
   ``count(1)`` makes auto-generated ``child_N`` / tooltip ids deterministic
   per test (no cross-test drift).
+- **Django's active language and timezone** (``translation._active`` /
+  ``timezone._active``) — the #2234 class. Django's own thread-locals, which
+  nothing here reset, so a test calling ``activate()`` changed how every later
+  test in the worker rendered. The subtle case is ``deactivate_all()``, which
+  reads like the thorough reset and leaves ``get_language()`` as ``None`` —
+  making ``get_format`` fall back to ``global_settings``, where
+  ``NUMBER_GROUPING`` is ``0``. ``deactivate()`` restores the settings default,
+  which is what resetting should mean.
 - **Rust tag-handler registry** (theme + component ``ready()``-time handlers)
   — the #1928 class. The process-global Rust tag-handler registry
   (``crates/djust_templates/src/registry.rs``) is shared across an xdist
@@ -245,6 +253,47 @@ def _reset_builtin_template_tags() -> None:
         pass
 
 
+def _reset_django_thread_locals() -> None:
+    """Normalise Django's ACTIVE language and timezone (#2234).
+
+    The other resets here cover djust's own process-globals. Django keeps two
+    of its own in thread-locals — ``translation._active`` and
+    ``timezone._active`` — and nothing reset them, so a test that called
+    ``activate()`` and forgot to undo it changed how every later test in that
+    worker rendered.
+
+    The shape that motivated this is subtler than a forgotten ``activate``:
+    ``translation.deactivate_all()`` reads like the THOROUGH reset and is the
+    one that leaks. It installs a ``NullTranslations`` and leaves
+    ``get_language()`` returning ``None``, so ``get_format`` skips the locale
+    modules and falls back to ``global_settings`` — where ``NUMBER_GROUPING``
+    is ``0``:
+
+        fresh                  get_language()='en-us'  NUMBER_GROUPING=3
+        after deactivate()     get_language()='en-us'  NUMBER_GROUPING=3
+        after deactivate_all() get_language()=None     NUMBER_GROUPING=0
+
+    Number grouping was silently off for the rest of the worker. It shipped in
+    the PR that added the localization tests and poisoned a test two PRs later
+    (#2233), caught only because that test happened to land in the same worker.
+
+    ``deactivate()`` — not ``deactivate_all()`` — restores
+    ``settings.LANGUAGE_CODE`` and ``settings.TIME_ZONE``, which is what
+    "reset" should mean. Doing it here means a test that forgets cannot poison
+    its neighbours, rather than every test file needing its own fixture to
+    remember.
+
+    Cheap (two thread-local deletes) and safe when i18n is disabled.
+    """
+    try:
+        from django.utils import timezone, translation
+
+        translation.deactivate()
+        timezone.deactivate()
+    except Exception:  # pragma: no cover - i18n/tz are optional at import time
+        pass
+
+
 def reset_djust_globals() -> None:
     """Reset every leak-prone djust process-global. Call BEFORE each test.
 
@@ -259,6 +308,7 @@ def reset_djust_globals() -> None:
     _reset_id_counters()
     _reset_rust_tag_handlers()
     _reset_builtin_template_tags()
+    _reset_django_thread_locals()
 
 
 __all__ = ["reset_djust_globals"]
