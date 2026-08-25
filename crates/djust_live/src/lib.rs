@@ -2351,10 +2351,12 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
     // doing `x === true` sees false, and after #2203 a `Value::Integer(1)`
     // renders `1` where a `Value::Bool(true)` renders `True`.
     //
-    // This is the THIRD converter to make the same choice; the other two
-    // (`FromPyObject for Value` in djust_core, and `python_to_value` after
-    // #2211) already check bool first. One invariant, three implementations,
-    // and a dead `if let` arm is not a compile error — #1646 exactly.
+    // SIX functions in this workspace extract both types — not the three
+    // #2212 was filed claiming. The other five already check bool first, but
+    // enumerating them by hand missed half, which is why the guard is
+    // structural: `python/tests/test_bool_before_int_converters_2212.py`
+    // sweeps every `fn` and pins the exact set. One invariant, six
+    // implementations, and a dead `if let` arm is not a compile error — #1646.
     if let Ok(b) = value.extract::<bool>() {
         return Ok(b.into_pyobject(py)?.to_owned().into_any().unbind());
     }

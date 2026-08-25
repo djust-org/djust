@@ -397,11 +397,17 @@ class TestBoolRoundTrip2212:
     ``bool`` has a **dead bool arm**. `serialize_python_value` did, so
     ``serialize_context({"flag": True})`` returned ``1``.
 
-    Three converters in this codebase make the same choice; two already check
-    bool first (`FromPyObject for Value` in djust_core, and `python_to_value`
-    after #2211). This is the third — #1646 in its purest form: one invariant,
-    three implementations, and the compiler cannot see a divergence in any of
-    them because a dead ``if let`` arm is not an error.
+    SIX converters in this codebase make the same choice — #2212 was filed
+    claiming three, and a sweep of every ``fn`` found twice that. The other five
+    already check bool first, but hand-enumeration had missed half of them,
+    which is why the structural guard in
+    ``test_bool_before_int_converters_2212.py`` pins the exact set. #1646 in its
+    purest form: one invariant, six implementations, and the compiler cannot see
+    a divergence in any of them because a dead ``if let`` arm is not an error.
+
+    This is also the ONLY converter with behavioural coverage — a review
+    gate-off re-introduced the #2211 bug in ``python_to_value`` and the whole
+    suite stayed green.
 
     Why it matters beyond tidiness: `serialize_context` is a public
     ``#[pyfunction]`` feeding JIT state serialization, so a bool in LiveView
