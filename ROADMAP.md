@@ -1,6 +1,7 @@
 # djust Roadmap
 
-> Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-10 (v1.1.0 final cut).
+> Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-23
+> (v1.1.1-2 Django-parity sweep added).
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
 > deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
@@ -29,6 +30,72 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.1-2 — Django-parity sweep: locale/timezone blindness + unported subsystems (drain bucket → ships in 1.1.1)
+
+Opened 2026-08-23 out of a Django-subsystem sweep (`PERFORMANCE_BRAINSTORM.md`
+§9) that asked which parts of Django *outside* the template renderer sit on
+djust's hot paths, and which have been ported to Rust, bridged back to Python, or
+silently skipped. The sweep used **differential probes against Django's own
+template engine** rather than inspection, and the first two findings were not
+performance items at all — they were wrong output shipping today.
+
+The unifying defect: **the Rust engine is locale- and timezone-blind.** #2209 and
+the `floatformat` row below are one defect seen through two filters; the i18n row
+is the same subsystem never implemented at all. All three share a fix mechanism —
+resolve the active timezone and locale ONCE per render and pass them into Rust,
+mirroring the existing `_apply_loop_render_cache_flag` /
+`_apply_template_auto_call_flag` plumbing — which is why they bucket together
+rather than scattering as unrelated bugs. Doing them separately would produce
+three per-value Python round trips where one per-render handoff suffices.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | Rust engine ignores `USE_TZ`/`TIME_ZONE` (#2209) | Every rendered timestamp is off by the UTC offset. Reproduced end-to-end through `LiveView.render()`: a UTC `23:30` renders `2026-08-22 23:30` where Django renders `19:30` — 4 hours, in the **default scaffold config** (`scaffolding/templates.py:171` sets `USE_TZ = True`). No timezone conversion exists anywhere in `python/djust/` or `crates/`; the only `chrono::Local` is `renderer.rs:1208` (`{% now %}`). Affects both value shapes (`.isoformat()` eager dict, `str()` sidecar). | v1.1.1 |
+| **P2** | (new) | **`floatformat` and friends ignore `USE_L10N` / `USE_THOUSAND_SEPARATOR`.** Probed with `LANGUAGE_CODE="de"`: `{{ n\|floatformat:2 }}` on `1234.5` → Django `'1.234,50'`, djust `'1234.50'`. Same locale-blindness as #2209 and **probably belongs folded into it** rather than filed separately — decide at Stage 4. Localized month/day names in `date` format strings (`{{ d\|date:"F" }}`) are presumed affected by the same cause but were **not probed**; probe before scoping. | v1.1.1 |
+| **P2** | `live_redirect` hardcodes the DB session backend (#2210) | `runtime.py:3978` and `websocket.py:3313` import `sessions.backends.db.SessionStore` directly when synthesizing a request; `settings.SESSION_ENGINE` is never read anywhere in the package. A cache-backed project gets a store that reads a `django_session` row which does not exist → **empty session** on the re-auth path, plus a DB round trip it configured its way out of. `scope["session"]` is correct, so only the synthesized-request path is wrong — which is why it went unnoticed. | v1.1.1 |
+| **P2** | (new) | **`{% trans %}` / `{% blocktrans %}` are unsupported** — both raise `Unsupported template tag` from the Rust parser. The error is explicit and actionable (feature gap, not silent bug), but it means **no i18n app can use the Rust engine at all**, which is a large excluded population for a framework whose pitch is that the fast path is the default path. Sequence per #1077: bridge through the existing Python tag registry first to unblock, port `.mo` catalog parsing into Rust second only if measurement justifies it. | v1.1.1 |
+| **P3** | (new) | **`{% url %}` fails soft to `''`** where Django raises. Consistent with djust's silent-empty policy for bad template paths, so this may be correct-as-designed — but it is currently *inherited* rather than decided, and a typo'd URL name renders a dead link instead of an error. Wants a deliberate call + a documented rule, not necessarily a code change. | v1.1.1 |
+| **P2** | (new) | **Model-backed render benchmark** (`PERFORMANCE_BRAINSTORM.md` §7). No `models.Model` subclass exists anywhere under `tests/benchmarks/` — every fixture is plain dicts — so the entire Python↔Rust boundary cost is invisible to CI. Gate for all remaining perf work in that document. **The fixture requirements are the point**: a `select_related`-only fixture measures ~0 and would falsely "prove" the getattr sidecar is free; it must also carry a `@property` column, a reverse-relation call, an un-`select_related` FK, and an attribute-change event, and must instrument whether the `SetText` fast path was actually taken. | v1.1.1 |
+| **P1** | A third Python→Value converter checks `i64` before `bool` (#2212) | PyO3 0.29 extracts a Python `True` as `i64` `1` (its own `test_i64_bool` asserts this), so any converter trying `i64` first has a **dead `bool` arm**. Three such converters exist; #2211 fixed one, and `djust_live/src/lib.rs:2346` still checks `i64` at `:2346` before `bool` at `:2352` — a bool crossing that path comes back as Python `1`. Split out of the #2211 review to keep that PR scoped (#1079). Same #1646 shape as the rest of this bucket: one invariant, three implementations, and the compiler cannot see a divergence in any of them. **Trace the callers before scoping severity** — the issue does not, and that decides whether this is cosmetic or a live wire-format bug. | v1.1.1 |
+
+**#2209 — the fix shape is the load-bearing decision, not the diagnosis.** The
+naive fix is a per-value `timezone.localtime(dt)` in the serializer, which
+reintroduces a GIL crossing per rendered datetime in one of the few render paths
+that currently has none — a crossing per cell on a table of timestamps. Do it as
+a once-per-render tz+locale handoff into Rust (`chrono-tz` for the conversion)
+instead. Cost to measure before committing: `chrono-tz` bundles a compiled tzdata
+table into the wheel. Note this is adjacent to code that shipped 2026-08-23 —
+#2203 / PR #2208 fixed datetime *parsing* in these filters; timezone was never in
+that issue's scope, so this is the next layer down rather than a regression.
+
+**Sequencing.** The three locale rows (#2209, `floatformat`, `{% trans %}`) should
+be scoped together at Stage 4 even if they ship as separate PRs, because the
+per-render locale handoff is the shared foundation and building it three times is
+the #1646 failure mode in advance. The i18n row is separable — it needs a catalog
+lookup that tz/l10n do not — but it consumes the same locale handle.
+
+**#2210 evidence grade.** Filed WITHOUT the `confirmed` label, deliberately:
+#2209 was reproduced at runtime twice, #2210 rests on reading the two call sites
+plus Django's session-engine contract. Confirm with a regression test that
+overrides `SESSION_ENGINE` to the cache backend before treating the fix as
+validated — and gate-off it (#1468), since a test asserting only "a session
+exists" passes either way against the hardcoded DB store. One case needs a real
+decision rather than a mechanical swap: `signed_cookies` sessions cannot be
+written from a WebSocket at all (no response to set a cookie on) and want a
+documented, logged refusal.
+
+**What is deliberately NOT in this bucket.** `PERFORMANCE_BRAINSTORM.md` carries
+fifteen ideas; only the six rows above are here. The rest — the getattr-sidecar
+remainder, attribute slots in the parse/diff bypass, copy-on-write state, query
+batching, context-processor memoization, the doubled `get_context_data()` on the
+state-save path, custom-filter bridge batching — are **unranked pending the
+benchmark row above**, and that document's own §2 records what happens when this
+project ranks perf work on reasoning instead of measurement: its first draft
+mis-ranked two of three top items because §1's baseline table had omitted the
+machinery they proposed re-building. Promoting them to ROADMAP rows before §7
+measures anything would repeat exactly that. They stay in the brainstorm until
+there are numbers.
+
 ## v1.1.1-1 — post-1.1.0 process drain: merge-gate enforcement + roadmap accuracy (drain bucket → ships in 1.1.1)
 
 Opened 2026-08-10, immediately after the 1.1.0 final cut (PR #2180). Both items
@@ -46,9 +113,10 @@ a control arm that was not itself broken. Still deferred: **#1561**
 |---|---|---|---|
 | **P2** | `main` has no required status checks (#2163) | Branch protection sets `required_status_checks: null`, so the entire `test-summary` aggregate — rust, python, javascript, browser-smoke, nav-hooks-guard, security-tests, demo-checks, benchmarks — can be red and the merge button stays live. #1713 one level up: being in `needs` is not the same as gating. Blocked on a prerequisite: `test.yml` carries `paths-ignore` for `**.md`/`docs/**`/`CHANGELOG.md`, so a required `test-summary` would leave docs-only PRs permanently unmergeable. | v1.1.1 |
 | **P1** | ~~ADR-026 iteration 3 — flip `virtual_keyed_ops` ON (#2017)~~ ✅ | The gate the ROADMAP set (real browser evidence) could not be met until #2185 and #2194 shipped, because until then the CONTROL arm was as broken as the test arm and every A/B compared OFF against OFF — the source of this feature's four withdrawn diagnoses. With a healthy list: an insert at server position 5 lands at pool index **60 (tail)** with the flag off and **5** with it on; a removal leaves the pool unchanged off and drops the right key on; a reverse is ignored off and exact on. | Shipped (PR #2197) |
-| **P1** | post-mount reinit is gated behind `requestAnimationFrame` (#2194) | `03-websocket.js:628` schedules ALL post-mount work — `reinitAfterDOMUpdate()`, `_mountReady`, form recovery, `dj-auto-recover` — through rAF, which browsers do not fire in a hidden tab. Measured: `visibilityState "hidden"` → no reinit at all, so the #1610 mount morph wipes the `[dj-virtual]` shell with nothing to restore it. Hidden-at-load is ordinary (background-tab open, session restore, prerender). Open question that decides severity: does a queued rAF fire on refocus (self-heals) or not (permanent)? | v1.1.1 |
+| **P1** | ~~post-mount reinit is gated behind `requestAnimationFrame` (#2194)~~ ✅ | `03-websocket.js:628` schedules ALL post-mount work — `reinitAfterDOMUpdate()`, `_mountReady`, form recovery, `dj-auto-recover` — through rAF, which browsers do not fire in a hidden tab. Measured: `visibilityState "hidden"` → no reinit at all, so the #1610 mount morph wipes the `[dj-virtual]` shell with nothing to restore it. Hidden-at-load is ordinary (background-tab open, session restore, prerender). Open question that decides severity: does a queued rAF fire on refocus (self-heals) or not (permanent)? | Shipped (PR #2196) |
 | **P2** | xdist order-dependent test flake (#2187) | A test failed on a first `-n auto` run, then passed in isolation and on re-run, with `main` clean — the signature of sharding/order pollution, not a regression. Needs the failing test id captured on the next sighting; then the #2053 playbook (pin the distribution, bisect the polluter, fix at source, gate with 3 consecutive clean runs per #182). | v1.1.1 |
 | **P2** | 113 shipped ROADMAP rows are not struck through (#2181) | 134 `**Pn**` rows in completed `v1.1.0-N` buckets carry no `~~`/✅; of the 128 issues they reference, 113 are closed and only #2017/#1561 are open. Cosmetic today because each bucket carries an authoritative `COMPLETE n/n ✅` line, but `/pipeline-next` reads these rows to pick work. | v1.1.1 |
+| **P2** | RETRO.md: 121 unchecked Open Items reference already-closed issues (#2200) | Sibling of #2181, one file over: 121 `- [ ]` rows in RETRO.md whose referenced issues are ALL closed — **including the row proposing to automate this check**, which is the finding. RETRO.md currently carries 197 unchecked items total, so roughly 60% of the open-work signal in the project's own retro ledger is noise. Fix mechanically (resolve each row's issues, strike the settled ones) and then decide whether a pre-commit check is worth it — note #2181 and this one are the same class, so a single checker could cover both files. | v1.1.1 |
 
 **#2194 — post-mount reinit vs. hidden tabs** — Split out of #2185, whose
 init-order half shipped in PR #2195. Both halves wore one symptom. rAF is the
