@@ -246,6 +246,24 @@ def set_django_value_repr(enabled: bool) -> None:
 def django_value_repr_enabled() -> bool:
     """Current Django-parity value-rendering setting."""
 
+def set_active_timezone(name: Optional[str] = None) -> bool:
+    """Set the active render timezone for the CALLING THREAD (#2209).
+
+    `name` is an IANA zone (`"America/New_York"`); `None` disables conversion,
+    which is what `USE_TZ = False` wants. Returns False if the name is not a
+    zone the bundled tz database knows, leaving the previous value in place.
+
+    Thread-local rather than process-global — unlike `set_django_value_repr`
+    above — because djust renders run in `sync_to_async` worker threads and two
+    connections can have activated different zones. Mirrors Django, whose own
+    `timezone._active` is a `Local()`. Applied per render by
+    `RustBridgeMixin._apply_active_timezone`, not once at startup: a zone
+    captured at `ready()` would miss every `timezone.activate()`.
+    """
+
+def active_timezone_name() -> Optional[str]:
+    """The calling thread's active render timezone, or None."""
+
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -1049,5 +1067,7 @@ __all__ = [
     "set_virtual_keyed_ops",
     "set_django_value_repr",
     "django_value_repr_enabled",
+    "set_active_timezone",
+    "active_timezone_name",
     "virtual_keyed_ops_enabled",
 ]

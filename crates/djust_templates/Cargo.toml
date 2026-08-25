@@ -19,6 +19,7 @@ regex.workspace = true
 once_cell.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 tracing = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 djust_core = { path = "../djust_core" }

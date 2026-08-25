@@ -36,6 +36,12 @@ quick-xml = "0.36"
 html5ever = "0.39"
 markup5ever_rcdom = "0.39"
 chrono = "0.4"  # DateTime handling for timesince filter
+# Timezone database for USE_TZ/TIME_ZONE parity (#2209). Bundles compiled
+# tzdata: +1.16 MB raw on the extension, +136 KB compressed (what a wheel
+# actually ships). Measured before adopting — a fixed UTC offset would have
+# been free but is wrong across a DST boundary, which a single render can
+# straddle (Jan renders -0500, Aug -0400 for the same zone).
+chrono-tz = "0.10"
 
 # Actor system dependencies
 parking_lot = "0.12"  # Faster sync primitives

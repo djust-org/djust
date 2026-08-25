@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
 from ..utils import get_template_dirs
+from ..timezone_bridge import apply_active_timezone
 from .context import _is_json_serializable
 
 logger = logging.getLogger(__name__)
@@ -648,6 +649,16 @@ class RustBridgeMixin:
         # and consumed (reset) after the render it forces.
         self._force_full_html = True
 
+    def _apply_active_timezone(self) -> None:
+        """Wire the active Django timezone → Rust for THIS render (#2209).
+
+        Delegates to :func:`djust.timezone_bridge.apply_active_timezone`, which
+        is shared with ``SimpleLiveView`` — that class renders through
+        ``render_template_with_dirs`` and never touches this mixin, so a second
+        copy here would have been the #1646 twin this fix exists to retire.
+        """
+        apply_active_timezone()
+
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.
 
@@ -668,6 +679,9 @@ class RustBridgeMixin:
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
+
+            # Per-render, before anything is formatted (#2209).
+            self._apply_active_timezone()
 
             full_context = (
                 preloaded_context if preloaded_context is not None else self.get_context_data()
