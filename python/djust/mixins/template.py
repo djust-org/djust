@@ -429,7 +429,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             r"<code[^>]*>.*?</code[^>]*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
         html = re.sub(
-            r"<textarea[^>]*>.*?</textarea[^>]*>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+            r"<textarea[^>]*>.*?</textarea[^>]*>",
+            preserve_block,
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
         )
 
         # Normalize whitespace

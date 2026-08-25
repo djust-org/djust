@@ -330,3 +330,89 @@ def clear_template_dirs_cache() -> None:
     typically don't change at runtime.
     """
     _get_template_dirs_cached.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Session engine (#2210)
+# ---------------------------------------------------------------------------
+
+# Engines whose sessions cannot be WRITTEN from a WebSocket, warned about once
+# per process rather than once per synthesized request.
+_SESSION_WRITE_WARNED: set = set()
+
+
+def get_session_store_class() -> Optional[type]:
+    """The ``SessionStore`` for ``settings.SESSION_ENGINE`` (#2210).
+
+    Four places synthesized a ``request`` for the ``live_redirect`` /
+    ``url_change`` paths and each imported
+    ``django.contrib.sessions.backends.db.SessionStore`` **directly**, so
+    ``settings.SESSION_ENGINE`` was never consulted anywhere in the package.
+    A project on a cache-backed engine got a store reading a ``django_session``
+    row that does not exist. Confirmed at runtime, and the failure has two
+    shapes rather than the one that was reported:
+
+    * the sessions migration HAS been run — the store finds no row and hands
+      the view an **empty session**, silently;
+    * it has NOT been run, which a cache-only project has no reason to do —
+      the store raises ``OperationalError: no such table: django_session``.
+      Django's stores load lazily, so this lands wherever the view first
+      *reads* the session, not where it is constructed.
+
+    Resolved the way ``django.contrib.sessions.middleware.SessionMiddleware``
+    itself does. Cached, because ``SESSION_ENGINE`` cannot change within a
+    process — except under ``override_settings``, which is why the cache is
+    keyed on the setting's value rather than being a bare ``lru_cache`` on a
+    no-argument function.
+
+    Returns ``None`` when sessions are not configured or the engine will not
+    import; callers leave ``request.session`` unset, which is what they did
+    before when the import failed.
+    """
+    from django.conf import settings
+
+    engine = getattr(settings, "SESSION_ENGINE", None)
+    if not engine:
+        return None
+    try:
+        store = _import_session_store(engine)
+    except Exception:  # noqa: BLE001 - a bad SESSION_ENGINE must not 500 a render
+        logger.warning(
+            "[djust] SESSION_ENGINE %r could not be imported; the synthesized "
+            "request will have no session",
+            engine,
+        )
+        return None
+    if engine.endswith("signed_cookies") and engine not in _SESSION_WRITE_WARNED:
+        _SESSION_WRITE_WARNED.add(engine)
+        # Reads work — the "session key" IS the signed payload, so the store
+        # deserializes it. Writes cannot: saving mints a NEW key that only a
+        # ``Set-Cookie`` header can deliver, and a WebSocket has no response to
+        # put one on. Warned rather than refused, because refusing would also
+        # break the reads, which are strictly better than the empty session
+        # this engine got before.
+        logger.warning(
+            "[djust] SESSION_ENGINE is signed_cookies: session READS work on the "
+            "synthesized live_redirect request, but WRITES cannot persist — there "
+            "is no HTTP response to set the cookie on"
+        )
+    return store
+
+
+@lru_cache(maxsize=8)
+def _import_session_store(engine: str) -> type:
+    from importlib import import_module
+
+    return import_module(engine).SessionStore  # type: ignore[no-any-return]
+
+
+def build_session_for_request(session_key: Optional[str] = None) -> Optional[Any]:
+    """A session store for a synthesized request, honouring ``SESSION_ENGINE``.
+
+    ``None`` when sessions are unavailable, so callers can leave
+    ``request.session`` unset exactly as they did before #2210.
+    """
+    store = get_session_store_class()
+    if store is None:
+        return None
+    return store(session_key=session_key) if session_key else store()

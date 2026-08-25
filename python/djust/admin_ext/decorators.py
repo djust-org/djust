@@ -6,9 +6,7 @@ from functools import wraps
 from typing import Any, Callable, Optional, Sequence, Type
 
 
-def register(
-    *models: Type[Any], site: Optional[Any] = None
-) -> Callable[[Type[Any]], Type[Any]]:
+def register(*models: Type[Any], site: Optional[Any] = None) -> Callable[[Type[Any]], Type[Any]]:
     """
     Register a model or models with the admin site.
 
