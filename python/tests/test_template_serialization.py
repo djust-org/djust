@@ -387,3 +387,57 @@ class TestCSRFTokenSerialization:
         # Should contain a proper hidden input
         assert "csrfmiddlewaretoken" in html
         assert 'type="hidden"' in html
+
+
+class TestBoolRoundTrip2212:
+    """A bool must survive `serialize_context` as a bool, not an int (#2212).
+
+    PyO3 0.29 extracts a Python ``True`` as ``i64`` ``1`` — its own
+    ``test_i64_bool`` asserts this — so any converter that tries ``i64`` before
+    ``bool`` has a **dead bool arm**. `serialize_python_value` did, so
+    ``serialize_context({"flag": True})`` returned ``1``.
+
+    SIX converters in this codebase make the same choice — #2212 was filed
+    claiming three, and a sweep of every ``fn`` found twice that. The other five
+    already check bool first, but hand-enumeration had missed half of them,
+    which is why the structural guard in
+    ``test_bool_before_int_converters_2212.py`` pins the exact set. #1646 in its
+    purest form: one invariant, six implementations, and the compiler cannot see
+    a divergence in any of them because a dead ``if let`` arm is not an error.
+
+    This is also the ONLY converter with behavioural coverage — a review
+    gate-off re-introduced the #2211 bug in ``python_to_value`` and the whole
+    suite stayed green.
+
+    Why it matters beyond tidiness: `serialize_context` is a public
+    ``#[pyfunction]`` feeding JIT state serialization, so a bool in LiveView
+    state reached the client as ``1``/``0``. Client code doing ``x === true``
+    sees false, and after #2203 a ``Value::Integer(1)`` renders ``1`` where a
+    ``Value::Bool(true)`` renders ``True``.
+    """
+
+    def test_a_top_level_bool_stays_a_bool(self):
+        from djust._rust import serialize_context
+
+        out = serialize_context({"t": True, "f": False})
+        assert out["t"] is True, f"True became {out['t']!r} ({type(out['t']).__name__})"
+        assert out["f"] is False, f"False became {out['f']!r} ({type(out['f']).__name__})"
+
+    def test_an_int_is_still_an_int(self):
+        # Guard: the fix must not send integers down the bool arm.
+        from djust._rust import serialize_context
+
+        out = serialize_context({"one": 1, "zero": 0, "big": 9999})
+        assert out["one"] == 1 and out["one"] is not True
+        assert out["zero"] == 0 and out["zero"] is not False
+        assert out["big"] == 9999
+
+    def test_bools_nested_in_containers_stay_bools(self):
+        # The recursion goes through the same arm, so a fix at the top level
+        # only would leave these wrong.
+        from djust._rust import serialize_context
+
+        out = serialize_context({"d": {"flag": True}, "xs": [True, False]})
+        assert out["d"]["flag"] is True
+        assert out["xs"] == [True, False]
+        assert all(isinstance(x, bool) for x in out["xs"]), out["xs"]

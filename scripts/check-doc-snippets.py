@@ -540,6 +540,11 @@ _SIZE_CLAIM_FILES = [
     "README.md",
     "CLAUDE.md",
     "ROADMAP.md",
+    # Cites CLAUDE.md's shipped-client budget when arguing against adding a JS
+    # decompressor. Checked rather than exempted (#2212 drain): the figure is
+    # load-bearing for that argument, so if the real artifact drifts past the
+    # budget this doc's reasoning silently stops holding.
+    "PERFORMANCE_BRAINSTORM.md",
     "docs/llms.txt",
     "docs/llms-full.txt",
     "docs/TEMPLATE_BACKEND.md",
