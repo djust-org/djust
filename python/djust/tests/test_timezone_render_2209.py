@@ -192,3 +192,76 @@ def test_use_tz_false_clears_the_zone_rather_than_leaving_a_stale_one():
     set_active_timezone("America/New_York")
     assert "2026-08-22 23:30" in _render()
     assert active_timezone_name() is None
+
+
+# ---------------------------------------------------------------------------
+# The second render path. `SimpleLiveView` shares no base class with
+# `RustBridgeMixin` — it calls `render_template_with_dirs` directly — so a fix
+# that lived on the mixin would have covered `LiveView` and silently missed
+# this one. That is the #1646 twin this release keeps closing; both now call
+# the same `djust.timezone_bridge.apply_active_timezone`.
+# ---------------------------------------------------------------------------
+
+
+def test_the_simple_live_view_path_is_wired_but_currently_unreachable():
+    """``simple_live_view`` gets the same handoff, and cannot be exercised.
+
+    That module's class — itself named ``LiveView``, a different one from
+    ``djust.LiveView``, which is why grepping for "SimpleLiveView" finds
+    nothing — renders through ``render_template_with_dirs`` and shares no base
+    with ``RustBridgeMixin``. So it is a genuine second render path and would
+    have kept rendering UTC while ``LiveView`` rendered correctly. It calls the
+    shared function for that reason.
+
+    It cannot get a behavioural test, because the module does not work at all:
+    ``get_context_data`` walks ``dir(self)`` and ``getattr``s each name, which
+    reaches Django's ``View.as_view`` — a ``classonlymethod`` that raises
+    ``AttributeError`` on any INSTANCE. Every render through it therefore fails
+    before reaching a template. Asserted below rather than described, so this
+    test starts failing the moment someone fixes the module — at which point
+    the real behavioural case belongs here. Filed as #2219.
+    """
+    from djust.simple_live_view import LiveView as SimpleLiveView
+
+    view = SimpleLiveView()
+    with pytest.raises(AttributeError, match="only on the class"):
+        view.get_context_data()
+
+
+def test_both_render_paths_call_the_same_timezone_function():
+    """Structural pin: one function, not two copies that can drift.
+
+    A behavioural test proves each path converts today. It cannot prove they
+    still SHARE the mechanism tomorrow — someone could inline a second copy into
+    either and both tests would stay green while the two drifted apart. This
+    asserts the single source of truth directly, and would go red the moment a
+    third render path appeared without wiring (#1125: pin the set, not a floor).
+    """
+    import ast
+    import pathlib
+
+    import djust
+
+    root = pathlib.Path(djust.__file__).parent
+    callers = set()
+    for path in root.rglob("*.py"):
+        if "tests" in path.parts or path.name == "timezone_bridge.py":
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover - not our concern here
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "apply_active_timezone"
+            ):
+                callers.add(path.relative_to(root).as_posix())
+
+    assert callers == {"mixins/rust_bridge.py", "simple_live_view.py"}, (
+        "the set of render paths pushing the timezone to Rust changed. Add the "
+        "new path here once it calls apply_active_timezone() — and if a path "
+        "was REMOVED from this set, check it did not grow its own private copy "
+        f"instead. Found: {sorted(callers)}"
+    )
