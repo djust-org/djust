@@ -459,9 +459,9 @@ The three failing tests blocked every contributor's push, not just mine, and not
 
 ### Open Items
 
-- [ ] Single source of truth for the client-size figures — Action Tracker #326 (GitHub #2138)
-- [ ] Alert when `main`'s suite is red rather than discovering it via a failed push — Action Tracker #327 (GitHub #2139)
-- [ ] Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group — Action Tracker #328 (GitHub #2140)
+- [x] Single source of truth for the client-size figures — Action Tracker #326 (GitHub #2138) — **closed (PR #2147)**
+- [x] Alert when `main`'s suite is red rather than discovering it via a failed push — Action Tracker #327 (GitHub #2139) — **closed (PR #2149)**
+- [x] Backfill milestone retros for v1.1.0-12 and the #2094–#2128 group — Action Tracker #328 (GitHub #2140) — **closed**
 - [x] `#2136` — index-addressed content patches for `[dj-virtual]` rows — **resolved (PR #2146)**
 - [x] `#2017` iteration 3 — flip the flag — **shipped in 1.1.0 (PR #2197)**. It stayed blocked
       longer than #2136 alone implied: the browser gate could not produce evidence because the
@@ -502,7 +502,7 @@ Ten of the 26 PRs (#2095, #2098–#2104, #2106, #2125) were dependency or securi
 
 ### Open Items
 
-- [ ] Chain-shaped drains need an estimation convention — Action Tracker #329 (GitHub #2142)
+- [x] Chain-shaped drains need an estimation convention — Action Tracker #329 (GitHub #2142) — **closed (PR #2153)**
 
 ## v1.1.0-12 — post-11 follow-up drain: JS test flake + Makefile PYO3_PYTHON parity (PRs #2092, #2093)
 
@@ -530,7 +530,7 @@ Row 325 said `Open` with GitHub #2082, which was closed 2026-07-18 by PR #2093. 
 
 ### Open Items
 
-- [ ] Close tracker rows automatically when their GitHub issue closes — Action Tracker #330 (GitHub #2143)
+- [x] Close tracker rows automatically when their GitHub issue closes — Action Tracker #330 (GitHub #2143) — **closed (PR #2153)**
 
 ## v1.1.0-11 — hygiene drain: test-infra trust + build churn + docs + replay viewer (PRs #2076-#2080, #2083)
 
@@ -580,8 +580,8 @@ Row 325 said `Open` with GitHub #2082, which was closed 2026-07-18 by PR #2093. 
 
 ### Open Items
 
-- [ ] dj_transition rAF flake — Action Tracker #324 (GitHub #2081)
-- [ ] Makefile PYO3_PYTHON twins — Action Tracker #325 (GitHub #2082)
+- [x] dj_transition rAF flake — Action Tracker #324 (GitHub #2081) — **closed**
+- [x] Makefile PYO3_PYTHON twins — Action Tracker #325 (GitHub #2082) — **closed**
 
 ## v1.1.0rc5 — main/1.1 branch consolidation + release cut (PR #2026)
 
@@ -678,7 +678,7 @@ The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut r
 
 ### Open Items
 
-- [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried forward
+- [x] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried forward — **closed (PR #2197)**
 - [x] bug-capture iter B (#1562) — **resolved in v1.1.0-11 (PR #2083)**; iter C (#1561) still deferred (`priority:low`)
 
 ## v1.1.0-7 — post-rc6 live-verify drain (PRs #2035/#2036)
@@ -731,7 +731,7 @@ The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut r
 ### Open Items
 
 - [x] Promote the `python/djust/tests/` CI soak step to a blocking gate + add to the pre-push hook — tracked in Action Tracker #323 (GitHub #2034) — resolved in v1.1.0-8 (PR #2039)
-- [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried forward
+- [x] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried forward — **closed (PR #2197)**
 
 ## v1.1.0-6 — retro-tail + carryover drain (PRs #2029/#2030/#2031)
 
@@ -784,7 +784,7 @@ The `1.1` branch had renamed `## [Unreleased]` → `## [1.1.0rc4]` when it cut r
 ### Open Items
 
 - [x] CI Python job omits `python/djust/tests/` (hides a RED security-structural test) — tracked in Action Tracker #322 (GitHub #2032) — resolved in v1.1.0-7 (PR #2035); gate-promotion follow-up #323 (#2034)
-- [ ] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried from v1.1.0-5
+- [x] dj-virtual deeper server-side reconcile — tracked in Action Tracker #318 (GitHub #2017), carried from v1.1.0-5 — **closed (PR #2197)**
 
 ## v1.1.0-5 — downstream-gotcha open-issue drain (PRs #2005–#2019)
 
@@ -835,7 +835,7 @@ All 14 PRs append to `### Fixed`; after the first merged, each subsequent PR nee
 ### Open Items
 
 - [x] #317 — transport-parity test for the async-work dispatch path (GitHub #2020) — resolved in v1.1.0-6 (PR #2030, shared `run_async_callback` helper)
-- [ ] #318 — dj-virtual deeper server-side reconcile (GitHub #2017)
+- [x] #318 — dj-virtual deeper server-side reconcile (GitHub #2017) — **closed (PR #2197)**
 - [ ] #319 — codify the CHANGELOG-union local-sync step in the pipeline-drain skill (OUT-OF-REPO; memory saved in-repo-adjacent)
 
 ## v1.1.0-4 — post-convergence open-issue drain (PRs #1961–#1965)
@@ -887,7 +887,7 @@ Launching all 5 drain fixers as concurrent worktree-isolated agents tripped a tr
 
 ### Open Items
 
-- [ ] #316 — propagate the worktree-agent concurrency cap into the pipeline-run/pipeline-drain skill prompts (OUT-OF-REPO; in-repo CLAUDE.md half done)
+- [x] #316 — propagate the worktree-agent concurrency cap into the pipeline-run/pipeline-drain skill prompts (OUT-OF-REPO; in-repo CLAUDE.md half done) — **closed (PR #359)**
 - [ ] #1561 / #1562 — priority:low bug-capture features, deferred (not in this bucket)
 
 ## v1.1 type-enforcement arc (ADR-023) + rc1/rc2 prep (PRs #1926–#1960)
@@ -1028,7 +1028,7 @@ WU4 (#1862) was a pollution-class fix, so the gate ran the full suite 3× under 
 
 ### Open Items
 
-- [ ] Flaky `test_ws_auth_close_socket` under `-n auto` — Action Tracker #315 (GitHub #1875)
+- [x] Flaky `test_ws_auth_close_socket` under `-n auto` — Action Tracker #315 (GitHub #1875) — **closed (PR #1881)**
 - [x] Promote browser-smoke to a hard gate once runner-green — Action Tracker #314 (GitHub #1869), carried from v1.0.8-1 (DONE: PR for #1869)
 
 **Forward-link →** v1.1 planning: `/pipeline-strategy --deep` (2026-06-23) used this arc's data (#1646 = #1 recurring class, 21×) to commit the **v1.1 code-quality / single-path convergence** headline — **Path B (quality-first → ViewRuntime convergence)**. See [`docs/strategy-sessions/2026-06-23-v1.1-code-quality.md`](docs/strategy-sessions/2026-06-23-v1.1-code-quality.md) + [ADR-022](docs/adr/022-v1.1-code-quality-single-path-convergence.md). Several of this arc's open items (#1875 flaky test, #1869 gate, plus #1360/#1279/#1648/#1368/#1356) feed the v1.1.0-1 quality-groundwork sub-milestone.
@@ -1097,9 +1097,9 @@ S011 (#1864) reached 0 false-positives only because the dogfood pass (#1060) aga
 
 ### Open Items
 
-- [ ] Test-ordering pollution in `test_demo_views.py::TestDemoRegistration` — Action Tracker #311 (GitHub #1862)
-- [ ] `_get_project_app_dirs()` blind from inside the repo tree — Action Tracker #312 (GitHub #1865)
-- [ ] Allowlist can re-expose the serialization floor — Action Tracker #313 (GitHub #1868)
+- [x] Test-ordering pollution in `test_demo_views.py::TestDemoRegistration` — Action Tracker #311 (GitHub #1862) — **closed (PR #1874)**
+- [x] `_get_project_app_dirs()` blind from inside the repo tree — Action Tracker #312 (GitHub #1865) — **closed (PR #1870)**
+- [x] Allowlist can re-expose the serialization floor — Action Tracker #313 (GitHub #1868) — **closed (PR #1872)**
 - [x] Promote browser-smoke to a hard gate once runner-green; flip #1848 xfail when the framework fix lands — Action Tracker #314 (GitHub #1869) (DONE: PR for #1869; #1848 fixed by PR #1871)
 - [x] Framework fix for #1848 (re-execute classic `<script>` on the mount morph) — Action Tracker #310 (GitHub #1848) — resolved in v1.0.8-2 (PR #1871)
 
@@ -1194,8 +1194,8 @@ PR #1838 deliberately left the actor event path (`use_actors=True`, `websocket.p
 
 ### Open Items
 
-- [ ] #1837 — system check for table-section-rooted views — Action Tracker #307 (GitHub #1837)
-- [ ] #1840 — arm recovery on the actor event path — Action Tracker #308 (GitHub #1840)
+- [x] #1837 — system check for table-section-rooted views — Action Tracker #307 (GitHub #1837) — **closed (PR #1841)**
+- [x] #1840 — arm recovery on the actor event path — Action Tracker #308 (GitHub #1840) — **closed**
 - [ ] #1561 / #1562 — bug-capture iter B/C feature epics — held for v1.1.0 (not yet tracked rows; revisit when scoped)
 
 ## v1.0.6-2 — Security + DX drain (PRs #1823, #1824, #1825)
@@ -1453,7 +1453,7 @@ Module-level `_PublicView` LiveView subclass (permanent in `__subclasses__()` �
 
 ### Open Items
 
-- [ ] Worktree pre-push editable-install gap — Action Tracker #301 (GitHub #1810)
+- [x] Worktree pre-push editable-install gap — Action Tracker #301 (GitHub #1810) — **closed (PR #1812)**
 
 ## v1.0.5-1 — Production-incident drain: WS recovery + render-path + scaffold (PRs #1789, #1790, #1792, #1793)
 
@@ -1502,7 +1502,7 @@ It hardcodes `.venv/bin/python`; inside a git worktree (no `.venv`) it fails, so
 - [x] scaffold warning-cleanliness + `cli.py` twin — Action Tracker #296 (GitHub #1791) — resolved in v1.0.5-2 (PR #1799)
 - [x] `test_checks` S005 / `auto_navigate` pollution — Action Tracker #297 (GitHub #1794) — resolved in v1.0.5-2 (PR #1800)
 - [x] flaky wall-clock perf test — Action Tracker #298 (GitHub #1795) — resolved in v1.0.5-2 (PR #1797)
-- [ ] consumer-owned VDOM send-version (deferred) — Action Tracker #299 (GitHub #1788)
+- [x] consumer-owned VDOM send-version (deferred) — Action Tracker #299 (GitHub #1788) — **closed (PR #1816)**
 
 ## v1.0.4 — Security hardening & navigation arc (rc1; PRs #1775, #1776, #1780, #1781, #1782, #1783)
 
@@ -1661,10 +1661,10 @@ Every issue here (#1733, #1737, #1738) came from a real consumer integrating the
 
 ### Open Items
 
-- [ ] #289 — fix 2 test_checks.py pollution failures + audit module-level caches (GitHub #1741)
-- [ ] #290 — dogfood dj-navigate + a client-hook in the demo (GitHub #1742)
-- [ ] v1.1.0 (ADR-021 Stage 2): #1734 `auto_navigate` opt-in + #1735 nav-story reconcile
-- [ ] **Release**: re-cut 1.0.2rc3 (rc2 + #1737 + #1738) or go to 1.0.2 stable.
+- [x] #289 — fix 2 test_checks.py pollution failures + audit module-level caches (GitHub #1741) — **closed (PR #1743)**
+- [x] #290 — dogfood dj-navigate + a client-hook in the demo (GitHub #1742) — **closed (PR #1744)**
+- [x] v1.1.0 (ADR-021 Stage 2): #1734 `auto_navigate` opt-in + #1735 nav-story reconcile — **closed (PR #1776)**
+- [x] **Release**: re-cut 1.0.2rc3 (rc2 + #1737 + #1738) or go to 1.0.2 stable. — **closed (PR #1739, PR #1740)**
 
 ## v1.0.2 — Second post-1.0 patch: theming/hydration bugs + v1.0.1 follow-ups (PRs #1725–#1732, 7 merged)
 
@@ -1714,7 +1714,7 @@ PR #1730 (#1713) moved the demo `djust_check` dogfood out of the `continue-on-er
 
 - [x] #288 — request-scope memoize `theme_context` (GitHub #1727) — resolved in v1.0.2 (PR #1732)
 - [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
-- [ ] **Release**: cut `1.0.2` (one version bump + tag) covering all 7 PRs — 3 production bug fixes + 3 tech-debt follow-ups + 1 perf follow-up (#1727).
+- [x] **Release**: cut `1.0.2` (one version bump + tag) covering all 7 PRs — 3 production bug fixes + 3 tech-debt follow-ups + 1 perf follow-up (#1727). — **closed (PR #1732)**
 
 **Forward-link**: `/pipeline-strategy` 2026-06-05 (auto-navigation) → `docs/strategy-sessions/2026-06-05-auto-navigation.md`. Chose Path 2 (Foundation + opt-in `auto_navigate`); drafted **ADR-021**; filed #1733 (foundation — shipped v1.0.2-1, PR #1736), #1734 + #1735 (v1.1.0). Surfaced from a downstream consumer hitting `dj-navigate` silent full-reload (undocumented route-map prerequisite + phantom `{% djust_route_map %}` tag in `get_route_map_script`'s docstring). **Retro for the resulting nav arc (v1.0.2-1 + v1.0.2-2): see the "v1.0.2 navigation arc" entry above.**
 
@@ -1789,7 +1789,7 @@ Wave-2 deferred 🟡: #1713 (promote dogfood to blocking), #1716 (generalize cro
 - [x] #287 — generalize the cross-IIFE guard to top-level modules (GitHub #1716) — resolved in v1.0.2 (PR #1729)
 - [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
 - [x] Wave-1 durable cures + review follow-ups (#280–#285) — all resolved in wave 2, within 1.0.1
-- [ ] **Release**: cut `1.0.1` (one version bump + tag) covering all 13 PRs. `[Unreleased]` holds the full set incl. the #1688 P0 production fix and the two wave-2 cross-IIFE prod fixes (dialog + keyboard).
+- [x] **Release**: cut `1.0.1` (one version bump + tag) covering all 13 PRs. `[Unreleased]` holds the full set incl. the #1688 P0 production fix and the two wave-2 cross-IIFE prod fixes (dialog + keyboard). — **closed (PR #1690)**
 
 ## v1.0.0rc14 — Open-issue drain: parallel-path drift (PRs #1646, #1649, #1650, #1651, #1652, #1653)
 
@@ -1852,9 +1852,9 @@ The P0 fix surfaced a sibling (`check_handler_permission`, same async-wrap class
 
 ### Open Items
 
-- [ ] `check_handler_permission` async-wrap sibling — Action Tracker #277 (GitHub #1648)
-- [ ] `assert_http_ws_djid_parity` empirical canary — Action Tracker #278 (GitHub #1654)
-- [ ] Drain guard-strengthenings (deploy-path test / caller-count test / single predicate) — Action Tracker #279 (GitHub #1655)
+- [x] `check_handler_permission` async-wrap sibling — Action Tracker #277 (GitHub #1648) — **closed (PR #1657)**
+- [x] `assert_http_ws_djid_parity` empirical canary — Action Tracker #278 (GitHub #1654) — **closed (PR #1658)**
+- [x] Drain guard-strengthenings (deploy-path test / caller-count test / single predicate) — Action Tracker #279 (GitHub #1655) — **closed (PR #1659)**
 
 ## v1.0.0rc6 — Open-issue drain + idna CVE (PRs #1546, #1547, #1548, #1549)
 
@@ -2049,10 +2049,10 @@ PR #1519's 🔴 (exact-filename matching regressing sensitive-file exclusion) wa
 
 ### Open Items
 
-- [ ] `git commit --amend` HEAD-hash skill-prompt propagation — Action Tracker #271 (GitHub #1524, OUT-OF-REPO)
-- [ ] Pre-1.0-final retro-finding closeout sweep — Action Tracker #272 (GitHub #1525)
+- [x] `git commit --amend` HEAD-hash skill-prompt propagation — Action Tracker #271 (GitHub #1524, OUT-OF-REPO) — **closed**
+- [x] Pre-1.0-final retro-finding closeout sweep — Action Tracker #272 (GitHub #1525) — **closed**
 - [x] Accessibility phase 2 — keyboard-interaction JS + `djust_audit` a11y reporting — Action Tracker #273–#274 (GitHub #1522, #1523) — resolved in v1.0.0rc4 (PR #1532)
-- [ ] Reviewer-subagent environment-premises brief — Action Tracker #269 (GitHub #1516, OUT-OF-REPO, carried from rc2)
+- [x] Reviewer-subagent environment-premises brief — Action Tracker #269 (GitHub #1516, OUT-OF-REPO, carried from rc2) — **closed**
 
 ## v1.0.0rc2 — Post-rc1 retro drain (PRs #1504, #1506, #1508, #1510, #1512)
 
@@ -2112,9 +2112,9 @@ PR #1512's Y003/Y004 used a `\b` word-boundary anchor in attribute-matching rege
 ### Open Items
 
 - [x] `scripts/check-*.py` audit-shape scaffold — Action Tracker #268 (GitHub #1515) — resolved in v1.0.0rc3 (PR #1520)
-- [ ] Reviewer-subagent environment-premises brief — Action Tracker #269 (GitHub #1516, OUT-OF-REPO)
+- [x] Reviewer-subagent environment-premises brief — Action Tracker #269 (GitHub #1516, OUT-OF-REPO) — **closed**
 - [x] `\b`-anchor-in-attribute-regex meta-check — Action Tracker #270 (GitHub #1517) — resolved in v1.0.0rc3 (PR #1518)
-- [ ] 6 deferred drain follow-ups — Action Tracker #262–#267 (GitHub #1505, #1507, #1509, #1511, #1513, #1514) — 4 of 6 resolved in v1.0.0rc3 (#1505→PR #1519, #1509→PR #1520, #1513→PR #1521, #1514→PR #1518); #1507 + #1511 remain OUT-OF-REPO (Action Tracker #263, #265)
+- [x] 6 deferred drain follow-ups — Action Tracker #262–#267 (GitHub #1505, #1507, #1509, #1511, #1513, #1514) — 4 of 6 resolved in v1.0.0rc3 (#1505→PR #1519, #1509→PR #1520, #1513→PR #1521, #1514→PR #1518); #1507 + #1511 remain OUT-OF-REPO (Action Tracker #263, #265) — **closed (PR #1519)**
 
 ## v1.0.0 — Release Readiness (PRs #1486, #1488, #1490, #1491, #1492, #1494)
 
@@ -2261,7 +2261,7 @@ Generalizable to a pattern for shell tools: any new script that processes `git d
 - [ ] **OUT-OF-REPO** (carried from earlier milestones):
   - #252/#1459 follow-up — pipeline-run skill repo edits for empirical Stage 11 canary.
   - #254/#1468 follow-up — pipeline-run skill repo edits for gate-off self-test in the Verification section of the implementer-subagent prompt.
-- [ ] **#1471** — Sticky-child LiveView state persistence across WS reconnect (architectural; v0.10.0+).
+- [x] **#1471** — Sticky-child LiveView state persistence across WS reconnect (architectural; v0.10.0+). — **closed (PR #1528)**
 
 ### Sequencing notes
 
@@ -2327,9 +2327,9 @@ This validates the "Stage 11 must never be skipped" canon for `feat:` PRs touchi
 
 ### Open Items
 
-- [ ] #254 (GitHub #1468) — Implementer-subagent prompt template should mandate gate-the-change-off tautology self-test before reporting tests pass. Validates against Action #1200 at Stage 5 instead of waiting for Stage 11.
-- [ ] **OUT-OF-REPO** (carried from v0.9.7-1): pipeline-run skill repo edits for #1459 Stage 11 empirical-canary canon. Still pending.
-- [ ] **#1467** — WS-event save for child LiveComponent views. Targeted for v0.9.7-3+; three solution options surfaced.
+- [x] #254 (GitHub #1468) — Implementer-subagent prompt template should mandate gate-the-change-off tautology self-test before reporting tests pass. Validates against Action #1200 at Stage 5 instead of waiting for Stage 11. — **closed (PR #1469)**
+- [x] **OUT-OF-REPO** (carried from v0.9.7-1): pipeline-run skill repo edits for #1459 Stage 11 empirical-canary canon. Still pending. — **closed (PR #1460)**
+- [x] **#1467** — WS-event save for child LiveComponent views. Targeted for v0.9.7-3+; three solution options surfaced. — **closed (PR #1472)**
 
 ---
 
@@ -2397,8 +2397,8 @@ This is the second milestone (after v0.9.6-1's #1423 investigation close) where 
 
 ### Open Items
 
-- [ ] #253 (GitHub #1464) — Pre-commit ruff auto-restage IMPLEMENTATION. Investigation on #1458 closed in v0.9.7-1 with 3 implementation options surfaced; this new tracker row covers picking one and shipping it. Recommend: Option A (wrapper script) as the lowest-risk first step.
-- [ ] **OUT-OF-REPO**: pipeline-run skill repo edits for #1459 Stage 11 empirical-canary canon. The in-repo canon landed in PR #1460; the `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt addendum needs to be edited in the pipeline-run skill repository when next touched.
+- [x] #253 (GitHub #1464) — Pre-commit ruff auto-restage IMPLEMENTATION. Investigation on #1458 closed in v0.9.7-1 with 3 implementation options surfaced; this new tracker row covers picking one and shipping it. Recommend: Option A (wrapper script) as the lowest-risk first step. — **closed (PR #1470)**
+- [x] **OUT-OF-REPO**: pipeline-run skill repo edits for #1459 Stage 11 empirical-canary canon. The in-repo canon landed in PR #1460; the `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt addendum needs to be edited in the pipeline-run skill repository when next touched. — **closed (PR #1460)**
 
 ---
 
@@ -2455,9 +2455,9 @@ The v0.9.6-1 retro flagged #1448 as "5 contracts" per the ROADMAP estimate. Empi
 
 ### Open Items
 
-- [ ] #251 — Pre-commit ruff hook auto-restage on reformat (GitHub #1458)
-- [ ] #252 — Empirical Stage 11 canary pattern for tooling/lint PRs (GitHub #1459)
-- [ ] **#1456** — Wire-protocol snapshot pinning for remaining ~22 frame shapes (`mount_batch`, `child_update`, `sticky_update`, `i18n`, `accessibility`, `focus`, `embedded_update`, `upload_*`, `reload`, `hvr-applied`, `sticky_hold`, `html_update`, `connect`, `rate_limit_exceeded`, `pong`, `navigate`, `noop`, `error.message`-variant, conditional `patch` keys, conditional `mount` keys, `presence_event`, streaming.*; plus inbound shapes). 2-3 grouped batches. Targeted for v0.9.7+.
+- [x] #251 — Pre-commit ruff hook auto-restage on reformat (GitHub #1458) — **closed**
+- [x] #252 — Empirical Stage 11 canary pattern for tooling/lint PRs (GitHub #1459) — **closed (PR #1460)**
+- [x] **#1456** — Wire-protocol snapshot pinning for remaining ~22 frame shapes (`mount_batch`, `child_update`, `sticky_update`, `i18n`, `accessibility`, `focus`, `embedded_update`, `upload_*`, `reload`, `hvr-applied`, `sticky_hold`, `html_update`, `connect`, `rate_limit_exceeded`, `pong`, `navigate`, `noop`, `error.message`-variant, conditional `patch` keys, conditional `mount` keys, `presence_event`, streaming.*; plus inbound shapes). 2-3 grouped batches. Targeted for v0.9.7+. — **closed (PR #1463)**
 
 ---
 
@@ -2607,7 +2607,7 @@ The new scheduling discipline (background-poll-then-wakeup at 270s intervals to 
 
 ### Open Items
 
-- [ ] Symbol-removal grep canon — generalize #1391 — tracked in Action Tracker #244 (GitHub #1400).
+- [x] Symbol-removal grep canon — generalize #1391 — tracked in Action Tracker #244 (GitHub #1400). — **closed (PR #1407)**
 
 ## v0.9.5-1 — Object-permission lifecycle (split-foundation rollout, #1373) (PRs #1374, #1378, #1381)
 
@@ -2717,12 +2717,12 @@ The fix is non-trivial — AST analysis would need to resolve simple base-class 
 
 - [x] Item 232 — resolved in v0.9.5-2 (PR #1399)
 - [x] Item 233 — resolved in v0.9.5-2 (PR #1399)
-- [ ] Item 234 (re-trigger of #1375 — branch-checkout canon update in pipeline-run skill) — tracked in Action Tracker #234 (GitHub #1387) — OUT-OF-REPO
-- [ ] Item 235 — tracked in Action Tracker #235 (GitHub #1384) — documentation-iteration shortcut canon — OUT-OF-REPO
+- [x] Item 234 (re-trigger of #1375 — branch-checkout canon update in pipeline-run skill) — tracked in Action Tracker #234 (GitHub #1387) — OUT-OF-REPO — **closed**
+- [x] Item 235 — tracked in Action Tracker #235 (GitHub #1384) — documentation-iteration shortcut canon — OUT-OF-REPO — **closed**
 - [x] Item 236 — resolved in v0.9.5-2 (PR #1395)
 - [x] Item 237 — resolved in v0.9.5-2 (PR #1395)
 - [x] Item 238 — resolved in v0.9.5-2 (PR #1394)
-- [ ] Item 239 — tracked in Action Tracker #239 (GitHub #1376) — pipeline-run skill stage-name reconciliation — OUT-OF-REPO
+- [x] Item 239 — tracked in Action Tracker #239 (GitHub #1376) — pipeline-run skill stage-name reconciliation — OUT-OF-REPO — **closed**
 - [x] Item 240 — resolved in v0.9.5-2 (PR #1399)
 
 ## v0.9.4-3 — Hotfix v0.9.4rc1 hooks TDZ regression (#1370) (PR #1371)
@@ -2771,7 +2771,7 @@ Independent diagnostic finding from the implementer: the TDZ surfaces only when 
 ### Open Items
 
 - ✅ #1370 closed via this hotfix.
-- [ ] #1372 — bundle-init-order structural lint follow-up.
+- [x] #1372 — bundle-init-order structural lint follow-up. — **closed (PR #1405)**
 - [ ] All carryover tracker rows from previous milestones still open.
 
 ### Acceptance check
@@ -2837,11 +2837,11 @@ Iter 1's first-pass had a test calling itself `test_multi_template_caveat_only_p
 - ✅ #1362 closed via this milestone.
 - [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
 - [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
-- [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
-- [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. Carryover from v0.9.3-8.
-- [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. Carryover from v0.9.3-8.
-- [ ] Action Tracker #227 (#1366) — dj-if + dj-key boundary-reorder limitation. Defer to v0.10 polish.
-- [ ] Action Tracker #228 (#1368) — HTTP path log-injection asymmetry follow-up.
+- [x] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7. — **closed (PR #1403)**
+- [x] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. Carryover from v0.9.3-8. — **closed (PR #1404)**
+- [x] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. Carryover from v0.9.3-8. — **closed (PR #1404)**
+- [x] Action Tracker #227 (#1366) — dj-if + dj-key boundary-reorder limitation. Defer to v0.10 polish. — **closed (PR #228)**
+- [x] Action Tracker #228 (#1368) — HTTP path log-injection asymmetry follow-up. — **closed (PR #1401)**
 
 ### Acceptance check
 
@@ -2906,10 +2906,10 @@ Action #1122 says foundations should "soak through one or more releases before t
 - ✅ #256 Option A closed via this milestone.
 - [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
 - [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
-- [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
-- [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. Carryover from v0.9.3-8.
-- [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. Carryover from v0.9.3-8.
-- [ ] Action Tracker #227 (#1366) — dj-if + dj-key boundary-reorder limitation. Defer to v0.10 polish.
+- [x] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7. — **closed (PR #1403)**
+- [x] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. Carryover from v0.9.3-8. — **closed (PR #1404)**
+- [x] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. Carryover from v0.9.3-8. — **closed (PR #1404)**
+- [x] Action Tracker #227 (#1366) — dj-if + dj-key boundary-reorder limitation. Defer to v0.10 polish. — **closed (PR #228)**
 
 ### Acceptance check
 
@@ -2969,9 +2969,9 @@ The #1351 body claimed `--max-warnings 0` was "implicitly via `npx eslint`'s def
 - ✅ #1351 closed via this drain.
 - [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
 - [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
-- [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
-- [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers.
-- [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access.
+- [x] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7. — **closed (PR #1403)**
+- [x] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. — **closed (PR #1404)**
+- [x] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. — **closed (PR #1404)**
 
 ### Acceptance check
 
@@ -3034,7 +3034,7 @@ Original Stage 5 implementation passed local tests AND CI (13/13 green). It woul
 
 - [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
 - [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
-- [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up.
+- [x] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. — **closed (PR #1403)**
 
 ### Acceptance check
 
@@ -3159,9 +3159,9 @@ The `/pipeline-run` skill's "Close-without-code path" guidance suggests investig
 
 ### Open Items
 
-- [ ] Triage 8 open CodeQL alerts (1 high-severity) — tracked in Action Tracker #220 (GitHub #1343)
-- [ ] Refresh stale audit "(file new)" placeholders — tracked in Action Tracker #221 (GitHub #1342)
-- [ ] Stage 4 plan-template: verify cited cause for retro-filed issues — tracked in Action Tracker #222 (GitHub #1345)
+- [x] Triage 8 open CodeQL alerts (1 high-severity) — tracked in Action Tracker #220 (GitHub #1343) — **closed (PR #1349)**
+- [x] Refresh stale audit "(file new)" placeholders — tracked in Action Tracker #221 (GitHub #1342) — **closed (PR #1398)**
+- [x] Stage 4 plan-template: verify cited cause for retro-filed issues — tracked in Action Tracker #222 (GitHub #1345) — **closed (PR #1399)**
 - [x] Two-direction Makefile↔pyproject testpath sync (#1346) — resolved in v0.9.5-2 (PR #1398).
 
 ### Acceptance check
@@ -3233,7 +3233,7 @@ PRs #1331, #1332 both hit the pre-commit stash-restore cycle: ruff/ruff-format m
 
 ### Open Items
 
-- [ ] CI test-collection gap — tracked in Action Tracker #218 (GitHub #1339)
+- [x] CI test-collection gap — tracked in Action Tracker #218 (GitHub #1339) — **closed**
 - [x] ~~CodeQL stale check-run workaround~~ — closed via #1340 closing PR. Misdiagnosis corrected; concurrency block added to codeql.yml; real alerts (1 high-severity) tracked separately in #1343.
 
 ---
@@ -3372,13 +3372,13 @@ PR #1303 caught the FormData-vs-server-state distinction (form params unaffected
 
 ### Open Items
 
-- [ ] Item 211 — opt-in pattern canonicalization (GitHub #1307)
-- [ ] Item 212 — Audit C Phase 2 inventory (GitHub #1308)
-- [ ] #1281 — private-state re-render (deferred to v0.9.3 per ROADMAP scoping decision; documented as known-issue for v0.9.2 stable release notes)
-- [ ] v0.9.2-5 follow-ups (#1295, #1296, #1297, #1298, #1299) — still open from prior milestone retro; targets v0.9.3
-- [ ] Audit A Phase 2 (#1284, #1285, #1286) — `_action_state` reconnect, snapshot truncation warning, change-detection unification; targets v0.9.3
-- [ ] Audit B Phase 2/3 (#1287, #1288, #1289, #1290) — decorator-contract spec tests + linter; targets v0.9.3
-- [ ] Audit C Phase 2 (Item 212 / #1308) — bidirectional-binding inventory; targets v0.9.3 / v0.9.4
+- [x] Item 211 — opt-in pattern canonicalization (GitHub #1307) — **closed (PR #1321)**
+- [x] Item 212 — Audit C Phase 2 inventory (GitHub #1308) — **closed (PR #1322)**
+- [x] #1281 — private-state re-render (deferred to v0.9.3 per ROADMAP scoping decision; documented as known-issue for v0.9.2 stable release notes) — **closed**
+- [x] v0.9.2-5 follow-ups (#1295, #1296, #1297, #1298, #1299) — still open from prior milestone retro; targets v0.9.3 — **closed (PR #1319, PR #1320)**
+- [x] Audit A Phase 2 (#1284, #1285, #1286) — `_action_state` reconnect, snapshot truncation warning, change-detection unification; targets v0.9.3 — **closed**
+- [x] Audit B Phase 2/3 (#1287, #1288, #1289, #1290) — decorator-contract spec tests + linter; targets v0.9.3 — **closed (PR #1330)**
+- [x] Audit C Phase 2 (Item 212 / #1308) — bidirectional-binding inventory; targets v0.9.3 / v0.9.4 — **closed (PR #1322)**
 
 ---
 
@@ -3447,9 +3447,9 @@ PR #1292 had 1 🟡 (`_mount_one` collector seam). PR #1293 had 3 🟡 (standalo
 - [x] Item 215 / #1311 — Stage 7 tautology check elevation — resolved in v0.9.3-4 (PR #1335)
 - [x] Item 216 / #1312 — single-script-transformation canon — resolved in v0.9.3-4 (PR #1336)
 - [x] Item 217 / #1313 — behavior-change CHANGELOG migration block — resolved in v0.9.3-4 (PR #1337)
-- [ ] #1281 — private-state re-render (deferred to v0.9.3 per ROADMAP scoping decision)
-- [ ] #1295, #1296, #1297, #1298, #1299 — Stage 11 🟡 follow-ups (5 total: `_mount_one` collector gap, standalone DataTable Component, stale fixture defaults, missing WS smoke test, `@background+@action` docs); targets v0.9.3
-- [ ] Audit A Phase 2 (#1284, #1285, #1286), Audit B Phase 2/3 (#1287-#1290) — split-foundation + linter + spec tests; targets v0.9.3
+- [x] #1281 — private-state re-render (deferred to v0.9.3 per ROADMAP scoping decision) — **closed**
+- [x] #1295, #1296, #1297, #1298, #1299 — Stage 11 🟡 follow-ups (5 total: `_mount_one` collector gap, standalone DataTable Component, stale fixture defaults, missing WS smoke test, `@background+@action` docs); targets v0.9.3 — **closed (PR #1319, PR #1320)**
+- [x] Audit A Phase 2 (#1284, #1285, #1286), Audit B Phase 2/3 (#1287-#1290) — split-foundation + linter + spec tests; targets v0.9.3 — **closed (PR #1330)**
 
 ---
 
@@ -3595,11 +3595,11 @@ The Stage 7 reviewer cross-checked all 6 deviations and confirmed each was the r
 
 ### Open Items
 
-- [ ] Audit-as-pre-staged-work-graph recipe in pipeline-drain skill — Action Tracker #210 (GitHub #1259) — resolved in v0.9.3-4 (direct commit to pipeline-drain SKILL.md)
-- [ ] (Carryover from v0.9.2-2) Stage 7 self-applicability check formal item — Action Tracker #206 (GitHub #1248) — still open, would have applied to PR #1257 + #1258 reviews
-- [ ] (Carryover) Single-source-of-truth regex extraction — Action Tracker #207 (GitHub #1249)
-- [ ] (Carryover) Direct-to-main bypass audit gap — Action Tracker #208 (GitHub #1250)
-- [ ] (Carryover) Pre-commit `git diff --cached --stat` reflex — Action Tracker #209 (GitHub #1251)
+- [x] Audit-as-pre-staged-work-graph recipe in pipeline-drain skill — Action Tracker #210 (GitHub #1259) — resolved in v0.9.3-4 (direct commit to pipeline-drain SKILL.md) — **closed**
+- [x] (Carryover from v0.9.2-2) Stage 7 self-applicability check formal item — Action Tracker #206 (GitHub #1248) — still open, would have applied to PR #1257 + #1258 reviews — **closed (PR #1263)**
+- [x] (Carryover) Single-source-of-truth regex extraction — Action Tracker #207 (GitHub #1249) — **closed (PR #1263)**
+- [x] (Carryover) Direct-to-main bypass audit gap — Action Tracker #208 (GitHub #1250) — **closed (PR #1263)**
+- [x] (Carryover) Pre-commit `git diff --cached --stat` reflex — Action Tracker #209 (GitHub #1251) — **closed (PR #1263)**
 
 ### v0.9.2 release readiness
 
@@ -3689,10 +3689,10 @@ While shipping the pipeline-skill CANON.md doc (commit `bf1a67f`, separate repo)
 
 ### Open Items
 
-- [ ] Stage 7 self-applicability check for canon PRs — Action Tracker #206 (GitHub #1248)
-- [ ] Extract retro-marker regex to shared constants module — Action Tracker #207 (GitHub #1249)
-- [ ] Extend retro-gate audit to scan direct-to-main commits OR migrate ROADMAP updates to PR-only — Action Tracker #208 (GitHub #1250)
-- [ ] Pre-commit `git diff --cached --stat` reflex to catch silent-bundle commits — Action Tracker #209 (GitHub #1251)
+- [x] Stage 7 self-applicability check for canon PRs — Action Tracker #206 (GitHub #1248) — **closed (PR #1263)**
+- [x] Extract retro-marker regex to shared constants module — Action Tracker #207 (GitHub #1249) — **closed (PR #1263)**
+- [x] Extend retro-gate audit to scan direct-to-main commits OR migrate ROADMAP updates to PR-only — Action Tracker #208 (GitHub #1250) — **closed (PR #1263)**
+- [x] Pre-commit `git diff --cached --stat` reflex to catch silent-bundle commits — Action Tracker #209 (GitHub #1251) — **closed (PR #1263)**
 - [ ] Resolve pipeline-skill `CANON.md` bundling decision (Option A/B/C from session conversation) — separate repo, no tracker row needed
 
 ---
@@ -3771,8 +3771,8 @@ PR #1238 (the docs PR that opened this milestone) was opened directly via `git c
 
 ### Open Items
 
-- [ ] Stage 4 plan-template addition: verify literal API contracts — Action Tracker #203 (GitHub #1243)
-- [ ] Stage 7 self-review addition: cross-ref workflow header claims against step semantics — Action Tracker #204 (GitHub #1244)
+- [x] Stage 4 plan-template addition: verify literal API contracts — Action Tracker #203 (GitHub #1243) — **closed (PR #1247)**
+- [x] Stage 7 self-review addition: cross-ref workflow header claims against step semantics — Action Tracker #204 (GitHub #1244) — **closed (PR #1247)**
 
 ---
 
@@ -3882,9 +3882,9 @@ Mid-arc, the divergence between `__version__ = "0.9.0"` and ROADMAP showing `v0.
 
 ### Open Items
 
-- [ ] **Pipeline-bypass CI check (ongoing)** — the `#1212 part 2` complementary check that flags merged PRs without retro markers within 24 hours of merge. Audit script (part 1) shipped in PR #1229; the scheduled-Action half is deferred. Tracked as Action Tracker #200 (GitHub #1234).
-- [ ] **Isolated cargo-test target for `filter_registry`** — `#1180 item 4`. The `OnceLock`-gated short-circuit test silently no-ops when prior tests register a filter. Either an isolated test target or a per-test reset would tighten coverage. Tracked as Action Tracker #201 (GitHub #1235).
-- [ ] **Watch-list for release-workflow-touching dep bumps** — surfaced in PR #1233's retro. Any future dependabot bump that modifies `.github/workflows/release.yml` should get explicit risk-review at refile time, not auto-merged. Tracked as Action Tracker #202 (GitHub #1236).
+- [x] **Pipeline-bypass CI check (ongoing)** — the `#1212 part 2` complementary check that flags merged PRs without retro markers within 24 hours of merge. Audit script (part 1) shipped in PR #1229; the scheduled-Action half is deferred. Tracked as Action Tracker #200 (GitHub #1234). — **closed (PR #1241)**
+- [x] **Isolated cargo-test target for `filter_registry`** — `#1180 item 4`. The `OnceLock`-gated short-circuit test silently no-ops when prior tests register a filter. Either an isolated test target or a per-test reset would tighten coverage. Tracked as Action Tracker #201 (GitHub #1235). — **closed (PR #1241)**
+- [x] **Watch-list for release-workflow-touching dep bumps** — surfaced in PR #1233's retro. Any future dependabot bump that modifies `.github/workflows/release.yml` should get explicit risk-review at refile time, not auto-merged. Tracked as Action Tracker #202 (GitHub #1236). — **closed (PR #1241)**
 
 ---
 
@@ -3956,15 +3956,15 @@ PR #1206's review surfaced three follow-ups already filed as GitHub issues (#120
 
 ### Open Items
 
-- [ ] Reproducer-first discipline canonicalized in plan-template Stage 4 — tracked in Action Tracker #191 (GitHub #1210)
-- [ ] Reviewer-prompt budget guidelines for pipeline-run Stage 11 — tracked in Action Tracker #192 (GitHub #1211)
-- [ ] Audit pipeline-bypass merges + harden retro-gate against silent dropout — tracked in Action Tracker #193 (GitHub #1212)
-- [ ] "Bug-report triage" section in CLAUDE.md citing #1206 as case study — tracked in Action Tracker #194 (GitHub #1213)
-- [ ] Heterogeneous and nested `list[Model]` shapes in change-detection normalize pass — tracked in Action Tracker #195 (GitHub #1207, filed during PR #1206 cleanup)
-- [ ] Strengthen idempotency test with explicit zero-patch assertion — tracked in Action Tracker #196 (GitHub #1208, filed during PR #1206 cleanup)
-- [ ] Vulture-based pre-push check for unused private methods — tracked in Action Tracker #197 (GitHub #1209, filed during PR #1206 cleanup)
-- [ ] (Carried from PR #1201 retro) CodeQL query model declaring `sanitize_for_log` as sanitizer — tracked in Action Tracker #198 (GitHub #1214)
-- [ ] (Carried from PR #1201 retro) Pre-commit `mixed-line-ending` cleanup of two `.pxd` files with lingering line-ending issues — tracked in Action Tracker #199 (GitHub #1215)
+- [x] Reproducer-first discipline canonicalized in plan-template Stage 4 — tracked in Action Tracker #191 (GitHub #1210) — **closed (PR #1218)**
+- [x] Reviewer-prompt budget guidelines for pipeline-run Stage 11 — tracked in Action Tracker #192 (GitHub #1211) — **closed (PR #1219)**
+- [x] Audit pipeline-bypass merges + harden retro-gate against silent dropout — tracked in Action Tracker #193 (GitHub #1212) — **closed (PR #1229)**
+- [x] "Bug-report triage" section in CLAUDE.md citing #1206 as case study — tracked in Action Tracker #194 (GitHub #1213) — **closed (PR #1216)**
+- [x] Heterogeneous and nested `list[Model]` shapes in change-detection normalize pass — tracked in Action Tracker #195 (GitHub #1207, filed during PR #1206 cleanup) — **closed (PR #1217)**
+- [x] Strengthen idempotency test with explicit zero-patch assertion — tracked in Action Tracker #196 (GitHub #1208, filed during PR #1206 cleanup) — **closed (PR #1217)**
+- [x] Vulture-based pre-push check for unused private methods — tracked in Action Tracker #197 (GitHub #1209, filed during PR #1206 cleanup) — **closed (PR #1220)**
+- [x] (Carried from PR #1201 retro) CodeQL query model declaring `sanitize_for_log` as sanitizer — tracked in Action Tracker #198 (GitHub #1214) — **closed (PR #1224)**
+- [x] (Carried from PR #1201 retro) Pre-commit `mixed-line-ending` cleanup of two `.pxd` files with lingering line-ending issues — tracked in Action Tracker #199 (GitHub #1215) — **closed (PR #1222)**
 - [ ] (Carried from PR #1206 retro) Stage 4 plan-template requires reproducer FIRST — deduplicated with Action Tracker #191 above
 
 ---
@@ -4038,12 +4038,12 @@ When a test asserts "this thing happened", check whether the assertion would ALS
 
 ### Open Items
 
-- [ ] Refactor-with-helper guard audit pattern — tracked in Action Tracker #185 (GitHub #1195)
-- [ ] Delegated-listener integration test pattern — tracked in Action Tracker #186 (GitHub #1196)
-- [ ] Canon-doc citation discipline — tracked in Action Tracker #187 (GitHub #1197)
-- [ ] Commit-or-rollback handler shape — tracked in Action Tracker #188 (GitHub #1198)
-- [ ] Edge-case coverage for index/cursor logic — tracked in Action Tracker #189 (GitHub #1199)
-- [ ] Tautology test detection — tracked in Action Tracker #190 (GitHub #1200)
+- [x] Refactor-with-helper guard audit pattern — tracked in Action Tracker #185 (GitHub #1195) — **closed (PR #1225)**
+- [x] Delegated-listener integration test pattern — tracked in Action Tracker #186 (GitHub #1196) — **closed**
+- [x] Canon-doc citation discipline — tracked in Action Tracker #187 (GitHub #1197) — **closed**
+- [x] Commit-or-rollback handler shape — tracked in Action Tracker #188 (GitHub #1198) — **closed**
+- [x] Edge-case coverage for index/cursor logic — tracked in Action Tracker #189 (GitHub #1199) — **closed**
+- [x] Tautology test detection — tracked in Action Tracker #190 (GitHub #1200) — **closed**
 
 ---
 
@@ -4118,8 +4118,8 @@ PR #1183 (cookie namespace polish) found a write-side issue and applied the lega
 
 - [x] "Closes #N each on its own body line" PR-checklist canon — Action Tracker #184 (GitHub #1185). — resolved in v0.9.4 (PR #1192)
 - [ ] PR #1170 row-nav 3 🟡 follow-ups (now closed via PR #1184) — superseded.
-- [ ] PR #1179 custom filter polish 3 🟡 follow-ups — GitHub #1180.
-- [ ] Executor-side post-stage hook enforcement (Stage 5 / 9 / 6 mechanical gates) — GitHub #1177.
+- [x] PR #1179 custom filter polish 3 🟡 follow-ups — GitHub #1180. — **closed (PR #1230)**
+- [x] Executor-side post-stage hook enforcement (Stage 5 / 9 / 6 mechanical gates) — GitHub #1177. — **closed**
 
 ---
 
@@ -4189,16 +4189,16 @@ Plan stage caught material reuse twice in this drain: PR #1161's eager filter re
 
 ### Open Items
 
-- [ ] Serialize implementer agents per checkout — Action Tracker #180 (GitHub #1172).
-- [ ] Two-commit shape canonicalized in pipeline template — Action Tracker #181 (GitHub #1173).
-- [ ] "3 clean full-suite runs" verification gate for pollution-class fixes — Action Tracker #182 (GitHub #1174).
-- [ ] CSP-strict defaults for new client-side framework code — Action Tracker #183 (GitHub #1175).
-- [ ] PR #1170 follow-ups (nested-control tags / test-hook namespace / Python allowlist test) — GitHub #1171.
-- [ ] PR #1168 follow-ups (empty-namespaced cookie / namespace validation / JSDOM write test / legacy cleanup) — GitHub #1169.
-- [ ] PR #1166 follow-ups (test-isolation flake / asymmetric sidecar) — GitHub #1167.
-- [ ] PR #1164 follow-ups (caplog assertions / descriptor doc / dev-env regression) — GitHub #1165.
-- [ ] PR #1161 follow-ups (hot-path Mutex / hardcoded autoescape / weak negative test / unused fn / fixture / async filter) — GitHub #1162.
-- [ ] PR #1159 follow-up (Redis perf bound) — GitHub #1160.
+- [x] Serialize implementer agents per checkout — Action Tracker #180 (GitHub #1172). — **closed**
+- [x] Two-commit shape canonicalized in pipeline template — Action Tracker #181 (GitHub #1173). — **closed (PR #1176)**
+- [x] "3 clean full-suite runs" verification gate for pollution-class fixes — Action Tracker #182 (GitHub #1174). — **closed (PR #1176)**
+- [x] CSP-strict defaults for new client-side framework code — Action Tracker #183 (GitHub #1175). — **closed (PR #1178)**
+- [x] PR #1170 follow-ups (nested-control tags / test-hook namespace / Python allowlist test) — GitHub #1171. — **closed (PR #1184)**
+- [x] PR #1168 follow-ups (empty-namespaced cookie / namespace validation / JSDOM write test / legacy cleanup) — GitHub #1169. — **closed (PR #1183)**
+- [x] PR #1166 follow-ups (test-isolation flake / asymmetric sidecar) — GitHub #1167. — **closed (PR #1182)**
+- [x] PR #1164 follow-ups (caplog assertions / descriptor doc / dev-env regression) — GitHub #1165. — **closed (PR #1181)**
+- [x] PR #1161 follow-ups (hot-path Mutex / hardcoded autoescape / weak negative test / unused fn / fixture / async filter) — GitHub #1162. — **closed (PR #1179)**
+- [x] PR #1159 follow-up (Redis perf bound) — GitHub #1160. — **closed (PR #1181)**
 
 ---
 
@@ -4271,16 +4271,16 @@ The integration test for `lazy=True` initially used the parent's `template = "..
 
 - [x] Stage-4 first-principles canonicalization in CLAUDE.md — tracked in Action Tracker #168 (GitHub #1143). — resolved in v0.9.4 (PR #1192)
 - [x] Branch-name verify check in pipeline-run skill — tracked in Action Tracker #169 (GitHub #1144). — resolved in v0.9.4 (PR #1192)
-- [ ] #1134 polluting-test bisect (HIGH-priority bump) — tracked in Action Tracker #170 (GitHub #1134, comment + label bump).
-- [ ] Rust template engine `{% live_render %}` tag handler — tracked in Action Tracker #171 (GitHub #1145).
-- [ ] A075 system check (sticky+lazy template scan) — tracked in Action Tracker #172 (GitHub #1146).
-- [ ] CSP-nonce-aware activator script for `<dj-lazy-slot>` fills — tracked in Action Tracker #173 (GitHub #1147).
-- [ ] Replay handler argument validation (defense-in-depth) — tracked in Action Tracker #174 (GitHub #1148).
-- [ ] `markdown` package missing from default test env (carryover from v0.8.7 retro) — tracked in Action Tracker #175 (GitHub #1149).
-- [ ] Descriptor-pattern component time-travel verification test — tracked in Action Tracker #176 (GitHub #1150).
+- [x] #1134 polluting-test bisect (HIGH-priority bump) — tracked in Action Tracker #170 (GitHub #1134, comment + label bump). — **closed (PR #1159)**
+- [x] Rust template engine `{% live_render %}` tag handler — tracked in Action Tracker #171 (GitHub #1145). — **closed**
+- [x] A075 system check (sticky+lazy template scan) — tracked in Action Tracker #172 (GitHub #1146). — **closed**
+- [x] CSP-nonce-aware activator script for `<dj-lazy-slot>` fills — tracked in Action Tracker #173 (GitHub #1147). — **closed**
+- [x] Replay handler argument validation (defense-in-depth) — tracked in Action Tracker #174 (GitHub #1148). — **closed**
+- [x] `markdown` package missing from default test env (carryover from v0.8.7 retro) — tracked in Action Tracker #175 (GitHub #1149). — **closed**
+- [x] Descriptor-pattern component time-travel verification test — tracked in Action Tracker #176 (GitHub #1150). — **closed**
 - [x] Debug panel UI for per-component scrubbing + forward-replay — tracked in Action Tracker #177 (GitHub #1151). — resolved in v0.9.4 (PRs #1193 + #1194)
-- [ ] Vitest unhandled-rejection in `view-transitions.test.js` — tracked in Action Tracker #178 (GitHub #1152).
-- [ ] `asyncio.as_completed._wait_for_one` warning suppression — tracked in Action Tracker #179 (GitHub #1153).
+- [x] Vitest unhandled-rejection in `view-transitions.test.js` — tracked in Action Tracker #178 (GitHub #1152). — **closed (PR #1187)**
+- [x] `asyncio.as_completed._wait_for_one` warning suppression — tracked in Action Tracker #179 (GitHub #1153). — **closed (PR #1187)**
 
 ---
 
@@ -4371,12 +4371,12 @@ PR #1117 decorated 21 `on_table_*` methods via Python regex script. PR #1120 ref
 
 ### Open Items
 
-- [ ] 4th-strike RETRO_GATE_VIOLATION (PRs #1119, #1120) — already tracked in Action Tracker #157 (GitHub #1085). Note added.
-- [ ] CodeQL `js/tainted-format-string` self-review checkpoint — Action Tracker #165.
+- [x] 4th-strike RETRO_GATE_VIOLATION (PRs #1119, #1120) — already tracked in Action Tracker #157 (GitHub #1085). Note added. — **closed**
+- [x] CodeQL `js/tainted-format-string` self-review checkpoint — Action Tracker #165. — **closed (PR #169)**
 - [ ] Two-PR-split-for-high-blast-radius pattern doc — Action Tracker #163.
-- [ ] Pre-mount/post-mount keyset invariant test as a generalizable pattern — Action Tracker #164.
-- [ ] Bulk-dispatch-site refactor + count-test pattern — Action Tracker #166.
-- [ ] v0.8.5 retro never written (this retro session backfilled per-PR retros for #1119/#1120 but a separate v0.8.5 milestone retro is also missing). Track separately — Action Tracker #167.
+- [x] Pre-mount/post-mount keyset invariant test as a generalizable pattern — Action Tracker #164. — **closed (PR #168)**
+- [x] Bulk-dispatch-site refactor + count-test pattern — Action Tracker #166. — **closed (PR #172)**
+- [x] v0.8.5 retro never written (this retro session backfilled per-PR retros for #1119/#1120 but a separate v0.8.5 milestone retro is also missing). Track separately — Action Tracker #167. — **closed (PR #173)**
 
 ---
 
@@ -4504,7 +4504,7 @@ When picking the next "Quick Win" task, 6 of the 8 candidates I checked were alr
 
 ### Open Items
 
-- [ ] Item 1 — Inheritance round-trip identity tests must drive from parser output (Action Tracker #158)
+- [x] Item 1 — Inheritance round-trip identity tests must drive from parser output (Action Tracker #158) — **closed (PR #162)**
 - [x] Item 2 — Stale-`collectstatic` Django system check (Action Tracker #159, GitHub #1088) — resolved in v0.8.6 PR #1115
 - [x] Item 3 — Expand release wheel matrix to cp313 + cp314 (Action Tracker #160, GitHub #1089) — resolved in v0.8.6 PR #1115
 - [x] Item 4 — Debug-log when `|date` / `|time` filter parse fails (Action Tracker #161, GitHub #1090) — resolved in v0.8.6 PR #1115
@@ -5683,20 +5683,20 @@ All 3 v0.5.7 PRs had retros posted before `completed_at` was set. Pipeline-run s
 
 ### Open Items (deferred to follow-up — see Action Tracker rows 80–93)
 
-- [ ] #930 — FormArrayNode drops inner template content (filed, pending fix)
-- [ ] #932 — `tag_input` missing `name=` attribute (filed)
-- [ ] #933 — `gallery/registry` dead `discover_*` path (filed)
-- [ ] #934 — CodeQL MaD model for `sanitize_for_log` (filed)
-- [ ] #935 — 3 pre-existing main test failures (filed)
+- [x] #930 — FormArrayNode drops inner template content (filed, pending fix) — **closed (PR #939)**
+- [x] #932 — `tag_input` missing `name=` attribute (filed) — **closed**
+- [x] #933 — `gallery/registry` dead `discover_*` path (filed) — **closed**
+- [x] #934 — CodeQL MaD model for `sanitize_for_log` (filed) — **closed (PR #945)**
+- [x] #935 — 3 pre-existing main test failures (filed) — **closed**
 - [ ] `_registry.py` F401 alerts — explicit `# noqa` if rescan still flags (row #83)
 - [ ] 3 `py/mixed-returns` — per-function judgment (noted in retro-931)
 - [ ] 3 `js/unused-local-variable` from PR #925/#931 — scanner rescan pending
-- [ ] `dispatch.py:295` vs `observability:399` message consistency (row #87)
+- [x] `dispatch.py:295` vs `observability:399` message consistency (row #87) — **closed (PR #88)**
 - [ ] `inspect.getsource` test quality follow-up (row #88)
 - [ ] `javascript:` scheme + HTTPS downgrade + null-byte storybook tests (row #89)
-- [ ] Full audit of `HttpResponseRedirect`/`redirect()` call sites (row #90)
-- [ ] Shared `conftest.py` staff-user fixture (row #91)
-- [ ] `docs/internal/codeql-patterns.md` cheat sheet (row #92)
+- [x] Full audit of `HttpResponseRedirect`/`redirect()` call sites (row #90) — **closed**
+- [x] Shared `conftest.py` staff-user fixture (row #91) — **closed**
+- [x] `docs/internal/codeql-patterns.md` cheat sheet (row #92) — **closed**
 - [ ] Automate CHANGELOG test-count validation (row #93 — 3rd recurrence)
 
 ---
@@ -5753,17 +5753,17 @@ All 3 v0.5.7 PRs had retros posted before `completed_at` was set. Pipeline-run s
 
 ### Open Items (carried forward)
 
-- [ ] #861 — render_slot Rust integration returns empty (new bug; high user value)
-- [ ] #786 — broaden dep-extractor correctness harness matrix (tests only, safe)
-- [ ] #787 — extract filter-arg vars in `extract_from_variable` (Rust dep tracker)
-- [ ] #793 — assign_async concurrent same-name cancellation semantics (async design)
-- [ ] #797 — variable-height virtual list items via ResizeObserver (feature; ROADMAP-worthy)
-- [ ] #803 — block-handler loader access (deferred from #802; Rust)
-- [ ] #804 — parent-tag propagation for nested custom-tag handlers (Rust)
-- [ ] #805 — warn when assign_tag_handler returns non-dict (~5 LOC Rust; pair with other Rust items)
-- [ ] #806 — extend `Context::resolve` to for-iterables over Model instances (Rust + Django interop)
-- [ ] #808 — PostgresNotifyListener event-loop binding across async_to_sync (real bug; async design)
-- [ ] #809 — `untrack()` helper for `@notify_on_save` receiver cleanup (new public API)
+- [x] #861 — render_slot Rust integration returns empty (new bug; high user value) — **closed (PR #871)**
+- [x] #786 — broaden dep-extractor correctness harness matrix (tests only, safe) — **closed (PR #869)**
+- [x] #787 — extract filter-arg vars in `extract_from_variable` (Rust dep tracker) — **closed (PR #873)**
+- [x] #793 — assign_async concurrent same-name cancellation semantics (async design) — **closed (PR #876)**
+- [x] #797 — variable-height virtual list items via ResizeObserver (feature; ROADMAP-worthy) — **closed (PR #947)**
+- [x] #803 — block-handler loader access (deferred from #802; Rust) — **closed (PR #877)**
+- [x] #804 — parent-tag propagation for nested custom-tag handlers (Rust) — **closed**
+- [x] #805 — warn when assign_tag_handler returns non-dict (~5 LOC Rust; pair with other Rust items) — **closed (PR #870)**
+- [x] #806 — extend `Context::resolve` to for-iterables over Model instances (Rust + Django interop) — **closed (PR #873)**
+- [x] #808 — PostgresNotifyListener event-loop binding across async_to_sync (real bug; async design) — **closed (PR #875)**
+- [x] #809 — `untrack()` helper for `@notify_on_save` receiver cleanup (new public API) — **closed (PR #874)**
 - [x] #778 — ADR-007 package-shim sunset (multi-repo archival) — Shipped as v99.0.0 DeprecationWarning shims across djust-{auth,tenants,admin,theming,components}, 2026-04-22
 
 ---
@@ -5831,11 +5831,11 @@ The error overlay (#848) is gated on `window.DEBUG_MODE`, which the `djust_tags`
 
 ### Open Items
 
-- [ ] `djust_typecheck` template-tag blind spots — Action Tracker #55 (#850)
-- [ ] `djust_typecheck` MRO walk for self-assigns — Action Tracker #56 (#851)
-- [ ] Extract `_walk_subclasses` / `_is_user_class` (3x duplication) — Action Tracker #57 (#852)
-- [ ] `follow_redirect` multiple-redirect semantics — Action Tracker #58 (#843)
-- [ ] `handle_async_result` callback not invoked in `render_async` — Action Tracker #59 (#844)
+- [x] `djust_typecheck` template-tag blind spots — Action Tracker #55 (#850) — **closed (PR #859)**
+- [x] `djust_typecheck` MRO walk for self-assigns — Action Tracker #56 (#851) — **closed**
+- [x] Extract `_walk_subclasses` / `_is_user_class` (3x duplication) — Action Tracker #57 (#852) — **closed**
+- [x] `follow_redirect` multiple-redirect semantics — Action Tracker #58 (#843) — **closed (PR #865)**
+- [x] `handle_async_result` callback not invoked in `render_async` — Action Tracker #59 (#844) — **closed**
 - [ ] v0.5.1rc3 → v0.5.1 stable release — PR #853 awaiting merge authorization
 
 ---
@@ -5907,9 +5907,9 @@ The djust-auth package's `logout_view` was a plain function that called `logout(
 
 ### Open Items
 
-- [ ] admin_ext silent except-pass blocks should log at DEBUG — Action Tracker #14 (#775)
-- [ ] admin_ext redirect_url should use |escapejs — Action Tracker #15 (#776)
-- [ ] Theming/components template tests need dedicated Django settings — Action Tracker #16 (#777)
+- [x] admin_ext silent except-pass blocks should log at DEBUG — Action Tracker #14 (#775) — **closed (PR #781)**
+- [x] admin_ext redirect_url should use |escapejs — Action Tracker #15 (#776) — **closed (PR #781)**
+- [x] Theming/components template tests need dedicated Django settings — Action Tracker #16 (#777) — **closed (PR #782)**
 - [x] Ship final standalone package versions as deprecation shims — Action Tracker #17 (#778) — Done 2026-04-22 (5 sibling repos tagged v99.0.0)
 
 ---
@@ -5988,15 +5988,15 @@ PRs #788, #814, #819, and #826 each saw at least one commit land on a phantom `p
 
 ### Open Items
 
-- [ ] Tracker rows #18–#19 — dep-extractor hardening follow-ups (PR #785 → #786, #787)
-- [ ] Tracker rows #20–#22 — component-system coverage + chore (PR #788 → #789, #790, #791)
-- [ ] Tracker rows #23–#25 — async rendering follow-ups (PR #792 → #793, #794, #795)
-- [ ] Tracker rows #26–#30 — large-list DOM perf follow-ups + client.js budget (PR #796 → #797–#801)
-- [ ] Tracker rows #31–#34 — Rust template parity deferrals (PR #802 → #803–#806)
-- [ ] Tracker rows #35–#40 — DB change notifications hardening (PR #807 → #808–#813)
-- [ ] Tracker rows #41–#44 — hook polish follow-ups (PR #814 → #815–#818)
-- [ ] Tracker rows #45–#50 — UploadWriter features + tech-debt (PR #819 → #820–#825)
-- [ ] Tracker rows #51–#54 — Service Worker follow-ups (PR #826 → #827–#830)
+- [x] Tracker rows #18–#19 — dep-extractor hardening follow-ups (PR #785 → #786, #787) — **closed (PR #869, PR #873)**
+- [x] Tracker rows #20–#22 — component-system coverage + chore (PR #788 → #789, #790, #791) — **closed (PR #22, PR #862, PR #955)**
+- [x] Tracker rows #23–#25 — async rendering follow-ups (PR #792 → #793, #794, #795) — **closed (PR #26, PR #876)**
+- [x] Tracker rows #26–#30 — large-list DOM perf follow-ups + client.js budget (PR #796 → #797–#801) — **closed (PR #866, PR #947)**
+- [x] Tracker rows #31–#34 — Rust template parity deferrals (PR #802 → #803–#806) — **closed (PR #55, PR #873, PR #877)**
+- [x] Tracker rows #35–#40 — DB change notifications hardening (PR #807 → #808–#813) — **closed (PR #38, PR #867, PR #875)**
+- [x] Tracker rows #41–#44 — hook polish follow-ups (PR #814 → #815–#818) — **closed (PR #863)**
+- [x] Tracker rows #45–#50 — UploadWriter features + tech-debt (PR #819 → #820–#825) — **closed**
+- [x] Tracker rows #51–#54 — Service Worker follow-ups (PR #826 → #827–#830) — **closed (PR #860)**
 
 ---
 
