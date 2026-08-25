@@ -199,7 +199,7 @@ def test_use_tz_false_clears_the_zone_rather_than_leaving_a_stale_one():
 # `RustBridgeMixin` — it calls `render_template_with_dirs` directly — so a fix
 # that lived on the mixin would have covered `LiveView` and silently missed
 # this one. That is the #1646 twin this release keeps closing; both now call
-# the same `djust.timezone_bridge.apply_active_timezone`.
+# the same `djust.render_env.apply_render_env`.
 # ---------------------------------------------------------------------------
 
 
@@ -245,7 +245,7 @@ def test_both_render_paths_call_the_same_timezone_function():
     root = pathlib.Path(djust.__file__).parent
     callers = set()
     for path in root.rglob("*.py"):
-        if "tests" in path.parts or path.name == "timezone_bridge.py":
+        if "tests" in path.parts or path.name == "render_env.py":
             continue
         try:
             tree = ast.parse(path.read_text())
@@ -255,13 +255,13 @@ def test_both_render_paths_call_the_same_timezone_function():
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "apply_active_timezone"
+                and node.func.id == "apply_render_env"
             ):
                 callers.add(path.relative_to(root).as_posix())
 
     assert callers == {"mixins/rust_bridge.py", "simple_live_view.py"}, (
-        "the set of render paths pushing the timezone to Rust changed. Add the "
-        "new path here once it calls apply_active_timezone() — and if a path "
+        "the set of render paths pushing per-render settings to Rust changed. Add the "
+        "new path here once it calls apply_render_env() — and if a path "
         "was REMOVED from this set, check it did not grow its own private copy "
         f"instead. Found: {sorted(callers)}"
     )

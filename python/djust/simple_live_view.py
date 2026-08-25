@@ -15,7 +15,7 @@ try:
 except ImportError:
     _RUST_AVAILABLE = False
 
-from .timezone_bridge import apply_active_timezone
+from .render_env import apply_render_env
 from .utils import get_template_dirs
 
 
@@ -52,7 +52,7 @@ class LiveView(View):
                 # Before ``get_context_data`` deliberately: that call currently
                 # raises for every instance (#2219), and the handoff should be
                 # in place for whatever renders once it does not.
-                apply_active_timezone()
+                apply_render_env()
                 context = self.get_context_data()
                 return str(render_template_with_dirs(self.template, context, get_template_dirs()))
             except Exception as e:

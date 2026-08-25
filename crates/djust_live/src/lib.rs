@@ -1489,6 +1489,50 @@ fn set_active_timezone(name: Option<&str>) -> bool {
     djust_templates::timezone::set_active_timezone(name)
 }
 
+/// Set the CALLING THREAD's number format (#2221).
+///
+/// Django localizes a number on its way into the page; the Rust engine used
+/// Rust's defaults, so `1234567` rendered without separators in every locale —
+/// including the default English one, since `USE_THOUSAND_SEPARATOR` applies
+/// regardless of language.
+///
+/// The parameters come from Python rather than being derived here, which is the
+/// inverse of the timezone fix above and deliberate: locale formatting is
+/// defined by `django/conf/locale/*/formats.py`, and reimplementing that would
+/// be a fork of Django's data rather than a use of it. Pass `None` to disable
+/// localization entirely.
+#[pyfunction]
+#[pyo3(signature = (decimal_sep=None, thousand_sep=None, grouping=None, use_grouping=false))]
+fn set_number_format(
+    decimal_sep: Option<String>,
+    thousand_sep: Option<String>,
+    grouping: Option<Vec<usize>>,
+    use_grouping: bool,
+) {
+    match decimal_sep {
+        None => djust_core::locale::set_number_format(None),
+        Some(dec) => {
+            djust_core::locale::set_number_format(Some(djust_core::locale::NumberFormat {
+                decimal_sep: dec,
+                thousand_sep: thousand_sep.unwrap_or_default(),
+                grouping: grouping.unwrap_or_default(),
+                use_grouping,
+            }))
+        }
+    }
+}
+
+/// The calling thread's number format as `(decimal_sep, thousand_sep, grouping,
+/// use_grouping)`, or `None`.
+///
+/// Exposed so the Python side can ASSERT the wiring took effect rather than
+/// assume it — a setter with no getter cannot be tested end to end (#2017).
+#[pyfunction]
+fn active_number_format() -> Option<(String, String, Vec<usize>, bool)> {
+    djust_core::locale::number_format()
+        .map(|f| (f.decimal_sep, f.thousand_sep, f.grouping, f.use_grouping))
+}
+
 /// The calling thread's active render timezone, or `None`.
 ///
 /// Exposed so the Python side can ASSERT the wiring took effect rather than
@@ -3405,6 +3449,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(set_active_timezone, m)?)?;
     m.add_function(wrap_pyfunction!(active_timezone_name, m)?)?;
+    m.add_function(wrap_pyfunction!(set_number_format, m)?)?;
+    m.add_function(wrap_pyfunction!(active_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
 

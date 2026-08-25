@@ -376,16 +376,25 @@ fn apply_builtin_filter(
         }
         "floatformat" => {
             // floatformat filter: formats float to specified decimal places
-            let decimals = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-            match value {
-                Value::Float(f) => Ok(Value::String(format!("{f:.decimals$}"))),
-                Value::Integer(n) => Ok(Value::String(format!(
-                    "{:.prec$}",
-                    *n as f64,
-                    prec = decimals
-                ))),
-                _ => Ok(value.clone()),
-            }
+            // Django's `u` suffix (`floatformat:"2u"`) is the documented
+            // opt-out from localization — and what it yields is exactly what
+            // djust produced for EVERY locale before #2221.
+            let unlocalized = arg.map(|s| s.ends_with('u')).unwrap_or(false);
+            let digits = arg.map(|s| s.trim_end_matches(['u', 'g']));
+            let decimals = digits.and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+            let rendered = match value {
+                Value::Float(f) => format!("{f:.decimals$}"),
+                Value::Integer(n) => format!("{:.prec$}", *n as f64, prec = decimals),
+                _ => return Some(Ok(value.clone())),
+            };
+            // Localized HERE, not at the render site, because by the time the
+            // renderer sees this it is a `Value::String` and indistinguishable
+            // from a user's own digits (#2221).
+            Ok(Value::String(if unlocalized {
+                rendered
+            } else {
+                djust_core::locale::localize_number(&rendered)
+            }))
         }
         "filesizeformat" => {
             // filesizeformat filter: formats bytes to human-readable size
