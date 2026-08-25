@@ -199,3 +199,98 @@ def test_timezone_and_number_format_reach_this_render_path():
 @pytest.mark.parametrize("attr", ["name", "count"])
 def test_mount_state_becomes_template_context(attr):
     assert attr in _mounted().get_context_data()
+
+
+# ---------------------------------------------------------------------------
+# Render failures: detail to the log, never to the response (#2596).
+# ---------------------------------------------------------------------------
+
+
+class _Exploding(SimpleLiveView):
+    """A view whose render raises, with a message shaped like an attack."""
+
+    template = "<p>{{ name }}</p>"
+    boom = '<script>alert(1)</script> "quoted" & <img src=x onerror=y>'
+
+    def mount(self, request, **kwargs):
+        self.name = "x"
+
+    def get_context_data(self):
+        raise ValueError(self.boom)
+
+
+@override_settings(DEBUG=True)
+def test_no_exception_detail_reaches_the_response_even_in_debug(caplog):
+    """CodeQL `py/stack-trace-exposure` #2596 — the alert this closes.
+
+    The response used to carry `f"<div>Template error: {e}</div>"` whenever
+    `DEBUG` was on. It is now a static string in every mode, so there is no
+    mode-dependent leak to reason about and nothing for a misconfigured
+    production `DEBUG=True` to expose.
+    """
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        out = _Exploding().render_template()
+
+    assert out == "<div>An error occurred rendering this view.</div>"
+    assert "alert(1)" not in out
+    assert "ValueError" not in out
+
+
+@override_settings(DEBUG=True)
+def test_the_markup_in_an_exception_message_cannot_reach_the_page(caplog):
+    """The second defect, which CodeQL did NOT name (CWE-79).
+
+    The old line interpolated the message **unescaped**, and template errors
+    routinely echo the offending value — so an exception carrying a `<`
+    injected markup straight into the page. `websocket.py:549` fixed exactly
+    this shape with `escape(str(e))` and its comment says it *mirrors* this
+    function; the copy was fixed and the original was not (#1646).
+
+    Asserted on a message containing a script tag, an attribute-breaking
+    quote, an ampersand and an event handler, so a partial escape fails too.
+    """
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        out = _Exploding().render_template()
+
+    for fragment in ("<script>", "onerror=", '"quoted"', "<img"):
+        assert fragment not in out, f"{fragment!r} reached the page"
+
+
+@override_settings(DEBUG=True)
+def test_the_detail_is_logged_so_the_developer_still_gets_it(caplog):
+    """Removing it from the page must not lose it.
+
+    A full traceback in the log is strictly more useful to the developer this
+    branch was written for than a one-line `str(e)` in a div — which is what
+    makes dropping the DEBUG branch an improvement rather than a trade.
+    """
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        _Exploding().render_template()
+
+    assert any(r.exc_info for r in caplog.records), "no traceback was logged"
+    assert any(
+        "alert(1)" in r.getMessage() or (r.exc_info and "alert(1)" in str(r.exc_info[1]))
+        for r in caplog.records
+    ), "the exception detail did not reach the log"
+
+
+@override_settings(DEBUG=False)
+def test_production_behaviour_is_identical(caplog):
+    # The point of removing the gate: one code path, so there is no
+    # DEBUG-dependent difference left to get wrong.
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        out = _Exploding().render_template()
+    assert out == "<div>An error occurred rendering this view.</div>"
+
+
+def test_a_successful_render_is_unaffected():
+    # Guard: the except path must not have swallowed the happy path.
+    assert "Hello Ada" in _mounted().render_template()
