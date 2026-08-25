@@ -2343,14 +2343,26 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
     if let Ok(s) = value.extract::<String>() {
         return Ok(s.into_pyobject(py)?.to_owned().into_any().unbind());
     }
+    // BOOL BEFORE INT (#2212). PyO3 0.29 extracts a Python `True` as `i64` `1`
+    // (its own `test_i64_bool` asserts this), so with the integer arm first the
+    // bool arm below was DEAD CODE and `serialize_context({"flag": True})`
+    // returned `1`. `serialize_context` is a public `#[pyfunction]` feeding JIT
+    // state serialization, so that reached the client as `1`/`0` — client code
+    // doing `x === true` sees false, and after #2203 a `Value::Integer(1)`
+    // renders `1` where a `Value::Bool(true)` renders `True`.
+    //
+    // This is the THIRD converter to make the same choice; the other two
+    // (`FromPyObject for Value` in djust_core, and `python_to_value` after
+    // #2211) already check bool first. One invariant, three implementations,
+    // and a dead `if let` arm is not a compile error — #1646 exactly.
+    if let Ok(b) = value.extract::<bool>() {
+        return Ok(b.into_pyobject(py)?.to_owned().into_any().unbind());
+    }
     if let Ok(i) = value.extract::<i64>() {
         return Ok(i.into_pyobject(py)?.to_owned().into_any().unbind());
     }
     if let Ok(f) = value.extract::<f64>() {
         return Ok(f.into_pyobject(py)?.to_owned().into_any().unbind());
-    }
-    if let Ok(b) = value.extract::<bool>() {
-        return Ok(b.into_pyobject(py)?.to_owned().into_any().unbind());
     }
 
     // Components: Check if object has 'render' method
