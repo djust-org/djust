@@ -960,6 +960,13 @@ struct Stamped {
     /// Seconds since the epoch, for `U`. Not derivable from `dt` alone for a
     /// naive value, which Django interprets in the DEFAULT zone rather than UTC.
     timestamp: i64,
+    /// The input was a bare `datetime.time` with no date (#2216).
+    ///
+    /// A distinct state from `!aware`, and the distinction is Django's, not an
+    /// invention here: for a naive DATETIME the zone codes report the default
+    /// zone (`T` gives `EDT`), while for a bare TIME they render empty, because
+    /// `TimeFormat` has no date to resolve an offset against.
+    time_only: bool,
 }
 
 /// Apply the active render timezone (#2209).
@@ -976,7 +983,11 @@ struct Stamped {
 /// the default zone's abbreviation and offset for it. Shifting naive values
 /// would break every project on `USE_TZ = False`, which is the configuration
 /// where naive datetimes are the norm.
-fn apply_active_timezone(dt: DateTime<chrono::FixedOffset>, aware: bool) -> Stamped {
+fn apply_active_timezone(
+    dt: DateTime<chrono::FixedOffset>,
+    aware: bool,
+    time_only: bool,
+) -> Stamped {
     use chrono::TimeZone;
 
     let Some(tz) = crate::timezone::active_timezone() else {
@@ -987,6 +998,7 @@ fn apply_active_timezone(dt: DateTime<chrono::FixedOffset>, aware: bool) -> Stam
             abbrev: None,
             aware,
             timestamp: dt.timestamp(),
+            time_only,
         };
     };
 
@@ -997,6 +1009,7 @@ fn apply_active_timezone(dt: DateTime<chrono::FixedOffset>, aware: bool) -> Stam
             abbrev: Some(local.format("%Z").to_string()),
             aware,
             timestamp: dt.timestamp(),
+            time_only,
         };
     }
 
@@ -1021,12 +1034,14 @@ fn apply_active_timezone(dt: DateTime<chrono::FixedOffset>, aware: bool) -> Stam
             abbrev: Some(local.format("%Z").to_string()),
             aware,
             timestamp: local.timestamp(),
+            time_only,
         },
         None => Stamped {
             dt,
             abbrev: None,
             aware,
             timestamp: dt.timestamp(),
+            time_only,
         },
     }
 }
@@ -1062,6 +1077,53 @@ fn is_dst(stamped: &Stamped) -> bool {
     }
 }
 
+/// Does this format string use a code a bare `datetime.time` cannot answer?
+///
+/// The set is Django's, enumerated by running all 38 format characters against a
+/// `datetime.time` through Django's own engine rather than reasoned about — the
+/// three groups do not follow from the docs:
+///
+/// * **supported**: `a A c f g G h H i P s u`
+/// * **empty in place**: `e T O Z` (a naive time has no zone, but the rest of
+///   the format still renders)
+/// * **empties everything**: the date codes below
+///
+/// `r` and `U` are excluded deliberately: Django RAISES on those
+/// (`combine() argument 1 must be datetime.date`), so a template using them
+/// 500s rather than rendering empty. Returning `""` here would be a silent
+/// divergence in the direction of hiding a template bug; they instead fall
+/// through to the catch-all and render as themselves, which is what every
+/// unimplemented code does (#2217).
+///
+/// Backslash escapes are honoured — `{{ v|date:"\Y H:i" }}` is a literal `Y`
+/// and does NOT blank the render.
+///
+/// The walk deliberately mirrors the FORMATTER's own escape handling below
+/// (consume the backslash, skip the next char) rather than Django's, which uses
+/// a negative lookbehind and so treats `\\Y` — an escaped backslash followed
+/// by `Y` — as a literal too. djust's formatter has always disagreed with
+/// Django on that double-escape case; matching Django here while the formatter
+/// did not would be worse than the disagreement, because the guard would blank
+/// a render the formatter was about to produce correctly. The pre-existing
+/// double-escape divergence belongs with the other format-string gaps (#2217).
+fn format_has_date_code(format_str: &str) -> bool {
+    const DATE_ONLY: &[char] = &[
+        'b', 'd', 'D', 'F', 'I', 'j', 'l', 'L', 'm', 'M', 'n', 'N', 'o', 'S', 't', 'w', 'W', 'y',
+        'Y', 'z',
+    ];
+    let mut chars = format_str.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            chars.next(); // escaped: a literal, not a code
+            continue;
+        }
+        if DATE_ONLY.contains(&ch) {
+            return true;
+        }
+    }
+    false
+}
+
 fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
     // Tracks whether the input carried a UTC offset. Set by the naive branches
     // below; the RFC3339 branch leaves it true. The distinction survives all
@@ -1069,6 +1131,12 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
     // aware values ONLY — converting a naive one would move every timestamp in
     // a `USE_TZ = False` project.
     let mut aware = true;
+    // A bare `datetime.time` — `"23:30:00"`, no date at all (#2216). Before
+    // this, no parse branch matched such a value, so `date`/`time` returned
+    // their INPUT VERBATIM: `{{ v|time:"H:i" }}` on a `TimeField` rendered
+    // `23:30:00` where Django renders `23:30`. Exactly the class #2203 fixed
+    // for datetimes, still live for a different type.
+    let mut time_only = false;
     let dt = DateTime::parse_from_rfc3339(datetime_str)
         .or_else(|_| {
             // Naive datetime: "2026-08-22 14:30:00" → that instant, UTC (#2203).
@@ -1116,12 +1184,45 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                 d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset()
             })
         })
-        .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {e}")))?;
+        .or_else(|_| {
+            // Time-only (#2216). Anchored on an arbitrary epoch date so the
+            // existing `Timelike` accessors work unchanged; `time_only` is what
+            // stops that borrowed date from ever being rendered.
+            ["%H:%M:%S%.f", "%H:%M"]
+                .iter()
+                .find_map(|fmt| chrono::NaiveTime::parse_from_str(datetime_str.trim(), fmt).ok())
+                .ok_or(())
+                .map(|t| {
+                    aware = false;
+                    time_only = true;
+                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                        .unwrap()
+                        .and_time(t)
+                        .and_utc()
+                        .fixed_offset()
+                })
+        })
+        .map_err(|_| {
+            DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
+        })?;
 
     // #2209: everything above produced a wall clock in whatever offset arrived.
     // Django would have run `timezone.localtime()` by now.
-    let stamped = apply_active_timezone(dt, aware);
+    let stamped = apply_active_timezone(dt, aware, time_only);
     let dt = stamped.dt;
+
+    // #2216: a bare time has no date, so Django's `TimeFormat` has no attribute
+    // to answer a date code with — it raises, the filter swallows it, and the
+    // WHOLE render comes back empty. Verified: `{{ v|date:"H:i Y" }}` on a
+    // `time` is `''`, not `'23:30 '`.
+    //
+    // Note this is all-or-nothing, unlike the TIMEZONE codes, which render as
+    // an empty string in place and leave the rest formatted
+    // (`{{ v|date:"H:i T" }}` is `'23:30 '`). Two different rules that look
+    // alike; conflating them gives `'23:30 '` where Django gives `''`.
+    if time_only && format_has_date_code(format_str) {
+        return Ok(String::new());
+    }
 
     // Convert common Django format codes to output
     // This is a simplified implementation - Django has many more format codes
@@ -1184,11 +1285,20 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                 }
             }
             'a' => {
-                // am/pm
+                // Django's `a` is `'a.m.'` / `'p.m.'` WITH the periods — only
+                // the uppercase `A` is bare `AM`/`PM`. djust emitted `am`/`pm`
+                // for both, which the #2216 differential caught on a datetime
+                // as well as a time, so it is not a time-only defect.
+                //
+                // Out of #2216's scope strictly speaking, and fixed here rather
+                // than filed because it is two lines in the function being
+                // edited, verified against Django, and shipping "time filters
+                // now match Django" alongside a wrong `a` in the same match arm
+                // would be odd.
                 if dt.hour() < 12 {
-                    result.push_str("am");
+                    result.push_str("a.m.");
                 } else {
-                    result.push_str("pm");
+                    result.push_str("p.m.");
                 }
             }
             'P' => {
@@ -1237,13 +1347,25 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                 }
             }
             'T' => {
-                // Timezone abbreviation, for naive values too.
-                if let Some(a) = stamped.abbrev.as_deref() {
-                    result.push_str(a);
+                // Timezone abbreviation, for naive DATETIMES too — but not for
+                // a bare time, which has no date to resolve an offset against
+                // (#2216). Django gives `'23:30 '` for `H:i T` on a time; an
+                // implementation that reused the naive-datetime rule here would
+                // give `'23:30 UTC'`, inventing a zone from the epoch date this
+                // value was anchored on.
+                if !stamped.time_only {
+                    if let Some(a) = stamped.abbrev.as_deref() {
+                        result.push_str(a);
+                    }
                 }
             }
-            'O' => result.push_str(&dt.format("%z").to_string()), // -0400
-            'Z' => result.push_str(&dt.offset().local_minus_utc().to_string()), // -14400
+            // Same rule as `T`: a bare time reports no offset, and the borrowed
+            // anchor date must not leak one.
+            'O' if !stamped.time_only => result.push_str(&dt.format("%z").to_string()),
+            'Z' if !stamped.time_only => {
+                result.push_str(&dt.offset().local_minus_utc().to_string())
+            }
+            'O' | 'Z' => {}
             'U' => result.push_str(&stamped.timestamp.to_string()), // seconds since epoch
             'I' => {
                 // '1' during DST, '0' otherwise. Django reads `dst()`; the
