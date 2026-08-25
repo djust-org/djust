@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod context;
 pub mod errors;
+pub mod locale;
 pub mod serialization;
 
 pub use context::Context;

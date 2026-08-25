@@ -264,6 +264,28 @@ def set_active_timezone(name: Optional[str] = None) -> bool:
 def active_timezone_name() -> Optional[str]:
     """The calling thread's active render timezone, or None."""
 
+def set_number_format(
+    decimal_sep: Optional[str] = None,
+    thousand_sep: Optional[str] = None,
+    grouping: Optional[List[int]] = None,
+    use_grouping: bool = False,
+) -> None:
+    """Set the CALLING THREAD's number format (#2221).
+
+    `None` for `decimal_sep` disables localization. `grouping` is Django's
+    `NUMBER_GROUPING` as a list — a scalar `3` arrives as `[3, 0]`, and Indian
+    grouping is `[3, 2, 0]`; a `0` entry keeps the previous width.
+
+    The parameters come from Python rather than being derived in Rust — the
+    inverse of `set_active_timezone` above, and deliberate: locale formatting is
+    defined by `django/conf/locale/*/formats.py`, so deriving it in Rust would
+    fork Django's data instead of using it. Applied per render by
+    `djust.render_env.apply_render_env`.
+    """
+
+def active_number_format() -> Optional[Tuple[str, str, List[int], bool]]:
+    """`(decimal_sep, thousand_sep, grouping, use_grouping)`, or None."""
+
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -1069,5 +1091,7 @@ __all__ = [
     "django_value_repr_enabled",
     "set_active_timezone",
     "active_timezone_name",
+    "set_number_format",
+    "active_number_format",
     "virtual_keyed_ops_enabled",
 ]

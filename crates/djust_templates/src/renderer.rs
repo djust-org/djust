@@ -302,6 +302,19 @@ fn resolve_tag_arg(arg: &str, context: &Context) -> String {
 /// `render_nodes_partial`, and the individual `render_node_with_loader`
 /// arm) — the #1646 parallel-path cure, so the operand-mask can never drift
 /// between them.
+/// Localize a bare number for output, leaving every other value untouched.
+///
+/// One function rather than the expression inlined twice, so the two
+/// variable-output sites cannot drift (#1646).
+fn localize_if_number(value: &Value) -> String {
+    match value {
+        Value::Integer(_) | Value::Float(_) => {
+            djust_core::locale::localize_number(&value.to_string())
+        }
+        _ => value.to_string(),
+    }
+}
+
 fn resolve_assign_tag_args(name: &str, args: &[String], context: &Context) -> Vec<String> {
     let resolve_positions = crate::registry::assign_handler_resolve_positions(name);
     args.iter()
@@ -503,7 +516,22 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 runtime_safe = produced_safe;
             }
 
-            let text = value.to_string();
+            // #2221: localize a bare number on its way into the page, which is
+            // exactly where Django does it (`render_value_in_context` calls
+            // `localize`). Deliberately NOT in `impl Display for Value`, even
+            // though that is where the rendering lives: `Display` is also the
+            // lookup key for `{% if x in dict %}` (#2203), so a separator there
+            // would turn `1234567` into `1,234,567` and break every such lookup
+            // against a dict Python keyed without one.
+            //
+            // Only `Integer` and `Float` — a `String` that happens to hold
+            // digits is the user's own text, and a filter that already returned
+            // a localized string (`floatformat`) must not be localized twice.
+            //
+            // Applied at BOTH variable-output sites (`Node::Variable` and the
+            // inline-if expression), which are byte-identical and were found
+            // only by counting the matches rather than by reading the diff.
+            let text = localize_if_number(&value);
 
             // Auto-escape unless:
             // 1. |safe is the last filter (matches Django behavior)
@@ -567,7 +595,22 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 runtime_safe = produced_safe;
             }
 
-            let text = value.to_string();
+            // #2221: localize a bare number on its way into the page, which is
+            // exactly where Django does it (`render_value_in_context` calls
+            // `localize`). Deliberately NOT in `impl Display for Value`, even
+            // though that is where the rendering lives: `Display` is also the
+            // lookup key for `{% if x in dict %}` (#2203), so a separator there
+            // would turn `1234567` into `1,234,567` and break every such lookup
+            // against a dict Python keyed without one.
+            //
+            // Only `Integer` and `Float` — a `String` that happens to hold
+            // digits is the user's own text, and a filter that already returned
+            // a localized string (`floatformat`) must not be localized twice.
+            //
+            // Applied at BOTH variable-output sites (`Node::Variable` and the
+            // inline-if expression), which are byte-identical and were found
+            // only by counting the matches rather than by reading the diff.
+            let text = localize_if_number(&value);
             let is_safe = filters.iter().any(|(name, _)| {
                 SAFE_OUTPUT_FILTERS.contains(&name.as_str())
                     || crate::filter_registry::is_custom_filter_safe(name)
