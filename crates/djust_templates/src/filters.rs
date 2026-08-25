@@ -933,7 +933,133 @@ fn format_filesize(bytes: i64) -> String {
 ///
 /// Note: bare date inputs pinned to midnight UTC will show "00:00" for time format
 /// codes like "H:i". This matches Django's behavior with DateField values.
+/// A parsed datetime plus everything the timezone-dependent format codes need.
+///
+/// Split out because the wall-clock accessors and the zone metadata answer to
+/// different rules, and collapsing them is how the bug got here: `dt` is what
+/// `Y`/`H`/`i` read, while `abbrev`/`offset_secs`/`timestamp` describe the zone
+/// that wall clock is expressed IN.
+struct Stamped {
+    /// Wall clock in the zone the value should DISPLAY in.
+    dt: DateTime<chrono::FixedOffset>,
+    /// Zone abbreviation (`EDT`) when one is known, for `T`/`e`.
+    abbrev: Option<String>,
+    /// Whether the input carried an offset. Django treats the two differently
+    /// and so must this: `e` is the empty string for a naive value but `EDT`
+    /// for an aware one.
+    aware: bool,
+    /// Seconds since the epoch, for `U`. Not derivable from `dt` alone for a
+    /// naive value, which Django interprets in the DEFAULT zone rather than UTC.
+    timestamp: i64,
+}
+
+/// Apply the active render timezone (#2209).
+///
+/// Django's rules, taken from a live 5.2 render rather than from the docs:
+///
+/// | input | wall clock | `T`/`O`/`Z` | `e` |
+/// |---|---|---|---|
+/// | aware  | converted to the active zone | that zone at that instant | same |
+/// | naive  | **unchanged** | the active zone at that local time | `""` |
+///
+/// The naive row is the one that is easy to get wrong. Django does not shift a
+/// naive datetime — it is already understood to be local — but it still reports
+/// the default zone's abbreviation and offset for it. Shifting naive values
+/// would break every project on `USE_TZ = False`, which is the configuration
+/// where naive datetimes are the norm.
+fn apply_active_timezone(dt: DateTime<chrono::FixedOffset>, aware: bool) -> Stamped {
+    use chrono::TimeZone;
+
+    let Some(tz) = crate::timezone::active_timezone() else {
+        // No active zone: `USE_TZ = False`, or this crate embedded without
+        // Django settings. Pre-#2209 behaviour exactly — format what arrived.
+        return Stamped {
+            dt,
+            abbrev: None,
+            aware,
+            timestamp: dt.timestamp(),
+        };
+    };
+
+    if aware {
+        let local = dt.with_timezone(&tz);
+        return Stamped {
+            dt: local.fixed_offset(),
+            abbrev: Some(local.format("%Z").to_string()),
+            aware,
+            timestamp: dt.timestamp(),
+        };
+    }
+
+    // Naive: keep the wall clock, and read the zone metadata off that same wall
+    // clock interpreted in the active zone. `from_local_datetime` is not total —
+    // a local time inside a DST gap does not exist, and one inside a fold is
+    // ambiguous. `.earliest()` picks the pre-transition offset for a fold, which
+    // is what Django's `_datetime_ambiguous_or_imaginary` guard effectively
+    // yields; a gap falls back to leaving the metadata unknown rather than
+    // inventing an offset.
+    let naive = dt.naive_local();
+    match tz.from_local_datetime(&naive).earliest() {
+        Some(local) => Stamped {
+            // Re-stamp the SAME wall clock with the zone's offset at that
+            // local time. The wall clock is untouched — this only replaces the
+            // meaningless "+0000" the parse produced with the offset the value
+            // is actually understood to be in, which is what `O` and `Z` read.
+            // Leaving `dt` alone rendered `-0400` as `+0000` for every naive
+            // value; caught by the differential against Django, not by
+            // inspection.
+            dt: local.fixed_offset(),
+            abbrev: Some(local.format("%Z").to_string()),
+            aware,
+            timestamp: local.timestamp(),
+        },
+        None => Stamped {
+            dt,
+            abbrev: None,
+            aware,
+            timestamp: dt.timestamp(),
+        },
+    }
+}
+
+/// Django's `I` format code: is this instant in daylight saving time?
+///
+/// Compared against the SAME zone's January offset rather than against a fixed
+/// UTC baseline, because "is DST active" is a statement about the zone's own
+/// standard offset, not about UTC. Southern-hemisphere zones make the naive
+/// version wrong: `Australia/Sydney` is +1100 in January (DST) and +1000 in
+/// July (standard), so anchoring on January would report every winter instant
+/// as DST and every summer one as not.
+fn is_dst(stamped: &Stamped) -> bool {
+    use chrono::{Datelike, TimeZone};
+
+    let Some(tz) = crate::timezone::active_timezone() else {
+        return false;
+    };
+    let here = stamped.dt.offset().local_minus_utc();
+    // The zone's standard offset is the MINIMUM it takes across the year: DST
+    // only ever moves a clock forward. Two probes six months apart bracket any
+    // real transition rule.
+    let year = stamped.dt.year();
+    let probe = |month: u32| {
+        chrono::NaiveDate::from_ymd_opt(year, month, 15)
+            .and_then(|d| d.and_hms_opt(12, 0, 0))
+            .and_then(|ndt| tz.from_local_datetime(&ndt).earliest())
+            .map(|d| d.fixed_offset().offset().local_minus_utc())
+    };
+    match (probe(1), probe(7)) {
+        (Some(jan), Some(jul)) => here > jan.min(jul),
+        _ => false,
+    }
+}
+
 fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
+    // Tracks whether the input carried a UTC offset. Set by the naive branches
+    // below; the RFC3339 branch leaves it true. The distinction survives all
+    // the way to `apply_active_timezone` because Django applies `localtime` to
+    // aware values ONLY — converting a naive one would move every timestamp in
+    // a `USE_TZ = False` project.
+    let mut aware = true;
     let dt = DateTime::parse_from_rfc3339(datetime_str)
         .or_else(|_| {
             // Naive datetime: "2026-08-22 14:30:00" → that instant, UTC (#2203).
@@ -969,14 +1095,24 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             .iter()
             .find_map(|fmt| chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), fmt).ok())
             .ok_or(())
-            .map(|ndt| ndt.and_utc().fixed_offset())
+            .map(|ndt| {
+                aware = false;
+                ndt.and_utc().fixed_offset()
+            })
         })
         .or_else(|_| {
             // Date-only: "2026-03-15" → midnight UTC (#719)
-            chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d")
-                .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset())
+            chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d").map(|d| {
+                aware = false;
+                d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset()
+            })
         })
         .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {e}")))?;
+
+    // #2209: everything above produced a wall clock in whatever offset arrived.
+    // Django would have run `timezone.localtime()` by now.
+    let stamped = apply_active_timezone(dt, aware);
+    let dt = stamped.dt;
 
     // Convert common Django format codes to output
     // This is a simplified implementation - Django has many more format codes
@@ -1069,6 +1205,43 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                         result.push_str(&format!("{display_hour}:{minute:02} {ampm}"));
                     }
                 }
+            }
+            // Timezone codes (#2209). Before the active-zone plumbing existed
+            // these had no answer to give, so they fell through to the
+            // catch-all and rendered as their own letter: `{{ v|date:"H:i T" }}`
+            // produced "19:30 T". They are grouped here because they are the
+            // visible face of the same blindness the conversion above fixes —
+            // shipping the conversion while `T` still emitted a literal T would
+            // be a timezone-parity claim that fails on the commonest idiom that
+            // shows a timezone.
+            //
+            // Django's naive-value semantics differ per code and are NOT
+            // uniform, which is why each is handled rather than sharing one
+            // branch: `e` is "" for a naive value, while `T`/`O`/`Z` report the
+            // DEFAULT zone's abbreviation and offset for that local time.
+            'e' => {
+                // Timezone name — empty for a naive value.
+                if stamped.aware {
+                    if let Some(a) = stamped.abbrev.as_deref() {
+                        result.push_str(a);
+                    }
+                }
+            }
+            'T' => {
+                // Timezone abbreviation, for naive values too.
+                if let Some(a) = stamped.abbrev.as_deref() {
+                    result.push_str(a);
+                }
+            }
+            'O' => result.push_str(&dt.format("%z").to_string()), // -0400
+            'Z' => result.push_str(&dt.offset().local_minus_utc().to_string()), // -14400
+            'U' => result.push_str(&stamped.timestamp.to_string()), // seconds since epoch
+            'I' => {
+                // '1' during DST, '0' otherwise. Django reads `dst()`; the
+                // equivalent here is whether this zone's offset at this instant
+                // differs from its offset in January, which is what a DST rule
+                // means. A zone with no DST answers 0 for every instant.
+                result.push(if is_dst(&stamped) { '1' } else { '0' });
             }
             // Literal characters
             '\\' => {

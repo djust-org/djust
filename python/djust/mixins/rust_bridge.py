@@ -12,6 +12,11 @@ from ..serialization import normalize_django_value
 from ..utils import get_template_dirs
 from .context import _is_json_serializable
 
+# Zone names the bundled tz database rejected, so the warning fires once per
+# process rather than once per render. A misconfigured ``TIME_ZONE`` would
+# otherwise emit a log line on every event for the life of the connection.
+_UNKNOWN_TIMEZONES_WARNED: Set[Optional[str]] = set()
+
 logger = logging.getLogger(__name__)
 
 
@@ -648,6 +653,52 @@ class RustBridgeMixin:
         # and consumed (reset) after the render it forces.
         self._force_full_html = True
 
+    def _apply_active_timezone(self) -> None:
+        """Wire the active Django timezone → Rust for THIS render (#2209).
+
+        Django applies ``timezone.localtime()`` to an aware datetime before
+        formatting it; the Rust engine did no conversion at all, so under
+        ``USE_TZ=True`` every rendered timestamp came out in UTC — off by the
+        UTC offset in the configuration ``djust new`` generates, since the
+        scaffold sets ``USE_TZ = True``.
+
+        **Called per render, not once at startup**, and per view-instance
+        initialization would be wrong too. ``timezone.activate()`` is
+        per-request (the documented way to show each user their own zone) and
+        ``override_settings(TIME_ZONE=...)`` is per-test, so a value cached at
+        ``ready()`` or on the ``RustLiveView`` — which outlives a request, being
+        session-cached — would be stale. It lives beside the change-detection
+        work in ``_sync_state_to_rust`` for the reason that path is the one
+        which re-runs every event (#1722): a first-sync gate here would pin the
+        zone at mount and miss every later switch.
+
+        Cost is two attribute reads and a thread-local store; the tz name is
+        resolved by Django from a thread-local it already maintains.
+
+        A ``TIME_ZONE`` Rust does not recognise is logged once and left
+        unconverted rather than raised — a settings typo should not 500 a page,
+        and Django itself would have rejected such a value long before here.
+        """
+        try:
+            from .._rust import set_active_timezone
+        except ImportError:  # pragma: no cover - Rust build predates #2209
+            return
+        try:
+            from django.conf import settings
+            from django.utils import timezone as dj_timezone
+
+            name = dj_timezone.get_current_timezone_name() if settings.USE_TZ else None
+        except Exception:  # pragma: no cover - settings access is defensive
+            logger.debug("[LiveView] timezone read failed; leaving conversion off")
+            return
+        if not set_active_timezone(name) and name not in _UNKNOWN_TIMEZONES_WARNED:
+            _UNKNOWN_TIMEZONES_WARNED.add(name)
+            logger.warning(
+                "[LiveView] TIME_ZONE %r is not a zone the bundled tz database knows; "
+                "timestamps will render unconverted",
+                name,
+            )
+
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.
 
@@ -668,6 +719,9 @@ class RustBridgeMixin:
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
+
+            # Per-render, before anything is formatted (#2209).
+            self._apply_active_timezone()
 
             full_context = (
                 preloaded_context if preloaded_context is not None else self.get_context_data()

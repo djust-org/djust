@@ -1472,6 +1472,32 @@ fn set_django_value_repr(enabled: bool) {
     djust_core::set_django_value_repr(enabled);
 }
 
+/// Set the active render timezone for the CALLING THREAD (#2209).
+///
+/// `name` is an IANA zone (`"America/New_York"`); `None` disables conversion,
+/// which is what `USE_TZ = False` wants. Returns `false` if the name was not
+/// recognised, leaving the previous value in place — the Python side logs and
+/// carries on unconverted rather than 500ing a page over a settings typo.
+///
+/// Thread-local, not a process global, and deliberately so: djust renders run
+/// in `sync_to_async` worker threads, so two connections whose requests
+/// activated different zones render concurrently. This mirrors Django, whose
+/// own `timezone._active` is a `Local()`.
+#[pyfunction]
+#[pyo3(signature = (name=None))]
+fn set_active_timezone(name: Option<&str>) -> bool {
+    djust_templates::timezone::set_active_timezone(name)
+}
+
+/// The calling thread's active render timezone, or `None`.
+///
+/// Exposed so the Python side can ASSERT the wiring took effect rather than
+/// assume it — a setter with no getter cannot be tested end to end (#2017).
+#[pyfunction]
+fn active_timezone_name() -> Option<String> {
+    djust_templates::timezone::active_timezone_name()
+}
+
 /// Read the current value-rendering mode.
 ///
 /// Exposed so the Python side can ASSERT the wiring took effect rather than
@@ -3377,6 +3403,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;
+    m.add_function(wrap_pyfunction!(set_active_timezone, m)?)?;
+    m.add_function(wrap_pyfunction!(active_timezone_name, m)?)?;
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
 
