@@ -3975,16 +3975,19 @@ class ViewRuntime:
 
         # Wire session if available from WS scope
         try:
-            from django.contrib.sessions.backends.db import SessionStore  # noqa: PLC0415
+            from .utils import build_session_for_request  # noqa: PLC0415
 
             session_key = None
             if self.scope:
                 scope_session = self.scope.get("session")
                 session_key = getattr(scope_session, "session_key", None) if scope_session else None
-            if session_key:
-                request.session = SessionStore(session_key=session_key)
-            else:
-                request.session = SessionStore()
+            # Honours settings.SESSION_ENGINE (#2210). Hardcoding the DB store
+            # here handed a cache-backed project an empty session — or, if it
+            # never ran the sessions migration, an OperationalError on first
+            # read.
+            session = build_session_for_request(session_key)
+            if session is not None:
+                request.session = session
         except Exception:
             # Session backend not configured — leave request.session unset.
             pass

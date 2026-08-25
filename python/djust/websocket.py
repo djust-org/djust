@@ -3309,16 +3309,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         page_url = _validate_mount_url(data.get("url", "/"))
         request = factory.get(page_url)
         # Session — same source as handle_mount.
-        try:
-            from django.contrib.sessions.backends.db import SessionStore
-        except Exception:  # noqa: BLE001
-            SessionStore = None  # type: ignore[assignment]
+        from .utils import build_session_for_request
+
         scope_session = self.scope.get("session") if hasattr(self, "scope") else None
         session_key = getattr(scope_session, "session_key", None) if scope_session else None
-        if SessionStore is not None:
-            request.session = (
-                SessionStore(session_key=session_key) if session_key else SessionStore()
-            )
+        # Honours settings.SESSION_ENGINE (#2210) — see the note at the twin
+        # site in runtime.py. Both go through one helper so they cannot drift.
+        session = build_session_for_request(session_key)
+        if session is not None:
+            request.session = session
         # User — Channels scope user is a LazyObject; assign directly.
         if hasattr(self, "scope") and "user" in self.scope:
             request.user = self.scope["user"]

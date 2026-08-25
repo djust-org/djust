@@ -121,10 +121,14 @@ class LiveViewTestClient:
 
             request.user = AnonymousUser()
 
-        # Initialize session
-        from django.contrib.sessions.backends.db import SessionStore
+        # Initialize session, honouring settings.SESSION_ENGINE (#2210). A test
+        # client that hardcoded the DB store would disagree with the production
+        # paths it exists to stand in for.
+        from .utils import build_session_for_request
 
-        request.session = SessionStore()
+        session = build_session_for_request()
+        if session is not None:
+            request.session = session
 
         # Store request on the instance (Django's View.dispatch does this;
         # many LiveViews access self.request in get_context_data etc.)
@@ -365,12 +369,15 @@ class LiveViewTestClient:
         one for the WebSocket mount).
         """
         from django.contrib.auth.models import AnonymousUser
-        from django.contrib.sessions.backends.db import SessionStore
+
+        from .utils import build_session_for_request
 
         instance = self.view_class()
         request = self.request_factory.get("/")
         request.user = self.user or AnonymousUser()
-        request.session = SessionStore()
+        session = build_session_for_request()
+        if session is not None:
+            request.session = session
         instance.request = request
         if hasattr(instance, "_initialize_temporary_assigns"):
             instance._initialize_temporary_assigns()

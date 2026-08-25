@@ -104,9 +104,7 @@ class DjustModelAdmin:
     ) -> bool:
         return True
 
-    def has_view_permission(
-        self, request: HttpRequest, obj: Optional[models.Model] = None
-    ) -> bool:
+    def has_view_permission(self, request: HttpRequest, obj: Optional[models.Model] = None) -> bool:
         return True
 
     def __init__(self, model: Type[models.Model], admin_site: Any) -> None:
