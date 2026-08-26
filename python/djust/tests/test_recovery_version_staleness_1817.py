@@ -84,6 +84,10 @@ class _TTRecoveryView(LiveView):
 # behaviour and asserts nothing.
 _FRAME_LOG: list = []
 
+#: Frame types an `event` is *supposed* to produce on this view. Anything else
+#: arriving in the mount -> event window is unsolicited (#2215).
+_EVENT_RESPONSE_TYPES = {"patch", "time_travel_event"}
+
 
 def _log_frames() -> str:
     if not _FRAME_LOG:
@@ -371,9 +375,13 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
     recovery round-trip (#1788, #1817). So this asserts a property worth
     holding on its own, not a workaround.
 
-    It cannot *prove* absence: a producer that fires once an hour will not
-    appear in a 1.5-second window. It converts a mystery into a name when it
-    does fire, which is the difference between a flake and a bug report.
+    Two limits, both real. It cannot *prove* absence: a producer that fires
+    once an hour will not appear in a 1.5-second window. And it can only name
+    a producer that SENDS something — the actual #2215 producer, found by the
+    review of this PR, bumps the version without emitting a frame at all (see
+    ``test_a_suppressed_hotreload_broadcast_consumes_no_wire_version``), so for
+    that one the version assertion is the load-bearing half and the frame
+    assertions would have stayed green forever.
     """
     from django.test import override_settings
 
@@ -383,32 +391,59 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
         )
         baseline = _frame_version(mount_frame)
 
-        # ORDER MATTERS, and not for a reason the docs make obvious: a
-        # `receive_json_from` that times out CANCELS the communicator's
-        # application task (`asgiref.testing` calls `self.future.result()` on a
-        # cancelled future), so every later `send_json_to` raises
-        # `CancelledError` from inside `send_input`. The first draft sat idle
-        # first and then sent an event; it failed in the SEND, not the receive.
+        # `receive_nothing` rather than a timed-out `receive_json_from`, for a
+        # harness reason worth recording because the first draft got it exactly
+        # backwards in a comment that then shipped:
         #
-        # So: do the round-trip that needs a live socket first, and let the
-        # idle wait be the last thing that happens on this connection.
+        #   receive_json_from(timeout=N)  -> raises TimeoutError (an Exception)
+        #                                    AND cancels the communicator's
+        #                                    application task, so every LATER
+        #                                    send_json_to raises CancelledError
+        #                                    (a BaseException) from inside
+        #                                    send_input.
+        #   receive_nothing(timeout=N)    -> returns a bool, touches nothing.
+        #
+        # Confirmed empirically on this harness rather than reasoned about: the
+        # receive raised `TimeoutError`, the later send raised
+        # `asyncio.CancelledError`. The draft attributed CancelledError to the
+        # RECEIVE, and so imposed an ordering constraint ("the idle wait must
+        # be last") that does not actually exist. `receive_nothing` removes the
+        # constraint outright.
+        window_start = len(_FRAME_LOG)
         await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
         after_event = _frame_version(await _receive_until(communicator, "patch"))
 
-        # Now sit idle. Anything that arrives was not asked for.
+        # The mount -> event round-trip is the exact #2215 window, and the idle
+        # wait below cannot see into it: `_receive_until` DRAINS whatever
+        # arrives while hunting for the patch, so a stray at t=0.01s is
+        # swallowed silently. `_FRAME_LOG` recorded it either way, so check the
+        # window directly — the patch should be the only thing that arrived.
         #
-        # `asyncio.CancelledError` is how the communicator reports a receive
-        # timeout, and it derives from BaseException — NOT Exception — since
-        # 3.8, so a bare `except Exception` lets it through and the test errors
-        # instead of concluding "nothing arrived".
-        try:
-            stray = await communicator.receive_json_from(timeout=1.5)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            stray = None
+        # "Unsolicited" means "not one of the frames this event is supposed to
+        # produce" — an allowlist, not a count. This view has time travel on,
+        # so every event legitimately emits a `time_travel_event` alongside its
+        # `patch`; a naive `len(...) == 1` flagged that as an intruder on the
+        # first run. A `hotreload`, `reload`, or second `mount` in this window
+        # is still caught, which is the point.
+        strays = [
+            f for f in _FRAME_LOG[window_start:] if f.get("type") not in _EVENT_RESPONSE_TYPES
+        ]
+        # Reachability (#1859): this is not decorative — the first run of it
+        # went red on a real frame captured from the window and named it, which
+        # is how the allowlist above got written. A silent producer still slips
+        # past, by construction; that is what the version assertion is for.
+        assert not strays, (
+            f"{len(strays)} unsolicited frame(s) arrived during the mount -> "
+            f"event round-trip, the exact #2215 window: {strays!r}\n"
+            f"Frames:\n{_log_frames()}"
+        )
 
-        assert stray is None, (
+        # Now sit idle. Anything that arrives was not asked for.
+        idle_clean = await communicator.receive_nothing(timeout=1.5)
+        stray = None if idle_clean else await communicator.receive_json_from(timeout=1)
+        assert idle_clean, (
             f"an unsolicited frame arrived at an idle connection: {stray!r}\n"
-            "That is the #2215 producer. Whatever sent this is what bumps the "
+            "That is a #2215 producer. Whatever sent this is what bumps the "
             "wire version mid-test and skews every later frame. Frames:\n"
             f"{_log_frames()}"
         )
@@ -416,5 +451,81 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
             f"the wire version moved between the mount and the first event: "
             f"mount was {baseline}, the event read {after_event} (expected "
             f"{baseline + 1}). Something advanced _next_version() without this "
-            f"socket asking for it. Frames:\n{_log_frames()}"
+            f"socket asking for it — and note it need not have SENT anything: "
+            f"a suppressed hot-reload broadcast bumped the version silently "
+            f"until #2215. Frames:\n{_log_frames()}"
         )
+        await communicator.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# The #2215 producer, found by the Stage 11 review of PR #2237.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_a_suppressed_hotreload_broadcast_consumes_no_wire_version():
+    """The reproducer two years of hunting never produced (#2215).
+
+    `hotreload` calls::
+
+        await self._send_update(
+            patches=patches,
+            version=self._next_version_armed(html),   # <- evaluated FIRST
+            hotreload=True, ...
+        )
+
+    and `_send_update` then suppresses an empty-patch hot-reload broadcast
+    (#763) and returns. Python evaluates arguments before the call, so the wire
+    version was consumed — and recovery armed — for a frame that never left the
+    socket. An unrelated file change re-renders to zero patches, which is the
+    COMMON case.
+
+    Why it stayed unreproducible: it is a **silent** bump. Nothing reaches the
+    socket, so every hunt that looked for a stray FRAME found nothing and
+    concluded the hot-reload path was innocent — including the first draft of
+    this PR, which shipped that conclusion in its CHANGELOG. The only evidence
+    it ever left was a version that jumped, which surfaced as
+    ``expected 2, got 3`` in a test about something else.
+
+    Two-arm, because "the version is 2" proves nothing without knowing what it
+    would have been: mount, broadcast, event, and compare against the same
+    sequence with no broadcast.
+    """
+    from channels.layers import get_channel_layer
+    from django.test import override_settings
+
+    async def _mount_broadcast_event(*, broadcast: bool) -> tuple:
+        communicator, mount = await _connect_and_mount(view_suffix="_TTRecoveryView", url="/tt/")
+        v_mount = _frame_version(mount)
+        if broadcast:
+            # An unrelated file: re-renders to zero patches, so `_send_update`
+            # suppresses it. This is the shape the watcher emits in dev.
+            await get_channel_layer().group_send(
+                "djust_hotreload", {"type": "hotreload", "file": "unrelated/module.py"}
+            )
+            await asyncio.sleep(0.4)  # let the broadcast be handled
+        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
+        v_event = _frame_version(await _receive_until(communicator, "patch"))
+        await communicator.disconnect()
+        return v_mount, v_event
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True):
+        control_mount, control_event = await _mount_broadcast_event(broadcast=False)
+        treat_mount, treat_event = await _mount_broadcast_event(broadcast=True)
+
+    assert control_event - control_mount == 1, (
+        f"control arm is broken: without any broadcast the event must be the "
+        f"very next version ({control_mount} -> {control_event})"
+    )
+    assert treat_event - treat_mount == control_event - control_mount, (
+        f"a suppressed hot-reload broadcast consumed a wire version: with no "
+        f"broadcast the event advanced by {control_event - control_mount} "
+        f"({control_mount} -> {control_event}); with one it advanced by "
+        f"{treat_event - treat_mount} ({treat_mount} -> {treat_event}).\n"
+        "The version was allocated as an ARGUMENT to `_send_update`, which then "
+        "returned early on the empty-patch guard (#763) — so the client never "
+        "saw it, `clientVdomVersion` lags, and the next real diff pays a "
+        "recovery round-trip. Frames:\n" + _log_frames()
+    )

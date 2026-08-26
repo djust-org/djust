@@ -1399,6 +1399,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self._arm_recovery(html)
         return version
 
+    @staticmethod
+    def _hotreload_broadcast_suppressed(patches: Optional[list]) -> bool:
+        """Would `_send_update` drop this hot-reload broadcast? (#763, #2215)
+
+        Exists so the CALL SITE can ask before allocating a wire version. The
+        suppression lived only inside `_send_update`, and Python evaluates
+        arguments before the call — so the armed `version=` kwarg was consumed
+        for a frame that then never left. See the call site in `hotreload` for
+        what that cost.
+
+        (Deliberately NOT spelling that kwarg literally: the structural pin
+        `test_every_client_checked_send_path_uses_next_version` counts
+        occurrences with a regex over raw source, so prose naming the pattern
+        is counted as a call site. This docstring tripped it. Tracked as its
+        own fragility in #2238 — a pin that counts comments is the #2213 class.)
+
+        One predicate rather than the same `patches == []` written twice: the
+        two would drift, and a drift here is silent in both directions
+        (#1646).
+        """
+        return patches == []
+
     async def _send_update(
         self,
         patches: Optional[list] = None,
@@ -1450,7 +1472,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # NON-hot-reload empty patches are still sent: user events that
         # legitimately produce no diff still need an acknowledgment so
         # the client can clear loading state.
-        if hotreload and patches == []:
+        if hotreload and self._hotreload_broadcast_suppressed(patches):
             hotreload_logger.debug(
                 "Suppressing empty-patch hot-reload broadcast (unrelated file: %s)",
                 file_path,
@@ -2922,12 +2944,41 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Arm recovery so a later request_html serves the post-HVR HTML,
                 # not a stale pre-HVR baseline (#1817). ``html`` is the pre-strip
                 # render from render_with_diff() above.
-                await self._send_update(
-                    patches=patches,
-                    version=self._next_version_armed(html),
-                    hotreload=True,
-                    file_path=file_path,
-                )
+                # #2215: allocate the wire version ONLY when the frame will
+                # actually be sent.
+                #
+                # `_send_update` suppresses an empty-patch hot-reload broadcast
+                # (#763) and returns early — but Python evaluates
+                # `self._next_version_armed(html)` BEFORE the call, so the
+                # version was consumed and recovery armed for a frame that never
+                # left the socket. An unrelated file change re-renders to zero
+                # patches, which is the COMMON case, so this fired on most
+                # hot-reload broadcasts.
+                #
+                # Two consequences, and the second is why this took two years to
+                # find. (1) The client's `clientVdomVersion` lags by one, so the
+                # next real diff fails its `version - 1` check and costs a
+                # `request_html` recovery round-trip — the exact class #1788 and
+                # #1817 exist to prevent, reintroduced by argument-evaluation
+                # order. (2) It is a SILENT bump: nothing reaches the socket, so
+                # the frame log shows nothing and the only evidence is a version
+                # that jumped. That is the #2215 signature — "clean mount, stray
+                # bump, nothing in the frame log" — and it is why every
+                # reproduction attempt that looked for a stray FRAME found
+                # nothing.
+                if self._hotreload_broadcast_suppressed(patches):
+                    hotreload_logger.debug(
+                        "Suppressing empty-patch hot-reload broadcast without "
+                        "consuming a wire version (unrelated file: %s)",
+                        file_path,
+                    )
+                else:
+                    await self._send_update(
+                        patches=patches,
+                        version=self._next_version_armed(html),
+                        hotreload=True,
+                        file_path=file_path,
+                    )
 
                 total_time = (time.time() - start_time) * 1000
                 hotreload_logger.info(
