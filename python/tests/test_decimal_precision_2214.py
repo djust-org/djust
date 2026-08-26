@@ -285,19 +285,46 @@ def test_pprint_shows_the_constructor_form() -> None:
     assert _rust.render_template("{{ p|pprint }}", ctx) == "Decimal(&#x27;19.99&#x27;)"
 
 
-def test_two_decimals_differing_only_in_digits_do_not_share_a_loop_cache_entry() -> None:
-    """`hash_value` hashes the DIGITS, not a parsed float.
+def test_a_loop_over_distinct_decimals_renders_each_one() -> None:
+    """`hash_value` must hash the DIGITS. Two rows, ONE render, one cache.
 
-    Two values that differ beyond f64 precision are different values; hashing
-    the parsed float would let a fragment rendered from one be served for the
-    other.
+    The version this replaces made two SEPARATE `render_template` calls, each
+    with its own cache — so the hash never had to distinguish anything and the
+    test passed with the digits discarded. It was green while the property it
+    names was false, which is the sharpest form of the tautology class
+    (#2135/#1200).
+
+    It stayed green through a real regression: a gate-off mutation
+    (`d.hash(hasher)` -> `let _ = d;`) leaked into commit `5b723a98`, every
+    Decimal hashed identically, and `{% for %}` served row 1's fragment for
+    every row — wrong prices in a price table, on djust's own default
+    (`loop_render_cache_enabled: True`). The 10,287-green suite and my own
+    gate-off both missed it; the re-review's collision probe found it.
+
+    So: both values in ONE template, so a collision shows as a wrong render.
     """
-    source = "{% for r in rows %}{{ r.v }}|{% endfor %}"
-    a = _rust.render_template(source, {"rows": [{"v": Decimal("1.00000000000000000001")}]})
-    b = _rust.render_template(source, {"rows": [{"v": Decimal("1.00000000000000000002")}]})
-    assert a == "1.00000000000000000001|"
-    assert b == "1.00000000000000000002|"
-    assert a != b
+    rows = [{"price": Decimal("19.99")}, {"price": Decimal("249.00")}]
+    source = "{% for r in rows %}<li>{{ r.price }}</li>{% endfor %}"
+    out = _rust.render_template(source, {"rows": rows})
+    assert out == "<li>19.99</li><li>249.00</li>", (
+        f"loop cache served one row's fragment for another: {out!r}. "
+        "hash_value must hash the Decimal's digit string."
+    )
+    assert out == DjangoTemplate(source).render(DjangoContext({"rows": rows}))
+
+
+def test_decimals_differing_beyond_f64_do_not_collide_in_one_loop() -> None:
+    """The same guard at the precision boundary that motivates the variant.
+
+    Hashing a PARSED FLOAT instead of the digits would collide here while
+    passing the test above.
+    """
+    rows = [
+        {"v": Decimal("1.00000000000000000001")},
+        {"v": Decimal("1.00000000000000000002")},
+    ]
+    out = _rust.render_template("{% for r in rows %}{{ r.v }}|{% endfor %}", {"rows": rows})
+    assert out == "1.00000000000000000001|1.00000000000000000002|", out
 
 
 # ---------------------------------------------------------------------------
@@ -420,3 +447,120 @@ def test_a_decimal_subclass_is_claimed_but_a_namesake_class_is_not() -> None:
 
     assert _rust.render_template("{{ p }}", {"p": Money("19.99")}) == "19.99"
     assert _rust.render_template("{{ p }}", {"p": Namesake()}) == "not-a-decimal"
+
+
+def test_every_json_producing_converter_keeps_the_digits() -> None:
+    """The three converters the fix added that had no test (#2240 re-review).
+
+    `python_to_json_value` (`fast_json_dumps`), `python_to_json`, and
+    `model_serializer`'s are all public exports with no in-repo caller, which is
+    exactly why the gate-off found them green: nothing drove them. A converter
+    nothing exercises is a converter that can silently revert.
+    """
+    from djust._rust import fast_json_dumps, serialize_models_fast, serialize_models_to_list
+
+    huge = Decimal("12345678901234567890.123456789")
+
+    out = fast_json_dumps({"p": huge})
+    assert '"12345678901234567890.123456789"' in out, out
+    assert "e+" not in out.lower()
+
+    # Both take a list of already-extracted field dicts, not model instances.
+    for fn in (serialize_models_fast, serialize_models_to_list):
+        result = str(fn([{"id": 1, "price": huge}]))
+        assert "12345678901234567890.123456789" in result, f"{fn.__name__}: {result}"
+        assert "e+19" not in result.lower(), f"{fn.__name__} collapsed it: {result}"
+
+
+def test_a_tagged_decimal_cannot_inject_json_structure() -> None:
+    """`value_to_json` escapes a Decimal through the same helper as a String.
+
+    The hostile value has to arrive as a `Value::Decimal`, and the only way it
+    can is the binary tag: a dict with the tag as its single key deserializes
+    AS a Decimal, so its payload is attacker-chosen. That is what falsifies the
+    "a Decimal only contains digits, so no escaping is needed" reasoning — true
+    of the values it considered, false of the type.
+
+    The first version of this test passed a plain Python string, which is the
+    `String` arm — it exercised the escaping that already worked and left the
+    Decimal arm green under gate-off.
+    """
+    from djust._rust import RustLiveView
+
+    payload = '","admin":true,"x":"'
+    view = RustLiveView('{{ p|json_script:"d" }}')
+    view.set_state("p", {"__djust_decimal__": payload})
+    restored = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+
+    # It is a `Value::Decimal` on the Rust side. `get_state()` hands back a str
+    # only because `IntoPyObject` falls back when `Decimal(payload)` raises —
+    # which is the point: Rust is holding a Decimal whose payload never went
+    # near the decimal parser.
+    assert restored.get_state()["p"] == payload
+
+    out = restored.render()
+    assert '"admin":true' not in out, f"JSON structure injected into a script body: {out}"
+
+
+# ---------------------------------------------------------------------------
+# Arms that were still green after the re-review's fixes — including two of the
+# fixes themselves, which I had verified only with an ad-hoc script.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("0E+3", "0"), ("-0E+3", "-0"), ("0E+9", "0"), ("0E-3", "0.000"), ("0E+0", "0")],
+)
+def test_a_zero_coefficient_never_grows_trailing_zeros(raw: str, expected: str) -> None:
+    """`format(Decimal('0E+3'), 'f')` is `0`, not `0000`.
+
+    The first expansion claimed in its own doc-comment to implement
+    `format(d, 'f')` and rendered `0000`. Reachable from ordinary money
+    arithmetic: `Decimal('1000').quantize(Decimal('1E+2'))` minus itself is
+    `Decimal('0E+2')`, so a zero balance rendered `000`.
+    """
+    ctx = {"p": Decimal(raw)}
+    assert _rust.render_template("{{ p }}", ctx) == expected
+    assert _rust.render_template("{{ p }}", ctx) == DjangoTemplate("{{ p }}").render(
+        DjangoContext(ctx)
+    )
+
+
+def test_a_very_long_decimal_uses_djangos_scientific_fallback() -> None:
+    """Django switches to `{:e}` when `abs(exponent) + len(digits) > 200`.
+
+    Its own comment says this exists *"to avoid high memory usage in
+    `{:f}'.format()`"*. Without the cutoff a twelve-byte Decimal expanded to a
+    ten-megabyte string — an amplification `main` never had, since the value was
+    an f64 there. The boundary is pinned exactly, because an off-by-one here is
+    invisible either side of it.
+    """
+    assert _rust.render_template("{{ p }}", {"p": Decimal("1E-199")}) == "0." + "0" * 198 + "1"
+    for raw in ("1E-200", "1E-201", "1.230E-250", "-1E-201"):
+        ctx = {"p": Decimal(raw)}
+        assert _rust.render_template("{{ p }}", ctx) == DjangoTemplate("{{ p }}").render(
+            DjangoContext(ctx)
+        )
+
+    out = _rust.render_template("{{ p }}", {"p": Decimal("1E-10000000")})
+    assert out == "1e-10000000", out
+    assert len(out) < 100, f"expanded to {len(out)} bytes instead of using scientific form"
+
+
+def test_a_decimal_returns_from_the_state_round_trip_as_a_decimal() -> None:
+    """`IntoPyObject` — a handler reading state back must not see its type change.
+
+    This is the exact path `InMemoryStateBackend.get()` takes, and the reason
+    the binary tag exists: without it the value came back a `str`, so
+    `view.price - 1` raised `TypeError` on the second event.
+    """
+    from djust._rust import RustLiveView
+
+    view = RustLiveView("{{ price }}")
+    view.set_state("price", Decimal("12345678901234567890.123456789"))
+    restored = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+
+    value = restored.get_state()["price"]
+    assert isinstance(value, Decimal), f"came back as {type(value).__name__}: {value!r}"
+    assert value == Decimal("12345678901234567890.123456789")

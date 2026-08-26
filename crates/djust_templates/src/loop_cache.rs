@@ -605,7 +605,7 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
         // beyond f64 precision are different values and must not collide.
         Value::Decimal(d) => {
             9u8.hash(hasher);
-            let _ = d;
+            d.hash(hasher);
         }
         Value::Bool(b) => {
             1u8.hash(hasher);

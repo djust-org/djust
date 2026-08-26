@@ -1062,8 +1062,9 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     # The exposure is NOT small, and an earlier version of this comment said it
     # was — claiming model fields reach the client through the Rust path, which
     # keeps full precision. False, and caught in review (#1867):
-    # ``python/djust/mixins/jit.py`` imports THIS function and calls it at six
-    # sites, and its fallbacks are ordinary — JIT unavailable, no template paths
+    # ``python/djust/mixins/jit.py`` imports THIS function and calls it at
+    # SEVEN sites (197, 202, 210, 293, 302, 307, 347 — line 316 is a comment, so
+    # a raw grep says eight), and its fallbacks are ordinary — JIT unavailable, no template paths
     # extracted for the variable, or the Rust serializer not capturing every
     # expected path (it cannot read ``@property`` attributes). A model with a
     # ``@property`` in the template sends the whole object down this path, so a

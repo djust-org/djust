@@ -1872,6 +1872,19 @@ fn json_escape_for_script(s: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
+/// The escaped BODY of a JSON string, without the surrounding quotes.
+///
+/// One helper rather than the same chain written per arm: a value that can
+/// reach a `<script type="application/json">` body must be escaped whatever
+/// variant carries it (#2214 review).
+fn json_string_body(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
 fn value_to_json(value: &Value) -> String {
     match value {
         // Both are JSON `null`: JSON cannot distinguish absent from None.
@@ -1889,20 +1902,18 @@ fn value_to_json(value: &Value) -> String {
         // returns `str(o)` for a Decimal (#2214). Emitting a bare JSON number
         // here would put the precision loss back on the wire by the other door
         // — `json_script` is a path to the browser too.
-        // No escaping: `str(Decimal)` yields only digits, `.`, sign, `E`/`e`,
-        // and the special forms `NaN`/`sNaN`/`Infinity` — none of which are
-        // JSON-significant. Pinned by a test rather than left as an assertion.
-        Value::Decimal(d) => format!("\"{d}\""),
-        Value::String(s) => {
-            // JSON string: escape special chars
-            let escaped = s
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
-            format!("\"{escaped}\"")
-        }
+        // Escaped through the SAME helper as `String`, deliberately.
+        //
+        // The first version reasoned it was exempt: `str(Decimal)` yields only
+        // digits, `.`, sign, `E`/`e` and `NaN`/`Infinity`, none JSON-significant.
+        // True of a Python-sourced Decimal and false of the variant — since
+        // #2214 gave binary encodings a tag, a `Value::Decimal` can be
+        // deserialized holding an ARBITRARY string, and the unescaped form let
+        // it inject JSON structure into a `<script type="application/json">`
+        // body that client code parses. Found by review; the argument was sound
+        // about the values it considered and wrong about the type.
+        Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
+        Value::String(s) => format!("\"{}\"", json_string_body(s)),
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
         Value::List(items) | Value::Tuple(items) => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();

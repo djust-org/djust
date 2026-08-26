@@ -35,6 +35,10 @@ pub(crate) const DECIMAL_TAG: &str = "__djust_decimal__";
 
 /// The `DECIMAL_TAG` value, for tests that must exercise near-misses against
 /// the real constant rather than a copy of the literal.
+///
+/// `#[doc(hidden)]`: public only because the integration tests live outside the
+/// crate. Not API.
+#[doc(hidden)]
 pub fn decimal_tag() -> &'static str {
     DECIMAL_TAG
 }
@@ -271,52 +275,100 @@ pub fn is_decimal(ob: &Bound<'_, PyAny>) -> bool {
     ob.is_instance(cls.bind(py)).unwrap_or(false)
 }
 
-/// Expand a Decimal's `str()` form to its non-exponent form, as Python's
-/// `format(d, 'f')` does (#2214).
+/// Render a Decimal's `str()` form the way Django renders a number (#2214).
 ///
-/// Django's `{{ }}` path is `localize()` -> `numberformat.format()`, which uses
-/// `"{:f}".format(number)` — NOT `str()`. The difference only shows for values
-/// `str()` renders in exponent form, and those are easy to produce:
-/// `Decimal('1') / Decimal('1000000000')` is `1E-9`, as is `.normalize()` on
-/// many values. Rendering `str()` verbatim gave `1E-9` where Django gives
-/// `0.000000001`, and `4E+1` where Django gives `40` — a REGRESSION against
-/// the previous release, since those rendered correctly while a Decimal was
-/// still a float.
+/// Django's `{{ }}` path is `localize()` -> `numberformat.format()`, which is
+/// NOT `str()`. Two rules, both taken from
+/// `django/utils/numberformat.py` rather than inferred:
 ///
-/// The first version of this variant asserted the opposite in a comment
-/// ("`str()` on a Decimal never reformats, so the digits verbatim ARE the
-/// parity"). It was wrong, and it is the reason this function exists: a prose
-/// invariant has to be falsification-tested, not reasoned about (#1867).
+/// 1. **`"{:f}".format(number)`** — the non-exponent form. `str()` gives `1E-9`
+///    where Django gives `0.000000001`, and `Decimal('1')/Decimal('1000000000')`
+///    is `1E-9`, as is `.normalize()` on many values. Rendering `str()` verbatim
+///    was a REGRESSION against the previous release, where these were floats and
+///    rendered correctly.
+/// 2. **`abs(exponent) + len(digits) > 200` switches to `"{:e}"`**, which
+///    Django added *"to avoid high memory usage in `{:f}'.format()`"*. Without
+///    it `Decimal('1E-10000000')` — twelve bytes — expands to a ten-megabyte
+///    string. `main` had no such amplification because the value was an f64.
 ///
-/// Non-finite forms (`NaN`, `sNaN`, `Infinity`) have no exponent and are
-/// returned untouched, matching `format(Decimal('NaN'), 'f')`.
+/// Both were missed by the first version of this function, which claimed in its
+/// own doc-comment to implement `format(d, 'f')` and did not: it rendered
+/// `0E+3` as `0000` where Python gives `0`, reachable from ordinary money
+/// arithmetic (`Decimal('1000').quantize(Decimal('1E+2'))` minus itself is
+/// `Decimal('0E+2')`, so a zero balance rendered `000`). Verified now by a
+/// randomized differential against real Django rather than by reading.
+///
+/// Non-finite forms (`NaN`, `sNaN`, `Infinity`) have no exponent and pass
+/// through, matching `format(Decimal('NaN'), 'f')`.
 pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
-    let Some(e_pos) = raw.find(['e', 'E']) else {
-        return raw.to_string();
+    // Split into Python's `as_tuple()` shape: sign, digit string, exponent.
+    let (sign, rest) = match raw.strip_prefix('-') {
+        Some(r) => ("-", r),
+        None => ("", raw.strip_prefix('+').unwrap_or(raw)),
     };
-    let (mantissa, exp_part) = raw.split_at(e_pos);
-    let Ok(exp) = exp_part[1..].parse::<i32>() else {
-        return raw.to_string();
+    let (mantissa, str_exp) = match rest.find(['e', 'E']) {
+        Some(i) => {
+            let Ok(e) = rest[i + 1..].parse::<i64>() else {
+                return raw.to_string();
+            };
+            (&rest[..i], e)
+        }
+        None => (rest, 0),
     };
-
-    let (sign, digits) = match mantissa.strip_prefix('-') {
-        Some(rest) => ("-", rest),
-        None => ("", mantissa.strip_prefix('+').unwrap_or(mantissa)),
-    };
-    let (int_part, frac_part) = match digits.split_once('.') {
+    let (int_part, frac_part) = match mantissa.split_once('.') {
         Some((i, f)) => (i, f),
-        None => (digits, ""),
+        None => (mantissa, ""),
     };
-    let all: String = format!("{int_part}{frac_part}");
-    // Position of the decimal point within `all`, after applying the exponent.
-    let point = int_part.len() as i32 + exp;
+    // Non-finite (or otherwise unparseable) forms pass through untouched.
+    if int_part.is_empty() && frac_part.is_empty() {
+        return raw.to_string();
+    }
+    if !int_part
+        .bytes()
+        .chain(frac_part.bytes())
+        .all(|b| b.is_ascii_digit())
+    {
+        return raw.to_string();
+    }
+    let digits: String = format!("{int_part}{frac_part}");
+    // `as_tuple()`'s exponent counts the fractional digits in.
+    let exponent = str_exp - frac_part.len() as i64;
 
+    // Django's cutoff (rule 2), on `as_tuple()`'s values, as Django computes it.
+    if exponent.unsigned_abs() + digits.len() as u64 > 200 {
+        // `format(d, 'e')`: one digit before the point, exponent adjusted.
+        let (first, tail) = digits.split_at(1);
+        let coefficient = if tail.is_empty() {
+            first.to_string()
+        } else {
+            format!("{first}.{tail}")
+        };
+        // `{:+}`: Python writes the exponent sign explicitly — `1e+212`, not
+        // `1e212`. A randomized differential caught this; reading the format
+        // spec did not.
+        let adjusted = exponent + digits.len() as i64 - 1;
+        return format!("{sign}{coefficient}e{adjusted:+}");
+    }
+
+    // A zero coefficient never grows trailing zeros: `format(Decimal('0E+3'),
+    // 'f')` is `0`, not `0000`. With a negative exponent it keeps that many
+    // decimal places, as `0E-3` -> `0.000` does.
+    if digits.bytes().all(|b| b == b'0') {
+        return if exponent >= 0 {
+            format!("{sign}0")
+        } else {
+            format!("{sign}0.{}", "0".repeat(exponent.unsigned_abs() as usize))
+        };
+    }
+
+    // Position of the decimal point within `digits`, after the exponent.
+    let point = int_part.len() as i64 + str_exp;
     let body = if point <= 0 {
-        format!("0.{}{}", "0".repeat((-point) as usize), all)
-    } else if (point as usize) >= all.len() {
-        format!("{}{}", all, "0".repeat(point as usize - all.len()))
+        format!("0.{}{}", "0".repeat(point.unsigned_abs() as usize), digits)
+    } else if point as usize >= digits.len() {
+        format!("{}{}", digits, "0".repeat(point as usize - digits.len()))
     } else {
-        let (l, r) = all.split_at(point as usize);
+        let (l, r) = digits.split_at(point as usize);
         format!("{l}.{r}")
     };
     format!("{sign}{body}")
