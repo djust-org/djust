@@ -326,10 +326,10 @@ class DjangoJSONEncoder(json.JSONEncoder):
         # written into the template context and the Rust engine treats a string
         # as a string.
         #
-        # The Rust converter — the path model fields actually take to the client
-        # (``serialize_python_value``, plus a ``Value::Decimal`` variant) — keeps
-        # full precision as of #2214. This pair is the remaining half, and it
-        # needs its own consumer audit rather than a one-line change.
+        # The Rust converters keep full precision as of #2214. This pair is the
+        # remaining half; it is reachable from ``mixins/jit.py``'s fallbacks and
+        # is not a rare path. See the note in ``normalize_django_value`` and
+        # #2239.
         if isinstance(obj, Decimal):
             return float(obj)
 
@@ -1059,10 +1059,20 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     #   ``tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip``
     #   exists to hold.
     #
-    # The exposure is bounded: model fields reach the client through the JIT
-    # path (Rust ``serialize_python_value``), which keeps full precision as of
-    # #2214; this is the fallback for models that path skips. Finishing it needs
-    # a consumer audit, tracked separately rather than bundled into the Rust fix.
+    # The exposure is NOT small, and an earlier version of this comment said it
+    # was — claiming model fields reach the client through the Rust path, which
+    # keeps full precision. False, and caught in review (#1867):
+    # ``python/djust/mixins/jit.py`` imports THIS function and calls it at six
+    # sites, and its fallbacks are ordinary — JIT unavailable, no template paths
+    # extracted for the variable, or the Rust serializer not capturing every
+    # expected path (it cannot read ``@property`` attributes). A model with a
+    # ``@property`` in the template sends the whole object down this path, so a
+    # ``DecimalField`` beside one still arrives as
+    # ``1.2345678901234567e+19``.
+    #
+    # Still deferred, because the blockers above are real and the fix is a
+    # consumer audit rather than a branch — but deferred at its true size, not a
+    # smaller one. Tracked in #2239.
     if isinstance(value, Decimal):
         return float(value)
 

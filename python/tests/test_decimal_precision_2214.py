@@ -21,6 +21,7 @@ of; Django is importable here, so there is no reason to guess (v1.1.1-2 retro).
 from __future__ import annotations
 
 import json
+import re
 from decimal import Decimal
 
 import pytest
@@ -170,6 +171,26 @@ def test_decimal_equality_against_a_float_literal_diverges_from_django() -> None
     assert _rust.render_template(source, CTX) == "EQ"
 
 
+def test_a_huge_decimal_loses_precision_once_a_filter_does_arithmetic() -> None:
+    """The f64 contract, at the boundary where it becomes visible.
+
+    `{{ huge }}` is exact — rendering and transport keep every digit. The moment
+    a filter computes, the value goes through `as_f64()` and Django's answer and
+    djust's diverge. Pinned because the differential above only exercises
+    `19.99`, where the limit never shows (#2240 review).
+    """
+    ctx = {"huge": Decimal("12345678901234567890.123456789")}
+    assert _rust.render_template("{{ huge }}", ctx) == "12345678901234567890.123456789"
+
+    for source in ("{{ huge|floatformat }}", "{{ huge|stringformat:'d' }}"):
+        django_says = DjangoTemplate(source).render(DjangoContext(ctx))
+        djust_says = _rust.render_template(source, ctx)
+        assert djust_says != django_says, (
+            f"{source} now agrees with Django ({django_says!r}) — if the "
+            "arithmetic path gained real precision, update this limit."
+        )
+
+
 def test_two_decimals_differing_beyond_f64_compare_equal() -> None:
     """The same limit, in its sharpest form: comparison is f64-precision.
 
@@ -183,3 +204,219 @@ def test_two_decimals_differing_beyond_f64_compare_equal() -> None:
     assert _rust.render_template("{% if a == b %}EQ{% else %}NE{% endif %}", ctx) == "EQ"
     # ...but neither value lost a digit on the way out.
     assert _rust.render_template("{{ a }}", ctx) == "1.00000000000000000001"
+
+
+# ---------------------------------------------------------------------------
+# Arms the first version of this file left untested (#2240 review).
+#
+# The review's gate-off ran each new arm's mutation against the FULL 10,395-case
+# suite; eight survived green, including two of the five wildcard fallbacks the
+# PR body highlighted as the audit's payoff. An arm with no test is an arm that
+# can be deleted silently, which is the same class as a decorative pin (#1859).
+# ---------------------------------------------------------------------------
+
+
+def test_filesizeformat_treats_a_decimal_as_a_number() -> None:
+    """Wildcard-arm coverage: without the Decimal arm the value returns unchanged.
+
+    Compared against djust's own output for the equivalent int rather than
+    against Django, because djust separates with a plain space where Django uses
+    U+00A0 — a pre-existing divergence that affects ints and floats identically
+    and is not this issue's (#1079).
+    """
+    as_int = _rust.render_template("{{ n|filesizeformat }}", {"n": 2048})
+    assert _rust.render_template("{{ n|filesizeformat }}", {"n": Decimal("2048")}) == as_int
+    assert as_int != "2048"
+
+
+def test_dictsort_orders_decimals_numerically() -> None:
+    """Wildcard-arm coverage: without it every pair compared Equal, i.e. no sort.
+
+    Rendered directly rather than through `{% for %}`: iterating a *filtered*
+    expression renders empty in djust for every element type, a pre-existing bug
+    outside this issue (#1079). Four scrambled elements, because a stable sort
+    leaves a two-element list alone whether it compares or not.
+    """
+    rows = [
+        {"amt": Decimal("10.50")},
+        {"amt": Decimal("2.25")},
+        {"amt": Decimal("100.00")},
+        {"amt": Decimal("0.99")},
+    ]
+    out = _rust.render_template("{{ rows|dictsort:'amt' }}", {"rows": rows})
+    order = [m for m in re.findall(r"Decimal\(&#x27;([\d.]+)&#x27;\)", out)]
+    assert order == ["0.99", "2.25", "10.50", "100.00"], out
+
+
+def test_a_decimal_is_localized_like_a_number() -> None:
+    """#2221: a German site must group a Decimal as it groups a float.
+
+    It did before #2214, when a Decimal simply WAS a float. Asserted against
+    djust's own float rendering, which is the property that must not have
+    changed, and restored afterwards because the number format is process-global.
+    """
+    from django.test import override_settings
+    from django.utils import translation
+
+    from djust import render_env
+
+    try:
+        with override_settings(USE_THOUSAND_SEPARATOR=True), translation.override("de"):
+            render_env.apply_number_format()
+            as_float = _rust.render_template("{{ p }}", {"p": 1234567.89})
+            as_dec = _rust.render_template("{{ p }}", {"p": Decimal("1234567.89")})
+        assert as_dec == as_float, f"Decimal {as_dec!r} vs float {as_float!r}"
+        assert as_dec != "1234567.89", "localization did not apply at all"
+    finally:
+        render_env.apply_number_format()
+
+
+def test_json_script_emits_a_decimal_as_a_quoted_string() -> None:
+    """`DjangoJSONEncoder` parity — `json_script` is a path to the browser too."""
+    ctx = {"p": Decimal("12345678901234567890.123456789")}
+    out = _rust.render_template('{{ p|json_script:"d" }}', ctx)
+    assert '"12345678901234567890.123456789"' in out
+    assert "e+" not in out.lower()
+
+
+def test_pprint_shows_the_constructor_form() -> None:
+    ctx = {"p": Decimal("19.99")}
+    # Escaped, as any filter output is.
+    assert _rust.render_template("{{ p|pprint }}", ctx) == "Decimal(&#x27;19.99&#x27;)"
+
+
+def test_two_decimals_differing_only_in_digits_do_not_share_a_loop_cache_entry() -> None:
+    """`hash_value` hashes the DIGITS, not a parsed float.
+
+    Two values that differ beyond f64 precision are different values; hashing
+    the parsed float would let a fragment rendered from one be served for the
+    other.
+    """
+    source = "{% for r in rows %}{{ r.v }}|{% endfor %}"
+    a = _rust.render_template(source, {"rows": [{"v": Decimal("1.00000000000000000001")}]})
+    b = _rust.render_template(source, {"rows": [{"v": Decimal("1.00000000000000000002")}]})
+    assert a == "1.00000000000000000001|"
+    assert b == "1.00000000000000000002|"
+    assert a != b
+
+
+# ---------------------------------------------------------------------------
+# The round-trip the first version got wrong (#2240 review, finding 1).
+# ---------------------------------------------------------------------------
+
+
+def test_django_raises_on_a_non_finite_decimal_and_djust_renders_it() -> None:
+    """A stated divergence, in djust's favour, found by a randomized sweep.
+
+    Django's `numberformat.format` calls `abs()` on an already-stringified
+    value for `NaN`/`Infinity` and raises `TypeError`. djust renders the form
+    `str()` gives. Pinned so the difference is known rather than discovered.
+    """
+    for form in ("NaN", "Infinity", "-Infinity"):
+        ctx = {"p": Decimal(form)}
+        with pytest.raises(TypeError):
+            DjangoTemplate("{{ p }}").render(DjangoContext(ctx))
+        assert _rust.render_template("{{ p }}", ctx) == form
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1E-9", "0.000000001"),
+        ("6E-10", "0.0000000006"),
+        ("9.08E-9", "0.00000000908"),
+        ("4E+1", "40"),
+        ("1E+3", "1000"),
+        ("-1E-9", "-0.000000001"),
+        ("19.99", "19.99"),
+    ],
+)
+def test_an_exponent_form_decimal_renders_expanded(raw: str, expected: str) -> None:
+    """Django renders via `"{:f}".format(...)`, NOT `str()` (#2240 review).
+
+    `Decimal('1') / Decimal('1000000000')` is `1E-9`, and so is `.normalize()`
+    on many values — this is easy to reach. Rendering `str()` verbatim gave
+    `1E-9` where Django gives `0.000000001`: a REGRESSION against the previous
+    release, since these rendered correctly while a Decimal was still a float.
+
+    The first version of the fix asserted the opposite in a comment. Verified
+    against Django rather than reasoned about, here and by a 6,901-case
+    randomized sweep.
+    """
+    ctx = {"p": Decimal(raw)}
+    assert _rust.render_template("{{ p }}", ctx) == expected
+    assert _rust.render_template("{{ p }}", ctx) == DjangoTemplate("{{ p }}").render(
+        DjangoContext(ctx)
+    )
+
+
+def test_widthratio_treats_a_decimal_as_a_number() -> None:
+    """`ToF64::to_f64` — the renderer's own numeric coercion, separate from
+    `Value::as_f64` because it also parses strings.
+
+    `{% widthratio %}` is its only consumer (`renderer.rs`), which is why the
+    delegate arm had no test: nothing else in the suite drives that path with a
+    Decimal. Without the arm `to_f64()` returns `None`, `unwrap_or(0.0)` makes
+    every operand zero, and the tag renders `0`.
+    """
+    ctx = {"v": Decimal("25"), "m": Decimal("50"), "w": Decimal("100")}
+    expected = DjangoTemplate("{% widthratio v m w %}").render(DjangoContext(ctx))
+    assert _rust.render_template("{% widthratio v m w %}", ctx) == expected
+    assert expected == "50"
+
+
+@pytest.mark.asyncio
+async def test_the_actor_path_carries_a_decimal_exactly() -> None:
+    """`python_to_value` — the third converter, and the one that renders props.
+
+    The actor path has its own Python->Value converter, distinct from
+    `FromPyObject` and from `serialize_python_value`. It takes component props
+    and, on mount, the whole `get_context_data()`. It carried the comment
+    *"both must agree, or the same object renders differently depending on which
+    path it took (#1646)"* while still extracting Decimal as f64 — so once the
+    other two were fixed, the same value rendered two ways depending on route.
+    Found by the #2240 review. Before this PR all three were consistently wrong,
+    which is a different kind of correct.
+
+    Driven through a real component render, so the assertion is on what a user
+    would see rather than on an internal shape. `create_component` needs a
+    mounted view, hence the mount first; the `view_id` comes back from it.
+    """
+    from djust._rust import create_session_actor
+
+    handle = await create_session_actor("s-2214")
+    mounted = await handle.mount("demo_app.views.CounterView", {}, None)
+    html = await handle.create_component(
+        mounted["view_id"],
+        "c-2214",
+        "{{ price }}",
+        {"price": Decimal("12345678901234567890.123456789")},
+        None,
+    )
+
+    assert "12345678901234567890.123456789" in html, html
+    assert "e+" not in html.lower(), f"the actor path collapsed it to a float: {html}"
+
+
+def test_a_decimal_subclass_is_claimed_but_a_namesake_class_is_not() -> None:
+    """`isinstance`, not a type-name match.
+
+    A subclass IS a Decimal and must keep its digits; an unrelated class that
+    merely shares the name must not be stringified as one. A `type_name ==`
+    check — which is what the dead branch this PR removes used — gets both
+    backwards.
+    """
+
+    class Money(Decimal):
+        pass
+
+    class Namesake:
+        """Named `Decimal` at runtime without being one."""
+
+        def __str__(self) -> str:
+            return "not-a-decimal"
+
+    Namesake.__name__ = "Decimal"
+
+    assert _rust.render_template("{{ p }}", {"p": Money("19.99")}) == "19.99"
+    assert _rust.render_template("{{ p }}", {"p": Namesake()}) == "not-a-decimal"

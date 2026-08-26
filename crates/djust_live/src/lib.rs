@@ -1666,6 +1666,10 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
         Ok(JsonValue::Bool(b))
     } else if let Ok(i) = obj.extract::<i64>() {
         Ok(JsonValue::Number(i.into()))
+    } else if djust_core::is_decimal(obj) {
+        // Before f64, and a JSON *string* — `DjangoJSONEncoder` parity, and the
+        // only JSON shape that carries the digits (#2214).
+        Ok(JsonValue::String(obj.str()?.extract::<String>()?))
     } else if let Ok(f) = obj.extract::<f64>() {
         Ok(serde_json::Number::from_f64(f)
             .map(JsonValue::Number)
@@ -2112,6 +2116,15 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::Integer(i));
     }
 
+    // DECIMAL BEFORE FLOAT (#2214). This is the actor path — `dispatch_mount`
+    // passes the whole `get_context_data()` through here, and component props
+    // come this way too — so leaving it on f64 while the other converters were
+    // fixed would make the same Decimal render differently by path, which is
+    // exactly what the comment below warns about.
+    if djust_core::is_decimal(obj) {
+        return Ok(Value::Decimal(obj.str()?.extract::<String>()?));
+    }
+
     // Float
     if let Ok(f) = obj.extract::<f64>() {
         return Ok(Value::Float(f));
@@ -2362,20 +2375,6 @@ fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<
 }
 
 /// Recursively serialize a Python value to JSON-compatible form
-/// Is this a `decimal.Decimal`? (#2214)
-///
-/// Mirrors `djust_core::is_decimal`. A real `isinstance`, not a `type_name`
-/// match: the latter would also claim an unrelated user class named `Decimal`.
-/// Both converters must agree, or the same object serializes differently
-/// depending on which path it took (#1646).
-fn is_decimal(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let Ok(module) = py.import("decimal") else {
-        return Ok(false);
-    };
-    let cls = module.getattr("Decimal")?;
-    value.is_instance(&cls)
-}
-
 fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     // Fast path: None
     if value.is_none() {
@@ -2469,7 +2468,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
     // arrives as a JSON string with its digits intact. That is a wire-format
     // change for clients doing arithmetic on it — a JSON *number* cannot carry
     // the precision, so there is no version of this fix that keeps both.
-    if is_decimal(py, value)? {
+    if djust_core::is_decimal(value) {
         let str_repr = value.str()?.to_string();
         return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
     }
@@ -2793,6 +2792,11 @@ fn python_to_json(_py: Python, value: &Bound<'_, PyAny>) -> PyResult<serde_json:
     // Try int
     if let Ok(i) = value.extract::<i64>() {
         return Ok(serde_json::Value::Number(i.into()));
+    }
+
+    // Decimal before float (#2214): exact digits as a JSON string.
+    if djust_core::is_decimal(value) {
+        return Ok(serde_json::Value::String(value.str()?.extract::<String>()?));
     }
 
     // Try float

@@ -111,11 +111,96 @@ fn as_f64_is_the_single_numeric_rule() {
 }
 
 #[test]
-fn the_digits_survive_a_json_round_trip() {
-    // `#[serde(untagged)]`, so a Decimal encodes as its bare string — which is
-    // what puts the exact digits on the wire.
+fn json_still_encodes_a_bare_string() {
+    // Human-readable formats stay untagged: this is what the browser receives,
+    // and a wrapper object here would be the wrong JSON.
     let encoded = serde_json::to_string(&dec("12345678901234567890.123456789")).unwrap();
     assert_eq!(encoded, "\"12345678901234567890.123456789\"");
+}
+
+#[test]
+fn a_decimal_survives_a_msgpack_round_trip() {
+    // The half the first version of this file did not test, and the half that
+    // was broken (#2240 review). It asserted only the ENCODE direction and
+    // stayed green while `SerializableViewState.state` — which round-trips
+    // through msgpack on EVERY read of the default `InMemoryStateBackend` —
+    // silently degraded `Decimal` to `String`. One cache hit undid the whole
+    // fix: `floatformat` stopped rounding, `{% if p > 10 %}` took the wrong
+    // branch, `bool(Decimal('0.00'))` flipped true.
+    //
+    // A test that asserts one direction of a round trip is the #2135 shape: it
+    // cannot fail for the thing it exists to guard.
+    for raw in [
+        "19.99",
+        "0.00",
+        "-3.50",
+        "12345678901234567890.123456789",
+        "1E-9",
+    ] {
+        let bytes = rmp_serde::to_vec(&dec(raw)).unwrap();
+        let back: Value = rmp_serde::from_slice(&bytes).unwrap();
+        assert!(
+            matches!(&back, Value::Decimal(d) if d == raw),
+            "msgpack round trip degraded {raw:?} to {back:?}"
+        );
+    }
+}
+
+#[test]
+fn the_decimal_tag_does_not_capture_an_ordinary_dict() {
+    // `visit_map` treats a one-key map under the tag as a Decimal, so check the
+    // near misses: a different key, the right key with a non-string payload,
+    // and the right key alongside another.
+    let mut plain = IndexMap::new();
+    plain.insert("price".to_string(), Value::String("19.99".into()));
+    let mut wrong_type = IndexMap::new();
+    wrong_type.insert(djust_core::decimal_tag().to_string(), Value::Integer(5));
+    let mut extra_key = IndexMap::new();
+    extra_key.insert(
+        djust_core::decimal_tag().to_string(),
+        Value::String("1".into()),
+    );
+    extra_key.insert("other".to_string(), Value::Integer(2));
+
+    for v in [
+        Value::Object(plain),
+        Value::Object(wrong_type),
+        Value::Object(extra_key),
+    ] {
+        let bytes = rmp_serde::to_vec(&v).unwrap();
+        let back: Value = rmp_serde::from_slice(&bytes).unwrap();
+        assert!(
+            matches!(back, Value::Object(_)),
+            "an ordinary dict was captured as a Decimal: {v:?} -> {back:?}"
+        );
+    }
+}
+
+#[test]
+fn an_exponent_form_decimal_expands_for_display() {
+    // Django renders through `"{:f}".format(...)`, not `str()`. Verified
+    // against Django by a 6,901-case randomized sweep; these are the shapes
+    // that sweep found, kept as a fast in-suite guard.
+    //
+    // `repr` keeps the exponent form — `repr(Decimal('1E-9'))` really is
+    // `Decimal('1E-9')` — so the two renderings differ on purpose.
+    assert_eq!(dec("1E-9").to_string(), "0.000000001");
+    assert_eq!(dec("6E-10").to_string(), "0.0000000006");
+    assert_eq!(dec("9.08E-9").to_string(), "0.00000000908");
+    assert_eq!(dec("4E+1").to_string(), "40");
+    assert_eq!(dec("1E+3").to_string(), "1000");
+    assert_eq!(dec("-1E-9").to_string(), "-0.000000001");
+    assert_eq!(dec("19.99").to_string(), "19.99");
+    // Non-finite forms have no exponent and pass through, as `format(d, 'f')`
+    // does. Django itself raises on these; djust rendering them is a stated
+    // divergence pinned on the Python side.
+    assert_eq!(dec("NaN").to_string(), "NaN");
+    assert_eq!(dec("Infinity").to_string(), "Infinity");
+
+    assert_eq!(
+        Value::List(vec![dec("1E-9")]).to_string(),
+        "[Decimal('1E-9')]"
+    );
 }
 
 #[test]
