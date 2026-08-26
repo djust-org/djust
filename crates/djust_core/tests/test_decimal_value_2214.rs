@@ -215,3 +215,62 @@ fn the_legacy_display_path_is_not_lossy() {
     );
     // `_g`'s Drop restores the default.
 }
+
+// ---------------------------------------------------------------------------
+// The two early-return guards, and the `"0"` floor. All three were claimed
+// unreachable or left unmentioned; all three are load-bearing (#2240 round 4).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_empty_and_punctuation_guard_is_load_bearing() {
+    let _g = FlagGuard::on();
+    // A previous version asserted this guard was "measured to be so:
+    // no input distinguishes" it. That measurement ran only the guard-ON arm
+    // and called it a comparison — no control. With the guard removed these
+    // render `0`, `-0`, `0`, ... because the general path treats an absent
+    // coefficient as zero.
+    //
+    // Reachable: the binary tag lets a `Value::Decimal` hold any string, so
+    // these are not hypothetical.
+    for raw in ["", ".", "-", "+", "E+5", "e5", ".E+5", "-.", "-E+5", "+."] {
+        assert_eq!(
+            dec(raw).to_string(),
+            raw,
+            "a Decimal holding {raw:?} must pass through unchanged"
+        );
+    }
+}
+
+#[test]
+fn the_non_digit_guard_is_load_bearing() {
+    let _g = FlagGuard::on();
+    // Distinct from the guard above: these have a coefficient AND an exponent,
+    // so they reach the digit check rather than the empty check. With it
+    // removed, `abcE+5` renders `abc00000` and `xyzE+200` renders `x.yze+202`
+    // — the exponent machinery applied to letters.
+    for raw in ["abcE+5", "xyzE+200", "NaNE+5", "InfinityE+3", "abcE-5"] {
+        assert_eq!(dec(raw).to_string(), raw);
+    }
+}
+
+#[test]
+fn an_all_zero_coefficient_over_the_cutoff_does_not_panic() {
+    let _g = FlagGuard::on();
+    // The `"0"` floor in `significant` is the only thing between these and a
+    // hard render crash: stripping every zero leaves an empty string, and the
+    // scientific branch does `significant.split_at(1)` on it —
+    // "end byte index 1 is out of bounds for string of length 0".
+    //
+    // These are ordinary Decimals that Django renders fine. The floor's comment
+    // gave only the `as_tuple() -> (0,)` rationale and never this, and no test
+    // covered it, so a future simplification would have shipped a panic.
+    for (raw, expected) in [
+        ("0E-250", "0e-250"),
+        ("0E+250", "0e+250"),
+        ("-0E-250", "-0e-250"),
+        ("0E-201", "0e-201"),
+        ("0E+201", "0e+201"),
+    ] {
+        assert_eq!(dec(raw).to_string(), expected, "for {raw}");
+    }
+}

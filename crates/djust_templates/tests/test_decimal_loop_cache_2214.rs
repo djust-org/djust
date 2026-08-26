@@ -74,7 +74,14 @@ fn decimals_differing_beyond_f64_do_not_collide() {
 
 #[test]
 fn a_decimal_does_not_share_a_cache_entry_with_the_string_of_the_same_digits() {
-    // Tag 9 keeps Decimal apart from String and Float. Two earlier versions of
+    // Tag 9 keeps Decimal apart from STRING. Not from Float — that separation
+    // comes from the payload, not the tag: `Float` hashes an 8-byte bit
+    // pattern where `Decimal` hashes a `&str`, so the two cannot collide
+    // whatever tags they carry. Gating tag 9 -> 3 (Float's) leaves this green,
+    // and a version of this comment claimed otherwise.
+    //
+    // The Float row below is therefore a payload guard, not a tag guard, and is
+    // kept as one. Two earlier versions of
     // this test could not fail:
     //
     //   1. asserted `"1.5|1.5|1.5|"` — exactly what a collision produces, while
@@ -91,17 +98,27 @@ fn a_decimal_does_not_share_a_cache_entry_with_the_string_of_the_same_digits() {
     let mut ctx = Context::new();
     ctx.set(
         "rows".to_string(),
-        Value::List(vec![row("v", "1E+1"), {
-            let mut m = IndexMap::new();
-            m.insert("v".to_string(), Value::String("1E+1".into()));
-            Value::Object(m)
-        }]),
+        Value::List(vec![
+            row("v", "1E+1"),
+            {
+                let mut m = IndexMap::new();
+                m.insert("v".to_string(), Value::String("1E+1".into()));
+                Value::Object(m)
+            },
+            // Payload guard (see above): pins that a Decimal and the Float of
+            // the same value keep their distinct renderings.
+            {
+                let mut m = IndexMap::new();
+                m.insert("v".to_string(), Value::Float(10.0));
+                Value::Object(m)
+            },
+        ]),
     );
     assert_eq!(
         render_cached("{% for r in rows %}{{ r.v }}|{% endfor %}", &ctx),
-        "10|1E+1|",
+        "10|1E+1|10.0|",
         "a Decimal shared a loop-cache entry with the String of the same digits \
-         — hash_value's tag 9 must keep the variants apart when only the \
-         rendering differs"
+         — hash_value's tag 9 must keep those two apart when only the rendering \
+         differs"
     );
 }

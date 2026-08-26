@@ -627,12 +627,10 @@ def test_a_non_finite_decimal_passes_through_rather_than_raising() -> None:
     and raises `TypeError` for `NaN`/`Infinity`. djust renders the form `str()`
     gives.
 
-    This pins the BEHAVIOUR, not the guard that appears to produce it: gating
-    off `expand_decimal_exponent`'s non-digit early-return changes nothing, for
-    any input, because the general path reconstructs a non-numeric string
-    unchanged by coincidence. Measured, and noted at the guard. So read this as
-    "djust renders non-finite Decimals where Django raises" — which is worth
-    holding — and not as coverage of that branch.
+    This pins the BEHAVIOUR. The guards that produce it are pinned separately in
+    `crates/djust_core/tests/test_decimal_value_2214.rs`, and an earlier version
+    of this docstring claimed they were unreachable — false, and false because
+    the "measurement" behind it ran only one arm.
     """
     for form in ("NaN", "sNaN", "Infinity", "-Infinity"):
         ctx = {"p": Decimal(form)}

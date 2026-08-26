@@ -308,9 +308,17 @@ fn resolve_tag_arg(arg: &str, context: &Context) -> String {
 /// variable-output sites cannot drift (#1646).
 fn localize_if_number(value: &Value) -> String {
     match value {
-        // Decimal included: it renders as bare digits, so a German site must
-        // localize it the same way it localizes a float — which it did before
-        // #2214, when a Decimal simply WAS a float (#2221).
+        // Decimal included: a German site must localize it the same way it
+        // localizes a float — which it did before #2214, when a Decimal simply
+        // WAS a float (#2221).
+        //
+        // NOT "renders as bare digits", which an earlier version of this
+        // comment claimed: over Django's >200-digit cutoff a Decimal renders in
+        // scientific form, and `localize_number_with` bails on anything holding
+        // an `e`. So `1.230E-250` stays `1.230e-250` where Django gives
+        // `1,230e-250` — it localizes the coefficient. A residual gap, filed as
+        // #2242, and still a strict improvement: on the previous release the
+        // same value was an f64 and rendered further from Django than either.
         Value::Integer(_) | Value::Float(_) | Value::Decimal(_) => {
             djust_core::locale::localize_number(&value.to_string())
         }

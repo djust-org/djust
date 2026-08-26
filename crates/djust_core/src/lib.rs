@@ -323,21 +323,24 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
     };
     // Non-finite (or otherwise unparseable) forms pass through untouched.
     //
-    // BELT AND BRACES, and measured to be so: no input distinguishes this guard
-    // from falling through to the general path, which reconstructs a
-    // non-numeric string unchanged by coincidence of the algorithm —
-    // `NaN`, `Infinity`, `abc`, `1.2.3`, `a.b`, `12.ab` and `""` all render
-    // identically either way, including when fed through the binary tag, which
-    // is the only route by which a `Value::Decimal` can hold an arbitrary
-    // string.
+    // LOAD-BEARING. A previous version of this comment said the opposite —
+    // "measured to be so: no input distinguishes this guard" — and that
+    // measurement ran only the guard-ON arm and called it a comparison. With
+    // no control, of course nothing looked different.
     //
-    // Kept anyway, and documented rather than pinned by a test that could not
-    // fail (#1859). The general path AGREEING is an accident of how it places
-    // the decimal point, not a designed property; this makes the function
-    // obviously total for non-numeric input rather than incidentally so.
+    // Removing it, `""` renders `0`, `-` renders `-0`, and `.`, `+`, `E+5`,
+    // `e5` all render `0`: the general path treats an absent coefficient as
+    // zero. Reachable, because the binary tag lets a `Value::Decimal` hold any
+    // string. Pinned by
+    // `test_decimal_value_2214.rs::the_empty_and_punctuation_guard_is_load_bearing`.
     if int_part.is_empty() && frac_part.is_empty() {
         return raw.to_string();
     }
+    // Also load-bearing, and a DIFFERENT guard from the one above: these have
+    // both a coefficient and an exponent, so they get past the empty check.
+    // Without this, `abcE+5` renders `abc00000` and `xyzE+200` renders
+    // `x.yze+202` — the exponent machinery applied to letters. Pinned by
+    // `the_non_digit_guard_is_load_bearing`.
     if !int_part
         .bytes()
         .chain(frac_part.bytes())
@@ -366,7 +369,12 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
     // the leading zeros to place the point.
     let significant = {
         let trimmed = digits.trim_start_matches('0');
-        // `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty.
+        // `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty — and this
+        // floor is also the only thing between an all-zero coefficient over the
+        // cutoff and a PANIC: without it `significant` is `""` and the
+        // scientific branch's `split_at(1)` is out of bounds. `Decimal("0E-250")`
+        // is an ordinary value Django renders fine. Pinned by
+        // `an_all_zero_coefficient_over_the_cutoff_does_not_panic`.
         if trimmed.is_empty() {
             "0"
         } else {
