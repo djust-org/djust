@@ -162,9 +162,13 @@ def test_decimal_equality_against_a_float_literal_diverges_from_django() -> None
     Deliberate. The variant's contract is exact *rendering and transport* with
     `as_f64()` for arithmetic — matching Django here needs arbitrary-precision
     comparison, i.e. a new dependency, for an idiom (`== <float literal>`) that
-    is rare and whose Django answer is surprising to most readers. Comparison
-    against an INTEGER, which is the common case, agrees with Django and is
-    pinned in the differential above.
+    is rare and whose Django answer is surprising to most readers.
+
+    Comparison against an INTEGER is the common case and mostly agrees with
+    Django — but NOT below `f64::EPSILON`, and an earlier version of this
+    docstring claimed it did without qualification. See
+    `test_decimal_equality_with_an_integer_is_epsilon_bounded` for the exact
+    boundary; that behaviour is new in this PR, not inherited.
     """
     source = "{% if p == 19.99 %}EQ{% else %}NE{% endif %}"
     assert DjangoTemplate(source).render(DjangoContext(CTX)) == "NE"
@@ -681,3 +685,32 @@ def test_python_to_json_keeps_the_digits() -> None:
 
     result = serialize_queryset([Row()], ["price"])
     assert result == [{"price": "12345678901234567890.123456789"}], result
+
+
+def test_decimal_equality_with_an_integer_is_epsilon_bounded() -> None:
+    """`{% if p == 0 %}` uses an absolute `f64::EPSILON` tolerance (#2240 round 5).
+
+    NEW in this PR, not inherited: `values_equal`'s wildcard arm was `_ => false`
+    before, so a Decimal never compared equal to an integer at all. The new
+    `numeric_pair` arm makes it compare, with `(a - b).abs() < f64::EPSILON`.
+
+    Net-positive — `Decimal('0.00') == 0` is now right where it used to be
+    wrong — but it has a boundary, and an unqualified "agrees with Django" is
+    false below it. Pinned exactly so the limit is a decision rather than a
+    discovery. `<` and `>` are unaffected: `compare_values` already carried the
+    same epsilon arm for `(Float, Integer)`.
+    """
+    source = "{% if p == 0 %}Z{% else %}NZ{% endif %}"
+
+    # Agrees with Django, including the case that used to be wrong.
+    for raw in ("0.00", "0E-250", "1E-15", "2.2204460492503130E-16"):
+        ctx = {"p": Decimal(raw)}
+        assert _rust.render_template(source, ctx) == DjangoTemplate(source).render(
+            DjangoContext(ctx)
+        ), raw
+
+    # Below the epsilon, djust says zero where Django says non-zero.
+    for raw in ("2.2204460492503129E-16", "1E-16", "1E-30"):
+        ctx = {"p": Decimal(raw)}
+        assert _rust.render_template(source, ctx) == "Z"
+        assert DjangoTemplate(source).render(DjangoContext(ctx)) == "NZ"

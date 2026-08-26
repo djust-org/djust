@@ -74,51 +74,49 @@ fn decimals_differing_beyond_f64_do_not_collide() {
 
 #[test]
 fn a_decimal_does_not_share_a_cache_entry_with_the_string_of_the_same_digits() {
-    // Tag 9 keeps Decimal apart from STRING. Not from Float — that separation
-    // comes from the payload, not the tag: `Float` hashes an 8-byte bit
-    // pattern where `Decimal` hashes a `&str`, so the two cannot collide
-    // whatever tags they carry. Gating tag 9 -> 3 (Float's) leaves this green,
-    // and a version of this comment claimed otherwise.
+    // Tag 9 keeps Decimal apart from BOTH String and Float, and both halves are
+    // pinned below with values that genuinely collide without it.
     //
-    // The Float row below is therefore a payload guard, not a tag guard, and is
-    // kept as one. Two earlier versions of
-    // this test could not fail:
+    // The Float half needed a constructed witness, because the obvious pairs do
+    // not collide and a previous version of this comment generalised one such
+    // non-collision into "Float hashes an 8-byte bit pattern where Decimal
+    // hashes a `&str`, so the two cannot collide whatever tags they carry."
+    // That is false. `Hash for str` writes the bytes then `0xff`; `Hash for u64`
+    // writes eight native-endian bytes. So any SEVEN-byte string collides with
+    // the f64 whose NE bit pattern is those bytes followed by `0xff` — here
+    // `"1.5E+30"` and `f64::from_bits(u64::from_ne_bytes([b'1', b'.', b'5',
+    // b'E', b'+', b'3', b'0', 0xff]))`, verified to hash identically.
     //
-    //   1. asserted `"1.5|1.5|1.5|"` — exactly what a collision produces, while
-    //      its comment claimed to assert distinctness;
-    //   2. used values whose DIGIT STRINGS differ (`"1.50"` vs `"1.5000"`), so
-    //      the hash separated them on payload alone and the tag was never load-
-    //      bearing.
-    //
-    // The case that actually needs the tag is one where the payload is IDENTICAL
-    // and the rendering is not: `Decimal("1E+1")` renders `10` (Django expands
-    // the exponent) while the string `"1E+1"` renders verbatim. Same bytes into
-    // the hasher, different output — so without distinct tags the second row is
-    // served the first row's fragment.
+    // Same error as the guard comment this file's sibling fixed: one
+    // observation reported as a universal, telling the next maintainer a live
+    // separator was not load-bearing.
+    let colliding_float = f64::from_bits(u64::from_ne_bytes([
+        b'1', b'.', b'5', b'E', b'+', b'3', b'0', 0xff,
+    ]));
     let mut ctx = Context::new();
     ctx.set(
         "rows".to_string(),
         Value::List(vec![
             row("v", "1E+1"),
             {
+                // String half: identical payload, different rendering.
                 let mut m = IndexMap::new();
                 m.insert("v".to_string(), Value::String("1E+1".into()));
                 Value::Object(m)
             },
-            // Payload guard (see above): pins that a Decimal and the Float of
-            // the same value keep their distinct renderings.
+            row("v", "1.5E+30"),
             {
+                // Float half: hashes to the same bytes as the Decimal above.
                 let mut m = IndexMap::new();
-                m.insert("v".to_string(), Value::Float(10.0));
+                m.insert("v".to_string(), Value::Float(colliding_float));
                 Value::Object(m)
             },
         ]),
     );
     assert_eq!(
         render_cached("{% for r in rows %}{{ r.v }}|{% endfor %}", &ctx),
-        "10|1E+1|10.0|",
-        "a Decimal shared a loop-cache entry with the String of the same digits \
-         — hash_value's tag 9 must keep those two apart when only the rendering \
-         differs"
+        format!("10|1E+1|1500000000000000000000000000000|{colliding_float}|"),
+        "a Decimal shared a loop-cache entry with the String or Float that hashes \
+         to the same bytes — tag 9 is what keeps all three apart"
     );
 }
