@@ -28,8 +28,19 @@ Design constraints (this runs on EVERY test):
 - **Cheap** — only clears / re-inits lazily-rebuilt state; no heavy work.
 - **Conservative** — resets ONLY state that genuinely *leaks* across tests AND
   is lazily re-derived on next use. It does NOT touch state a test legitimately
-  configures via ``override_settings`` / its own fixtures (Django restores
-  settings itself), nor self-invalidating keyed caches.
+  configures via ``override_settings`` (Django restores settings itself), nor
+  self-invalidating keyed caches.
+
+  **One deliberate exception, added in #2234**: the Django language/timezone
+  thread-locals ARE reset, which means a MODULE- or SESSION-scoped fixture that
+  calls ``activate()`` once would have its activation undone before each test in
+  that module. No such fixture exists in the suite today (verified: every
+  ``activate()`` call is inside a test body), and the alternative — leaving them
+  alone — is what let #2222's leak silently change how every later test in a
+  worker rendered. A module-scoped activation is the supported-but-unused
+  pattern being traded away; a per-test ``activate()`` inside the test body is
+  unaffected and is what the suite actually uses. Said out loud because the
+  constraint above would otherwise read as covering a case it no longer does.
 - **Pre-test (pre-yield)** — clears so each test STARTS clean; tests that set up
   their own global state in their body still work.
 - **Optional-dep safe** — Channels may be absent; every reset is wrapped so a
@@ -285,12 +296,21 @@ def _reset_django_thread_locals() -> None:
 
     Cheap (two thread-local deletes) and safe when i18n is disabled.
     """
+    # One guard PER action, matching every sibling helper here. A single shared
+    # `try` would let a raising `translation.deactivate()` silently skip the
+    # timezone reset — two independent resets sharing one failure path is how
+    # half a cleanup goes missing without anyone noticing.
     try:
-        from django.utils import timezone, translation
+        from django.utils import translation
 
         translation.deactivate()
+    except Exception:  # noqa: BLE001 - i18n is optional; a failure here must not
+        pass  # break every test in the suite via an autouse fixture
+    try:
+        from django.utils import timezone
+
         timezone.deactivate()
-    except Exception:  # pragma: no cover - i18n/tz are optional at import time
+    except Exception:  # noqa: BLE001 - same, independently: see above
         pass
 
 

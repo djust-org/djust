@@ -108,24 +108,91 @@ def test_reset_djust_globals_also_undoes_deactivate_all():
 # ---------------------------------------------------------------------------
 
 
-DEACTIVATE_ALL = re.compile(r"^(?!\s*#).*\btranslation\.deactivate_all\s*\(", re.MULTILINE)
+# Matches the bare name, so BOTH aliasing shapes are caught:
+#
+#     from django.utils.translation import deactivate_all;  deactivate_all()
+#     from django.utils import translation as trans;        trans.deactivate_all()
+#
+# An earlier version anchored on the literal `translation.deactivate_all(` and
+# both of those passed clean — the first being the shape most likely to
+# reintroduce #2222, since it is what an editor auto-import produces.
+DEACTIVATE_ALL = re.compile(r"\bdeactivate_all\s*\(")
+COMMENT_LINE = re.compile(r"^\s*#")
+_DELIMS = ('"""', "'''")
 
 
-def test_no_test_calls_translation_deactivate_all():
-    """``deactivate()``, never ``deactivate_all()``, in a test.
+def _strip_prose(text: str) -> str:
+    """Blank out comments and triple-quoted blocks, preserving line count.
 
-    Comment lines are excluded so a file may still EXPLAIN the difference —
-    which several do, and which is worth keeping.
+    The earlier version excluded only `#` lines, so a DOCSTRING naming
+    deactivate_all tripped the guard — and the files that legitimately explain
+    the difference survived only because they happened to write it without the
+    `translation.` prefix. That is luck, not an exemption, and the stated rule
+    ("a file may still EXPLAIN the difference") was not the rule enforced.
+    """
+    out, delim = [], None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if delim is not None:
+            out.append("")
+            if delim in stripped:
+                delim = None
+            continue
+        if COMMENT_LINE.match(line):
+            out.append("")
+            continue
+        opened = next((d for d in _DELIMS if stripped.startswith(d)), None)
+        if opened is not None:
+            # A one-line docstring opens and closes on the same line.
+            if not (len(stripped) > 2 * len(opened) and stripped.endswith(opened)):
+                delim = opened
+            line = ""
+        out.append(line)
+    return "\n".join(out)
+
+
+def test_no_test_calls_deactivate_all():
+    """`deactivate()`, never `deactivate_all()`, in a test.
+
+    Comments and docstrings are excluded so a file may still EXPLAIN the
+    difference — which several do, and which is worth keeping.
     """
     offenders = []
     for p in _test_files():
-        if DEACTIVATE_ALL.search(p.read_text()):
+        if DEACTIVATE_ALL.search(_strip_prose(p.read_text())):
             offenders.append(str(p.relative_to(ROOT)))
     assert offenders == [], (
-        "these call translation.deactivate_all(), which leaves get_language() "
-        "as None and zeroes NUMBER_GROUPING for the rest of the worker. Use "
-        f"translation.deactivate(), which restores LANGUAGE_CODE: {offenders}"
+        "these call deactivate_all(), which leaves get_language() as None and "
+        "zeroes NUMBER_GROUPING for the rest of the worker. Use deactivate(), "
+        f"which restores LANGUAGE_CODE: {offenders}"
     )
+
+
+def test_the_guard_catches_both_aliasing_shapes_and_spares_prose():
+    """Empirical canary (#1459) — a lint reporting nothing looks like a broken one.
+
+    Each shape is checked against the real matcher rather than trusted from the
+    regex's appearance. Both aliased forms passed the earlier version.
+    """
+    caught = [
+        "translation.deactivate_all()",
+        "deactivate_all()",
+        "trans.deactivate_all()",
+        "    deactivate_all()",
+        "x = 1; deactivate_all()",
+        "foo()  # trailing comment\ndeactivate_all()",
+    ]
+    for src in caught:
+        assert DEACTIVATE_ALL.search(_strip_prose(src)), f"missed: {src!r}"
+
+    spared = [
+        "# never call translation.deactivate_all() here",
+        "    # deactivate_all() leaks",
+        '"""' + "Explains why deactivate_all() is wrong." + '"""',
+        '"""' + "\nProse about deactivate_all().\n" + '"""',
+    ]
+    for src in spared:
+        assert not DEACTIVATE_ALL.search(_strip_prose(src)), f"false alarm: {src!r}"
 
 
 def test_every_override_settings_enable_has_a_matching_disable():
@@ -177,4 +244,26 @@ def test_activating_a_locale_or_zone_is_paired_with_a_reset(call):
             offenders.append(str(p.relative_to(ROOT)))
     assert offenders == [], (
         f"these call {call}() with no deactivate anywhere in the file: {offenders}"
+    )
+
+
+def test_every_scanned_test_root_actually_has_the_autouse_reset():
+    """The guards scan three roots; all three must be protected by one (#2234).
+
+    `python/tests/` had no conftest at all, so the autouse reset wired into the
+    other two roots since #1883 never ran for its 133 files — the guards
+    *scanned* a root that nothing *protected*. Caught by the Stage 11 review of
+    the PR that added those guards.
+
+    Pins the invariant rather than the fix: adding a fourth scanned root
+    without a conftest fails here.
+    """
+    missing = []
+    for root in TEST_ROOTS:
+        conftest = ROOT / root / "conftest.py"
+        if not conftest.exists() or "reset_djust_globals" not in conftest.read_text():
+            missing.append(root)
+    assert missing == [], (
+        "these roots are scanned by the guards above but have no autouse "
+        f"reset_djust_globals fixture, so nothing protects them: {missing}"
     )
