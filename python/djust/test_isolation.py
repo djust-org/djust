@@ -18,7 +18,7 @@ Three such flakes surfaced in two milestones, all the same class:
 
 Each was previously whack-a-moled with a per-test reset. ``reset_djust_globals``
 is the SYSTEMIC cure: one cheap function, called by an ``autouse`` fixture in
-both test roots (``tests/conftest.py`` and ``python/djust/tests/conftest.py``),
+all three test roots (``tests/``, ``python/tests/`` and ``python/djust/tests/``),
 that resets djust's process-globals BEFORE each test so every test starts from a
 clean slate. That retires the entire flaky-class instead of patching one test at
 a time, and prevents the next instance.
@@ -318,8 +318,8 @@ def reset_djust_globals() -> None:
     """Reset every leak-prone djust process-global. Call BEFORE each test.
 
     Cheap, idempotent, and optional-dependency safe. Wired into an ``autouse``
-    fixture in both test roots so every test starts from a clean slate. See the
-    module docstring for the full inventory + the conservative-inclusion
+    fixture in all three test roots so every test starts from a clean slate. See
+    the module docstring for the full inventory + the conservative-inclusion
     rationale.
     """
     _reset_channel_layer()
