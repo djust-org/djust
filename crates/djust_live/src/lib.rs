@@ -2362,6 +2362,20 @@ fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<
 }
 
 /// Recursively serialize a Python value to JSON-compatible form
+/// Is this a `decimal.Decimal`? (#2214)
+///
+/// Mirrors `djust_core::is_decimal`. A real `isinstance`, not a `type_name`
+/// match: the latter would also claim an unrelated user class named `Decimal`.
+/// Both converters must agree, or the same object serializes differently
+/// depending on which path it took (#1646).
+fn is_decimal(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let Ok(module) = py.import("decimal") else {
+        return Ok(false);
+    };
+    let cls = module.getattr("Decimal")?;
+    value.is_instance(&cls)
+}
+
 fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     // Fast path: None
     if value.is_none() {
@@ -2442,6 +2456,23 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
     if let Ok(i) = value.extract::<i64>() {
         return Ok(i.into_pyobject(py)?.to_owned().into_any().unbind());
     }
+    // DECIMAL BEFORE FLOAT (#2214), the same shape as BOOL BEFORE INT above and
+    // the second instance of that class. `extract::<f64>()` goes through
+    // `PyFloat_AsDouble`, which honours `Decimal.__float__`, so the
+    // `type_name == "Decimal"` branch further down was DEAD CODE and every
+    // Decimal reached the client as a binary double —
+    // `Decimal('12345678901234567890.123456789')` as `1.2345678901234567e+19`.
+    // `DecimalField` is Django's money type; a binary double is what it exists
+    // to avoid.
+    //
+    // Emitting `str(value)` matches `DjangoJSONEncoder.default`, so the value
+    // arrives as a JSON string with its digits intact. That is a wire-format
+    // change for clients doing arithmetic on it — a JSON *number* cannot carry
+    // the precision, so there is no version of this fix that keeps both.
+    if is_decimal(py, value)? {
+        let str_repr = value.str()?.to_string();
+        return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
+    }
     if let Ok(f) = value.extract::<f64>() {
         return Ok(f.into_pyobject(py)?.to_owned().into_any().unbind());
     }
@@ -2477,8 +2508,11 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         }
     }
 
-    // Decimal, UUID: convert to string
-    if type_name == "Decimal" || type_name == "UUID" {
+    // UUID: convert to string. Decimal is handled ABOVE, before the numeric
+    // extracts — leaving it here made it unreachable (#2214). UUID is safe here
+    // only because it is not float-convertible, which is why the same bug did
+    // not affect it.
+    if type_name == "UUID" {
         let str_repr = value.str()?.to_string();
         return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
     }

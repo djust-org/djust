@@ -308,7 +308,10 @@ fn resolve_tag_arg(arg: &str, context: &Context) -> String {
 /// variable-output sites cannot drift (#1646).
 fn localize_if_number(value: &Value) -> String {
     match value {
-        Value::Integer(_) | Value::Float(_) => {
+        // Decimal included: it renders as bare digits, so a German site must
+        // localize it the same way it localizes a float — which it did before
+        // #2214, when a Decimal simply WAS a float (#2221).
+        Value::Integer(_) | Value::Float(_) | Value::Decimal(_) => {
             djust_core::locale::localize_number(&value.to_string())
         }
         _ => value.to_string(),
@@ -2191,6 +2194,22 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
     Ok((Value::Missing, false))
 }
 
+/// Both operands as f64, but ONLY when both are genuinely numeric (#2214).
+///
+/// Deliberately narrower than `ToF64`, which also parses strings: widening `==`
+/// and `<`/`>` to strings would make `{% if "5" == 5 %}` true, where Django
+/// says false. This exists so a Decimal compares against an Integer or a Float
+/// — which it did before the variant, when it was a Float — without opening
+/// that door.
+fn numeric_pair(a: &Value, b: &Value) -> Option<(f64, f64)> {
+    let numeric = |v: &Value| matches!(v, Value::Integer(_) | Value::Float(_) | Value::Decimal(_));
+    if numeric(a) && numeric(b) {
+        Some((a.as_f64()?, b.as_f64()?))
+    } else {
+        None
+    }
+}
+
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         // BOTH variants, same as `values_identity` below (#2203 review). The
@@ -2205,7 +2224,13 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
-        _ => false,
+        // Mixed numeric pairs, which is every pair involving a Decimal. Without
+        // this `{% if p == 19.99 %}` went FALSE the moment Decimal stopped
+        // being a Float (#2214).
+        _ => match numeric_pair(a, b) {
+            Some((a, b)) => (a - b).abs() < f64::EPSILON,
+            None => false,
+        },
     }
 }
 
@@ -2270,8 +2295,24 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
         (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
         // Null comparisons
         (Value::Missing, Value::Missing) => 0,
-        // Incomparable types return 0 (treated as equal, so < and > fail)
-        _ => 0,
+        // Any remaining numeric pair — which is every pair involving a Decimal
+        // (#2214). This is the `{% if p > 10 %}` case: without it the arm below
+        // returns 0, `>` and `<` both fail, and the template silently takes the
+        // wrong branch. It is the second of the two regressions measured against
+        // serializing a Decimal as a plain string.
+        _ => match numeric_pair(a, b) {
+            Some((a, b)) => {
+                if (a - b).abs() < f64::EPSILON {
+                    0
+                } else if a < b {
+                    -1
+                } else {
+                    1
+                }
+            }
+            // Incomparable types return 0 (treated as equal, so < and > fail)
+            None => 0,
+        },
     }
 }
 
@@ -2287,6 +2328,9 @@ impl ToF64 for Value {
             Value::Float(f) => Some(*f),
             Value::String(s) => s.parse::<f64>().ok(),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            // Delegates rather than re-parsing: `Value::as_f64` is the one
+            // definition of what a Decimal is worth numerically (#1646).
+            Value::Decimal(_) => self.as_f64(),
             _ => None,
         }
     }

@@ -597,6 +597,16 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
         // ("" vs "None"), so sharing a tag would let a cached fragment rendered
         // from one be served for the other.
         Value::None => 7u8.hash(hasher),
+        // Tag 9, distinct from both Float and String: a Decimal renders and
+        // encodes differently from either, so sharing a tag would let a cached
+        // fragment built from one be served for the other (#2214).
+        //
+        // Hashes the DIGIT STRING, not a parsed float — two Decimals differing
+        // beyond f64 precision are different values and must not collide.
+        Value::Decimal(d) => {
+            9u8.hash(hasher);
+            d.hash(hasher);
+        }
         Value::Bool(b) => {
             1u8.hash(hasher);
             b.hash(hasher);

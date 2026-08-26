@@ -314,9 +314,22 @@ class DjangoJSONEncoder(json.JSONEncoder):
         if isinstance(obj, UUID):
             return str(obj)
 
-        # Handle Decimal — float, not str. Diverges from
-        # ``DjangoJSONEncoder.default`` (which returns ``str(o)``) and loses
-        # precision; see the note in ``normalize_django_value`` below and #2214.
+        # Decimal -> float, and NOT ``str`` despite that being what
+        # ``DjangoJSONEncoder.default`` returns (#2214).
+        #
+        # This looks like a free parity fix and is not. ``normalize_django_value``
+        # below is documented as the fast path for exactly this encoder, and
+        # ``tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip``
+        # pins the two as equal for every shared type. Changing one alone splits
+        # a tested invariant; changing both moves the precision loss into a
+        # template regression, because ``normalize_django_value``'s output is
+        # written into the template context and the Rust engine treats a string
+        # as a string.
+        #
+        # The Rust converter — the path model fields actually take to the client
+        # (``serialize_python_value``, plus a ``Value::Decimal`` variant) — keeps
+        # full precision as of #2214. This pair is the remaining half, and it
+        # needs its own consumer audit rather than a one-line change.
         if isinstance(obj, Decimal):
             return float(obj)
 
@@ -974,7 +987,7 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
 
     Supported types:
     - None, bool, int, float, str  -- pass through
-    - Decimal                      -- float()
+    - Decimal                      -- float() (lossy; see the note at the branch, #2214)
     - UUID                         -- str()
     - datetime, date, time         -- .isoformat()
     - timedelta                    -- ISO-8601 duration string (via Django util)
@@ -1027,12 +1040,29 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     # ``Decimal('12345678901234567890.123456789')`` becomes
     # ``1.2345678901234567e+19``.
     #
-    # Left as float ON PURPOSE rather than corrected in place, because the
-    # obvious fix is not free: the Rust template engine treats a string as a
-    # string, so switching this to ``str`` regresses ``{{ p|floatformat }}``
-    # and ``{% if p > 10 %}`` — both measured. The three converters that
-    # disagree about this (here, ``__default__`` above, and Rust's
-    # ``serialize_python_value``) need one decision, tracked in #2214.
+    # Decimal -> float, diverging from ``DjangoJSONEncoder`` (which returns
+    # ``str(o)``) and losing precision beyond ~15 significant digits (#2214).
+    #
+    # Kept, together with ``__default__`` above, which this function mirrors.
+    # Three things block the obvious fix, and they pull in different directions:
+    #
+    # - ``str`` regresses templates. This output is written into the template
+    #   context (``mixins/context.py``), so the Rust renderer sees it too, and a
+    #   string is a string there: ``{{ p|floatformat }}`` stops rounding and
+    #   ``{% if p > 10 %}`` compares lexically. Both measured.
+    # - Returning the ``Decimal`` unchanged would let the Rust extractor build a
+    #   ``Value::Decimal`` — the right shape — but breaks this function's
+    #   documented "JSON-safe primitives" contract. At least one consumer
+    #   (``runtime.py``'s ``json.dumps(public_state, ...)``) passes no encoder
+    #   and would raise ``TypeError``.
+    # - Changing only one of this pair splits the parity invariant that
+    #   ``tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip``
+    #   exists to hold.
+    #
+    # The exposure is bounded: model fields reach the client through the JIT
+    # path (Rust ``serialize_python_value``), which keeps full precision as of
+    # #2214; this is the fallback for models that path skips. Finishing it needs
+    # a consumer audit, tracked separately rather than bundled into the Rust fix.
     if isinstance(value, Decimal):
         return float(value)
 

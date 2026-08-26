@@ -51,6 +51,26 @@ pub enum Value {
     /// per process, so dict repr would differ between renders of the same
     /// template. Python dicts are insertion-ordered (#2203).
     Object(IndexMap<String, Value>),
+    /// A Python `Decimal`, carried as its EXACT digit string (#2214).
+    ///
+    /// Not a `Float`, because that is the bug: PyO3's `extract::<f64>()` goes
+    /// through `PyFloat_AsDouble`, which honours `Decimal.__float__`, so every
+    /// `Decimal` silently became a binary double before any special case could
+    /// see it. `DecimalField` is what Django projects use for money, and a
+    /// binary double is precisely what it exists to avoid.
+    ///
+    /// Not a `String` either, which was the fix the issue suggested: the
+    /// serialized value is written back into the template context, so the Rust
+    /// renderer sees the same value the wire does. As a string,
+    /// `{{ p|floatformat }}` stops rounding and `{% if p > 10 %}` compares
+    /// lexically — measured, both regress.
+    ///
+    /// So: exact digits for rendering and transport, and `as_f64()` for
+    /// arithmetic and comparison. Arithmetic keeps today's float behaviour
+    /// rather than claiming a precision it does not have; what changes is that
+    /// the value no longer LOSES its digits on the way to the browser or to
+    /// `{{ p }}`.
+    Decimal(String),
 }
 
 /// Custom Deserialize that uses the deserializer's type hints to distinguish
@@ -159,7 +179,40 @@ impl<'de> Deserialize<'de> for Value {
     }
 }
 
+/// Is this a `decimal.Decimal`? (#2214)
+///
+/// A real `isinstance`, not `type().__name__ == "Decimal"`: a name match would
+/// also claim any unrelated user class called `Decimal` and stringify it. The
+/// import is cached by Python, so this costs a dict lookup.
+///
+/// Fails CLOSED — if `decimal` cannot be imported or the check raises, the
+/// answer is "no" and the value takes its previous path. A serialization helper
+/// must not raise on an odd object.
+fn is_decimal(ob: &pyo3::Borrowed<'_, '_, PyAny>) -> bool {
+    let py = ob.py();
+    py.import("decimal")
+        .and_then(|m| m.getattr("Decimal"))
+        .and_then(|cls| ob.is_instance(&cls))
+        .unwrap_or(false)
+}
+
 impl Value {
+    /// The numeric view of a value, for arithmetic and comparison (#2214).
+    ///
+    /// `Decimal` parses its digit string on demand. That is lossy for more than
+    /// ~15 significant digits — deliberately, because it is exactly what
+    /// happened before this variant existed, so no arithmetic or comparison
+    /// changes behaviour. Rendering and transport keep the exact digits, which
+    /// is where the loss was actually reaching users.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Integer(i) => Some(*i as f64),
+            Value::Float(f) => Some(*f),
+            Value::Decimal(d) => d.parse::<f64>().ok(),
+            _ => None,
+        }
+    }
+
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Missing => false,
@@ -168,6 +221,9 @@ impl Value {
             Value::Bool(b) => *b,
             Value::Integer(i) => *i != 0,
             Value::Float(f) => *f != 0.0,
+            // Django/Python: `bool(Decimal('0.00'))` is False. Parsing is
+            // enough — a value too large to parse is certainly non-zero.
+            Value::Decimal(d) => d.parse::<f64>().map(|f| f != 0.0).unwrap_or(true),
             Value::String(s) => !s.is_empty(),
             Value::List(l) => !l.is_empty(),
             Value::Tuple(t) => !t.is_empty(),
@@ -236,6 +292,11 @@ impl Value {
                     format!("'{}'", escaped.replace('\'', "\\'"))
                 }
             }
+            // `repr(Decimal('19.99'))` is `Decimal('19.99')`, so a Decimal
+            // nested in a list or dict renders the constructor form while a
+            // top-level one renders bare digits — the same str/repr split that
+            // makes containers unable to reuse Display (#2203, #2214).
+            Value::Decimal(d) => format!("Decimal('{d}')"),
             other => other.to_string(),
         }
     }
@@ -247,6 +308,10 @@ impl Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Integer(i) => write!(f, "{i}"),
             Value::Float(fl) => write!(f, "{fl}"),
+            // Exact digits even on the legacy path: `django_value_repr` is the
+            // #2203 repr switch, and restoring the #2214 precision loss through
+            // it would make a rendering-parity flag silently lossy.
+            Value::Decimal(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
             Value::List(_) | Value::Tuple(_) => write!(f, "[List]"),
             Value::Object(o) => match o.get("__str__") {
@@ -282,6 +347,9 @@ impl fmt::Display for Value {
                     write!(f, "{fl}")
                 }
             }
+            // `str(Decimal('19.99'))` is `'19.99'`; `str()` on a Decimal
+            // never reformats. Rendering the digits verbatim IS the parity.
+            Value::Decimal(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
@@ -333,6 +401,14 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             Ok(Value::Bool(b))
         } else if let Ok(i) = ob.extract::<i64>() {
             Ok(Value::Integer(i))
+        } else if is_decimal(&ob) {
+            // BEFORE the f64 arm, and that ordering is the whole point (#2214).
+            // `extract::<f64>()` goes through `PyFloat_AsDouble`, which honours
+            // `Decimal.__float__`, so a Decimal placed after it is unreachable
+            // — silently, because the arms have different types and neither
+            // rustc nor clippy can see a dead if-else branch. That is exactly
+            // how the `serialize_python_value` branch died.
+            Ok(Value::Decimal(ob.str()?.extract::<String>()?))
         } else if let Ok(f) = ob.extract::<f64>() {
             Ok(Value::Float(f))
         } else if let Ok(s) = ob.extract::<String>() {
@@ -459,6 +535,18 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::Integer(i) => Ok(i.into_pyobject(py)?.to_owned().into_any()),
             Value::Float(f) => Ok(f.into_pyobject(py)?.to_owned().into_any()),
             Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any()),
+            // Back to a real `decimal.Decimal`, not a str: a value that made
+            // the round-trip as a Decimal must come back as one, or handlers
+            // reading it from the context see their type change under them.
+            // Falls back to the string if `Decimal(s)` raises, which it should
+            // not for a string we produced from a Decimal.
+            Value::Decimal(d) => {
+                let decimal_cls = py.import("decimal")?.getattr("Decimal")?;
+                match decimal_cls.call1((d.as_str(),)) {
+                    Ok(obj) => Ok(obj),
+                    Err(_) => Ok(d.into_pyobject(py)?.to_owned().into_any()),
+                }
+            }
             Value::List(l) => {
                 let py_list = PyList::empty(py);
                 for item in l {
