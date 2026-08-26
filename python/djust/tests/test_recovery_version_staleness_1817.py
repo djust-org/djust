@@ -37,6 +37,8 @@ GATE-OFF evidence (reverting the arm on the jump path) is recorded in the PR.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from asgiref.sync import sync_to_async
 
@@ -82,6 +84,10 @@ class _TTRecoveryView(LiveView):
 # behaviour and asserts nothing.
 _FRAME_LOG: list = []
 
+#: The `ref` these tests echo on their event, used to tell an event's own
+#: response from a stray. See `_solicited_by` for why type is not enough.
+_EVENT_REF = 1
+
 
 def _log_frames() -> str:
     if not _FRAME_LOG:
@@ -114,12 +120,32 @@ def _reset_frame_log():
     _FRAME_LOG.clear()
 
 
-async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
-    """Drain frames until one whose ``type`` == ``wanted_type`` (or return last seen)."""
+def _solicited_by(frame, ref) -> bool:
+    """Is this frame the response to the event we sent with ``ref``?
+
+    Frame TYPE cannot answer this, which cost the first version of the
+    stray-detection below its whole point: a hot-reload broadcast is not its own
+    frame type — `_send_update` emits it as `{"type": "patch", "hotreload":
+    True}` — so a type allowlist containing "patch" admits the exact producer
+    #2215 is about. `ref` can answer it: the client echoes its `ref` on an
+    event's response, and a broadcast carries none.
+    """
+    if ref is None:
+        return False
+    return frame.get("ref") == ref or (frame.get("entry") or {}).get("ref") == ref
+
+
+async def _receive_until(communicator, wanted_type, *, ref=None, tries=8, timeout=3):
+    """Drain frames until one of ``wanted_type`` (and matching ``ref``, if given).
+
+    Pass ``ref`` whenever a stray could share the wanted type — otherwise this
+    returns the STRAY and the caller reads its version, which is how a
+    hot-reload broadcast would masquerade as the event's own patch.
+    """
     last = None
     for _ in range(tries):
         last = await _recv(communicator, timeout)
-        if last.get("type") == wanted_type:
+        if last.get("type") == wanted_type and (ref is None or _solicited_by(last, ref)):
             return last
     return last
 
@@ -206,7 +232,22 @@ async def test_time_travel_jump_recovery_version_is_current():
         ev1 = await _receive_until(communicator, "patch")
         assert ev1.get("type") == "patch", f"bump should patch, got {ev1!r}"
         v_arm = _frame_version(ev1)
-        assert v_arm == v_mount + 1, f"arming event must be {v_mount + 1}, got {v_arm!r}"
+        # MONOTONIC, not adjacent (#2215). This used to assert
+        # `v_arm == v_mount + 1`, and that is what the flake failed on: an
+        # extra `_next_version()` bump landed between the mount and this frame,
+        # so it read 3 where 2 was expected.
+        #
+        # The exact integer was never what this test guards. Gating off the
+        # #1817 fix shows the LAST assertion — `v_recovery == v_jump` — catches
+        # the regression entirely on its own; these two only assert that the
+        # counter is a counter. So they now assert exactly that, and the
+        # "did something else bump it" question moved to
+        # `test_an_idle_connection_receives_no_unsolicited_frames` below, which
+        # can NAME the intruder instead of reporting an off-by-N.
+        assert v_arm > v_mount, (
+            f"the arming event must ADVANCE the wire version past the mount "
+            f"baseline ({v_mount}); got {v_arm!r}. Frames so far:\n{_log_frames()}"
+        )
 
         # (3) DRIFT path: jump back to snapshot[0]'s state_before (count → 0).
         # This re-renders (count 1 → 0 produces a patch) and advances the wire
@@ -224,9 +265,13 @@ async def test_time_travel_jump_recovery_version_is_current():
                 pytest.fail(f"time_travel_jump errored: {frame!r}")
         assert jump_render is not None, "time_travel_jump must emit a render frame"
         v_jump = _frame_version(jump_render)
-        assert v_jump == v_arm + 1, (
-            f"jump render must advance the wire version to {v_arm + 1} "
-            f"(client now at this version); got {v_jump!r}"
+        # Monotonic for the same reason as above (#2215): what matters is that
+        # the jump ADVANCES the version — the client writes
+        # `clientVdomVersion = data.version` from this frame — not that it
+        # advances by exactly one.
+        assert v_jump > v_arm, (
+            f"the jump render must advance the wire version past the arming "
+            f"version ({v_arm}); got {v_jump!r}. Frames so far:\n{_log_frames()}"
         )
 
         # (4) request_html → html_recovery. Its version MUST be the post-jump
@@ -321,4 +366,198 @@ def test_bare_next_version_does_not_arm_then_armed_resyncs():
     assert armed == 3
     assert p._recovery_version == 3, (
         "_next_version_armed must bring _recovery_version current with _last_sent_version (#1817)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The relocated stray-bump signal (#2215).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_an_idle_connection_receives_no_unsolicited_frames():
+    """Nothing may push a frame at a connection that did not ask for one.
+
+    This is where the "did something else bump the version counter" question
+    lives now. It used to be answered accidentally, by
+    ``test_time_travel_jump_recovery_version_is_current`` asserting
+    ``v_arm == v_mount + 1`` — so a stray broadcast surfaced as an off-by-N in
+    a test about something else, with no indication of what had arrived.
+
+    Here the failure message carries the intruding frame. That is the whole
+    point: #2215 has been seen twice and reproduced never, and the reason it
+    stayed unreproducible is that the only evidence it ever produced was
+    "expected 2, got 3".
+
+    Every unsolicited frame is a real defect regardless of this flake — a
+    broadcast racing an event skews the wire version and costs the client a
+    recovery round-trip (#1788, #1817). So this asserts a property worth
+    holding on its own, not a workaround.
+
+    Two limits, both real. It cannot *prove* absence: a producer that fires
+    once an hour will not appear in a 1.5-second window. And it can only name
+    a producer that SENDS something — the actual #2215 producer, found by the
+    review of this PR, bumps the version without emitting a frame at all (see
+    ``test_a_suppressed_hotreload_broadcast_consumes_no_wire_version``), so for
+    that one the version assertion is the load-bearing half and the frame
+    assertions would have stayed green forever.
+    """
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True):
+        communicator, mount_frame = await _connect_and_mount(
+            view_suffix="_TTRecoveryView", url="/tt/"
+        )
+        baseline = _frame_version(mount_frame)
+
+        # `receive_nothing` rather than a timed-out `receive_json_from`, for a
+        # harness reason worth recording because the first draft got it exactly
+        # backwards in a comment that then shipped:
+        #
+        #   receive_json_from(timeout=N)  -> raises TimeoutError (an Exception)
+        #                                    AND cancels the communicator's
+        #                                    application task, so every LATER
+        #                                    send_json_to raises CancelledError
+        #                                    (a BaseException) from inside
+        #                                    send_input.
+        #   receive_nothing(timeout=N)    -> returns a bool, touches nothing.
+        #
+        # Confirmed empirically on this harness rather than reasoned about: the
+        # receive raised `TimeoutError`, the later send raised
+        # `asyncio.CancelledError`. The draft attributed CancelledError to the
+        # RECEIVE, and so imposed an ordering constraint ("the idle wait must
+        # be last") that does not actually exist. `receive_nothing` removes the
+        # constraint outright.
+        window_start = len(_FRAME_LOG)
+        await communicator.send_json_to(
+            {"type": "event", "event": "bump", "params": {}, "ref": _EVENT_REF}
+        )
+        after_event = _frame_version(await _receive_until(communicator, "patch", ref=_EVENT_REF))
+
+        # The mount -> event round-trip is the exact #2215 window, and the idle
+        # wait below cannot see into it: `_receive_until` DRAINS whatever
+        # arrives while hunting for the patch, so a stray at t=0.01s is
+        # swallowed silently. `_FRAME_LOG` recorded it either way, so check the
+        # window directly — the patch should be the only thing that arrived.
+        #
+        # "Unsolicited" means "not a response to the event we just sent", and
+        # the test for that is the echoed `ref` — NOT the frame type.
+        #
+        # A type allowlist was the first version and it was wrong in the one way
+        # that mattered: a hot-reload broadcast has no frame type of its own,
+        # `_send_update` emits it as `{"type": "patch", "hotreload": True}`, so
+        # `"patch"` on the allowlist admitted the very producer this file is
+        # about. Worse, `_receive_until` then returned the broadcast as though
+        # it were the event's patch and the version assertion read ITS version,
+        # so both halves stayed green. Caught by the Stage 15 review, which
+        # falsified the docstring claim that a stray hotreload "is still
+        # caught" by injecting a sending one (#1867 — a prose invariant must be
+        # falsification-tested, not just citation-checked).
+        #
+        # This view has time travel on, so an event legitimately emits a
+        # `time_travel_event` too; it carries the same `ref` under `entry`.
+        strays = [f for f in _FRAME_LOG[window_start:] if not _solicited_by(f, _EVENT_REF)]
+        # Reachability (#1859): this is not decorative — the first run of it
+        # went red on a real frame captured from the window and named it, which
+        # is how the allowlist above got written. A silent producer still slips
+        # past, by construction; that is what the version assertion is for.
+        assert not strays, (
+            f"{len(strays)} unsolicited frame(s) arrived during the mount -> "
+            f"event round-trip, the exact #2215 window: {strays!r}\n"
+            f"Frames:\n{_log_frames()}"
+        )
+
+        # Now sit idle. Anything that arrives was not asked for.
+        idle_clean = await communicator.receive_nothing(timeout=1.5)
+        stray = None if idle_clean else await communicator.receive_json_from(timeout=1)
+        assert idle_clean, (
+            f"an unsolicited frame arrived at an idle connection: {stray!r}\n"
+            "That is a #2215 producer. Whatever sent this is what bumps the "
+            "wire version mid-test and skews every later frame. Frames:\n"
+            f"{_log_frames()}"
+        )
+        assert after_event == baseline + 1, (
+            f"the wire version moved between the mount and the first event: "
+            f"mount was {baseline}, the event read {after_event} (expected "
+            f"{baseline + 1}). Something advanced _next_version() without this "
+            f"socket asking for it — and note it need not have SENT anything: "
+            f"a suppressed hot-reload broadcast bumped the version silently "
+            f"until #2215. Frames:\n{_log_frames()}"
+        )
+        await communicator.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# The #2215 producer, found by the Stage 11 review of PR #2237.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_a_suppressed_hotreload_broadcast_consumes_no_wire_version():
+    """The reproducer two years of hunting never produced (#2215).
+
+    `hotreload` calls::
+
+        await self._send_update(
+            patches=patches,
+            version=self._next_version_armed(html),   # <- evaluated FIRST
+            hotreload=True, ...
+        )
+
+    and `_send_update` then suppresses an empty-patch hot-reload broadcast
+    (#763) and returns. Python evaluates arguments before the call, so the wire
+    version was consumed — and recovery armed — for a frame that never left the
+    socket. An unrelated file change re-renders to zero patches, which is the
+    COMMON case.
+
+    Why it stayed unreproducible: it is a **silent** bump. Nothing reaches the
+    socket, so every hunt that looked for a stray FRAME found nothing and
+    concluded the hot-reload path was innocent — including the first draft of
+    this PR, which shipped that conclusion in its CHANGELOG. The only evidence
+    it ever left was a version that jumped, which surfaced as
+    ``expected 2, got 3`` in a test about something else.
+
+    Two-arm, because "the version is 2" proves nothing without knowing what it
+    would have been: mount, broadcast, event, and compare against the same
+    sequence with no broadcast.
+    """
+    from channels.layers import get_channel_layer
+    from django.test import override_settings
+
+    async def _mount_broadcast_event(*, broadcast: bool) -> tuple:
+        communicator, mount = await _connect_and_mount(view_suffix="_TTRecoveryView", url="/tt/")
+        v_mount = _frame_version(mount)
+        if broadcast:
+            # An unrelated file: re-renders to zero patches, so `_send_update`
+            # suppresses it. This is the shape the watcher emits in dev.
+            await get_channel_layer().group_send(
+                "djust_hotreload", {"type": "hotreload", "file": "unrelated/module.py"}
+            )
+            await asyncio.sleep(0.4)  # let the broadcast be handled
+        await communicator.send_json_to(
+            {"type": "event", "event": "bump", "params": {}, "ref": _EVENT_REF}
+        )
+        v_event = _frame_version(await _receive_until(communicator, "patch", ref=_EVENT_REF))
+        await communicator.disconnect()
+        return v_mount, v_event
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True):
+        control_mount, control_event = await _mount_broadcast_event(broadcast=False)
+        treat_mount, treat_event = await _mount_broadcast_event(broadcast=True)
+
+    assert control_event - control_mount == 1, (
+        f"control arm is broken: without any broadcast the event must be the "
+        f"very next version ({control_mount} -> {control_event})"
+    )
+    assert treat_event - treat_mount == control_event - control_mount, (
+        f"a suppressed hot-reload broadcast consumed a wire version: with no "
+        f"broadcast the event advanced by {control_event - control_mount} "
+        f"({control_mount} -> {control_event}); with one it advanced by "
+        f"{treat_event - treat_mount} ({treat_mount} -> {treat_event}).\n"
+        "The version was allocated as an ARGUMENT to `_send_update`, which then "
+        "returned early on the empty-patch guard (#763) — so the client never "
+        "saw it, `clientVdomVersion` lags, and the next real diff pays a "
+        "recovery round-trip. Frames:\n" + _log_frames()
     )

@@ -315,11 +315,26 @@ def test_reset_is_optional_dep_safe(monkeypatch):
 _TT_MOD = "djust.tests.test_recovery_version_staleness_1817"
 
 
-async def _recv_until(comm, wanted, *, tries=8, timeout=3):
+#: The `ref` this harness echoes on its arming event.
+_ARM_REF = 1
+
+
+async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=3):
+    """Drain frames until one of ``wanted`` type (and matching ``ref``, if given).
+
+    ``ref`` matters more than it looks. A hot-reload broadcast is not its own
+    frame type — it ships as ``{"type": "patch", "hotreload": True}`` — so
+    without a ref filter this returns the STRAY when hunting for the arming
+    patch, the caller reads the stray's version as ``v_arm``, and the whole
+    chain reads clean while the drift is happening. That silently disarmed the
+    gate-off below: it stopped going red under a reverted fix, which is the
+    decorative-pin failure (#1859). Found by re-running the gate-off after
+    #2215 removed the second suppression site (#2237).
+    """
     last = None
     for _ in range(tries):
         last = await comm.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted:
+        if last.get("type") == wanted and (ref is None or last.get("ref") == ref):
             return last
     return last
 
@@ -375,8 +390,8 @@ async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
     await asyncio.sleep(0.05)  # let the consumer process any stray re-render
 
     # Arming event — first patch, read EXACTLY as the real #1882 test does.
-    await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-    ev1 = await _recv_until(comm, "patch")
+    await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": _ARM_REF})
+    ev1 = await _recv_until(comm, "patch", ref=_ARM_REF)
     v_arm = ev1["version"]
 
     # Jump (the render-send drift path).
@@ -400,6 +415,22 @@ async def test_channel_layer_reset_keeps_wire_version_clean_1882():
     The fixture's ``channel_layers.backends.clear()`` puts the victim on a fresh
     layer, so the stale-layer sibling send is a no-op for it and the wire-version
     chain stays 1 -> 2 -> 3.
+
+    **Why this keeps its exact integers when #2215 relaxed the ones in
+    ``test_recovery_version_staleness_1817``.** Those were *scaffolding* — that
+    test is about recovery-version staleness, and its exact `v_arm` was
+    incidental, so a stray bump failed it for a reason it was not about. Here
+    the exact chain IS the subject: this test and its gate-off sibling below
+    are a control/treatment pair asking precisely "did an extra bump happen?",
+    and 3-vs-4 is the entire signal. Relaxing to `>` would delete the test.
+
+    So this pair stays exact deliberately, and inherits the consequence: a
+    stray bump from anywhere else reads here as "the reset failed". One real
+    such producer existed until #2215 — a hot-reload broadcast suppressed by
+    the empty-patch guard still consumed a wire version, silently, with no
+    frame on the socket. If this test fails with `got mount=1 arm=2 jump=4`
+    while the gate-off sibling ALSO passes, suspect a new silent bumper rather
+    than the reset.
     """
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[_TT_MOD], DEBUG=True):
         v_mount, v_arm, v_jump = await _drive_jump_with_stale_layer_sender(reset_layer=True)
@@ -411,21 +442,47 @@ async def test_channel_layer_reset_keeps_wire_version_clean_1882():
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_gate_off_without_reset_reproduces_1882_drift():
-    """GATE-OFF (#1468): WITHOUT the reset, the stray hotreload drifts the version.
+async def test_a_stale_layer_stray_no_longer_drifts_the_version_2215():
+    """This test used to REQUIRE the drift. #2215 fixed it at the root.
 
-    The victim shares the stale layer with the sibling sender, receives the
-    stray re-render, bumps ``_next_version()``, and the jump lands at 4 — the
-    exact ``got 4`` #1882 symptom. This proves the reset (not something else) is
-    what keeps the companion test clean.
+    It was written as the gate-off (#1468) for the companion above: without the
+    channel-layer reset the victim shared the stale layer with the sibling
+    sender, received the stray re-render, and the jump landed at 4 — the exact
+    ``got 4`` #1882 symptom. It asserted ``v_jump == 4`` and passed.
+
+    It now lands at 3, because **#1882, #1883 and #2215 were one bug.**
+    ``sibling.html`` is unrelated to the victim, so the stray re-render
+    produced ZERO patches; ``_send_update`` suppressed the broadcast (#763) and
+    returned — but the wire version had already been consumed, because
+    ``hotreload`` passed ``version=self._next_version_armed(html)`` as an
+    ARGUMENT and Python evaluates arguments before the call. A bump with no
+    frame. That is why every hunt for a stray FRAME came back empty, and why
+    #2215 was sighted repeatedly and reproduced never.
+
+    So this assertion is flipped rather than deleted: the transition from 4 to 3
+    is the end-to-end proof that #2215 cured #1882 at the source instead of
+    containing it. If it ever reads 4 again, the argument-evaluation defect (or
+    another silent bumper) is back — see
+    ``test_a_suppressed_hotreload_broadcast_consumes_no_wire_version``.
+
+    **The reset fixture is still justified**, and this test no longer proves
+    it. A stray whose re-render produces NON-empty patches sends a real frame
+    and legitimately advances the version, which would still drift a victim
+    sharing the layer; the fixture prevents that. This harness cannot construct
+    that case — the hot-reload path re-renders without mutating view state, so
+    its patches are always empty here — so the claim is left stated rather than
+    pinned, instead of faking a stray to keep a green gate-off (#1859).
     """
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[_TT_MOD], DEBUG=True):
         v_mount, v_arm, v_jump = await _drive_jump_with_stale_layer_sender(reset_layer=False)
-    assert v_jump == 4, (
-        "gate-off: without the channel-layer reset the stray hotreload frame "
-        "must bump the wire version so the jump lands at 4 (the #1882 drift); "
-        f"got mount={v_mount} arm={v_arm} jump={v_jump}. If this no longer "
-        "reproduces, the reproduction has drifted from the real mechanism."
+    assert (v_mount, v_arm, v_jump) == (1, 2, 3), (
+        "a stale-layer stray hotreload drifted the wire version: expected the "
+        f"clean chain 1 -> 2 -> 3, got mount={v_mount} arm={v_arm} "
+        f"jump={v_jump}.\n"
+        "This test asserted jump == 4 until #2215 — the drift was a hot-reload "
+        "broadcast consuming a wire version and then being suppressed by the "
+        "empty-patch guard, sending nothing. A 4 here means that silent bump "
+        "is back."
     )
 
 

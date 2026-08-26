@@ -1399,6 +1399,31 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self._arm_recovery(html)
         return version
 
+    @staticmethod
+    def _hotreload_broadcast_suppressed(patches: Optional[list]) -> bool:
+        """Should this hot-reload broadcast be dropped? (#763, #2215)
+
+        The suppression this answers used to live inside `_send_update`, and
+        that was the bug: Python evaluates arguments before the call, so the
+        armed `version=` kwarg was already spent by the time the guard ran, and
+        the version went to a frame that never left. Asking HERE — at the one
+        `hotreload=True` call site, before allocating — is the whole fix.
+
+        It is the ONLY place the question is asked; the guard inside
+        `_send_update` is deliberately gone rather than kept as a backstop, so
+        the two cannot drift and there is no second, silent way to fail
+        (#1646, #2233). The comment where it used to be explains why that
+        direction is the safe one.
+
+        (Deliberately NOT spelling that kwarg literally: the structural pin
+        `test_every_client_checked_send_path_uses_next_version` counts
+        occurrences with a regex over raw source, so prose naming the pattern
+        is counted as a call site. This docstring tripped it. Tracked as its
+        own fragility in #2238 — a pin that counts comments is the #2213 class.)
+
+        """
+        return patches == []
+
     async def _send_update(
         self,
         patches: Optional[list] = None,
@@ -1441,21 +1466,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             ref: Event reference number echoed back from the client's request,
                 allowing the client to match responses to sent events (#560).
         """
-        # #763: On hot-reload, suppress empty-patch broadcasts. When an
-        # unrelated Python file changes, re-rendering often produces zero
-        # patches (the file didn't affect the current view's output). The
-        # old code still broadcast a full ~14 KB payload including the
-        # `_debug` state dump to every connected session. Skip it — the
-        # client has nothing to do and the payload is pure noise.
-        # NON-hot-reload empty patches are still sent: user events that
-        # legitimately produce no diff still need an acknowledgment so
-        # the client can clear loading state.
-        if hotreload and patches == []:
-            hotreload_logger.debug(
-                "Suppressing empty-patch hot-reload broadcast (unrelated file: %s)",
-                file_path,
-            )
-            return
+        # #763's empty-patch hot-reload suppression USED TO LIVE HERE, and it is
+        # deliberately gone: it now happens at the one `hotreload=True` call
+        # site, before the wire version is allocated. See
+        # `_hotreload_broadcast_suppressed`.
+        #
+        # Deliberate, because the two placements fail differently (#2233 — remove
+        # the redundant mechanism rather than test around it). Suppressing HERE
+        # cannot prevent the caller from having already evaluated
+        # `version=...armed(html)` as an argument, so a caller that gets it
+        # wrong spends a version on a frame that never ships — a SILENT client
+        # version lag costing a recovery round-trip, which is #2215 and took two
+        # years to find. With the check only at the call site, a future
+        # `hotreload=True` caller that repeats that mistake instead SENDS an
+        # empty-patch frame: wasteful, exactly the #763 noise, and loud — the
+        # client's version stays consistent and
+        # `test_an_idle_connection_receives_no_unsolicited_frames` sees the
+        # frame. Trading a silent correctness bug for a visible performance one
+        # is the right direction.
+        #
+        # NON-hot-reload empty patches are still sent, unchanged: user events
+        # that legitimately produce no diff still need an acknowledgment so the
+        # client can clear loading state.
 
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
@@ -2922,12 +2954,41 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Arm recovery so a later request_html serves the post-HVR HTML,
                 # not a stale pre-HVR baseline (#1817). ``html`` is the pre-strip
                 # render from render_with_diff() above.
-                await self._send_update(
-                    patches=patches,
-                    version=self._next_version_armed(html),
-                    hotreload=True,
-                    file_path=file_path,
-                )
+                # #2215: allocate the wire version ONLY when the frame will
+                # actually be sent.
+                #
+                # `_send_update` suppresses an empty-patch hot-reload broadcast
+                # (#763) and returns early — but Python evaluates
+                # `self._next_version_armed(html)` BEFORE the call, so the
+                # version was consumed and recovery armed for a frame that never
+                # left the socket. An unrelated file change re-renders to zero
+                # patches, which is the COMMON case, so this fired on most
+                # hot-reload broadcasts.
+                #
+                # Two consequences, and the second is why this took two years to
+                # find. (1) The client's `clientVdomVersion` lags by one, so the
+                # next real diff fails its `version - 1` check and costs a
+                # `request_html` recovery round-trip — the exact class #1788 and
+                # #1817 exist to prevent, reintroduced by argument-evaluation
+                # order. (2) It is a SILENT bump: nothing reaches the socket, so
+                # the frame log shows nothing and the only evidence is a version
+                # that jumped. That is the #2215 signature — "clean mount, stray
+                # bump, nothing in the frame log" — and it is why every
+                # reproduction attempt that looked for a stray FRAME found
+                # nothing.
+                if self._hotreload_broadcast_suppressed(patches):
+                    hotreload_logger.debug(
+                        "Suppressing empty-patch hot-reload broadcast without "
+                        "consuming a wire version (unrelated file: %s)",
+                        file_path,
+                    )
+                else:
+                    await self._send_update(
+                        patches=patches,
+                        version=self._next_version_armed(html),
+                        hotreload=True,
+                        file_path=file_path,
+                    )
 
                 total_time = (time.time() - start_time) * 1000
                 hotreload_logger.info(
