@@ -350,7 +350,14 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
     }
     let digits: String = format!("{int_part}{frac_part}");
     // `as_tuple()`'s exponent counts the fractional digits in.
-    let exponent = str_exp - frac_part.len() as i64;
+    // SATURATING: `str_exp` comes from a `parse::<i64>()` on attacker-chosen
+    // text — the binary tag lets a `Value::Decimal` hold any string — so a
+    // payload like `1.5E-9223372036854775808` overflows this subtraction. In
+    // debug that panics on the render path; in release, where `overflow-checks`
+    // is off, it wraps silently and renders nonsense. Saturating is correct
+    // either way: a magnitude that large is far past the cutoff below, so the
+    // scientific branch takes it regardless of the exact value (#2240 round 6).
+    let exponent = str_exp.saturating_sub(frac_part.len() as i64);
 
     // `as_tuple().digits` drops LEADING zeros; this string form keeps them — the
     // `0` in `0.xxx`, and any zeros after the point. Counting those inflates the
@@ -394,7 +401,10 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
         // `{:+}`: Python writes the exponent sign explicitly — `1e+212`, not
         // `1e212`. A randomized differential caught this; reading the format
         // spec did not.
-        let adjusted = exponent + significant.len() as i64 - 1;
+        // Saturating for the same reason as `exponent` above.
+        let adjusted = exponent
+            .saturating_add(significant.len() as i64)
+            .saturating_sub(1);
         return format!("{sign}{coefficient}e{adjusted:+}");
     }
 

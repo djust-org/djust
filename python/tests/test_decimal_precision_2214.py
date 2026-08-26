@@ -691,8 +691,12 @@ def test_decimal_equality_with_an_integer_is_epsilon_bounded() -> None:
     """`{% if p == 0 %}` uses an absolute `f64::EPSILON` tolerance (#2240 round 5).
 
     NEW in this PR, not inherited: `values_equal`'s wildcard arm was `_ => false`
-    before, so a Decimal never compared equal to an integer at all. The new
-    `numeric_pair` arm makes it compare, with `(a - b).abs() < f64::EPSILON`.
+    before, so a Decimal never compared equal to an integer at all. The new arm
+    makes it compare, with `(a - b).abs() < f64::EPSILON`.
+
+    Scoped to pairs that involve a Decimal — see
+    `test_plain_float_equality_is_unchanged_by_this_pr`, which is the guard that
+    the widening did not leak onto the float path. It did, for two rounds.
 
     Net-positive — `Decimal('0.00') == 0` is now right where it used to be
     wrong — but it has a boundary, and an unqualified "agrees with Django" is
@@ -714,3 +718,64 @@ def test_decimal_equality_with_an_integer_is_epsilon_bounded() -> None:
         ctx = {"p": Decimal(raw)}
         assert _rust.render_template(source, ctx) == "Z"
         assert DjangoTemplate(source).render(DjangoContext(ctx)) == "NZ"
+
+
+def test_plain_float_equality_is_unchanged_by_this_pr() -> None:
+    """`{% if x == 0 %}` on an ordinary float must answer as it did before #2214.
+
+    The equality widening was written for Decimals and reached `(Float, Integer)`
+    too, which involves no Decimal at all. On the previous release that pair fell
+    to `_ => false`; widened, it took an absolute `f64::EPSILON` tolerance, so
+    `{% if delta == 0 %}` on a float residue silently took the wrong branch —
+    the same failure class this PR exists to fix, introduced by its own fix.
+
+    It survived two review rounds because the arm's comment said "every pair
+    involving a Decimal" while the code did more. These are the values float
+    arithmetic actually produces.
+    """
+    source = "{% if x == 0 %}Z{% else %}NZ{% endif %}"
+    for value in (0.1 + 0.2 - 0.3, 1.0 - 0.9 - 0.1, 1e-17, 5e-324, 2.2e-16):
+        ctx = {"x": value}
+        assert _rust.render_template(source, ctx) == "NZ", f"{value!r} read as zero"
+        assert DjangoTemplate(source).render(DjangoContext(ctx)) == "NZ"
+
+    # A PRE-EXISTING divergence this RESTORES rather than fixes: djust answers
+    # `{% if <float> == <int literal> %}` false regardless, so `0.0 == 0` and
+    # `19.0 == 19` are both false where Django says true. That predates #2214
+    # and is not its to change (#1079) — filed as #2243. Asserted so the
+    # restoration is exact and the divergence is recorded, not rediscovered.
+    assert _rust.render_template(source, {"x": 0.0}) == "NZ"
+    assert DjangoTemplate(source).render(DjangoContext({"x": 0.0})) == "Z"
+
+
+def test_a_hostile_exponent_magnitude_does_not_crash_the_render() -> None:
+    """`i64` arithmetic on an attacker-chosen exponent (#2240 round 6).
+
+    `str_exp` comes from `parse::<i64>()` on text that the binary tag lets a
+    `Value::Decimal` hold arbitrarily. `1.5E-9223372036854775808` overflowed the
+    subtraction that folds the fractional length into the exponent: a panic on
+    the render path in debug, and — since `overflow-checks` is off in release —
+    a silent wrap in the shipped wheel.
+
+    Not reachable from a real `Decimal` (CPython rejects exponents past ~2e18),
+    only through the tag. That is the same route the escaping fix and both
+    `*_guard_is_load_bearing` tests rest on, so it is reachable by this PR's own
+    standard; it cannot be attacker-reachable for those and not for this.
+
+    The guard tests enumerated every hostile SHAPE and no hostile MAGNITUDE.
+    """
+    from djust._rust import RustLiveView
+
+    for payload in (
+        "1.5E-9223372036854775808",
+        "1.55E-9223372036854775808",
+        "12E+9223372036854775807",
+        "1.5E+9223372036854775807",
+        "0.0000000001E-9223372036854775800",
+        "1E-9223372036854775808",
+    ):
+        view = RustLiveView("{{ p }}")
+        view.set_state("p", {"__djust_decimal__": payload})
+        restored = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+        # The assertion is that this returns at all.
+        assert isinstance(restored.render(), str), payload

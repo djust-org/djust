@@ -2209,6 +2209,17 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 /// says false. This exists so a Decimal compares against an Integer or a Float
 /// — which it did before the variant, when it was a Float — without opening
 /// that door.
+/// Does this pair involve a `Decimal` at all? (#2214)
+///
+/// Guards the equality widening so it cannot reach `(Float, Integer)`, which
+/// has its own long-standing semantics. Ordering (`<`, `>`) needs no such guard:
+/// `compare_values` already carried explicit `(Float, Integer)` and
+/// `(Integer, Float)` arms before this change, so its wildcard only ever sees
+/// Decimal pairs.
+fn is_decimal_pair(a: &Value, b: &Value) -> bool {
+    matches!(a, Value::Decimal(_)) || matches!(b, Value::Decimal(_))
+}
+
 fn numeric_pair(a: &Value, b: &Value) -> Option<(f64, f64)> {
     let numeric = |v: &Value| matches!(v, Value::Integer(_) | Value::Float(_) | Value::Decimal(_));
     if numeric(a) && numeric(b) {
@@ -2232,13 +2243,28 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
-        // Mixed numeric pairs, which is every pair involving a Decimal. Without
-        // this `{% if p == 19.99 %}` went FALSE the moment Decimal stopped
-        // being a Float (#2214).
-        _ => match numeric_pair(a, b) {
+        // Pairs involving a DECIMAL, and only those. Without this
+        // `{% if p == 19.99 %}` went false the moment a Decimal stopped being a
+        // Float (#2214).
+        //
+        // The `is_decimal_pair` restriction is load-bearing and was missing.
+        // `numeric_pair` alone also catches `(Float, Integer)` — no Decimal in
+        // sight — which on the previous release fell to `_ => false` and now
+        // took an absolute `f64::EPSILON` tolerance. That silently changed
+        // `{% if delta == 0 %}` for ordinary float residues: `0.1 + 0.2 - 0.3`
+        // is `5.55e-17`, which Django calls non-zero and this called zero.
+        //
+        // A scope leak, not a design choice — the comment here even said "every
+        // pair involving a Decimal" while the code did more, which is how it
+        // survived review twice (#1079, #1867).
+        _ if is_decimal_pair(a, b) => match numeric_pair(a, b) {
             Some((a, b)) => (a - b).abs() < f64::EPSILON,
             None => false,
         },
+        // Everything else keeps the pre-#2214 answer. A guarded arm is not
+        // exhaustive, and this is the arm that must stay `false` — it is where
+        // `(Float, Integer)` lands.
+        _ => false,
     }
 }
 
