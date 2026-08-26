@@ -1874,9 +1874,16 @@ fn json_escape_for_script(s: &str) -> String {
 
 /// The escaped BODY of a JSON string, without the surrounding quotes.
 ///
-/// One helper rather than the same chain written per arm: a value that can
-/// reach a `<script type="application/json">` body must be escaped whatever
-/// variant carries it (#2214 review).
+/// One helper for the `String` and `Decimal` arms: a value that can reach a
+/// `<script type="application/json">` body must be escaped whatever variant
+/// carries it (#2214 review).
+///
+/// A THIRD copy survives, in `value_to_json`'s object-KEY path, escaping only
+/// `\` and `"`. So a dict key containing a newline still emits a raw control
+/// character and the result does not parse. Pre-existing and outside this
+/// issue, so it is filed rather than fixed here (#1079) — but named, because
+/// "one helper rather than the same chain written per arm" would otherwise read
+/// as complete when it is not.
 fn json_string_body(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")

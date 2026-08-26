@@ -301,7 +301,15 @@ def test_a_loop_over_distinct_decimals_renders_each_one() -> None:
     (`loop_render_cache_enabled: True`). The 10,287-green suite and my own
     gate-off both missed it; the re-review's collision probe found it.
 
-    So: both values in ONE template, so a collision shows as a wrong render.
+    **This test cannot see the loop cache** and does not claim to: `render_template`
+    installs no `LoopCacheGuard`, only the `RustLiveView` paths do. An earlier
+    version of this docstring said otherwise — false, and proved so by a gate-off
+    that discarded the Decimal payload and left this green (#1867).
+
+    The cache guard lives in
+    `crates/djust_templates/tests/test_decimal_loop_cache_2214.rs`, where a real
+    guard is installed. What remains here is worth keeping on its own terms: a
+    Django-parity check that a `{% for %}` over Decimals renders each one.
     """
     rows = [{"price": Decimal("19.99")}, {"price": Decimal("249.00")}]
     source = "{% for r in rows %}<li>{{ r.price }}</li>{% endfor %}"
@@ -445,7 +453,14 @@ def test_a_decimal_subclass_is_claimed_but_a_namesake_class_is_not() -> None:
 
     Namesake.__name__ = "Decimal"
 
-    assert _rust.render_template("{{ p }}", {"p": Money("19.99")}) == "19.99"
+    # A value that a FLOAT cannot represent, so the subclass assertion fails
+    # under a name-based check (`Money` is not named `Decimal`) where it passes
+    # under `isinstance`. The previous version used `19.99`, which renders the
+    # same either way — decorative, and green under gate-off.
+    assert (
+        _rust.render_template("{{ p }}", {"p": Money("12345678901234567890.123456789")})
+        == "12345678901234567890.123456789"
+    )
     assert _rust.render_template("{{ p }}", {"p": Namesake()}) == "not-a-decimal"
 
 
@@ -537,6 +552,32 @@ def test_a_very_long_decimal_uses_djangos_scientific_fallback() -> None:
     invisible either side of it.
     """
     assert _rust.render_template("{{ p }}", {"p": Decimal("1E-199")}) == "0." + "0" * 198 + "1"
+
+    # The axis the first version of this test missed entirely: every one of its
+    # cases had `1` as the integer part, so none exercised a `0.xxx` `str()`
+    # form — where `as_tuple().digits` drops the leading zero and a naive parse
+    # does not. That off-by-N fired the cutoff up to six places early and
+    # shifted the coefficient when it did (#2240 round 3).
+    for raw in (
+        "0." + "1" * 100,  # sum == 200 exactly: Django stays fixed-point
+        "0." + "1" * 101,  # sum == 202: Django goes scientific
+        "0." + "0" * 5 + "1" * 95,  # leading zeros AFTER the point too
+        "-0." + "1" * 101,
+    ):
+        ctx = {"p": Decimal(raw)}
+        assert _rust.render_template("{{ p }}", ctx) == DjangoTemplate("{{ p }}").render(
+            DjangoContext(ctx)
+        ), f"diverged for {raw[:20]}... ({len(raw)} chars)"
+
+    # Ordinary code, not a constructed pathology.
+    from decimal import localcontext
+
+    with localcontext() as c:
+        c.prec = 120
+        ctx = {"p": Decimal(1) / Decimal(7)}
+    assert _rust.render_template("{{ p }}", ctx) == DjangoTemplate("{{ p }}").render(
+        DjangoContext(ctx)
+    )
     for raw in ("1E-200", "1E-201", "1.230E-250", "-1E-201"):
         ctx = {"p": Decimal(raw)}
         assert _rust.render_template("{{ p }}", ctx) == DjangoTemplate("{{ p }}").render(
@@ -564,3 +605,81 @@ def test_a_decimal_returns_from_the_state_round_trip_as_a_decimal() -> None:
     value = restored.get_state()["price"]
     assert isinstance(value, Decimal), f"came back as {type(value).__name__}: {value!r}"
     assert value == Decimal("12345678901234567890.123456789")
+
+
+def test_a_positive_scientific_exponent_keeps_its_sign() -> None:
+    """`{:+}` — Python writes `1e+212`, not `1e212`.
+
+    Every scientific-branch case elsewhere in this file has a NEGATIVE exponent,
+    where the sign appears either way, so the arm was unpinned (#2240 round 3).
+    """
+    ctx = {"p": Decimal("1E+250")}
+    assert _rust.render_template("{{ p }}", ctx) == "1e+250"
+    assert _rust.render_template("{{ p }}", ctx) == DjangoTemplate("{{ p }}").render(
+        DjangoContext(ctx)
+    )
+
+
+def test_a_non_finite_decimal_passes_through_rather_than_raising() -> None:
+    """A DIVERGENCE from Django, in djust's favour, and now pinned.
+
+    Django's `numberformat.format` calls `abs()` on an already-stringified value
+    and raises `TypeError` for `NaN`/`Infinity`. djust renders the form `str()`
+    gives.
+
+    This pins the BEHAVIOUR, not the guard that appears to produce it: gating
+    off `expand_decimal_exponent`'s non-digit early-return changes nothing, for
+    any input, because the general path reconstructs a non-numeric string
+    unchanged by coincidence. Measured, and noted at the guard. So read this as
+    "djust renders non-finite Decimals where Django raises" — which is worth
+    holding — and not as coverage of that branch.
+    """
+    for form in ("NaN", "sNaN", "Infinity", "-Infinity"):
+        ctx = {"p": Decimal(form)}
+        assert _rust.render_template("{{ p }}", ctx) == form
+        with pytest.raises(TypeError):
+            DjangoTemplate("{{ p }}").render(DjangoContext(ctx))
+
+
+def test_a_tagged_decimal_escapes_backslashes_and_control_characters() -> None:
+    """Every escape in the shared helper, not just the quote.
+
+    The injection test above only exercises `"`, so dropping the backslash or
+    newline case from `json_string_body` left the suite green.
+    """
+    import json
+
+    from djust._rust import RustLiveView
+
+    payload = 'a\\b"c\nd\re\tf'
+    view = RustLiveView('{{ p|json_script:"d" }}')
+    view.set_state("p", {"__djust_decimal__": payload})
+    restored = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+
+    out = restored.render()
+    body = out[out.index(">") + 1 : out.rindex("</script>")]
+    # The proof that every escape landed: it parses, and round-trips exactly.
+    assert json.loads(body) == payload, body
+
+
+def test_python_to_json_keeps_the_digits() -> None:
+    """The sixth converter (`djust_live/src/lib.rs` `python_to_json`).
+
+    It is named in the CHANGELOG and in
+    `test_every_json_producing_converter_keeps_the_digits`, which actually drives
+    `fast_json_dumps` and the two model serializers — so it stayed green under
+    gate-off while being listed as covered (#2240 round 3).
+
+    Reached via `serialize_queryset` -> `serialize_object_with_paths` ->
+    `python_to_json`, which is the real path a queryset attribute takes.
+    """
+    from djust._rust import serialize_queryset
+
+    class Row:
+        """Duck-typed: the path walker reads attributes by name."""
+
+        def __init__(self) -> None:
+            self.price = Decimal("12345678901234567890.123456789")
+
+    result = serialize_queryset([Row()], ["price"])
+    assert result == [{"price": "12345678901234567890.123456789"}], result

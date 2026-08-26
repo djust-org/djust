@@ -73,28 +73,35 @@ fn decimals_differing_beyond_f64_do_not_collide() {
 }
 
 #[test]
-fn a_decimal_does_not_collide_with_the_float_or_string_of_the_same_value() {
-    // Tag 9 exists to keep these apart: they render differently, so a shared
-    // cache entry would serve one for another.
+fn a_decimal_does_not_share_a_cache_entry_with_the_string_of_the_same_digits() {
+    // Tag 9 keeps Decimal apart from String and Float. Two earlier versions of
+    // this test could not fail:
+    //
+    //   1. asserted `"1.5|1.5|1.5|"` — exactly what a collision produces, while
+    //      its comment claimed to assert distinctness;
+    //   2. used values whose DIGIT STRINGS differ (`"1.50"` vs `"1.5000"`), so
+    //      the hash separated them on payload alone and the tag was never load-
+    //      bearing.
+    //
+    // The case that actually needs the tag is one where the payload is IDENTICAL
+    // and the rendering is not: `Decimal("1E+1")` renders `10` (Django expands
+    // the exponent) while the string `"1E+1"` renders verbatim. Same bytes into
+    // the hasher, different output — so without distinct tags the second row is
+    // served the first row's fragment.
     let mut ctx = Context::new();
     ctx.set(
         "rows".to_string(),
-        Value::List(vec![
-            row("v", "1.5"),
-            {
-                let mut m = IndexMap::new();
-                m.insert("v".to_string(), Value::Float(1.5));
-                Value::Object(m)
-            },
-            {
-                let mut m = IndexMap::new();
-                m.insert("v".to_string(), Value::String("1.5".into()));
-                Value::Object(m)
-            },
-        ]),
+        Value::List(vec![row("v", "1E+1"), {
+            let mut m = IndexMap::new();
+            m.insert("v".to_string(), Value::String("1E+1".into()));
+            Value::Object(m)
+        }]),
     );
-    // All three render "1.5"; what matters is that a collision cannot be hidden
-    // by identical output, so assert the cache kept them distinct.
-    let out = render_cached("{% for r in rows %}{{ r.v }}|{% endfor %}", &ctx);
-    assert_eq!(out, "1.5|1.5|1.5|");
+    assert_eq!(
+        render_cached("{% for r in rows %}{{ r.v }}|{% endfor %}", &ctx),
+        "10|1E+1|",
+        "a Decimal shared a loop-cache entry with the String of the same digits \
+         — hash_value's tag 9 must keep the variants apart when only the \
+         rendering differs"
+    );
 }

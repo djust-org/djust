@@ -588,7 +588,10 @@ fn is_foster_unsafe_tag(tag: &str) -> bool {
 ///
 /// `Value` does not derive `Hash` (it holds f64 / nested maps), so we hash a
 /// canonical byte encoding. Floats are hashed by their bit pattern; map keys
-/// are sorted for order-independence.
+/// are hashed in INSERTION order — this doc said "sorted for
+/// order-independence" and was contradicted by the `Object` arm's own
+/// comment ever since #2203 made rendering insertion-ordered. Corrected
+/// rather than left, since it sits above the arm a #2240 regression hid in.
 fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
     use djust_core::Value;
     match value {

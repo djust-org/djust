@@ -301,7 +301,9 @@ pub fn is_decimal(ob: &Bound<'_, PyAny>) -> bool {
 /// Non-finite forms (`NaN`, `sNaN`, `Infinity`) have no exponent and pass
 /// through, matching `format(Decimal('NaN'), 'f')`.
 pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
-    // Split into Python's `as_tuple()` shape: sign, digit string, exponent.
+    // Parse TOWARD Python's `as_tuple()` shape: sign, digit string, exponent.
+    // Not identical to it — see `significant` below, which is where a previous
+    // version's claim of equivalence went wrong.
     let (sign, rest) = match raw.strip_prefix('-') {
         Some(r) => ("-", r),
         None => ("", raw.strip_prefix('+').unwrap_or(raw)),
@@ -320,6 +322,19 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
         None => (mantissa, ""),
     };
     // Non-finite (or otherwise unparseable) forms pass through untouched.
+    //
+    // BELT AND BRACES, and measured to be so: no input distinguishes this guard
+    // from falling through to the general path, which reconstructs a
+    // non-numeric string unchanged by coincidence of the algorithm —
+    // `NaN`, `Infinity`, `abc`, `1.2.3`, `a.b`, `12.ab` and `""` all render
+    // identically either way, including when fed through the binary tag, which
+    // is the only route by which a `Value::Decimal` can hold an arbitrary
+    // string.
+    //
+    // Kept anyway, and documented rather than pinned by a test that could not
+    // fail (#1859). The general path AGREEING is an accident of how it places
+    // the decimal point, not a designed property; this makes the function
+    // obviously total for non-numeric input rather than incidentally so.
     if int_part.is_empty() && frac_part.is_empty() {
         return raw.to_string();
     }
@@ -334,10 +349,35 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
     // `as_tuple()`'s exponent counts the fractional digits in.
     let exponent = str_exp - frac_part.len() as i64;
 
+    // `as_tuple().digits` drops LEADING zeros; this string form keeps them — the
+    // `0` in `0.xxx`, and any zeros after the point. Counting those inflates the
+    // length and corrupts both rules below: the cutoff fires up to several places
+    // early, and when it does the coefficient and exponent are shifted by one.
+    //
+    // A previous version said in its own comment that it split "into Python's
+    // `as_tuple()` shape" and did not. It diverged from Django for EVERY `0.xxx`
+    // value near the cutoff — including `Decimal(1)/Decimal(7)` under
+    // `localcontext(prec=120)`, which is ordinary code. The boundary test missed
+    // it because all six of its cases had `1` as their integer part, so not one
+    // exercised a `0.xxx` form: true on the axis it enumerated, blind on the one
+    // it did not (#1867).
+    //
+    // Only the two rules below use this. The fixed-point path further down needs
+    // the leading zeros to place the point.
+    let significant = {
+        let trimmed = digits.trim_start_matches('0');
+        // `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty.
+        if trimmed.is_empty() {
+            "0"
+        } else {
+            trimmed
+        }
+    };
+
     // Django's cutoff (rule 2), on `as_tuple()`'s values, as Django computes it.
-    if exponent.unsigned_abs() + digits.len() as u64 > 200 {
+    if exponent.unsigned_abs() + significant.len() as u64 > 200 {
         // `format(d, 'e')`: one digit before the point, exponent adjusted.
-        let (first, tail) = digits.split_at(1);
+        let (first, tail) = significant.split_at(1);
         let coefficient = if tail.is_empty() {
             first.to_string()
         } else {
@@ -346,7 +386,7 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
         // `{:+}`: Python writes the exponent sign explicitly — `1e+212`, not
         // `1e212`. A randomized differential caught this; reading the format
         // spec did not.
-        let adjusted = exponent + digits.len() as i64 - 1;
+        let adjusted = exponent + significant.len() as i64 - 1;
         return format!("{sign}{coefficient}e{adjusted:+}");
     }
 
