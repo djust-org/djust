@@ -26,7 +26,8 @@ def _reset_djust_globals():
 
     Mirrors the same autouse fixture in ``tests/conftest.py``; the shared reset
     logic lives in ``djust.test_isolation.reset_djust_globals`` (DRY, #1646) so
-    both test roots stay in lock-step. Pre-yield (resets before the test runs)
+    all three test roots stay in lock-step (``python/tests/`` joined them in
+    #2234 — it had no conftest at all, so 133 files were unprotected). Pre-yield (resets before the test runs)
     so tests that set up their own global state in their body still work.
     """
     from djust.test_isolation import reset_djust_globals

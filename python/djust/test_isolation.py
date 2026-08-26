@@ -18,7 +18,7 @@ Three such flakes surfaced in two milestones, all the same class:
 
 Each was previously whack-a-moled with a per-test reset. ``reset_djust_globals``
 is the SYSTEMIC cure: one cheap function, called by an ``autouse`` fixture in
-both test roots (``tests/conftest.py`` and ``python/djust/tests/conftest.py``),
+all three test roots (``tests/``, ``python/tests/`` and ``python/djust/tests/``),
 that resets djust's process-globals BEFORE each test so every test starts from a
 clean slate. That retires the entire flaky-class instead of patching one test at
 a time, and prevents the next instance.
@@ -28,8 +28,19 @@ Design constraints (this runs on EVERY test):
 - **Cheap** — only clears / re-inits lazily-rebuilt state; no heavy work.
 - **Conservative** — resets ONLY state that genuinely *leaks* across tests AND
   is lazily re-derived on next use. It does NOT touch state a test legitimately
-  configures via ``override_settings`` / its own fixtures (Django restores
-  settings itself), nor self-invalidating keyed caches.
+  configures via ``override_settings`` (Django restores settings itself), nor
+  self-invalidating keyed caches.
+
+  **One deliberate exception, added in #2234**: the Django language/timezone
+  thread-locals ARE reset, which means a MODULE- or SESSION-scoped fixture that
+  calls ``activate()`` once would have its activation undone before each test in
+  that module. No such fixture exists in the suite today (verified: every
+  ``activate()`` call is inside a test body), and the alternative — leaving them
+  alone — is what let #2222's leak silently change how every later test in a
+  worker rendered. A module-scoped activation is the supported-but-unused
+  pattern being traded away; a per-test ``activate()`` inside the test body is
+  unaffected and is what the suite actually uses. Said out loud because the
+  constraint above would otherwise read as covering a case it no longer does.
 - **Pre-test (pre-yield)** — clears so each test STARTS clean; tests that set up
   their own global state in their body still work.
 - **Optional-dep safe** — Channels may be absent; every reset is wrapped so a
@@ -54,6 +65,14 @@ Globals reset (and why):
   — module-level ``itertools.count`` singletons. Resetting to a fresh
   ``count(1)`` makes auto-generated ``child_N`` / tooltip ids deterministic
   per test (no cross-test drift).
+- **Django's active language and timezone** (``translation._active`` /
+  ``timezone._active``) — the #2234 class. Django's own thread-locals, which
+  nothing here reset, so a test calling ``activate()`` changed how every later
+  test in the worker rendered. The subtle case is ``deactivate_all()``, which
+  reads like the thorough reset and leaves ``get_language()`` as ``None`` —
+  making ``get_format`` fall back to ``global_settings``, where
+  ``NUMBER_GROUPING`` is ``0``. ``deactivate()`` restores the settings default,
+  which is what resetting should mean.
 - **Rust tag-handler registry** (theme + component ``ready()``-time handlers)
   — the #1928 class. The process-global Rust tag-handler registry
   (``crates/djust_templates/src/registry.rs``) is shared across an xdist
@@ -245,12 +264,62 @@ def _reset_builtin_template_tags() -> None:
         pass
 
 
+def _reset_django_thread_locals() -> None:
+    """Normalise Django's ACTIVE language and timezone (#2234).
+
+    The other resets here cover djust's own process-globals. Django keeps two
+    of its own in thread-locals — ``translation._active`` and
+    ``timezone._active`` — and nothing reset them, so a test that called
+    ``activate()`` and forgot to undo it changed how every later test in that
+    worker rendered.
+
+    The shape that motivated this is subtler than a forgotten ``activate``:
+    ``translation.deactivate_all()`` reads like the THOROUGH reset and is the
+    one that leaks. It installs a ``NullTranslations`` and leaves
+    ``get_language()`` returning ``None``, so ``get_format`` skips the locale
+    modules and falls back to ``global_settings`` — where ``NUMBER_GROUPING``
+    is ``0``:
+
+        fresh                  get_language()='en-us'  NUMBER_GROUPING=3
+        after deactivate()     get_language()='en-us'  NUMBER_GROUPING=3
+        after deactivate_all() get_language()=None     NUMBER_GROUPING=0
+
+    Number grouping was silently off for the rest of the worker. It shipped in
+    the PR that added the localization tests and poisoned a test two PRs later
+    (#2233), caught only because that test happened to land in the same worker.
+
+    ``deactivate()`` — not ``deactivate_all()`` — restores
+    ``settings.LANGUAGE_CODE`` and ``settings.TIME_ZONE``, which is what
+    "reset" should mean. Doing it here means a test that forgets cannot poison
+    its neighbours, rather than every test file needing its own fixture to
+    remember.
+
+    Cheap (two thread-local deletes) and safe when i18n is disabled.
+    """
+    # One guard PER action, matching every sibling helper here. A single shared
+    # `try` would let a raising `translation.deactivate()` silently skip the
+    # timezone reset — two independent resets sharing one failure path is how
+    # half a cleanup goes missing without anyone noticing.
+    try:
+        from django.utils import translation
+
+        translation.deactivate()
+    except Exception:  # noqa: BLE001 - i18n is optional; a failure here must not
+        pass  # break every test in the suite via an autouse fixture
+    try:
+        from django.utils import timezone
+
+        timezone.deactivate()
+    except Exception:  # noqa: BLE001 - same, independently: see above
+        pass
+
+
 def reset_djust_globals() -> None:
     """Reset every leak-prone djust process-global. Call BEFORE each test.
 
     Cheap, idempotent, and optional-dependency safe. Wired into an ``autouse``
-    fixture in both test roots so every test starts from a clean slate. See the
-    module docstring for the full inventory + the conservative-inclusion
+    fixture in all three test roots so every test starts from a clean slate. See
+    the module docstring for the full inventory + the conservative-inclusion
     rationale.
     """
     _reset_channel_layer()
@@ -259,6 +328,7 @@ def reset_djust_globals() -> None:
     _reset_id_counters()
     _reset_rust_tag_handlers()
     _reset_builtin_template_tags()
+    _reset_django_thread_locals()
 
 
 __all__ = ["reset_djust_globals"]

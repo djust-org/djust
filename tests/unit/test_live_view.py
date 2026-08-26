@@ -99,6 +99,18 @@ class TestTemplateInheritance:
         new_templates[0]["DIRS"] = [str(templates_dir)]
         ctx = override_settings(TEMPLATES=new_templates)
         ctx.enable()
+        # #2234: `enable()` without a matching `disable()` leaves TEMPLATES
+        # overridden for the REST OF THE WORKER — pointing the loader at a
+        # pytest tmp directory that is deleted when this test ends. The
+        # `settings` fixture in this signature does NOT undo it: it restores
+        # only the settings IT was asked to change, and this override was
+        # applied through a separate context manager it never saw.
+        #
+        # Verified before fixing: a probe test running immediately after this
+        # one read
+        #   TEMPLATES[0]['DIRS'] = ['/private/var/.../pytest-78/.../templates']
+        # a path that no longer exists.
+        request.addfinalizer(ctx.disable)
 
         # get_template() resolves search dirs via the cached get_template_dirs()
         # helper (shared with render_full_template step 2 — #1646). The lru_cache
