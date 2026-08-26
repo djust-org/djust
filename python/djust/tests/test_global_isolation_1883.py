@@ -315,11 +315,26 @@ def test_reset_is_optional_dep_safe(monkeypatch):
 _TT_MOD = "djust.tests.test_recovery_version_staleness_1817"
 
 
-async def _recv_until(comm, wanted, *, tries=8, timeout=3):
+#: The `ref` this harness echoes on its arming event.
+_ARM_REF = 1
+
+
+async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=3):
+    """Drain frames until one of ``wanted`` type (and matching ``ref``, if given).
+
+    ``ref`` matters more than it looks. A hot-reload broadcast is not its own
+    frame type — it ships as ``{"type": "patch", "hotreload": True}`` — so
+    without a ref filter this returns the STRAY when hunting for the arming
+    patch, the caller reads the stray's version as ``v_arm``, and the whole
+    chain reads clean while the drift is happening. That silently disarmed the
+    gate-off below: it stopped going red under a reverted fix, which is the
+    decorative-pin failure (#1859). Found by re-running the gate-off after
+    #2215 removed the second suppression site (#2237).
+    """
     last = None
     for _ in range(tries):
         last = await comm.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted:
+        if last.get("type") == wanted and (ref is None or last.get("ref") == ref):
             return last
     return last
 
@@ -375,8 +390,8 @@ async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
     await asyncio.sleep(0.05)  # let the consumer process any stray re-render
 
     # Arming event — first patch, read EXACTLY as the real #1882 test does.
-    await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-    ev1 = await _recv_until(comm, "patch")
+    await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": _ARM_REF})
+    ev1 = await _recv_until(comm, "patch", ref=_ARM_REF)
     v_arm = ev1["version"]
 
     # Jump (the render-send drift path).

@@ -84,9 +84,9 @@ class _TTRecoveryView(LiveView):
 # behaviour and asserts nothing.
 _FRAME_LOG: list = []
 
-#: Frame types an `event` is *supposed* to produce on this view. Anything else
-#: arriving in the mount -> event window is unsolicited (#2215).
-_EVENT_RESPONSE_TYPES = {"patch", "time_travel_event"}
+#: The `ref` these tests echo on their event, used to tell an event's own
+#: response from a stray. See `_solicited_by` for why type is not enough.
+_EVENT_REF = 1
 
 
 def _log_frames() -> str:
@@ -120,12 +120,32 @@ def _reset_frame_log():
     _FRAME_LOG.clear()
 
 
-async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
-    """Drain frames until one whose ``type`` == ``wanted_type`` (or return last seen)."""
+def _solicited_by(frame, ref) -> bool:
+    """Is this frame the response to the event we sent with ``ref``?
+
+    Frame TYPE cannot answer this, which cost the first version of the
+    stray-detection below its whole point: a hot-reload broadcast is not its own
+    frame type — `_send_update` emits it as `{"type": "patch", "hotreload":
+    True}` — so a type allowlist containing "patch" admits the exact producer
+    #2215 is about. `ref` can answer it: the client echoes its `ref` on an
+    event's response, and a broadcast carries none.
+    """
+    if ref is None:
+        return False
+    return frame.get("ref") == ref or (frame.get("entry") or {}).get("ref") == ref
+
+
+async def _receive_until(communicator, wanted_type, *, ref=None, tries=8, timeout=3):
+    """Drain frames until one of ``wanted_type`` (and matching ``ref``, if given).
+
+    Pass ``ref`` whenever a stray could share the wanted type — otherwise this
+    returns the STRAY and the caller reads its version, which is how a
+    hot-reload broadcast would masquerade as the event's own patch.
+    """
     last = None
     for _ in range(tries):
         last = await _recv(communicator, timeout)
-        if last.get("type") == wanted_type:
+        if last.get("type") == wanted_type and (ref is None or _solicited_by(last, ref)):
             return last
     return last
 
@@ -410,8 +430,10 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
         # be last") that does not actually exist. `receive_nothing` removes the
         # constraint outright.
         window_start = len(_FRAME_LOG)
-        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-        after_event = _frame_version(await _receive_until(communicator, "patch"))
+        await communicator.send_json_to(
+            {"type": "event", "event": "bump", "params": {}, "ref": _EVENT_REF}
+        )
+        after_event = _frame_version(await _receive_until(communicator, "patch", ref=_EVENT_REF))
 
         # The mount -> event round-trip is the exact #2215 window, and the idle
         # wait below cannot see into it: `_receive_until` DRAINS whatever
@@ -419,15 +441,23 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
         # swallowed silently. `_FRAME_LOG` recorded it either way, so check the
         # window directly — the patch should be the only thing that arrived.
         #
-        # "Unsolicited" means "not one of the frames this event is supposed to
-        # produce" — an allowlist, not a count. This view has time travel on,
-        # so every event legitimately emits a `time_travel_event` alongside its
-        # `patch`; a naive `len(...) == 1` flagged that as an intruder on the
-        # first run. A `hotreload`, `reload`, or second `mount` in this window
-        # is still caught, which is the point.
-        strays = [
-            f for f in _FRAME_LOG[window_start:] if f.get("type") not in _EVENT_RESPONSE_TYPES
-        ]
+        # "Unsolicited" means "not a response to the event we just sent", and
+        # the test for that is the echoed `ref` — NOT the frame type.
+        #
+        # A type allowlist was the first version and it was wrong in the one way
+        # that mattered: a hot-reload broadcast has no frame type of its own,
+        # `_send_update` emits it as `{"type": "patch", "hotreload": True}`, so
+        # `"patch"` on the allowlist admitted the very producer this file is
+        # about. Worse, `_receive_until` then returned the broadcast as though
+        # it were the event's patch and the version assertion read ITS version,
+        # so both halves stayed green. Caught by the Stage 15 review, which
+        # falsified the docstring claim that a stray hotreload "is still
+        # caught" by injecting a sending one (#1867 — a prose invariant must be
+        # falsification-tested, not just citation-checked).
+        #
+        # This view has time travel on, so an event legitimately emits a
+        # `time_travel_event` too; it carries the same `ref` under `entry`.
+        strays = [f for f in _FRAME_LOG[window_start:] if not _solicited_by(f, _EVENT_REF)]
         # Reachability (#1859): this is not decorative — the first run of it
         # went red on a real frame captured from the window and named it, which
         # is how the allowlist above got written. A silent producer still slips
@@ -506,8 +536,10 @@ async def test_a_suppressed_hotreload_broadcast_consumes_no_wire_version():
                 "djust_hotreload", {"type": "hotreload", "file": "unrelated/module.py"}
             )
             await asyncio.sleep(0.4)  # let the broadcast be handled
-        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-        v_event = _frame_version(await _receive_until(communicator, "patch"))
+        await communicator.send_json_to(
+            {"type": "event", "event": "bump", "params": {}, "ref": _EVENT_REF}
+        )
+        v_event = _frame_version(await _receive_until(communicator, "patch", ref=_EVENT_REF))
         await communicator.disconnect()
         return v_mount, v_event
 

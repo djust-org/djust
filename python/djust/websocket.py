@@ -1401,13 +1401,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     @staticmethod
     def _hotreload_broadcast_suppressed(patches: Optional[list]) -> bool:
-        """Would `_send_update` drop this hot-reload broadcast? (#763, #2215)
+        """Should this hot-reload broadcast be dropped? (#763, #2215)
 
-        Exists so the CALL SITE can ask before allocating a wire version. The
-        suppression lived only inside `_send_update`, and Python evaluates
-        arguments before the call — so the armed `version=` kwarg was consumed
-        for a frame that then never left. See the call site in `hotreload` for
-        what that cost.
+        The suppression this answers used to live inside `_send_update`, and
+        that was the bug: Python evaluates arguments before the call, so the
+        armed `version=` kwarg was already spent by the time the guard ran, and
+        the version went to a frame that never left. Asking HERE — at the one
+        `hotreload=True` call site, before allocating — is the whole fix.
+
+        It is the ONLY place the question is asked; the guard inside
+        `_send_update` is deliberately gone rather than kept as a backstop, so
+        the two cannot drift and there is no second, silent way to fail
+        (#1646, #2233). The comment where it used to be explains why that
+        direction is the safe one.
 
         (Deliberately NOT spelling that kwarg literally: the structural pin
         `test_every_client_checked_send_path_uses_next_version` counts
@@ -1415,9 +1421,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         is counted as a call site. This docstring tripped it. Tracked as its
         own fragility in #2238 — a pin that counts comments is the #2213 class.)
 
-        One predicate rather than the same `patches == []` written twice: the
-        two would drift, and a drift here is silent in both directions
-        (#1646).
         """
         return patches == []
 
@@ -1463,21 +1466,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             ref: Event reference number echoed back from the client's request,
                 allowing the client to match responses to sent events (#560).
         """
-        # #763: On hot-reload, suppress empty-patch broadcasts. When an
-        # unrelated Python file changes, re-rendering often produces zero
-        # patches (the file didn't affect the current view's output). The
-        # old code still broadcast a full ~14 KB payload including the
-        # `_debug` state dump to every connected session. Skip it — the
-        # client has nothing to do and the payload is pure noise.
-        # NON-hot-reload empty patches are still sent: user events that
-        # legitimately produce no diff still need an acknowledgment so
-        # the client can clear loading state.
-        if hotreload and self._hotreload_broadcast_suppressed(patches):
-            hotreload_logger.debug(
-                "Suppressing empty-patch hot-reload broadcast (unrelated file: %s)",
-                file_path,
-            )
-            return
+        # #763's empty-patch hot-reload suppression USED TO LIVE HERE, and it is
+        # deliberately gone: it now happens at the one `hotreload=True` call
+        # site, before the wire version is allocated. See
+        # `_hotreload_broadcast_suppressed`.
+        #
+        # Deliberate, because the two placements fail differently (#2233 — remove
+        # the redundant mechanism rather than test around it). Suppressing HERE
+        # cannot prevent the caller from having already evaluated
+        # `version=...armed(html)` as an argument, so a caller that gets it
+        # wrong spends a version on a frame that never ships — a SILENT client
+        # version lag costing a recovery round-trip, which is #2215 and took two
+        # years to find. With the check only at the call site, a future
+        # `hotreload=True` caller that repeats that mistake instead SENDS an
+        # empty-patch frame: wasteful, exactly the #763 noise, and loud — the
+        # client's version stays consistent and
+        # `test_an_idle_connection_receives_no_unsolicited_frames` sees the
+        # frame. Trading a silent correctness bug for a visible performance one
+        # is the right direction.
+        #
+        # NON-hot-reload empty patches are still sent, unchanged: user events
+        # that legitimately produce no diff still need an acknowledgment so the
+        # client can clear loading state.
 
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
