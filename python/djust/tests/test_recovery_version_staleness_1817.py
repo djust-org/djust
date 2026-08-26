@@ -37,6 +37,8 @@ GATE-OFF evidence (reverting the arm on the jump path) is recorded in the PR.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from asgiref.sync import sync_to_async
 
@@ -206,7 +208,22 @@ async def test_time_travel_jump_recovery_version_is_current():
         ev1 = await _receive_until(communicator, "patch")
         assert ev1.get("type") == "patch", f"bump should patch, got {ev1!r}"
         v_arm = _frame_version(ev1)
-        assert v_arm == v_mount + 1, f"arming event must be {v_mount + 1}, got {v_arm!r}"
+        # MONOTONIC, not adjacent (#2215). This used to assert
+        # `v_arm == v_mount + 1`, and that is what the flake failed on: an
+        # extra `_next_version()` bump landed between the mount and this frame,
+        # so it read 3 where 2 was expected.
+        #
+        # The exact integer was never what this test guards. Gating off the
+        # #1817 fix shows the LAST assertion — `v_recovery == v_jump` — catches
+        # the regression entirely on its own; these two only assert that the
+        # counter is a counter. So they now assert exactly that, and the
+        # "did something else bump it" question moved to
+        # `test_an_idle_connection_receives_no_unsolicited_frames` below, which
+        # can NAME the intruder instead of reporting an off-by-N.
+        assert v_arm > v_mount, (
+            f"the arming event must ADVANCE the wire version past the mount "
+            f"baseline ({v_mount}); got {v_arm!r}. Frames so far:\n{_log_frames()}"
+        )
 
         # (3) DRIFT path: jump back to snapshot[0]'s state_before (count → 0).
         # This re-renders (count 1 → 0 produces a patch) and advances the wire
@@ -224,9 +241,13 @@ async def test_time_travel_jump_recovery_version_is_current():
                 pytest.fail(f"time_travel_jump errored: {frame!r}")
         assert jump_render is not None, "time_travel_jump must emit a render frame"
         v_jump = _frame_version(jump_render)
-        assert v_jump == v_arm + 1, (
-            f"jump render must advance the wire version to {v_arm + 1} "
-            f"(client now at this version); got {v_jump!r}"
+        # Monotonic for the same reason as above (#2215): what matters is that
+        # the jump ADVANCES the version — the client writes
+        # `clientVdomVersion = data.version` from this frame — not that it
+        # advances by exactly one.
+        assert v_jump > v_arm, (
+            f"the jump render must advance the wire version past the arming "
+            f"version ({v_arm}); got {v_jump!r}. Frames so far:\n{_log_frames()}"
         )
 
         # (4) request_html → html_recovery. Its version MUST be the post-jump
@@ -322,3 +343,78 @@ def test_bare_next_version_does_not_arm_then_armed_resyncs():
     assert p._recovery_version == 3, (
         "_next_version_armed must bring _recovery_version current with _last_sent_version (#1817)"
     )
+
+
+# ---------------------------------------------------------------------------
+# The relocated stray-bump signal (#2215).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_an_idle_connection_receives_no_unsolicited_frames():
+    """Nothing may push a frame at a connection that did not ask for one.
+
+    This is where the "did something else bump the version counter" question
+    lives now. It used to be answered accidentally, by
+    ``test_time_travel_jump_recovery_version_is_current`` asserting
+    ``v_arm == v_mount + 1`` — so a stray broadcast surfaced as an off-by-N in
+    a test about something else, with no indication of what had arrived.
+
+    Here the failure message carries the intruding frame. That is the whole
+    point: #2215 has been seen twice and reproduced never, and the reason it
+    stayed unreproducible is that the only evidence it ever produced was
+    "expected 2, got 3".
+
+    Every unsolicited frame is a real defect regardless of this flake — a
+    broadcast racing an event skews the wire version and costs the client a
+    recovery round-trip (#1788, #1817). So this asserts a property worth
+    holding on its own, not a workaround.
+
+    It cannot *prove* absence: a producer that fires once an hour will not
+    appear in a 1.5-second window. It converts a mystery into a name when it
+    does fire, which is the difference between a flake and a bug report.
+    """
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True):
+        communicator, mount_frame = await _connect_and_mount(
+            view_suffix="_TTRecoveryView", url="/tt/"
+        )
+        baseline = _frame_version(mount_frame)
+
+        # ORDER MATTERS, and not for a reason the docs make obvious: a
+        # `receive_json_from` that times out CANCELS the communicator's
+        # application task (`asgiref.testing` calls `self.future.result()` on a
+        # cancelled future), so every later `send_json_to` raises
+        # `CancelledError` from inside `send_input`. The first draft sat idle
+        # first and then sent an event; it failed in the SEND, not the receive.
+        #
+        # So: do the round-trip that needs a live socket first, and let the
+        # idle wait be the last thing that happens on this connection.
+        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
+        after_event = _frame_version(await _receive_until(communicator, "patch"))
+
+        # Now sit idle. Anything that arrives was not asked for.
+        #
+        # `asyncio.CancelledError` is how the communicator reports a receive
+        # timeout, and it derives from BaseException — NOT Exception — since
+        # 3.8, so a bare `except Exception` lets it through and the test errors
+        # instead of concluding "nothing arrived".
+        try:
+            stray = await communicator.receive_json_from(timeout=1.5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            stray = None
+
+        assert stray is None, (
+            f"an unsolicited frame arrived at an idle connection: {stray!r}\n"
+            "That is the #2215 producer. Whatever sent this is what bumps the "
+            "wire version mid-test and skews every later frame. Frames:\n"
+            f"{_log_frames()}"
+        )
+        assert after_event == baseline + 1, (
+            f"the wire version moved between the mount and the first event: "
+            f"mount was {baseline}, the event read {after_event} (expected "
+            f"{baseline + 1}). Something advanced _next_version() without this "
+            f"socket asking for it. Frames:\n{_log_frames()}"
+        )
