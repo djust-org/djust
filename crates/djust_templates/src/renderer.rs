@@ -2202,6 +2202,18 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
     Ok((Value::Missing, false))
 }
 
+/// Does this pair involve a `Decimal` at all? (#2214)
+///
+/// Guards the equality widening so it cannot reach `(Float, Integer)`, which
+/// has its own long-standing semantics. Ordering (`<`, `>`) needs no such guard:
+/// `compare_values` already carried explicit `(Float, Integer)` and
+/// `(Integer, Float)` arms before this change, and `numeric_pair` admits only
+/// {Integer, Float, Decimal}² — all four non-Decimal combinations of which have
+/// their own arms — so nothing without a Decimal reaches its wildcard.
+fn is_decimal_pair(a: &Value, b: &Value) -> bool {
+    matches!(a, Value::Decimal(_)) || matches!(b, Value::Decimal(_))
+}
+
 /// Both operands as f64, but ONLY when both are genuinely numeric (#2214).
 ///
 /// Deliberately narrower than `ToF64`, which also parses strings: widening `==`
@@ -2209,17 +2221,6 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 /// says false. This exists so a Decimal compares against an Integer or a Float
 /// — which it did before the variant, when it was a Float — without opening
 /// that door.
-/// Does this pair involve a `Decimal` at all? (#2214)
-///
-/// Guards the equality widening so it cannot reach `(Float, Integer)`, which
-/// has its own long-standing semantics. Ordering (`<`, `>`) needs no such guard:
-/// `compare_values` already carried explicit `(Float, Integer)` and
-/// `(Integer, Float)` arms before this change, so its wildcard only ever sees
-/// Decimal pairs.
-fn is_decimal_pair(a: &Value, b: &Value) -> bool {
-    matches!(a, Value::Decimal(_)) || matches!(b, Value::Decimal(_))
-}
-
 fn numeric_pair(a: &Value, b: &Value) -> Option<(f64, f64)> {
     let numeric = |v: &Value| matches!(v, Value::Integer(_) | Value::Float(_) | Value::Decimal(_));
     if numeric(a) && numeric(b) {

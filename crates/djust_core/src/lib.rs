@@ -354,9 +354,21 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
     // text — the binary tag lets a `Value::Decimal` hold any string — so a
     // payload like `1.5E-9223372036854775808` overflows this subtraction. In
     // debug that panics on the render path; in release, where `overflow-checks`
-    // is off, it wraps silently and renders nonsense. Saturating is correct
-    // either way: a magnitude that large is far past the cutoff below, so the
-    // scientific branch takes it regardless of the exact value (#2240 round 6).
+    // is off, it wraps silently and renders nonsense.
+    //
+    // Saturating picks the right BRANCH — a magnitude this large is far past
+    // the cutoff below, so the scientific arm takes it either way. It does NOT
+    // reproduce unbounded-integer arithmetic: a saturated exponent renders off
+    // by a few from the mathematically exact one
+    // (`1.5E-9223372036854775808` gives `…807`, not `…808`).
+    //
+    // That is acceptable only because it is UNREACHABLE from a real value:
+    // CPython's `MAX_EMAX` is 999999999999999999, far short of `i64::MAX`, so
+    // no `Decimal` can saturate. It matters solely for tag-supplied strings,
+    // where not crashing is the requirement and the digits were never
+    // meaningful. An earlier version of this comment said "saturating is
+    // correct either way", which asserted more than the reasoning under it
+    // establishes (#2240 round 7).
     let exponent = str_exp.saturating_sub(frac_part.len() as i64);
 
     // `as_tuple().digits` drops LEADING zeros; this string form keeps them — the

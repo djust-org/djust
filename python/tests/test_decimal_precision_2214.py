@@ -748,6 +748,31 @@ def test_plain_float_equality_is_unchanged_by_this_pr() -> None:
     assert DjangoTemplate(source).render(DjangoContext({"x": 0.0})) == "Z"
 
 
+def test_decimal_equality_works_with_the_literal_on_either_side() -> None:
+    r"""`is_decimal_pair` checks BOTH operands, and only the `a` half was pinned.
+
+    Mutating it to `matches!(a, Value::Decimal(_))` survived the entire suite —
+    57 cases here, 881 across the Python roots, and all 56 Rust binaries — because
+    no test in the repo puts a literal on the left of `==`
+    (`grep -rnE "\{%\s*if\s+[-0-9.]+\s*[=!]=" tests/ python/ crates/` returns
+    nothing). Not an equivalent mutation: it produces eight wrong answers against
+    Django on ordinary values.
+
+    Half a guard pinned is a decorative guard (#1859).
+    """
+    for source, ctx, expected in (
+        ("{% if 0 == p %}T{% else %}F{% endif %}", {"p": Decimal("0.00")}, "T"),
+        ("{% if 19 == p %}T{% else %}F{% endif %}", {"p": Decimal("19")}, "T"),
+        ("{% if 100 == p %}T{% else %}F{% endif %}", {"p": Decimal("100.00")}, "T"),
+        ("{% if x == p %}T{% else %}F{% endif %}", {"x": 19.5, "p": Decimal("19.5")}, "T"),
+        ("{% if x != p %}T{% else %}F{% endif %}", {"x": 19, "p": Decimal("19")}, "F"),
+    ):
+        assert _rust.render_template(source, ctx) == expected, source
+        assert _rust.render_template(source, ctx) == DjangoTemplate(source).render(
+            DjangoContext(ctx)
+        ), source
+
+
 def test_a_hostile_exponent_magnitude_does_not_crash_the_render() -> None:
     """`i64` arithmetic on an attacker-chosen exponent (#2240 round 6).
 
@@ -766,16 +791,24 @@ def test_a_hostile_exponent_magnitude_does_not_crash_the_render() -> None:
     """
     from djust._rust import RustLiveView
 
-    for payload in (
-        "1.5E-9223372036854775808",
-        "1.55E-9223372036854775808",
-        "12E+9223372036854775807",
-        "1.5E+9223372036854775807",
-        "0.0000000001E-9223372036854775800",
-        "1E-9223372036854775808",
+    # Asserting the VALUE, not just that a string came back. CI builds
+    # `--release`, where `overflow-checks` is off, so the unfixed code does not
+    # panic there — it wraps, and an `isinstance(..., str)` assertion passes.
+    # The test that pins the debug half would then be inert in the profile that
+    # gates the merge (#1960, #2240 round 7).
+    #
+    # The wrap is trivially observable: the exponent's SIGN flips positive.
+    for payload, expected in (
+        ("1.5E-9223372036854775808", "1.5e-9223372036854775807"),
+        ("1.55E-9223372036854775808", "1.55e-9223372036854775806"),
+        ("12E+9223372036854775807", "1.2e+9223372036854775806"),
+        ("0.0000000001E-9223372036854775800", "1e-9223372036854775808"),
+        ("1E-9223372036854775808", "1e-9223372036854775808"),
     ):
         view = RustLiveView("{{ p }}")
         view.set_state("p", {"__djust_decimal__": payload})
         restored = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
-        # The assertion is that this returns at all.
-        assert isinstance(restored.render(), str), payload
+        rendered = restored.render()
+        assert rendered == expected, f"{payload}: {rendered!r}"
+        # The load-bearing half in release: an unfixed wrap flips the sign.
+        assert ("e-" in expected) == ("e-" in rendered), payload
