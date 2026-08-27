@@ -22,6 +22,14 @@ chrono.workspace = true
 chrono-tz.workspace = true
 tracing = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# `markup5ever::data::NAMED_ENTITIES` is byte-identical to CPython's
+# `html.entities.html5` (2231 entries, equality asserted in the parity suite),
+# which is what `html.unescape` resolves against — and `html.unescape` is what
+# `HTMLParser(convert_charrefs=True)` runs over every run of text, so the HTML
+# truncators cannot match Django without it. NOT a new dependency: html5ever
+# already pulls markup5ever into this workspace for djust_vdom, so this only
+# adds an edge, not a crate.
+markup5ever = "0.39"
 djust_core = { path = "../djust_core" }
 djust_vdom = { path = "../djust_vdom" }
 djust_components = { path = "../djust_components" }

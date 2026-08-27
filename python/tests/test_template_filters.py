@@ -47,10 +47,19 @@ class TestUrlencodeFilter:
         assert result == ""
 
     def test_urlencode_path_and_query(self):
-        """Test urlencode with path and query characters."""
+        """The query separators are encoded; the path separator is NOT (#2262).
+
+        This case asserted ``path%2Fto%2F…`` until #2262, which pinned the bug:
+        Django's filter is ``quote(value, safe=…)`` and ``quote``'s own default
+        safe set is ``"/"``. Encoding a path separator is what the argument
+        form is for, so both are asserted here.
+        """
         template = "{{ url|urlencode }}"
         context = {"url": "path/to/file?query=1"}
         result = render_template(template, context)
+        assert result == "path/to/file%3Fquery%3D1"
+
+        result = render_template('{{ url|urlencode:"" }}', context)
         assert result == "path%2Fto%2Ffile%3Fquery%3D1"
 
     def test_urlencode_in_href(self):
