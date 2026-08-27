@@ -415,12 +415,117 @@ class TestPprintWraps:
 
 
 # ---------------------------------------------------------------------------
+# py_repr_string's OTHER caller -- the container-rendering path
+# ---------------------------------------------------------------------------
+
+# Every row carries Python's own `repr`, so the table asserts the CONTRACT and
+# not merely that djust agrees with itself. Each escape is an ASCII control or
+# DEL, which every supported interpreter spells identically -- see
+# `TestKnownResidualDivergences` for the half that is not portable.
+CONTROL_VALUES = [
+    ("a\tb", "'a\\tb'"),  # TAB
+    ("c\nd", "'c\\nd'"),  # LF
+    ("e\rf", "'e\\rf'"),  # CR
+    ("g\x1bh", "'g\\x1bh'"),  # ESC -- no `\e` in Python, it is `\x1b`
+    ("i\x7fj", "'i\\x7fj'"),  # DEL
+    ("k\x00l", "'k\\x00l'"),  # NUL
+    ("m\x0bn", "'m\\x0bn'"),  # VT -- no `\v` either
+    ("m'n", '"m\'n"'),  # a `'` and no `"` flips the quoting to `"`
+    ("o'p\"q", "'o\\'p\"q'"),  # BOTH quote kinds, so the flip does not apply
+    ("r\\s", "'r\\\\s'"),  # the backslash itself
+]
+
+
+class TestContainerReprUsesTheSameEscaper:
+    """`py_repr_string`'s SECOND caller: `{{ list }}` / `{{ dict }}`, not `pprint`.
+
+    The helper was extracted from `Value::py_repr` so that `pprint` and the
+    container-rendering path stop carrying two different escapers (#1646) -- the
+    `pprint` one escaped nothing at all. Extracting it also gave `Value::py_repr`
+    the ASCII control escapes it had been missing, which is a behaviour change on
+    a path neither #2279 nor #2277 names::
+
+        {{ p }} with p = ['a<TAB>b']
+            before   [ 'a<TAB>b' ]   -- a literal tab
+            after    [ 'a\\tb' ]     -- Django's answer
+
+    That is a fix, and it is disclosed in the CHANGELOG. It is tested HERE
+    because every other test in this file reaches `py_repr_string` through
+    `pprint`: gate off the escaping inside the helper and, without this class,
+    nothing tells you which of the two callers you broke. The
+    refactor-with-helper gap, CLAUDE.md #1195.
+    """
+
+    @pytest.mark.parametrize(("value", "want_repr"), CONTROL_VALUES)
+    def test_the_table_states_pythons_answer(self, value: str, want_repr: str) -> None:
+        """Guards every assertion below from pinning a wrong expectation."""
+        assert repr(value) == want_repr
+
+    @pytest.mark.parametrize(("value", "want_repr"), CONTROL_VALUES)
+    def test_in_a_list(self, value: str, want_repr: str) -> None:
+        assert_agrees("{{ p }}", [value])
+        assert _rust.render_template("{{ p|safe }}", {"p": [value]}) == f"[{want_repr}]"
+
+    @pytest.mark.parametrize(("value", "want_repr"), CONTROL_VALUES)
+    def test_in_a_dict_value(self, value: str, want_repr: str) -> None:
+        assert_agrees("{{ p }}", {"k": value})
+        assert (
+            _rust.render_template("{{ p|safe }}", {"p": {"k": value}}) == "{'k': " + want_repr + "}"
+        )
+
+    @pytest.mark.parametrize(("value", "want_repr"), CONTROL_VALUES)
+    def test_in_a_dict_key(self, value: str, want_repr: str) -> None:
+        """A KEY goes through the same helper. `{{ dict }}` had a hand-rolled
+        escaper in this position once and it missed the backslash, so a key
+        `a\\` emitted a closing quote that read as escaped (#2203 review)."""
+        assert_agrees("{{ p }}", {value: 1})
+        assert _rust.render_template("{{ p|safe }}", {"p": {value: 1}}) == "{" + want_repr + ": 1}"
+
+    @pytest.mark.parametrize(("value", "want_repr"), CONTROL_VALUES)
+    def test_in_a_tuple_and_when_nested(self, value: str, want_repr: str) -> None:
+        """The `Value::Tuple` arm, reached WITHOUT `normalize_django_value`.
+
+        The serializer flattens a tuple to a list, so a tuple that goes through
+        `render_both` never exercises that arm; passing the raw Python tuple to
+        `render_template` does. Django's `str(tuple)` is the reference either
+        way, and it is `repr` of each element.
+        """
+        assert _rust.render_template("{{ p|safe }}", {"p": (value,)}) == "(" + want_repr + ",)"
+        assert_agrees("{{ p }}", [[value]])
+
+    def test_the_two_callers_agree_on_the_same_value(self) -> None:
+        """The convergence itself: one spelling, two paths (#1646).
+
+        A second escaper is what made these disagree before this PR, and any
+        mutation inside the helper has to move BOTH sides for this to stay
+        green -- which is what makes it a check on the convergence rather than
+        on either caller.
+        """
+        for value, want_repr in CONTROL_VALUES:
+            container = _rust.render_template("{{ p|safe }}", {"p": [value]})
+            pprinted = _rust.render_template("{{ p|pprint|safe }}", {"p": [value]})
+            assert container == f"[{want_repr}]", value
+            assert pprinted == container, value
+
+
+# ---------------------------------------------------------------------------
 # The residuals this PR does NOT close, recorded rather than rediscovered
 # ---------------------------------------------------------------------------
 
 
 class TestKnownResidualDivergences:
-    """Each row asserts the divergence still EXISTS, so closing it fires here."""
+    """**Every test here pins a KNOWN-WRONG answer, not a correct one.**
+
+    djust's output in each case differs from Django's; the assertion is that it
+    STILL differs, so the row fails the day someone closes the gap and the
+    obsolete pin gets deleted with the issue. Read no row here as a statement
+    that djust's answer is right -- the filed issue number is on each one:
+    #2292 for the escaping gap, #2294 for `{{ dict|length }}`.
+
+    The failure mode this framing guards against is real and recent: three
+    artifacts pinned a buggy arrangement as if correct and let a shipped XSS
+    survive in `linenumbers`, one of them saying so in its own test name.
+    """
 
     @pytest.mark.parametrize(
         "value",
@@ -433,10 +538,15 @@ class TestKnownResidualDivergences:
             "\ue000",  # Co -- a private-use code point
         ],
     )
-    def test_non_ascii_non_printables_are_not_escaped(self, value: str) -> None:
-        """`str.isprintable()` is Unicode-version data; no fixed table is green
-        on every runner. See the module docstring for the 5812-code-point
-        measurement between Unicode 15.0 and 16.0.
+    def test_non_ascii_non_printables_are_WRONGLY_not_escaped_bug_2292(self, value: str) -> None:
+        """**Pins a KNOWN-WRONG answer.** CPython escapes each of these code
+        points; djust emits it literally. Filed as #2292.
+
+        Not fixed here because `str.isprintable()` is Unicode-version data and
+        no fixed table is green on every runner -- see the module docstring for
+        the 5812-code-point measurement between Unicode 15.0 and 16.0, and
+        `djust_core::py_repr_string`'s doc comment for the two routes that would
+        close it.
         """
         django_out, djust_out = render_both("{{ p|pprint }}", value)
         assert django_out != djust_out, (
@@ -480,15 +590,20 @@ class TestKnownResidualDivergences:
             assert _rust.render_template("{{ p|pprint|safe }}", {"p": value}) == want, value
 
     @pytest.mark.parametrize("value", [{"a": 1, "b": 2}, {"é": "中"}])
-    def test_length_of_a_dict_is_still_zero(self, value: dict) -> None:
-        """`{{ dict|length }}` answers 0 where Django answers `len(dict)`.
+    def test_length_of_a_dict_is_WRONGLY_still_zero_bug_2294(self, value: dict) -> None:
+        """**Pins a KNOWN-WRONG answer.** `{{ dict|length }}` renders 0; Django
+        renders `len(dict)`. Zero is the bug, filed as #2294 -- this test exists
+        so the divergence is recorded rather than rediscovered, and it FAILS the
+        day someone fixes it, which is the signal to delete the row.
 
         NOT the byte-vs-char bug #2279 is about -- `Value::Object` simply has no
-        arm in the `length` match. Left alone deliberately: `Value::Object`
-        carries both a Python dict and a model instance (which holds a
-        `__str__` key), and `len(model)` raises `TypeError`, which Django's
-        `length` catches and answers 0 to. Telling the two apart is a decision
-        that belongs with its own issue, not with a code-point fix.
+        arm in the `length` match. Left alone deliberately rather than because
+        zero is defensible: `Value::Object` carries both a Python dict and a
+        model instance (which holds a `__str__` key), and `len(model)` raises
+        `TypeError`, which Django's `length` catches and answers 0 to. So the
+        right answer is 0 for one of the two things this variant represents and
+        `len()` for the other, and telling them apart is a decision that belongs
+        with #2294, not with a code-point fix.
         """
         django_out, djust_out = render_both("{{ p|length }}", value)
         assert django_out == str(len(value))

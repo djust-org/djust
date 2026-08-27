@@ -613,8 +613,19 @@ pub fn django_value_repr() -> bool {
 /// the range every Unicode version agrees on — the ASCII controls `U+0000`–
 /// `U+001F` and `U+007F`, which are `Cc` and can never be reclassified. A
 /// non-ASCII non-printable (`U+00A0`, `U+200B`, `U+2028`, `U+FEFF`, …) is
-/// emitted literally where CPython emits `\xa0` / `\u200b`. Tracked separately;
-/// see the module docs of `djust_templates::pprint`.
+/// emitted literally where CPython emits `\xa0` / `\u200b`.
+///
+/// **What completing it would take** — the decision lands in #2292, not
+/// here. Only `Cn` (unassigned) actually drifts between Unicode versions;
+/// `Cc`, `Cf`, `Cs`, `Co`, `Zl`, `Zp` and `Zs` are small, stable sets. So
+/// either (a) carry a table of those seven categories and treat `Cn` as
+/// printable, which is exact for every ASSIGNED code point and diverges only
+/// where the interpreters already diverge — needing a hand-written range
+/// table or a Unicode-category dependency, which is a dependency discussion;
+/// or (b) accept a pinned divergence, the route `striptags` took (#2273),
+/// where the reference is captured per interpreter in a fixture rather than
+/// ported. What is NOT available is one fixed table green on every runner.
+/// See also the module docs of `djust_templates::pprint`.
 pub fn py_repr_string(s: &str) -> String {
     // Python's quote rule: single quotes, UNLESS the string contains a `'` and
     // no `"` — then double quotes, with the `'` left unescaped.
