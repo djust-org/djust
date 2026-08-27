@@ -11,7 +11,6 @@ Covers the acceptance criteria from GitHub issue #1562:
 
 from __future__ import annotations
 
-import ast
 import inspect
 import re
 
@@ -20,33 +19,62 @@ from django.test import RequestFactory, override_settings
 
 from djust import bug_capture_views
 from djust.bug_capture import BugCapture
+from djust.tests._source_scan import code_only, without_prose
+
+
+#: Framework event-dispatch entrypoints this module must not reference at all.
+DISPATCH_ENTRYPOINTS = ("handle_event", "_djust_decorators", "ViewRuntime", "dispatch_event")
+#: Tenant-context symbols this module must never reach.
+TENANT_SYMBOLS = ("djust.tenants", "set_current_tenant", "get_current_tenant")
+DYNAMIC_DISPATCH = re.compile(r"getattr\([^)]*event_name")
+
+
+def _strip_prose(src: str) -> str:
+    """Blank comments and docstrings; keep string literals. See `_code_only_source`.
+
+    Split from `_code_only_source` so the canaries at the bottom of this file can
+    run the REAL stripper against a mutated copy of the module. Calling
+    `without_prose` directly there would leave this function untested — reverting
+    it to the old implementation would redden nothing (#1859/#2135).
+    """
+    return without_prose(src)
 
 
 def _code_only_source(module) -> str:
-    """Module source with the LEADING module docstring stripped.
+    """Module source with COMMENTS and DOCSTRINGS blanked, string literals kept.
 
-    The structural regression tests below grep for dangerous patterns
-    (``getattr(..., event_name)``, ``djust.tenants`` imports) that this
-    module's own module-level docstring explicitly WARNS AGAINST in
-    prose — e.g. "grep this file for ``getattr(`` before adding new
-    code" and "This view never imports ``djust.tenants``". A naive
-    full-source grep false-positives on that prose. Scanning everything
-    AFTER the module docstring (which is where all real code and every
-    per-function docstring lives) keeps the check meaningful without
-    hand-tuning the regex to dodge one paragraph.
+    The structural bans below grep for dangerous patterns
+    (``getattr(..., event_name)``, ``djust.tenants`` imports) that this module's
+    own docstrings explicitly WARN AGAINST in prose — e.g. "grep this file for
+    ``getattr(`` before adding new code" and "This view never imports
+    ``djust.tenants``". Grepping the raw source false-alarms on that prose:
+    measured, the raw module fails two of the three bans on its docstring alone.
+
+    This used to strip only the LEADING module docstring, which covered exactly
+    the one paragraph it was written for and nothing else (#2246). Appending a
+    function whose own docstring and ``#`` comments name the banned shapes turned
+    all three bans RED under that version and leaves all three GREEN under this
+    one — the migration's value, measured rather than asserted, and pinned by
+    ``TestSourcePinCanaries``.
+
+    ``without_prose`` and NOT ``code_only`` (#2238 exposes both), because every
+    assertion here is a BAN and blanking string literals would weaken it: a
+    string is how a dynamic reference is spelled. ``importlib.import_module(
+    "djust.tenants.middleware")`` is caught by this function and is NOT caught by
+    ``code_only`` — also measured, and pinned below. The trade is that a message
+    string naming a banned symbol would false-alarm; that is loud and fixable,
+    whereas a string-mediated import slipping the ban is silent.
+
+    Note on direction, since #2246 stated it the other way round: these are all
+    NEGATIVE assertions, so prose false-**alarms** here and there is no
+    false-pass direction to fix. A commented-out ``getattr(mod, event_name)`` is
+    not a violation — the module does not do it — and the issue's "a call site
+    inside a commented-out block still matches, so deleting the code the pin
+    protects leaves it green" describes a POSITIVE count (#1817's, #2249's pin
+    B), not a ban. Blanking the comment is still the right answer; it just
+    removes an alarm rather than restoring a missed catch.
     """
-    src = inspect.getsource(module)
-    tree = ast.parse(src)
-    first = tree.body[0] if tree.body else None
-    is_docstring = (
-        isinstance(first, ast.Expr)
-        and isinstance(first.value, ast.Constant)
-        and isinstance(first.value.value, str)
-    )
-    if not is_docstring:
-        return src
-    lines = src.splitlines()
-    return "\n".join(lines[first.end_lineno :])
+    return _strip_prose(inspect.getsource(module))
 
 
 def _encoded(**overrides) -> str:
@@ -209,10 +237,10 @@ class TestNoDispatch:
         before a behavioral test could exercise the specific object it
         was wired to."""
         src = _code_only_source(bug_capture_views)
-        assert not re.search(r"getattr\([^)]*event_name", src)
+        assert not DYNAMIC_DISPATCH.search(src)
         # Belt-and-suspenders: no reference to the framework's event
         # dispatch entrypoints at all.
-        for forbidden in ("handle_event", "_djust_decorators", "ViewRuntime", "dispatch_event"):
+        for forbidden in DISPATCH_ENTRYPOINTS:
             assert forbidden not in src
 
     @override_settings(DEBUG=True)
@@ -275,9 +303,8 @@ class TestMultiTenantBoundary:
 
     def test_module_never_imports_tenants(self):
         src = _code_only_source(bug_capture_views)
-        assert "djust.tenants" not in src
-        assert "set_current_tenant" not in src
-        assert "get_current_tenant" not in src
+        for forbidden in TENANT_SYMBOLS:
+            assert forbidden not in src
 
     @pytest.mark.django_db
     @override_settings(DEBUG=True)
@@ -335,3 +362,139 @@ class TestReadOnlyContent:
         body = resp.content.decode()
         assert "dj-bugcapture-copy" in body
         assert blob in body
+
+
+# ---------------------------------------------------------------------------
+# Empirical canaries for the source pin itself (#2246 / #2238).
+#
+# The bans above are only as good as `_code_only_source`. These run the REAL
+# matchers against mutated copies of the real module, so they cannot pass by
+# re-implementing the check, and each asserts its mutation applied before
+# reporting anything (#2129/#2135).
+# ---------------------------------------------------------------------------
+
+
+def _bans_verdict(src: str) -> dict:
+    """The three bans, evaluated over already-stripped source."""
+    return {
+        "dynamic_dispatch": DYNAMIC_DISPATCH.search(src) is None,
+        "dispatch_entrypoints": all(f not in src for f in DISPATCH_ENTRYPOINTS),
+        "tenants": all(f not in src for f in TENANT_SYMBOLS),
+    }
+
+
+ALL_GREEN = {"dynamic_dispatch": True, "dispatch_entrypoints": True, "tenants": True}
+
+
+def _old_module_docstring_only(src: str) -> str:
+    """The PRE-#2246 stripper, kept so the canaries can measure the delta.
+
+    It returned everything after the leading module docstring — which is why a
+    per-function docstring or any ``#`` comment naming a banned shape sailed
+    straight into the grep.
+    """
+    import ast
+
+    tree = ast.parse(src)
+    first = tree.body[0] if tree.body else None
+    is_docstring = (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    )
+    if not is_docstring:
+        return src
+    return "\n".join(src.splitlines()[first.end_lineno :])
+
+
+class TestSourcePinCanaries:
+    def test_the_real_module_needs_stripping_at_all(self):
+        """Non-vacuity: the raw source FAILS two of the three bans.
+
+        If this ever goes green the pin is measuring nothing, because the
+        stripper would have no prose to remove.
+        """
+        raw = inspect.getsource(bug_capture_views)
+        raw_verdict = _bans_verdict(raw)
+        assert raw_verdict["dynamic_dispatch"] is False, (
+            "the module docstring no longer names `getattr(` — this canary is vacuous"
+        )
+        assert raw_verdict["tenants"] is False
+        assert _bans_verdict(_code_only_source(bug_capture_views)) == ALL_GREEN
+
+    def test_prose_below_the_module_docstring_does_not_trip_the_bans(self):
+        """The #2246 gap, measured: the old stripper reddened ALL THREE here.
+
+        A per-function docstring and a ``#`` comment naming every banned shape
+        is exactly the note someone writes next to a ban. Under the old
+        module-docstring-only stripper it failed the build.
+        """
+        raw = inspect.getsource(bug_capture_views)
+        prose = '''
+
+
+def _explains_the_bans():
+    """Never wire the captured event_name to getattr(mod, event_name)().
+
+    This module must not import djust.tenants or call set_current_tenant()
+    or get_current_tenant(), and never reaches handle_event / dispatch_event
+    / ViewRuntime / _djust_decorators.
+    """
+    # getattr(mod, event_name)
+    return None
+'''
+        mutated = raw + prose
+        assert mutated != raw, "NO-OP MUTATION"
+
+        # The mutation is real: under the OLD stripper every ban goes red.
+        old = _bans_verdict(_old_module_docstring_only(mutated))
+        assert old == {
+            "dynamic_dispatch": False,
+            "dispatch_entrypoints": False,
+            "tenants": False,
+        }, f"the canary fixture stopped naming the banned shapes: {old}"
+
+        assert _bans_verdict(_strip_prose(mutated)) == ALL_GREEN, (
+            "prose below the module docstring is being counted as code again (#2246)"
+        )
+
+    def test_a_real_dynamic_dispatch_still_reddens_the_ban(self):
+        """Gate-off (#1468): the ban must fire when the module actually violates it.
+
+        Without this the canary above only proves the pin is quiet, which a pin
+        that always returns green also achieves.
+        """
+        raw = inspect.getsource(bug_capture_views)
+        mutated = (
+            raw
+            + "\n\ndef _really_dispatches(mod, event_name):\n"
+            + "    return getattr(mod, event_name)()\n"
+        )
+        assert mutated != raw, "NO-OP MUTATION"
+        verdict = _bans_verdict(_strip_prose(mutated))
+        assert verdict["dynamic_dispatch"] is False, (
+            "a genuine getattr(mod, event_name) call did not trip the ban"
+        )
+
+    def test_a_string_mediated_tenants_import_still_reddens_the_ban(self):
+        """Why ``without_prose`` and not ``code_only`` — measured, not argued.
+
+        A dynamic import spells its target as a STRING. ``code_only`` blanks
+        string literals, so the tenants ban would pass over
+        ``importlib.import_module("djust.tenants.middleware")`` in silence.
+        ``without_prose`` keeps it and catches it. Every assertion in this file
+        is a BAN, and a silent miss is the failure that matters.
+        """
+        raw = inspect.getsource(bug_capture_views)
+        mutated = (
+            raw + "\n\ndef _dynamic_tenants():\n    import importlib\n\n"
+            '    return importlib.import_module("djust.tenants.middleware")\n'
+        )
+        assert mutated != raw, "NO-OP MUTATION"
+        assert _bans_verdict(_strip_prose(mutated))["tenants"] is False, (
+            "without_prose must keep string literals — they are how a dynamic reference is spelled"
+        )
+        assert _bans_verdict(code_only(mutated))["tenants"] is True, (
+            "code_only was expected to MISS this — if it now catches it, the "
+            "without_prose/code_only choice above needs rewriting, not this test"
+        )

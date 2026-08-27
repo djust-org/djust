@@ -37,8 +37,6 @@ from __future__ import annotations
 
 import json
 import random
-from pathlib import Path
-
 import pytest
 
 pytest.importorskip("django")
@@ -253,33 +251,26 @@ def test_the_short_forms_are_the_ones_json_dumps_uses(payload: str, expected: st
 # The partial chain this issue fixes survived a convergence that had ALREADY
 # named it. A comment naming a gap does not close it; a test that goes red when
 # a third chain reappears does (#1646/#1859).
+#
+# THE PIN LIVES IN RUST NOW (#2249), not here: see the
+# `value_to_json_structure` module in `crates/djust_templates/src/filters.rs`.
+# It was a pair of Python greps over the RAW text of `filters.rs`, which counted
+# comments as code in both directions — measured:
+#
+#   mutation of filters.rs                        `.replace(` ban | `jsb(` count
+#   ---------------------------------------------------------------------------
+#   baseline                                       GREEN          | 3, GREEN
+#   a `//` comment naming `.replace(`              RED            | 3, GREEN
+#   a `//` comment naming `json_string_body(`      GREEN          | 4, RED
+#   a real arm deleted, its text left in a `//`    GREEN          | 3, GREEN  ←
+#   a real arm deleted cleanly                     GREEN          | 2, RED
+#
+# The #2238 prose-stripper could not fix it: it runs CPython's `tokenize`, so a
+# `.rs` file comes back UNCHANGED and silently — wiring these to it would have
+# looked like a fix and been a no-op (`djust.tests._source_scan`, pinned from
+# the other side by `test_rust_source_is_NOT_stripped_and_comes_back_unchanged`).
+# Rust's own lexer drops the comment before the pin ever sees it, so the two
+# assertions moved next to the code they pin rather than growing a second
+# language's stripper in Python (#1646). `rust-tests` gates the merge, so they
+# are no less enforced there.
 # ---------------------------------------------------------------------------
-
-FILTERS_RS = (
-    Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / "filters.rs"
-)
-
-
-def _value_to_json_source() -> str:
-    source = FILTERS_RS.read_text(encoding="utf-8")
-    start = source.index("fn value_to_json(")
-    end = source.index("\nfn ", start)
-    return source[start:end]
-
-
-def test_value_to_json_escapes_every_string_through_the_one_helper() -> None:
-    """Three quoted-string sites — `Decimal`, `String`, the object key — one helper."""
-    body = _value_to_json_source()
-    assert body.count("json_string_body(") == 3, (
-        "value_to_json should escape exactly its three quoted-string sites "
-        f"through json_string_body; found {body.count('json_string_body(')}"
-    )
-
-
-def test_value_to_json_has_no_escape_chain_of_its_own() -> None:
-    """A local `.replace(` inside `value_to_json` is how the key path drifted."""
-    body = _value_to_json_source()
-    assert ".replace(" not in body, (
-        "value_to_json grew an inline escape chain again — route it through "
-        "json_string_body instead (#2241)"
-    )

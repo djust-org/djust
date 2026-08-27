@@ -41,13 +41,18 @@ understand ``#`` comments and Python string literals and nothing else. They do
 NOT strip Rust ``//`` / ``/* */`` comments, JS comments, or template syntax —
 a ``.rs`` file fed in here comes back unchanged via the does-not-parse
 fallback, silently, which is the failure mode this module exists to prevent.
-A pin over non-Python source needs its own language-appropriate stripper.
-#2247's two guards over ``crates/djust_templates/src/filters.rs`` are the live
-example, and they show the blindness has a direction that depends on the
-assertion's shape: the ``".replace(" not in body`` guard goes RED on a comment
-merely explaining the ban, while the ``count("json_string_body(") == 3`` guard
-stays GREEN when a real call site is deleted and its text left in a comment.
-Both measured; tracked at #2249.
+A pin over non-Python source needs a pin written in that language, NOT a second
+stripper here. #2247's two guards over ``crates/djust_templates/src/filters.rs``
+were the live example, and they showed the blindness has a direction that
+depends on the assertion's shape: the ``".replace(" not in body`` guard went RED
+on a comment merely explaining the ban, while the
+``count("json_string_body(") == 3`` guard stayed GREEN when a real call site was
+deleted and its text left in a comment. Both measured. Resolved in #2249 by
+moving them into a ``#[cfg(test)] mod value_to_json_structure`` inside
+``filters.rs`` that counts over ``proc_macro2``'s token stream — Rust's own
+lexer, so no second parser exists to drift (#1646) and the pin cannot silently
+no-op (``include_str!`` makes a wrong path a compile error). The blindness of
+THIS module toward Rust is unchanged and is still pinned below.
 """
 
 from __future__ import annotations

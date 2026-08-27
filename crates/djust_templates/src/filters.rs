@@ -1982,6 +1982,276 @@ fn value_to_json(value: &Value) -> String {
     }
 }
 
+/// Structural pins over `value_to_json`, taken from Rust's own TOKEN STREAM (#2249).
+///
+/// These two assertions used to live in `python/tests/test_json_script_escaping_2241.py`,
+/// where they sliced this function's body out of `filters.rs` with `str::index` and
+/// matched against the RAW text. That is the #2238 defect in a language the #2238
+/// helper cannot reach: `djust.tests._source_scan` runs CPython's `tokenize`, so a
+/// `.rs` file comes back **unchanged, silently**, and wiring those pins to it would
+/// have looked like a fix and been a no-op (pinned from the other side by
+/// `test_rust_source_is_NOT_stripped_and_comes_back_unchanged`).
+///
+/// Both text pins were prose-blind, and — measured, because the issue's first draft
+/// had it backwards — **the direction follows the assertion's shape**:
+///
+/// | mutation of the real source              | `.replace(` ban | `json_string_body(` count |
+/// |------------------------------------------|-----------------|---------------------------|
+/// | baseline                                  | GREEN           | 3, GREEN                  |
+/// | `//` comment naming `.replace(`           | **RED**         | 3, GREEN                  |
+/// | `//` comment naming `json_string_body(`   | GREEN           | **4, RED**                |
+/// | a real arm deleted, its text left in a `//` | GREEN         | **3, GREEN** ← the deletion|
+/// | a real arm deleted cleanly                | GREEN           | 2, RED                    |
+///
+/// A NEGATIVE assertion false-**alarms** on prose — the comment someone writes next
+/// to the ban ("never add a `.replace(` chain here") fails the build, and the #2237
+/// shape is then to contort the prose. A POSITIVE count false-**passes** — deleting a
+/// real escape site and leaving `// was: json_string_body(d)` behind keeps it at 3.
+/// That second one is the #1817 bug verbatim, in Rust, and is the half nothing caught.
+///
+/// The cure is to stop matching text. `proc_macro2` lexes this file with Rust's own
+/// lexer, which drops `//` and `/* */` before the pin ever sees them and makes each
+/// string literal ONE opaque token — so `".replace("` inside a string is not a call
+/// either, which the text pin also got wrong. A hand-written Rust stripper in Python
+/// was the alternative and is the #1646 shape: a second lexer to keep correct through
+/// raw strings (`r#"…"#`), byte strings, nested block comments, and lifetimes, which
+/// look exactly like unterminated char literals. There is no such thing to maintain
+/// here.
+///
+/// It also cannot silently no-op, which the text version could in three ways: the path
+/// is `include_str!`, so a moved file is a COMPILE error rather than a skipped test;
+/// the lex result is asserted; and the function is located in the token tree rather
+/// than by `str::index`, so the body is exactly the brace group and not "everything up
+/// to the next `\nfn `".
+#[cfg(test)]
+mod value_to_json_structure {
+    use proc_macro2::{Delimiter, TokenStream, TokenTree};
+    use std::str::FromStr;
+
+    /// This file's own source, embedded at COMPILE time. A wrong path cannot
+    /// reach a runtime `assert` — it fails to build.
+    const SOURCE: &str = include_str!("filters.rs");
+
+    /// The token trees inside `fn value_to_json`'s `{ … }` block.
+    fn body_tokens() -> Vec<TokenTree> {
+        let stream = TokenStream::from_str(SOURCE).expect("filters.rs must lex as Rust");
+        let toks: Vec<TokenTree> = stream.into_iter().collect();
+        for i in 0..toks.len() {
+            let is_target = matches!((&toks[i], toks.get(i + 1)),
+                (TokenTree::Ident(kw), Some(TokenTree::Ident(name)))
+                    if *kw == "fn" && *name == "value_to_json");
+            if !is_target {
+                continue;
+            }
+            // The first brace group after the signature IS the body.
+            for tok in &toks[i + 2..] {
+                if let TokenTree::Group(g) = tok {
+                    if g.delimiter() == Delimiter::Brace {
+                        return g.stream().into_iter().collect();
+                    }
+                }
+            }
+            panic!("`fn value_to_json` has no body block");
+        }
+        panic!("`fn value_to_json` not found in filters.rs — did it move or get renamed?");
+    }
+
+    /// Count occurrences of the IDENTIFIER `name`, recursing into every group.
+    ///
+    /// One matcher, deliberately — a name and a call shape were two mechanisms and
+    /// only one of them could ever be reached from a test, which makes the other
+    /// decoration (#1859). After the lexer has run, an occurrence of the identifier
+    /// IS a reference to the thing: a comment is gone and a string literal is a
+    /// single opaque `Literal`, so there is nothing left for a `(`-suffix rule to
+    /// exclude. It also over-approximates in the safe direction for the ban below,
+    /// where a bare `replace` used any way at all is the drift being banned.
+    ///
+    /// Recursion is required and not incidental: every call being counted sits
+    /// inside `format!(…)`, one level down in a parenthesis group.
+    fn count_ident(toks: &[TokenTree], name: &str) -> usize {
+        let mut n = 0;
+        for tok in toks {
+            match tok {
+                TokenTree::Ident(id) if *id == name => n += 1,
+                TokenTree::Group(g) => {
+                    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                    n += count_ident(&inner, name);
+                }
+                _ => {}
+            }
+        }
+        n
+    }
+
+    /// Three quoted-string sites — `Decimal`, `String`, the object key — one helper.
+    ///
+    /// The partial chain #2241 fixed survived a convergence that had already NAMED
+    /// the gap. A comment naming a gap does not close it; a count that goes red when
+    /// a third chain appears does (#1646/#1859).
+    #[test]
+    fn value_to_json_escapes_every_string_through_the_one_helper() {
+        let body = body_tokens();
+        let n = count_ident(&body, "json_string_body");
+        assert_eq!(
+            n, 3,
+            "value_to_json should escape exactly its three quoted-string sites \
+             (Decimal, String, the object key) through json_string_body; found {n}"
+        );
+    }
+
+    /// A local `.replace(` inside `value_to_json` is how the key path drifted.
+    #[test]
+    fn value_to_json_has_no_escape_chain_of_its_own() {
+        let body = body_tokens();
+        let n = count_ident(&body, "replace");
+        assert_eq!(
+            n, 0,
+            "value_to_json grew an inline escape chain again ({n} references to \
+             `replace`) — route it through json_string_body instead (#2241)"
+        );
+    }
+
+    /// Both counts must see through a `format!(…)` wrapper — every real one is there.
+    ///
+    /// This is what makes the recursion load-bearing rather than incidental: drop
+    /// the `Group` arm of `count_ident` and this goes red on its own.
+    #[test]
+    fn a_call_nested_inside_a_macro_group_is_still_counted() {
+        let src = "let x = format!(\"{}\", json_string_body(s.replace('a', \"b\")));\n";
+        let toks: Vec<TokenTree> = TokenStream::from_str(src)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+        assert_eq!(count_ident(&toks, "json_string_body"), 1);
+        assert_eq!(count_ident(&toks, "replace"), 1);
+    }
+
+    /// Empirical canary (#1459) — the pin must be blind to PROSE, in both shapes.
+    ///
+    /// Not a re-implementation: the mutations run through the same `count_*`
+    /// functions the pins above use. Each asserts the mutation applied before
+    /// reporting anything, so it cannot pass by failing to mutate (#2129/#2135).
+    #[test]
+    fn prose_naming_the_pattern_does_not_move_either_pin() {
+        let real = body_tokens();
+        assert_eq!(
+            (
+                count_ident(&real, "json_string_body"),
+                count_ident(&real, "replace")
+            ),
+            (3, 0),
+            "baseline drifted"
+        );
+
+        let prose = "\
+            // never add a .replace( chain here — route through json_string_body(x)\n\
+            /* json_string_body(a); json_string_body(b); s.replace('x', \"y\") */\n\
+            let quoted = format!(\"\\\"{}\\\"\", json_string_body(s));\n";
+        let toks: Vec<TokenTree> = TokenStream::from_str(prose)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+
+        // The mutation IS real: the RAW text names both patterns many times over,
+        // which is exactly what the pre-#2249 text pins were counting.
+        assert_eq!(
+            prose.matches("json_string_body(").count(),
+            4,
+            "fixture text changed"
+        );
+        assert!(prose.contains(".replace("), "fixture text changed");
+
+        // ...and the lexer sees exactly the one live call and no `replace` at all.
+        assert_eq!(
+            count_ident(&toks, "json_string_body"),
+            1,
+            "prose in a // or /* */ comment was counted as a call site"
+        );
+        assert_eq!(
+            count_ident(&toks, "replace"),
+            0,
+            "prose in a comment tripped the `.replace(` ban — the #2237 false alarm"
+        );
+    }
+
+    /// Empirical canary (#1459) — the LATENT half, which nothing caught before.
+    ///
+    /// A real escape site deleted with its text left behind in a comment kept the
+    /// text count at 3 and the pin green. Through the lexer the count drops, so the
+    /// pin's own `assert_eq!(n, 3)` goes red.
+    #[test]
+    fn a_deleted_call_site_left_behind_in_a_comment_still_drops_the_count() {
+        let real = body_tokens();
+        assert_eq!(
+            count_ident(&real, "json_string_body"),
+            3,
+            "baseline drifted"
+        );
+
+        let mutated = "\
+            let a = format!(\"\\\"{}\\\"\", json_string_body(d));\n\
+            // was: let b = format!(\"\\\"{}\\\"\", json_string_body(s));\n\
+            let b = format!(\"\\\"{}\\\"\", s);\n\
+            let c = format!(\"\\\"{}\\\"\", json_string_body(k));\n";
+        assert_eq!(
+            mutated.matches("json_string_body(").count(),
+            3,
+            "the RAW text must still read 3 — that IS the false negative being shown"
+        );
+
+        let toks: Vec<TokenTree> = TokenStream::from_str(mutated)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+        assert_eq!(
+            count_ident(&toks, "json_string_body"),
+            2,
+            "a commented-out call site is still being counted — the deletion is invisible"
+        );
+    }
+
+    /// A string literal is ONE token, so naming a call inside one is not a call.
+    ///
+    /// The text pins got this wrong too, in both directions: the `.replace(` ban
+    /// would have fired on an error message quoting the banned shape, and the count
+    /// would have risen on one quoting the helper.
+    #[test]
+    fn a_call_shape_inside_a_string_literal_is_not_a_call() {
+        let src = "\
+            let msg = \"route it through json_string_body(x), never s.replace('a', \\\"b\\\")\";\n";
+        let toks: Vec<TokenTree> = TokenStream::from_str(src)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+        assert!(src.contains("json_string_body(") && src.contains(".replace("));
+        assert_eq!(count_ident(&toks, "json_string_body"), 0);
+        assert_eq!(count_ident(&toks, "replace"), 0);
+    }
+
+    /// The locator is structural, not textual: it finds the function by tokens and
+    /// takes exactly its brace group.
+    ///
+    /// The text version sliced to the next `"\nfn "`, so it carried whatever trailing
+    /// comment sat between the closing brace and the next item — and would have taken
+    /// the wrong end had a nested `fn` appeared. This asserts the body starts at
+    /// `match value` and ends inside the function.
+    #[test]
+    fn the_body_is_the_function_s_brace_group_and_nothing_after_it() {
+        let body = body_tokens();
+        assert!(!body.is_empty(), "empty body");
+        match &body[0] {
+            TokenTree::Ident(id) => assert_eq!(id.to_string(), "match", "body starts at `match`"),
+            other => panic!("unexpected first token: {other:?}"),
+        }
+        // `escape_js` is the next item in the file; the body must NOT reach it.
+        assert_eq!(
+            count_ident(&body, "escape_js"),
+            0,
+            "the slice ran past the end of value_to_json"
+        );
+    }
+}
+
 fn escape_js(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
