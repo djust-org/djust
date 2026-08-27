@@ -12,6 +12,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod context;
+pub mod decimal;
 pub mod errors;
 pub mod locale;
 pub mod serialization;
@@ -301,108 +302,39 @@ pub fn is_decimal(ob: &Bound<'_, PyAny>) -> bool {
 /// Non-finite forms (`NaN`, `sNaN`, `Infinity`) have no exponent and pass
 /// through, matching `format(Decimal('NaN'), 'f')`.
 pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
-    // Parse TOWARD Python's `as_tuple()` shape: sign, digit string, exponent.
-    // Not identical to it — see `significant` below, which is where a previous
-    // version's claim of equivalence went wrong.
-    let (sign, rest) = match raw.strip_prefix('-') {
-        Some(r) => ("-", r),
-        None => ("", raw.strip_prefix('+').unwrap_or(raw)),
-    };
-    let (mantissa, str_exp) = match rest.find(['e', 'E']) {
-        Some(i) => {
-            let Ok(e) = rest[i + 1..].parse::<i64>() else {
-                return raw.to_string();
-            };
-            (&rest[..i], e)
-        }
-        None => (rest, 0),
-    };
-    let (int_part, frac_part) = match mantissa.split_once('.') {
-        Some((i, f)) => (i, f),
-        None => (mantissa, ""),
-    };
-    // Non-finite (or otherwise unparseable) forms pass through untouched.
-    //
-    // LOAD-BEARING. A previous version of this comment said the opposite —
-    // "measured to be so: no input distinguishes this guard" — and that
-    // measurement ran only the guard-ON arm and called it a comparison. With
-    // no control, of course nothing looked different.
-    //
-    // Removing it, `""` renders `0`, `-` renders `-0`, and `.`, `+`, `E+5`,
-    // `e5` all render `0`: the general path treats an absent coefficient as
-    // zero. Reachable, because the binary tag lets a `Value::Decimal` hold any
-    // string. Pinned by
-    // `test_decimal_value_2214.rs::the_empty_and_punctuation_guard_is_load_bearing`.
-    if int_part.is_empty() && frac_part.is_empty() {
+    // The parse itself is `decimal::parse_decimal_parts` — lifted out of this
+    // function in #2253 so `floatformat` uses the same definition of "is this a
+    // decimal" rather than growing a second one (#1646). Its doc-comment
+    // carries the two load-bearing rejections (an absent coefficient is not a
+    // zero; letters with an exponent are not digits) and the saturating
+    // exponent, all of which have pinning tests in
+    // `crates/djust/tests/test_decimal_value_2214.rs`.
+    let Some(parts) = crate::decimal::parse_decimal_parts(raw) else {
         return raw.to_string();
-    }
-    // Also load-bearing, and a DIFFERENT guard from the one above: these have
-    // both a coefficient and an exponent, so they get past the empty check.
-    // Without this, `abcE+5` renders `abc00000` and `xyzE+200` renders
-    // `x.yze+202` — the exponent machinery applied to letters. Pinned by
-    // `the_non_digit_guard_is_load_bearing`.
-    if !int_part
-        .bytes()
-        .chain(frac_part.bytes())
-        .all(|b| b.is_ascii_digit())
-    {
-        return raw.to_string();
-    }
-    let digits: String = format!("{int_part}{frac_part}");
-    // `as_tuple()`'s exponent counts the fractional digits in.
-    // SATURATING: `str_exp` comes from a `parse::<i64>()` on attacker-chosen
-    // text — the binary tag lets a `Value::Decimal` hold any string — so a
-    // payload like `1.5E-9223372036854775808` overflows this subtraction. In
-    // debug that panics on the render path; in release, where `overflow-checks`
-    // is off, it wraps silently and renders nonsense.
-    //
-    // Saturating picks the right BRANCH — a magnitude this large is far past
-    // the cutoff below, so the scientific arm takes it either way. It does NOT
-    // reproduce unbounded-integer arithmetic: a saturated exponent renders off
-    // by a few from the mathematically exact one
-    // (`1.5E-9223372036854775808` gives `…807`, not `…808`).
-    //
-    // That is acceptable only because it is UNREACHABLE from a real value:
-    // CPython's `MAX_EMAX` is 999999999999999999, far short of `i64::MAX`, so
-    // no `Decimal` can saturate. It matters solely for tag-supplied strings,
-    // where not crashing is the requirement and the digits were never
-    // meaningful. An earlier version of this comment said "saturating is
-    // correct either way", which asserted more than the reasoning under it
-    // establishes (#2240 round 7).
-    let exponent = str_exp.saturating_sub(frac_part.len() as i64);
-
-    // `as_tuple().digits` drops LEADING zeros; this string form keeps them — the
-    // `0` in `0.xxx`, and any zeros after the point. Counting those inflates the
-    // length and corrupts both rules below: the cutoff fires up to several places
-    // early, and when it does the coefficient and exponent are shifted by one.
-    //
-    // A previous version said in its own comment that it split "into Python's
-    // `as_tuple()` shape" and did not. It diverged from Django for EVERY `0.xxx`
-    // value near the cutoff — including `Decimal(1)/Decimal(7)` under
-    // `localcontext(prec=120)`, which is ordinary code. The boundary test missed
-    // it because all six of its cases had `1` as their integer part, so not one
-    // exercised a `0.xxx` form: true on the axis it enumerated, blind on the one
-    // it did not (#1867).
-    //
-    // Only the two rules below use this. The fixed-point path further down needs
-    // the leading zeros to place the point.
-    let significant = {
-        let trimmed = digits.trim_start_matches('0');
-        // `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty — and this
-        // floor is also the only thing between an all-zero coefficient over the
-        // cutoff and a PANIC: without it `significant` is `""` and the
-        // scientific branch's `split_at(1)` is out of bounds. `Decimal("0E-250")`
-        // is an ordinary value Django renders fine. Pinned by
-        // `an_all_zero_coefficient_over_the_cutoff_does_not_panic`.
-        if trimmed.is_empty() {
-            "0"
-        } else {
-            trimmed
-        }
     };
+    let sign = if parts.neg { "-" } else { "" };
+    let digits = &parts.digits;
+    let exponent = parts.exponent;
 
     // Django's cutoff (rule 2), on `as_tuple()`'s values, as Django computes it.
-    if exponent.unsigned_abs() + significant.len() as u64 > 200 {
+    if parts.over_django_digit_cutoff() {
+        // `as_tuple().digits` drops LEADING zeros; `digits` keeps them. Counting
+        // those inflates the length and shifts the coefficient by one, which
+        // diverged for EVERY `0.xxx` value near the cutoff until #2240 — an
+        // ordinary shape (`Decimal(1)/Decimal(7)` under `prec=120`) that the
+        // boundary test missed because all six of its cases had `1` as their
+        // integer part (#1867).
+        let significant = {
+            let trimmed = digits.trim_start_matches('0');
+            if trimmed.is_empty() {
+                // `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty — and
+                // this floor is also the only thing between an all-zero
+                // coefficient over the cutoff and a PANIC on `split_at(1)`.
+                "0"
+            } else {
+                trimmed
+            }
+        };
         // `format(d, 'e')`: one digit before the point, exponent adjusted.
         let (first, tail) = significant.split_at(1);
         let coefficient = if tail.is_empty() {
@@ -413,7 +345,7 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
         // `{:+}`: Python writes the exponent sign explicitly — `1e+212`, not
         // `1e212`. A randomized differential caught this; reading the format
         // spec did not.
-        // Saturating for the same reason as `exponent` above.
+        // Saturating for the same reason `parse_decimal_parts` saturates.
         let adjusted = exponent
             .saturating_add(significant.len() as i64)
             .saturating_sub(1);
@@ -431,8 +363,10 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
         };
     }
 
-    // Position of the decimal point within `digits`, after the exponent.
-    let point = int_part.len() as i64 + str_exp;
+    // Position of the decimal point within `digits`, after the exponent. Equal
+    // to the pre-#2253 `int_part.len() + str_exp` by construction: `exponent`
+    // already has the fractional length subtracted out of it.
+    let point = digits.len() as i64 + exponent;
     let body = if point <= 0 {
         format!("0.{}{}", "0".repeat(point.unsigned_abs() as usize), digits)
     } else if point as usize >= digits.len() {

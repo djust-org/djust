@@ -341,34 +341,58 @@ fn apply_builtin_filter(
             // float, and `int(1.5)` is 1. The template layer distinguishes the
             // two by quoting, so `arg_was_quoted` is what separates them —
             // `float_ok` is false for a quoted argument, mirroring `int(str)`.
-            let as_int = |v: &Value, float_ok: bool| -> Option<i64> {
+            // `i128`, not `i64`. Python's ints are unbounded, and TWO separate
+            // truncations were losing digits before #2253: `as_f64()` on a
+            // `Value::Decimal` is a binary double, so `int()` was off by one
+            // from 2^53 up (`Decimal('9007199254740993')|add:1` gave back
+            // 9007199254740993), and `as i64` saturated from 2^63 up, so the
+            // `checked_add` below overflowed and the filter returned its input
+            // UNCHANGED — silently doing nothing rather than adding.
+            //
+            // The issue that reported this named only the first cause. The
+            // second is why widening the truncation alone would not have fixed
+            // the cell it cites: 12345678901234567890 does not fit an i64 no
+            // matter how exactly you compute it.
+            //
+            // Non-finite floats are refused rather than saturated. `int(inf)`
+            // raises `OverflowError` in Python — uncaught by Django's
+            // `except (ValueError, TypeError)` — so there is no answer to
+            // agree with, and `i64::MAX` was a fabricated number where the
+            // fail-soft below at least returns the value it was given.
+            let as_int = |v: &Value, float_ok: bool| -> Option<i128> {
+                // `f64 as i128` SATURATES, so a magnitude past i128 would
+                // become `i128::MAX` and be reported as a real sum.
+                let from_f64 = |f: f64| -> Option<i128> {
+                    (f.is_finite() && f.abs() < 1.7e38).then(|| f.trunc() as i128)
+                };
                 match v {
-                    Value::Integer(n) => Some(*n),
+                    Value::Integer(n) => Some(i128::from(*n)),
                     // `int()` truncates toward zero, so int(1.5) == 1.
-                    Value::Float(f) => Some(*f as i64),
-                    // `int(Decimal('19.99'))` is 19 — truncation, same as float
-                    // (#2214). Via `as_f64` so the Decimal->number rule has one
-                    // definition rather than one per consumption site (#1646).
-                    Value::Decimal(_) => v.as_f64().map(|f| f as i64),
+                    Value::Float(f) => from_f64(*f),
+                    // `int(Decimal('19.99'))` is 19 — truncation, on the EXACT
+                    // digits. One definition of Decimal->integer, in
+                    // `djust_core::decimal`, shared with `floatformat` (#1646).
+                    Value::Decimal(d) => {
+                        djust_core::decimal::parse_decimal_parts(d).and_then(|p| p.to_i128_trunc())
+                    }
                     // `int(True)` is 1 in Python, so Django's first branch
                     // handles bools: `{{ True|add:1 }}` is 2.
-                    Value::Bool(b) => Some(i64::from(*b)),
-                    Value::String(s) => s.trim().parse::<i64>().ok().or_else(|| {
+                    Value::Bool(b) => Some(i128::from(*b)),
+                    Value::String(s) => s.trim().parse::<i128>().ok().or_else(|| {
                         float_ok
-                            .then(|| s.trim().parse::<f64>().ok().map(|f| f as i64))
+                            .then(|| s.trim().parse::<f64>().ok())
                             .flatten()
+                            .and_then(from_f64)
                     }),
                     _ => None,
                 }
             };
             let arg_value = arg.map(|s| Value::String(s.to_string()));
             // `checked_add`, not `+`. Python's ints are arbitrary-precision so
-            // Django cannot overflow here; `i64` can, and plain `+` PANICS in a
-            // debug build ("attempt to add with overflow") while silently
-            // wrapping in release — `{{ max|add:1 }}` returned a NEGATIVE
-            // number. Widening the coercion above (floats, numeric strings)
-            // widened that surface: `f64::INFINITY as i64` saturates to
-            // `i64::MAX`, so `{{ 5|add:inf }}` wrapped to -9223372036854775804.
+            // Django cannot overflow here; a fixed width can, and plain `+`
+            // PANICS in a debug build ("attempt to add with overflow") while
+            // silently wrapping in release — `{{ max|add:1 }}` returned a
+            // NEGATIVE number.
             //
             // On overflow, fall through to the branch below and return the
             // value unchanged — the same fail-soft posture `date` takes on an
@@ -379,7 +403,19 @@ fn apply_builtin_filter(
             let lhs = as_int(value, true);
             let rhs = arg_value.as_ref().and_then(|a| as_int(a, !arg_was_quoted));
             match lhs.zip(rhs).and_then(|(a, b)| a.checked_add(b)) {
-                Some(sum) => Ok(Value::Integer(sum)),
+                // A sum outside `i64` is carried as its exact digits rather than
+                // being thrown away: `Value::Integer` is an i64 and Python's is
+                // not, so `{{ p|add:1 }}` on a 20-digit `DecimalField` had no
+                // Integer to return and silently returned its input. A
+                // `Value::Decimal` is precisely "an exact digit string" (#2214),
+                // renders exactly, and truncates back exactly if another `add`
+                // is chained onto it. Beyond i128 the fail-soft below still
+                // applies — Python's unbounded ints have no equivalent here
+                // (#2253).
+                Some(sum) => Ok(match i64::try_from(sum) {
+                    Ok(n) => Value::Integer(n),
+                    Err(_) => Value::Decimal(sum.to_string()),
+                }),
                 None => match (value, arg) {
                     // Concatenation branch.
                     (Value::String(s), Some(a)) => Ok(Value::String(format!("{s}{a}"))),
@@ -473,35 +509,17 @@ fn apply_builtin_filter(
             }
         }
         "floatformat" => {
-            // floatformat filter: formats float to specified decimal places
-            // Django's `u` suffix (`floatformat:"2u"`) is the documented
-            // opt-out from localization — and what it yields is exactly what
-            // djust produced for EVERY locale before #2221.
-            let unlocalized = arg.map(|s| s.ends_with('u')).unwrap_or(false);
-            let digits = arg.map(|s| s.trim_end_matches(['u', 'g']));
-            let decimals = digits.and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-            let rendered = match value {
-                Value::Float(f) => format!("{f:.decimals$}"),
-                Value::Integer(n) => format!("{:.prec$}", *n as f64, prec = decimals),
-                // Without this a Decimal hits the `_` arm and is returned
-                // UNCHANGED — `{{ p|floatformat }}` would stop rounding. That is
-                // one of the two regressions measured against the one-line fix
-                // the issue suggested, and the reason this needed a variant
-                // rather than a string (#2214).
-                Value::Decimal(_) => match value.as_f64() {
-                    Some(f) => format!("{f:.decimals$}"),
-                    None => return Some(Ok(value.clone())),
-                },
-                _ => return Some(Ok(value.clone())),
-            };
-            // Localized HERE, not at the render site, because by the time the
-            // renderer sees this it is a `Value::String` and indistinguishable
-            // from a user's own digits (#2221).
-            Ok(Value::String(if unlocalized {
-                rendered
-            } else {
-                djust_core::locale::localize_number(&rendered)
-            }))
+            // Django's `floatformat` is decimal arithmetic, not float
+            // formatting: `Decimal(str(text)).quantize(exp, ROUND_HALF_UP)`.
+            // The whole algorithm — the `-1` default, the `p <= 0`
+            // drop-the-fraction branch, half-up rounding, the `g`/`u` suffixes,
+            // string and bool coercion, the 200-digit cut-off — lives in
+            // `crate::floatformat`, whose module docs explain what the old
+            // `format!("{f:.n$}")` got wrong and what is still not covered
+            // (#2253). Localization happens INSIDE it, because by the time the
+            // renderer sees the result it is a `Value::String` and
+            // indistinguishable from a user's own digits (#2221).
+            Ok(crate::floatformat::floatformat(value, arg, arg_was_quoted))
         }
         "filesizeformat" => {
             // filesizeformat filter: formats bytes to human-readable size

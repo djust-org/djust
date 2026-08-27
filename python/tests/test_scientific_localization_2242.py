@@ -232,8 +232,15 @@ def test_ordinary_values_are_unchanged_by_the_scientific_branch() -> None:
 def test_floatformat_is_untouched_by_the_scientific_branch() -> None:
     """`floatformat` shares `localize_number`, so it is in this change's blast radius.
 
-    It cannot reach the new arm — its input is Rust's `{:.N}` output, which never
-    carries an `e` — but "cannot" is worth pinning rather than reasoning about.
+    Its input never carries an `e` — Django's `floatformat` returns a value past
+    the 200-digit cut-off VERBATIM rather than formatting it, so nothing
+    exponent-shaped reaches the localizer — but "cannot" is worth pinning
+    rather than reasoning about.
+
+    Every row except the unquoted-argument one is a Django-parity claim, and
+    the last row was CORRECTED by #2253: it read `"0,00"`, which is what
+    djust's old `{:.N}`-on-an-f64 produced and was never Django's answer.
+    Django gives `1E-250`, the untouched `str(text)`.
     """
     try:
         with override_settings(USE_THOUSAND_SEPARATOR=True), translation.override("de"):
@@ -241,11 +248,24 @@ def test_floatformat_is_untouched_by_the_scientific_branch() -> None:
             for source, value, expected in (
                 ("{{ p|floatformat }}", Decimal("1234.56"), "1.234,6"),
                 ("{{ p|floatformat:2 }}", Decimal("1234.567"), "1.234,57"),
+                # Unquoted: Django reads `2u` as a VARIABLE and raises
+                # `VariableDoesNotExist`; djust falls back to the literal. A
+                # djust-internal pin, not a parity claim.
                 ("{{ p|floatformat:2u }}", Decimal("1234.567"), "1234.57"),
-                ("{{ p|floatformat:2 }}", Decimal("1E-250"), "0,00"),
+                ("{{ p|floatformat:2 }}", Decimal("1E-250"), "1E-250"),
             ):
                 got = _rust.render_template(source, {"p": value})
                 assert got == expected, f"{source} on {value}: {got!r}"
+            # The parity half, so the table above cannot drift from Django
+            # again without something going red.
+            for source, value in (
+                ("{{ p|floatformat }}", Decimal("1234.56")),
+                ("{{ p|floatformat:2 }}", Decimal("1234.567")),
+                ("{{ p|floatformat:2 }}", Decimal("1E-250")),
+            ):
+                assert _rust.render_template(source, {"p": value}) == DjangoTemplate(source).render(
+                    DjangoContext({"p": value})
+                ), f"{source} on {value}"
     finally:
         render_env.apply_number_format()
 

@@ -76,9 +76,24 @@ pub fn number_format() -> Option<NumberFormat> {
 /// Returns the input unchanged when no format is active, so every call site is
 /// a no-op by default.
 pub fn localize_number(rendered: &str) -> String {
-    let Some(fmt) = number_format() else {
+    localize_number_forced(rendered, false)
+}
+
+/// [`localize_number`] with Django's `force_grouping` flag (#2253).
+///
+/// `floatformat`'s `g` suffix means *"group by the THOUSAND_SEPARATOR whether
+/// or not `USE_THOUSAND_SEPARATOR` is on"*, which in `numberformat.format` is
+/// `use_grouping = (use_l10n and USE_THOUSAND_SEPARATOR) or force_grouping`.
+/// Note the `and grouping != 0` that follows it in Django survives: a locale
+/// with no digit grouping stays ungrouped even under `g`.
+///
+/// [`localize_number`] delegates here rather than the two having parallel
+/// bodies, so the plain and forced paths cannot drift (#1646).
+pub fn localize_number_forced(rendered: &str, force_grouping: bool) -> String {
+    let Some(mut fmt) = number_format() else {
         return rendered.to_string();
     };
+    fmt.use_grouping |= force_grouping;
     localize_number_with(rendered, &fmt)
 }
 
