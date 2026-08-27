@@ -3918,6 +3918,70 @@ mod tests {
         }
     }
 
+    /// The SECOND arm of that contract, added with #2284.
+    ///
+    /// The test above proves the escape happens; since #2284 the escape is
+    /// CONDITIONAL, so proving it happens is only half of what
+    /// `SAFE_OUTPUT_FILTERS` membership now rests on. This pins the other half
+    /// in both directions: `autoescape=false` really does emit the input
+    /// verbatim (or the flag is dead and #2284 is a no-op), and it is
+    /// reachable ONLY through the flag — `apply_filter`, the entry point with
+    /// no view of the chain, still escapes.
+    ///
+    /// If either assertion goes red, the four names must come out of
+    /// `renderer::SAFE_OUTPUT_FILTERS` in the same commit.
+    #[test]
+    fn the_needs_autoescape_filters_skip_the_escape_only_when_told_to() {
+        let attack = "<img src=x onerror=alert(1)>\nsecond line";
+
+        // autoescape = false: verbatim. Django's `linebreaks(v, False)`.
+        assert!(linebreaks(attack, false).contains("<img src=x onerror=alert(1)>"));
+        assert!(linebreaksbr(attack, false).contains("<img src=x onerror=alert(1)>"));
+        assert!(urlize(attack, None, false).contains("<img src=x onerror=alert(1)>"));
+
+        // autoescape = true: escaped, and no live payload survives.
+        for out in [
+            linebreaks(attack, true),
+            linebreaksbr(attack, true),
+            urlize(attack, None, true),
+        ] {
+            assert!(!out.contains("<img"), "leaked live markup: {out:?}");
+            assert!(
+                out.contains("&lt;img src=x onerror=alert(1)&gt;"),
+                "did not escape the payload: {out:?}"
+            );
+        }
+
+        // And the flag is the ONLY way in: the chain-blind entry point escapes.
+        let value = Value::String(attack.to_string());
+        for name in ["linebreaks", "linebreaksbr", "urlize"] {
+            let out = apply_filter(name, &value, None).unwrap().to_string();
+            assert!(
+                !out.contains("<img"),
+                "{name} via apply_filter leaked: {out:?}"
+            );
+        }
+    }
+
+    /// `urlize`'s href escape is NOT conditional, because it lands inside
+    /// `href="…"`. Django writes `escape(url)` outside its `if autoescape`
+    /// branch for exactly this reason, and making it conditional along with
+    /// the display text is the obvious way to write #2284 and an XSS Django
+    /// does not have.
+    #[test]
+    fn urlize_escapes_the_href_even_when_autoescape_is_off() {
+        let out = urlize("http://ex.com/?a=1&b=2", None, false);
+        let href = out
+            .split("href=\"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .unwrap_or_default();
+        assert!(
+            href.contains("&amp;"),
+            "the href carried a raw & under autoescape=false: {out:?}"
+        );
+    }
+
     #[test]
     fn test_cut_filter() {
         let value = Value::String("hello world".to_string());
