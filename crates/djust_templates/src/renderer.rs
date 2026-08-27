@@ -2213,8 +2213,9 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 /// Does this pair involve a `Decimal` at all? (#2214)
 ///
 /// Guards the equality widening so it cannot reach `(Float, Integer)`, which
-/// has its own long-standing semantics. Ordering (`<`, `>`) needs no such guard:
-/// `compare_values` already carried explicit `(Float, Integer)` and
+/// has its own arms — `_ => false` when this guard was written, exact since
+/// #2243, and an epsilon in neither case. Ordering (`<`, `>`) needs no such
+/// guard: `compare_values` already carried explicit `(Float, Integer)` and
 /// `(Integer, Float)` arms before this change, and `numeric_pair` admits only
 /// {Integer, Float, Decimal}² — all four non-Decimal combinations of which have
 /// their own arms — so nothing without a Decimal reaches its wildcard.
@@ -2238,6 +2239,33 @@ fn numeric_pair(a: &Value, b: &Value) -> Option<(f64, f64)> {
     }
 }
 
+/// `i64 == f64` with Python's exact semantics (#2243).
+///
+/// The obvious spelling is `a as f64 == b`, and it is wrong above 2^53, where
+/// the cast rounds: `9007199254740993 as f64` IS `9007199254740992.0`, so the
+/// comparison answers true for two values Python calls different. Python
+/// compares an int to a float without converting either — an int equals a float
+/// only when the float is a whole number naming that same integer — so this
+/// goes the other way and converts the FLOAT, which is always exact when it
+/// succeeds.
+///
+/// A non-finite or fractional float can equal no integer; neither can a whole
+/// float outside `i64`'s range, which is the only case the range guard exists
+/// for (`b as i64` saturates rather than wrapping, so without it `1e300` would
+/// compare equal to `i64::MAX`).
+fn int_eq_float(a: i64, b: f64) -> bool {
+    if !b.is_finite() || b.fract() != 0.0 {
+        return false;
+    }
+    // -2^63 exactly; its negation is 2^63, one past `i64::MAX`. Both are exact
+    // in f64, so the bounds are precise rather than approximate.
+    let min = i64::MIN as f64;
+    if b < min || b >= -min {
+        return false;
+    }
+    b as i64 == a
+}
+
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         // BOTH variants, same as `values_identity` below (#2203 review). The
@@ -2251,6 +2279,20 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
+        // Mixed int/float, EXACTLY — `{% if x == 0 %}` on `0.0` (#2243).
+        //
+        // `compare_values` has carried `(Integer, Float)` and `(Float, Integer)`
+        // arms all along, so `{% if x > 0 %}` was right for a float while
+        // `{% if x == 0 %}` fell to `_ => false` and was unconditionally wrong.
+        // Django says true, because Python does.
+        //
+        // NOT the epsilon those ordering arms use, and not the one two lines
+        // above: an absolute tolerance here answers true for `0.1 + 0.2 - 0.3`
+        // (`5.55e-17`), a float residue silently taking the wrong branch. That
+        // shipped briefly in #2240 and was reverted as a worse bug than this
+        // one. `(Float, Float)` keeps its epsilon — a separate question (#1079).
+        (Value::Integer(a), Value::Float(b)) => int_eq_float(*a, *b),
+        (Value::Float(a), Value::Integer(b)) => int_eq_float(*b, *a),
         (Value::String(a), Value::String(b)) => a == b,
         // Pairs involving a DECIMAL, and only those. Without this
         // `{% if p == 19.99 %}` went false the moment a Decimal stopped being a
@@ -2271,8 +2313,8 @@ fn values_equal(a: &Value, b: &Value) -> bool {
             None => false,
         },
         // Everything else keeps the pre-#2214 answer. A guarded arm is not
-        // exhaustive, and this is the arm that must stay `false` — it is where
-        // `(Float, Integer)` lands.
+        // exhaustive, so this arm is still reachable — but no longer for
+        // `(Float, Integer)`, which has had its own exact arms since #2243.
         _ => false,
     }
 }
@@ -3919,5 +3961,74 @@ mod tests {
         context.mark_safe("theme_panel".to_string());
         let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
         assert_eq!(result, "<aside><b>P</b></aside>");
+    }
+
+    // -- #2243: mixed int/float equality -----------------------------------
+    //
+    // The Django differential lives in
+    // `python/tests/test_float_int_equality_2243.py`; these pin the boundary
+    // cases at the function, where the values are exact rather than routed
+    // through a template literal.
+
+    #[test]
+    fn test_2243_int_eq_float_is_exact_not_epsilon() {
+        assert!(int_eq_float(0, 0.0));
+        assert!(int_eq_float(0, -0.0));
+        assert!(int_eq_float(19, 19.0));
+        assert!(int_eq_float(-19, -19.0));
+
+        // Residues float arithmetic actually produces. An epsilon tolerance
+        // calls the first two zero; Python does not.
+        assert!(!int_eq_float(0, 0.1 + 0.2 - 0.3));
+        assert!(!int_eq_float(0, 1.0 - 0.9 - 0.1));
+        assert!(!int_eq_float(0, 1e-17));
+        assert!(!int_eq_float(0, f64::MIN_POSITIVE));
+        assert!(!int_eq_float(0, 5e-324));
+    }
+
+    #[test]
+    fn test_2243_int_eq_float_beyond_f64_precision() {
+        // `9007199254740993 as f64` IS `9007199254740992.0`, so the obvious
+        // `a as f64 == b` spelling answers true here. Python answers false.
+        assert!(!int_eq_float(9007199254740993, 9007199254740992.0));
+        assert!(int_eq_float(9007199254740992, 9007199254740992.0));
+        assert!(!int_eq_float((1i64 << 62) + 1, (1u64 << 62) as f64));
+        assert!(int_eq_float(1i64 << 62, (1u64 << 62) as f64));
+    }
+
+    #[test]
+    fn test_2243_int_eq_float_rejects_out_of_range_and_non_finite() {
+        // `b as i64` saturates, so without the range guard these compare equal.
+        assert!(!int_eq_float(i64::MAX, 1e300));
+        assert!(!int_eq_float(i64::MIN, -1e300));
+        assert!(!int_eq_float(i64::MAX, 9_223_372_036_854_775_808.0)); // 2^63
+        assert!(int_eq_float(i64::MIN, -9_223_372_036_854_775_808.0)); // -2^63
+
+        assert!(!int_eq_float(0, f64::NAN));
+        assert!(!int_eq_float(0, f64::INFINITY));
+        assert!(!int_eq_float(0, f64::NEG_INFINITY));
+        assert!(!int_eq_float(0, 0.5));
+        assert!(!int_eq_float(19, 19.5));
+    }
+
+    #[test]
+    fn test_2243_values_equal_wires_both_operand_orders() {
+        // Half a two-sided guard pinned is half a guard (#1859).
+        assert!(values_equal(&Value::Float(0.0), &Value::Integer(0)));
+        assert!(values_equal(&Value::Integer(0), &Value::Float(0.0)));
+        assert!(!values_equal(&Value::Float(0.5), &Value::Integer(0)));
+        assert!(!values_equal(&Value::Integer(0), &Value::Float(0.5)));
+
+        // The arms this did not touch.
+        assert!(values_equal(&Value::Integer(1), &Value::Integer(1)));
+        assert!(values_equal(&Value::Float(1e-17), &Value::Float(0.0))); // epsilon, unchanged
+        assert!(!values_equal(
+            &Value::String("5".to_string()),
+            &Value::Integer(5)
+        ));
+        assert!(!values_equal(&Value::None, &Value::Integer(0)));
+        // Pinned as-is, NOT as correct: Django says `True == 1` is true, since
+        // `bool` subclasses `int`. Out of scope here (#1079) — filed as #2244.
+        assert!(!values_equal(&Value::Bool(true), &Value::Integer(1)));
     }
 }
