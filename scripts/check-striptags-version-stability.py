@@ -195,7 +195,16 @@ def main() -> int:
             for ver in order:
                 print(f"      {ver:9} {answers[ver][idx[v]]!r}")
     if ok:
-        print(f"OK: every literal expectation is stable across {order}")
+        print(f"OK: {len(set(rust))} Rust pin(s) are stable across the matrix "
+              f"{matrix}, and {len(set(pyvals))} live-compared value(s) are "
+              f"stable across {order}.")
+        rust_only = sorted(set(rust) - set(pyvals))
+        moved = [v for v in rust_only
+                 if answers[local][idx[v]] != answers[matrix[0]][idx[v]]]
+        if moved:
+            print(f"     ({len(moved)} of the Rust pins deliberately differ on "
+                  f"the local {local} — that interpreter predates the 3.12.10 "
+                  f"html.parser rewrite the port targets.)")
     return 0 if ok else 1
 
 

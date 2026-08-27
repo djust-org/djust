@@ -1427,6 +1427,56 @@ mod tests {
         assert_eq!(strip_tags("<style>q{}"), "q{}");
     }
 
+    /// GATE-OFF for the comment-close rewrite: `commentclose` went from
+    /// `--\s*>` to `--!?>`, and `commentabruptclose = -?>` was added, in the
+    /// 3.12.10 spec alignment. Removing the `!` or the abrupt fallback
+    /// reddens a row here.
+    ///
+    /// Added because the gate-off found both mechanisms unreachable from the
+    /// suite: a surviving mutation is a question, not a pass.
+    #[test]
+    fn comment_close_follows_the_html5_shape() {
+        // `--!>` closes a comment...
+        assert_eq!(strip_tags("<!--x--!>keep<b>y</b>"), "keepy");
+        // ...and so do the two abrupt forms, which `--\s*>` could not match.
+        assert_eq!(strip_tags("<!-->keep<b>y</b>"), "keepy");
+        assert_eq!(strip_tags("<!--->keep<b>y</b>"), "keepy");
+        // The ordinary close still works, so the rows above are not merely
+        // "a comment is dropped however it ends".
+        assert_eq!(strip_tags("<!---->keep<b>y</b>"), "keepy");
+        // The converse, and the sharper half: whitespace between `--` and `>`
+        // NO LONGER closes, so this comment swallows the rest of the input.
+        assert_eq!(strip_tags("<!--x-- >keep<b>y</b>"), "");
+    }
+
+    /// GATE-OFF for the `<![CDATA[` arm: a CDATA section runs to `]]>`, so a
+    /// `>` inside it does not end it. Falling back to the generic "run to the
+    /// next `>`" reddens the first row.
+    #[test]
+    fn a_cdata_section_runs_to_its_close_not_to_the_next_gt() {
+        assert_eq!(strip_tags("<![CDATA[a>b]]>keep<i>z</i>"), "keepz");
+        assert_eq!(strip_tags("<![CDATA[a]]>keep"), "keep");
+    }
+
+    /// GATE-OFF for the CDATA-close lookahead: `</{elem}(?=[\t\n\r\f />])`
+    /// replaced `</\s*{elem}\s*>`, so an end tag carrying attributes — or a
+    /// `/` — now leaves RAWTEXT mode where before it did not, and the rest of
+    /// the document stayed swallowed inside the element.
+    #[test]
+    fn rawtext_closes_on_the_tag_name_not_on_a_following_gt() {
+        // Asserted on `strip_once`, not `strip_tags`: this is a SINGLE-PASS
+        // property, and the re-strip loop repairs it. Gating the lookahead
+        // off leaves `strip_tags` green here while `strip_once` returns
+        // `"x</style foo>keep<b>y</b>"` — two mechanisms shadowing each
+        // other, which the gate-off caught.
+        assert_eq!(strip_once("<style>x</style foo>keep<b>y</b>"), "xkeepy");
+        assert_eq!(strip_once("<style>x</style/>keep<b>y</b>"), "xkeepy");
+        assert_eq!(strip_once("<script>a</script bar>keep"), "akeep");
+        // The filter-level answer is the same, so the rows above are not
+        // asserting some `strip_once`-only artefact.
+        assert_eq!(strip_tags("<style>x</style foo>keep<b>y</b>"), "xkeepy");
+    }
+
     /// GATE-OFF for the `<![` branch of `parse_html_declaration`: restore the
     /// `parse_marked_section` port's `-1` and these reddens.
     ///
