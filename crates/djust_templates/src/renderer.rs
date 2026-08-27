@@ -2249,15 +2249,16 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
     Ok((Value::Missing, false))
 }
 
-/// Does this pair involve a `Decimal` at all? (#2214)
+/// Does this pair involve an EXACT-DIGIT numeric — `Decimal` or `BigInt`?
+/// (#2214, #2260)
 ///
 /// Guards the equality widening so it cannot reach `(Float, Integer)`, which
 /// has its own arms — `_ => false` when this guard was written, exact since
 /// #2243, and an epsilon in neither case. Ordering (`<`, `>`) needs no such
 /// guard: `compare_values` already carried explicit `(Float, Integer)` and
-/// `(Integer, Float)` arms before this change, and `numeric_pair` admits only
-/// {Integer, Float, Decimal}² — all four non-Decimal combinations of which have
-/// their own arms — so nothing without a Decimal reaches its wildcard.
+/// `(Integer, Float)` arms before this change, and every remaining combination
+/// `numeric_pair` admits involves one of the two exact-digit variants, which
+/// have no arms of their own — so nothing without one reaches its wildcard.
 fn is_decimal_pair(a: &Value, b: &Value) -> bool {
     // `BigInt` too (#2260): it is the other exact-digit numeric variant, it has
     // no arm of its own here either, and the reason is the same one — before
@@ -2433,9 +2434,13 @@ fn values_identity(a: &Value, b: &Value) -> bool {
 fn compare_values(a: &Value, b: &Value) -> i32 {
     // Ordering has the same hole `values_equal` had, from the other side
     // (#2244): there is no `Bool` arm here at all, so `{% if flag > 0 %}` fell
-    // to `numeric_pair`, which admits only {Integer, Float, Decimal}, returned
+    // to `numeric_pair`, which admits only the numeric variants, returned
     // `None`, and yielded 0 — "equal", so BOTH `>` and `<` were false while
     // `>=` and `<=` were both true. Django says `True > 0`.
+    //
+    // #2260 hit exactly this again with `BigInt`, which was likewise not on
+    // that admitted list: the hole is a per-variant one, and it reopens for
+    // every variant added without a decision here.
     //
     // Unlike `values_equal` there is no bool-vs-bool arm to defer to, so this
     // covers that pair too: `{% if a > b %}` on `True`/`False` was 0/"equal"
