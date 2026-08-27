@@ -2125,11 +2125,14 @@ fn split_on_blank_lines(s: &str) -> Vec<&str> {
     out
 }
 
-/// `{{ value|linebreaks }}` — `django.utils.html.linebreaks` under
-/// `autoescape=True`, then `mark_safe` (#2259).
+/// `{{ value|linebreaks }}` — `django.utils.html.linebreaks`, then `mark_safe`
+/// (#2259), with the `autoescape` argument #2284 made real.
 ///
-/// **This filter escapes its own input, and that is what earns it a place in
-/// `renderer::SAFE_OUTPUT_FILTERS`.** Django's registration is
+/// **This filter escapes its own input UNLESS that input was already
+/// `SafeData`, and that is what earns it a place in
+/// `renderer::SAFE_OUTPUT_FILTERS`.** (Read the `# autoescape` section below
+/// before changing either half — the exemption rests on both arms, not on the
+/// escape alone.) Django's registration is
 /// `@register.filter("linebreaks", is_safe=True, needs_autoescape=True)`, whose
 /// body is `mark_safe(linebreaks(value, autoescape))` — the markup it builds is
 /// exempt from escaping precisely BECAUSE `escape(p)` has already been applied
