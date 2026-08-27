@@ -267,12 +267,14 @@ class RequestMixin:
         _session_state = {
             k: v for k, v in _cached.items() if not isinstance(v, LiveComponent) and k != "streams"
         }
-        request.session[view_key] = normalize_django_value(_session_state)
+        request.session[view_key] = normalize_django_value(_session_state, state_roundtrip=True)
 
         # Persist user-defined _private attributes so they survive reconnects
         private_state = self._get_private_state()
         if private_state:
-            request.session[f"{view_key}__private"] = normalize_django_value(private_state)
+            request.session[f"{view_key}__private"] = normalize_django_value(
+                private_state, state_roundtrip=True
+            )
 
         t0_sc = time.perf_counter()
         self._save_components_to_session(request, _cached)
@@ -707,7 +709,9 @@ class RequestMixin:
             # don't want to accidentally capture.
             private_state = self._get_private_state()
             if private_state:
-                request.session[f"{view_key}__private"] = normalize_django_value(private_state)
+                request.session[f"{view_key}__private"] = normalize_django_value(
+                    private_state, state_roundtrip=True
+                )
             else:
                 # Clean up if no private attrs remain
                 request.session.pop(f"{view_key}__private", None)
@@ -715,8 +719,7 @@ class RequestMixin:
             # Save updated state back to session
             updated_context = self.get_context_data()
             state = {k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)}
-            state_serializable = normalize_django_value(state)
-            request.session[view_key] = state_serializable
+            request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
 
             self._save_components_to_session(request, updated_context)
 

@@ -249,7 +249,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
     Automatically converts:
     - datetime/date/time → ISO format strings
     - UUID → string
-    - Decimal → float
+    - Decimal → string (exact digits, matching Django's own encoder; #2239)
     - Component/LiveComponent → rendered HTML string
     - Django models → dict with id and __str__
     - QuerySets → list
@@ -314,24 +314,21 @@ class DjangoJSONEncoder(json.JSONEncoder):
         if isinstance(obj, UUID):
             return str(obj)
 
-        # Decimal -> float, and NOT ``str`` despite that being what
-        # ``DjangoJSONEncoder.default`` returns (#2214).
+        # Decimal -> str, exactly what Django's own ``DjangoJSONEncoder`` does
+        # (#2239). This encoder feeds JSON that LEAVES the process — the
+        # WebSocket frame (``websocket.py``), the SSE stream (``sse.py``), the
+        # HTTP-API body (``api/dispatch.py``) — and a JSON *number* cannot
+        # carry a Decimal's digits: ``Decimal('12345678901234567890.123456789')``
+        # becomes ``1.2345678901234567e+19`` as a float. The Rust wire already
+        # emits the digit string (``serialize_context``, #2214), so this is also
+        # what makes the two wires agree.
         #
-        # This looks like a free parity fix and is not. ``normalize_django_value``
-        # below is documented as the fast path for exactly this encoder, and
-        # ``tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip``
-        # pins the two as equal for every shared type. Changing one alone splits
-        # a tested invariant; changing both moves the precision loss into a
-        # template regression, because ``normalize_django_value``'s output is
-        # written into the template context and the Rust engine treats a string
-        # as a string.
-        #
-        # The Rust converters keep full precision as of #2214. This pair is the
-        # remaining half; it is reachable from ``mixins/jit.py``'s fallbacks and
-        # is not a rare path. See the note in ``normalize_django_value`` and
-        # #2239.
+        # The one boundary that must NOT take the string is a round-trip whose
+        # output is restored back ONTO the view — see
+        # :class:`StateRoundtripJSONEncoder` and
+        # :func:`decimal_for_state_roundtrip` below.
         if isinstance(obj, Decimal):
-            return float(obj)
+            return str(obj)
 
         # Handle Django FieldFile/ImageFieldFile (must check before Model)
         from django.db.models.fields.files import FieldFile
@@ -723,6 +720,75 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
 
 # ---------------------------------------------------------------------------
+# The state-round-trip boundary (#2239)
+#
+# Three destinations take a serialized djust value, and they do NOT want the
+# same representation of a ``Decimal``:
+#
+# 1. **The template context.** ``normalize_django_value``'s output is written
+#    straight into it (``mixins/context.py``, ``mixins/jit.py``,
+#    ``template/rendering.py``), so the Rust renderer sees it. A ``Decimal``
+#    is carried there exactly, as ``Value::Decimal`` (#2214) — measured to
+#    render identically to Django for every idiom in
+#    ``python/tests/test_decimal_precision_2214.py``.
+# 2. **The client wire.** ``DjangoJSONEncoder`` and the Rust
+#    ``serialize_context`` both emit the exact digit string. A JSON number
+#    cannot carry the digits, so ``str`` is the only lossless answer, and it
+#    is what Django's own encoder returns.
+# 3. **A round trip back ONTO the view** — the Django session
+#    (``mixins/request.py``, ``runtime.py``, ``mixins/sticky.py``,
+#    ``mixins/components.py``) and the signed state snapshot
+#    (``live_view.py``). This one is neither of the above: whatever is stored
+#    is ``safe_setattr``-ed back onto the view on restore and lands in the
+#    template context on the very next render.
+#
+# Destination 3 cannot take the raw ``Decimal`` (Django's session serializer is
+# ``json.dumps(obj, separators=(",", ":"))`` with NO encoder — see
+# ``django/core/signing.py``'s ``JSONSerializer`` — so it raises ``TypeError``),
+# and it must not take the ``str`` either: a string restored into view state is
+# a string in the template, where ``{{ p|floatformat }}`` stops rounding and
+# ``{% if p > 10 %}`` compares lexically. That is exactly the regression that
+# blocked #2214, arriving one hop later.
+#
+# So destination 3 keeps today's ``float``, and keeps today's precision loss
+# with it. This is the deliberate, documented residue of #2239; the lossless
+# fix needs a TAGGED round-trip (the shape ``encode_private_model_refs`` uses
+# for models, #1994) with a decode at every restore site, which is a separate
+# change. Tracked in the #2239 follow-up.
+#
+# ONE function decides it, so the encoder adapter and the normalizer adapter
+# can never drift apart (#1646).
+# ---------------------------------------------------------------------------
+
+
+def decimal_for_state_roundtrip(value: Decimal) -> float:
+    """Represent *value* for a boundary that restores its output onto the view.
+
+    Returns ``float`` — lossy past ~15 significant digits, and deliberately so:
+    see the block comment above. Client-bound boundaries use ``str`` instead
+    (:class:`DjangoJSONEncoder`), and template-bound ones keep the ``Decimal``
+    (:func:`normalize_django_value`).
+    """
+    return float(value)
+
+
+class StateRoundtripJSONEncoder(DjangoJSONEncoder):
+    """:class:`DjangoJSONEncoder` for a JSON round trip back onto the view.
+
+    Identical in every respect except ``Decimal``, which
+    :func:`decimal_for_state_roundtrip` keeps numeric so the restored value
+    still behaves like a number in the template. Use this — never the plain
+    encoder — when the ``json.dumps`` output is read back and assigned to view
+    state (``_capture_snapshot_state``, ``_capture_components_snapshot``).
+    """
+
+    def _default_impl(self, obj: Any) -> Any:
+        if isinstance(obj, Decimal):
+            return decimal_for_state_roundtrip(obj)
+        return super()._default_impl(obj)
+
+
+# ---------------------------------------------------------------------------
 # Direct Python-to-Python value normalizer (replaces json.loads(json.dumps()))
 # ---------------------------------------------------------------------------
 
@@ -965,13 +1031,26 @@ def render_form_value(value: Any) -> Any:
     return None
 
 
-def normalize_django_value(value: Any, _depth: int = 0) -> Any:
-    """Convert Django/Python types to JSON-safe Python primitives **directly**.
+def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool = False) -> Any:
+    """Convert Django/Python types to values djust's serializers can carry.
 
-    For types supported by both, this produces output identical to
-    ``json.loads(json.dumps(value, cls=DjangoJSONEncoder))`` but avoids the
-    serialise-then-parse roundtrip through JSON text, giving a meaningful
-    speedup when called in hot paths (context serialization, state sync).
+    This is the **pre-pass** for :class:`DjangoJSONEncoder`, not a replacement
+    for it: for every type both handle, encoding the output is identical to
+    encoding the input —
+
+    .. code-block:: python
+
+        json.dumps(normalize_django_value(v), cls=DjangoJSONEncoder)
+        == json.dumps(v, cls=DjangoJSONEncoder)
+
+    — while avoiding the serialise-then-parse round trip through JSON text,
+    which is a meaningful speedup in hot paths (context serialization, state
+    sync). ``TestParityWithJSONRoundtrip`` pins exactly that composition.
+
+    The output is NOT ``json.dumps``-able on its own, because ``Decimal`` is
+    carried through unconverted (see the branch below, #2239). Every caller
+    either hands it to the Rust renderer / a djust encoder — both of which take
+    a ``Decimal`` — or passes ``state_roundtrip=True``.
 
     **Enhancements beyond DjangoJSONEncoder**: the following types would raise
     ``TypeError`` under ``json.dumps(value, cls=DjangoJSONEncoder)`` but are
@@ -987,7 +1066,8 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
 
     Supported types:
     - None, bool, int, float, str  -- pass through
-    - Decimal                      -- float() (lossy; see the note at the branch, #2214)
+    - Decimal                      -- carried through EXACTLY (see the branch, #2239);
+                                      float() under ``state_roundtrip=True``
     - UUID                         -- str()
     - datetime, date, time         -- .isoformat()
     - timedelta                    -- ISO-8601 duration string (via Django util)
@@ -1004,6 +1084,14 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     Args:
         value: The value to normalize.
         _depth: Internal recursion depth counter (do not set manually).
+        state_roundtrip: Set by the callers whose output is written to the
+            Django session or a signed snapshot and later restored back ONTO
+            the view. Converts ``Decimal`` via
+            :func:`decimal_for_state_roundtrip` so the result is
+            ``json.dumps``-able by Django's encoder-less session serializer AND
+            still behaves like a number once restored. See the block comment on
+            :func:`decimal_for_state_roundtrip` for why those boundaries take
+            neither the ``Decimal`` nor the exact string.
     """
     # Fast path: JSON-native primitives need no conversion
     if value is None or isinstance(value, (bool, int, float)):
@@ -1014,10 +1102,15 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
 
     # Containers -- recurse
     if isinstance(value, dict):
-        return {k: normalize_django_value(v, _depth) for k, v in value.items()}
+        return {
+            k: normalize_django_value(v, _depth, state_roundtrip=state_roundtrip)
+            for k, v in value.items()
+        }
 
     if isinstance(value, (list, tuple)):
-        return [normalize_django_value(item, _depth) for item in value]
+        return [
+            normalize_django_value(item, _depth, state_roundtrip=state_roundtrip) for item in value
+        ]
 
     # set/frozenset → sorted list (#626)
     if isinstance(value, (set, frozenset)):
@@ -1025,58 +1118,48 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
             items = sorted(value)
         except TypeError:
             items = list(value)
-        return [normalize_django_value(item, _depth) for item in items]
+        return [
+            normalize_django_value(item, _depth, state_roundtrip=state_roundtrip) for item in items
+        ]
 
     # Django lazy translation strings (Promise) -- must be before str check
     # since Promise is not a str subclass
     if isinstance(value, Promise):
         return str(value)
 
-    # Decimal -> float.
+    # Decimal -> the Decimal itself (#2239).
     #
-    # NOT what DjangoJSONEncoder does, despite what this comment used to claim
-    # (#2214, #1867): Django's encoder returns ``str(o)`` for Decimal, keeping
-    # full precision. Converting to float loses it —
-    # ``Decimal('12345678901234567890.123456789')`` becomes
-    # ``1.2345678901234567e+19``.
+    # This function's output goes into the TEMPLATE CONTEXT
+    # (``mixins/context.py``, ``mixins/jit.py``, ``template/rendering.py``,
+    # ``mixins/rust_bridge.py``), so the Rust renderer sees it. Rust carries a
+    # ``Decimal`` exactly, as ``Value::Decimal`` (#2214) — through
+    # ``update_state``, through the msgpack state-backend round trip, and out
+    # to the wire as the exact digit string. Verified against real Django in
+    # ``python/tests/test_decimal_precision_2214.py``.
     #
-    # Decimal -> float, diverging from ``DjangoJSONEncoder`` (which returns
-    # ``str(o)``) and losing precision beyond ~15 significant digits (#2214).
+    # Neither of the two conversions works here, which is why the fix is this
+    # branch and not a different one:
     #
-    # Kept, together with ``__default__`` above, which this function mirrors.
-    # Three things block the obvious fix, and they pull in different directions:
+    # - ``float`` (what this used to do) loses every digit past ~15 significant
+    #   ones: ``Decimal('12345678901234567890.123456789')`` becomes
+    #   ``1.2345678901234567e+19``. ``DecimalField`` is Django's money type.
+    # - ``str`` — the right answer at the wire, and what ``DjangoJSONEncoder``
+    #   above now returns — is wrong HERE, because a string is a string to the
+    #   renderer: ``{{ p|floatformat }}`` stops rounding and ``{% if p > 10 %}``
+    #   compares lexically. Both measured.
     #
-    # - ``str`` regresses templates. This output is written into the template
-    #   context (``mixins/context.py``), so the Rust renderer sees it too, and a
-    #   string is a string there: ``{{ p|floatformat }}`` stops rounding and
-    #   ``{% if p > 10 %}`` compares lexically. Both measured.
-    # - Returning the ``Decimal`` unchanged would let the Rust extractor build a
-    #   ``Value::Decimal`` — the right shape — but breaks this function's
-    #   documented "JSON-safe primitives" contract. At least one consumer
-    #   (``runtime.py``'s ``json.dumps(public_state, ...)``) passes no encoder
-    #   and would raise ``TypeError``.
-    # - Changing only one of this pair splits the parity invariant that
-    #   ``tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip``
-    #   exists to hold.
+    # The exposure this closes is not a rare fallback. ``mixins/jit.py`` calls
+    # this function at seven sites (197, 202, 210, 293, 302, 307, 347) and its
+    # fallbacks are ordinary: JIT unavailable, template-variable extraction
+    # returning None, no paths extracted for the variable, or the Rust
+    # serializer not capturing every expected path — it cannot read
+    # ``@property`` attributes, so a model with a ``@property`` in the template
+    # sends the WHOLE object down this path.
     #
-    # The exposure is NOT small, and an earlier version of this comment said it
-    # was — claiming model fields reach the client through the Rust path, which
-    # keeps full precision. False, and caught in review (#1867):
-    # ``python/djust/mixins/jit.py`` imports THIS function and calls it at
-    # SEVEN sites (197, 202, 210, 293, 302, 307, 347 — line 316 is a comment, so
-    # ``grep -n`` returns nine lines: seven calls, one comment at
-    # 316, and the import at 12), and its fallbacks are ordinary — JIT unavailable, no template paths
-    # extracted for the variable, or the Rust serializer not capturing every
-    # expected path (it cannot read ``@property`` attributes). A model with a
-    # ``@property`` in the template sends the whole object down this path, so a
-    # ``DecimalField`` beside one still arrives as
-    # ``1.2345678901234567e+19``.
-    #
-    # Still deferred, because the blockers above are real and the fix is a
-    # consumer audit rather than a branch — but deferred at its true size, not a
-    # smaller one. Tracked in #2239.
+    # ``state_roundtrip=True`` is the one boundary that cannot take it: see
+    # ``decimal_for_state_roundtrip``.
     if isinstance(value, Decimal):
-        return float(value)
+        return decimal_for_state_roundtrip(value) if state_roundtrip else value
 
     # UUID -> str
     if isinstance(value, UUID):
@@ -1133,7 +1216,7 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
             model_dict = _encoder._serialize_model_safely(value)
         finally:
             DjangoJSONEncoder._depth -= 1
-        return normalize_django_value(model_dict, _depth + 1)
+        return normalize_django_value(model_dict, _depth + 1, state_roundtrip=state_roundtrip)
 
     # Duck-typing fallback for file-like objects (must be after Model check)
     if hasattr(value, "url") and hasattr(value, "name") and not isinstance(value, type):
@@ -1147,7 +1230,9 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
 
     # QuerySet -> list of normalized models
     if hasattr(value, "model") and hasattr(value, "__iter__"):
-        return [normalize_django_value(item, _depth) for item in value]
+        return [
+            normalize_django_value(item, _depth, state_roundtrip=state_roundtrip) for item in value
+        ]
 
     # AsyncResult -> serializable dict (closes #1274). Must come before Component
     # check since AsyncResult is its own frozen dataclass. Recurse via
@@ -1156,7 +1241,7 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     from .async_result import AsyncResult
 
     if isinstance(value, AsyncResult):
-        return normalize_django_value(value.to_dict(), _depth + 1)
+        return normalize_django_value(value.to_dict(), _depth + 1, state_roundtrip=state_roundtrip)
 
     # Components -> rendered HTML string
     try:

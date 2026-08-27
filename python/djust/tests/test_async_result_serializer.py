@@ -120,7 +120,7 @@ class TestDjangoJSONEncoderAsyncResult:
         s = json.dumps(result, cls=DjangoJSONEncoder)
         loaded = json.loads(s)
         assert loaded["ok"] is True
-        assert loaded["result"]["price"] == 9.99  # Decimal → float
+        assert loaded["result"]["price"] == "9.99"  # Decimal → exact string (#2239)
 
     def test_json_dumps_errored(self):
         s = json.dumps(AsyncResult.errored(RuntimeError("kaboom")), cls=DjangoJSONEncoder)

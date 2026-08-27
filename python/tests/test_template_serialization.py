@@ -61,8 +61,10 @@ class TestDjangoJSONEncoderTypes:
         result = json.dumps({"price": d}, cls=DjangoJSONEncoder)
         data = json.loads(result)
 
-        # Should be serialized as float (DjangoJSONEncoder uses float)
-        assert data["price"] == 123.456789
+        # The exact digit string, matching Django's own encoder (#2239). The
+        # module docstring and this test's own name have claimed "string" since
+        # it was written; the assertion said float until #2239 made it true.
+        assert data["price"] == "123.456789"
 
     def test_uuid_serialization(self):
         """UUID objects should serialize to strings."""
@@ -158,8 +160,8 @@ class TestTemplateBackendContextSerialization:
         result = json.dumps(context, cls=DjangoJSONEncoder)
         data = json.loads(result)
 
-        assert data["price"] == 99.99
-        assert data["tax_rate"] == 0.0825
+        assert data["price"] == "99.99"
+        assert data["tax_rate"] == "0.0825"
 
     def test_serialize_context_with_uuid(self):
         """Context with UUID should be serializable for Rust."""
@@ -199,7 +201,7 @@ class TestTemplateBackendContextSerialization:
 
         assert data["created_at"] == "2024-06-15T14:30:45"
         assert data["birth_date"] == "1990-01-15"
-        assert data["price"] == 123.45
+        assert data["price"] == "123.45"
         assert data["uuid"] == str(test_uuid)
         assert data["document"] == "/media/doc.pdf"
         assert data["name"] == "Test"

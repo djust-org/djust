@@ -37,17 +37,18 @@ class TestFormCleanedDataTypes:
         result = json.loads(json.dumps(t, cls=DjangoJSONEncoder))
         assert result == "14:30:45"
 
-    def test_decimal_serializes_to_number(self):
-        """Decimal should serialize to a float, not null."""
+    def test_decimal_serializes_to_exact_string(self):
+        """Decimal serializes to its exact digits, as Django's own encoder
+        does (#2239). A JSON number cannot carry them."""
         d = Decimal("3.14")
         result = json.loads(json.dumps(d, cls=DjangoJSONEncoder))
-        assert result == pytest.approx(3.14)
+        assert result == "3.14"
 
     def test_decimal_zero(self):
-        """Decimal('0') should serialize to 0.0, not null."""
+        """Decimal('0') should serialize to "0", not null."""
         d = Decimal("0")
         result = json.loads(json.dumps(d, cls=DjangoJSONEncoder))
-        assert result == 0.0
+        assert result == "0"
 
     def test_uuid_serializes_to_string(self):
         """UUID should serialize to its string representation, not null."""
@@ -66,7 +67,7 @@ class TestFormCleanedDataTypes:
         }
         result = json.loads(json.dumps(cleaned_data, cls=DjangoJSONEncoder))
         assert result["birth_date"] == "1990-05-20"
-        assert result["amount"] == pytest.approx(99.99)
+        assert result["amount"] == "99.99"  # #2239: exact digits, as Django does
         assert result["user_id"] == "abcdef01-2345-6789-abcd-ef0123456789"
         assert result["name"] == "Alice"
         assert result["count"] == 42
@@ -76,8 +77,8 @@ class TestFormCleanedDataTypes:
         assert normalize_django_value(date(2024, 1, 15)) == "2024-01-15"
 
     def test_normalize_decimal(self):
-        """normalize_django_value should handle Decimal."""
-        assert normalize_django_value(Decimal("3.14")) == pytest.approx(3.14)
+        """normalize_django_value carries a Decimal through exactly (#2239)."""
+        assert normalize_django_value(Decimal("3.14")) == Decimal("3.14")
 
     def test_normalize_uuid(self):
         """normalize_django_value should handle UUID."""

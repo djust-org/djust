@@ -3345,7 +3345,10 @@ class ViewRuntime:
             if hasattr(target_view, "_get_private_state"):
                 _priv = await sync_to_async(target_view._get_private_state)()
                 if _priv:
-                    await save_session.aset(f"{save_view_key}__private", _normalize(_priv))
+                    await save_session.aset(
+                        f"{save_view_key}__private",
+                        _normalize(_priv, state_roundtrip=True),
+                    )
                 else:
                     try:
                         await save_session.apop(f"{save_view_key}__private", None)
@@ -3359,7 +3362,7 @@ class ViewRuntime:
                 save_context = await sync_to_async(_gcd_save)()
 
             save_state = {k: v for k, v in save_context.items() if not isinstance(v, _LC)}
-            await save_session.aset(save_view_key, _normalize(save_state))
+            await save_session.aset(save_view_key, _normalize(save_state, state_roundtrip=True))
 
             # Components — sync helper, wrap with sync_to_async.
             if mount_request is not None and hasattr(target_view, "_save_components_to_session"):
