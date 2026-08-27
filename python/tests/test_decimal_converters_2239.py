@@ -20,7 +20,7 @@ The third is the residue this PR does NOT close. Django's session serializer is
 the very next render, which is the regression that blocked #2214 arriving one
 hop later. Those boundaries keep today's `float` through the single
 `decimal_for_state_roundtrip` chokepoint. The lossless fix needs a TAGGED
-round trip plus a decode at every restore site — a separate change.
+round trip plus a decode at every restore site — a separate change, #2252.
 
 Every template and encoder assertion below is a **differential against real
 Django**, not a hand-written table (v1.1.1-2 retro): Django is importable here,
@@ -67,7 +67,7 @@ VALUES = [Decimal("19.99"), Decimal("0.00"), Decimal("-3.5"), HUGE]
 #: assumed. Every one is the Rust filter layer parsing a `Value::Decimal`
 #: through f64, which is equally wrong with the pre-fix `float`; see
 #: `test_this_change_turns_no_agreeing_case_into_a_disagreeing_one`. Out of
-#: scope for #2239 (a Python-converter fix), tracked as its own follow-up.
+#: scope for #2239 (a Python-converter fix), tracked in #2253.
 KNOWN_FILTER_DIVERGENCES = {
     ("{{ p|floatformat }}", "0.00"),
     ("{{ p|floatformat }}", "12345678901234567890.123456789"),
@@ -452,7 +452,7 @@ class TestStateRoundtripBoundary:
         """The residue, pinned so it is not mistaken for fixed.
 
         `decimal_for_state_roundtrip` is deliberately lossy. When the tagged
-        round trip lands, this test is the one that should change.
+        round trip lands (#2252), this test is the one that should change.
         """
         assert decimal_for_state_roundtrip(HUGE) == float(HUGE)
         assert Decimal(str(decimal_for_state_roundtrip(HUGE))) != HUGE

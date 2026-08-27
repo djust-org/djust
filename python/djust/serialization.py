@@ -754,7 +754,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
 # with it. This is the deliberate, documented residue of #2239; the lossless
 # fix needs a TAGGED round-trip (the shape ``encode_private_model_refs`` uses
 # for models, #1994) with a decode at every restore site, which is a separate
-# change. Tracked in the #2239 follow-up.
+# change. Tracked in #2252.
 #
 # ONE function decides it, so the encoder adapter and the normalizer adapter
 # can never drift apart (#1646).
