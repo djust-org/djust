@@ -1,7 +1,7 @@
 # djust Roadmap
 
 > Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-23
-> (v1.1.1-2 Django-parity sweep added).
+> (v1.1.1-3 Decimal follow-ups added).
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
 > deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
@@ -29,6 +29,43 @@ Two name shapes appear in this roadmap, with distinct meanings:
 **Historical note**: ROADMAP entries `v0.9.1` through `v0.9.5` (already shipped) were drain buckets under the old naming; they are equivalent to `v0.9.1-1` through `v0.9.1-5` under the new convention. They are NOT being retroactively renamed (would invalidate cross-references in 50+ PRs, retro files, and CHANGELOG entries). The convention applies forward-only.
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
+
+## v1.1.1-3 — the #2214 Decimal follow-ups (drain bucket → ships in 1.1.1)
+
+Opened 2026-08-26 out of PR #2240 (#2214: `Decimal` reached the client and the
+template engine as a lossy binary float). Five follow-ups, each split out under
+#1079 rather than bundled, and each carrying a verified reproduction and a fix
+shape from the eight review rounds that produced them.
+
+Two are the same defect seen from opposite ends. **#2239** is the half of #2214
+that was deliberately not fixed: the Python `normalize_django_value` /
+`__default__` pair still returns `float()`, and it is NOT a rare path —
+`mixins/jit.py` reaches it at seven fallback sites, so a model with a
+`@property` in the template sends the whole object down it. **#2243** is a
+pre-existing divergence that #2214 briefly masked and then un-masked when its
+equality widening was correctly restricted: `{% if x == 0 %}` is false for
+`0.0`, where Django says true, because `values_equal` has explicit arms for
+like-for-like types and nothing for mixed int/float. `compare_values` already
+has those arms — only equality is missing them.
+
+The remaining three are narrower. **#2241** and **#2242** are both residual gaps
+inside strict improvements: a third partial JSON escaper on the object-key path
+that emits raw control characters, and a scientific-form coefficient that skips
+localization. **#2238** is a structural pin that counts prose — a docstring
+naming the pattern it guards inflated its own count, which is a false positive
+today and a false negative the moment a real call site is commented out.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | The Python Decimal converters are still lossy (#2239) | `normalize_django_value` / `__default__` return `float()`, losing precision past ~15 significant digits. Reachable from `mixins/jit.py`'s seven fallback sites — JIT unavailable, no template paths extracted, or the Rust serializer not capturing a `@property`. Three verified blockers: the two are a tested pair (`TestParityWithJSONRoundtrip`), `str` regresses templates, and returning the raw `Decimal` breaks the documented "JSON-safe primitives" contract (`runtime.py:2561` dumps with no encoder). The work is the **consumer audit**, not the branch. | v1.1.1 |
+| **P1** | `{% if <float> == <int literal> %}` is always false (#2243) | `values_equal` has `(Integer, Integer)`, `(Float, Float)`, `(Bool, Bool)`, `(String, String)` and nothing for mixed numerics, so `0.0 == 0` and `19.0 == 19` are both false where Django says true. Ordering already works — `compare_values` carries the mixed arms. Fix shape: mirror those arms and compare **exactly**, not with an epsilon, which is what avoids re-creating the residue bug #2240 round 6 found (`0.1 + 0.2 - 0.3 == 0` answering true). | v1.1.1 |
+| **P2** | `value_to_json`'s object-key path has its own partial escaper (#2241) | Escapes `\` and `"` only — no `\n`/`\r`/`\t` — so a dict key with a newline emits a raw control character into a `<script type="application/json">` body and `json.loads` raises. Raw control chars `0x00`–`0x1F` are unescaped in every arm, key and value alike. One fix covers both: escape the full control range in `json_string_body` and route the key path through it. | v1.1.1 |
+| **P2** | A scientific-form Decimal's coefficient is not localized (#2242) | Past Django's `>200`-digit cutoff a Decimal renders scientific, and `localize_number_with` bails on any string holding an `e`: `1.230E-250` stays `1.230e-250` where Django gives `1,230e-250`. Not a regression — the previous release rendered an f64 further from Django than either. Two more consequences of the same root cause folded in: `truncatechars` and `make_list\|first` see the scientific form where Django sees `str(Decimal)`. | v1.1.1 |
+| **P2** | The #1817 render-send structural pin counts prose (#2238) | `test_every_client_checked_send_path_uses_next_version` regexes raw source, so a comment naming the pattern is counted as a call site — a docstring inflated it from 13 to 14. False positive today; false **negative** the moment a real call site is commented out. Cure is the #2213 one: strip comments and docstrings with `tokenize` first. `tests/test_reset_fixture_hygiene_2234.py::_code_only` already implements it, including the PEP 701 f-string handling a first pass missed, so it can be lifted rather than rewritten (#1077). | v1.1.1 |
+
+---
 
 ## v1.1.1-2 — Django-parity sweep: locale/timezone blindness + unported subsystems (drain bucket → ships in 1.1.1)
 
