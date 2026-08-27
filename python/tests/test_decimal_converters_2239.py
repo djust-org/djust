@@ -52,6 +52,7 @@ from djust.serialization import DjangoJSONEncoder as DjustEncoder  # noqa: E402
 from djust.serialization import (  # noqa: E402
     StateRoundtripJSONEncoder,
     decimal_for_state_roundtrip,
+    decode_state_roundtrip,
     normalize_django_value,
 )
 
@@ -399,16 +400,23 @@ class TestStateRoundtripBoundary:
         """Why the boundary does NOT take the exact string either.
 
         Whatever is stored is restored back onto the view and lands in the
-        template context on the next render. A string there stops
+        template context on the next render. A bare string there stops
         `|floatformat` rounding — the #2214 regression, one hop later.
+
+        #2252 made the stored form a TAG rather than a `float`, so the
+        as-stored bytes are no longer directly renderable — the restore sites
+        run `decode_state_roundtrip` first, which is what this asserts. That
+        decode is not optional: `test_an_undecoded_tag_is_worse_than_the_float`
+        in `test_decimal_state_tag_2252.py` measures what skipping it costs.
         """
         stored = json.loads(
             DjangoSessionSerializer()
             .dumps(normalize_django_value({"p": Decimal("19.99")}, state_roundtrip=True))
             .decode("latin-1")
         )
+        restored = decode_state_roundtrip(stored)
         for source in ("{{ p|floatformat }}", "{% if p > 10 %}BIG{% else %}small{% endif %}"):
-            assert _rust.render_template(source, stored) == DjangoTemplate(source).render(
+            assert _rust.render_template(source, restored) == DjangoTemplate(source).render(
                 DjangoContext({"p": Decimal("19.99")})
             )
 
@@ -448,14 +456,17 @@ class TestStateRoundtripBoundary:
             == "SENTINEL:1.5"
         )
 
-    def test_the_roundtrip_form_is_documented_as_lossy(self) -> None:
-        """The residue, pinned so it is not mistaken for fixed.
+    def test_the_roundtrip_form_is_no_longer_lossy(self) -> None:
+        """The residue #2239 documented, and #2252 closed.
 
-        `decimal_for_state_roundtrip` is deliberately lossy. When the tagged
-        round trip lands (#2252), this test is the one that should change.
+        This test used to assert `decimal_for_state_roundtrip(HUGE) ==
+        float(HUGE)` — the deliberate loss — and #2252's issue named it as the
+        one that should change when the tagged round trip landed. It is that
+        change. The full contract lives in `test_decimal_state_tag_2252.py`.
         """
-        assert decimal_for_state_roundtrip(HUGE) == float(HUGE)
-        assert Decimal(str(decimal_for_state_roundtrip(HUGE))) != HUGE
+        assert decimal_for_state_roundtrip(HUGE) != float(HUGE)
+        assert decode_state_roundtrip(decimal_for_state_roundtrip(HUGE)) == HUGE
+        assert isinstance(decode_state_roundtrip(decimal_for_state_roundtrip(HUGE)), Decimal)
 
 
 # ---------------------------------------------------------------------------

@@ -101,7 +101,16 @@ class ComponentMixin:
     def _restore_component_state(self, component: Any, state: Dict[str, Any]) -> None:
         """
         Restore state to a component from session storage.
+
+        #2252: the session write ran through ``normalize_django_value(...,
+        state_roundtrip=True)``, so a ``Decimal`` arrives here in the tagged
+        form. Decode before assigning — the single decode point for both
+        callers (``mixins/request.py``'s POST restore and ``runtime.py``'s
+        mount restore).
         """
+        from ..serialization import decode_state_roundtrip
+
+        state = decode_state_roundtrip(state)
         for key, value in state.items():
             if not key.startswith("_"):
                 try:

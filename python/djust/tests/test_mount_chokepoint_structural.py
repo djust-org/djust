@@ -228,9 +228,16 @@ _SETATTR_WHITELIST = {
     # ``StateRoundtripJSONEncoder`` import plus the reflow of the
     # ``_capture_components_snapshot`` capture call that now uses it —
     # re-verified sanctioned: still the same two DynamicLiveView
-    # developer-dict setattr lines.
-    ("live_view.py", 1319),
-    ("live_view.py", 1321),
+    # developer-dict setattr lines;
+    # shifted +7 (1319/1321 → 1326/1328) by #2252: the
+    # ``decode_state_roundtrip`` import plus its call (+ comment) in
+    # ``_restore_private_state``, which un-tags a session-restored ``Decimal``
+    # before it is assigned — re-verified sanctioned: still the same two
+    # DynamicLiveView developer-dict setattr lines, and the #2252 restore
+    # itself uses ``setattr`` on a PRIVATE key set already filtered by
+    # ``_framework_attrs`` (not a view-like target this walker flags).
+    ("live_view.py", 1326),
+    ("live_view.py", 1328),
 }
 
 

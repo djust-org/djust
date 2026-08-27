@@ -2147,8 +2147,11 @@ class ViewRuntime:
                 saved_state = {}
             if saved_state:
                 from .security import safe_setattr
+                from .serialization import decode_state_roundtrip
 
-                for key, value in saved_state.items():
+                # #2252: the per-event session save tagged every Decimal
+                # (``normalize_django_value(..., state_roundtrip=True)``).
+                for key, value in decode_state_roundtrip(saved_state).items():
                     safe_setattr(view_instance, key, value, allow_private=False)
 
                 # Restore user-defined _private attributes (mirrors WS + HTTP).
@@ -2249,6 +2252,13 @@ class ViewRuntime:
                     if state_dict is not None and await sync_to_async(
                         view_instance._should_restore_snapshot
                     )(request):
+                        # #2252: un-tag Decimals BEFORE handing the state to
+                        # ``_restore_snapshot``, which is a documented
+                        # subclass-override point — a user override must not
+                        # have to know about the tag shape.
+                        from .serialization import decode_state_roundtrip
+
+                        state_dict = decode_state_roundtrip(state_dict)
                         try:
                             await sync_to_async(view_instance._restore_snapshot)(state_dict)
                             mounted_from_restore = True
