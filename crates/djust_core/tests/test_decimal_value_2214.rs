@@ -213,6 +213,11 @@ fn the_legacy_display_path_is_not_lossy() {
         dec("12345678901234567890.123456789").to_string(),
         "12345678901234567890.123456789"
     );
+    // The EXPANSION half of the same arm, which the digits above do not reach:
+    // that value has no exponent form, so dropping `expand_decimal_exponent`
+    // here left the whole suite green in both profiles. On the previous release
+    // this rendered `0.000000001`, because the value was an f64 (#2240 round 8).
+    assert_eq!(dec("1E-9").to_string(), "0.000000001");
     // `_g`'s Drop restores the default.
 }
 

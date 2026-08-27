@@ -252,6 +252,32 @@ def test_dictsort_orders_decimals_numerically() -> None:
     assert order == ["0.99", "2.25", "10.50", "100.00"], out
 
 
+def test_dictsort_orders_a_mixed_int_and_float_column() -> None:
+    """The other half of the same fallback, and it had no test.
+
+    `sort_dicts_by_key`'s arms cover like-for-like only — there is no
+    `(Integer, Float)` arm — so a mixed column compared all-Equal and did not
+    sort. The Decimal fallback fixed that too, which is a strict improvement:
+    against Django an all-permutations sweep of a mixed pool agreed 938/2184
+    before and 2184/2184 after.
+
+    Restricting the fallback to Decimal-involving pairs left the entire suite
+    green (10,431 Python, 1,084 Rust), so this half was unpinned — the same
+    shape as the half-pinned guard in round 7 (#1859, #2240 round 8).
+    """
+    rows = [{"v": 10}, {"v": 2.5}, {"v": 100}, {"v": 0.99}]
+    source = "{% for r in rows|dictsort:'v' %}{{ r.v }}|{% endfor %}"
+    out = _rust.render_template("{{ rows|dictsort:'v' }}", {"rows": rows})
+    order = re.findall(r"(\d+\.?\d*)", out.replace("&#x27;", "'"))
+    assert [o for o in order if o in {"10", "2.5", "100", "0.99"}] == [
+        "0.99",
+        "2.5",
+        "10",
+        "100",
+    ], out
+    assert source  # the {% for %} form renders empty for any type (pre-existing)
+
+
 def test_a_decimal_is_localized_like_a_number() -> None:
     """#2221: a German site must group a Decimal as it groups a float.
 
@@ -755,8 +781,8 @@ def test_decimal_equality_works_with_the_literal_on_either_side() -> None:
     57 cases here, 881 across the Python roots, and all 56 Rust binaries — because
     no test in the repo puts a literal on the left of `==`
     (`grep -rnE "\{%\s*if\s+[-0-9.]+\s*[=!]=" tests/ python/ crates/` returns
-    nothing). Not an equivalent mutation: it produces eight wrong answers against
-    Django on ordinary values.
+    nothing). Not an equivalent mutation: on the five rows below it
+    gives five wrong answers against Django across ten assertion sites.
 
     Half a guard pinned is a decorative guard (#1859).
     """

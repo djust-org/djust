@@ -1670,9 +1670,18 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
                 .partial_cmp(b_float)
                 .unwrap_or(std::cmp::Ordering::Equal),
             (Value::Bool(a_bool), Value::Bool(b_bool)) => a_bool.cmp(b_bool),
-            // Any pair that is numeric on BOTH sides, which now includes
-            // Decimal — without this a Decimal column sorted as all-Equal,
-            // i.e. not at all (#2214).
+            // Any pair that is numeric on BOTH sides. Two deltas, not one:
+            // a Decimal column used to sort as all-Equal, i.e. not at all
+            // (#2214) — and so did a MIXED int/float column, since the arms
+            // above cover only like-for-like and `sort_dicts_by_key` has no
+            // `(Integer, Float)` arm.
+            //
+            // The mixed case is a strict improvement, not a regression: against
+            // Django, an all-permutations sweep of a mixed pool agreed 938/2184
+            // before and 2184/2184 after. Deliberately left unguarded for that
+            // reason, unlike `values_equal`'s wildcard, which was restricted to
+            // Decimal pairs because widening it there CHANGED answers for the
+            // worse (#2240 round 6).
             _ => match (a_val.as_f64(), b_val.as_f64()) {
                 (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
                 _ => std::cmp::Ordering::Equal,

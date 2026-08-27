@@ -535,9 +535,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // would turn `1234567` into `1,234,567` and break every such lookup
             // against a dict Python keyed without one.
             //
-            // Only `Integer` and `Float` — a `String` that happens to hold
-            // digits is the user's own text, and a filter that already returned
-            // a localized string (`floatformat`) must not be localized twice.
+            // Only `Integer`, `Float` and `Decimal` — a `String` that happens
+            // to hold digits is the user's own text, and a filter that already
+            // returned a localized string (`floatformat`) must not be localized
+            // twice. (`Decimal` since #2214; this comment said "Only Integer
+            // and Float" at both sites for six review rounds — the same
+            // comment-narrower-than-the-code shape that let the equality
+            // widening leak past two reviews.)
             //
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
@@ -614,9 +618,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // would turn `1234567` into `1,234,567` and break every such lookup
             // against a dict Python keyed without one.
             //
-            // Only `Integer` and `Float` — a `String` that happens to hold
-            // digits is the user's own text, and a filter that already returned
-            // a localized string (`floatformat`) must not be localized twice.
+            // Only `Integer`, `Float` and `Decimal` — a `String` that happens
+            // to hold digits is the user's own text, and a filter that already
+            // returned a localized string (`floatformat`) must not be localized
+            // twice. (`Decimal` since #2214; this comment said "Only Integer
+            // and Float" at both sites for six review rounds — the same
+            // comment-narrower-than-the-code shape that let the equality
+            // widening leak past two reviews.)
             //
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
