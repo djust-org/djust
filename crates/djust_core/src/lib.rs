@@ -308,7 +308,7 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
     // carries the two load-bearing rejections (an absent coefficient is not a
     // zero; letters with an exponent are not digits) and the saturating
     // exponent, all of which have pinning tests in
-    // `crates/djust/tests/test_decimal_value_2214.rs`.
+    // `crates/djust_core/tests/test_decimal_value_2214.rs`.
     let Some(parts) = crate::decimal::parse_decimal_parts(raw) else {
         return raw.to_string();
     };
@@ -318,23 +318,15 @@ pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
 
     // Django's cutoff (rule 2), on `as_tuple()`'s values, as Django computes it.
     if parts.over_django_digit_cutoff() {
-        // `as_tuple().digits` drops LEADING zeros; `digits` keeps them. Counting
-        // those inflates the length and shifts the coefficient by one, which
-        // diverged for EVERY `0.xxx` value near the cutoff until #2240 — an
-        // ordinary shape (`Decimal(1)/Decimal(7)` under `prec=120`) that the
+        // `as_tuple().digits` drops LEADING zeros; `parts.digits` keeps them.
+        // Counting those inflates the length and shifts the coefficient by one,
+        // which diverged for EVERY `0.xxx` value near the cutoff until #2240 —
+        // an ordinary shape (`Decimal(1)/Decimal(7)` under `prec=120`) that the
         // boundary test missed because all six of its cases had `1` as their
-        // integer part (#1867).
-        let significant = {
-            let trimmed = digits.trim_start_matches('0');
-            if trimmed.is_empty() {
-                // `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty — and
-                // this floor is also the only thing between an all-zero
-                // coefficient over the cutoff and a PANIC on `split_at(1)`.
-                "0"
-            } else {
-                trimmed
-            }
-        };
+        // integer part (#1867). `significant()` is the shared definition the
+        // cutoff above also uses, so the two cannot disagree about what a
+        // digit is (#1646).
+        let significant = parts.significant();
         // `format(d, 'e')`: one digit before the point, exponent adjusted.
         let (first, tail) = significant.split_at(1);
         let coefficient = if tail.is_empty() {

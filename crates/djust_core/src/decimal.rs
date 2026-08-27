@@ -36,17 +36,24 @@ pub struct DecimalParts {
 }
 
 impl DecimalParts {
-    /// `len(Decimal.as_tuple().digits)` — leading zeros dropped, floored at 1.
+    /// `Decimal.as_tuple().digits` — leading zeros dropped.
     ///
-    /// `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty, which is why
-    /// the floor is there rather than being an off-by-one guard.
-    pub fn significant_len(&self) -> usize {
-        let trimmed = self.digits.trim_start_matches('0').len();
-        if trimmed == 0 {
-            1
+    /// `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty, so an all-zero
+    /// coefficient yields `"0"` rather than `""`. That floor is not cosmetic:
+    /// it is the only thing between such a value and a `split_at(1)` panic in
+    /// the scientific branch, and `Decimal("0E-250")` is an ordinary value.
+    pub fn significant(&self) -> &str {
+        let trimmed = self.digits.trim_start_matches('0');
+        if trimmed.is_empty() {
+            "0"
         } else {
             trimmed
         }
+    }
+
+    /// `len(Decimal.as_tuple().digits)`, for the rules defined on the length.
+    pub fn significant_len(&self) -> usize {
+        self.significant().len()
     }
 
     /// Django's `abs(exponent) + len(digits) > 200` cut-off, which it applies
