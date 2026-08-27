@@ -1,7 +1,7 @@
 # djust Roadmap
 
 > Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-23
-> (v1.1.1-3 Decimal follow-ups added).
+> (v1.1.1-4 chain links added).
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
 > deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
@@ -30,7 +30,56 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.1-4 — the v1.1.1-3 chain links (drain bucket → ships in 1.1.1)
+
+Opened 2026-08-27. Every issue here was surfaced by a v1.1.1-3 PR's own review or
+implementation — this is the chain-shaped case (#2142), where you only learn the
+root cause is a *class* rather than an instance from the fix for the previous
+link. Filed as they appeared rather than batched, so the chain is visible in the
+issue graph instead of only in the PR trail.
+
+Three chains run through it.
+
+**Numeric-equality arms.** #2243 added `(Integer, Float)` arms to `values_equal`;
+its implementer measured that **#2244** is the identical hole one type over —
+Django says `True == 1` and `True > 0`, djust says false to both, and
+`compare_values` has no `Bool` arm either. Pinned as-is rather than fixed, with
+`values_identity` noted as the arm that must NOT widen (`True is 1` is false in
+Python and both engines already agree).
+
+**Source-grepping pins.** #2238 replaced one prose-counting pin with a shared
+`tokenize` stripper — and that fix established a capability limit rather than
+removing the class: **#2249** is #2241's pin over *Rust* source, which
+`tokenize` cannot parse (it returns the input unchanged, silently, so wiring it
+up would look like a fix and be a no-op), and **#2246** is a third Python-side
+variant that strips only the module docstring.
+
+**Decimal representation.** #2239 gave each of the three destinations the
+representation it needs, and the two it could not satisfy are **#2252** (a
+Decimal round-tripping back onto the view through the session must survive
+Django's own `json.dumps`, which has no encoder) and **#2253** (the Rust filter
+layer parses `Value::Decimal` through f64, so `floatformat`/`add` lose the digits
+the variant exists to carry). **#2250** is the residue #2242 measured and
+explicitly declined: string filters consume djust's numberformat rendering where
+Django's `@stringfilter` consumes `str(Decimal)` — a different mechanism, and not
+confined to the 200-digit cutoff.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | `floatformat`/`add` parse a Decimal through f64 (#2253) | The filter layer discards the digits `Value::Decimal` was added to carry. Measured as an exact set of divergent cells against Django, all equally wrong before the variant — so not a regression, but the half of #2214 that its own filter arms did not reach. | v1.1.1 |
+| **P1** | `{% if <bool> == <number> %}` always false (#2244) | Same hole as #2243 one type over: `True == 1`, `False == 0`, `True > 0` all false where Django says true. Both `values_equal` and `compare_values` need `Bool` arms; `values_identity` must not widen. | v1.1.1 |
+| **P2** | A Decimal in the session or a signed snapshot is still a float (#2252) | The one destination #2239 could take neither answer for: Django's session serializer is `json.dumps` with no `cls=`, so it raises on a `Decimal`, and the exact string is wrong too because the value is `safe_setattr`-ed back onto the view and reaches the next render. Wants a tagged round trip. | v1.1.1 |
+| **P2** | String filters see the numberformat rendering (#2250) | `truncatechars` 96/600, `make_list\|first` 1/600 against Django. Django's `@stringfilter` consume `str(Decimal)`; djust's consume the rendered form. **Not** confined to the cutoff — `Decimal('1E-9')` diverges. Declined by #2242 with measurements rather than assumed covered. | v1.1.1 |
+| **P2** | #2241's pin greps raw Rust source (#2249) | `tokenize` is CPython's, so pointing it at `filters.rs` returns the input unchanged **silently** — a no-op that looks like a fix. Options: a Rust-aware stripper, or move the pin into a `#[test]` over the token stream. Falsification-tested in #2238's helper so nobody wires it up by mistake. | v1.1.1 |
+| **P3** | `test_bug_capture_views`' pin strips only the module docstring (#2246) | Third Python-side variant of the same class; migrate it onto the shared `without_prose` / `code_only` helper #2238 introduced. | v1.1.1 |
+
+---
+
 ## v1.1.1-3 — the #2214 Decimal follow-ups (drain bucket → ships in 1.1.1)
+
+**COMPLETE 5/5 ✅** — #2238, #2239, #2241, #2242, #2243 all shipped 2026-08-27 (PRs #2245, #2254, #2247, #2251, #2248). Every one surfaced at least one further link; those are collected in v1.1.1-4 above.
 
 Opened 2026-08-26 out of PR #2240 (#2214: `Decimal` reached the client and the
 template engine as a lossy binary float). Five follow-ups, each split out under
