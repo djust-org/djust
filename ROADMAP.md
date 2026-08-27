@@ -55,9 +55,10 @@ up would look like a fix and be a no-op), and **#2246** is a third Python-side
 variant that strips only the module docstring.
 
 **Decimal representation.** #2239 gave each of the three destinations the
-representation it needs, and the two it could not satisfy are **#2252** (a
-Decimal round-tripping back onto the view through the session must survive
-Django's own `json.dumps`, which has no encoder) and **#2253** (the Rust filter
+representation it needs. **#2252** — the round trip back onto the view, which had
+to survive Django's own encoder-less `json.dumps` — is closed by a tagged form
+(`{"__djust_decimal__": "…"}`, the Rust `DECIMAL_TAG` name) decoded at every
+restore site. What remains is **#2253** (the Rust filter
 layer parses `Value::Decimal` through f64, so `floatformat`/`add` lose the digits
 the variant exists to carry). **#2250** is the residue #2242 measured and
 explicitly declined: string filters consume djust's numberformat rendering where
@@ -70,7 +71,7 @@ confined to the 200-digit cutoff.
 |---|---|---|---|
 | **P1** | `floatformat`/`add` parse a Decimal through f64 (#2253) | The filter layer discards the digits `Value::Decimal` was added to carry. Measured as an exact set of divergent cells against Django, all equally wrong before the variant — so not a regression, but the half of #2214 that its own filter arms did not reach. | v1.1.1 |
 | **P1** | `{% if <bool> == <number> %}` always false (#2244) | Same hole as #2243 one type over: `True == 1`, `False == 0`, `True > 0` all false where Django says true. Both `values_equal` and `compare_values` need `Bool` arms; `values_identity` must not widen. | v1.1.1 |
-| **P2** | A Decimal in the session or a signed snapshot is still a float (#2252) | The one destination #2239 could take neither answer for: Django's session serializer is `json.dumps` with no `cls=`, so it raises on a `Decimal`, and the exact string is wrong too because the value is `safe_setattr`-ed back onto the view and reaches the next render. Wants a tagged round trip. | v1.1.1 |
+| ~~**P2**~~ | ~~A Decimal in the session or a signed snapshot is still a float (#2252)~~ ✅ | ~~The one destination #2239 could take neither answer for~~ — Fixed with the tagged round trip: `decimal_for_state_roundtrip` writes `{"__djust_decimal__": "19.99"}` (the Rust `DECIMAL_TAG` name, #2214) and `decode_state_roundtrip` restores a real `Decimal` at eight sites found by grepping the SINK. The issue's framing was corrected by measuring it: the residue is **not** ">15 significant digits" — `float` also changes the **type** (`self.price + Decimal('1')` raises after a reconnect) and drops **trailing zeros** (`Decimal('19.90')` → `19.9`), so 10 of 20 ordinary-money template cases disagreed with Django, against 2 of 20 now (both the separate #2253 gap). Its read-side list was wrong in both directions: `mixins/rust_bridge.py` has no restore path, and `runtime.py`'s `_restore_snapshot`, `time_travel.py` and `_restore_component_state` were omitted. | v1.1.1 |
 | **P2** | String filters see the numberformat rendering (#2250) | `truncatechars` 96/600, `make_list\|first` 1/600 against Django. Django's `@stringfilter` consume `str(Decimal)`; djust's consume the rendered form. **Not** confined to the cutoff — `Decimal('1E-9')` diverges. Declined by #2242 with measurements rather than assumed covered. | v1.1.1 |
 | **P2** | #2241's pin greps raw Rust source (#2249) | `tokenize` is CPython's, so pointing it at `filters.rs` returns the input unchanged **silently** — a no-op that looks like a fix. Options: a Rust-aware stripper, or move the pin into a `#[test]` over the token stream. Falsification-tested in #2238's helper so nobody wires it up by mistake. | v1.1.1 |
 | **P3** | `test_bug_capture_views`' pin strips only the module docstring (#2246) | Third Python-side variant of the same class; migrate it onto the shared `without_prose` / `code_only` helper #2238 introduced. | v1.1.1 |
