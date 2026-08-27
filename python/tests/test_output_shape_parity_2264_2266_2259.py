@@ -600,22 +600,52 @@ class TestLinebreaksSafeMarking:
         block = text.split("const SAFE_OUTPUT_FILTERS", 1)[1].split("];", 1)[0]
         assert '"linebreaks"' in block
         assert '"linebreaksbr"' in block
-        # And the one that must stay OUT — it does not escape its own input.
-        assert '"linenumbers"' not in block
+        # And the neighbour, which joined them in #2291 — see below for why the
+        # line that used to be here asserted the opposite.
+        assert '"linenumbers"' in block
 
-    def test_linenumbers_stays_out_of_the_safe_list_and_is_still_correct(self) -> None:
-        """Why the neighbour was NOT added despite Django's ``is_safe=True``.
+    def test_linenumbers_membership_is_paired_with_the_escape(self) -> None:
+        """This test used to assert the exact opposite, and was wrong (#2291).
 
-        Django escapes each line and marks the join safe; djust escapes the whole
-        rendered string afterwards. Byte-identical, because everything the filter
-        ADDS — digits, ``.``, a space, the ``\\n`` join — is escape-invariant.
-        Adding the name to the safe list without moving the escape inside would
-        stop the input being escaped at all.
+        It read ``assert '"linenumbers"' not in block``, with the comment "the
+        one that must stay OUT — it does not escape its own input", and a
+        sibling named ``test_linenumbers_stays_out_of_the_safe_list_and_is_still_correct``
+        that rendered ``{{ p|linenumbers }}`` over six values, found djust and
+        Django byte-identical, and concluded the exclusion was correct. Every
+        one of those observations was accurate. The conclusion was not: djust
+        escaped nothing inside the filter and leaned on the render-time escape,
+        so ``{{ p|linenumbers|safe }}`` — the one column that removes that
+        escape — emitted attacker markup live.
+
+        The old docstring even named the precondition: "adding the name to the
+        safe list *without moving the escape inside* would stop the input being
+        escaped at all." That is true, and it is a statement about a PAIR. What
+        it pinned instead was one half of the pair, unconditionally, which made
+        the vulnerable arrangement the asserted-correct one.
+
+        So this now pins the pair, in both directions: membership without the
+        inner escape is the XSS, and the inner escape without membership
+        double-escapes. Neither half can move alone.
         """
+        base = _rust.__file__.rsplit("/python/", 1)[0] + "/crates/djust_templates/src/"
+        try:
+            with open(base + "renderer.rs", encoding="utf-8") as fh:
+                block = fh.read().split("const SAFE_OUTPUT_FILTERS", 1)[1].split("];", 1)[0]
+            with open(base + "filters.rs", encoding="utf-8") as fh:
+                body = fh.read().split("fn add_linenumbers", 1)[1].split("\nfn ", 1)[0]
+        except OSError:
+            pytest.skip("Rust source not available next to the built extension")
+        assert '"linenumbers"' in block, "the safety grant went missing"
+        assert "html_escape(line)" in body, (
+            "the escape moved out of add_linenumbers while the safe-list grant "
+            "stayed — that arrangement IS the #2291 vulnerability"
+        )
+        # And the behaviour both halves exist to produce.
         for value in ["<b>x</b>", "a\n<i>", "&", '"q"', "'s'", "<img src=x onerror=alert(1)>"]:
-            django_out, djust_out = render_both("{{ p|linenumbers }}", value)
-            assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
-            assert "<b>" not in djust_out and "<img" not in djust_out
+            for src in ("{{ p|linenumbers }}", "{{ p|linenumbers|safe }}"):
+                django_out, djust_out = render_both(src, value)
+                assert djust_out == django_out, f"{src}: django={django_out!r} djust={djust_out!r}"
+                assert "<b>" not in djust_out and "<img" not in djust_out
 
 
 class TestLinebreaksDifferential:

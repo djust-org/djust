@@ -806,8 +806,12 @@ fn apply_builtin_filter(
             Ok(Value::String(escape_js(&value.to_string())))
         }
         "linenumbers" => {
-            // linenumbers filter: prepend line numbers to each line
-            Ok(Value::String(add_linenumbers(&value.to_string())))
+            // linenumbers filter: prepend line numbers to each line.
+            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
+            Ok(Value::String(add_linenumbers(
+                &value.to_string(),
+                !input_was_safe,
+            )))
         }
         "get_digit" => {
             // Django indexes `str(int(value))`, NOT the rendered value:
@@ -3283,13 +3287,36 @@ fn escape_js(s: &str) -> String {
 /// Verified against Django over `<`, `&`, `"`, `'` and a multi-line mix. Adding
 /// it to the safe list WITHOUT moving the escape inside would stop the input
 /// being escaped at all and open an XSS hole for a one-cell cosmetic gain.
-fn add_linenumbers(s: &str) -> String {
+fn add_linenumbers(s: &str, autoescape: bool) -> String {
     let lines: Vec<&str> = s.split('\n').collect();
     let width = lines.len().to_string().len();
     lines
         .iter()
         .enumerate()
-        .map(|(i, line)| format!("{:0width$}. {line}", i + 1))
+        .map(|(i, line)| {
+            // Escape each LINE inside the filter, as Django does, rather than
+            // leaving it to the render-time auto-escape (#2291).
+            //
+            // The previous version relied on that render-time escape and
+            // `SAFE_OUTPUT_FILTERS` documented the exclusion deliberately,
+            // arguing the two were byte-identical "because everything it adds
+            // is escape-invariant". True — and beside the point: the argument
+            // holds only while the render-time escape actually RUNS. A later
+            // `|safe` suppresses it, and then nothing had escaped the input at
+            // all, so `{{ p|linenumbers|safe }}` emitted attacker markup live.
+            //
+            // Same shape as `linebreaks` (#2269): the escape moves inside and
+            // the name joins `SAFE_OUTPUT_FILTERS` as ONE inseparable change.
+            // Doing either alone is a bug in opposite directions — the escape
+            // without the grant double-escapes, the grant without the escape is
+            // the XSS.
+            let body = if autoescape {
+                html_escape(line)
+            } else {
+                (*line).to_string()
+            };
+            format!("{:0width$}. {body}", i + 1)
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
