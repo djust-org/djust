@@ -1386,12 +1386,22 @@ fn filesize_to_int(value: &Value) -> Option<i128> {
             }
         }
         Value::Decimal(d) => djust_core::decimal::parse_decimal_parts(d.trim())?.to_i128_trunc(),
-        // `int()` of an int is itself (#2260). `None` past `i128` — 39 digits —
-        // takes the `0 bytes` fallback, exactly as the `Decimal` arm above does
-        // at the same width. Without this arm a `BigInt` fell to the wildcard
-        // and every value past `i64` rendered `0 bytes`, where before the
-        // variant it had arrived as a `Float` and got a real answer.
-        Value::BigInt(d) => d.parse::<i128>().ok(),
+        // `int()` of an int is itself (#2260). Without this arm a `BigInt` fell
+        // to the wildcard and every value past `i64` rendered `0 bytes`, where
+        // before the variant it had arrived as a `Float` and got a real answer.
+        //
+        // Past `i128` — 39 digits — the digits do not fit either, and falling
+        // straight to `0 bytes` there is a regression at exactly `2**127`, which
+        // a set comparison against `main` caught as two cells. So the overflow
+        // delegates to the `Float` arm above, which is what the value used to
+        // take: one definition of that bound rather than a second copy of the
+        // constant (#1646). Beyond what a double can carry, both give up
+        // together, as they did before.
+        Value::BigInt(d) => d.parse::<i128>().ok().or_else(|| {
+            d.parse::<f64>()
+                .ok()
+                .and_then(|f| filesize_to_int(&Value::Float(f)))
+        }),
         Value::String(s) => python_int_from_str(s),
         // `int(None)`, `int([1, 2])`, `int({'a': 1})` — all TypeError.
         _ => None,

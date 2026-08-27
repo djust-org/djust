@@ -692,19 +692,23 @@ class TestKnownRemainingDivergences:
         )
         assert out == f"0{NBSP}bytes"
 
-    def test_a_float_nan_spells_itself_differently_before_any_filter_runs(self) -> None:
-        """``Value::Float``'s ``Display`` writes Rust's ``NaN``; Python writes ``nan``.
+    def test_a_float_nan_no_longer_spells_itself_differently(self) -> None:
+        """CLOSED by #2258, hours after this entry was written.
 
-        Surfaced by the ``linebreaks`` differential and left alone — ``{{ p }}``
-        alone already disagrees, so it is the ``Display`` gap already recorded
-        in ``test_floatformat_parity_2253``, not a ``linebreaks`` one. The
-        paragraph markup around it is now correct, which is this fix's part.
+        It read: ``Value::Float``'s ``Display`` writes Rust's ``NaN`` where
+        Python writes ``nan`` — surfaced by the ``linebreaks`` differential and
+        correctly left alone, because ``{{ p }}`` alone already disagreed, so it
+        was the ``Display`` gap and not a ``linebreaks`` one. That diagnosis is
+        exactly why #2258 closes it here for free: `Display` now routes through
+        Django's own ``numberformat.format`` rules.
+
+        Kept and inverted rather than deleted — the entry was right about where
+        the gap lived, and the pin is what goes red if either fix regresses.
         """
-        bare_django, bare_djust = render_both("{{ p }}", float("nan"))
-        assert (bare_django, bare_djust) == ("nan", "NaN")
+        assert render_both("{{ p }}", float("nan")) == ("nan", "nan")
         django_out, djust_out = render_both("{{ p|linebreaks }}", float("nan"))
         assert django_out == "<p>nan</p>"
-        assert djust_out == "<p>NaN</p>"
+        assert djust_out == django_out
 
 
 class TestLastFilterWinsForSafeness:

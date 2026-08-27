@@ -214,6 +214,35 @@ def test_the_comparison_operators_still_work() -> None:
     assert render_both("{% if p > 10 %}gt{% else %}le{% endif %}", -(2**70)) == ("le", "le")
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        I64_MAX + 1,
+        2**64,
+        12345678901234567890,
+        -12345678901234567890,
+        I128_MAX,
+        # Exactly at and just past `i128` — the two cells a set comparison
+        # against `main` caught when the overflow fell straight to `0 bytes`
+        # instead of the `f64` path the value used to take.
+        2**127,
+        -(2**127) - 1,
+    ],
+    ids=repr,
+)
+def test_filesizeformat_still_gets_a_real_answer(value: int) -> None:
+    """A variant with no arm falls to a wildcard, and the wildcard is a cliff.
+
+    `filesize_to_int` (#2264) coerces every input and falls back to `0 bytes`;
+    a `BigInt` with no arm of its own hits that fallback, where the same value
+    used to arrive as a `Float` and get a real answer. Asserted against Django
+    rather than against the previous djust output — this is a real parity gain
+    up to `i128`, and only the >`i128` cells are about non-regression.
+    """
+    django_out, djust_out = render_both("{{ p|filesizeformat }}", value)
+    assert djust_out == django_out
+
+
 def test_add_is_arbitrary_precision() -> None:
     """Django's first ``add`` branch is ``int(value) + int(arg)``, unbounded.
 
