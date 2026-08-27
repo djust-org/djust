@@ -765,12 +765,12 @@ def test_plain_float_equality_is_unchanged_by_this_pr() -> None:
         assert _rust.render_template(source, ctx) == "NZ", f"{value!r} read as zero"
         assert DjangoTemplate(source).render(DjangoContext(ctx)) == "NZ"
 
-    # A PRE-EXISTING divergence this RESTORES rather than fixes: djust answers
-    # `{% if <float> == <int literal> %}` false regardless, so `0.0 == 0` and
-    # `19.0 == 19` are both false where Django says true. That predates #2214
-    # and is not its to change (#1079) — filed as #2243. Asserted so the
-    # restoration is exact and the divergence is recorded, not rediscovered.
-    assert _rust.render_template(source, {"x": 0.0}) == "NZ"
+    # The other half of the same arm, closed separately in #2243: an EXACT
+    # `(Float, Integer)` comparison, so `0.0 == 0` is now true as Django says,
+    # while every residue above stays non-zero. Both halves are one assertion
+    # apart on purpose — an epsilon here would satisfy this line and break the
+    # loop above, which is exactly what #2240 shipped for two rounds.
+    assert _rust.render_template(source, {"x": 0.0}) == "Z"
     assert DjangoTemplate(source).render(DjangoContext({"x": 0.0})) == "Z"
 
 
