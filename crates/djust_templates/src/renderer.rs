@@ -28,6 +28,24 @@ static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
 /// `linebreaks`/`linebreaksbr` were added in #2259 together with the escape in
 /// `filters::linebreaks`/`linebreaksbr` — one change, never separable.
 ///
+/// #2284 made that internal escape CONDITIONAL for the four names Django
+/// registers `needs_autoescape=True` (`linebreaks`, `linebreaksbr`, `urlize`,
+/// `urlizetrunc`), and the membership survives because the reason widened
+/// rather than weakened. Each of those four now emits safe output under BOTH
+/// arms of `autoescape = not input_was_safe`:
+///
+/// * `input_was_safe == false` — the filter escapes its input, as before. This
+///   is every value that reached the filter without `mark_safe` / `|safe`,
+///   i.e. all hostile input.
+/// * `input_was_safe == true` — the escape is skipped, but only because the
+///   context or an earlier safe filter already declared the value safe. Django
+///   makes exactly this trade in `defaultfilters.linebreaks` et al.
+///
+/// So the invariant this list depends on — "nothing unescaped that was not
+/// deliberately marked safe reaches the page through these names" — is
+/// unchanged. A future `needs_autoescape` name added here must satisfy the same
+/// two-arm reading, not just the first.
+///
 /// `linenumbers` is `is_safe=True` in Django and is deliberately NOT here: it
 /// escapes per line where djust escapes the whole output, and those are
 /// byte-identical because everything it adds is escape-invariant. Adding the
@@ -662,6 +680,11 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     stripped,
                     Some(context),
                     arg_was_quoted,
+                    // Django's `needs_autoescape` input term (#2284). Read
+                    // BEFORE the assignment below, so it is the safety of the
+                    // value going IN — the same `obj` Django's
+                    // `isinstance(obj, SafeData)` reads.
+                    runtime_safe,
                 )?;
                 value = new_value;
                 // ASSIGNED, not OR-ed: the LAST filter decides (#2259) — but the
@@ -753,6 +776,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     stripped,
                     Some(context),
                     arg_was_quoted,
+                    // Django's `needs_autoescape` input term (#2284) — the
+                    // second of the three sites, kept in step by construction.
+                    runtime_safe,
                 )?;
                 value = new_value;
                 // ASSIGNED, not OR-ed: the LAST filter decides (#2259) — but the
@@ -2308,6 +2334,10 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
                 arg.as_deref(),
                 Some(context),
                 arg_was_quoted,
+                // Django's `needs_autoescape` input term (#2284) — the third of
+                // the three sites. `{% firstof p|safe|linebreaks %}` gets the
+                // same answer the `{{ … }}` arms do, or this is #1646 again.
+                runtime_safe,
             )?;
             value = new_value;
             // This arm always had LAST-filter semantics and its comment

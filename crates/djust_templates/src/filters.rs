@@ -30,6 +30,13 @@ pub fn apply_filter_with_context(
 /// is available. The ``arg_was_quoted`` flag tells the custom-filter
 /// fallback whether to treat the arg as a literal string (quoted) or a
 /// context-variable identifier (bare).
+///
+/// Passes ``input_was_safe = false`` — the SAFE default. This entry point has
+/// no view of the render chain, so it cannot know whether the caller had
+/// `mark_safe`d the value; reporting "not safe" makes the four
+/// `needs_autoescape` filters escape, which is what they did unconditionally
+/// before #2284. Only [`apply_filter_full_safe`]'s renderer call sites, which
+/// track the chain's safety, ever report `true`.
 pub fn apply_filter_full(
     filter_name: &str,
     value: &Value,
@@ -37,7 +44,7 @@ pub fn apply_filter_full(
     context: Option<&Context>,
     arg_was_quoted: bool,
 ) -> Result<Value> {
-    apply_filter_full_safe(filter_name, value, arg, context, arg_was_quoted).map(|(v, _)| v)
+    apply_filter_full_safe(filter_name, value, arg, context, arg_was_quoted, false).map(|(v, _)| v)
 }
 
 /// Like [`apply_filter_full`] but also reports whether the produced value is a
@@ -52,12 +59,40 @@ pub fn apply_filter_full(
 /// *final* value lacks ``__html__``), even when the filter is not decorated
 /// ``is_safe=True`` (#1660). A later plain-returning filter re-taints, because
 /// it overwrites this flag with ``false``.
+///
+/// # `input_was_safe` — Django's `needs_autoescape` term (#2284)
+///
+/// Django registers four built-ins ``needs_autoescape=True`` — `linebreaks`,
+/// `linebreaksbr`, `urlize`, `urlizetrunc` — and each opens with
+///
+/// ```text
+/// autoescape = autoescape and not isinstance(value, SafeData)
+/// ```
+///
+/// so it **skips its own internal escape** when the value handed to it was
+/// already safe. djust has no `{% autoescape %}` block (the tag is rejected by
+/// the parser), so the first term is pinned `true` and the expression reduces
+/// to `not input_was_safe` — which is the half that is observable today and
+/// was missing: `{{ p|safe|linebreaks }}` rendered `<p>&lt;b&gt;x&lt;/b&gt;</p>`
+/// where Django renders `<p><b>x</b></p>`.
+///
+/// `input_was_safe` is the renderer's `runtime_safe` **before** this filter
+/// runs — the same value `filter_output_is_safe` consumes as its input term
+/// (#2274), so the two halves of Django's `SafeData` reading are driven off one
+/// piece of state rather than two that can drift (#1646).
+///
+/// This does **not** loosen escaping for hostile input: the flag is `true` only
+/// when the context `mark_safe`d the value or an earlier `|safe` /
+/// safe-output filter marked it. Anything that was never marked safe still
+/// takes the escape, which is what keeps the four names' membership of
+/// `renderer::SAFE_OUTPUT_FILTERS` earned — see the `linebreaks` doc comment.
 pub fn apply_filter_full_safe(
     filter_name: &str,
     value: &Value,
     arg: Option<&str>,
     context: Option<&Context>,
     arg_was_quoted: bool,
+    input_was_safe: bool,
 ) -> Result<(Value, bool)> {
     // #2202: Django resolves a bare-identifier filter argument as a context
     // variable (`Variable(arg).resolve(context)`); only a QUOTED argument is a
@@ -110,9 +145,14 @@ pub fn apply_filter_full_safe(
     // `arg_was_quoted` reaches the dispatch table because `add` needs it: a
     // quoted "1.5" is a STRING to Python's int() (which raises), while an
     // unquoted 1.5 is a float literal (which truncates). See that arm (#2203).
-    if let Some(builtin) =
-        apply_builtin_filter(filter_name, value, builtin_arg, context, arg_was_quoted)
-    {
+    if let Some(builtin) = apply_builtin_filter(
+        filter_name,
+        value,
+        builtin_arg,
+        context,
+        arg_was_quoted,
+        input_was_safe,
+    ) {
         return builtin.map(|v| (v, false));
     }
     // Built-in match miss — fall through to the custom filter registry for
@@ -212,6 +252,7 @@ fn apply_builtin_filter(
     arg: Option<&str>,
     context: Option<&Context>,
     arg_was_quoted: bool,
+    input_was_safe: bool,
 ) -> Option<Result<Value>> {
     // #2250: Django's `@stringfilter` consumes `str(value)`. For a `Decimal`
     // that is NOT the rendered form — `str(Decimal('1E-9'))` is `1E-9`, while
@@ -482,12 +523,20 @@ fn apply_builtin_filter(
             Ok(Value::String(result.to_string()))
         }
         "linebreaks" => {
-            // linebreaks filter: converts newlines to <p> and <br> tags
-            Ok(Value::String(linebreaks(&value.to_string())))
+            // linebreaks filter: converts newlines to <p> and <br> tags.
+            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
+            Ok(Value::String(linebreaks(
+                &value.to_string(),
+                !input_was_safe,
+            )))
         }
         "linebreaksbr" => {
-            // linebreaksbr filter: converts newlines to <br> tags
-            Ok(Value::String(linebreaksbr(&value.to_string())))
+            // linebreaksbr filter: converts newlines to <br> tags.
+            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
+            Ok(Value::String(linebreaksbr(
+                &value.to_string(),
+                !input_was_safe,
+            )))
         }
         "cut" => {
             // cut filter: removes all occurrences of arg from string
@@ -830,13 +879,23 @@ fn apply_builtin_filter(
             }
         }
         "urlize" => {
-            // urlize filter: convert URLs and emails to clickable links
-            Ok(Value::String(urlize(&value.to_string(), None)))
+            // urlize filter: convert URLs and emails to clickable links.
+            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
+            Ok(Value::String(urlize(
+                &value.to_string(),
+                None,
+                !input_was_safe,
+            )))
         }
         "urlizetrunc" => {
-            // urlizetrunc filter: like urlize but truncates displayed URL
+            // urlizetrunc filter: like urlize but truncates displayed URL.
+            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
             let limit = arg.and_then(|s| s.parse::<usize>().ok());
-            Ok(Value::String(urlize(&value.to_string(), limit)))
+            Ok(Value::String(urlize(
+                &value.to_string(),
+                limit,
+                !input_was_safe,
+            )))
         }
         "unordered_list" => {
             // unordered_list filter: recursively render nested lists as <li>/<ul>
@@ -2078,13 +2137,26 @@ fn split_on_blank_lines(s: &str) -> Vec<&str> {
 /// inner escape would turn `{{ comment|linebreaks }}` into an XSS sink; the two
 /// halves are one change and must never be separated.
 ///
-/// The engine has no `{% autoescape %}` block (the tag is rejected by the
-/// parser), so `autoescape` is unconditionally true here. Django's
-/// `not isinstance(value, SafeData)` clause is therefore not reproduced: a
-/// context value the caller `mark_safe`d is escaped here where Django would pass
-/// it through. That divergence is in the SAFE direction — over-escaping, never
-/// under-escaping — and is stated in the parity suite rather than left to be
-/// discovered.
+/// # `autoescape` (#2284)
+///
+/// Django's registration is `needs_autoescape=True`, and the filter body opens
+/// `autoescape = autoescape and not isinstance(value, SafeData)`. The engine has
+/// no `{% autoescape %}` block (the tag is rejected by the parser), so the first
+/// term is pinned true and the caller passes `!input_was_safe` — Django's
+/// `SafeData` clause, which #2259 left unreproduced and #2284 closed. When it is
+/// `false` the paragraph text is emitted verbatim, exactly as
+/// `django.utils.html.linebreaks(value, autoescape=False)` does, so
+/// `{{ p|safe|linebreaks }}` on `<b>x</b>` renders `<p><b>x</b></p>` rather than
+/// escaping markup the view deliberately marked safe.
+///
+/// **The `SAFE_OUTPUT_FILTERS` membership survives that**, and the reason it
+/// does is worth stating because it changed: the output is exempt from
+/// auto-escaping because it is safe under BOTH arms — either this filter
+/// escaped the input itself (`autoescape = true`, the hostile-input case), or
+/// the input was already `SafeData` and the caller took responsibility for it
+/// (`autoescape = false`). A value that was never marked safe still takes the
+/// escape, so nothing that reaches a page unescaped today reaches it unescaped
+/// after #2284.
 ///
 /// Four defects beyond the escaping, all of which made `''` and multi-paragraph
 /// text render wrong:
@@ -2094,27 +2166,41 @@ fn split_on_blank_lines(s: &str) -> Vec<&str> {
 /// * empty paragraphs were FILTERED OUT, so `''` rendered `''` where Django
 ///   renders `<p></p>`;
 /// * `\r\n` was not normalized.
-fn linebreaks(s: &str) -> String {
+fn linebreaks(s: &str, autoescape: bool) -> String {
     let normalized = normalize_newlines(s);
     split_on_blank_lines(&normalized)
         .iter()
         // `"<p>%s</p>" % escape(p).replace("\n", "<br>")`. Escape FIRST, as
         // Django does — `escape` leaves `\n` alone, so the order is not
         // load-bearing, but mirroring it keeps the two readable side by side.
-        .map(|p| format!("<p>{}</p>", html_escape(p).replace('\n', "<br>")))
+        .map(|p| {
+            let body = if autoescape {
+                html_escape(p)
+            } else {
+                (*p).to_string()
+            };
+            format!("<p>{}</p>", body.replace('\n', "<br>"))
+        })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-/// `{{ value|linebreaksbr }}` — the same contract as [`linebreaks`] (#2259).
+/// `{{ value|linebreaksbr }}` — the same contract as [`linebreaks`] (#2259),
+/// including its `needs_autoescape` handling (#2284).
 ///
 /// The issue listed this one as a neighbour to *check* rather than to fix; it
 /// diverges too, on both axes. It escapes its input and is `is_safe=True` in
 /// Django exactly like `linebreaks`, and it needs the same
 /// `normalize_newlines` — a single-line differential misses it only because it
 /// emits no tag at all until the input contains a newline.
-fn linebreaksbr(s: &str) -> String {
-    html_escape(&normalize_newlines(s)).replace('\n', "<br>")
+fn linebreaksbr(s: &str, autoescape: bool) -> String {
+    let normalized = normalize_newlines(s);
+    let body = if autoescape {
+        html_escape(&normalized)
+    } else {
+        normalized
+    };
+    body.replace('\n', "<br>")
 }
 
 fn apply_stringformat(value: &Value, spec: &str) -> String {
@@ -3317,21 +3403,54 @@ static URLIZE_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
-fn urlize(text: &str, trunc_limit: Option<usize>) -> String {
+/// `{{ value|urlize }}` / `{{ value|urlizetrunc:n }}`.
+///
+/// # `autoescape` (#2284)
+///
+/// Django registers both `needs_autoescape=True` and threads the flag into
+/// `django.utils.html.Urlizer`, which reads it as `autoescape and not
+/// safe_input`. Everything the filter *quotes from the user* — the text between
+/// matches, the trailing punctuation, the anchor's display text — is escaped
+/// only when that is true.
+///
+/// The one escape that is **unconditional** is the `href`. Django writes
+/// `self.url_template % {"href": escape(url), ...}` outside the `if autoescape`
+/// branch, because the attribute value has to survive being placed inside
+/// `href="…"` whatever the surrounding policy is. Making it conditional would
+/// let a `mark_safe`d `http://x/"onmouseover=alert(1)` break out of the
+/// attribute — a genuine XSS that Django does not have. It is kept
+/// unconditional here for exactly that reason.
+///
+/// As with [`linebreaks`], `autoescape=false` is reachable only when the value
+/// was already `SafeData`, so the `SAFE_OUTPUT_FILTERS` membership stays
+/// earned: hostile input that nothing marked safe still takes every escape.
+fn urlize(text: &str, trunc_limit: Option<usize>, autoescape: bool) -> String {
+    // Django's `escape(...)` applied only where its `if autoescape and not
+    // safe_input:` branch applies. One helper rather than an `if` at each of
+    // the four sites, so a future site cannot forget the flag (#1646).
+    let maybe_escape = |s: &str| -> String {
+        if autoescape {
+            html_escape(s)
+        } else {
+            s.to_string()
+        }
+    };
+
     let mut result = String::new();
     let mut last_end = 0;
 
     for m in URLIZE_RE.find_iter(text) {
-        // Escape non-URL text between matches (prevents XSS via raw HTML injection)
-        result.push_str(&html_escape(&text[last_end..m.start()]));
+        // Non-URL text between matches — user text, so it follows the flag.
+        result.push_str(&maybe_escape(&text[last_end..m.start()]));
 
         let matched = m.as_str();
 
         // Determine if this is an email or a URL
         if matched.contains('@') && !matched.starts_with("http") {
-            // Email — escape href and display text
+            // Email — the href is ALWAYS escaped (attribute context); the
+            // display text follows the flag.
             let safe_href = html_escape(matched);
-            let display = html_escape(&truncate_url_display(matched, trunc_limit));
+            let display = maybe_escape(&truncate_url_display(matched, trunc_limit));
             result.push_str(&format!("<a href=\"mailto:{safe_href}\">{display}</a>"));
         } else {
             // URL
@@ -3342,9 +3461,10 @@ fn urlize(text: &str, trunc_limit: Option<usize>) -> String {
             };
             // Strip trailing punctuation from href/display that's not part of URL
             let (href_clean, display_raw, trailing) = strip_url_trailing(&href, matched);
+            // ALWAYS escaped — attribute context, as Django does.
             let safe_href = html_escape(&href_clean);
-            let display = html_escape(&truncate_url_display(&display_raw, trunc_limit));
-            let safe_trailing = html_escape(&trailing);
+            let display = maybe_escape(&truncate_url_display(&display_raw, trunc_limit));
+            let safe_trailing = maybe_escape(&trailing);
             result.push_str(&format!(
                 "<a href=\"{safe_href}\" rel=\"nofollow\">{display}</a>{safe_trailing}"
             ));
@@ -3353,8 +3473,8 @@ fn urlize(text: &str, trunc_limit: Option<usize>) -> String {
         last_end = m.end();
     }
 
-    // Escape remaining text after last match
-    result.push_str(&html_escape(&text[last_end..]));
+    // Remaining text after the last match — user text, so it follows the flag.
+    result.push_str(&maybe_escape(&text[last_end..]));
     result
 }
 
