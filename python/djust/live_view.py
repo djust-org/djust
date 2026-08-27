@@ -17,6 +17,7 @@ from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
     StateRoundtripJSONEncoder,
     decode_private_model_refs,
+    decode_state_roundtrip,
     encode_private_model_refs,
 )
 from .session_utils import (  # noqa: F401
@@ -801,6 +802,12 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 # #1994: re-hydrate model refs back to model instances (fresh DB
                 # fetch) so a private model attr comes back a MODEL, not a dict.
                 value = decode_private_model_refs(value)
+                # #2252: un-tag Decimals written by decimal_for_state_roundtrip
+                # so a private DecimalField attr comes back a DECIMAL, not a
+                # tag dict. This is the single decode point for all three
+                # callers of this method (mixins/request.py, runtime.py,
+                # mixins/sticky.py).
+                value = decode_state_roundtrip(value)
                 setattr(self, key, value)
                 # Track restored attrs as user-defined so they persist
                 # through subsequent save cycles.

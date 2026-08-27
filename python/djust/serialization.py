@@ -8,7 +8,7 @@ import importlib.util
 import json
 import logging
 from datetime import datetime, date, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, FrozenSet, List, Optional, Union
 from uuid import UUID
 
@@ -720,7 +720,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
 
 # ---------------------------------------------------------------------------
-# The state-round-trip boundary (#2239)
+# The state-round-trip boundary (#2239; closed lossless in #2252)
 #
 # Three destinations take a serialized djust value, and they do NOT want the
 # same representation of a ``Decimal``:
@@ -737,49 +737,164 @@ class DjangoJSONEncoder(json.JSONEncoder):
 #    is what Django's own encoder returns.
 # 3. **A round trip back ONTO the view** — the Django session
 #    (``mixins/request.py``, ``runtime.py``, ``mixins/sticky.py``,
-#    ``mixins/components.py``) and the signed state snapshot
-#    (``live_view.py``). This one is neither of the above: whatever is stored
-#    is ``safe_setattr``-ed back onto the view on restore and lands in the
-#    template context on the very next render.
+#    ``mixins/components.py``) and the snapshot captures in ``live_view.py``,
+#    restored by ``runtime.py`` (the signed back-navigation snapshot) and
+#    ``time_travel.py`` (the recorded event buffer). This one is neither of
+#    the above: whatever is stored is ``safe_setattr``-ed back onto the view on
+#    restore and lands in the template context on the very next render.
 #
-# Destination 3 cannot take the raw ``Decimal`` (Django's session serializer is
-# ``json.dumps(obj, separators=(",", ":"))`` with NO encoder — see
-# ``django/core/signing.py``'s ``JSONSerializer`` — so it raises ``TypeError``),
-# and it must not take the ``str`` either: a string restored into view state is
-# a string in the template, where ``{{ p|floatformat }}`` stops rounding and
-# ``{% if p > 10 %}`` compares lexically. That is exactly the regression that
-# blocked #2214, arriving one hop later.
+# Destination 3 can take NEITHER of the other two answers, which is what made
+# it the residue of #2239:
 #
-# So destination 3 keeps today's ``float``, and keeps today's precision loss
-# with it. This is the deliberate, documented residue of #2239; the lossless
-# fix needs a TAGGED round-trip (the shape ``encode_private_model_refs`` uses
-# for models, #1994) with a decode at every restore site, which is a separate
-# change. Tracked in #2252.
+# * **Not the raw ``Decimal``.** Django's session serializer is
+#   ``json.dumps(obj, separators=(",", ":"))`` with NO encoder — see
+#   ``django/core/signing.py``'s ``JSONSerializer`` — and the signed snapshot
+#   is a bare ``json.dumps`` too (``runtime.py``'s ``state_snapshot_signed``
+#   emit). Both raise ``TypeError``.
+# * **Not the exact string.** A string restored into view state is a string in
+#   the template, where ``{{ p|floatformat }}`` stops rounding and
+#   ``{% if p > 10 %}`` compares lexically — the #2214 regression, one hop
+#   later.
 #
-# ONE function decides it, so the encoder adapter and the normalizer adapter
-# can never drift apart (#1646).
+# #2239 therefore shipped ``float`` as "today's behaviour exactly, today's loss
+# exactly". What #2252 changed is that the cost of that was measured, and it is
+# NOT the "past ~15 significant digits" the issue framed it as. ``float`` is
+# wrong for ordinary money too, in two ways needing no precision loss at all:
+#
+# * **The type changes.** ``Decimal('19.99')`` comes back a ``float``, so an
+#   ordinary handler line — ``self.price + Decimal('1')`` — raises
+#   ``TypeError: unsupported operand type(s)`` after a reconnect and not
+#   before one.
+# * **Trailing zeros are gone.** ``Decimal('19.90')`` comes back ``19.9`` and
+#   renders ``19.9`` where Django renders ``19.90``. Measured across
+#   {19.90, 0.00, 100.00, 2.50, 19.99} x {``{{ p }}``, ``|floatformat``,
+#   ``|floatformat:2``, ``|stringformat:'s'``}: **10 of 20** cases disagree
+#   with Django through the float round trip, against 2 of 20 through the
+#   tagged one — and those 2 are the separate ``floatformat`` gap (#2253),
+#   not this boundary.
+#
+# So destination 3 gets a TAGGED round trip: the shape
+# ``encode_private_model_refs`` uses for models (#1994), under the same tag
+# name the Rust binary encoding already uses for the same job (``DECIMAL_TAG``
+# in ``crates/djust_core/src/lib.rs``, #2214).
+#
+# ``Decimal('19.99')`` is written as ``{"__djust_decimal__": "19.99"}``, which
+# every JSON serializer on these paths accepts, and
+# :func:`decode_state_roundtrip` turns back into a real ``Decimal`` at every
+# restore site. Backward compatible in the useful direction: an untagged
+# ``float`` from a session written by an older release passes straight through.
+#
+# COLLISION HAZARD, deliberately the same one the Rust side documents: a user
+# dict that is exactly ``{"__djust_decimal__": <digit string>}`` and nothing
+# else is misread as a ``Decimal`` on restore. The guard is the same three
+# rules ``visit_map`` applies — exactly one key, that key, a ``str`` payload —
+# plus a fourth the Rust side does not need, because Python's ``Decimal()``
+# raises where Rust just stores the string: a payload ``Decimal`` refuses is
+# left as a dict rather than raised on. The name is chosen to make the
+# collision a thing you have to try to do.
+#
+# ONE function decides each direction, so the encoder adapter and the
+# normalizer adapter can never drift apart (#1646), and every restore site
+# decodes by the same rules.
 # ---------------------------------------------------------------------------
 
+#: The tag key. Must equal ``DECIMAL_TAG`` in ``crates/djust_core/src/lib.rs``
+#: — the Rust ``visit_map`` decodes this exact shape, so the two halves of the
+#: framework agree on what a tagged ``Decimal`` looks like. Pinned by
+#: ``test_the_python_tag_is_the_rust_tag``.
+STATE_DECIMAL_TAG = "__djust_decimal__"
 
-def decimal_for_state_roundtrip(value: Decimal) -> float:
+
+def decimal_for_state_roundtrip(value: Decimal) -> Dict[str, str]:
     """Represent *value* for a boundary that restores its output onto the view.
 
-    Returns ``float`` — lossy past ~15 significant digits, and deliberately so:
-    see the block comment above. Client-bound boundaries use ``str`` instead
+    Returns the tagged form ``{"__djust_decimal__": "<exact digits>"}``, which
+    every JSON serializer on those paths accepts and which
+    :func:`decode_state_roundtrip` restores to a real ``Decimal`` — type and
+    digits both. See the block comment above for why neither the raw
+    ``Decimal`` (the serializers refuse it) nor the bare string (it stops being
+    a number in the template) can be used here.
+
+    Client-bound boundaries take the bare string instead
     (:class:`DjangoJSONEncoder`), and template-bound ones keep the ``Decimal``
     (:func:`normalize_django_value`).
     """
-    return float(value)
+    return {STATE_DECIMAL_TAG: str(value)}
+
+
+def decode_state_roundtrip(obj: Any) -> Any:
+    """Inverse of :func:`decimal_for_state_roundtrip` (#2252).
+
+    Recursively replaces every ``{"__djust_decimal__": "<digits>"}`` map with
+    the ``Decimal`` it stands for. Call this on ANY state read back from the
+    Django session or a recorded/signed snapshot BEFORE it is applied to a
+    view: an undecoded tag is strictly *worse* than the ``float`` it replaced,
+    because it reaches the template as a dict rather than as a wrong number.
+
+    Untagged values pass through unchanged, which is what makes state written
+    by an older release keep working.
+
+    Fails soft on a payload ``Decimal`` refuses — ``{"__djust_decimal__": "hi"}``
+    stays a dict — because a user dict that collides with the tag must not
+    crash a reconnect.
+    """
+    if isinstance(obj, dict):
+        # The same three rules the Rust ``visit_map`` applies (#2214): exactly
+        # one key, that key, a string payload. Anything else is a real dict.
+        if len(obj) == 1:
+            payload = obj.get(STATE_DECIMAL_TAG)
+            if isinstance(payload, str):
+                try:
+                    return Decimal(payload)
+                except InvalidOperation:
+                    # A colliding user dict whose payload is not a number.
+                    # Leave it alone rather than raise — see the docstring.
+                    return dict(obj)
+        return {k: decode_state_roundtrip(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [decode_state_roundtrip(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(decode_state_roundtrip(v) for v in obj)
+    return obj
+
+
+def decimal_tags_to_strings(obj: Any) -> Any:
+    """Render every tagged ``Decimal`` as its bare digit string, recursively.
+
+    For a CLIENT-BOUND *view* of state that was captured for destination 3 —
+    the time-travel debug panel, which DISPLAYS ``state_before`` /
+    ``state_after`` rather than restoring from them. Destination 2's rule is
+    the exact digit string, so this converts between the two instead of leaking
+    a tag shape into a UI (``{__djust_decimal__: "19.99"}`` where ``19.99``
+    belongs).
+
+    Never call this on state that will be restored: the restore path needs
+    :func:`decode_state_roundtrip`, and a bare string there is the #2214
+    regression.
+    """
+    if isinstance(obj, dict):
+        if len(obj) == 1:
+            payload = obj.get(STATE_DECIMAL_TAG)
+            if isinstance(payload, str):
+                return payload
+        return {k: decimal_tags_to_strings(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [decimal_tags_to_strings(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(decimal_tags_to_strings(v) for v in obj)
+    return obj
 
 
 class StateRoundtripJSONEncoder(DjangoJSONEncoder):
     """:class:`DjangoJSONEncoder` for a JSON round trip back onto the view.
 
     Identical in every respect except ``Decimal``, which
-    :func:`decimal_for_state_roundtrip` keeps numeric so the restored value
-    still behaves like a number in the template. Use this — never the plain
-    encoder — when the ``json.dumps`` output is read back and assigned to view
-    state (``_capture_snapshot_state``, ``_capture_components_snapshot``).
+    :func:`decimal_for_state_roundtrip` writes in the tagged form so
+    :func:`decode_state_roundtrip` can restore the real ``Decimal`` on the way
+    back. Use this — never the plain encoder — when the ``json.dumps`` output
+    is read back and assigned to view state (``_capture_snapshot_state``,
+    ``_capture_components_snapshot``), and pair it with a decode at the restore
+    site.
     """
 
     def _default_impl(self, obj: Any) -> Any:

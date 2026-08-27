@@ -347,8 +347,11 @@ def restore_sticky_child_state(child: Any, parent: Any, session: Any, parent_pat
 
     # Lazy import to avoid a circular import (security -> live_view -> mixins).
     from ..security import safe_setattr
+    from ..serialization import decode_state_roundtrip
 
-    for attr, value in saved.items():
+    # #2252: ``save_sticky_child_state`` tagged every Decimal on the way out
+    # (``_normalize(..., state_roundtrip=True)``); un-tag before applying.
+    for attr, value in decode_state_roundtrip(saved).items():
         safe_setattr(child, attr, value, allow_private=False)
 
     private = session.get(f"{key}__private")
