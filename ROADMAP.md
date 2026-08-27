@@ -33,8 +33,9 @@ Two name shapes appear in this roadmap, with distinct meanings:
 ## v1.1.1-5 — Django filter-parity divergences surfaced by the #2250 sweep (drain bucket → ships in 1.1.1)
 
 Opened 2026-08-27. Unlike v1.1.1-4, these are **not** chain links off a fix —
-they are pre-existing divergences a 129,360-cell differential walked into while
-verifying something else, and every one reproduces with a plain string and no
+they are pre-existing divergences that differentials walked into while verifying
+something else — nine in total, from #2250's 129,360-cell sweep and #2253's
+sibling-filter check, and every one reproduces with a plain string and no
 `Decimal` anywhere. They are collected rather than scattered because they share
 a cause: djust's filter implementations were written against Django's
 *documentation* rather than differentialed against its *behaviour*, so each is
@@ -52,10 +53,13 @@ chain axis.
 |---|---|---|---|
 | **P1** | A Python `int` past `i64` loses precision (#2260) | `1234567890123456789012345` does not fit `Value::Integer`, so it lands as a float and renders in exponent form. Same class as #2214's Decimal loss, one type over, and unlike Decimal there is no variant to carry it. | v1.1.1 |
 | **P2** | `\|linebreaks` output is HTML-escaped (#2259) | djust escapes its own generated `<p>`/`<br>` markup, so the filter emits visible tags instead of formatting. Django marks it safe. | v1.1.1 |
-| **P2** | `escape`/`safe` are no-ops where Django's are stringfilters (#2257) | Measured residue from #2250: coercing them fixes 22,707 cells and regresses 1,195, because the type flowing down a chain changes and `floatformat` cannot absorb it. Wants the numeric-string parse question settled first. | v1.1.1 |
+| ~~**P2**~~ | ~~`escape`/`safe` are no-ops where Django's are stringfilters (#2257)~~ ✅ **closed by PR #2263** | The residue #2250 measured at 22,707 fixed / 1,195 regressed. Its blocker was the numeric-string parse question, which #2253's `floatformat` port settled — Django's `floatformat` is `Decimal(str(text)).quantize(...)` on every input type, so a coerced string is absorbed rather than dropped. Closed without its own PR. | v1.1.1 |
 | **P3** | `Display` for `Value::Float` diverges from `str()` (#2258) | `1e300` and `NaN` render differently from Python. The #2203 `django_value_repr` work covered the integral-float `.0` case and not these. | v1.1.1 |
 | **P3** | Five filter-algorithm divergences (#2262) | `truncatechars_html` ×2, `truncatewords_html`, `truncatewords`, `urlencode` — each a distinct algorithm difference, batched because they share the "written from docs" cause. | v1.1.1 |
 | **P3** | `slugify` maps `.` to `-`; `title` strips whitespace (#2261) | Two small algorithm divergences in the same pair of filters. | v1.1.1 |
+| **P1** | `filesizeformat` diverges on EVERY value (#2264) | Django separates number and unit with U+00A0 and djust uses a plain space, plus a pluralization difference — so *every* call is wrong by a byte. Surfaced by #2253's sibling sweep. This is the class #2228 recorded: **a test written with an ordinary space passes while shipping the wrong byte.** | v1.1.1 |
+| **P2** | `stringformat:"d"` saturates a >i64 Decimal (#2265) | `9223372036854775807` where Django prints the digits. Same defect as #2260 at a second boundary — plausibly one fix. | v1.1.1 |
+| **P3** | `floatformat`'s `u`/`gu` suffixes ignore an overridden `DECIMAL_SEPARATOR` (#2266) | With `DECIMAL_SEPARATOR="!"` Django gives `6666!67`, djust `6666.67`. Falsification-tested rather than assumed when filed. Measured against the pre-#2263 implementation, so re-measure first. | v1.1.1 |
 
 ---
 
