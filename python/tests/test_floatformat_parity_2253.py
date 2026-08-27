@@ -23,8 +23,10 @@ then widening the differential to the whole surface corrected the premise twice:
   IS a second, real defect — it loses a digit from 2^53 upward
   (``Decimal('9007199254740993')|add:1`` gave back 9007199254740993) — but
   widening the truncation alone would not have closed the reported cell. Both
-  are fixed: the truncation is exact and the arithmetic is ``i128``, with a sum
-  outside ``i64`` carried as ``Value::Decimal``'s exact digits.
+  are fixed: the truncation is exact and the arithmetic is arbitrary-precision,
+  with a sum outside ``i64`` carried as exact digits. (#2253 shipped this as an
+  ``i128`` carrying ``Value::Decimal``; #2260 removed the width and moved the
+  carrier to ``Value::BigInt``, which is what an ``int`` + ``int`` returns.)
 
 Every assertion here is a **differential against real Django**, and the curated
 table is paired with a randomized sweep, because a table samples the axis you
@@ -364,18 +366,38 @@ class TestKnownRemainingDivergences:
     Each is either a Django behaviour djust deliberately does not reproduce, or
     a gap that belongs to a different filter. Asserted as facts so that closing
     one turns this file red, which is the signal to prune the entry (#1125).
+
+    It worked: three entries went red when #2258/#2260/#2265 landed. They are
+    kept, inverted to assert AGREEMENT and named after what closed them, rather
+    than deleted — a gap that was stated and then closed is worth a pin, and
+    deleting it would leave nothing to go red if the fix regressed.
     """
 
-    def test_python_ints_are_unbounded_and_i128_is_not(self) -> None:
-        """Past i128, `add` returns its input rather than guessing.
+    def test_python_ints_are_unbounded_and_add_is_too(self) -> None:
+        """CLOSED by #2260 — kept as a pin, per this class's own contract.
 
-        Django computes it exactly — Python's ints have no ceiling. Matching
-        that needs arbitrary-precision arithmetic, which this fix does not add.
+        This entry read "past i128, `add` returns its input rather than
+        guessing … matching Django needs arbitrary-precision arithmetic, which
+        this fix does not add." #2260 added it: `add` computes on digit strings,
+        so the only remaining give-up is an operand `int()` itself refuses.
         """
         django_out, djust_out = render_both("{{ p|add:1 }}", Decimal("1E+250"))
-        assert django_out.startswith("1000")
         assert len(django_out) == 251
-        assert djust_out == "1e+250"
+        assert djust_out == django_out
+
+        # The give-up that DOES remain, one width further out: past CPython's
+        # `sys.get_int_max_str_digits()` Django raises `ValueError` (its
+        # `except (ValueError, TypeError)` is around the `%` in `stringformat`,
+        # not around `add`'s `int()`), and djust renders the input rather than
+        # 500ing. Never a fabricated number.
+        assert (
+            _rust.render_template(
+                "{{ p|add:1 }}", normalize_django_value({"p": Decimal("1E+5000")})
+            )
+            == "1e+5000"
+        )
+        with pytest.raises(ValueError):
+            DjangoTemplate("{{ p|add:1 }}").render(DjangoContext({"p": Decimal("1E+5000")}))
 
     def test_add_still_returns_the_value_rather_than_djangos_empty_string(self) -> None:
         """Django's third branch is `return ""`; djust returns the input.
@@ -404,33 +426,38 @@ class TestKnownRemainingDivergences:
             == "1.6"
         )
 
-    def test_a_python_int_past_i64_is_lossy_before_any_filter_runs(self) -> None:
-        """`{{ p }}` alone already disagrees, so this is not a filter gap.
+    def test_a_python_int_past_i64_survives_the_value_boundary(self) -> None:
+        """CLOSED by #2260 — this entry named where the fix belonged.
 
-        A Python `int` wider than an `i64` does not survive the crossing into
-        `Value::Integer`; it arrives as a double. `floatformat` then formats
-        the double it was handed, exactly. Out of scope for #2253 — the fix
-        belongs at the value boundary, not in a filter.
+        It read: "a Python `int` wider than an `i64` does not survive the
+        crossing into `Value::Integer`; it arrives as a double … the fix
+        belongs at the value boundary, not in a filter." `Value::BigInt` is
+        that boundary fix, and `floatformat` needed no change: it was already
+        faithful to the value it was handed, which is now the exact one.
         """
         big = -17475672789612459955425
         bare_django, bare_djust = render_both("{{ p }}", big)
         assert bare_django == "-17475672789612459955425"
-        assert bare_djust == "-17475672789612460000000"
-        # The filter is faithful to the (already lossy) value it receives.
-        _, filtered = render_both("{{ p|floatformat }}", big)
-        assert filtered == bare_djust
+        assert bare_djust == bare_django, "the int must survive `{{ p }}` exactly"
+        # The filter is still faithful to the value it receives — which is the
+        # point: the digits it formats are the real ones now.
+        ff_django, ff_djust = render_both("{{ p|floatformat }}", big)
+        assert ff_djust == ff_django
 
-    def test_a_float_nan_is_a_display_gap_that_floatformat_does_not_share(self) -> None:
-        """`Value::Float`'s `Display` writes Rust's `NaN` where Python writes `nan`.
+    def test_a_float_nan_no_longer_has_a_display_gap(self) -> None:
+        """CLOSED by #2258 — this entry named the change that would close it.
 
-        `floatformat` builds its own `str(text)` via `python_float_repr`, so it
-        agrees with Django here while the bare `{{ p }}` still does not. Stated
-        because the asymmetry is deliberate: widening it to `Display` would
-        change every render of a NaN and belongs to its own change.
+        It read: "`Value::Float`'s `Display` writes Rust's `NaN` where Python
+        writes `nan` … widening it to `Display` would change every render of a
+        NaN and belongs to its own change." #2258 is that change: `Display`
+        routes through `python_float_repr` and then Django's own
+        `numberformat.format` rules, so the bare render agrees too.
         """
-        bare_django, bare_djust = render_both("{{ p }}", float("nan"))
-        assert (bare_django, bare_djust) == ("nan", "NaN")
+        assert_agrees("{{ p }}", float("nan"))
         assert_agrees("{{ p|floatformat }}", float("nan"))
+        # The other two shapes #2258 named, in the same place.
+        assert_agrees("{{ p }}", 1e300)
+        assert_agrees("{{ p }}", float("inf"))
 
     def test_the_u_suffix_now_honours_overridden_number_settings(self) -> None:
         """CLOSED by #2266 — this entry was a divergence and is now agreement.

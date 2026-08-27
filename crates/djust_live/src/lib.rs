@@ -2157,6 +2157,15 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::Integer(i));
     }
 
+    // BIG INT BEFORE FLOAT, for the same reason as the Decimal arm below
+    // (#2260): `extract::<f64>()` succeeds on any Python `int`, so a value past
+    // `i64` placed after it silently becomes a lossy double. This converter and
+    // `FromPyObject for Value` must agree or the same int renders differently by
+    // path (#1646) — the actor path reaches here.
+    if let Some(digits) = djust_core::big_int_digits(obj) {
+        return Ok(Value::BigInt(digits));
+    }
+
     // DECIMAL BEFORE FLOAT (#2214). This is the actor path — `dispatch_mount`
     // passes the whole `get_context_data()` through here, and component props
     // come this way too — so leaving it on f64 while the other converters were

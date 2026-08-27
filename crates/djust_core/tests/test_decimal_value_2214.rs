@@ -12,39 +12,11 @@ fn dec(s: &str) -> Value {
     Value::Decimal(s.to_string())
 }
 
-/// Serial guard for the process-global `django_value_repr`.
-///
-/// EVERY test that reads `Display` must hold it, not only the one that toggles:
-/// Rust runs a binary's tests on parallel threads, so a default-ON reader that
-/// skipped the lock would race the OFF test. Lifted from
-/// `test_display_django_parity_2203.rs`, where taking the lock in only one
-/// state made roughly one run in three red — including, memorably, the
-/// determinism guard failing non-deterministically.
-static FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-struct FlagGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
-
-impl FlagGuard {
-    fn on() -> Self {
-        let g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        djust_core::set_django_value_repr(true);
-        FlagGuard(g)
-    }
-
-    fn off() -> Self {
-        let g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        djust_core::set_django_value_repr(false);
-        FlagGuard(g)
-    }
-}
-
-impl Drop for FlagGuard {
-    /// Restores the default even on panic — without this one genuine failure
-    /// leaves the flag OFF and cascades into unrelated tests.
-    fn drop(&mut self) {
-        djust_core::set_django_value_repr(true);
-    }
-}
+// The serial guard for the process-global `django_value_repr`. Was a copy of
+// `test_display_django_parity_2203.rs`'s; shared since #2260, which was about
+// to add a third and a fourth. See `tests/value_repr_flag/mod.rs`.
+mod value_repr_flag;
+use value_repr_flag::FlagGuard;
 
 #[test]
 fn a_decimal_renders_its_exact_digits() {

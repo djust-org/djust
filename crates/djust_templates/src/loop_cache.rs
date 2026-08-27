@@ -610,6 +610,18 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             9u8.hash(hasher);
             d.hash(hasher);
         }
+        // Tag 10, distinct from Decimal, String, Integer and Float (#2260).
+        // Sharing tag 9 with Decimal would let a fragment rendered from
+        // `Decimal('123')` be served for the int `123` — they render the same
+        // but do not SERIALIZE the same (one leaves as a `decimal.Decimal`,
+        // the other as an `int`) and `pprint`/`json_script` spell them
+        // differently. The tag is what keeps that separate; hashing the digit
+        // string, not a parsed double, is what keeps two big ints differing
+        // past f64 precision apart.
+        Value::BigInt(d) => {
+            10u8.hash(hasher);
+            d.hash(hasher);
+        }
         Value::Bool(b) => {
             1u8.hash(hasher);
             b.hash(hasher);

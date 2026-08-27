@@ -190,43 +190,12 @@ fn both_missing_and_none_stay_falsy() {
 // the suite stays green.
 // ---------------------------------------------------------------------------
 
-/// Serial guard: the flag is process-global, so EVERY test that reads `Display`
-/// must hold it — not only the ones that toggle. Rust runs a binary's tests on
-/// parallel threads, so a default-ON test that skipped the lock would read the
-/// global while an OFF test held it false.
-///
-/// A first pass took the lock only in `off()` and was RED on roughly 1 run in 3,
-/// a different test each time — including `dict_rendering_is_stable_...`, the
-/// determinism guard, failing non-deterministically. The reference this file
-/// cites (`djust_vdom/tests/virtual_keyed_ops_2017.rs`) locks both states; only
-/// half the pattern had been lifted (#2203 review).
-static FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Holds the lock AND restores the default, even if the test panics — without
-/// this, one genuine failure leaves the flag OFF and cascades into unrelated
-/// ones.
-struct FlagGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
-
-impl FlagGuard {
-    /// Hold the lock at the DEFAULT (on) state — for tests that only read.
-    fn on() -> Self {
-        let g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        djust_core::set_django_value_repr(true);
-        FlagGuard(g)
-    }
-
-    fn off() -> Self {
-        let g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        djust_core::set_django_value_repr(false);
-        FlagGuard(g)
-    }
-}
-
-impl Drop for FlagGuard {
-    fn drop(&mut self) {
-        djust_core::set_django_value_repr(true);
-    }
-}
+// The serial guard moved to `tests/value_repr_flag/mod.rs` in #2260, which was
+// about to add a third and a fourth copy of it. Its module docs carry the
+// rationale this comment used to: the flag is process-global, so EVERY test
+// that reads `Display` must hold the lock, not only the ones that toggle.
+mod value_repr_flag;
+use value_repr_flag::FlagGuard;
 
 #[test]
 fn the_flag_restores_the_previous_rendering_verbatim() {
