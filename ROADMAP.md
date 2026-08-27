@@ -1,7 +1,7 @@
 # djust Roadmap
 
 > Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-23
-> (v1.1.1-5 filter-parity divergences added).
+> (v1.1.1-6 chain links added).
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
 > deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
@@ -30,7 +30,50 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.1-6 — the v1.1.1-5 chain links (drain bucket → ships in 1.1.1)
+
+Opened 2026-08-27. Four issues, each surfaced by a v1.1.1-5 PR's own differential
+rather than by inspection — and each one an axis that PR's sample did not reach.
+That is the recurring shape now: **the sweep finds what the sweep was shaped to
+find, and the next issue is whatever axis it held fixed.**
+
+Two are the sharpest kind — silent data loss:
+
+**#2273** — `striptags` deletes everything after a lone `<`, so `"a < b"`
+renders `"a "`. Found by #2272's chain axis while porting `Truncator`;
+reproduces on `main` independent of that branch.
+
+**#2274** — `|safe` does not survive an `is_safe=True` filter. **24 of Django's
+27** such filters diverge on `{{ p|safe|X }}`. #2272 measured it and improved it
+(24 → 23, and 5 → 1 on the unchained axis) without closing it, because the
+propagation rule itself is the defect rather than any one filter.
+
+The other two are representation gaps #2275's float work walked into:
+
+**#2276** — `normalize_django_value` flattens a Python tuple to a list at the
+PyO3 boundary, so `Value::Tuple` is unreachable from a view context and
+`{{ (1.0,) }}` renders `[1.0]`. Both `py_repr` and `pprint_value` carry `Tuple`
+arms, one with a comment asserting it "must stay reachable" — it is not.
+
+**#2277** — `pprint` never wraps where `pprint.pformat` wraps at width 80:
+`[1.5]*40` is 39 newlines in Django and 0 in djust. #2275's differential
+reported full `pprint` parity because every container in its sample was short —
+the divergence lives entirely on the axis it held fixed.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | `striptags` deletes everything after a lone `<` (#2273) | `"a < b"` → `"a "`. Silent data loss on ordinary prose containing a mathematical `<`. Django's `strip_tags` loops `MLStripper` until the output stops changing and does not swallow the tail. | v1.1.1 |
+| **P1** | `\|safe` does not survive an `is_safe=True` filter (#2274) | 24 of Django's 27 `is_safe=True` filters diverge on `{{ p\|safe\|X }}`. The rule, not any one filter, is the defect — `filter_output_is_safe` (added by PR #2269) is the single consumer to fix. | v1.1.1 |
+| **P2** | A Python tuple is flattened at the PyO3 boundary (#2276) | `Value::Tuple` is unreachable from a view context, so `{{ (1.0,) }}` renders `[1.0]` where Django renders `(1.0,)`. #2203 added the variant *specifically* so a tuple would render with parentheses; the boundary undoes it. | v1.1.1 |
+| **P3** | `pprint` never wraps (#2277) | `pprint.pformat` wraps at width 80; djust emits one line. Needs Python's line-breaking algorithm, not a width check — measure before assuming it is small. | v1.1.1 |
+
+---
+
 ## v1.1.1-5 — Django filter-parity divergences surfaced by the #2250 sweep (drain bucket → ships in 1.1.1)
+
+**COMPLETE 9/9 ✅** — shipped 2026-08-27 (PRs #2263, #2269, #2271, #2272, #2275). Four further links collected in v1.1.1-6 above.
 
 Opened 2026-08-27. Unlike v1.1.1-4, these are **not** chain links off a fix —
 they are pre-existing divergences that differentials walked into while verifying
