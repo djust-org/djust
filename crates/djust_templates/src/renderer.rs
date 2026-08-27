@@ -314,11 +314,11 @@ fn localize_if_number(value: &Value) -> String {
         //
         // NOT "renders as bare digits", which an earlier version of this
         // comment claimed: over Django's >200-digit cutoff a Decimal renders in
-        // scientific form, and `localize_number_with` bails on anything holding
-        // an `e`. So `1.230E-250` stays `1.230e-250` where Django gives
-        // `1,230e-250` — it localizes the coefficient. A residual gap, filed as
-        // #2242, and still a strict improvement: on the previous release the
-        // same value was an f64 and rendered further from Django than either.
+        // scientific form. `localize_number_with` used to bail on anything
+        // holding an `e`, so `1.230E-250` stayed `1.230e-250` where Django
+        // gives `1,230e-250`. Fixed in #2242 by mirroring Django's own
+        // scientific branch — the coefficient goes through the same
+        // localisation path and the exponent passes through verbatim.
         Value::Integer(_) | Value::Float(_) | Value::Decimal(_) => {
             djust_core::locale::localize_number(&value.to_string())
         }
