@@ -34,6 +34,13 @@ pub use errors::{DjangoRustError, Result};
 /// name is chosen to make that collision a thing you have to try to do.
 pub(crate) const DECIMAL_TAG: &str = "__djust_decimal__";
 
+/// Map key marking a [`Value::BigInt`] in a BINARY encoding (#2260).
+///
+/// Same mechanism, same deliberate ugliness, and DISTINCT from [`DECIMAL_TAG`]:
+/// a big int that came back as a `Decimal` would leave the process as a
+/// `decimal.Decimal`, which is the type change the variant exists to prevent.
+pub(crate) const BIGINT_TAG: &str = "__djust_bigint__";
+
 /// The `DECIMAL_TAG` value, for tests that must exercise near-misses against
 /// the real constant rather than a copy of the literal.
 ///
@@ -42,6 +49,13 @@ pub(crate) const DECIMAL_TAG: &str = "__djust_decimal__";
 #[doc(hidden)]
 pub fn decimal_tag() -> &'static str {
     DECIMAL_TAG
+}
+
+/// The [`BIGINT_TAG`] value, for tests outside the crate. `#[doc(hidden)]`, not
+/// API — same rationale as [`decimal_tag`].
+#[doc(hidden)]
+pub fn bigint_tag() -> &'static str {
+    BIGINT_TAG
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +102,39 @@ pub enum Value {
     /// the value no longer LOSES its digits on the way to the browser or to
     /// `{{ p }}`.
     Decimal(String),
+    /// A Python `int` too large for [`Value::Integer`], carried as its EXACT
+    /// digit string (#2260).
+    ///
+    /// `Integer` is an `i64`; a Python `int` is arbitrary-precision. Past
+    /// `2**63 - 1` the `i64` arm of `FromPyObject` fails and — before this
+    /// variant — the next arm that matched was `extract::<f64>()`, so
+    /// `12345678901234567890` reached the renderer as a binary double and
+    /// `{{ p }}` printed `12345678901234567000`. Reachable from a `Sum()`
+    /// aggregate, a nanosecond timestamp product, or an id from an external
+    /// system.
+    ///
+    /// **Not `Value::Decimal`**, which carries an exact digit string already
+    /// and would have cost nothing to reuse. Two things a `Decimal` does that
+    /// an `int` must not: it renders `Decimal('123')` from [`Value::py_repr`]
+    /// when nested in a list (Python renders `123`), and it converts back to a
+    /// `decimal.Decimal` in [`IntoPyObject`], so a view attribute holding a big
+    /// int would come back from the session round trip as a `Decimal` and stop
+    /// being an `int` to every `isinstance` downstream. A separate variant
+    /// costs six exhaustive `match` arms; sharing `Decimal` costs a type change
+    /// that leaves the process.
+    ///
+    /// **Not a wider `Integer`** either. `i128` reaches 39 digits and stops;
+    /// `1234567890123456789012345678901234567890` is 40 and is not exotic for a
+    /// hash. A digit string has no ceiling, which is the property Python has.
+    ///
+    /// The invariant: `BigInt` holds `str(int)` — an optional `-` then ASCII
+    /// digits, and a magnitude that does NOT fit an `i64` (a value that fits is
+    /// always `Integer`, so the two variants never both spell one number).
+    /// `as_f64()` parses it on demand, deliberately lossily, for exactly the
+    /// reason `Decimal` does: arithmetic and comparison keep the behaviour they
+    /// had when this value simply WAS a float. What changes is that the digits
+    /// survive rendering and transport.
+    BigInt(String),
 }
 
 /// Untagged in human-readable formats, with ONE exception (#2214).
@@ -121,8 +168,22 @@ impl Serialize for Value {
                 m.serialize_entry(DECIMAL_TAG, d)?;
                 m.end()
             }
+            // A big int takes the same two-format split, for the same reason:
+            // `SerializableViewState` round-trips through msgpack on every read
+            // of the default state backend, and an untagged big int comes back
+            // as `Value::String` — which renders the same but stops being an
+            // `int` on the way back to Python and loses `{% if p > 10 %}`
+            // (#2260). The JSON half stays a string, as `Decimal`'s does: JSON
+            // has no way to say "a number with more digits than a double", and
+            // a string at least does not silently drop them.
+            Value::BigInt(d) if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(BIGINT_TAG, d)?;
+                m.end()
+            }
             // Everything else is exactly the untagged derive it replaces.
             Value::Decimal(d) => serializer.serialize_str(d),
+            Value::BigInt(d) => serializer.serialize_str(d),
             Value::Missing | Value::None => serializer.serialize_none(),
             Value::Bool(b) => serializer.serialize_bool(*b),
             Value::Integer(i) => serializer.serialize_i64(*i),
@@ -238,6 +299,12 @@ impl<'de> Deserialize<'de> for Value {
                     if let Some(Value::String(d)) = obj.get(DECIMAL_TAG) {
                         return Ok(Value::Decimal(d.clone()));
                     }
+                    // The binary-format big-int tag (#2260), same shape and the
+                    // same "exactly one key, that key, a string payload"
+                    // discrimination — anything else is a real dict.
+                    if let Some(Value::String(d)) = obj.get(BIGINT_TAG) {
+                        return Ok(Value::BigInt(d.clone()));
+                    }
                 }
                 Ok(Value::Object(obj))
             }
@@ -274,6 +341,36 @@ pub fn is_decimal(ob: &Bound<'_, PyAny>) -> bool {
         return false;
     };
     ob.is_instance(cls.bind(py)).unwrap_or(false)
+}
+
+/// The exact decimal digits of a Python `int`, or `None` if this is not one
+/// (#2260).
+///
+/// Called only after `extract::<i64>()` has already failed, so a `Some` means
+/// "an int too large for [`Value::Integer`]" and the [`Value::BigInt`]
+/// invariant holds by construction.
+///
+/// NOT `ob.str()`. `bool` and `IntEnum` are `int` SUBCLASSES and may spell
+/// themselves any way they like — `str(Color.RED)` is `Color.RED`, and a
+/// subclass could stringify to something that is not digits at all, which would
+/// then be parsed back as an `int` on the way out. `int(ob)` narrows to a plain
+/// `int` first, so the digits are the value's, not its `__str__`'s. (`bool` is
+/// claimed by the earlier arm and never reaches here; the point is that the
+/// rule does not depend on that.)
+///
+/// Fails CLOSED, like [`is_decimal`]: on any error the answer is `None` and the
+/// value takes its previous path — a conversion helper must not raise.
+pub fn big_int_digits(ob: &Bound<'_, PyAny>) -> Option<String> {
+    let py = ob.py();
+    if !ob.is_instance_of::<pyo3::types::PyInt>() {
+        return None;
+    }
+    let plain = py.get_type::<pyo3::types::PyInt>().call1((ob,)).ok()?;
+    let digits = plain.str().ok()?.extract::<String>().ok()?;
+    // Defence in depth: whatever produced this string, only `[-]digits` may
+    // become a `BigInt`, because `Display` writes it back out verbatim.
+    let body = digits.strip_prefix('-').unwrap_or(&digits);
+    (!body.is_empty() && body.bytes().all(|b| b.is_ascii_digit())).then_some(digits)
 }
 
 /// Render a Decimal's `str()` form the way Django renders a number (#2214).
@@ -383,6 +480,10 @@ impl Value {
             Value::Integer(i) => Some(*i as f64),
             Value::Float(f) => Some(*f),
             Value::Decimal(d) => d.parse::<f64>().ok(),
+            // Same contract as `Decimal`: lossy on purpose. Before this variant
+            // the value already WAS this double, so no comparison or arithmetic
+            // changes answer; only rendering and transport gain the digits.
+            Value::BigInt(d) => d.parse::<f64>().ok(),
             _ => None,
         }
     }
@@ -398,6 +499,10 @@ impl Value {
             // Django/Python: `bool(Decimal('0.00'))` is False. Parsing is
             // enough — a value too large to parse is certainly non-zero.
             Value::Decimal(d) => d.parse::<f64>().map(|f| f != 0.0).unwrap_or(true),
+            // Every `BigInt` is past `i64` by construction, so it is never zero;
+            // written on the digits anyway rather than through a parse that
+            // gives `inf` for a 400-digit value.
+            Value::BigInt(d) => d.bytes().any(|b| b.is_ascii_digit() && b != b'0'),
             Value::String(s) => !s.is_empty(),
             Value::List(l) => !l.is_empty(),
             Value::Tuple(t) => !t.is_empty(),
@@ -471,6 +576,14 @@ impl Value {
             // top-level one renders bare digits — the same str/repr split that
             // makes containers unable to reuse Display (#2203, #2214).
             Value::Decimal(d) => format!("Decimal('{d}')"),
+            // `repr`, NOT `Display` (#2258). `str([1e20])` is `[1e+20]` while
+            // `str(1e20)` is `100000000000000000000`: the bare render goes
+            // through `numberformat.format`, but a NESTED float is spelled by
+            // Python's list repr, which calls `repr` on the element. So the
+            // delegation below — correct for every other variant — was the
+            // third site of the same str/repr split the string-filter coercion
+            // and `floatformat` already carry.
+            Value::Float(f) => decimal::python_float_repr(*f),
             other => other.to_string(),
         }
     }
@@ -484,8 +597,10 @@ impl Value {
             Value::Float(fl) => write!(f, "{fl}"),
             // Exact digits even on the legacy path: `django_value_repr` is the
             // #2203 repr switch, and restoring the #2214 precision loss through
-            // it would make a rendering-parity flag silently lossy.
+            // it would make a rendering-parity flag silently lossy. Same for
+            // `BigInt` and the #2260 loss.
             Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
+            Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
             Value::List(_) | Value::Tuple(_) => write!(f, "[List]"),
             Value::Object(o) => match o.get("__str__") {
@@ -511,21 +626,47 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", if *b { "True" } else { "False" }),
             Value::Integer(i) => write!(f, "{i}"),
             Value::Float(fl) => {
-                // Python keeps the `.0` on an integral float; Rust's Display
-                // drops it. Guarded on `is_finite` and a magnitude below 2^53
-                // so `inf`, `NaN` and values already in exponent form keep
-                // their own formatting.
-                if fl.is_finite() && fl.fract() == 0.0 && fl.abs() < 1e16 {
-                    write!(f, "{fl:.1}")
-                } else {
-                    write!(f, "{fl}")
-                }
+                // Django's `{{ }}` path for a float is `numberformat.format`,
+                // which is TWO steps, and this arm used to be neither of them
+                // (#2258):
+                //
+                //     if isinstance(number, float) and "e" in str(number).lower():
+                //         number = Decimal(str(number))
+                //     if isinstance(number, Decimal):  <200-digit cutoff, else "{:f}">
+                //     else:                            str_number = str(number)
+                //
+                // So the input to both steps is `str(float)` — CPython's `repr`
+                // since 3.1, which is what `python_float_repr` is. Rust's `{}`
+                // is not it: it never uses exponent notation and spells the
+                // non-finite values `NaN`/`inf` where Python gives `nan`/`inf`.
+                // The old `{:.1}` guard was a partial hand-port of the `.0` case
+                // (#2203) that could not see either.
+                //
+                // Then the SECOND step is exactly `expand_decimal_exponent` —
+                // the same >200-digit cutoff and the same `{:f}` expansion the
+                // `Decimal` arm below uses, because Django reaches it by turning
+                // the float INTO a Decimal. One definition, not two (#1646).
+                // That is what makes `1e20` render `100000000000000000000` while
+                // `1e300` renders `1e+300`: Django really does spell them
+                // differently, on the digit count, not on the variant.
+                //
+                // Non-finite spellings hold no `e` and `expand_decimal_exponent`
+                // rejects them, so `nan`/`inf`/`-inf` pass through verbatim.
+                write!(
+                    f,
+                    "{}",
+                    expand_decimal_exponent(&decimal::python_float_repr(*fl))
+                )
             }
             // Django renders a number through `numberformat.format()`, which
             // uses `"{:f}".format(...)`, so an exponent-form Decimal expands:
             // `1E-9` renders `0.000000001`. NOT `str()` — see
             // `expand_decimal_exponent`.
             Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
+            // `str(int)` is the digits, with no cutoff and no exponent form:
+            // `numberformat.format` short-circuits an `int` before it reaches
+            // either rule, and its non-grouping path is `str(number)` (#2260).
+            Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
@@ -577,6 +718,13 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             Ok(Value::Bool(b))
         } else if let Ok(i) = ob.extract::<i64>() {
             Ok(Value::Integer(i))
+        } else if let Some(digits) = big_int_digits(&ob.to_owned()) {
+            // BEFORE the f64 arm, and for the same reason the Decimal arm is
+            // (#2260): `extract::<f64>()` succeeds on ANY Python `int`, so a
+            // value past `i64` placed after it is unreachable and silently
+            // becomes a double. Only reached when the `i64` arm above already
+            // failed, so this is exactly "an int that does not fit".
+            Ok(Value::BigInt(digits))
         } else if is_decimal(&ob.to_owned()) {
             // BEFORE the f64 arm, and that ordering is the whole point (#2214).
             // `extract::<f64>()` goes through `PyFloat_AsDouble`, which honours
@@ -719,6 +867,20 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::Decimal(d) => {
                 let decimal_cls = py.import("decimal")?.getattr("Decimal")?;
                 match decimal_cls.call1((d.as_str(),)) {
+                    Ok(obj) => Ok(obj),
+                    Err(_) => Ok(d.into_pyobject(py)?.to_owned().into_any()),
+                }
+            }
+            // Back to a real Python `int`, not a `str` and not a `Decimal`
+            // (#2260). This is the half of the variant that a shared
+            // `Value::Decimal` could not have done: a handler that put an
+            // `int` in the context must read an `int` back out of it, or every
+            // `isinstance(x, int)` downstream of a state round trip changes
+            // answer. Falls back to the digits as a string if `int(s)` raises,
+            // which it cannot for a string this crate produced.
+            Value::BigInt(d) => {
+                let int_cls = py.get_type::<pyo3::types::PyInt>();
+                match int_cls.call1((d.as_str(),)) {
                     Ok(obj) => Ok(obj),
                     Err(_) => Ok(d.into_pyobject(py)?.to_owned().into_any()),
                 }

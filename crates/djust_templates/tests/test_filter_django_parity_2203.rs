@@ -213,11 +213,13 @@ fn add_does_not_overflow() {
     // test profile has debug assertions on — which is precisely how it was
     // found.
     //
-    // The give-up POINT moved in #2253: the arithmetic is `i128` now, and a sum
-    // outside `i64` is carried as `Value::Decimal`'s exact digits rather than
-    // being discarded, so `i64::MAX + 1` is the answer Django gives instead of
-    // the input unchanged. What has not moved — and is what this test is for —
-    // is that no overflow may ever produce a wrapped or fabricated number.
+    // The give-up POINT has moved twice. #2253 made the arithmetic `i128` and
+    // carried a sum outside `i64` as exact digits, so `i64::MAX + 1` became the
+    // answer Django gives instead of the input unchanged. #2260 removed the
+    // width entirely — `add_int_digits` is arbitrary-precision, as Python's
+    // `int` is — so there is no overflow left to guard, only inputs `int()`
+    // itself refuses. What has not moved, and is what this test is for, is that
+    // no width may ever produce a wrapped or fabricated number.
     let ctx = ctx_with("v", Value::Integer(i64::MAX));
     let out = render("{{ v|add:1 }}", &ctx);
     assert!(
@@ -226,10 +228,27 @@ fn add_does_not_overflow() {
     );
     assert_eq!(out, "9223372036854775808", "i64::MAX + 1, exactly");
 
-    // Past i128 there is still no answer to give, so the value comes back
-    // unchanged — the same fail-soft, one width further out.
+    // Past i128 there IS an answer now, and it is Django's: 251 digits, verified
+    // against a live `{{ v|add:1 }}` render. Before #2260 this returned the
+    // input unchanged (`1e+250`), which the comment above called a fail-soft and
+    // which was really the width showing through.
     let far = ctx_with("v", Value::Decimal("1E+250".to_string()));
-    assert_eq!(render("{{ v|add:1 }}", &far), "1e+250");
+    let sum = render("{{ v|add:1 }}", &far);
+    assert_eq!(
+        sum.len(),
+        251,
+        "10**250 + 1 has 251 digits, got {}",
+        sum.len()
+    );
+    assert!(sum.starts_with('1') && sum.ends_with('1'), "got {sum}");
+    assert_eq!(sum.matches('0').count(), 249);
+
+    // The remaining fail-soft is an operand `int()` itself refuses. Django
+    // RAISES here (`str(int)` past `sys.get_int_max_str_digits()` is a
+    // `ValueError` its `except` does not catch); djust renders the input rather
+    // than 500ing, and the digits are never fabricated.
+    let too_wide = ctx_with("v", Value::Decimal("1E+5000".to_string()));
+    assert_eq!(render("{{ v|add:1 }}", &too_wide), "1e+5000");
 
     // Same via the widened float path.
     let mut c2 = Context::new();

@@ -230,14 +230,29 @@ fn apply_builtin_filter(
     // Custom filters need nothing: `apply_custom_filter` hands Python a real
     // `Decimal`, so Django's own `@stringfilter` applies to them unchanged.
     //
-    // Only `Decimal` is coerced. Every other variant's `Display` already IS
-    // Python's `str()` (or diverges for reasons that show up in `{{ v }}` too,
-    // which a filter-boundary coercion could not fix — e.g. `1e300`, #2258).
-    let coerced_decimal: Value;
+    // `Float` takes the SAME split, for the same reason (#2258). `str(1e20)` is
+    // `1e+20`; `{{ f }}` renders `100000000000000000000`, because
+    // `numberformat.format` converts an exponent-form float to a `Decimal` and
+    // expands it up to Django's 200-digit cut-off. Django really does spell one
+    // float two ways depending on which path it takes, and so must this: the
+    // renderer keeps `Display`, and the string filters get `repr`.
+    //
+    // Before #2258 this arm could not have helped — `Display` was Rust's `{}`,
+    // which is neither spelling — so the earlier version of this comment
+    // recorded the gap ("diverges for reasons that show up in `{{ v }}` too")
+    // rather than closing it. With `Display` correct, the coercion is the other
+    // half.
+    //
+    // Every remaining variant's `Display` already IS Python's `str()`.
+    let coerced: Value;
     let value: &Value = match value {
         Value::Decimal(d) if is_string_filter(filter_name) => {
-            coerced_decimal = Value::String(d.clone());
-            &coerced_decimal
+            coerced = Value::String(d.clone());
+            &coerced
+        }
+        Value::Float(f) if is_string_filter(filter_name) => {
+            coerced = Value::String(djust_core::decimal::python_float_repr(*f));
+            &coerced
         }
         _ => value,
     };
@@ -341,81 +356,54 @@ fn apply_builtin_filter(
             // float, and `int(1.5)` is 1. The template layer distinguishes the
             // two by quoting, so `arg_was_quoted` is what separates them —
             // `float_ok` is false for a quoted argument, mirroring `int(str)`.
-            // `i128`, not `i64`. Python's ints are unbounded, and TWO separate
-            // truncations were losing digits before #2253: `as_f64()` on a
-            // `Value::Decimal` is a binary double, so `int()` was off by one
-            // from 2^53 up (`Decimal('9007199254740993')|add:1` gave back
-            // 9007199254740993), and `as i64` saturated from 2^63 up, so the
-            // `checked_add` below overflowed and the filter returned its input
-            // UNCHANGED — silently doing nothing rather than adding.
+            // DIGIT STRINGS, not a machine integer. `int()` is unbounded in
+            // Python, and every fixed width tried here has been the wrong shape:
+            // `as_f64()` on a `Value::Decimal` is a binary double, so `int()`
+            // was off by one from 2^53 up (`Decimal('9007199254740993')|add:1`
+            // gave back 9007199254740993); `as i64` saturated from 2^63 up, so
+            // the add overflowed and the filter returned its input UNCHANGED
+            // (#2253); and the `i128` that replaced it does the same thing at 39
+            // digits (#2260). `9`×60 `|add:1` was CORRECT on main only by
+            // coincidence — it had arrived as the double `1e60`, whose expansion
+            // is exactly the sum the filter was declining to compute.
             //
-            // The issue that reported this named only the first cause. The
-            // second is why widening the truncation alone would not have fixed
-            // the cell it cites: 12345678901234567890 does not fit an i64 no
-            // matter how exactly you compute it.
+            // So the width is gone: `add_int_digits` is arbitrary-precision, and
+            // the only way to reach the fail-soft below is an operand `int()`
+            // itself would refuse.
             //
             // Non-finite floats are refused rather than saturated. `int(inf)`
             // raises `OverflowError` in Python — uncaught by Django's
             // `except (ValueError, TypeError)` — so there is no answer to
             // agree with, and `i64::MAX` was a fabricated number where the
             // fail-soft below at least returns the value it was given.
-            let as_int = |v: &Value, float_ok: bool| -> Option<i128> {
-                // `f64 as i128` SATURATES, so a magnitude past i128 would
-                // become `i128::MAX` and be reported as a real sum.
-                let from_f64 = |f: f64| -> Option<i128> {
-                    (f.is_finite() && f.abs() < 1.7e38).then(|| f.trunc() as i128)
-                };
-                match v {
-                    Value::Integer(n) => Some(i128::from(*n)),
-                    // `int()` truncates toward zero, so int(1.5) == 1.
-                    Value::Float(f) => from_f64(*f),
-                    // `int(Decimal('19.99'))` is 19 — truncation, on the EXACT
-                    // digits. One definition of Decimal->integer, in
-                    // `djust_core::decimal`, shared with `floatformat` (#1646).
-                    Value::Decimal(d) => {
-                        djust_core::decimal::parse_decimal_parts(d).and_then(|p| p.to_i128_trunc())
-                    }
-                    // `int(True)` is 1 in Python, so Django's first branch
-                    // handles bools: `{{ True|add:1 }}` is 2.
-                    Value::Bool(b) => Some(i128::from(*b)),
-                    Value::String(s) => s.trim().parse::<i128>().ok().or_else(|| {
-                        float_ok
-                            .then(|| s.trim().parse::<f64>().ok())
-                            .flatten()
-                            .and_then(from_f64)
-                    }),
-                    _ => None,
-                }
-            };
             let arg_value = arg.map(|s| Value::String(s.to_string()));
-            // `checked_add`, not `+`. Python's ints are arbitrary-precision so
-            // Django cannot overflow here; a fixed width can, and plain `+`
-            // PANICS in a debug build ("attempt to add with overflow") while
-            // silently wrapping in release — `{{ max|add:1 }}` returned a
-            // NEGATIVE number.
-            //
-            // On overflow, fall through to the branch below and return the
-            // value unchanged — the same fail-soft posture `date` takes on an
-            // unparseable input, and honest about not being able to compute it.
             // The VALUE is a real typed value, never a template literal, so its
             // float coercion is always allowed. Only the ARGUMENT's quoting is
             // in question.
-            let lhs = as_int(value, true);
-            let rhs = arg_value.as_ref().and_then(|a| as_int(a, !arg_was_quoted));
-            match lhs.zip(rhs).and_then(|(a, b)| a.checked_add(b)) {
+            let lhs = int_digits_of(value, true);
+            let rhs = arg_value
+                .as_ref()
+                .and_then(|a| int_digits_of(a, !arg_was_quoted));
+            match lhs.zip(rhs) {
                 // A sum outside `i64` is carried as its exact digits rather than
                 // being thrown away: `Value::Integer` is an i64 and Python's is
                 // not, so `{{ p|add:1 }}` on a 20-digit `DecimalField` had no
-                // Integer to return and silently returned its input. A
-                // `Value::Decimal` is precisely "an exact digit string" (#2214),
-                // renders exactly, and truncates back exactly if another `add`
-                // is chained onto it. Beyond i128 the fail-soft below still
-                // applies — Python's unbounded ints have no equivalent here
-                // (#2253).
-                Some(sum) => Ok(match i64::try_from(sum) {
-                    Ok(n) => Value::Integer(n),
-                    Err(_) => Value::Decimal(sum.to_string()),
-                }),
+                // Integer to return and silently returned its input (#2253).
+                //
+                // `BigInt`, not `Decimal` (#2260). Django's first branch is
+                // `int(value) + int(arg)` and an `int` is what it returns, so a
+                // `Decimal` here was the nearest exact-digit variant available
+                // rather than the right type: it rendered identically but
+                // spelled itself `Decimal('...')` under `pprint`, quoted itself
+                // under `json_script`, and left the process as a
+                // `decimal.Decimal`.
+                Some((a, b)) => {
+                    let sum = djust_core::decimal::add_int_digits(&a, &b);
+                    Ok(match sum.parse::<i64>() {
+                        Ok(n) => Value::Integer(n),
+                        Err(_) => Value::BigInt(sum),
+                    })
+                }
                 None => match (value, arg) {
                     // Concatenation branch.
                     (Value::String(s), Some(a)) => Ok(Value::String(format!("{s}{a}"))),
@@ -524,6 +512,9 @@ fn apply_builtin_filter(
         "filesizeformat" => {
             // Django coerces with `int(bytes_)` and formats EVERY input,
             // falling back to `0 bytes` rather than echoing the value (#2264).
+            // #2260's own arm here is superseded by that rewrite, which already
+            // routes every variant through one `filesize_to_int` — so `BigInt`
+            // belongs there, next to `Decimal`, and that is where it is.
             Ok(Value::String(format_filesize(value)))
         }
         "random" => {
@@ -750,9 +741,38 @@ fn apply_builtin_filter(
             Ok(Value::String(add_linenumbers(&value.to_string())))
         }
         "get_digit" => {
-            // get_digit filter: return Nth digit from right (1-indexed)
+            // Django indexes `str(int(value))`, NOT the rendered value:
+            //
+            //     arg = int(arg); value = int(value)   # ValueError -> value
+            //     if arg < 1: return value
+            //     try: return int(str(value)[-arg])
+            //     except IndexError: return 0
+            //
+            // Which is why `{{ 1e-200|get_digit:3 }}` is `0` and not a digit of
+            // the rendering: `int(1e-200)` is `0`, so there is no third digit.
+            // Reading the rendered string instead was invisible while `Display`
+            // expanded every float — it answered `0` from the 200 zeros — and
+            // became wrong the moment #2258 made `{{ 1e-200 }}` render `1e-200`,
+            // whose third-from-last character is `2`. The #2260 differential
+            // caught it as a regression against `main`.
             let n = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
-            Ok(Value::String(get_digit(&value.to_string(), n)))
+            if n == 0 {
+                return Some(Ok(value.clone()));
+            }
+            match int_digits_of(value, false) {
+                // `str(value)` INCLUDES the sign, and Django indexes into that,
+                // so `-123` has four characters. Out of range is `0`; landing on
+                // the `-` raises in Django (`int('-')`) and returns the value
+                // unchanged here, the same fail-soft posture the rest of this
+                // module takes rather than 500ing (documented divergence).
+                Some(d) => Ok(match d.as_bytes().get(d.len().wrapping_sub(n)) {
+                    Some(b) if b.is_ascii_digit() => Value::String((*b as char).to_string()),
+                    Some(_) => value.clone(),
+                    None => Value::String("0".to_string()),
+                }),
+                // `int()` raised: Django returns the value unchanged.
+                None => Ok(value.clone()),
+            }
         }
         "iriencode" => {
             // iriencode filter: like urlencode but preserves non-ASCII chars
@@ -1366,6 +1386,12 @@ fn filesize_to_int(value: &Value) -> Option<i128> {
             }
         }
         Value::Decimal(d) => djust_core::decimal::parse_decimal_parts(d.trim())?.to_i128_trunc(),
+        // `int()` of an int is itself (#2260). `None` past `i128` — 39 digits —
+        // takes the `0 bytes` fallback, exactly as the `Decimal` arm above does
+        // at the same width. Without this arm a `BigInt` fell to the wildcard
+        // and every value past `i64` rendered `0 bytes`, where before the
+        // variant it had arrived as a `Float` and got a real answer.
+        Value::BigInt(d) => d.parse::<i128>().ok(),
         Value::String(s) => python_int_from_str(s),
         // `int(None)`, `int([1, 2])`, `int({'a': 1})` — all TypeError.
         _ => None,
@@ -2131,33 +2157,58 @@ fn apply_stringformat(value: &Value, spec: &str) -> String {
     match last_char {
         's' => value.to_string(),
         'd' | 'i' => {
-            let int_val = match value {
-                Value::Integer(n) => *n,
-                Value::Float(f) => *f as i64,
-                Value::Decimal(_) => value.as_f64().unwrap_or(0.0) as i64,
-                Value::Bool(b) => {
-                    if *b {
-                        1
-                    } else {
-                        0
-                    }
-                }
-                _ => value.to_string().parse::<i64>().unwrap_or(0),
+            // Django is `("%" + arg) % value`, catching `(ValueError,
+            // TypeError)` and returning `""`. CPython's `%d` takes an `int`, a
+            // `bool`, a FINITE `float` or a FINITE `Decimal` and truncates
+            // toward zero; it raises `TypeError` for a `str`, `None`, a list, a
+            // dict or a tuple (Django stringifies a tuple first, which then
+            // fails the same way) and `ValueError` for a NaN. Read off CPython
+            // 3.12, not inferred.
+            //
+            // What was here computed an `i64` through `as_f64()`, so it carried
+            // BOTH of the losses #2253 had already fixed one filter over: a
+            // double holds ~15 digits, so it was off by one from 2^53 up, and
+            // `as i64` SATURATES, so every value past 2^63 rendered
+            // `9223372036854775807` — a fabricated constant, silently, where an
+            // id or a money column was meant (#2265). The digits are exact
+            // now, and a value with no answer renders `""` as Django's does
+            // rather than the `0` a failed `parse` used to produce (#2265
+            // group 3).
+            //
+            // `int_digits_of` is the shared `int()` — the same one `add` and
+            // `get_digit` use (#1646) — with one difference `%d` needs: it
+            // accepts a NUMERIC STRING, and `"%d" % "42"` raises. So a string
+            // is refused here before it reaches the shared helper, which is
+            // also what makes `{{ "abc"|stringformat:"d" }}` empty rather than
+            // the `0` a failed `parse` used to produce (#2265 group 3).
+            let digits: Option<String> = match value {
+                Value::String(_) | Value::List(_) | Value::Tuple(_) | Value::Object(_) => None,
+                _ => int_digits_of(value, false),
+            };
+            let Some(digits) = digits else {
+                return String::new();
             };
 
             let prefix = &spec[..spec.len() - 1];
             if prefix.is_empty() {
-                format!("{int_val}")
-            } else if let Some(stripped) = prefix.strip_prefix('0') {
-                let width = if stripped.is_empty() {
-                    prefix.parse::<usize>().unwrap_or(0)
-                } else {
-                    stripped.parse::<usize>().unwrap_or(0)
+                return digits;
+            }
+            let zero_pad = prefix.starts_with('0');
+            let width = prefix.parse::<usize>().unwrap_or(0);
+            if digits.len() >= width {
+                return digits;
+            }
+            if zero_pad {
+                // SIGN-AWARE: `"%05d" % -1` is `-0001`, not `000-1`. A plain
+                // `{:0>width$}` on the formatted string pads in front of the
+                // minus, which is what the previous code did.
+                let (sign, body) = match digits.strip_prefix('-') {
+                    Some(b) => ("-", b),
+                    None => ("", digits.as_str()),
                 };
-                format!("{int_val:0>width$}")
+                format!("{sign}{}{body}", "0".repeat(width - digits.len()))
             } else {
-                let width = prefix.parse::<usize>().unwrap_or(0);
-                format!("{int_val:>width$}")
+                format!("{}{digits}", " ".repeat(width - digits.len()))
             }
         }
         'f' | 'F' => {
@@ -2285,6 +2336,21 @@ fn json_string_body(s: &str) -> String {
     out
 }
 
+/// Is this string safe to emit as a bare JSON integer literal?
+///
+/// JSON's `int` grammar: an optional `-`, then either `0` alone or a non-zero
+/// leading digit. `str(int)` always satisfies it; a forged binary tag need not,
+/// which is the whole reason this exists (see [`value_to_json`]).
+fn is_json_int_literal(s: &str) -> bool {
+    let body = s.strip_prefix('-').unwrap_or(s);
+    if !body.bytes().all(|b| b.is_ascii_digit()) || body.is_empty() {
+        return false;
+    }
+    // No leading zeros: `-0`, `007` and `0` are not all legal, and `str(int)`
+    // emits none of the illegal ones.
+    body == "0" || !body.starts_with('0')
+}
+
 fn value_to_json(value: &Value) -> String {
     match value {
         // Both are JSON `null`: JSON cannot distinguish absent from None.
@@ -2312,6 +2378,16 @@ fn value_to_json(value: &Value) -> String {
         // it inject JSON structure into a `<script type="application/json">`
         // body that client code parses. Found by review; the argument was sound
         // about the values it considered and wrong about the type.
+        // `json.dumps(12345678901234567890)` is a BARE number with every digit —
+        // JSON's grammar has no precision ceiling, and quoting it would change
+        // the type client code reads (#2260). But a `Value::BigInt` reaches here
+        // able to hold an arbitrary string for exactly the reason the `Decimal`
+        // arm above documents — the binary tag's payload is unvalidated — so the
+        // digits go out bare ONLY when they are digits, and anything else takes
+        // the escaped-string path rather than injecting JSON structure into a
+        // `<script type="application/json">` body.
+        Value::BigInt(d) if is_json_int_literal(d) => d.clone(),
+        Value::BigInt(d) => format!("\"{}\"", json_string_body(d)),
         Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
         Value::String(s) => format!("\"{}\"", json_string_body(s)),
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
@@ -2445,19 +2521,23 @@ mod value_to_json_structure {
         n
     }
 
-    /// Three quoted-string sites — `Decimal`, `String`, the object key — one helper.
+    /// Four quoted-string sites — the `BigInt` fallback, `Decimal`, `String`, the
+    /// object key — one helper.
     ///
     /// The partial chain #2241 fixed survived a convergence that had already NAMED
     /// the gap. A comment naming a gap does not close it; a count that goes red when
-    /// a third chain appears does (#1646/#1859).
+    /// another chain appears does (#1646/#1859) — and it did exactly that when
+    /// #2260 added the `BigInt` arm, whose non-digit fallback is a quoted string
+    /// for the same unvalidated-tag-payload reason `Decimal`'s is.
     #[test]
     fn value_to_json_escapes_every_string_through_the_one_helper() {
         let body = body_tokens();
         let n = count_ident(&body, "json_string_body");
         assert_eq!(
-            n, 3,
-            "value_to_json should escape exactly its three quoted-string sites \
-             (Decimal, String, the object key) through json_string_body; found {n}"
+            n, 4,
+            "value_to_json should escape exactly its four quoted-string sites \
+             (the BigInt fallback, Decimal, String, the object key) through \
+             json_string_body; found {n}"
         );
     }
 
@@ -2501,7 +2581,7 @@ mod value_to_json_structure {
                 count_ident(&real, "json_string_body"),
                 count_ident(&real, "replace")
             ),
-            (3, 0),
+            (4, 0),
             "baseline drifted"
         );
 
@@ -2546,7 +2626,7 @@ mod value_to_json_structure {
         let real = body_tokens();
         assert_eq!(
             count_ident(&real, "json_string_body"),
-            3,
+            4,
             "baseline drifted"
         );
 
@@ -2667,15 +2747,57 @@ fn add_linenumbers(s: &str) -> String {
         .join("\n")
 }
 
-fn get_digit(s: &str, n: usize) -> String {
-    if n == 0 {
-        return s.to_string();
+/// `str(int(value))`, or `None` where Python's `int()` would raise.
+///
+/// ONE definition for every filter that needs Python's `int()` — `add`,
+/// `get_digit`, `stringformat:"d"` — rather than the per-filter re-derivation
+/// that let `add` and `stringformat` disagree about the same value for two
+/// releases (#2253, #2265, #1646).
+///
+/// `string_float_ok` decides only what a STRING may become. Python's
+/// `int("1.5")` RAISES, which is what sends `{{ "1.5"|add:"1.5" }}` to the
+/// concatenation branch; a float LITERAL is a different thing and the template
+/// layer distinguishes the two by quoting, so `add` passes `true` for the
+/// unquoted case. `get_digit` always passes `false` — it has no literal
+/// operand.
+///
+/// Leading zeros survive: `add_int_digits` normalizes them and `get_digit`'s
+/// only consumer indexes from the RIGHT, so neither cares.
+fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
+    let from_digits = |s: &str| -> Option<String> {
+        let t = s.trim();
+        let body = t.strip_prefix(['-', '+']).unwrap_or(t);
+        if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        Some(if t.starts_with('-') {
+            format!("-{body}")
+        } else {
+            body.to_string()
+        })
+    };
+    match value {
+        Value::Integer(n) => Some(n.to_string()),
+        // Exact, and truncating toward zero: `int(1.5)` is 1 and `int(1e300)`
+        // is the binary value's 301 digits, not `10**300`. `None` for a
+        // non-finite, which `int()` refuses too.
+        Value::Float(f) => djust_core::decimal::python_float_trunc_digits(*f),
+        // `int(Decimal('19.99'))` is 19 — truncation, on the EXACT digits.
+        Value::Decimal(d) => djust_core::decimal::parse_decimal_parts(d)
+            .and_then(|p| p.to_int_digits_trunc(djust_core::decimal::PY_INT_MAX_STR_DIGITS)),
+        // Already `str(int)`; `int()` of an int is itself (#2260).
+        Value::BigInt(d) => Some(d.clone()),
+        // `int(True)` is 1 in Python.
+        Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
+        Value::String(s) => from_digits(s).or_else(|| {
+            string_float_ok
+                .then(|| s.trim().parse::<f64>().ok())
+                .flatten()
+                .and_then(djust_core::decimal::python_float_trunc_digits)
+        }),
+        // `int(None)`, `int([1])`, `int({})` all raise.
+        _ => None,
     }
-    let digits: Vec<char> = s.chars().filter(|c| c.is_ascii_digit()).collect();
-    if n > digits.len() {
-        return s.to_string();
-    }
-    digits[digits.len() - n].to_string()
 }
 
 fn iriencode(s: &str) -> String {
@@ -2730,6 +2852,9 @@ fn pprint_value(value: &Value) -> String {
         Value::Float(f) => format!("{f}"),
         // `pprint` shows the constructor form, as `repr` does (#2214).
         Value::Decimal(d) => format!("Decimal('{d}')"),
+        // `repr(int)` is the digits, however many there are (#2260) — the
+        // constructor form above is a Decimal-only spelling.
+        Value::BigInt(d) => d.clone(),
         Value::String(s) => format!("'{s}'"),
         // List-only: `pprint` renders a tuple with parentheses, so the arm
         // below must stay reachable. (A blanket Tuple twin here made it dead
@@ -4110,9 +4235,13 @@ mod tests {
         let result = apply_filter("get_digit", &value, Some("3")).unwrap();
         assert_eq!(result.to_string(), "3");
 
-        // Out of range returns original
+        // Out of range is `0`, NOT the original: Django's `except IndexError`
+        // arm returns 0, and the `return value` arm is only for the `int(value)`
+        // ValueError. Corrected in #2260 — this case had pinned djust's own
+        // pre-fix behaviour, and a live Django render disagrees:
+        // `{{ "12345"|get_digit:10 }}` is `0`.
         let result = apply_filter("get_digit", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "12345");
+        assert_eq!(result.to_string(), "0");
 
         // 0 returns original (Django behavior)
         let result = apply_filter("get_digit", &value, Some("0")).unwrap();

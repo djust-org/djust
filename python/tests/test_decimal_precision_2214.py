@@ -193,24 +193,26 @@ def test_a_huge_decimal_loses_precision_once_a_filter_does_arithmetic() -> None:
     NARROWED by #2253, which moved `floatformat` and `add` OFF `as_f64` and
     onto the exact digits — Django's own `floatformat` is decimal arithmetic,
     so matching it is what the #2214 contract's "exact rendering" half asks
-    for. `stringformat:'d'` is the remaining `as_f64` consumer on this shape,
-    so the limit is pinned there instead of being deleted.
+    for. `stringformat:'d'` was pinned as the last `as_f64` consumer on this
+    shape, with a note saying to update the limit if the arithmetic path gained
+    real precision. #2265 is that update: it reads the exact digits too, so the
+    "still lossy" list is empty and only the pin underneath it remains.
+
+    What is STILL lossy on this shape is comparison — see
+    `test_two_decimals_differing_beyond_f64_compare_equal`.
     """
     ctx = {"huge": Decimal("12345678901234567890.123456789")}
     assert _rust.render_template("{{ huge }}", ctx) == "12345678901234567890.123456789"
 
-    # Still lossy: `int()` through a double, then a saturating `as i64`.
-    for source in ("{{ huge|stringformat:'d' }}",):
-        django_says = DjangoTemplate(source).render(DjangoContext(ctx))
-        djust_says = _rust.render_template(source, ctx)
-        assert djust_says != django_says, (
-            f"{source} now agrees with Django ({django_says!r}) — if the "
-            "arithmetic path gained real precision, update this limit."
-        )
-
-    # No longer lossy, as of #2253. Asserted rather than dropped so that a
-    # regression to the f64 path turns this red instead of going unnoticed.
-    for source in ("{{ huge|floatformat }}", "{{ huge|floatformat:2 }}", "{{ huge|add:1 }}"):
+    # No longer lossy: #2253 for `floatformat`/`add`, #2265 for `stringformat`.
+    # Asserted rather than dropped so that a regression to the f64 path turns
+    # this red instead of going unnoticed.
+    for source in (
+        "{{ huge|floatformat }}",
+        "{{ huge|floatformat:2 }}",
+        "{{ huge|add:1 }}",
+        "{{ huge|stringformat:'d' }}",
+    ):
         assert _rust.render_template(source, ctx) == DjangoTemplate(source).render(
             DjangoContext(ctx)
         ), f"{source} regressed to the f64 path"

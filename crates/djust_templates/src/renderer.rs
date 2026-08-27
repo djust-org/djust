@@ -360,7 +360,13 @@ fn localize_if_number(value: &Value) -> String {
         // gives `1,230e-250`. Fixed in #2242 by mirroring Django's own
         // scientific branch — the coefficient goes through the same
         // localisation path and the exponent passes through verbatim.
-        Value::Integer(_) | Value::Float(_) | Value::Decimal(_) => {
+        // `BigInt` included for the same reason `Integer` is: Django's
+        // `numberformat.format` groups an `int` regardless of width, so a
+        // German site — or an English one with `USE_THOUSAND_SEPARATOR` —
+        // renders `12.345.678.901.234.567.890`. It reached here as a `Float`
+        // before #2260 and so was already being grouped, just from the wrong
+        // digits.
+        Value::Integer(_) | Value::Float(_) | Value::Decimal(_) | Value::BigInt(_) => {
             djust_core::locale::localize_number(&value.to_string())
         }
         _ => value.to_string(),
@@ -2253,7 +2259,11 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 /// {Integer, Float, Decimal}² — all four non-Decimal combinations of which have
 /// their own arms — so nothing without a Decimal reaches its wildcard.
 fn is_decimal_pair(a: &Value, b: &Value) -> bool {
-    matches!(a, Value::Decimal(_)) || matches!(b, Value::Decimal(_))
+    // `BigInt` too (#2260): it is the other exact-digit numeric variant, it has
+    // no arm of its own here either, and the reason is the same one — before
+    // the variant it was a `Float` and reached the `(Float, Integer)` arms.
+    let wide = |v: &Value| matches!(v, Value::Decimal(_) | Value::BigInt(_));
+    wide(a) || wide(b)
 }
 
 /// Both operands as f64, but ONLY when both are genuinely numeric (#2214).
@@ -2264,7 +2274,19 @@ fn is_decimal_pair(a: &Value, b: &Value) -> bool {
 /// — which it did before the variant, when it was a Float — without opening
 /// that door.
 fn numeric_pair(a: &Value, b: &Value) -> Option<(f64, f64)> {
-    let numeric = |v: &Value| matches!(v, Value::Integer(_) | Value::Float(_) | Value::Decimal(_));
+    // `BigInt` is admitted for the same reason `Decimal` is, and NOT admitting
+    // it was a real regression the #2260 differential caught: a Python int past
+    // `i64` used to arrive as a `Float` and take the `(Float, Integer)` arm, so
+    // `{% if p > 10 %}` answered `gt`. As a `BigInt` with no arm it fell to this
+    // wildcard, got `None`, and `compare_values` returned 0 — "equal", so BOTH
+    // `>` and `<` were false and the template silently took the wrong branch.
+    // Exactly the #2244 hole, one variant over.
+    let numeric = |v: &Value| {
+        matches!(
+            v,
+            Value::Integer(_) | Value::Float(_) | Value::Decimal(_) | Value::BigInt(_)
+        )
+    };
     if numeric(a) && numeric(b) {
         Some((a.as_f64()?, b.as_f64()?))
     } else {
@@ -2494,7 +2516,7 @@ impl ToF64 for Value {
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             // Delegates rather than re-parsing: `Value::as_f64` is the one
             // definition of what a Decimal is worth numerically (#1646).
-            Value::Decimal(_) => self.as_f64(),
+            Value::Decimal(_) | Value::BigInt(_) => self.as_f64(),
             _ => None,
         }
     }

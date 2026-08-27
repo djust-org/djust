@@ -115,7 +115,13 @@ fn a_decimal_does_not_share_a_cache_entry_with_the_string_of_the_same_digits() {
     );
     assert_eq!(
         render_cached("{% for r in rows %}{{ r.v }}|{% endfor %}", &ctx),
-        format!("10|1E+1|1500000000000000000000000000000|{colliding_float}|"),
+        // The float's spelling is Python's, not Rust's `{}` — since #2258
+        // `Display` renders a float the way `numberformat.format` does, and this
+        // one is past Django's 200-digit cut-off so it stays in exponent form.
+        // Written out rather than interpolated: an interpolated `{colliding_float}`
+        // asserted Rust's spelling against the renderer's and had to change here
+        // when the renderer became correct.
+        "10|1E+1|1500000000000000000000000000000|-4.443727305504026e+304|",
         "a Decimal shared a loop-cache entry with the String or Float that hashes \
          to the same bytes — tag 9 is what keeps all three apart"
     );

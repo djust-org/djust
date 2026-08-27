@@ -97,6 +97,53 @@ impl DecimalParts {
         Some(if self.neg { -magnitude } else { magnitude })
     }
 
+    /// Python's `int(Decimal)` as its exact DIGIT STRING, or `None` when
+    /// CPython would raise instead (#2265).
+    ///
+    /// [`to_i128_trunc`](Self::to_i128_trunc) is the same truncation bounded by
+    /// a machine integer, which is right for arithmetic (`add` has to add the
+    /// result to something). `stringformat` does not: `"%d" % Decimal('1E+400')`
+    /// prints all 401 digits, and an `i128` ceiling would turn that into `""`
+    /// — or, before the fix, into `i64::MAX`.
+    ///
+    /// `max_digits` is CPython's `sys.get_int_max_str_digits()`, which is what
+    /// actually bounds this in Python: past it, `"%d" % d` raises `ValueError`
+    /// and Django's `stringformat` returns `""`. Verified against CPython 3.12,
+    /// where `Decimal('1E+4299')` prints 4300 digits and `Decimal('1E+5000')`
+    /// raises. It is ALSO what bounds the allocation here — `Decimal('1E+400000000')`
+    /// is twelve bytes that would otherwise ask for 400 MB. (CPython genuinely
+    /// hangs allocating it; djust returning `""` is a deliberate divergence in
+    /// djust's favour on a DoS shape, not an oversight.)
+    ///
+    /// The digits are `str(int(d))`: no sign on a zero, no leading zeros.
+    pub fn to_int_digits_trunc(&self, max_digits: usize) -> Option<String> {
+        // On the SIGNIFICANT digits: dropping leading zeros changes neither the
+        // value nor the exponent, and it is the length Python's limit counts.
+        let sig = self.significant();
+        if sig == "0" {
+            return Some("0".to_string());
+        }
+        let int_len = (sig.len() as i64).saturating_add(self.exponent);
+        if int_len <= 0 {
+            // |value| < 1. `int(Decimal('-0.5'))` is 0, unsigned.
+            return Some("0".to_string());
+        }
+        // Checked BEFORE the `repeat` below, which is what bounds it.
+        if int_len as u128 > max_digits as u128 {
+            return None;
+        }
+        let magnitude = if self.exponent >= 0 {
+            format!("{}{}", sig, "0".repeat(self.exponent as usize))
+        } else {
+            sig[..int_len as usize].to_string()
+        };
+        Some(if self.neg {
+            format!("-{magnitude}")
+        } else {
+            magnitude
+        })
+    }
+
     /// The fixed-point form, as `(integer digits, fractional digits)`.
     ///
     /// Neither part is normalized: the integer part keeps its leading zeros and
@@ -262,6 +309,176 @@ pub fn python_float_repr(f: f64) -> String {
     }
 }
 
+/// CPython's default `sys.get_int_max_str_digits()`.
+///
+/// The ceiling on `str(int)` since 3.11, and therefore on `"%d" % d`. Reading
+/// the live value would mean a Python call from a pure-Rust module for a limit
+/// almost nobody changes; the default is what a djust project runs under unless
+/// it has deliberately raised it, and raising it is documented-out-of-scope
+/// rather than silently unsupported.
+pub const PY_INT_MAX_STR_DIGITS: usize = 4300;
+
+/// Python's `int(float)` — truncation toward zero — as its EXACT digit string,
+/// or `None` where CPython raises (#2265).
+///
+/// `None` for `nan` (CPython: `ValueError`) and for `±inf` (`OverflowError`).
+/// Django's `stringformat` catches only the first, so the two are not the same
+/// to Django; they ARE the same to djust, which has no exception to propagate
+/// through a filter and renders `""` for both rather than 500ing on a value it
+/// previously rendered. Documented divergence, one cell wide.
+///
+/// **Exact, not `f as i64`.** A double past `2**63` saturates to `i64::MAX`
+/// under `as`, which prints a fabricated constant. And `int(1e300)` is NOT
+/// `10**300`: a double is a binary value, so it is
+/// `1000000000000000052504760255204420248704468581108159154915854115511802457988908...`,
+/// which no decimal-string shortcut produces. The mantissa is doubled out in
+/// decimal instead — at most 971 doublings of a string that reaches ~309 digits,
+/// bounded by the f64 exponent range, and reached only for `|f| >= 2**63`.
+pub fn python_float_trunc_digits(f: f64) -> Option<String> {
+    if !f.is_finite() {
+        return None;
+    }
+    let t = f.trunc();
+    // 2^63 exactly, and exactly representable as an f64. Inside it, `as i64` is
+    // itself exact (the value is already integral), so the slow path is only
+    // for magnitudes a machine integer genuinely cannot hold.
+    const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
+    if t.abs() < TWO_POW_63 {
+        return Some((t as i64).to_string());
+    }
+    let bits = t.to_bits();
+    let neg = t.is_sign_negative();
+    // `|t| >= 2**63` is always normal, so the implicit leading 1 is present and
+    // the subnormal case cannot arrive here.
+    let exp_field = ((bits >> 52) & 0x7ff) as i32;
+    let mantissa = (bits & 0x000f_ffff_ffff_ffff) | (1u64 << 52);
+    // value == mantissa * 2^exp2, and exp2 >= 11 here (2^63 / 2^52).
+    let exp2 = exp_field - 1075;
+    debug_assert!(
+        exp2 >= 0,
+        "|t| >= 2^63 implies a non-negative binary exponent"
+    );
+    let mut digits: Vec<u8> = mantissa
+        .to_string()
+        .into_bytes()
+        .into_iter()
+        .map(|b| b - b'0')
+        .collect();
+    for _ in 0..exp2 {
+        let mut carry = 0u8;
+        for d in digits.iter_mut().rev() {
+            let v = *d * 2 + carry;
+            *d = v % 10;
+            carry = v / 10;
+        }
+        if carry > 0 {
+            digits.insert(0, carry);
+        }
+    }
+    let body: String = digits.into_iter().map(|d| (d + b'0') as char).collect();
+    Some(if neg { format!("-{body}") } else { body })
+}
+
+/// `str(int(a) + int(b))` for two exact digit strings (#2260).
+///
+/// Python's `int` is unbounded and `add`'s first branch is `int(v) + int(a)`,
+/// so a fixed width is the wrong shape for this: an `i128` `checked_add`
+/// overflowed at 39 digits and the filter fell through to returning its input
+/// UNCHANGED. It looked correct at the 60-digit case only by coincidence —
+/// `9`×60 had arrived as the double `1e60`, whose expansion is `1` followed by
+/// sixty zeros, which is the right answer to the sum it was refusing to compute.
+///
+/// Inputs are `[-]digits`, as [`DecimalParts::to_int_digits_trunc`] and
+/// [`python_float_trunc_digits`] produce; a malformed input yields a wrong
+/// answer rather than a panic, so callers validate first. Output is normalized:
+/// no leading zeros, no `-0`.
+pub fn add_int_digits(a: &str, b: &str) -> String {
+    fn split(s: &str) -> (bool, &str) {
+        match s.strip_prefix('-') {
+            Some(m) => (true, m),
+            None => (false, s.strip_prefix('+').unwrap_or(s)),
+        }
+    }
+    let (neg_a, mag_a) = split(a);
+    let (neg_b, mag_b) = split(b);
+    let (neg, magnitude) = if neg_a == neg_b {
+        (neg_a, add_magnitudes(mag_a, mag_b))
+    } else {
+        match cmp_magnitudes(mag_a, mag_b) {
+            std::cmp::Ordering::Equal => (false, "0".to_string()),
+            std::cmp::Ordering::Greater => (neg_a, sub_magnitudes(mag_a, mag_b)),
+            std::cmp::Ordering::Less => (neg_b, sub_magnitudes(mag_b, mag_a)),
+        }
+    };
+    if neg && magnitude != "0" {
+        format!("-{magnitude}")
+    } else {
+        magnitude
+    }
+}
+
+/// Strip leading zeros, flooring at `"0"` — `int` has no `007` and no `-0`.
+fn strip_zeros(s: String) -> String {
+    let t = s.trim_start_matches('0');
+    if t.is_empty() {
+        "0".to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+fn cmp_magnitudes(a: &str, b: &str) -> std::cmp::Ordering {
+    let a = a.trim_start_matches('0');
+    let b = b.trim_start_matches('0');
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
+fn add_magnitudes(a: &str, b: &str) -> String {
+    let (mut ai, mut bi) = (a.bytes().rev(), b.bytes().rev());
+    let mut out: Vec<u8> = Vec::with_capacity(a.len().max(b.len()) + 1);
+    let mut carry = 0u8;
+    loop {
+        let x = ai.next();
+        let y = bi.next();
+        if x.is_none() && y.is_none() {
+            break;
+        }
+        let sum = x.map_or(0, |d| d - b'0') + y.map_or(0, |d| d - b'0') + carry;
+        out.push(sum % 10 + b'0');
+        carry = sum / 10;
+    }
+    if carry > 0 {
+        out.push(carry + b'0');
+    }
+    out.reverse();
+    strip_zeros(String::from_utf8(out).expect("digits stay ASCII"))
+}
+
+/// `a - b` where `a >= b`, both non-negative magnitudes.
+fn sub_magnitudes(a: &str, b: &str) -> String {
+    let (mut ai, mut bi) = (a.bytes().rev(), b.bytes().rev());
+    let mut out: Vec<u8> = Vec::with_capacity(a.len());
+    let mut borrow = 0i8;
+    loop {
+        let x = ai.next();
+        let y = bi.next();
+        if x.is_none() && y.is_none() {
+            break;
+        }
+        let mut d =
+            x.map_or(0i8, |d| (d - b'0') as i8) - y.map_or(0i8, |d| (d - b'0') as i8) - borrow;
+        if d < 0 {
+            d += 10;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        out.push(d as u8 + b'0');
+    }
+    out.reverse();
+    strip_zeros(String::from_utf8(out).expect("digits stay ASCII"))
+}
+
 fn exp_sign(e: i32) -> char {
     if e < 0 {
         '-'
@@ -357,6 +574,133 @@ mod tests {
                 .to_i128_trunc(),
             Some(0)
         );
+    }
+
+    #[test]
+    fn to_int_digits_trunc_prints_what_a_machine_integer_cannot() {
+        let d = |s: &str, max: usize| parse_decimal_parts(s).unwrap().to_int_digits_trunc(max);
+        // The i128 sibling gives up here; `%d` prints all 401 digits.
+        assert_eq!(parse_decimal_parts("1E+400").unwrap().to_i128_trunc(), None);
+        let wide = d("1E+400", PY_INT_MAX_STR_DIGITS).unwrap();
+        assert_eq!(wide.len(), 401);
+        assert!(wide.starts_with('1') && wide.trim_start_matches('1').bytes().all(|b| b == b'0'));
+
+        // Truncation toward zero, both signs, no `-0`, no leading zeros.
+        assert_eq!(d("19.99", 4300).as_deref(), Some("19"));
+        assert_eq!(d("-19.99", 4300).as_deref(), Some("-19"));
+        assert_eq!(d("-0.5", 4300).as_deref(), Some("0"));
+        assert_eq!(d("0.00", 4300).as_deref(), Some("0"));
+        assert_eq!(d("0E+3", 4300).as_deref(), Some("0"));
+        assert_eq!(d("007", 4300).as_deref(), Some("7"));
+        assert_eq!(d("1E+3", 4300).as_deref(), Some("1000"));
+        assert_eq!(d("1E-3", 4300).as_deref(), Some("0"));
+        // Exact past 2^53, which is the whole reason this is on digits.
+        assert_eq!(
+            d("9007199254740993", 4300).as_deref(),
+            Some("9007199254740993")
+        );
+    }
+
+    #[test]
+    fn to_int_digits_trunc_refuses_past_the_limit_without_allocating_it() {
+        // CPython's `sys.get_int_max_str_digits()` boundary, read off 3.12:
+        // `"%d" % Decimal('1E+4299')` prints 4300 digits; `1E+5000` raises.
+        assert_eq!(
+            parse_decimal_parts("1E+4299")
+                .unwrap()
+                .to_int_digits_trunc(PY_INT_MAX_STR_DIGITS)
+                .map(|s| s.len()),
+            Some(4300)
+        );
+        assert_eq!(
+            parse_decimal_parts("1E+5000")
+                .unwrap()
+                .to_int_digits_trunc(PY_INT_MAX_STR_DIGITS),
+            None
+        );
+        // The DoS shape: twelve bytes that would otherwise ask for 400 MB. The
+        // check is on the LENGTH, before the `repeat` — so this returns rather
+        // than allocating. CPython genuinely hangs here; refusing is a
+        // deliberate divergence in djust's favour.
+        assert_eq!(
+            parse_decimal_parts("1E+400000000")
+                .unwrap()
+                .to_int_digits_trunc(PY_INT_MAX_STR_DIGITS),
+            None
+        );
+    }
+
+    #[test]
+    fn python_float_trunc_digits_is_the_binary_value_not_the_decimal_literal() {
+        // The trap: `int(1e300)` is NOT `10**300`. A double is a binary value,
+        // so its integer part is the exact expansion of mantissa x 2^exp. Read
+        // off CPython — the first 40 digits and the length are enough to pin it.
+        let big = python_float_trunc_digits(1e300).unwrap();
+        assert_eq!(big.len(), 301);
+        assert!(
+            big.starts_with("1000000000000000052504760255204420248704"),
+            "got {}",
+            &big[..40]
+        );
+        assert_eq!(
+            python_float_trunc_digits(-1e300).unwrap(),
+            format!("-{big}")
+        );
+
+        // Inside i64 the fast path is exact too.
+        assert_eq!(python_float_trunc_digits(1.5).as_deref(), Some("1"));
+        assert_eq!(python_float_trunc_digits(-1.5).as_deref(), Some("-1"));
+        assert_eq!(python_float_trunc_digits(-0.0).as_deref(), Some("0"));
+        assert_eq!(
+            python_float_trunc_digits(1e15).as_deref(),
+            Some("1000000000000000")
+        );
+        // 2^63 exactly — the boundary between the two paths, and the value
+        // `as i64` used to saturate on.
+        assert_eq!(
+            python_float_trunc_digits(9_223_372_036_854_775_808.0).as_deref(),
+            Some("9223372036854775808")
+        );
+        assert_eq!(
+            python_float_trunc_digits(-9_223_372_036_854_775_808.0).as_deref(),
+            Some("-9223372036854775808")
+        );
+        assert_eq!(
+            python_float_trunc_digits(1e20).as_deref(),
+            Some("100000000000000000000")
+        );
+
+        // `int()` refuses these; so does this.
+        assert_eq!(python_float_trunc_digits(f64::NAN), None);
+        assert_eq!(python_float_trunc_digits(f64::INFINITY), None);
+        assert_eq!(python_float_trunc_digits(f64::NEG_INFINITY), None);
+    }
+
+    #[test]
+    fn add_int_digits_is_arbitrary_precision_and_signed() {
+        let a = |x: &str, y: &str| add_int_digits(x, y);
+        assert_eq!(a("1", "2"), "3");
+        assert_eq!(a("999", "1"), "1000");
+        assert_eq!(a("-999", "-1"), "-1000");
+        assert_eq!(a("1000", "-1"), "999");
+        assert_eq!(a("-1000", "1"), "-999");
+        // No `-0`, either way round.
+        assert_eq!(a("-5", "5"), "0");
+        assert_eq!(a("5", "-5"), "0");
+        // Leading zeros are normalized rather than needing a caller pass.
+        assert_eq!(a("007", "0003"), "10");
+        assert_eq!(a("0100", "-99"), "1");
+        // Past i64 and past i128 — the two widths this replaced.
+        assert_eq!(a("9223372036854775807", "1"), "9223372036854775808");
+        assert_eq!(
+            a("170141183460469231731687303715884105727", "1"),
+            "170141183460469231731687303715884105728"
+        );
+        // The 60-digit case that was correct on main only by coincidence: the
+        // value had arrived as the double `1e60`, whose expansion IS this sum.
+        assert_eq!(a(&"9".repeat(60), "1"), format!("1{}", "0".repeat(60)));
+        // A borrow that shortens the result by many digits.
+        assert_eq!(a(&format!("1{}", "0".repeat(60)), "-1"), "9".repeat(60));
     }
 
     #[test]
