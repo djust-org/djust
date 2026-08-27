@@ -259,7 +259,7 @@ fn apply_builtin_filter(
     let result: Result<Value> = match filter_name {
         "upper" => Ok(Value::String(value.to_string().to_uppercase())),
         "lower" => Ok(Value::String(value.to_string().to_lowercase())),
-        "title" => Ok(Value::String(titlecase(&value.to_string()))),
+        "title" => Ok(Value::String(crate::truncate::title(&value.to_string()))),
         "length" => {
             let len = match value {
                 Value::String(s) => s.len(),
@@ -303,16 +303,22 @@ fn apply_builtin_filter(
                 _ => Ok(value.clone()),
             }
         }
-        "truncatewords" => {
-            let num_words = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
-            let text = value.to_string();
-            Ok(Value::String(truncate_words(&text, num_words)))
-        }
-        "truncatechars" => {
-            let num_chars = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(20);
-            let text = value.to_string();
-            Ok(Value::String(truncate_chars(&text, num_chars)))
-        }
+        "truncatewords" => match truncate_arg(arg, 10) {
+            Some(n) => Ok(Value::String(crate::truncate::text_words(
+                &value.to_string(),
+                n,
+                Some(WORDS_TRUNCATE),
+            ))),
+            None => Ok(value.clone()),
+        },
+        "truncatechars" => match truncate_arg(arg, 20) {
+            Some(n) => Ok(Value::String(crate::truncate::text_chars(
+                &value.to_string(),
+                n,
+                None,
+            ))),
+            None => Ok(value.clone()),
+        },
         "slice" => {
             // slice filter supports Python slice syntax: ":5", "2:", "2:5".
             // Return the Result directly (no `?`): this arm's value IS the
@@ -439,7 +445,7 @@ fn apply_builtin_filter(
         }
         "slugify" => {
             // slugify filter: converts to URL-friendly slug
-            Ok(Value::String(slugify(&value.to_string())))
+            Ok(Value::String(crate::truncate::slugify(&value.to_string())))
         }
         "capfirst" => {
             // capfirst filter: capitalizes first character
@@ -642,9 +648,13 @@ fn apply_builtin_filter(
             }
         }
         "urlencode" => {
-            // urlencode filter: URL-encodes the string
-            // Matches Django behavior: spaces become %20, safe chars are preserved
-            Ok(Value::String(urlencode(&value.to_string())))
+            // `quote(value, safe=arg)`, and `quote`'s own default safe set is
+            // `"/"` — NOT the empty string. `urlencode:""` is the form that
+            // percent-encodes a path separator (#2262).
+            Ok(Value::String(crate::truncate::urlencode(
+                &value.to_string(),
+                arg,
+            )))
         }
         "stringformat" => {
             // stringformat filter: formats value using Python %-style format spec
@@ -821,43 +831,28 @@ fn apply_builtin_filter(
                 _ => Ok(value.clone()),
             }
         }
-        "truncatechars_html" => {
-            // truncatechars_html filter: truncate by char count, preserving HTML tags
-            let num_chars = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(20);
-            Ok(Value::String(truncate_chars_html(
+        "truncatechars_html" => match truncate_arg(arg, 20) {
+            Some(n) => Ok(Value::String(crate::truncate::html_chars(
                 &value.to_string(),
-                num_chars,
-            )))
-        }
-        "truncatewords_html" => {
-            // truncatewords_html filter: truncate by word count, preserving HTML tags
-            let num_words = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
-            Ok(Value::String(truncate_words_html(
+                n,
+                None,
+            ))),
+            None => Ok(value.clone()),
+        },
+        "truncatewords_html" => match truncate_arg(arg, 10) {
+            Some(n) => Ok(Value::String(crate::truncate::html_words(
                 &value.to_string(),
-                num_words,
-            )))
-        }
+                n,
+                Some(WORDS_TRUNCATE),
+            ))),
+            None => Ok(value.clone()),
+        },
         // Not a built-in — signal the caller to try the custom-filter
         // registry. (The custom fallback lives in ``apply_filter_full_safe``
         // so it can capture the result's runtime safeness, #1660.)
         _ => return None,
     };
     Some(result)
-}
-
-fn titlecase(s: &str) -> String {
-    s.split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => {
-                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 pub fn html_escape(s: &str) -> String {
@@ -886,38 +881,20 @@ pub fn html_escape_attr(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
-/// Django's truncation ellipsis: U+2026, ONE character (#2203).
+/// Django passes `truncate=" …"` to both `truncatewords` filters and lets
+/// `truncatechars` take `Truncator`'s default. The leading space is genuine.
+const WORDS_TRUNCATE: &str = " \u{2026}";
+
+/// `int(arg)` with Django's fail-silently contract.
 ///
-/// django.utils.text.Truncator appends `…`, not `...`. The distinction is not
-/// cosmetic for `truncate_chars` — see below.
-const ELLIPSIS: &str = "…";
-
-fn truncate_words(text: &str, num_words: usize) -> String {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.len() <= num_words {
-        text.to_string()
-    } else {
-        // Django separates the ellipsis with a space: "one two …".
-        words[..num_words].join(" ") + " " + ELLIPSIS
-    }
-}
-
-fn truncate_chars(text: &str, num_chars: usize) -> String {
-    // Django's `Truncator.chars` opens with `if length <= 0: return ""`, so a
-    // limit of 0 yields nothing at all — not a bare ellipsis (#2203 review).
-    if num_chars == 0 {
-        return String::new();
-    }
-    if text.chars().count() <= num_chars {
-        text.to_string()
-    } else {
-        // Django counts the ellipsis as ONE character inside the limit, so
-        // `truncatechars:5` keeps 4 characters plus `…`. Reserving three (for
-        // `...`) kept only 2 and rendered "ab..." where Django gives "abcd…".
-        text.chars()
-            .take(num_chars.saturating_sub(1))
-            .collect::<String>()
-            + ELLIPSIS
+/// `Some(n)` is a usable limit; `None` means the filter must return its input
+/// unchanged, which is what Django's `except ValueError: return value` does.
+/// A missing argument is a `TemplateSyntaxError` in Django; djust keeps its
+/// historical per-filter default rather than raising.
+fn truncate_arg(arg: Option<&str>, default: i64) -> Option<i64> {
+    match arg {
+        None => Some(default),
+        Some(a) => a.trim().parse::<i64>().ok(),
     }
 }
 
@@ -2027,19 +2004,6 @@ fn get_dict_value(value: &Value, key: &str) -> Value {
     }
 }
 
-fn slugify(s: &str) -> String {
-    // Convert to lowercase and replace non-alphanumeric characters with hyphens
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        // Remove consecutive hyphens
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 /// `django.utils.text.normalize_newlines` — `re.sub(r"\r\n|\r|\n", "\n", ...)`.
 ///
 /// Both `linebreaks` and `linebreaksbr` call it first, so `a\r\nb` renders
@@ -2130,30 +2094,6 @@ fn linebreaks(s: &str) -> String {
 /// emits no tag at all until the input contains a newline.
 fn linebreaksbr(s: &str) -> String {
     html_escape(&normalize_newlines(s)).replace('\n', "<br>")
-}
-
-fn urlencode(s: &str) -> String {
-    // URL-encode a string, matching Django's urlencode behavior
-    // Safe characters (not encoded): alphanumeric, -, _, ., ~
-    // Everything else is percent-encoded
-    // Spaces become %20 (not +)
-    let mut result = String::with_capacity(s.len() * 3); // Worst case: every char becomes %XX
-
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
-            result.push(c);
-        } else {
-            // Percent-encode the character
-            // For multi-byte UTF-8 characters, encode each byte separately
-            let mut buf = [0u8; 4];
-            let encoded = c.encode_utf8(&mut buf);
-            for byte in encoded.bytes() {
-                result.push_str(&format!("%{:02X}", byte));
-            }
-        }
-    }
-
-    result
 }
 
 fn apply_stringformat(value: &Value, spec: &str) -> String {
@@ -3482,166 +3422,6 @@ fn unordered_list(items: &[Value], depth: usize) -> String {
     result.join("\n")
 }
 
-/// Tracks open HTML tags during truncation, providing shared logic for
-/// `truncate_chars_html` and `truncate_words_html`.
-struct HtmlTagTracker {
-    open_tags: Vec<String>,
-}
-
-impl HtmlTagTracker {
-    fn new() -> Self {
-        Self {
-            open_tags: Vec::new(),
-        }
-    }
-
-    /// Read a full HTML tag from the char iterator and track open/close state.
-    /// Returns the raw tag string (e.g. `<b>`, `</p>`).
-    fn consume_tag(&mut self, chars: &mut impl Iterator<Item = char>) -> String {
-        let mut tag = String::from('<');
-        for tc in chars {
-            tag.push(tc);
-            if tc == '>' {
-                break;
-            }
-        }
-        let tag_inner = tag.trim_start_matches('<').trim_end_matches('>').trim();
-        if let Some(stripped) = tag_inner.strip_prefix('/') {
-            let name = stripped
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_lowercase();
-            if let Some(pos) = self.open_tags.iter().rposition(|t| *t == name) {
-                self.open_tags.remove(pos);
-            }
-        } else if !tag_inner.ends_with('/')
-            && !tag_inner.starts_with('!')
-            && !is_void_element(tag_inner.split_whitespace().next().unwrap_or(""))
-        {
-            let name = tag_inner
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_lowercase();
-            if !name.is_empty() {
-                self.open_tags.push(name);
-            }
-        }
-        tag
-    }
-
-    /// Append closing tags for all still-open elements (in reverse order).
-    fn close_open_tags(&self, result: &mut String) {
-        for tag_name in self.open_tags.iter().rev() {
-            result.push_str(&format!("</{tag_name}>"));
-        }
-    }
-}
-
-fn truncate_chars_html(text: &str, limit: usize) -> String {
-    if limit == 0 {
-        return String::new();
-    }
-
-    // #2203: the HTML twins carried BOTH halves of the bug their plain-text
-    // counterparts just had — the wrong glyph and a three-character reservation
-    // — so `truncatechars` and `truncatechars_html` disagreed on the same page
-    // (#1646).
-    //
-    // `.chars().count()`, NOT `.len()`. `"…".len()` is 3 BYTES, exactly like
-    // `"..."`, so swapping the constant alone keeps reserving three and looks
-    // correct while silently preserving the arithmetic bug.
-    let ellipsis = ELLIPSIS;
-    let mut visible_count = 0;
-    let mut tracker = HtmlTagTracker::new();
-    let mut result = String::new();
-    let mut chars = text.chars().peekable();
-    let target = limit.saturating_sub(ellipsis.chars().count());
-
-    while let Some(c) = chars.next() {
-        if c == '<' {
-            result.push_str(&tracker.consume_tag(&mut chars));
-        } else {
-            visible_count += 1;
-            if visible_count > target {
-                result.push_str(ellipsis);
-                tracker.close_open_tags(&mut result);
-                return result;
-            }
-            result.push(c);
-        }
-    }
-
-    // Text was shorter than the limit, return as-is
-    result
-}
-
-fn truncate_words_html(text: &str, limit: usize) -> String {
-    if limit == 0 {
-        return String::new();
-    }
-
-    // #2203 — Django's `truncatewords` passes `truncate=" …"` explicitly, so the
-    // leading space is genuine here (unlike `truncatechars`, which has none).
-    let ellipsis = concat!(" ", "…");
-    let mut word_count = 0;
-    let mut in_word = false;
-    let mut tracker = HtmlTagTracker::new();
-    let mut result = String::new();
-    let mut chars = text.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '<' {
-            in_word = false;
-            result.push_str(&tracker.consume_tag(&mut chars));
-        } else if c.is_whitespace() {
-            if in_word {
-                in_word = false;
-            }
-            if word_count >= limit {
-                result.push_str(ellipsis);
-                tracker.close_open_tags(&mut result);
-                return result;
-            }
-            result.push(c);
-        } else {
-            if !in_word {
-                word_count += 1;
-                in_word = true;
-                if word_count > limit {
-                    result.push_str(ellipsis);
-                    tracker.close_open_tags(&mut result);
-                    return result;
-                }
-            }
-            result.push(c);
-        }
-    }
-
-    result
-}
-
-fn is_void_element(tag: &str) -> bool {
-    matches!(
-        tag.to_lowercase().as_str(),
-        "area"
-            | "base"
-            | "br"
-            | "col"
-            | "embed"
-            | "hr"
-            | "img"
-            | "input"
-            | "link"
-            | "meta"
-            | "param"
-            | "source"
-            | "track"
-            | "wbr"
-    )
-}
-
 pub mod tags {
     // Placeholder for custom tags
 }
@@ -4366,10 +4146,21 @@ mod tests {
         let result = apply_filter("urlencode", &value, None).unwrap();
         assert_eq!(result.to_string(), "");
 
-        // Question mark and slash should be encoded
+        // The question mark is encoded; the SLASH is not (#2262). This case
+        // previously asserted `path%2Fto%2F…`, which pinned the bug: Django's
+        // filter is `quote(value, safe=…)` and `quote`'s own default safe set
+        // is `"/"`. The argument form below is what encodes a separator.
         let value = Value::String("path/to/file?query=1".to_string());
         let result = apply_filter("urlencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "path/to/file%3Fquery%3D1");
+
+        let result = apply_filter("urlencode", &value, Some("")).unwrap();
         assert_eq!(result.to_string(), "path%2Fto%2Ffile%3Fquery%3D1");
+
+        // An explicit safe set adds to the always-safe characters.
+        let value = Value::String("a&b/c".to_string());
+        let result = apply_filter("urlencode", &value, Some("&")).unwrap();
+        assert_eq!(result.to_string(), "a&b%2Fc");
     }
 
     #[test]

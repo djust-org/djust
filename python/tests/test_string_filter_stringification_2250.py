@@ -35,6 +35,7 @@ repo's history.
 from __future__ import annotations
 
 import random
+import re
 from decimal import Decimal, localcontext
 
 import pytest
@@ -57,46 +58,28 @@ LANGUAGES = ["en-us", "de", "fr", "hi", "ja"]
 #: the coercion — see the module docstring for `escape`/`safe`.
 NAMED_EXCLUSIONS = frozenset({"escape", "safe"})
 
-#: Six filters DO take the coercion but cannot be diffed against Django
-#: byte-for-byte, because each has a whole-filter divergence of its own. The bar
-#: for being listed here is a reproduction on a NON-``Decimal`` input on
-#: ``main`` — otherwise this list is just a way of making a red suite green:
+#: **Nothing is left in ``UNCOMPARABLE``.** It held the filters that took the
+#: coercion but could not be diffed against Django byte-for-byte, because each
+#: had a whole-filter divergence of its own. The bar for being listed was a
+#: reproduction on a NON-``Decimal`` input on ``main`` — otherwise the list is
+#: just a way of making a red suite green — and every entry has now cleared:
 #:
-#: * `slugify` — djust maps `.` and `+` to `-` where Django deletes them
-#:   (#2261). `{{ "3.5"|slugify }}` diverges.
-#: * `title` — djust strips surrounding whitespace and misses a word boundary
-#:   after a non-letter (#2261). `{{ "  spaced  "|title }}` diverges.
-#: * `truncatechars_html` — truncates at `len == limit` and counts escaped
-#:   characters (#2262). `{{ "Infinity"|truncatechars_html:8 }}` diverges.
-#: * `truncatewords` — does not strip surrounding whitespace (#2262).
-#:   `{{ "  spaced  "|truncatewords:2 }}` diverges.
-#: * `truncatewords_html` — escapes once where Django escapes twice (#2262).
-#:   `{{ some_dict|truncatewords_html:2 }}` diverges.
-#: * `urlencode` — encodes `/`, which Django keeps safe by default (#2262).
-#:   `{{ "<b>x</b>"|urlencode }}` diverges.
+#: * `linebreaks` escaped its own markup and was missing from
+#:   `SAFE_OUTPUT_FILTERS` (#2259) — closed.
+#: * `slugify` mapped `.` and `+` to `-` where Django deletes them, and `title`
+#:   stripped surrounding whitespace and missed a word boundary after a
+#:   non-letter (#2261) — closed.
+#: * `truncatechars_html` truncated at `len == limit` and counted escaped
+#:   characters, `truncatewords` did not strip surrounding whitespace,
+#:   `truncatewords_html` escaped once where Django escapes twice, and
+#:   `urlencode` encoded `/` (#2262) — closed.
 #:
-#: `linebreaks` was the seventh until #2259 closed it: the filter now escapes
-#: its own input and is in `SAFE_OUTPUT_FILTERS`, so it is byte-diffable
-#: against Django and has moved into the covered set.
-#:
-#: Folding them into the parity tables would assert those issues rather than
-#: this one. Dropping them silently would leave six of the 27 with no
-#: assertion at all, so
-#: :func:`test_every_covered_filter_treats_a_decimal_as_its_str` covers every
-#: filter including these — Django-independently, which is the direct form of
-#: what this fix claims — and
+#: All 27 are in the compared set, which is what
 #: :func:`test_the_uncomparable_filters_are_excluded_for_a_reason_that_still_holds`
-#: pins each plain-string divergence so closing it turns this file red.
-UNCOMPARABLE = frozenset(
-    {
-        "slugify",
-        "title",
-        "truncatechars_html",
-        "truncatewords",
-        "truncatewords_html",
-        "urlencode",
-    }
-)
+#: was written to force. Keeping the machinery (rather than deleting it) means
+#: a future filter with the same shape has somewhere to go, and the empty-set
+#: assertion below documents that nothing is parked there today.
+UNCOMPARABLE: frozenset[str] = frozenset()
 
 #: One representative invocation per filter, so the differential can render it.
 INVOCATION = {
@@ -398,29 +381,32 @@ def test_every_covered_filter_treats_a_decimal_as_its_str() -> None:
 def test_the_uncomparable_filters_are_excluded_for_a_reason_that_still_holds() -> None:
     """Characterize each ``UNCOMPARABLE`` divergence so closing it turns this red.
 
-    Each assertion below is the *plain-string* form of the divergence — no
-    ``Decimal`` involved — which is what makes "this is #2259/#2261, not #2250"
-    a claim rather than an assertion of convenience.
+    Each assertion was the *plain-string* form of a divergence — no ``Decimal``
+    involved — which is what made "this is #2259/#2261, not #2250" a claim
+    rather than an assertion of convenience.
+
+    **It worked, and there is nothing left.** The test went red when #2259
+    closed (`linebreaks`) and again when #2261/#2262 closed (the other six);
+    each time the rows moved into the compared set rather than being deleted
+    quietly. The six from #2261/#2262 now live as the ``TestReportedCells``
+    table in ``test_truncate_slugify_parity_2262.py``, asserting agreement.
+
+    What remains here is the guard that keeps the list honest: an entry may
+    only be parked in ``UNCOMPARABLE`` with a row below that reproduces its
+    divergence, so a future addition cannot be a way of making a red suite
+    green.
     """
     assert UNCOMPARABLE <= _django_string_filters()
+    rows: tuple[tuple[str, object, str, str], ...] = ()
+    assert {re.search(r"\|(\w+)", source).group(1) for source, *_ in rows} == UNCOMPARABLE, (
+        "every UNCOMPARABLE filter needs a row here reproducing its divergence"
+    )
     try:
         render_env.apply_number_format()
-        for source, value, django_says, djust_says in (
-            ("{{ p|slugify }}", "3.5", "35", "3-5"),  # 2261
-            ("{{ p|title }}", "  spaced  ", "  Spaced  ", "Spaced"),  # 2261
-            ("{{ p|truncatechars_html:8 }}", "Infinity", "Infinity", "Infinit…"),  # 2262
-            ("{{ p|truncatewords:2 }}", "  spaced  ", "spaced", "  spaced  "),  # 2262
-            (
-                "{{ p|truncatewords_html:2 }}",
-                {"a": 1},
-                "{&amp;#x27;a&amp;#x27;: 1}",
-                "{&#x27;a&#x27;: 1}",
-            ),  # 2262
-            ("{{ p|urlencode }}", "<b>x</b>", "%3Cb%3Ex%3C/b%3E", "%3Cb%3Ex%3C%2Fb%3E"),  # 2262
-        ):
+        for source, value, django_says, djust_says in rows:
             expected, got = _render_both(source, value)
             assert expected == django_says, f"Django changed: {source} -> {expected!r}"
-            assert got == djust_says, f"#2259/#2261 closed? {source} -> {got!r}"
+            assert got == djust_says, f"closed? {source} -> {got!r}"
     finally:
         render_env.apply_number_format()
 

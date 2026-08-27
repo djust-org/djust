@@ -26,6 +26,7 @@ pub mod registry;
 pub mod renderer;
 pub mod tags;
 pub mod timezone;
+pub mod truncate;
 
 pub use markdown::render_markdown;
 
