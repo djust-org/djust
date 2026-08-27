@@ -432,16 +432,21 @@ class TestKnownRemainingDivergences:
         assert (bare_django, bare_djust) == ("nan", "NaN")
         assert_agrees("{{ p|floatformat }}", float("nan"))
 
-    def test_the_u_suffix_ignores_overridden_number_settings(self) -> None:
-        """The `u`/`gu` gap, RUN rather than reasoned about (#1867).
+    def test_the_u_suffix_now_honours_overridden_number_settings(self) -> None:
+        """CLOSED by #2266 — this entry was a divergence and is now agreement.
 
-        Django's `u` means `use_l10n=False`, which re-reads
-        `settings.DECIMAL_SEPARATOR` / `THOUSAND_SEPARATOR` / `NUMBER_GROUPING`
-        rather than the active locale's. Only the LOCALIZED format is pushed to
-        Rust (`render_env.apply_number_format`), so djust emits Django's
-        DEFAULTS for those three — correct for every project that does not
-        override them, and this is the case that proves it is a real gap and
-        not an imagined one.
+        It used to assert the gap: with `DECIMAL_SEPARATOR="!"`, Django gave
+        `6666!67` for `{{ p|floatformat:"2u" }}` and djust gave `6666.67`,
+        because only the LOCALIZED number format was pushed to Rust while
+        Django's `u` (i.e. `use_l10n=False`) re-reads the RAW settings. It did
+        its job: closing the gap turned it red rather than letting it pass
+        unnoticed, and it is kept here — flipped to the agreeing direction —
+        rather than deleted, so the four measured cells stay pinned.
+
+        `render_env.apply_number_format` now pushes BOTH triples and
+        `floatformat::finish` selects on `use_l10n`. The localized rows were
+        already correct and are re-asserted so the fix is shown not to have
+        moved them.
 
         The number format is a Rust thread-local, so it is restored
         unconditionally: leaking an overridden separator into the rest of the
@@ -453,16 +458,16 @@ class TestKnownRemainingDivergences:
             ):
                 apply_number_format()
                 value = Decimal("6666.6666")
-                # The gap.
-                for source, django_says, djust_says in (
-                    ('{{ p|floatformat:"2u" }}', "6666!67", "6666.67"),
-                    ('{{ p|floatformat:"2gu" }}', "6_666!67", "6666.67"),
+                for source, expected in (
+                    ('{{ p|floatformat:"2u" }}', "6666!67"),
+                    ('{{ p|floatformat:"2gu" }}', "6_666!67"),
                 ):
                     d, u = render_both(source, value)
-                    assert d == django_says, f"Django changed for {source}"
-                    assert u == djust_says, f"the gap closed for {source} — prune this"
-                # And the localized forms, which are NOT affected, so the gap is
-                # bounded to `u` rather than being a general locale failure.
+                    assert d == expected, f"Django changed for {source}: {d!r}"
+                    assert u == expected, f"{source} regressed: {u!r}"
+                # The localized forms, which were never affected — asserting
+                # them keeps the fix bounded to `u` rather than being a general
+                # change to how numbers render.
                 for source in ('{{ p|floatformat:"2" }}', '{{ p|floatformat:"2g" }}'):
                     assert_agrees(source, value)
         finally:

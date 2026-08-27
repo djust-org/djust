@@ -1501,13 +1501,30 @@ fn set_active_timezone(name: Option<&str>) -> bool {
 /// defined by `django/conf/locale/*/formats.py`, and reimplementing that would
 /// be a fork of Django's data rather than a use of it. Pass `None` to disable
 /// localization entirely.
+/// The trailing `raw_*` triple is Django's `use_l10n=False` format (#2266) —
+/// `settings.DECIMAL_SEPARATOR` / `THOUSAND_SEPARATOR` / `NUMBER_GROUPING` read
+/// directly, which is what `floatformat`'s `u` suffix formats through. Optional
+/// and defaulted to `None` so an embedder (or a build that predates #2266's
+/// Python side) keeps the previous four-argument call working and simply gets
+/// no unlocalized format, i.e. the digits verbatim — the behaviour `u` had
+/// before.
+///
+/// There is no `raw_use_grouping`: it is `False` by construction on this half,
+/// per [`djust_core::locale::set_unlocalized_number_format`].
 #[pyfunction]
-#[pyo3(signature = (decimal_sep=None, thousand_sep=None, grouping=None, use_grouping=false))]
+#[pyo3(signature = (
+    decimal_sep=None, thousand_sep=None, grouping=None, use_grouping=false,
+    raw_decimal_sep=None, raw_thousand_sep=None, raw_grouping=None,
+))]
+#[allow(clippy::too_many_arguments)]
 fn set_number_format(
     decimal_sep: Option<String>,
     thousand_sep: Option<String>,
     grouping: Option<Vec<usize>>,
     use_grouping: bool,
+    raw_decimal_sep: Option<String>,
+    raw_thousand_sep: Option<String>,
+    raw_grouping: Option<Vec<usize>>,
 ) {
     match decimal_sep {
         None => djust_core::locale::set_number_format(None),
@@ -1520,6 +1537,19 @@ fn set_number_format(
             }))
         }
     }
+    match raw_decimal_sep {
+        None => djust_core::locale::set_unlocalized_number_format(None),
+        Some(dec) => djust_core::locale::set_unlocalized_number_format(Some(
+            djust_core::locale::NumberFormat {
+                decimal_sep: dec,
+                thousand_sep: raw_thousand_sep.unwrap_or_default(),
+                grouping: raw_grouping.unwrap_or_default(),
+                // Never grouped on its own; `floatformat`'s `g` supplies
+                // `force_grouping` at the call site.
+                use_grouping: false,
+            },
+        )),
+    }
 }
 
 /// The calling thread's number format as `(decimal_sep, thousand_sep, grouping,
@@ -1530,6 +1560,17 @@ fn set_number_format(
 #[pyfunction]
 fn active_number_format() -> Option<(String, String, Vec<usize>, bool)> {
     djust_core::locale::number_format()
+        .map(|f| (f.decimal_sep, f.thousand_sep, f.grouping, f.use_grouping))
+}
+
+/// The calling thread's `use_l10n=False` number format (#2266), same shape as
+/// [`active_number_format`].
+///
+/// Same reason it exists: the Python side must be able to ASSERT the second
+/// format reached Rust, not assume it (#2017).
+#[pyfunction]
+fn active_unlocalized_number_format() -> Option<(String, String, Vec<usize>, bool)> {
+    djust_core::locale::unlocalized_number_format()
         .map(|f| (f.decimal_sep, f.thousand_sep, f.grouping, f.use_grouping))
 }
 
@@ -3498,6 +3539,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(active_timezone_name, m)?)?;
     m.add_function(wrap_pyfunction!(set_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(active_number_format, m)?)?;
+    m.add_function(wrap_pyfunction!(active_unlocalized_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
 

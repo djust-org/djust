@@ -88,6 +88,21 @@ def apply_number_format() -> None:
     where flipping it changed no output. Django 5.0 removed it as a toggle.
     Only the active language (decimal separator) and ``USE_THOUSAND_SEPARATOR``
     (grouping) matter, so reading ``USE_L10N`` would be cargo cult.
+
+    **TWO formats are pushed, not one** (#2266). Django's ``floatformat`` has a
+    ``u`` suffix meaning ``use_l10n=False``, and ``formats.get_format`` short-
+    circuits on that flag *before* it consults the active language::
+
+        if use_l10n is False:
+            return getattr(settings, format_type)   # the RAW setting
+
+    So ``u`` formats through ``settings.DECIMAL_SEPARATOR`` /
+    ``THOUSAND_SEPARATOR`` / ``NUMBER_GROUPING`` directly. Neither triple can be
+    derived from the other — under ``de`` the localized separator is ``,`` and
+    the raw one is ``.``; under ``DECIMAL_SEPARATOR="!"`` with English it is the
+    other way round — so both are resolved here and pushed together. Measured:
+    with ``DECIMAL_SEPARATOR="!"`` and ``Decimal("6666.6666")``, Django renders
+    ``{{ p|floatformat:"2u" }}`` as ``6666!67``.
     """
     try:
         from ._rust import set_number_format
@@ -101,19 +116,37 @@ def apply_number_format() -> None:
         thousand_sep = formats.get_format("THOUSAND_SEPARATOR")
         grouping = formats.get_format("NUMBER_GROUPING")
         use_grouping = bool(getattr(settings, "USE_THOUSAND_SEPARATOR", False))
+        # Django's own ``use_l10n=False`` read — ``getattr(settings, ...)``, not
+        # ``get_format``, because ``get_format`` would re-consult the locale.
+        raw_decimal_sep = settings.DECIMAL_SEPARATOR
+        raw_thousand_sep = settings.THOUSAND_SEPARATOR
+        raw_grouping = settings.NUMBER_GROUPING
     except Exception:  # pragma: no cover - settings access is defensive
         logger.debug("[djust] number-format read failed; leaving numbers unlocalized")
         return
 
-    # Django allows a sequence here (Indian grouping is ``[3, 2, 0]``); a scalar
-    # becomes ``[n, 0]``, matching ``numberformat.format``'s own
-    # ``intervals = [grouping, 0]`` fallback.
-    if isinstance(grouping, (list, tuple)):
-        groups = [int(g) for g in grouping]
-    else:
-        groups = [int(grouping), 0]
+    set_number_format(
+        str(decimal_sep),
+        str(thousand_sep),
+        _grouping_intervals(grouping),
+        use_grouping,
+        str(raw_decimal_sep),
+        str(raw_thousand_sep),
+        _grouping_intervals(raw_grouping),
+    )
 
-    set_number_format(str(decimal_sep), str(thousand_sep), groups, use_grouping)
+
+def _grouping_intervals(grouping: object) -> list[int]:
+    """Django's ``NUMBER_GROUPING`` as ``numberformat.format`` consumes it.
+
+    Django allows a sequence here (Indian grouping is ``[3, 2, 0]``); a scalar
+    becomes ``[n, 0]``, matching ``numberformat.format``'s own
+    ``intervals = [grouping, 0]`` fallback. Shared by the localized and the raw
+    read so the two cannot normalize differently (#1646).
+    """
+    if isinstance(grouping, (list, tuple)):
+        return [int(g) for g in grouping]
+    return [int(grouping), 0]  # type: ignore[call-overload]
 
 
 def apply_render_env() -> None:

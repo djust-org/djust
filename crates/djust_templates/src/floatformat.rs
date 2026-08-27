@@ -27,16 +27,6 @@
 //!
 //! ## What is NOT covered
 //!
-//! * **`u`/`gu` under overridden number settings.** Django's `u` re-reads
-//!   `settings.DECIMAL_SEPARATOR` / `THOUSAND_SEPARATOR` / `NUMBER_GROUPING`
-//!   rather than the active locale's. Only the LOCALIZED format is pushed to
-//!   Rust (`render_env.apply_number_format`), so `u` here emits the Django
-//!   DEFAULTS for those settings (`.`, `,`, grouping 0) — correct unless a
-//!   project overrides them, in which case `u`/`gu` is unlocalized where
-//!   Django would have used the override. Not a reasoned claim: run with
-//!   `DECIMAL_SEPARATOR="!"`, Django gives `6666!67` and this gives `6666.67`
-//!   (#1867). Pinned by `test_the_u_suffix_ignores_overridden_number_settings`
-//!   and tracked in #2266.
 //! * **Give-up paths on a `Value::Float`.** Django returns `str(text)`
 //!   verbatim when the argument is unparseable, the value is non-finite, or the
 //!   value is past the 200-digit cut-off. That string is `repr(float)`, which
@@ -289,10 +279,13 @@ fn finish(number: &str, use_l10n: bool, force_grouping: bool) -> String {
     if use_l10n {
         locale::localize_number_forced(number, force_grouping)
     } else {
-        // `use_l10n=False` reads the raw settings, whose defaults are `.` and a
-        // grouping of 0 — i.e. exactly the digits already in hand, grouped or
-        // not. See the module docstring for the overridden-settings gap.
-        number.to_string()
+        // `use_l10n=False` reads the RAW settings — `settings.DECIMAL_SEPARATOR`
+        // and friends, never the active locale's `formats.py` (#2266). That is a
+        // second `NumberFormat`, pushed alongside the localized one; when none
+        // has been pushed this returns the digits verbatim, which is both the
+        // pre-#2266 behaviour and what Django's own DEFAULTS (`.`, `,`,
+        // grouping `0`) produce.
+        locale::localize_number_unlocalized(number, force_grouping)
     }
 }
 
