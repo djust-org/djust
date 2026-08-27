@@ -198,7 +198,9 @@ def test_the_exponent_is_not_localized() -> None:
             for value in (Decimal("1.5E+1000"), Decimal("1.5E-1000")):
                 expected, got = _render_both("{{ p }}", value)
                 assert got == expected
-                assert got.split("e")[1] == str(value).split("E")[1].replace("+", "+")
+                # The exponent as the value itself carries it, sign included —
+                # byte-for-byte what comes out the far side of the rejoin.
+                assert got.split("e")[1] == str(value).split("E")[1]
     finally:
         render_env.apply_number_format()
 
