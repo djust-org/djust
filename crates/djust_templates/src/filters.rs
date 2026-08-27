@@ -134,6 +134,72 @@ pub fn apply_filter_full_safe(
     )))
 }
 
+/// Django's ``@stringfilter``-decorated built-ins that actually stringify.
+///
+/// ``django.template.defaultfilters.stringfilter`` wraps a filter so it runs on
+/// ``str(value)`` rather than on the value. Django applies it to 29 built-ins;
+/// all 29 are implemented here and 27 of them are listed below. The list is not
+/// a judgement call about which filters "feel string-shaped" — it is a
+/// transcript of Django's decorators, and
+/// ``python/tests/test_string_filter_stringification_2250.py`` re-derives the
+/// set by introspecting the live ``defaultfilters`` registry, so a filter
+/// Django adds to (or removes from) the decorator fails that test rather than
+/// drifting silently.
+///
+/// **The two deliberate omissions — ``escape`` and ``safe``.** Django's
+/// versions return a string; djust's are no-ops returning the value unchanged,
+/// because auto-escaping is decided by filter NAME at the render site. So their
+/// `Decimal` divergence has a different mechanism from the other 27: nothing
+/// stringifies it, the value simply stays a `Decimal` and the renderer's
+/// ``localize_if_number`` fires where Django's had already become a ``str``.
+/// Coercing them here is not free — it changes the TYPE flowing down the rest
+/// of the chain, and ``floatformat`` cannot parse a numeric string, so
+/// ``{{ d|escape|floatformat }}`` regressed in 1,168 measured cells. Teaching
+/// ``floatformat`` to parse strings was tried and is worse (it cannot reproduce
+/// Django's >200-digit passthrough or its NaN/inf handling from an ``f64``, and
+/// broke 538 cells of ``{{ d|upper|floatformat }}``). Both residues are
+/// measured and tracked in #2257; neither belongs in this fix.
+///
+/// Also deliberately NOT here: ``default``/``default_if_none`` (Django returns
+/// the value itself, which then localizes at render), and every numeric filter
+/// (``add``, ``floatformat``, ``divisibleby``, ``get_digit``, ``length``,
+/// ``pluralize``, ``yesno``, ``filesizeformat``, ``stringformat``) — Django
+/// does not stringify those, and coercing here would be a different bug.
+const STRING_FILTERS: &[&str] = &[
+    "addslashes",
+    "capfirst",
+    "center",
+    "cut",
+    "escapejs",
+    "force_escape",
+    "iriencode",
+    "linebreaks",
+    "linebreaksbr",
+    "linenumbers",
+    "ljust",
+    "lower",
+    "make_list",
+    "rjust",
+    "slugify",
+    "striptags",
+    "title",
+    "truncatechars",
+    "truncatechars_html",
+    "truncatewords",
+    "truncatewords_html",
+    "upper",
+    "urlencode",
+    "urlize",
+    "urlizetrunc",
+    "wordcount",
+    "wordwrap",
+];
+
+/// Is this built-in one of Django's ``@stringfilter``s? (#2250)
+pub fn is_string_filter(filter_name: &str) -> bool {
+    STRING_FILTERS.contains(&filter_name)
+}
+
 /// Dispatch table for all built-in filters. Returns ``None`` when
 /// ``filter_name`` is not a built-in, so the caller falls through to the
 /// custom-filter registry. Extracted from ``apply_filter_full`` so the
@@ -147,6 +213,34 @@ fn apply_builtin_filter(
     context: Option<&Context>,
     arg_was_quoted: bool,
 ) -> Option<Result<Value>> {
+    // #2250: Django's `@stringfilter` consumes `str(value)`. For a `Decimal`
+    // that is NOT the rendered form — `str(Decimal('1E-9'))` is `1E-9`, while
+    // `{{ d }}` renders `0.000000001` because `numberformat.format` uses
+    // `"{:f}".format(number)`. Both are correct, for different jobs, and
+    // `Display` is the render one (#2214), so the string filters need the other.
+    //
+    // The coercion is free: `Value::Decimal` already CARRIES `str(Decimal)` —
+    // it is built from `ob.str()` at the PyO3 boundary (`djust_core::lib.rs`),
+    // and `Display` is what applies the expansion. So this hands the filter the
+    // raw payload rather than re-deriving anything.
+    //
+    // Placed HERE — the one dispatch table every built-in call funnels through
+    // — rather than in the ~30 arms that call `value.to_string()`, which is the
+    // #1646 shape: N correct copies, one of which the next filter forgets.
+    // Custom filters need nothing: `apply_custom_filter` hands Python a real
+    // `Decimal`, so Django's own `@stringfilter` applies to them unchanged.
+    //
+    // Only `Decimal` is coerced. Every other variant's `Display` already IS
+    // Python's `str()` (or diverges for reasons that show up in `{{ v }}` too,
+    // which a filter-boundary coercion could not fix — e.g. `1e300`, #2258).
+    let coerced_decimal: Value;
+    let value: &Value = match value {
+        Value::Decimal(d) if is_string_filter(filter_name) => {
+            coerced_decimal = Value::String(d.clone());
+            &coerced_decimal
+        }
+        _ => value,
+    };
     let result: Result<Value> = match filter_name {
         "upper" => Ok(Value::String(value.to_string().to_uppercase())),
         "lower" => Ok(Value::String(value.to_string().to_lowercase())),
@@ -2781,6 +2875,89 @@ mod tests {
         let value = Value::String("hello".to_string());
         let result = apply_filter("upper", &value, None).unwrap();
         assert_eq!(result.to_string(), "HELLO");
+    }
+
+    /// #2250: a string filter gets `str(Decimal)`, not the rendered expansion.
+    ///
+    /// The dispatch-table level of the claim. Parity against a live Django,
+    /// across every filter and locale, is
+    /// `python/tests/test_string_filter_stringification_2250.py`; this pins that
+    /// the coercion is at the ONE chokepoint rather than in the arms, which is
+    /// the property that keeps a future filter from missing it (#1646).
+    #[test]
+    fn string_filters_see_the_decimals_str_form_not_its_display() {
+        let value = Value::Decimal("1E-9".to_string());
+        // `Display` is the RENDER form and must stay that way (#2214).
+        assert_eq!(value.to_string(), "0.000000001");
+
+        for (name, expected) in [
+            ("upper", "1E-9"),
+            ("lower", "1e-9"),
+            ("truncatechars", "1E-9"),
+            ("addslashes", "1E-9"),
+            ("center", "        1E-9        "),
+        ] {
+            let arg = match name {
+                "truncatechars" => Some("8"),
+                "center" => Some("20"),
+                _ => None,
+            };
+            let got = apply_filter(name, &value, arg).unwrap();
+            assert_eq!(got.to_string(), expected, "|{name}");
+        }
+    }
+
+    /// The other half: a NON-string filter must still see the `Decimal`.
+    ///
+    /// Without this the coercion could be applied to every filter and the test
+    /// above would not notice — `floatformat` losing its `Decimal` arm is one of
+    /// the two regressions #2214 measured.
+    #[test]
+    fn non_string_filters_still_receive_the_decimal() {
+        let value = Value::Decimal("1234.56".to_string());
+        assert!(!is_string_filter("floatformat"));
+        assert!(!is_string_filter("add"));
+        assert!(!is_string_filter("default"));
+        // Reaches the `Value::Decimal` arm and rounds; a `Value::String` would
+        // fall through the dispatch and come back unchanged.
+        let got = apply_filter("floatformat", &value, Some("1u")).unwrap();
+        assert_eq!(got.to_string(), "1234.6");
+        // `default` returns the value itself, so it is still a Decimal and still
+        // localizes at the render site.
+        let got = apply_filter("default", &value, Some("x")).unwrap();
+        assert!(matches!(got, Value::Decimal(_)), "{got:?}");
+    }
+
+    /// `escape`/`safe` are Django `@stringfilter`s that djust EXCLUDES (#2257).
+    ///
+    /// Pinned so the exclusion stays a decision. They stay no-ops returning the
+    /// value, which is what lets the renderer localize it — the divergence
+    /// #2257 tracks.
+    #[test]
+    fn escape_and_safe_are_excluded_from_the_coercion() {
+        assert!(!is_string_filter("escape"));
+        assert!(!is_string_filter("safe"));
+        let value = Value::Decimal("1E-9".to_string());
+        for name in ["escape", "safe"] {
+            let got = apply_filter(name, &value, None).unwrap();
+            assert!(matches!(got, Value::Decimal(_)), "|{name} gave {got:?}");
+        }
+    }
+
+    /// The set is Django's, transcribed — 27 of its 29, minus `escape`/`safe`.
+    ///
+    /// A count pin rather than a floor (#1125): adding a name without deciding
+    /// about it fails here, and the Python test re-derives the set from the live
+    /// Django registry so a name that is not really a `@stringfilter` fails
+    /// there.
+    #[test]
+    fn the_string_filter_set_is_the_twenty_seven_it_claims() {
+        assert_eq!(STRING_FILTERS.len(), 27);
+        let mut sorted = STRING_FILTERS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 27, "duplicate entry in STRING_FILTERS");
+        assert_eq!(sorted, STRING_FILTERS, "STRING_FILTERS is not sorted");
     }
 
     #[test]
