@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from djust.tests._source_scan import code_only as _shared_code_only
+
 ROOT = Path(__file__).resolve().parents[1]
 TEST_ROOTS = ("tests", "python/tests", "python/djust/tests")
 SELF = Path(__file__).name
@@ -120,46 +122,27 @@ DEACTIVATE_ALL = re.compile(r"\bdeactivate_all\s*\(")
 
 
 def _code_only(text: str) -> str:
-    """Return only the CODE tokens, dropping comments and string literals.
+    """Return ``text`` with comments and string literals blanked out.
 
-    Uses ``tokenize`` rather than scanning lines. The hand-rolled scanner this
-    replaces had the failure mode hand-rolled parsers in this repo keep having
-    (#2213): it tracked a triple-quote delimiter across lines and therefore
-    treated everything between a docstring's `\"\"\"` and the next occurrence as
-    prose — which, whenever a file's docstrings were counted oddly, blanked
-    **real code**. The Stage 15 re-review measured 1318 live code lines blinded
-    across 42 files and proved it end to end with a `deactivate_all()` call
-    that passed the guard clean.
+    The implementation moved to ``djust.tests._source_scan`` in #2238, where a
+    second structural pin needed the same primitive — the #1817 render-send
+    pin was counting docstrings as call sites. One copy, not three (#1646).
 
-    It also fixed the wrong half of the false-positive: a `#` comment *after*
-    real code on the same line still tripped the old line-oriented version,
-    because that line does not start with `#`.
+    The behaviour this guard depends on is unchanged: ``tokenize`` rather than
+    a line scanner. The hand-rolled scanner it replaced had the failure mode
+    hand-rolled parsers in this repo keep having (#2213): it tracked a
+    triple-quote delimiter across lines and therefore treated everything
+    between a docstring's `\"\"\"` and the next occurrence as prose — which,
+    whenever a file's docstrings were counted oddly, blanked **real code**. The
+    Stage 15 re-review measured 1318 live code lines blinded across 42 files
+    and proved it end to end with a `deactivate_all()` call that passed the
+    guard clean.
 
-    ``tokenize`` knows the difference between a delimiter and a string, handles
-    CRLF, f-strings, raw strings and nested quotes, and cannot desynchronise.
-    A file that does not parse is returned unchanged — a syntax error is
-    somebody else's failure, and silently exempting it would be the same
-    blindness in a new costume.
+    The one visible change is that the shared version preserves layout
+    (blanking in place) instead of re-joining tokens with spaces, so the
+    matcher sees the original spacing. ``DEACTIVATE_ALL`` matches either way.
     """
-    import io
-    import tokenize as _tok
-
-    try:
-        toks = list(_tok.generate_tokens(io.StringIO(text).readline))
-    except (_tok.TokenError, SyntaxError, IndentationError):
-        return text
-    # Python 3.12 (PEP 701) splits an f-string into FSTRING_START /
-    # FSTRING_MIDDLE / FSTRING_END rather than one STRING token, so the literal
-    # text inside it is NOT type STRING and leaks through a naive filter. The
-    # canary below caught this on the first run, which is the entire argument
-    # for having a canary rather than trusting that "tokenize handles strings".
-    # `getattr` because those names do not exist before 3.12.
-    drop = {_tok.COMMENT, _tok.STRING, _tok.NL}
-    for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"):
-        tok_type = getattr(_tok, name, None)
-        if tok_type is not None:
-            drop.add(tok_type)
-    return " ".join(t.string for t in toks if t.type not in drop)
+    return _shared_code_only(text)
 
 
 def test_no_test_calls_deactivate_all():
