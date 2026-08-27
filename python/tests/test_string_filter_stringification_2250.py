@@ -57,13 +57,11 @@ LANGUAGES = ["en-us", "de", "fr", "hi", "ja"]
 #: the coercion — see the module docstring for `escape`/`safe`.
 NAMED_EXCLUSIONS = frozenset({"escape", "safe"})
 
-#: Seven filters DO take the coercion but cannot be diffed against Django
+#: Six filters DO take the coercion but cannot be diffed against Django
 #: byte-for-byte, because each has a whole-filter divergence of its own. The bar
 #: for being listed here is a reproduction on a NON-``Decimal`` input on
 #: ``main`` — otherwise this list is just a way of making a red suite green:
 #:
-#: * `linebreaks` — djust escapes its own markup; missing from
-#:   `SAFE_OUTPUT_FILTERS` (#2259). `{{ "hello"|linebreaks }}` diverges.
 #: * `slugify` — djust maps `.` and `+` to `-` where Django deletes them
 #:   (#2261). `{{ "3.5"|slugify }}` diverges.
 #: * `title` — djust strips surrounding whitespace and misses a word boundary
@@ -77,8 +75,12 @@ NAMED_EXCLUSIONS = frozenset({"escape", "safe"})
 #: * `urlencode` — encodes `/`, which Django keeps safe by default (#2262).
 #:   `{{ "<b>x</b>"|urlencode }}` diverges.
 #:
+#: `linebreaks` was the seventh until #2259 closed it: the filter now escapes
+#: its own input and is in `SAFE_OUTPUT_FILTERS`, so it is byte-diffable
+#: against Django and has moved into the covered set.
+#:
 #: Folding them into the parity tables would assert those issues rather than
-#: this one. Dropping them silently would leave seven of the 27 with no
+#: this one. Dropping them silently would leave six of the 27 with no
 #: assertion at all, so
 #: :func:`test_every_covered_filter_treats_a_decimal_as_its_str` covers every
 #: filter including these — Django-independently, which is the direct form of
@@ -87,7 +89,6 @@ NAMED_EXCLUSIONS = frozenset({"escape", "safe"})
 #: pins each plain-string divergence so closing it turns this file red.
 UNCOMPARABLE = frozenset(
     {
-        "linebreaks",
         "slugify",
         "title",
         "truncatechars_html",
@@ -405,7 +406,6 @@ def test_the_uncomparable_filters_are_excluded_for_a_reason_that_still_holds() -
     try:
         render_env.apply_number_format()
         for source, value, django_says, djust_says in (
-            ("{{ p|linebreaks }}", "hello", "<p>hello</p>", "&lt;p&gt;hello&lt;/p&gt;"),  # 2259
             ("{{ p|slugify }}", "3.5", "35", "3-5"),  # 2261
             ("{{ p|title }}", "  spaced  ", "  Spaced  ", "Spaced"),  # 2261
             ("{{ p|truncatechars_html:8 }}", "Infinity", "Infinity", "Infinit…"),  # 2262

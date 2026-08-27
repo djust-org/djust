@@ -269,12 +269,23 @@ def set_number_format(
     thousand_sep: Optional[str] = None,
     grouping: Optional[List[int]] = None,
     use_grouping: bool = False,
+    raw_decimal_sep: Optional[str] = None,
+    raw_thousand_sep: Optional[str] = None,
+    raw_grouping: Optional[List[int]] = None,
 ) -> None:
     """Set the CALLING THREAD's number format (#2221).
 
     `None` for `decimal_sep` disables localization. `grouping` is Django's
     `NUMBER_GROUPING` as a list — a scalar `3` arrives as `[3, 0]`, and Indian
     grouping is `[3, 2, 0]`; a `0` entry keeps the previous width.
+
+    The `raw_*` triple is Django's `use_l10n=False` format (#2266) —
+    `settings.DECIMAL_SEPARATOR` / `THOUSAND_SEPARATOR` / `NUMBER_GROUPING`
+    read directly rather than through the active locale, which is what
+    `floatformat`'s `u` suffix formats through. `None` clears it. There is no
+    `raw_use_grouping`: that half never groups on its own, because Django's
+    `use_grouping` is False whenever `use_l10n` is False; `floatformat`'s `g`
+    supplies `force_grouping` at the call site.
 
     The parameters come from Python rather than being derived in Rust — the
     inverse of `set_active_timezone` above, and deliberate: locale formatting is
@@ -285,6 +296,13 @@ def set_number_format(
 
 def active_number_format() -> Optional[Tuple[str, str, List[int], bool]]:
     """`(decimal_sep, thousand_sep, grouping, use_grouping)`, or None."""
+
+def active_unlocalized_number_format() -> Optional[Tuple[str, str, List[int], bool]]:
+    """The `use_l10n=False` format (#2266), same shape as above, or None.
+
+    Exposed so the Python side can ASSERT the second format reached Rust
+    rather than assume it (#2017). Its `use_grouping` is always False.
+    """
 
 def dj_model_fields_from_template(
     template_source: str,
@@ -1093,5 +1111,6 @@ __all__ = [
     "active_timezone_name",
     "set_number_format",
     "active_number_format",
+    "active_unlocalized_number_format",
     "virtual_keyed_ops_enabled",
 ]

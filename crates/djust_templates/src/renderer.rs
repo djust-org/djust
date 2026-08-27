@@ -21,7 +21,18 @@ static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
 /// `is_safe`/`needs_autoescape` semantics. NAME-based check is additive: it
 /// only ever marks MORE values safe, and only for these established names —
 /// never under-escapes a plain/unknown filter's output.
-const SAFE_OUTPUT_FILTERS: [&str; 7] = [
+/// Membership here is earned by ESCAPING THE INPUT INTERNALLY, not by producing
+/// markup. Django's `is_safe=True` on a markup-producing filter always comes
+/// paired with an `escape()` inside the filter body; a name added here whose
+/// filter does not escape becomes an XSS sink for every template that uses it.
+/// `linebreaks`/`linebreaksbr` were added in #2259 together with the escape in
+/// `filters::linebreaks`/`linebreaksbr` — one change, never separable.
+///
+/// `linenumbers` is `is_safe=True` in Django and is deliberately NOT here: it
+/// escapes per line where djust escapes the whole output, and those are
+/// byte-identical because everything it adds is escape-invariant. Adding the
+/// name without moving the escape inside would stop its input being escaped.
+const SAFE_OUTPUT_FILTERS: [&str; 9] = [
     "safe",
     "safeseq",
     "force_escape",
@@ -29,7 +40,37 @@ const SAFE_OUTPUT_FILTERS: [&str; 7] = [
     "urlize",
     "urlizetrunc",
     "unordered_list",
+    "linebreaks",
+    "linebreaksbr",
 ];
+
+/// Is the value a filter just produced exempt from auto-escaping?
+///
+/// **LAST filter wins.** Call this once per filter, assigning (never OR-ing)
+/// the result, so a later plain filter re-taints — which is Django's rule:
+/// `FilterExpression.resolve` marks the value safe only when THE FILTER IT JUST
+/// RAN is `is_safe`, so `{{ p|linebreaks|upper }}` is escaped because `upper`
+/// is registered `is_safe=False`.
+///
+/// Extracted in #2259 because the three call sites had drifted and one of them
+/// said in a comment that they had not: `get_value_safe` applied the name check
+/// per filter (correct) while the `Node::Variable` and `Node::InlineIf` arms
+/// applied it as `filters.iter().any(...)` over the WHOLE chain, which marks the
+/// output safe when a safe filter appears anywhere — even in the middle. That
+/// made `{{ p|urlize|upper }}` and `{{ p|safe|upper }}` diverge from Django on
+/// an unmodified build, and adding `linebreaks` to the list above would have
+/// widened the same divergence to a fourth name instead of leaving it where it
+/// was. One helper, three callers, no room to drift again (#1646).
+///
+/// Fail-SAFE by construction: this can only ever mark FEWER values safe than the
+/// `any()` it replaces, so no value that was escaped before becomes unescaped.
+fn filter_output_is_safe(filter_name: &str, produced_safe: bool) -> bool {
+    // `produced_safe` is a genuine runtime `SafeString` — a custom filter that
+    // `mark_safe()`d its result without the static `is_safe=True` flag (#1660).
+    produced_safe
+        || SAFE_OUTPUT_FILTERS.contains(&filter_name)
+        || crate::filter_registry::is_custom_filter_safe(filter_name)
+}
 
 /// Returns ``true`` if the (parser-preserved) filter argument string is a
 /// quoted literal — i.e. starts and ends with matching single or double
@@ -524,7 +565,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     arg_was_quoted,
                 )?;
                 value = new_value;
-                runtime_safe = produced_safe;
+                // ASSIGNED, not OR-ed: the LAST filter decides (#2259).
+                runtime_safe = filter_output_is_safe(filter_name, produced_safe);
             }
 
             // #2221: localize a bare number on its way into the page, which is
@@ -558,11 +600,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             //    ``mark_safe()``d its result at runtime without the static
             //    ``is_safe=True`` flag (#1660). Additive: only ever marks MORE
             //    values safe, and only when the LAST filter's output is safe.
-            let is_safe = filter_specs.iter().any(|(name, _)| {
-                SAFE_OUTPUT_FILTERS.contains(&name.as_str())
-                    || crate::filter_registry::is_custom_filter_safe(name)
-            }) || context.is_safe(var_name)
-                || runtime_safe;
+            // `runtime_safe` now carries the name-based check too, applied
+            // per filter rather than as an `any()` over the whole chain — see
+            // `filter_output_is_safe`.
+            let is_safe = runtime_safe || context.is_safe(var_name);
             if is_safe {
                 Ok(text)
             } else if *in_attr {
@@ -607,7 +648,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     arg_was_quoted,
                 )?;
                 value = new_value;
-                runtime_safe = produced_safe;
+                // ASSIGNED, not OR-ed: the LAST filter decides (#2259).
+                runtime_safe = filter_output_is_safe(filter_name, produced_safe);
             }
 
             // #2221: localize a bare number on its way into the page, which is
@@ -630,11 +672,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // inline-if expression), which are byte-identical and were found
             // only by counting the matches rather than by reading the diff.
             let text = localize_if_number(&value);
-            let is_safe = filters.iter().any(|(name, _)| {
-                SAFE_OUTPUT_FILTERS.contains(&name.as_str())
-                    || crate::filter_registry::is_custom_filter_safe(name)
-            }) || context.is_safe(expr)
-                || runtime_safe;
+            // Same shape as the Variable arm — see `filter_output_is_safe`.
+            let is_safe = runtime_safe || context.is_safe(expr);
             if is_safe {
                 Ok(text)
             } else {
@@ -2158,16 +2197,10 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
                 arg_was_quoted,
             )?;
             value = new_value;
-            // Mark safe when EITHER the filter produced a runtime SafeString
-            // (#1672) OR its NAME is in the name-based safe_output_filters
-            // whitelist / a custom is_safe=True filter — mirroring the
-            // Variable/InlineIf arms exactly (#1692). LAST-filter semantics:
-            // assigned each iteration, so a later plain filter re-taints to
-            // false. Fail-safe: only ever ADDS safeness for established names;
-            // a plain/unknown filter (e.g. `upper`) stays escaped.
-            runtime_safe = produced_safe
-                || SAFE_OUTPUT_FILTERS.contains(&filter_name)
-                || crate::filter_registry::is_custom_filter_safe(filter_name);
+            // This arm always had LAST-filter semantics and its comment
+            // claimed the other two matched it. They did not, until #2259
+            // extracted `filter_output_is_safe` and pointed all three at it.
+            runtime_safe = filter_output_is_safe(filter_name, produced_safe);
         }
 
         return Ok((value, runtime_safe));

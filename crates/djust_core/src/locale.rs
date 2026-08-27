@@ -53,6 +53,7 @@ pub struct NumberFormat {
 
 thread_local! {
     static NUMBER_FORMAT: RefCell<Option<NumberFormat>> = const { RefCell::new(None) };
+    static UNLOCALIZED_NUMBER_FORMAT: RefCell<Option<NumberFormat>> = const { RefCell::new(None) };
 }
 
 /// Set this thread's number format. `None` restores unlocalized rendering,
@@ -64,6 +65,40 @@ pub fn set_number_format(fmt: Option<NumberFormat>) {
 /// This thread's number format, if any.
 pub fn number_format() -> Option<NumberFormat> {
     NUMBER_FORMAT.with(|c| c.borrow().clone())
+}
+
+/// Set this thread's `use_l10n=False` number format (#2266).
+///
+/// The SECOND format, not a variation on the first. Django's `get_format`
+/// branches before it ever looks at the active language:
+///
+/// ```python
+/// if use_l10n is False:
+///     return getattr(settings, format_type)   # the RAW setting
+/// ```
+///
+/// so `floatformat`'s `u` suffix reads `settings.DECIMAL_SEPARATOR` /
+/// `THOUSAND_SEPARATOR` / `NUMBER_GROUPING` directly and the active locale's
+/// `formats.py` never participates. The two cannot be derived from each other:
+/// under `de` with no overrides the localized separator is `,` and the
+/// unlocalized one is `.`, and under `DECIMAL_SEPARATOR="!"` with
+/// `LANGUAGE_CODE="en"` it is the other way round. Both are therefore resolved
+/// on the Python side and pushed down together (`render_env.apply_number_format`).
+///
+/// `use_grouping` is always FALSE on this one, and that is Django's arithmetic
+/// rather than a simplification: `numberformat.format` computes
+/// `use_grouping = (use_l10n or ...) and USE_THOUSAND_SEPARATOR`, which is
+/// `False` whenever `use_l10n` is `False`, and only then ORs in
+/// `force_grouping`. So `u` never groups and `gu` groups iff the RAW
+/// `NUMBER_GROUPING` is non-zero — measured: with `NUMBER_GROUPING` left at its
+/// default `0`, Django renders `6666.67` for `"2gu"`, not `6,666.67`.
+pub fn set_unlocalized_number_format(fmt: Option<NumberFormat>) {
+    UNLOCALIZED_NUMBER_FORMAT.with(|c| *c.borrow_mut() = fmt);
+}
+
+/// This thread's `use_l10n=False` number format, if any.
+pub fn unlocalized_number_format() -> Option<NumberFormat> {
+    UNLOCALIZED_NUMBER_FORMAT.with(|c| c.borrow().clone())
 }
 
 /// Localize a plain numeric string (`"-1234.5"`) the way Django would.
@@ -90,7 +125,28 @@ pub fn localize_number(rendered: &str) -> String {
 /// [`localize_number`] delegates here rather than the two having parallel
 /// bodies, so the plain and forced paths cannot drift (#1646).
 pub fn localize_number_forced(rendered: &str, force_grouping: bool) -> String {
-    let Some(mut fmt) = number_format() else {
+    apply_active_format(number_format(), rendered, force_grouping)
+}
+
+/// [`localize_number_forced`] against the `use_l10n=False` format (#2266).
+///
+/// What `floatformat`'s `u`/`gu` suffixes reach for. Returns the digits
+/// unchanged when no unlocalized format has been pushed, which is what an
+/// embedder with no Django settings gets and what every caller got before
+/// #2266 — the change is additive, never a re-format of something that already
+/// agreed.
+pub fn localize_number_unlocalized(rendered: &str, force_grouping: bool) -> String {
+    apply_active_format(unlocalized_number_format(), rendered, force_grouping)
+}
+
+/// The shared body of the two `localize_number_*` entry points.
+///
+/// Extracted rather than copied so the localized and unlocalized arms cannot
+/// drift in how they apply `force_grouping` or handle an absent format
+/// (#1646) — the exact drift class that put the `u` gap here in the first
+/// place.
+fn apply_active_format(fmt: Option<NumberFormat>, rendered: &str, force_grouping: bool) -> String {
+    let Some(mut fmt) = fmt else {
         return rendered.to_string();
     };
     fmt.use_grouping |= force_grouping;

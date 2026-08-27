@@ -522,16 +522,9 @@ fn apply_builtin_filter(
             Ok(crate::floatformat::floatformat(value, arg, arg_was_quoted))
         }
         "filesizeformat" => {
-            // filesizeformat filter: formats bytes to human-readable size
-            match value {
-                Value::Integer(n) => Ok(Value::String(format_filesize(*n))),
-                Value::Float(f) => Ok(Value::String(format_filesize(*f as i64))),
-                Value::Decimal(_) => Ok(match value.as_f64() {
-                    Some(f) => Value::String(format_filesize(f as i64)),
-                    None => value.clone(),
-                }),
-                _ => Ok(value.clone()),
-            }
+            // Django coerces with `int(bytes_)` and formats EVERY input,
+            // falling back to `0 bytes` rather than echoing the value (#2264).
+            Ok(Value::String(format_filesize(value)))
         }
         "random" => {
             // random filter: returns random item from list
@@ -1237,26 +1230,213 @@ fn format_timeuntil(datetime_str: &str) -> Result<String> {
     Ok(django_timesince(now, then))
 }
 
-fn format_filesize(bytes: i64) -> String {
-    const KB: i64 = 1024;
-    const MB: i64 = KB * 1024;
-    const GB: i64 = MB * 1024;
-    const TB: i64 = GB * 1024;
-    const PB: i64 = TB * 1024;
+/// The NON-BREAKING SPACE Django joins a file size to its unit with.
+///
+/// Spelled as an escape rather than as a literal U+00A0 in the source on
+/// purpose: the two are visually identical, so a literal one is silently
+/// destroyed by an editor that normalises whitespace, by a copy-paste through a
+/// terminal, or by a well-meaning "trailing whitespace" fixer — and the
+/// resulting output looks *exactly right* while being the wrong bytes. Same
+/// character, same reasoning, as `timesince` (#2228).
+const NBSP: &str = "\u{00A0}";
 
-    if bytes < KB {
-        format!("{bytes} bytes")
-    } else if bytes < MB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else if bytes < GB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes < TB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes < PB {
-        format!("{:.1} TB", bytes as f64 / TB as f64)
+/// `{{ value|filesizeformat }}`, as `django/template/defaultfilters.py` writes
+/// it (#2264).
+///
+/// The previous implementation diverged on EVERY value, on five independent
+/// axes, of which the `as_f64` parse the issue was filed against is the only one
+/// that needs an unusual input to see:
+///
+/// 1. **The separator.** Django ends with `avoid_wrapping(value)`, which is
+///    `value.replace(" ", "\xa0")` — the number and the unit are joined by a
+///    NON-BREAKING space. Every cell differed by this one byte, and a test
+///    written with an ordinary space passes while shipping the wrong one. See
+///    [`NBSP`].
+/// 2. **Pluralization.** `ngettext("%(size)d byte", "%(size)d bytes", bytes_)`
+///    says `1 byte`, not `1 bytes`.
+/// 3. **Negatives.** Django takes the absolute value, formats that, and puts the
+///    `-` back — so `-1024` is `-1.0 KB`. The old signed `bytes < KB` comparison
+///    sent every negative into the bytes branch, rendering `-1024 bytes`.
+/// 4. **Coercion.** Django's first statement is `int(bytes_)`, catching
+///    `TypeError`/`ValueError`/`UnicodeDecodeError` into `0 bytes`. So `"1024"`
+///    is `1.0 KB`, `None` and `"abc"` and a list are `0 bytes`, and `True` is
+///    `1 byte`. The old version returned the value UNCHANGED for every
+///    non-numeric type, so `{{ p|filesizeformat }}` rendered `None`.
+/// 5. **Localization.** The `KB`-and-up branch formats through
+///    `formats.number_format(round(value, 1), 1)`, which honours the active
+///    locale's decimal separator AND `USE_THOUSAND_SEPARATOR` grouping —
+///    measured: `de` gives `1,5 GB`, and grouping gives `1,024.0 KB`. The
+///    `bytes` branch does NOT: it is a raw `%d`.
+///
+/// ## Two divergences that remain, deliberately
+///
+/// * **The unit names are translated by Django** and not here: `fr` renders
+///   `1,5 Gio`, not `1,5 GB`. That is `gettext`, which the Rust engine has no
+///   catalogue for; it is the same gap `{% trans %}` has and is not specific to
+///   this filter.
+/// * **Past `i128`** — about 1.7e38 bytes — this gives up and renders
+///   `0 bytes`, where Python's unbounded ints keep counting. The same ceiling
+///   `add` documents, reached only by a `Decimal` with a huge exponent.
+fn format_filesize(value: &Value) -> String {
+    let Some(bytes) = filesize_to_int(value) else {
+        // `except (TypeError, ValueError, UnicodeDecodeError)` — Django formats
+        // ZERO here, it does not echo the input.
+        return avoid_wrapping(&format!("0 {}", byte_unit(0)));
+    };
+
+    const KB: u128 = 1 << 10;
+    const MB: u128 = 1 << 20;
+    const GB: u128 = 1 << 30;
+    const TB: u128 = 1 << 40;
+    const PB: u128 = 1 << 50;
+
+    // `negative = bytes_ < 0; if negative: bytes_ = -bytes_`. `unsigned_abs`
+    // rather than `-bytes` because `i128::MIN` has no positive counterpart.
+    let negative = bytes < 0;
+    let magnitude = bytes.unsigned_abs();
+
+    let scaled = |unit: u128| filesize_number_format(magnitude as f64 / unit as f64);
+    let formatted = if magnitude < KB {
+        format!("{magnitude} {}", byte_unit(magnitude))
+    } else if magnitude < MB {
+        format!("{} KB", scaled(KB))
+    } else if magnitude < GB {
+        format!("{} MB", scaled(MB))
+    } else if magnitude < TB {
+        format!("{} GB", scaled(GB))
+    } else if magnitude < PB {
+        format!("{} TB", scaled(TB))
     } else {
-        format!("{:.1} PB", bytes as f64 / PB as f64)
+        format!("{} PB", scaled(PB))
+    };
+
+    let signed = if negative {
+        format!("-{formatted}")
+    } else {
+        formatted
+    };
+    avoid_wrapping(&signed)
+}
+
+/// `django.utils.html.avoid_wrapping` — `value.replace(" ", "\xa0")`.
+///
+/// EVERY space, not just the one before the unit. Django applies it to the whole
+/// rendered string, so mirroring the whole-string replace (rather than
+/// formatting an [`NBSP`] directly into the one place it is currently needed)
+/// stays correct if the value ever grows a second space.
+fn avoid_wrapping(value: &str) -> String {
+    value.replace(' ', NBSP)
+}
+
+/// `ngettext("%(size)d byte", "%(size)d bytes", n)` for the English catalogue.
+fn byte_unit(n: u128) -> &'static str {
+    if n == 1 {
+        "byte"
+    } else {
+        "bytes"
     }
+}
+
+/// Python's `int(x)` over a [`Value`], or `None` for what Django catches.
+///
+/// `i128`, not `i64`: `int(Decimal('12345678901234567890.123456789'))` is the
+/// exact 20-digit integer, and routing it through `as_f64() as i64` saturated at
+/// `i64::MAX` and rendered `8192.0 PB` where Django renders `10965.2 PB` — the
+/// third cause #2264 reported. The `Decimal` arm delegates to
+/// `decimal::to_i128_trunc` rather than re-deriving the truncation (#1646).
+fn filesize_to_int(value: &Value) -> Option<i128> {
+    match value {
+        Value::Integer(n) => Some(*n as i128),
+        // `int(True)` is 1. Django reaches this before any string handling.
+        Value::Bool(b) => Some(i128::from(*b)),
+        Value::Float(f) => {
+            // `int(float)` truncates toward zero; `int(nan)` raises ValueError
+            // and `int(inf)` raises OverflowError — which Django does NOT catch,
+            // so it propagates as a 500. A filter here cannot raise, so both
+            // land on the `0 bytes` fallback.
+            // The bound is `i128::MAX` as a double — the largest magnitude the
+            // `as i128` below can carry without saturating. NaN fails the range
+            // test on its own, so `is_finite` is not spelled separately.
+            const I128_MAX_AS_F64: f64 = 1.7014118346046923e38;
+            let truncated = f.trunc();
+            if (-I128_MAX_AS_F64..=I128_MAX_AS_F64).contains(&truncated) {
+                Some(truncated as i128)
+            } else {
+                None
+            }
+        }
+        Value::Decimal(d) => djust_core::decimal::parse_decimal_parts(d.trim())?.to_i128_trunc(),
+        Value::String(s) => python_int_from_str(s),
+        // `int(None)`, `int([1, 2])`, `int({'a': 1})` — all TypeError.
+        _ => None,
+    }
+}
+
+/// Python's `int(str)`: surrounding whitespace, an optional sign, then digits
+/// that may be separated by single underscores (`int("1_024")` is 1024).
+///
+/// Rejects `"19.99"` — Python's `int()` does not parse a decimal point, which is
+/// why Django renders `0 bytes` for it and not `19 bytes`.
+fn python_int_from_str(raw: &str) -> Option<i128> {
+    let trimmed = raw.trim();
+    let (neg, digits) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    let mut cleaned = String::with_capacity(digits.len());
+    let mut prev_was_digit = false;
+    for ch in digits.chars() {
+        if ch.is_ascii_digit() {
+            cleaned.push(ch);
+            prev_was_digit = true;
+        } else if ch == '_' && prev_was_digit {
+            // A separator must sit BETWEEN digits: `int("_1")` and `int("1__2")`
+            // are both ValueError.
+            prev_was_digit = false;
+        } else {
+            return None;
+        }
+    }
+    // Also rejects an empty string and a bare sign — neither ends on a digit.
+    if !prev_was_digit {
+        return None;
+    }
+    let n = cleaned.parse::<i128>().ok()?;
+    Some(if neg { -n } else { n })
+}
+
+/// Django's inner `filesize_number_format`:
+/// `formats.number_format(round(value, 1), 1)`.
+///
+/// Three steps, each of which the naive `format!("{v:.1}")` gets wrong for some
+/// input:
+///
+/// 1. `round(value, 1)` — correctly rounded to one decimal, ties to EVEN
+///    (`2.25` KB is `2.2`, not `2.3`). Rust's `{:.1}` agrees on the rule, so a
+///    round trip through a formatted parse is the cheapest faithful spelling.
+/// 2. `str(...)` — Python's float repr, which switches to an EXPONENT for large
+///    magnitudes; `numberformat.format` then re-reads that through
+///    `Decimal(str(number))` and expands it with `"{:f}"`. The distinction is
+///    real rather than theoretical: `{:.1}` prints the double's EXACT binary
+///    expansion (`151115727451828646838272.0`) where Python prints the shortest
+///    repr expanded (`151115727451828650000000.0`). `Value::Decimal`'s `Display`
+///    IS that `"{:f}"` expansion, so it is reused rather than re-derived.
+/// 3. `decimal_pos=1` — truncate the fraction to one place, then pad it to one.
+///
+/// Finally the digits go through the active locale, which is what makes `de`
+/// render `1,5 GB` and `USE_THOUSAND_SEPARATOR` render `1,024.0 KB`.
+fn filesize_number_format(value: f64) -> String {
+    let rounded: f64 = format!("{value:.1}").parse().unwrap_or(value);
+    let expanded = Value::Decimal(djust_core::decimal::python_float_repr(rounded)).to_string();
+
+    let (int_part, dec_part) = match expanded.split_once('.') {
+        Some((i, d)) => (i, d),
+        None => (expanded.as_str(), ""),
+    };
+    // `dec_part = dec_part[:1]`, then `+= "0" * (1 - len(dec_part))` — take the
+    // first decimal digit, or pad with a zero when there is none.
+    let fraction = dec_part.chars().next().unwrap_or('0');
+    djust_core::locale::localize_number(&format!("{int_part}.{fraction}"))
 }
 
 /// Format a datetime or date string using Django-style format codes.
@@ -1824,26 +2004,96 @@ fn slugify(s: &str) -> String {
         .join("-")
 }
 
-fn linebreaks(s: &str) -> String {
-    // Convert double newlines to </p><p> and single newlines to <br>
-    // Similar to Django's linebreaks filter
-    let paragraphs: Vec<&str> = s.split("\n\n").collect();
-
-    let formatted_paragraphs: Vec<String> = paragraphs
-        .iter()
-        .filter(|p| !p.trim().is_empty())
-        .map(|p| {
-            let lines_with_br = p.split('\n').collect::<Vec<_>>().join("<br>");
-            format!("<p>{lines_with_br}</p>")
-        })
-        .collect();
-
-    formatted_paragraphs.join("\n")
+/// `django.utils.text.normalize_newlines` — `re.sub(r"\r\n|\r|\n", "\n", ...)`.
+///
+/// Both `linebreaks` and `linebreaksbr` call it first, so `a\r\nb` renders
+/// `a<br>b` and not `a\r<br>b` (#2259). `linenumbers` deliberately does NOT —
+/// Django splits it on a bare `"\n"`.
+fn normalize_newlines(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// `re.split(r"\n{2,}", value)` — split on a run of TWO OR MORE newlines.
+///
+/// Not `split("\n\n")`: `a\n\n\nb` is ONE separator to Django and two to a
+/// literal split, which is how the old implementation grew a spurious
+/// `<p><br>b</p>`. Runs are consumed whole, and empty pieces are KEPT (Django
+/// does not filter them — `""` is one empty paragraph, and `"\n\n"` is two).
+///
+/// Byte indexing is safe because `\n` is ASCII, so every boundary it produces is
+/// a `char` boundary.
+fn split_on_blank_lines(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'\n' {
+            i += 1;
+            continue;
+        }
+        let run_start = i;
+        while i < bytes.len() && bytes[i] == b'\n' {
+            i += 1;
+        }
+        if i - run_start >= 2 {
+            out.push(&s[start..run_start]);
+            start = i;
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// `{{ value|linebreaks }}` — `django.utils.html.linebreaks` under
+/// `autoescape=True`, then `mark_safe` (#2259).
+///
+/// **This filter escapes its own input, and that is what earns it a place in
+/// `renderer::SAFE_OUTPUT_FILTERS`.** Django's registration is
+/// `@register.filter("linebreaks", is_safe=True, needs_autoescape=True)`, whose
+/// body is `mark_safe(linebreaks(value, autoescape))` — the markup it builds is
+/// exempt from escaping precisely BECAUSE `escape(p)` has already been applied
+/// to every paragraph of the user's text. Marking the output safe without that
+/// inner escape would turn `{{ comment|linebreaks }}` into an XSS sink; the two
+/// halves are one change and must never be separated.
+///
+/// The engine has no `{% autoescape %}` block (the tag is rejected by the
+/// parser), so `autoescape` is unconditionally true here. Django's
+/// `not isinstance(value, SafeData)` clause is therefore not reproduced: a
+/// context value the caller `mark_safe`d is escaped here where Django would pass
+/// it through. That divergence is in the SAFE direction — over-escaping, never
+/// under-escaping — and is stated in the parity suite rather than left to be
+/// discovered.
+///
+/// Four defects beyond the escaping, all of which made `''` and multi-paragraph
+/// text render wrong:
+///
+/// * paragraphs were split on a literal `"\n\n"` rather than `\n{2,}`;
+/// * they were joined with `"\n"` where Django joins with `"\n\n"`;
+/// * empty paragraphs were FILTERED OUT, so `''` rendered `''` where Django
+///   renders `<p></p>`;
+/// * `\r\n` was not normalized.
+fn linebreaks(s: &str) -> String {
+    let normalized = normalize_newlines(s);
+    split_on_blank_lines(&normalized)
+        .iter()
+        // `"<p>%s</p>" % escape(p).replace("\n", "<br>")`. Escape FIRST, as
+        // Django does — `escape` leaves `\n` alone, so the order is not
+        // load-bearing, but mirroring it keeps the two readable side by side.
+        .map(|p| format!("<p>{}</p>", html_escape(p).replace('\n', "<br>")))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// `{{ value|linebreaksbr }}` — the same contract as [`linebreaks`] (#2259).
+///
+/// The issue listed this one as a neighbour to *check* rather than to fix; it
+/// diverges too, on both axes. It escapes its input and is `is_safe=True` in
+/// Django exactly like `linebreaks`, and it needs the same
+/// `normalize_newlines` — a single-line differential misses it only because it
+/// emits no tag at all until the input contains a newline.
 fn linebreaksbr(s: &str) -> String {
-    // Simply replace newlines with <br> tags
-    s.replace('\n', "<br>")
+    html_escape(&normalize_newlines(s)).replace('\n', "<br>")
 }
 
 fn urlencode(s: &str) -> String {
@@ -2389,13 +2639,30 @@ fn escape_js(s: &str) -> String {
     result
 }
 
+/// `{{ value|linenumbers }}` — Django's `("%0" + width + "d. %s")`.
+///
+/// **ZERO padding, not space padding** (#2259). Django builds the format string
+/// as `"%0" + width + "d"`, so an 11-line input numbers `01.` through `11.`; the
+/// previous `{:>width$}` produced ` 1.`, which is invisible until the input
+/// crosses ten lines. Checked as a neighbour of `linebreaks` because the issue
+/// asked for it — and the escaping half of that check came back clean while this
+/// one did not.
+///
+/// **Deliberately NOT added to `renderer::SAFE_OUTPUT_FILTERS`,** even though
+/// Django registers it `is_safe=True`. Django escapes each line and marks the
+/// join safe; this escapes the whole rendered string afterwards. The two are
+/// byte-identical, because everything this filter ADDS — digits, `.`, a space,
+/// the `\n` join — is escape-invariant, and `escape` operates per character.
+/// Verified against Django over `<`, `&`, `"`, `'` and a multi-line mix. Adding
+/// it to the safe list WITHOUT moving the escape inside would stop the input
+/// being escaped at all and open an XSS hole for a one-cell cosmetic gain.
 fn add_linenumbers(s: &str) -> String {
     let lines: Vec<&str> = s.split('\n').collect();
     let width = lines.len().to_string().len();
     lines
         .iter()
         .enumerate()
-        .map(|(i, line)| format!("{:>width$}. {line}", i + 1))
+        .map(|(i, line)| format!("{:0width$}. {line}", i + 1))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -3105,10 +3372,15 @@ mod tests {
 
     #[test]
     fn test_linebreaks_filter() {
+        // Was `contains("<p>")` + `contains("<br>")`, which is true of the old
+        // output too — it passed while the paragraph JOIN was `\n` instead of
+        // Django's `\n\n` (#2259). Exact bytes, so the join is pinned.
         let value = Value::String("Line 1\nLine 2\n\nParagraph 2".to_string());
         let result = apply_filter("linebreaks", &value, None).unwrap();
-        assert!(result.to_string().contains("<p>"));
-        assert!(result.to_string().contains("<br>"));
+        assert_eq!(
+            result.to_string(),
+            "<p>Line 1<br>Line 2</p>\n\n<p>Paragraph 2</p>"
+        );
     }
 
     #[test]
@@ -3116,6 +3388,30 @@ mod tests {
         let value = Value::String("Line 1\nLine 2\nLine 3".to_string());
         let result = apply_filter("linebreaksbr", &value, None).unwrap();
         assert_eq!(result.to_string(), "Line 1<br>Line 2<br>Line 3");
+    }
+
+    /// The half that makes the `SAFE_OUTPUT_FILTERS` membership safe (#2259).
+    ///
+    /// `linebreaks`/`linebreaksbr` are exempt from the renderer's auto-escape
+    /// ONLY because they escape their own input. If this test goes red, the
+    /// name must come out of `renderer::SAFE_OUTPUT_FILTERS` in the same commit
+    /// — the two are one change.
+    #[test]
+    fn linebreaks_escapes_its_input_which_is_what_makes_marking_it_safe_safe() {
+        let attack = Value::String("<img src=x onerror=alert(1)>\n</script><script>".to_string());
+        for name in ["linebreaks", "linebreaksbr"] {
+            let out = apply_filter(name, &attack, None).unwrap().to_string();
+            assert!(
+                !out.contains("<img") && !out.contains("<script") && !out.contains("</script"),
+                "{name} leaked live markup: {out:?}"
+            );
+            assert!(
+                out.contains("&lt;img src=x onerror=alert(1)&gt;"),
+                "{name} did not escape the payload: {out:?}"
+            );
+            // The tags the FILTER generates stay live — that is the point.
+            assert!(out.contains("<br>"), "{name} lost its own markup: {out:?}");
+        }
     }
 
     #[test]
@@ -3149,17 +3445,49 @@ mod tests {
 
     #[test]
     fn test_filesizeformat_filter() {
-        let value = Value::Integer(1024);
-        let result = apply_filter("filesizeformat", &value, None).unwrap();
-        assert_eq!(result.to_string(), "1.0 KB");
+        // The separator is U+00A0, spelled as an escape so it survives an
+        // editor (#2264). These three cells asserted a PLAIN space and passed
+        // for the whole life of the filter while every rendered byte was wrong.
+        let cases = [
+            (Value::Integer(1024), "1.0\u{a0}KB"),
+            (Value::Integer(1048576), "1.0\u{a0}MB"),
+            (Value::Integer(500), "500\u{a0}bytes"),
+            // Pluralization, and the negative that used to skip every unit.
+            (Value::Integer(1), "1\u{a0}byte"),
+            (Value::Integer(0), "0\u{a0}bytes"),
+            (Value::Integer(-1), "-1\u{a0}byte"),
+            (Value::Integer(-1024), "-1.0\u{a0}KB"),
+            // `int(bytes_)` coercion: a string parses, everything else is 0.
+            (Value::String("1024".into()), "1.0\u{a0}KB"),
+            (Value::String("19.99".into()), "0\u{a0}bytes"),
+            (Value::None, "0\u{a0}bytes"),
+            (Value::Bool(true), "1\u{a0}byte"),
+            (Value::List(vec![Value::Integer(1)]), "0\u{a0}bytes"),
+            // Exact `i128` truncation, where `as_f64() as i64` saturated to
+            // `8192.0 PB`.
+            (
+                Value::Decimal("12345678901234567890.123456789".into()),
+                "10965.2\u{a0}PB",
+            ),
+        ];
+        for (value, expected) in cases {
+            let got = apply_filter("filesizeformat", &value, None)
+                .unwrap()
+                .to_string();
+            assert_eq!(got, expected, "filesizeformat({value:?})");
+        }
+    }
 
-        let value = Value::Integer(1048576);
-        let result = apply_filter("filesizeformat", &value, None).unwrap();
-        assert_eq!(result.to_string(), "1.0 MB");
-
-        let value = Value::Integer(500);
-        let result = apply_filter("filesizeformat", &value, None).unwrap();
-        assert_eq!(result.to_string(), "500 bytes");
+    /// The nbsp is a distinct byte from a space — asserted structurally so a
+    /// future edit cannot re-introduce the plain space and stay green (#2264).
+    #[test]
+    fn filesizeformat_joins_with_a_non_breaking_space_not_a_plain_one() {
+        let out = apply_filter("filesizeformat", &Value::Integer(2048), None)
+            .unwrap()
+            .to_string();
+        assert!(!out.contains(' '), "found a PLAIN space in {out:?}");
+        assert!(out.contains('\u{a0}'), "no U+00A0 in {out:?}");
+        assert_eq!(out.chars().filter(|c| *c == '\u{a0}').count(), 1);
     }
 
     #[test]
@@ -3757,13 +4085,19 @@ mod tests {
 
     #[test]
     fn test_linenumbers_filter_alignment() {
-        // With 10+ lines, numbers should be right-aligned
+        // Django's format is `"%0" + width + "d. %s"` — ZERO padded, not space
+        // padded (#2259). This asserted ` 1. line`, which is what djust used to
+        // emit and what Django never emits.
         let lines: Vec<&str> = (0..12).map(|_| "line").collect();
         let value = Value::String(lines.join("\n"));
         let result = apply_filter("linenumbers", &value, None).unwrap();
         let output = result.to_string();
-        assert!(output.starts_with(" 1. line"));
-        assert!(output.contains("12. line"));
+        assert!(output.starts_with("01. line"), "{output:?}");
+        assert!(output.contains("\n12. line"), "{output:?}");
+        assert!(
+            !output.contains(" 1. line"),
+            "space padding is back: {output:?}"
+        );
     }
 
     #[test]
