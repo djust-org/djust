@@ -2398,8 +2398,9 @@ fn is_json_int_literal(s: &str) -> bool {
 /// fixed six-byte token chosen by this function from the float's own class,
 /// carries no attacker payload, and cannot inject structure. Divergence was the
 /// defect in #2241; here parity is what a strict parser rejects, so the
-/// consequence is recorded (`test_infinity_is_django_parity_and_is_not_parseable
-/// _json`) rather than papered over.
+/// consequence is recorded — `test_infinity_is_django_parity_and_is_not_`
+/// `parseable_json` in `python/tests/test_pprint_json_script_float_2270.py` —
+/// rather than papered over.
 fn json_float_body(f: f64) -> String {
     if f.is_nan() {
         return "NaN".to_string();
@@ -2773,13 +2774,15 @@ mod value_to_json_structure {
 /// `Value::Float` arm that spells the binding itself fails this test until it is
 /// classified, which is the "next omission fails loudly" the issue asks for.
 ///
-/// **Scope is the DIRECTORY, read at test time**, not this file — the two #2270
-/// sinks were both in `filters.rs` and the three #2258 ones were spread over
-/// `filters.rs`, `floatformat.rs` and `djust_core`. Reading the directory means
-/// a NEW file in this crate is covered the day it is added, which an
-/// `include_str!` list of names is not. The read is asserted, so a moved or
-/// renamed directory fails rather than silently scanning nothing (#2249's third
-/// no-op mode).
+/// **Scope is the DIRECTORY, read at test time**, not this file. The two #2270
+/// sinks were both in `filters.rs`, but the class is not: the crate's other
+/// float→string arm is in `floatformat.rs` (#2253), and #2258's `Display` and
+/// `py_repr` sites are in `djust_core` — a sibling crate this pin cannot see,
+/// which is exactly why it must at least see every file of its own. Reading the
+/// directory means a NEW file in this crate is covered the day it is added,
+/// which an `include_str!` list of names is not. The read is asserted, so a
+/// moved or renamed directory fails rather than silently scanning nothing
+/// (#2249's third no-op mode).
 ///
 /// **The rule is about the OPERATION** (#2129): an arm that binds a float and
 /// turns it into a string must route through one of the approved reprs. It is
@@ -2867,8 +2870,9 @@ mod float_sink_set {
     ///
     /// `Value::Float(_)` is excluded: it binds nothing, so it cannot spell the
     /// float — `renderer.rs`'s `localize_number` arm reaches the value through
-    /// `value.to_string()`, which is `Display`, the one spelling that is
-    /// correct by construction (#2258 fixed it there).
+    /// `value.to_string()`, which is `Display`, and `Display` is the one
+    /// spelling already correct by construction (#2258 fixed it in
+    /// `djust_core`, out of this pin's reach).
     fn float_arms(toks: &[TokenTree]) -> Vec<(String, Vec<TokenTree>)> {
         let mut found = Vec::new();
         for (i, tok) in toks.iter().enumerate() {
