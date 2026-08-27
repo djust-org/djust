@@ -2241,18 +2241,15 @@ fn word_wrap(text: &str, width: usize) -> String {
     result
 }
 
+/// `django.utils.html.strip_tags`, ported in `crate::htmlparser` (#2273).
+///
+/// The scan this replaced treated EVERY `<` as opening a tag, so `a < b`
+/// rendered as `a ` -- everything from the `<` to the next `>` (or to the end
+/// of the input) was deleted. Django runs a real `HTMLParser`, which emits a
+/// `<` that is not followed by a letter / `/` / `!` / `?` as data, and repeats
+/// the strip until the tag count stops falling.
 fn strip_tags(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for c in s.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => result.push(c),
-            _ => {}
-        }
-    }
-    result
+    crate::htmlparser::strip_tags(s)
 }
 
 fn json_escape_for_script(s: &str) -> String {

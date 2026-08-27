@@ -49,6 +49,7 @@
 use std::collections::VecDeque;
 
 use crate::filters::html_escape;
+use crate::htmlparser::{char_at, Sink, SinkResult, Stop, Tokenizer};
 
 /// Django's default truncation text: `pgettext(..., "%(truncated_text)s…")`.
 const DEFAULT_TRUNCATE: &str = "%(truncated_text)s…";
@@ -124,210 +125,6 @@ pub fn calculate_truncate_chars_length(length: i64, replacement: Option<&str>) -
 }
 
 // ---------------------------------------------------------------------------
-// html.unescape
-// ---------------------------------------------------------------------------
-
-/// CPython `html._invalid_charrefs` — numeric references the HTML5 spec
-/// remaps (the windows-1252 C1 block, plus NUL and CR).
-const INVALID_CHARREFS: [(u32, &str); 34] = [
-    (0x00, "\u{fffd}"),
-    (0x0d, "\r"),
-    (0x80, "\u{20ac}"),
-    (0x81, "\u{81}"),
-    (0x82, "\u{201a}"),
-    (0x83, "\u{192}"),
-    (0x84, "\u{201e}"),
-    (0x85, "\u{2026}"),
-    (0x86, "\u{2020}"),
-    (0x87, "\u{2021}"),
-    (0x88, "\u{2c6}"),
-    (0x89, "\u{2030}"),
-    (0x8a, "\u{160}"),
-    (0x8b, "\u{2039}"),
-    (0x8c, "\u{152}"),
-    (0x8d, "\u{8d}"),
-    (0x8e, "\u{17d}"),
-    (0x8f, "\u{8f}"),
-    (0x90, "\u{90}"),
-    (0x91, "\u{2018}"),
-    (0x92, "\u{2019}"),
-    (0x93, "\u{201c}"),
-    (0x94, "\u{201d}"),
-    (0x95, "\u{2022}"),
-    (0x96, "\u{2013}"),
-    (0x97, "\u{2014}"),
-    (0x98, "\u{2dc}"),
-    (0x99, "\u{2122}"),
-    (0x9a, "\u{161}"),
-    (0x9b, "\u{203a}"),
-    (0x9c, "\u{153}"),
-    (0x9d, "\u{9d}"),
-    (0x9e, "\u{17e}"),
-    (0x9f, "\u{178}"),
-];
-
-/// CPython `html._invalid_codepoints` — numeric references that resolve to
-/// nothing at all.
-const INVALID_CODEPOINTS: [u32; 126] = [
-    0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0xb, 0xe, 0xf, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
-    0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x7f, 0x80, 0x81, 0x82, 0x83, 0x84,
-    0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94,
-    0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xfdd0, 0xfdd1, 0xfdd2,
-    0xfdd3, 0xfdd4, 0xfdd5, 0xfdd6, 0xfdd7, 0xfdd8, 0xfdd9, 0xfdda, 0xfddb, 0xfddc, 0xfddd, 0xfdde,
-    0xfddf, 0xfde0, 0xfde1, 0xfde2, 0xfde3, 0xfde4, 0xfde5, 0xfde6, 0xfde7, 0xfde8, 0xfde9, 0xfdea,
-    0xfdeb, 0xfdec, 0xfded, 0xfdee, 0xfdef, 0xfffe, 0xffff, 0x1fffe, 0x1ffff, 0x2fffe, 0x2ffff,
-    0x3fffe, 0x3ffff, 0x4fffe, 0x4ffff, 0x5fffe, 0x5ffff, 0x6fffe, 0x6ffff, 0x7fffe, 0x7ffff,
-    0x8fffe, 0x8ffff, 0x9fffe, 0x9ffff, 0xafffe, 0xaffff, 0xbfffe, 0xbffff, 0xcfffe, 0xcffff,
-    0xdfffe, 0xdffff, 0xefffe, 0xeffff, 0xffffe, 0xfffff, 0x10fffe, 0x10ffff,
-];
-
-/// Look one entity name (without the leading `&`) up in the HTML5 table.
-///
-/// `markup5ever`'s map also carries every *prefix* of every entity name mapped
-/// to `(0, 0)` for its own incremental tokenizer; no real entity resolves to
-/// U+0000, so `(0, 0)` means "not an entity" here.
-fn named_entity(bare_name: &str) -> Option<String> {
-    let (a, b) = *markup5ever::data::NAMED_ENTITIES.get(bare_name)?;
-    if a == 0 {
-        return None;
-    }
-    let mut s = String::new();
-    s.push(char::from_u32(a)?);
-    if b != 0 {
-        if let Some(c) = char::from_u32(b) {
-            s.push(c);
-        }
-    }
-    Some(s)
-}
-
-fn resolve_numeric(body: &str) -> String {
-    // body is the text after '&', e.g. "#65;" / "#x41" / "#65"
-    let digits = body.trim_start_matches('#');
-    let (radix, digits) = if let Some(rest) = digits.strip_prefix(['x', 'X']) {
-        (16, rest)
-    } else {
-        (10, digits)
-    };
-    let digits = digits.trim_end_matches(';');
-    let num = match u32::from_str_radix(digits, radix) {
-        Ok(n) => n,
-        // Python's `int()` on a >64-bit literal still succeeds and lands in the
-        // `num > 0x10FFFF` branch below; an overflow here means the same thing.
-        Err(_) => return "\u{fffd}".to_string(),
-    };
-    if let Some((_, s)) = INVALID_CHARREFS.iter().find(|(k, _)| *k == num) {
-        return (*s).to_string();
-    }
-    if (0xd800..=0xdfff).contains(&num) || num > 0x10ffff {
-        return "\u{fffd}".to_string();
-    }
-    if INVALID_CODEPOINTS.contains(&num) {
-        return String::new();
-    }
-    char::from_u32(num).map(String::from).unwrap_or_default()
-}
-
-/// `html.unescape` — a port of CPython's `_charref.sub(_replace_charref, s)`.
-///
-/// The pattern is `&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)`,
-/// matched leftmost-first, and the named branch falls back to the longest
-/// prefix of the captured name that is a known entity.
-pub fn unescape(s: &str) -> String {
-    if !s.contains('&') {
-        return s.to_string();
-    }
-    let bytes = s.as_bytes();
-    let n = s.len();
-    let mut out = String::with_capacity(n);
-    let mut i = 0usize;
-    while i < n {
-        if bytes[i] != b'&' {
-            let c = s[i..].chars().next().unwrap();
-            out.push(c);
-            i += c.len_utf8();
-            continue;
-        }
-        // Try `#[0-9]+;?` and `#[xX][0-9a-fA-F]+;?`
-        if i + 1 < n && bytes[i + 1] == b'#' {
-            let mut j = i + 2;
-            let hex = j < n && (bytes[j] == b'x' || bytes[j] == b'X');
-            if hex {
-                j += 1;
-            }
-            let digits_start = j;
-            while j < n
-                && (if hex {
-                    bytes[j].is_ascii_hexdigit()
-                } else {
-                    bytes[j].is_ascii_digit()
-                })
-            {
-                j += 1;
-            }
-            if j > digits_start {
-                let mut end = j;
-                if end < n && bytes[end] == b';' {
-                    end += 1;
-                }
-                out.push_str(&resolve_numeric(&s[i + 1..end]));
-                i = end;
-                continue;
-            }
-        }
-        // Named branch: `[^\t\n\f <&#;]{1,32};?`
-        let mut j = i + 1;
-        let mut taken = 0;
-        while j < n && taken < 32 {
-            let c = s[j..].chars().next().unwrap();
-            if matches!(c, '\t' | '\n' | '\u{c}' | ' ' | '<' | '&' | '#' | ';') {
-                break;
-            }
-            j += c.len_utf8();
-            taken += 1;
-        }
-        if taken == 0 {
-            out.push('&');
-            i += 1;
-            continue;
-        }
-        let mut end = j;
-        if end < n && bytes[end] == b';' && taken < 32 {
-            end += 1;
-        }
-        let bare = &s[i + 1..end]; // the capture group: no leading '&'
-        if let Some(rep) = named_entity(bare) {
-            out.push_str(&rep);
-            i = end;
-            continue;
-        }
-        // Longest matching prefix, per the standard. CPython walks
-        // `range(len(s)-1, 1, -1)` over the captured name.
-        let mut matched = None;
-        let mut cut = bare.len();
-        while cut > 2 {
-            cut -= 1;
-            if !bare.is_char_boundary(cut) {
-                continue;
-            }
-            if let Some(rep) = named_entity(&bare[..cut]) {
-                matched = Some(format!("{}{}", rep, &bare[cut..]));
-                break;
-            }
-        }
-        match matched {
-            Some(rep) => out.push_str(&rep),
-            None => {
-                out.push('&');
-                out.push_str(bare);
-            }
-        }
-        i = end;
-    }
-    out
-}
-
-// ---------------------------------------------------------------------------
 // Plain-text truncation
 // ---------------------------------------------------------------------------
 
@@ -372,20 +169,19 @@ pub fn text_words(text: &str, length: i64, truncate: Option<&str>) -> String {
 // The HTML parser
 // ---------------------------------------------------------------------------
 
-/// Stand-in for `TruncateHTMLParser.TruncationCompleted`.
-struct Truncated;
-
-type PResult = Result<(), Truncated>;
-
 enum Mode {
     Chars { length: i64, processed_chars: i64 },
     Words,
 }
 
-struct Parser<'a> {
-    raw: &'a str,
+/// `TruncateHTMLParser` minus the tokenizer: the handler half only.
+///
+/// `raw` and `cdata_elem` moved to [`Tokenizer`] with the state machine; what
+/// is left here is the truncation budget and the tag stack, which is the only
+/// state Django's subclass actually adds. `raw_chars` stays because
+/// `process_chars` compares against the length of the WHOLE input.
+struct TruncateSink<'a> {
     raw_chars: usize,
-    cdata_elem: Option<&'static str>,
     tags: VecDeque<String>,
     output: String,
     output_chars: usize,
@@ -394,250 +190,7 @@ struct Parser<'a> {
     mode: Mode,
 }
 
-fn char_at(s: &str, i: usize) -> Option<char> {
-    if i >= s.len() {
-        return None;
-    }
-    s[i..].chars().next()
-}
-
-fn prev_char(s: &str, i: usize) -> Option<char> {
-    if i == 0 {
-        return None;
-    }
-    s[..i].chars().next_back()
-}
-
-/// `(?:\s|/(?!>))*`
-fn skip_ws_or_slash(s: &str, mut i: usize) -> usize {
-    let b = s.as_bytes();
-    let n = s.len();
-    while i < n {
-        let c = char_at(s, i).unwrap();
-        if py_is_space(c) {
-            i += c.len_utf8();
-        } else if c == '/' && !(i + 1 < n && b[i + 1] == b'>') {
-            i += 1;
-        } else {
-            break;
-        }
-    }
-    i
-}
-
-fn skip_ws(s: &str, mut i: usize) -> usize {
-    while i < s.len() {
-        let c = char_at(s, i).unwrap();
-        if py_is_space(c) {
-            i += c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    i
-}
-
-/// `attrfind_tolerant`, hand-rolled because it uses a lookbehind and a
-/// lookahead that the `regex` crate cannot express.
-///
-/// `((?<=['"\s/])[^\s/>][^\s/=>]*)(\s*=+\s*('[^']*'|"[^"]*"|(?!['"])[^>\s]*))?(?:\s|/(?!>))*`
-fn match_attr(s: &str, k: usize) -> Option<usize> {
-    let b = s.as_bytes();
-    let n = s.len();
-    let prev = prev_char(s, k)?;
-    if !(prev == '\'' || prev == '"' || prev == '/' || py_is_space(prev)) {
-        return None;
-    }
-    let c = char_at(s, k)?;
-    if py_is_space(c) || c == '/' || c == '>' {
-        return None;
-    }
-    let mut q = k + c.len_utf8();
-    while q < n {
-        let c = char_at(s, q).unwrap();
-        if py_is_space(c) || c == '/' || c == '=' || c == '>' {
-            break;
-        }
-        q += c.len_utf8();
-    }
-    // (\s*=+\s*(value))?  — the whole group backtracks to empty if the value
-    // alternation fails (an unterminated quoted value is the case that matters).
-    let save = q;
-    let mut r = skip_ws(s, q);
-    let mut matched_value = false;
-    if r < n && b[r] == b'=' {
-        while r < n && b[r] == b'=' {
-            r += 1;
-        }
-        r = skip_ws(s, r);
-        if r < n && (b[r] == b'\'' || b[r] == b'"') {
-            let quote = b[r] as char;
-            if let Some(off) = s[r + 1..].find(quote) {
-                r = r + 1 + off + 1;
-                matched_value = true;
-            }
-        } else {
-            while r < n {
-                let c = char_at(s, r).unwrap();
-                if c == '>' || py_is_space(c) {
-                    break;
-                }
-                r += c.len_utf8();
-            }
-            matched_value = true;
-        }
-        if matched_value {
-            r = skip_ws(s, r);
-        }
-    }
-    let q = if matched_value { r } else { save };
-    Some(skip_ws_or_slash(s, q))
-}
-
-/// `locatestarttagend_tolerant.match(rawdata, i)`; returns `m.end()`.
-fn locate_starttag_end(s: &str, i: usize) -> Option<usize> {
-    let b = s.as_bytes();
-    let n = s.len();
-    if i + 1 >= n || !(b[i + 1] as char).is_ascii_alphabetic() {
-        return None;
-    }
-    let mut p = i + 2;
-    while p < n {
-        let c = char_at(s, p).unwrap();
-        if matches!(c, '\t' | '\n' | '\r' | '\u{c}' | ' ' | '/' | '>' | '\0') {
-            break;
-        }
-        p += c.len_utf8();
-    }
-    // (?:[\s/]* (attr)*)?
-    let mut q = p;
-    while q < n {
-        let c = char_at(s, q).unwrap();
-        if py_is_space(c) || c == '/' {
-            q += c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    while let Some(e) = match_attr(s, q) {
-        if e <= q {
-            break;
-        }
-        q = e;
-    }
-    Some(skip_ws(s, q))
-}
-
-/// `tagfind_tolerant.match(rawdata, pos)` → `(lowercased name, m.end())`.
-fn tagfind(s: &str, pos: usize) -> Option<(String, usize)> {
-    let b = s.as_bytes();
-    let n = s.len();
-    if pos >= n || !(b[pos] as char).is_ascii_alphabetic() {
-        return None;
-    }
-    let mut p = pos + 1;
-    while p < n {
-        let c = char_at(s, p).unwrap();
-        if matches!(c, '\t' | '\n' | '\r' | '\u{c}' | ' ' | '/' | '>' | '\0') {
-            break;
-        }
-        p += c.len_utf8();
-    }
-    let name = s[pos..p].to_lowercase();
-    Some((name, skip_ws_or_slash(s, p)))
-}
-
-/// `endtagfind.match(rawdata, i)`: `</\s*([a-zA-Z][-.a-zA-Z0-9:_]*)\s*>`.
-fn endtagfind(s: &str, i: usize) -> Option<String> {
-    let b = s.as_bytes();
-    let n = s.len();
-    if !s[i..].starts_with("</") {
-        return None;
-    }
-    let mut p = skip_ws(s, i + 2);
-    if p >= n || !(b[p] as char).is_ascii_alphabetic() {
-        return None;
-    }
-    let start = p;
-    p += 1;
-    while p < n {
-        let c = b[p] as char;
-        if c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | ':' | '_') {
-            p += 1;
-        } else {
-            break;
-        }
-    }
-    let name = s[start..p].to_lowercase();
-    let p = skip_ws(s, p);
-    if p < n && b[p] == b'>' {
-        Some(name)
-    } else {
-        None
-    }
-}
-
-/// `_markupbase._declname_match`: `[a-zA-Z][-_.a-zA-Z0-9]*\s*` → `(name, end)`.
-fn declname(s: &str, i: usize) -> Option<(String, usize)> {
-    let b = s.as_bytes();
-    let n = s.len();
-    if i >= n || !(b[i] as char).is_ascii_alphabetic() {
-        return None;
-    }
-    let mut p = i + 1;
-    while p < n {
-        let c = b[p] as char;
-        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-            p += 1;
-        } else {
-            break;
-        }
-    }
-    let name = s[i..p].to_lowercase();
-    Some((name, skip_ws(s, p)))
-}
-
-/// Leftmost match of `--\s*>` at or after `from`; returns `m.end()`.
-fn comment_close(s: &str, from: usize) -> Option<usize> {
-    let b = s.as_bytes();
-    let n = s.len();
-    let mut p = from;
-    while let Some(off) = s[p..].find("--") {
-        let start = p + off;
-        let e = skip_ws(s, start + 2);
-        if e < n && b[e] == b'>' {
-            return Some(e + 1);
-        }
-        p = start + 1;
-    }
-    None
-}
-
-/// Leftmost match of `]\s*]\s*>` (or `]\s*>` for the MS variant) → `(start, end)`.
-fn marked_section_close(s: &str, from: usize, double: bool) -> Option<(usize, usize)> {
-    let b = s.as_bytes();
-    let n = s.len();
-    let mut p = from;
-    while let Some(off) = s[p..].find(']') {
-        let start = p + off;
-        let mut e = skip_ws(s, start + 1);
-        if double {
-            if e < n && b[e] == b']' {
-                e = skip_ws(s, e + 1);
-            } else {
-                p = start + 1;
-                continue;
-            }
-        }
-        if e < n && b[e] == b'>' {
-            return Some((start, e + 1));
-        }
-        p = start + 1;
-    }
-    None
-}
-
-impl<'a> Parser<'a> {
+impl<'a> TruncateSink<'a> {
     fn new(raw: &'a str, length: i64, replacement: Option<&'a str>, words: bool) -> Self {
         let (mode, remaining) = if words {
             (Mode::Words, length)
@@ -650,10 +203,8 @@ impl<'a> Parser<'a> {
                 calculate_truncate_chars_length(length, replacement),
             )
         };
-        Parser {
-            raw,
+        TruncateSink {
             raw_chars: raw.chars().count(),
-            cdata_elem: None,
             tags: VecDeque::new(),
             output: String::new(),
             output_chars: 0,
@@ -668,8 +219,15 @@ impl<'a> Parser<'a> {
         self.output_chars += s.chars().count();
     }
 
-    // --- handlers ---------------------------------------------------------
+    /// `TruncateHTMLParser.feed`'s `except` branch.
+    fn finish_truncated(&mut self) {
+        let closing: String = self.tags.iter().map(|t| format!("</{t}>")).collect();
+        self.output.push_str(&closing);
+        self.tags.clear();
+    }
+}
 
+impl Sink for TruncateSink<'_> {
     fn handle_starttag(&mut self, tag: &str, starttag_text: &str) {
         self.push_out(starttag_text);
         if !is_void_element(tag) {
@@ -693,7 +251,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn handle_data(&mut self, data: &str) -> PResult {
+    fn handle_data(&mut self, data: &str) -> SinkResult {
         let (data_len, out) = match self.mode {
             Mode::Chars { .. } => self.process_chars(data)?,
             Mode::Words => self.process_words(data),
@@ -702,15 +260,17 @@ impl<'a> Parser<'a> {
             self.remaining = 0;
             let t = add_truncation_text(&out, self.replacement);
             self.push_out(&t);
-            return Err(Truncated);
+            return Err(Stop);
         }
         self.remaining -= data_len;
         self.push_out(&out);
         Ok(())
     }
+}
 
+impl TruncateSink<'_> {
     /// `TruncateCharsHTMLParser.process`.
-    fn process_chars(&mut self, data: &str) -> Result<(i64, String), Truncated> {
+    fn process_chars(&mut self, data: &str) -> Result<(i64, String), Stop> {
         let dlen = data.chars().count() as i64;
         let special = if let Mode::Chars {
             length,
@@ -727,7 +287,7 @@ impl<'a> Parser<'a> {
         // RAW — no escape, no truncation text — which is divergences #1 and #2.
         if special && self.output_chars as i64 + dlen == self.raw_chars as i64 {
             self.push_out(data);
-            return Err(Truncated);
+            return Err(Stop);
         }
         let take = self.remaining.max(0) as usize;
         let kept: String = data.chars().take(take).collect();
@@ -746,270 +306,6 @@ impl<'a> Parser<'a> {
             .join(" ");
         (parts.len() as i64, html_escape(&joined))
     }
-
-    // --- the tokenizer ----------------------------------------------------
-
-    /// `HTMLParser.goahead(0)`.
-    ///
-    /// `end` is always 0: Django's `feed` override calls `reset()` before
-    /// `close()` can run, so an incomplete construct at the end of the input is
-    /// discarded rather than flushed. `"trailing &amp"` really does render as
-    /// the empty string.
-    fn goahead(&mut self) -> PResult {
-        let raw = self.raw;
-        let b = raw.as_bytes();
-        let n = raw.len();
-        let mut i = 0usize;
-        while i < n {
-            let j;
-            if self.cdata_elem.is_none() {
-                match raw[i..].find('<') {
-                    Some(off) => j = i + off,
-                    None => {
-                        // `amppos = rawdata.rfind('&', max(i, n-34))`
-                        let back = raw
-                            .char_indices()
-                            .rev()
-                            .take(34)
-                            .last()
-                            .map(|(idx, _)| idx)
-                            .unwrap_or(0);
-                        let start = back.max(i);
-                        match raw[start..].rfind('&') {
-                            Some(off) => {
-                                let amppos = start + off;
-                                if !raw[amppos..].contains(|c: char| py_is_space(c) || c == ';') {
-                                    break; // wait for the rest of the text
-                                }
-                                j = n;
-                            }
-                            None => j = n,
-                        }
-                    }
-                }
-            } else if let Some(elem) = self.cdata_elem {
-                // In CDATA mode `interesting` is `</\s*{elem}\s*>`, so the only
-                // thing that ends a text run is that element's own end tag.
-                match find_cdata_close(raw, i, elem) {
-                    Some(pos) => j = pos,
-                    None => break,
-                }
-            } else {
-                unreachable!("the `is_none` arm above covers this case")
-            }
-            if i < j {
-                let data = if self.cdata_elem.is_none() {
-                    unescape(&raw[i..j])
-                } else {
-                    raw[i..j].to_string()
-                };
-                self.handle_data(&data)?;
-            }
-            i = j;
-            if i == n {
-                break;
-            }
-            debug_assert_eq!(b[i], b'<');
-            let k: i64 = if i + 1 < n && (b[i + 1] as char).is_ascii_alphabetic() {
-                self.parse_starttag(i)?
-            } else if raw[i..].starts_with("</") {
-                self.parse_endtag(i)?
-            } else if raw[i..].starts_with("<!--") {
-                comment_close(raw, i + 4).map(|e| e as i64).unwrap_or(-1)
-            } else if raw[i..].starts_with("<?") {
-                raw[i + 2..]
-                    .find('>')
-                    .map(|o| (i + 2 + o + 1) as i64)
-                    .unwrap_or(-1)
-            } else if raw[i..].starts_with("<!") {
-                parse_html_declaration(raw, i)
-            } else if i + 1 < n {
-                self.handle_data("<")?;
-                (i + 1) as i64
-            } else {
-                break;
-            };
-            if k < 0 {
-                break; // `end` is 0, so an incomplete construct stops the parse
-            }
-            i = k as usize;
-        }
-        Ok(())
-    }
-
-    fn parse_starttag(&mut self, i: usize) -> Result<i64, Truncated> {
-        let raw = self.raw;
-        let endpos = match check_for_whole_start_tag(raw, i) {
-            e if e < 0 => return Ok(e),
-            e => e as usize,
-        };
-        let starttag_text = raw[i..endpos].to_string();
-        let (tag, mut k) = match tagfind(raw, i + 1) {
-            Some(t) => t,
-            None => return Ok(endpos as i64),
-        };
-        while k < endpos {
-            match match_attr(raw, k) {
-                Some(e) if e > k => k = e,
-                _ => break,
-            }
-        }
-        let end: &str = raw[k..endpos].trim_matches(py_is_space);
-        if end != ">" && end != "/>" {
-            self.handle_data(&raw[i..endpos])?;
-            return Ok(endpos as i64);
-        }
-        if end.ends_with("/>") {
-            self.handle_startendtag(&tag, &starttag_text);
-        } else {
-            self.handle_starttag(&tag, &starttag_text);
-            if tag == "script" {
-                self.cdata_elem = Some("script");
-            } else if tag == "style" {
-                self.cdata_elem = Some("style");
-            }
-        }
-        Ok(endpos as i64)
-    }
-
-    fn parse_endtag(&mut self, i: usize) -> Result<i64, Truncated> {
-        let raw = self.raw;
-        let gt = match raw[i + 1..].find('>') {
-            Some(o) => i + 1 + o,
-            None => return Ok(-1),
-        };
-        let gtpos = gt + 1;
-        if let Some(elem) = endtagfind(raw, i) {
-            if let Some(cd) = self.cdata_elem {
-                if elem != cd {
-                    self.handle_data(&raw[i..gtpos])?;
-                    return Ok(gtpos as i64);
-                }
-            }
-            self.handle_endtag(&elem);
-            self.cdata_elem = None;
-            return Ok(gtpos as i64);
-        }
-        if self.cdata_elem.is_some() {
-            self.handle_data(&raw[i..gtpos])?;
-            return Ok(gtpos as i64);
-        }
-        match tagfind(raw, i + 2) {
-            None => {
-                if raw[i..].starts_with("</>") {
-                    Ok((i + 3) as i64)
-                } else {
-                    // parse_bogus_comment: handle_comment is a no-op.
-                    Ok(raw[i + 2..]
-                        .find('>')
-                        .map(|o| (i + 2 + o + 1) as i64)
-                        .unwrap_or(-1))
-                }
-            }
-            Some((tagname, nend)) => {
-                let gp = raw[nend..].find('>').map(|o| nend + o);
-                self.handle_endtag(&tagname);
-                // Django would return 0 here and spin; there is always a `>` at
-                // or after `nend` because `endendtag` found one and `tagfind`
-                // cannot consume it, so the fallback is unreachable in practice.
-                Ok(gp.map(|g| (g + 1) as i64).unwrap_or(-1))
-            }
-        }
-    }
-
-    /// `TruncateHTMLParser.feed`'s `except` branch.
-    fn finish_truncated(&mut self) {
-        let closing: String = self.tags.iter().map(|t| format!("</{t}>")).collect();
-        self.output.push_str(&closing);
-        self.tags.clear();
-    }
-}
-
-fn check_for_whole_start_tag(s: &str, i: usize) -> i64 {
-    let j = match locate_starttag_end(s, i) {
-        Some(j) => j,
-        None => return (i + 1) as i64,
-    };
-    let next = char_at(s, j);
-    match next {
-        Some('>') => (j + 1) as i64,
-        Some('/') => {
-            if s[j..].starts_with("/>") {
-                (j + 2) as i64
-            } else {
-                -1
-            }
-        }
-        None => -1,
-        Some(c) if c.is_ascii_alphabetic() || c == '=' => -1,
-        Some(_) => {
-            if j > i {
-                j as i64
-            } else {
-                (i + 1) as i64
-            }
-        }
-    }
-}
-
-fn parse_html_declaration(s: &str, i: usize) -> i64 {
-    let n = s.len();
-    if s[i..].starts_with("<!--") {
-        return comment_close(s, i + 4).map(|e| e as i64).unwrap_or(-1);
-    }
-    if s[i..].starts_with("<![") {
-        // parse_marked_section
-        if i + 3 >= n {
-            return -1;
-        }
-        let (name, end) = match declname(s, i + 3) {
-            Some(v) => v,
-            // Django raises AssertionError here; refusing to parse is the
-            // fail-soft equivalent (the alternative is a 500 on a template).
-            None => return -1,
-        };
-        if end == n {
-            return -1;
-        }
-        let double = match name.as_str() {
-            "temp" | "cdata" | "ignore" | "include" | "rcdata" => true,
-            "if" | "else" | "endif" => false,
-            _ => return -1,
-        };
-        return marked_section_close(s, i + 3, double)
-            .map(|(_, e)| e as i64)
-            .unwrap_or(-1);
-    }
-    if n >= i + 9 && s[i..i + 9].eq_ignore_ascii_case("<!doctype") {
-        return s[i + 9..]
-            .find('>')
-            .map(|o| (i + 9 + o + 1) as i64)
-            .unwrap_or(-1);
-    }
-    // parse_bogus_comment
-    s[i + 2..]
-        .find('>')
-        .map(|o| (i + 2 + o + 1) as i64)
-        .unwrap_or(-1)
-}
-
-/// `re.compile(r'</\s*%s\s*>' % cdata_elem, re.I).search(rawdata, i)` → start.
-fn find_cdata_close(s: &str, from: usize, elem: &str) -> Option<usize> {
-    let b = s.as_bytes();
-    let n = s.len();
-    let mut p = from;
-    while let Some(off) = s[p..].find("</") {
-        let start = p + off;
-        let q = skip_ws(s, start + 2);
-        if q + elem.len() <= n && s[q..q + elem.len()].eq_ignore_ascii_case(elem) {
-            let r = skip_ws(s, q + elem.len());
-            if r < n && b[r] == b'>' {
-                return Some(start);
-            }
-        }
-        p = start + 1;
-    }
-    None
 }
 
 /// `re.split(r"(?<=\S)\s+(?=\S)", data)` — split only on whitespace runs that
@@ -1050,11 +346,15 @@ fn run_html(text: &str, length: i64, truncate: Option<&str>, words: bool) -> Str
     if length <= 0 {
         return String::new();
     }
-    let mut parser = Parser::new(text, length, truncate, words);
-    if parser.goahead().is_err() {
-        parser.finish_truncated();
+    // `convert_charrefs=True`, and `feed` WITHOUT `close`: Django's
+    // `TruncateHTMLParser.feed` calls `reset()` before it feeds, so `close()`
+    // can never see a buffered tail.
+    let sink = TruncateSink::new(text, length, truncate, words);
+    let mut tok = Tokenizer::new(text, true, sink);
+    if tok.feed().is_err() {
+        tok.sink.finish_truncated();
     }
-    parser.output
+    tok.sink.output
 }
 
 /// `Truncator.chars(num, truncate, html=True)`.
@@ -2058,22 +1358,6 @@ pub fn urlencode(value: &str, safe: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn unescape_matches_cpython_shapes() {
-        assert_eq!(unescape("a &amp; b"), "a & b");
-        assert_eq!(unescape("&#65;"), "A");
-        assert_eq!(unescape("&#x41;"), "A");
-        assert_eq!(unescape("&#65"), "A");
-        assert_eq!(unescape("&nope;"), "&nope;");
-        assert_eq!(unescape("&"), "&");
-        assert_eq!(unescape("&#x27;"), "'");
-        // Longest-prefix fallback: `&notit;` is `&not` + `it;`.
-        assert_eq!(unescape("&notit;"), "\u{ac}it;");
-        // C1 remap and the invalid-codepoint drop.
-        assert_eq!(unescape("&#128;"), "\u{20ac}");
-        assert_eq!(unescape("&#1;"), "");
-    }
 
     #[test]
     fn split_interior_whitespace_keeps_padding() {
