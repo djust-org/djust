@@ -35,6 +35,16 @@ Two functions, because "prose" and "not executable" are different lines:
 Lifted from ``tests/test_reset_fixture_hygiene_2234.py::_code_only`` (#1077),
 which now delegates here rather than keeping a second copy (#1646). That
 version's hard-won details are preserved below.
+
+**PYTHON SOURCE ONLY.** Both functions run CPython's ``tokenize``, so they
+understand ``#`` comments and Python string literals and nothing else. They do
+NOT strip Rust ``//`` / ``/* */`` comments, JS comments, or template syntax —
+a ``.rs`` file fed in here comes back unchanged via the does-not-parse
+fallback, silently, which is the failure mode this module exists to prevent.
+A pin over non-Python source (e.g. #2247's ``value_to_json`` ``.replace(``
+chain guard over ``crates/djust_templates/src/filters.rs``) has the identical
+prose-blindness and needs its own language-appropriate stripper; tracked at
+#2249.
 """
 
 from __future__ import annotations

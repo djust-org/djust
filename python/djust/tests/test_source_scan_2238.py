@@ -147,6 +147,26 @@ def test_a_method_source_scans_like_a_module_source():
     )
 
 
+def test_rust_source_is_NOT_stripped_and_comes_back_unchanged():
+    """The module docstring's "Python source only" claim, run rather than asserted.
+
+    A `.rs` file is not Python, so ``tokenize`` fails and the does-not-parse
+    fallback returns it verbatim — SILENTLY. That matters because #2247's pin
+    greps `crates/djust_templates/src/filters.rs` for a `.replace(` chain and
+    has the same prose-blindness this module fixes: wiring it to these
+    functions would LOOK like a fix and be a no-op. Tracked at #2249.
+
+    If a future change makes this pass Rust through a stripper, this test goes
+    red and #2249 should be revisited rather than the test relaxed.
+    """
+    rust = "fn f(s: &str) -> String {\n    // danger() is banned here\n    s.to_string()\n}\n"
+    assert without_prose(rust) == rust, "Rust comments must NOT appear stripped"
+    assert code_only(rust) == rust
+    assert CALL.search(without_prose(rust)), (
+        "the Rust comment survives — a pin over .rs source is still prose-blind (#2249)"
+    )
+
+
 def test_unparseable_source_is_returned_unchanged():
     """A syntax error is somebody else's failure; exempting the file silently
     would be the same blindness in a new costume, so the raw text is returned
