@@ -1,7 +1,7 @@
 # djust Roadmap
 
 > Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-23
-> (v1.1.1-4 chain links added).
+> (v1.1.1-5 filter-parity divergences added).
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
 > deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
@@ -30,7 +30,38 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.1-5 — Django filter-parity divergences surfaced by the #2250 sweep (drain bucket → ships in 1.1.1)
+
+Opened 2026-08-27. Unlike v1.1.1-4, these are **not** chain links off a fix —
+they are pre-existing divergences a 129,360-cell differential walked into while
+verifying something else, and every one reproduces with a plain string and no
+`Decimal` anywhere. They are collected rather than scattered because they share
+a cause: djust's filter implementations were written against Django's
+*documentation* rather than differentialed against its *behaviour*, so each is
+correct-looking and wrong in a detail.
+
+The methodological point worth keeping: the sweep that found them had a **chain
+axis** (`escape|X`, `upper|X`, `safe|X`), and that axis is the only reason #2250
+caught a 1,195-cell regression in its own candidate fix before shipping it. A
+single-filter sweep would have missed it. Whoever picks these up should keep the
+chain axis.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | A Python `int` past `i64` loses precision (#2260) | `1234567890123456789012345` does not fit `Value::Integer`, so it lands as a float and renders in exponent form. Same class as #2214's Decimal loss, one type over, and unlike Decimal there is no variant to carry it. | v1.1.1 |
+| **P2** | `\|linebreaks` output is HTML-escaped (#2259) | djust escapes its own generated `<p>`/`<br>` markup, so the filter emits visible tags instead of formatting. Django marks it safe. | v1.1.1 |
+| **P2** | `escape`/`safe` are no-ops where Django's are stringfilters (#2257) | Measured residue from #2250: coercing them fixes 22,707 cells and regresses 1,195, because the type flowing down a chain changes and `floatformat` cannot absorb it. Wants the numeric-string parse question settled first. | v1.1.1 |
+| **P3** | `Display` for `Value::Float` diverges from `str()` (#2258) | `1e300` and `NaN` render differently from Python. The #2203 `django_value_repr` work covered the integral-float `.0` case and not these. | v1.1.1 |
+| **P3** | Five filter-algorithm divergences (#2262) | `truncatechars_html` ×2, `truncatewords_html`, `truncatewords`, `urlencode` — each a distinct algorithm difference, batched because they share the "written from docs" cause. | v1.1.1 |
+| **P3** | `slugify` maps `.` to `-`; `title` strips whitespace (#2261) | Two small algorithm divergences in the same pair of filters. | v1.1.1 |
+
+---
+
 ## v1.1.1-4 — the v1.1.1-3 chain links (drain bucket → ships in 1.1.1)
+
+**4/6 shipped** — #2244 (PR #2255), #2249 + #2246 (PR #2256), #2250 (PR #2267). #2253 and #2252 in flight.
 
 Opened 2026-08-27. Every issue here was surfaced by a v1.1.1-3 PR's own review or
 implementation — this is the chain-shaped case (#2142), where you only learn the
