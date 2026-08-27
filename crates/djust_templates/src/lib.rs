@@ -23,6 +23,7 @@ pub mod lexer;
 pub mod loop_cache;
 pub mod markdown;
 pub mod parser;
+pub mod pprint;
 pub mod registry;
 pub mod renderer;
 pub mod tags;

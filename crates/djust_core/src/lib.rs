@@ -595,25 +595,79 @@ pub fn django_value_repr() -> bool {
     DJANGO_VALUE_REPR.load(Ordering::Relaxed)
 }
 
+/// Python's `repr()` of a `str`, for every code point CPython spells the same
+/// way on every interpreter this project supports.
+///
+/// The ONE definition of the quoted-string spelling (#1646): `Value::py_repr`
+/// renders it for a nested string, and `djust_templates`' `pprint` port renders
+/// it for every scalar it lays out. A second escaper here is how the `{{ list }}`
+/// path and the `pprint` path drifted in the first place — `pprint` used a bare
+/// `format!("'{s}'")` that escaped nothing at all.
+///
+/// **Deliberately incomplete, on the same reasoning as the `striptags` port
+/// (#2273): the reference moves.** CPython escapes any code point for which
+/// `str.isprintable()` is false, and that predicate is Unicode-version data —
+/// 3.12/3.13 carry Unicode 15.0, 3.14 carries 16.0, and the two disagree about
+/// **5812** code points (measured: 148998 printable vs 154810). No fixed table
+/// in Rust can be right on every runner in the CI matrix, so this escapes only
+/// the range every Unicode version agrees on — the ASCII controls `U+0000`–
+/// `U+001F` and `U+007F`, which are `Cc` and can never be reclassified. A
+/// non-ASCII non-printable (`U+00A0`, `U+200B`, `U+2028`, `U+FEFF`, …) is
+/// emitted literally where CPython emits `\xa0` / `\u200b`.
+///
+/// **What completing it would take** — the decision lands in #2292, not
+/// here. Only `Cn` (unassigned) actually drifts between Unicode versions;
+/// `Cc`, `Cf`, `Cs`, `Co`, `Zl`, `Zp` and `Zs` are small, stable sets. So
+/// either (a) carry a table of those seven categories and treat `Cn` as
+/// printable, which is exact for every ASSIGNED code point and diverges only
+/// where the interpreters already diverge — needing a hand-written range
+/// table or a Unicode-category dependency, which is a dependency discussion;
+/// or (b) accept a pinned divergence, the route `striptags` took (#2273),
+/// where the reference is captured per interpreter in a fixture rather than
+/// ported. What is NOT available is one fixed table green on every runner.
+/// See also the module docs of `djust_templates::pprint`.
+pub fn py_repr_string(s: &str) -> String {
+    // Python's quote rule: single quotes, UNLESS the string contains a `'` and
+    // no `"` — then double quotes, with the `'` left unescaped.
+    // `repr("a'b")` is `"a'b"`, not `'a\'b'`.
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            _ if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            // The rest of C0, plus DEL. `\x1b` really is spelled `\x1b` by
+            // CPython — there is no `\e`, and no `\v`/`\f`/`\a`/`\b` either.
+            _ if (c as u32) < 0x20 || (c as u32) == 0x7F => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            _ => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
+}
+
 impl Value {
     /// Python `repr()`, used for values NESTED inside a container.
     ///
     /// `str(['a'])` is `"['a']"` while `str('a')` is `"a"` — a nested string is
     /// quoted, a top-level one is not. Containers therefore cannot reuse
     /// `Display` for their elements.
-    fn py_repr(&self) -> String {
+    pub fn py_repr(&self) -> String {
         match self {
-            Value::String(s) => {
-                // Python's `repr` rule: single quotes, UNLESS the string
-                // contains a `'` and no `"` — then double quotes, with the `'`
-                // left unescaped. `repr("a'b")` is `"a'b"`, not `'a\'b'`.
-                let escaped = s.replace('\\', "\\\\");
-                if escaped.contains('\'') && !escaped.contains('"') {
-                    format!("\"{escaped}\"")
-                } else {
-                    format!("'{}'", escaped.replace('\'', "\\'"))
-                }
-            }
+            Value::String(s) => py_repr_string(s),
             // `repr(Decimal('19.99'))` is `Decimal('19.99')`, so a Decimal
             // nested in a list or dict renders the constructor form while a
             // top-level one renders bare digits — the same str/repr split that
