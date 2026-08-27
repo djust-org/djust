@@ -1883,22 +1883,44 @@ fn json_escape_for_script(s: &str) -> String {
 
 /// The escaped BODY of a JSON string, without the surrounding quotes.
 ///
-/// One helper for the `String` and `Decimal` arms: a value that can reach a
-/// `<script type="application/json">` body must be escaped whatever variant
-/// carries it (#2214 review).
+/// The ONE helper every quoted string in `value_to_json` goes through — the
+/// `String` arm, the `Decimal` arm (#2214 review) and the object KEY path
+/// (#2241). A value that can reach a `<script type="application/json">` body
+/// must be escaped whatever position carries it; a key is a JSON string with
+/// exactly the same grammar as a value, and the partial chain it used to own
+/// (`\` and `"` only) emitted a raw newline that `json.loads` rejects.
 ///
-/// A THIRD copy survives, in `value_to_json`'s object-KEY path, escaping only
-/// `\` and `"`. So a dict key containing a newline still emits a raw control
-/// character and the result does not parse. Pre-existing and outside this
-/// issue, so it is filed rather than fixed here (#1079) — but named, because
-/// "one helper rather than the same chain written per arm" would otherwise read
-/// as complete when it is not.
+/// Escapes the whole `0x00`–`0x1F` control range, not just the three
+/// characters with short forms: RFC 8259 forbids ALL of them unescaped inside
+/// a string, so `{"k": "a\u{0}b"}` did not parse either — in every arm, which
+/// is why the range moved here rather than into the key path alone.
+///
+/// Deliberately does NOT escape `<`, `>`, `&`, U+2028 or U+2029:
+/// `json_escape_for_script` runs over the assembled document afterwards and
+/// covers exactly those (`json_script` composes the two). Escaping them here
+/// too would be the double-application the single-helper shape exists to
+/// avoid. `0x7F` (DEL) is left raw because JSON permits it raw — `json.loads`
+/// round-trips it, and `json.dumps(ensure_ascii=False)` emits it unescaped.
 fn json_string_body(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // The two remaining short forms `json.dumps` emits, so the output
+            // matches Python's for the same input.
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn value_to_json(value: &Value) -> String {
@@ -1939,7 +1961,12 @@ fn value_to_json(value: &Value) -> String {
             let mut parts: Vec<String> = map
                 .iter()
                 .map(|(k, v)| {
-                    let key_json = format!("\"{}\"", k.replace('\\', "\\\\").replace('"', "\\\""));
+                    // Through the SAME helper as the value arms (#2241). The
+                    // partial chain this replaces escaped `\` and `"` only, so
+                    // a key holding a newline emitted it raw and the whole
+                    // script body stopped parsing — a dict key is as
+                    // attacker-reachable as a dict value.
+                    let key_json = format!("\"{}\"", json_string_body(k));
                     format!("{}: {}", key_json, value_to_json(v))
                 })
                 .collect();
@@ -3170,6 +3197,52 @@ mod tests {
         assert!(s.contains("\\u2029"));
         assert!(!s.contains('\u{2028}'));
         assert!(!s.contains('\u{2029}'));
+    }
+
+    /// #2241: the object-KEY path had its own partial chain (`\` and `"`
+    /// only), so a key holding a newline emitted a raw control character.
+    #[test]
+    fn test_json_script_escapes_control_characters_in_object_keys() {
+        let mut map = IndexMap::new();
+        map.insert(
+            "a\nb\tc\rd\\e\"f".to_string(),
+            Value::String("v".to_string()),
+        );
+        let result = apply_filter("json_script", &Value::Object(map), Some("data")).unwrap();
+        let s = result.to_string();
+        assert!(
+            s.contains(r#""a\nb\tc\rd\\e\"f""#),
+            "key was not escaped through json_string_body: {s}"
+        );
+        for raw in ['\n', '\t', '\r'] {
+            assert!(!s.contains(raw), "raw {raw:?} survived into the body: {s}");
+        }
+    }
+
+    /// The whole `0x00`–`0x1F` range, in a key and in a value — the arms
+    /// without a short form were raw everywhere before #2241.
+    #[test]
+    fn test_json_script_escapes_the_whole_control_range() {
+        for code in 0x00u32..0x20 {
+            let c = char::from_u32(code).unwrap();
+            let mut map = IndexMap::new();
+            map.insert(format!("k{c}"), Value::String(format!("v{c}")));
+            let result = apply_filter("json_script", &Value::Object(map), Some("d")).unwrap();
+            let s = result.to_string();
+            assert!(
+                !s.contains(c),
+                "U+{code:04X} rendered raw into the script body: {s:?}"
+            );
+        }
+    }
+
+    /// `0x7F` is legal raw in a JSON string and `json.dumps(ensure_ascii=False)`
+    /// leaves it alone; escaping it would be a divergence, not a fix.
+    #[test]
+    fn test_json_script_leaves_delete_raw() {
+        let value = Value::String("a\u{7f}b".to_string());
+        let result = apply_filter("json_script", &value, Some("d")).unwrap();
+        assert!(result.to_string().contains("\"a\u{7f}b\""));
     }
 
     #[test]
