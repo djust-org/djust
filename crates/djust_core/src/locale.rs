@@ -84,10 +84,57 @@ pub fn localize_number(rendered: &str) -> String {
 
 /// The formatting itself, split out so it can be tested without touching the
 /// thread-local.
+///
+/// Handles both the plain form (`-1234.5`) and the SCIENTIFIC form
+/// (`1.230e-250`), which is what a `Decimal` past Django's >200-digit cutoff
+/// renders as (#2242).
 pub fn localize_number_with(rendered: &str, fmt: &NumberFormat) -> String {
+    // Django's scientific branch, mirrored rather than approximated
+    // (`django/utils/numberformat.py`):
+    //
+    //     number = "{:e}".format(number)
+    //     coefficient, exponent = number.split("e")
+    //     coefficient = format(coefficient, ...)   # the SAME localisation path
+    //     return "{}e{}".format(coefficient, exponent)
+    //
+    // Two things that reading the table in #2242 would not have told us, and
+    // that only reading Django gives:
+    //
+    // * the **exponent passes through verbatim** — sign and all. It is not
+    //   localized and not reformatted, so `1,230e-250` under `de`, never
+    //   `1,230e-250,0` or a grouped `e-1.250`.
+    // * the coefficient goes through the FULL path, grouping included. That is
+    //   a no-op in practice — `{:e}` leaves exactly one digit before the point
+    //   — but recursing rather than special-casing is what keeps the two arms
+    //   from drifting (#1646).
+    //
+    // Everything a non-numeric coefficient would have done before is preserved:
+    // `localize_plain` returns its input unchanged for anything that is not
+    // digits-and-a-point, and the rejoin is byte-exact, so `abcE+5` still comes
+    // back as `abcE+5`.
+    if let Some(i) = rendered.find(['e', 'E']) {
+        let (coefficient, suffix) = rendered.split_at(i);
+        // `suffix` keeps the `e`/`E`. Only treat this as scientific when what
+        // follows is an exponent: an optional sign then at least one digit.
+        // Without the check `1.5exyz` would be localized to `1,5exyz` — Django
+        // does that only because its string branch never looks for an `e` at
+        // all, and inheriting the accident is worse than passing it through.
+        let exp_digits = suffix[1..].strip_prefix(['+', '-']).unwrap_or(&suffix[1..]);
+        if !exp_digits.is_empty() && exp_digits.bytes().all(|b| b.is_ascii_digit()) {
+            return format!("{}{}", localize_plain(coefficient, fmt), suffix);
+        }
+        return rendered.to_string();
+    }
+    localize_plain(rendered, fmt)
+}
+
+/// The non-exponent form — Django's `format()` below its scientific branch.
+fn localize_plain(rendered: &str, fmt: &NumberFormat) -> String {
     // Anything that is not a plain decimal number passes through untouched —
-    // notably `inf`, `NaN` and exponent forms, which have no separators to
-    // place and which Django's own fast paths also leave alone.
+    // notably `inf` and `NaN`, which have no separators to place and which
+    // Django's own fast paths also leave alone. Exponent forms were in that
+    // list until #2242; they are now split above and reach here as their
+    // coefficient.
     let (sign, body) = match rendered.strip_prefix('-') {
         Some(rest) => ("-", rest),
         None => ("", rendered),
