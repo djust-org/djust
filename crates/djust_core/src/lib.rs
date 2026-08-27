@@ -173,9 +173,17 @@ impl Serialize for Value {
             // of the default state backend, and an untagged big int comes back
             // as `Value::String` — which renders the same but stops being an
             // `int` on the way back to Python and loses `{% if p > 10 %}`
-            // (#2260). The JSON half stays a string, as `Decimal`'s does: JSON
-            // has no way to say "a number with more digits than a double", and
-            // a string at least does not silently drop them.
+            // (#2260).
+            //
+            // The JSON half stays a string, as `Decimal`'s does. Scope, checked
+            // rather than assumed: this arm is reached only through
+            // `serialization::to_json`/`from_json`, which no caller in this
+            // workspace uses — the client-facing JSON is `json_script`'s own
+            // `value_to_json`, which emits BARE digits (a `json.dumps(int)` is a
+            // number). So the choice here is about the pair round-tripping
+            // through one format, not about what a browser parses; a string is
+            // what `from_json` can read back without a tag, and JSON has no way
+            // to say "a number with more digits than a double" anyway.
             Value::BigInt(d) if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
                 m.serialize_entry(BIGINT_TAG, d)?;

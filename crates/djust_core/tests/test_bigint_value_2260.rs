@@ -105,15 +105,24 @@ fn the_binary_tag_is_distinct_from_the_decimal_one() {
 
 #[test]
 fn json_carries_the_digits_as_a_string_rather_than_a_lossy_number() {
-    // The `Decimal` precedent, verbatim: JSON has no way to say "a number with
-    // more digits than a double", and the wire is read by JavaScript. A string
-    // at least does not silently drop them, which a bare JSON number would.
+    // The `Decimal` precedent, verbatim. Scope, checked rather than assumed:
+    // this arm is reached only through `serialization::to_json`/`from_json`,
+    // which no caller in this workspace uses — the CLIENT-facing JSON is
+    // `json_script`'s own `value_to_json`, which emits bare digits and is
+    // pinned in `djust_templates/tests/test_bigint_json_script_2260.rs`. So a
+    // string here is about `from_json` being able to read it back without a
+    // tag, not about what a browser parses.
     let json = serde_json::to_string(&Value::BigInt(BIG.into())).expect("json");
     assert_eq!(json, format!("\"{BIG}\""));
     assert!(
         !json.contains("__djust"),
         "the tag is a BINARY-only encoding"
     );
+    // Round-trips as a String, which is what untagged means and why the binary
+    // half needs the tag. Asserted so the asymmetry is a decision on the record
+    // rather than a surprise.
+    let back: Value = serde_json::from_str(&json).expect("json decode");
+    assert!(matches!(&back, Value::String(s) if s == BIG), "{back:?}");
 }
 
 #[test]
