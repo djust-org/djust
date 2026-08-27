@@ -371,6 +371,7 @@ dependencies = [
  "djust_vdom",
  "indexmap",
  "once_cell",
+ "proc-macro2",
  "pulldown-cmark",
  "pyo3",
  "regex",

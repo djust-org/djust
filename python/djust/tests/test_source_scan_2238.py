@@ -151,13 +151,20 @@ def test_rust_source_is_NOT_stripped_and_comes_back_unchanged():
     """The module docstring's "Python source only" claim, run rather than asserted.
 
     A `.rs` file is not Python, so ``tokenize`` fails and the does-not-parse
-    fallback returns it verbatim — SILENTLY. That matters because #2247's pin
-    greps `crates/djust_templates/src/filters.rs` for a `.replace(` chain and
-    has the same prose-blindness this module fixes: wiring it to these
-    functions would LOOK like a fix and be a no-op. Tracked at #2249.
+    fallback returns it verbatim — SILENTLY. That mattered because #2247's pins
+    grepped `crates/djust_templates/src/filters.rs` for a `.replace(` chain and
+    a `json_string_body(` count, and had the same prose-blindness this module
+    fixes: wiring them to these functions would have LOOKED like a fix and been
+    a no-op.
+
+    #2249 resolved that by moving those two pins into Rust — a
+    ``#[cfg(test)] mod value_to_json_structure`` in `filters.rs` counting over
+    ``proc_macro2``'s token stream — rather than teaching this module a second
+    language. So this test's claim is unchanged and still load bearing: nothing
+    in the repo may feed `.rs` source to these functions and believe the result.
 
     If a future change makes this pass Rust through a stripper, this test goes
-    red and #2249 should be revisited rather than the test relaxed.
+    red; the answer is a pin in the target language, not a relaxation here.
     """
     rust = "fn f(s: &str) -> String {\n    // danger() is banned here\n    s.to_string()\n}\n"
     assert without_prose(rust) == rust, "Rust comments must NOT appear stripped"

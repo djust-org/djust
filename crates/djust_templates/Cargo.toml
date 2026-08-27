@@ -29,6 +29,13 @@ djust_components = { path = "../djust_components" }
 [dev-dependencies]
 criterion = "0.8"
 tempfile = "3.27"
+# Lexes this crate's own source for the `value_to_json` structural pin (#2249).
+# A pin that greps RAW text counts comments as code; `proc-macro2` is Rust's own
+# lexer, so a comment is gone before the pin sees it and a string literal is one
+# opaque token. Test-only, and already in the lockfile via `pyo3-macros` — no new
+# supply-chain surface. Works outside a proc macro via its fallback backend,
+# which is the use case the crate exists for.
+proc-macro2 = "1.0"
 
 [[bench]]
 name = "variable_extraction"
