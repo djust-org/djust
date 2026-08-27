@@ -629,4 +629,11 @@ class TestEveryRenderSiteThreadsTheInputSafety:
         stop escaping."""
         src = (self.RENDERER.parent / "filters.rs").read_text()
         body = src.split("pub fn apply_filter_full(", 1)[1].split("\n}\n", 1)[0]
-        assert "arg_was_quoted, false)" in body.replace("\n", " ").replace("  ", " "), body
+        call = re.search(r"apply_filter_full_safe\(([^)]*)\)", body, re.S)
+        assert call, body
+        # Whitespace-insensitive, so a `cargo fmt` that rewraps the call does
+        # not false-fail this. The LAST argument is the one under test.
+        args = [a.strip() for a in call.group(1).split(",") if a.strip()]
+        assert args[-1] == "false", (
+            f"apply_filter_full must pass the SAFE default; it passes {args[-1]!r}"
+        )
