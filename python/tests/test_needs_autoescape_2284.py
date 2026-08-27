@@ -291,23 +291,41 @@ class TestTheRegistryHasSevenNotFour:
             assert getattr(register.filters[name], "is_safe", False), name
 
 
-class TestLinenumbersWasAlreadyCorrect:
-    """``renderer.rs`` claims ``linenumbers`` is deliberately absent from
-    ``SAFE_OUTPUT_FILTERS`` because djust's whole-output escape and Django's
-    per-line escape are byte-identical. That is a prose invariant, so run it.
+class TestLinenumbersColumnsThatWereAlreadyCorrect:
+    """These three columns agreed before #2291 and still agree after it.
 
-    It matters here because ``linenumbers`` has the SAME whole-value
-    ``isinstance(value, SafeData)`` clause as the four — so if this were
-    broken, it would belong in the fix rather than in a docstring.
+    This class was originally named ``TestLinenumbersWasAlreadyCorrect`` and
+    said so in its docstring — it ran ``renderer.rs``'s prose invariant that
+    ``linenumbers`` was deliberately absent from ``SAFE_OUTPUT_FILTERS``
+    because djust's whole-output escape and Django's per-line escape are
+    byte-identical, found the three columns below in agreement, and concluded
+    the filter was correct.
+
+    It was not. The invariant holds only while the render-time escape actually
+    RUNS, and the one column that removes it — a TRAILING ``|safe`` — was never
+    sampled. ``{{ p|linenumbers|safe }}`` emitted attacker markup live (#2291).
+    A leading ``|safe`` was sampled and is a different question entirely (it
+    means the author trusts the input, and Django emits it live too), which is
+    exactly why sampling it read as coverage of the safety axis.
+
+    Kept, renamed, and narrowed to the claim it can actually support: THESE
+    columns agree. #2291's own file owns the trailing-``|safe`` column and the
+    equality between the two escape placements.
     """
 
     @pytest.mark.parametrize("payload", NO_URL_PAYLOADS)
-    def test_all_three_columns_agree_with_django(self, payload):
+    def test_these_three_columns_agree_with_django(self, payload):
         plain = "{{ p|linenumbers }}"
         assert djust_render(plain, payload) == django_render(plain, payload)
         safe = "{{ p|safe|linenumbers }}"
         assert djust_render(safe, payload) == django_render(safe, payload)
         assert djust_render_marked_safe(plain, payload) == django_render(plain, mark_safe(payload))
+
+    @pytest.mark.parametrize("payload", NO_URL_PAYLOADS)
+    def test_and_the_column_that_did_not(self, payload):
+        """The one #2291 fixed — here so this file cannot mislead again."""
+        source = "{{ p|linenumbers|safe }}"
+        assert djust_render(source, payload) == django_render(source, payload)
 
 
 class TestSequenceShapeIsOutOfScopeAndStillDiverges:

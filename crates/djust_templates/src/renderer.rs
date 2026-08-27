@@ -46,11 +46,14 @@ static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
 /// unchanged. A future `needs_autoescape` name added here must satisfy the same
 /// two-arm reading, not just the first.
 ///
-/// `linenumbers` is `is_safe=True` in Django and is deliberately NOT here: it
-/// escapes per line where djust escapes the whole output, and those are
-/// byte-identical because everything it adds is escape-invariant. Adding the
-/// name without moving the escape inside would stop its input being escaped.
-const SAFE_OUTPUT_FILTERS: [&str; 9] = [
+/// `linenumbers` was deliberately NOT here until #2291, on the argument that it
+/// escapes per line where djust escaped the whole output and the two are
+/// byte-identical because everything it adds is escape-invariant. That was
+/// true, and beside the point: it holds only while the render-time escape
+/// actually RUNS, and a later `|safe` suppresses exactly that. It now escapes
+/// inside `add_linenumbers` and is listed below — the escape and the grant are
+/// one change, and neither is correct without the other.
+const SAFE_OUTPUT_FILTERS: [&str; 10] = [
     "safe",
     "safeseq",
     "force_escape",
@@ -60,6 +63,9 @@ const SAFE_OUTPUT_FILTERS: [&str; 9] = [
     "unordered_list",
     "linebreaks",
     "linebreaksbr",
+    // Joined the list with #2291: it now escapes each line inside the filter
+    // body, which is what earns the grant — see `add_linenumbers`.
+    "linenumbers",
 ];
 
 /// Django's `is_safe=True` built-in filters — the ones that **preserve** the
