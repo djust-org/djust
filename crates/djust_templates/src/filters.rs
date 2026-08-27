@@ -303,7 +303,17 @@ fn apply_builtin_filter(
         "title" => Ok(Value::String(crate::truncate::title(&value.to_string()))),
         "length" => {
             let len = match value {
-                Value::String(s) => s.len(),
+                // `len()` of a Python `str` counts CODE POINTS; `str::len()`
+                // counts BYTES (#2279). `é` is 2 bytes and `中` is 3, so every
+                // non-ASCII string measured long — `{{ "中<b"|length }}` gave 5
+                // where Django gives 3.
+                //
+                // Code points, NOT graphemes: Python's `len("👍🏽")` is 2 (the
+                // emoji plus its skin-tone modifier) and `len("👨\u{200d}👩\u{200d}👧")`
+                // is 5. `char` IS a Unicode scalar value, so `chars().count()`
+                // is Python's answer and a grapheme-cluster count would be a
+                // different, wronger one.
+                Value::String(s) => s.chars().count(),
                 Value::List(l) | Value::Tuple(l) => l.len(),
                 _ => 0,
             };
@@ -842,8 +852,10 @@ fn apply_builtin_filter(
             Ok(Value::String(phone2numeric(&value.to_string())))
         }
         "pprint" => {
-            // pprint filter: Python-like repr of value
-            Ok(Value::String(pprint_value(value)))
+            // Django's `pprint` filter is `pprint.pformat(value)` — which WRAPS
+            // at width 80. The single-line builder this replaced diverged by
+            // every newline and every indent space above that width (#2277).
+            Ok(Value::String(crate::pprint::pformat(value)))
         }
         "safeseq" => {
             // safeseq filter: marks each item in a sequence as safe (no-op at filter level)
@@ -2308,6 +2320,44 @@ fn apply_stringformat(value: &Value, spec: &str) -> String {
     }
 }
 
+/// `django.utils.text.wrap`, which is what the `wordwrap` filter calls.
+///
+/// The greedy re-joiner this replaces was not Django's algorithm and diverged
+/// three ways at once (#2279 named the first):
+///
+/// 1. **Byte widths.** `word.len()` is bytes; Django counts code points, so
+///    every non-ASCII word measured long and broke the line early.
+/// 2. **Whitespace was destroyed.** `split_whitespace()` + `" "`-join dropped
+///    leading indentation, collapsed runs of spaces, and — the visible one —
+///    turned every existing newline into a space. `wordwrap` is supposed to
+///    wrap each line of the input independently and PRESERVE what it does not
+///    have to break.
+/// 3. **`width=0` returned the text unchanged**, where Django breaks at every
+///    space.
+///
+/// Django's own `max_width` line is `min(width + 1 if line.endswith("\n") else
+/// width, width)`, which is unconditionally `width`; it is dead arithmetic in
+/// the reference and is not reproduced.
+/// **`word.len()` below is BYTES, and that is deliberately left alone (#2279).**
+///
+/// #2279 lists `wordwrap` as a place to check for the byte-vs-char sink, and it
+/// is one. But this is NOT `django.utils.text.wrap` and the sink cannot be fixed
+/// on its own. Django 5.x delegates to `textwrap.TextWrapper(width,
+/// break_long_words=False, break_on_hyphens=False, replace_whitespace=False)`,
+/// which preserves existing line breaks and interior whitespace, drops
+/// whitespace only at a break, restores a whitespace-only line, re-appends a
+/// trailing newline, and raises `ValueError` for `width=0`. The greedy re-joiner
+/// below does none of that: it splits on whitespace and rejoins on single
+/// spaces, so it flattens every line break, collapses runs of spaces, and drops
+/// leading indentation. At `width=0` it returns the text where Django raises.
+///
+/// Changing `.len()` to `.chars().count()` was implemented and MEASURED against
+/// a randomized differential: it fixes 21 cells and **regresses 6** — every
+/// regression a string containing `U+2028`, where Django's `splitlines()` breaks
+/// the line and this rejoiner emits a space. The byte overcount had been putting
+/// a break at that position by accident. Two bugs cancelling, so removing one
+/// alone makes the output worse; the pair goes with the `TextWrapper` port and
+/// is tracked separately.
 fn word_wrap(text: &str, width: usize) -> String {
     if width == 0 {
         return text.to_string();
@@ -3014,9 +3064,10 @@ mod float_sink_set {
 
     /// The pin. Every entry is a float→string sink; the SET is exact.
     ///
-    /// `filters.rs` × `python_float_repr` is two arms — the `@stringfilter`
-    /// coercion (#2258) and `pprint` (#2270). Adding a sixth sink without
-    /// classifying it fails here.
+    /// `filters.rs` × `python_float_repr` is the `@stringfilter` coercion
+    /// (#2258); `pprint.rs` × `python_float_repr` is `pprint`'s flat repr, which
+    /// moved out of `filters.rs` when the wrapping port landed (#2270, #2277).
+    /// Adding a sixth sink without classifying it fails here.
     #[test]
     fn every_float_to_string_sink_routes_through_an_approved_repr() {
         let files = rust_files();
@@ -3042,9 +3093,9 @@ mod float_sink_set {
         let expected: Vec<(String, String)> = [
             ("filters.rs", "json_float_body"),
             ("filters.rs", "python_float_repr"),
-            ("filters.rs", "python_float_repr"),
             ("filters.rs", "python_float_trunc_digits"),
             ("floatformat.rs", "python_float_repr"),
+            ("pprint.rs", "python_float_repr"),
         ]
         .iter()
         .map(|(f, h)| ((*f).to_string(), (*h).to_string()))
@@ -3334,57 +3385,6 @@ fn phone2numeric(s: &str) -> String {
             other => other,
         })
         .collect()
-}
-
-fn pprint_value(value: &Value) -> String {
-    match value {
-        // `pprint` already rendered Python repr before #2203 — it was `Display`
-        // that was the outlier. Both variants print "None" here to preserve
-        // this filter's existing output exactly.
-        Value::Missing | Value::None => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::Integer(n) => n.to_string(),
-        // `pprint.pformat(f)` IS `repr(f)` for a float — measured across the
-        // whole spectrum, not assumed — so this is the same `repr` the nested
-        // `py_repr` spelling uses (#2258, #2270). Rust's `{}` was neither
-        // Python spelling in three separate ways, and the ORDINARY one is not
-        // the `1e20` the issue leads with: `{}` drops the trailing `.0`, so
-        // `{{ 1.0|pprint }}` rendered `1` and `{{ 0.0|pprint }}` rendered `0`.
-        // It also never uses exponent form (`1e-05` came out as `0.00001` and
-        // `5e-324` as a 324-digit expansion) and spells NaN `NaN` where Python
-        // gives `nan`. `inf`/`-inf` agreed only by coincidence.
-        Value::Float(f) => djust_core::decimal::python_float_repr(*f),
-        // `pprint` shows the constructor form, as `repr` does (#2214).
-        Value::Decimal(d) => format!("Decimal('{d}')"),
-        // `repr(int)` is the digits, however many there are (#2260) — the
-        // constructor form above is a Decimal-only spelling.
-        Value::BigInt(d) => d.clone(),
-        Value::String(s) => format!("'{s}'"),
-        // List-only: `pprint` renders a tuple with parentheses, so the arm
-        // below must stay reachable. (A blanket Tuple twin here made it dead
-        // code — caught by clippy's unreachable_patterns.)
-        Value::List(items) => {
-            let parts: Vec<String> = items.iter().map(pprint_value).collect();
-            format!("[{}]", parts.join(", "))
-        }
-        Value::Tuple(items) => {
-            let parts: Vec<String> = items.iter().map(pprint_value).collect();
-            if parts.len() == 1 {
-                format!("({},)", parts[0])
-            } else {
-                format!("({})", parts.join(", "))
-            }
-        }
-        Value::Object(map) => {
-            let mut parts: Vec<String> = map
-                .iter()
-                .map(|(k, v)| format!("'{}': {}", k, pprint_value(v)))
-                .collect();
-            parts.sort();
-            format!("{{{}}}", parts.join(", "))
-        }
-    }
 }
 
 static URLIZE_RE: Lazy<Regex> = Lazy::new(|| {
@@ -4654,10 +4654,10 @@ mod tests {
             (f64::INFINITY, "inf", "Infinity"),
             (f64::NEG_INFINITY, "-inf", "-Infinity"),
         ] {
-            assert_eq!(pprint_value(&Value::Float(input)), want_pprint);
+            assert_eq!(crate::pprint::pformat(&Value::Float(input)), want_pprint);
             assert_eq!(json_float_body(input), want_json);
         }
-        assert_eq!(pprint_value(&Value::Float(f64::NAN)), "nan");
+        assert_eq!(crate::pprint::pformat(&Value::Float(f64::NAN)), "nan");
         assert_eq!(json_float_body(f64::NAN), "NaN");
     }
 
@@ -4669,11 +4669,11 @@ mod tests {
                 .into_iter()
                 .collect(),
         )]);
-        assert_eq!(pprint_value(&nested), "[{'k': 1e+20}]");
+        assert_eq!(crate::pprint::pformat(&nested), "[{'k': 1e+20}]");
         assert_eq!(value_to_json(&nested), "[{\"k\": 1e+20}]");
 
         let integral = Value::Tuple(vec![Value::Float(1.0), Value::Float(-0.0)]);
-        assert_eq!(pprint_value(&integral), "(1.0, -0.0)");
+        assert_eq!(crate::pprint::pformat(&integral), "(1.0, -0.0)");
         assert_eq!(value_to_json(&integral), "[1.0, -0.0]");
     }
 

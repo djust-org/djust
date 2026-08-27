@@ -62,12 +62,13 @@ being shared-tokenizer changes (comment close, `locatetagend`, the widened
 CDATA element set) that also affect the truncators and are deliberately not in
 this PR's scope.
 
-Two chain divergences that remain are NOT `striptags`: `|escape|striptags`
-(#2281) and `|striptags|length` (#2279). Both are pinned in
-`TestKnownRemainingDivergences` together with a proof that `striptags` itself
-is byte-exact on the same value, so neither gets re-diagnosed as this filter's
-bug. The third, `|safe|striptags` (#2280), was fixed by #2285 while this PR
-was open.
+One chain divergence that remains is NOT `striptags`: `|escape|striptags`
+(#2281). It is pinned in `TestKnownRemainingDivergences` together with a proof
+that `striptags` itself is byte-exact on the same value, so it does not get
+re-diagnosed as this filter's bug. The other two were fixed while this file
+was in flight -- `|safe|striptags` (#2280) by #2285, and `|striptags|length`
+(#2279) by the `length` code-point fix, whose parity file is
+`test_length_pprint_parity_2279_2277.py`.
 
 Two defects in the port survived a curated table and were found only by the
 randomized differential:
@@ -101,9 +102,7 @@ from django.utils.html import strip_tags as django_strip_tags  # noqa: E402
 from djust import _rust  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
 
-FIXTURE_PATH = (
-    pathlib.Path(__file__).parent / "fixtures" / "striptags_reference_2273.json"
-)
+FIXTURE_PATH = pathlib.Path(__file__).parent / "fixtures" / "striptags_reference_2273.json"
 
 
 def render_both(source: str, value: Any) -> tuple[str, str]:
@@ -216,9 +215,7 @@ CHAIN_VALUES = [
     "<b/>&amp-",
 ]
 
-LIVE_COMPARED_VALUES = (
-    [v for v, _ in REPORTED_CELLS] + UNREPORTED_VALUES + CHAIN_VALUES
-)
+LIVE_COMPARED_VALUES = [v for v, _ in REPORTED_CELLS] + UNREPORTED_VALUES + CHAIN_VALUES
 
 
 # ---------------------------------------------------------------------------
@@ -231,44 +228,165 @@ LIVE_COMPARED_VALUES = (
 # construct recovery, and the end-of-input tail flush.
 FRAGMENTS = [
     # bare delimiters -- the issue's case and its neighbours
-    "<", ">", "<>", "< >", "</>", "<<", ">>", "<<>>", "a < b", "a > b",
-    "5 < 10 and 10 > 5", "x<y<z", "<b", "a <b", "<0>", "< b>", "<-", "<=",
+    "<",
+    ">",
+    "<>",
+    "< >",
+    "</>",
+    "<<",
+    ">>",
+    "<<>>",
+    "a < b",
+    "a > b",
+    "5 < 10 and 10 > 5",
+    "x<y<z",
+    "<b",
+    "a <b",
+    "<0>",
+    "< b>",
+    "<-",
+    "<=",
     # well-formed markup
-    "<b>", "</b>", "<i>", "</i>", "<br/>", "<br />", "<br>", "<p>", "</p>",
-    "<div class='x'>", "</div>", '<a href="x">', "<img src=x>", "<span>",
+    "<b>",
+    "</b>",
+    "<i>",
+    "</i>",
+    "<br/>",
+    "<br />",
+    "<br>",
+    "<p>",
+    "</p>",
+    "<div class='x'>",
+    "</div>",
+    '<a href="x">',
+    "<img src=x>",
+    "<span>",
     # malformed / tolerant-parse territory
-    "<<b>script>", "<b ", "<b x", "<b x=", '<b x=">', "<b x=y", "<b/",
-    "<b\n>", "<b\t>", "</ b>", "</b", "<b//>", '<a href="a>b">', "<b ==x>",
+    "<<b>script>",
+    "<b ",
+    "<b x",
+    "<b x=",
+    '<b x=">',
+    "<b x=y",
+    "<b/",
+    "<b\n>",
+    "<b\t>",
+    "</ b>",
+    "</b",
+    "<b//>",
+    '<a href="a>b">',
+    "<b ==x>",
     # CDATA elements
-    "<script>", "</script>", "<style>", "</style>", "<script>a<b</script>",
-    "<style>x{}</style>", "</SCRIPT>",
+    "<script>",
+    "</script>",
+    "<style>",
+    "</style>",
+    "<script>a<b</script>",
+    "<style>x{}</style>",
+    "</SCRIPT>",
     # comments, PIs, declarations
-    "<!--", "-->", "<!-- c -->", "<!--->", "<!-->", "<!--a--!>",
-    "<?", "<?php ?>", "<?pi>", "<!", "<!x>", "<!DOCTYPE html>", "<!doctype>",
-    "]]>", "<![", "<![CDATA[x]]>", "<![endif]>",
+    "<!--",
+    "-->",
+    "<!-- c -->",
+    "<!--->",
+    "<!-->",
+    "<!--a--!>",
+    "<?",
+    "<?php ?>",
+    "<?pi>",
+    "<!",
+    "<!x>",
+    "<!DOCTYPE html>",
+    "<!doctype>",
+    "]]>",
+    "<![",
+    "<![CDATA[x]]>",
+    "<![endif]>",
     # entities -- the `convert_charrefs=False` arms
-    "&", "&&", "&amp;", "&amp", "&lt;", "&gt;", "&nbsp;", "&one", "&one;",
-    "&a b", "&a", "&#", "&#65;", "&#65", "&#x41;", "&#x41", "&#xZZ", "&#;",
-    "&#x", "&z;", "&123;", "& ", "&;", "&amp-", "&one3.5",
+    "&",
+    "&&",
+    "&amp;",
+    "&amp",
+    "&lt;",
+    "&gt;",
+    "&nbsp;",
+    "&one",
+    "&one;",
+    "&a b",
+    "&a",
+    "&#",
+    "&#65;",
+    "&#65",
+    "&#x41;",
+    "&#x41",
+    "&#xZZ",
+    "&#;",
+    "&#x",
+    "&z;",
+    "&123;",
+    "& ",
+    "&;",
+    "&amp-",
+    "&one3.5",
     # plain prose
-    "a", "b", "x", "word", "5", "10", " ", "\n", "\t", "hello world", "3.5",
-    "price", "and", "-", "=", "/", "'", '"', "\\", "é", "中",
+    "a",
+    "b",
+    "x",
+    "word",
+    "5",
+    "10",
+    " ",
+    "\n",
+    "\t",
+    "hello world",
+    "3.5",
+    "price",
+    "and",
+    "-",
+    "=",
+    "/",
+    "'",
+    '"',
+    "\\",
+    "é",
+    "中",
 ]
 
 # Inputs whose point is the shape of the WHOLE string.
 WHOLE = [
-    "", "<", ">", "&", "a < b", "a > b", "5 < 10 and 10 > 5", "<<b>script>",
-    "a <b", "x<y<z", "<bx&y3.5word", "price < 5 and > 3", "&one two<b>x</b>",
-    "<i>&a b</i>", "&one two", "a<b>c</b>d",
-    "<" * 10 + "b>" * 10, "<<<<<<<<<<b>>>>>>>>>>",
+    "",
+    "<",
+    ">",
+    "&",
+    "a < b",
+    "a > b",
+    "5 < 10 and 10 > 5",
+    "<<b>script>",
+    "a <b",
+    "x<y<z",
+    "<bx&y3.5word",
+    "price < 5 and > 3",
+    "&one two<b>x</b>",
+    "<i>&a b</i>",
+    "&one two",
+    "a<b>c</b>d",
+    "<" * 10 + "b>" * 10,
+    "<<<<<<<<<<b>>>>>>>>>>",
     # depth-guard territory (Django raises SuspiciousOperation on all three).
     "<a" + "<" * 49 + "y" * 1001,
     "<a" + "<" * 48 + "y" * 1001,
     "keepA" + "<" * 51 + "b>" * 51 + "keepB",
     "keepA" + "<" * 50 + "b>" * 50 + "keepB",
     # unterminated at end of input
-    "text <b", "text &am", "text &#6", "text <!--", "text <?",
-    "text <![CDATA[", "text <script>", "text </", "text </d",
+    "text <b",
+    "text &am",
+    "text &#6",
+    "text <!--",
+    "text <?",
+    "text <![CDATA[",
+    "text <script>",
+    "text </",
+    "text </d",
 ]
 
 
@@ -299,8 +417,7 @@ def load_fixture() -> dict[str, Any]:
     global _FIXTURE_CACHE
     if _FIXTURE_CACHE is None:
         assert FIXTURE_PATH.exists(), (
-            f"{FIXTURE_PATH} is missing — regenerate with "
-            f"scripts/gen-striptags-reference.py"
+            f"{FIXTURE_PATH} is missing — regenerate with scripts/gen-striptags-reference.py"
         )
         _FIXTURE_CACHE = json.loads(FIXTURE_PATH.read_text())
     return _FIXTURE_CACHE
@@ -323,9 +440,7 @@ class TestReportedCells:
     def test_reported_cell(self, value: str, expected: str) -> None:
         source = "{{ p|striptags }}"
         django_out, djust_out = render_both(source, value)
-        assert django_out == expected, (
-            f"Django's answer for {value!r} changed: {django_out!r}"
-        )
+        assert django_out == expected, f"Django's answer for {value!r} changed: {django_out!r}"
         assert djust_out == expected
 
 
@@ -586,8 +701,7 @@ class TestKnownRemainingDivergences:
         fifty = "keepA" + "<" * 50 + "b>" * 50 + "keepB"
         assert_agrees("{{ p|striptags }}", fifty)
         assert (
-            DjangoTemplate("{{ p|striptags }}").render(DjangoContext({"p": fifty}))
-            == "keepAkeepB"
+            DjangoTemplate("{{ p|striptags }}").render(DjangoContext({"p": fifty})) == "keepAkeepB"
         )
 
     @pytest.mark.parametrize(
@@ -596,16 +710,19 @@ class TestKnownRemainingDivergences:
             # `|escape|striptags`: djust strips the UNESCAPED value, so the
             # tags Django's `escape` had already neutralised are removed.
             ("{{ p|escape|striptags }}", "a<b>c</b>d"),
-            # `|striptags|length`: djust's `length` counts BYTES.
-            ("{{ p|striptags|length }}", "中<b"),
+            # The `|striptags|length` row this class carried is GONE: #2279 is
+            # fixed, `length` counts code points, and the row fired its own
+            # "now AGREES -- delete this row" assertion. Its replacement is
+            # `test_length_pprint_parity_2279_2277.py`, which pins the chain
+            # cell as an AGREEMENT.
         ],
     )
     def test_chain_divergence_is_not_striptags(self, source: str, value: str) -> None:
-        """Three chain divergences whose cause is the OTHER filter.
+        """A chain divergence whose cause is the OTHER filter.
 
-        Each is pinned with a proof that `striptags` itself is exact on the
-        value, so a future reader does not re-diagnose them as a `striptags`
-        bug. Tracked at #2279, #2280 and #2281.
+        Pinned with a proof that `striptags` itself is exact on the value, so a
+        future reader does not re-diagnose it as a `striptags` bug. Tracked at
+        #2281.
         """
         django_out, djust_out = render_both(source, value)
         assert django_out != djust_out, (
