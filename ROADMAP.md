@@ -1,7 +1,7 @@
 # djust Roadmap
 
 > Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-23
-> (v1.1.1-6 chain links added).
+> (v1.1.1-7 opened; shipped XSS found and fixed).
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
 > deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
@@ -30,7 +30,48 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
+## v1.1.1-7 — filter-layer semantics, and one security finding (drain bucket → ships in 1.1.1)
+
+Opened 2026-08-27. Six issues, every one filed by a v1.1.1-6 PR's own differential.
+
+**The security finding first.** Fixing #2274 (`|safe` not surviving an
+`is_safe=True` filter) uncovered a **live XSS in shipped 1.1.0**:
+`{{ user_bio|unordered_list }}` and `|safeseq` render attacker markup unescaped.
+Both filters sit in `SAFE_OUTPUT_FILTERS` — an unconditional "emit unescaped"
+grant, *earned* for a sequence because they escape every item they emit. Given a
+non-sequence they emit nothing and hand the input straight back, still under the
+grant. Correct for the case it was written for; wrong for the case nobody
+checked.
+
+It also could not be fixed separately: once an `is_safe` filter preserves the
+safety it is handed, that grant survives arbitrarily far down a chain. The
+parity fix alone measured **+1067** more-permissive cells; **−663** with the sink
+fix included. Shipped together in PR #2285. Draft advisory
+**GHSA-9395-2g46-rj3f**, unpublished pending 1.1.1 on PyPI.
+
+**The methodological finding.** PR #2282 established that CPython's own
+`html.parser` is not stable across the interpreters CI runs — 3.12.9 vs 3.12.13
+differ on 1,108 of 4,000 values, and **3.12.13 vs 3.14.6 differ on 224**. So no
+fixed port matches every supported host, and a differential that computes its
+reference at run time silently changes meaning with the runner. #2286 asks
+whether a Rust reimplementation should track the host version at all.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | `{{ p\|escape\|X }}` passes the UNescaped value to X (#2281) | If `\|escape` is a no-op in a chain, this is a second instance of the #2285 class. Being established as exploitable-or-not before anything else. | v1.1.1 |
+| **P1** | Sequence filters do not iterate a string as characters (#2283) | Python iterates `"abc"` as `['a','b','c']`; djust does not, so `join`/`safeseq`/`unordered_list`/`random`/`first`/`last`/`slice` all diverge. Same filters as the #2285 sink — check whether that escape stays load-bearing. | v1.1.1 |
+| **P1** | `{{ p\|length }}` counts BYTES, not characters (#2279) | `len("é")` is 1 in Python, 2 in djust. Unmasked 20 pre-existing flips in #2282's differential, where the old `striptags` deleted the non-ASCII tail and the two bugs cancelled. | v1.1.1 |
+| **P2** | `needs_autoescape` is ignored (#2284) | Over-escaping only, so not a security gap. But djust has no `{% autoescape %}` tag, so the flag is unobservable — the real question is whether it should exist at all. A decision, not a patch. | v1.1.1 |
+| **P3** | `pprint` never wraps (#2277) | `pprint.pformat` wraps at width 80 via a real line-breaking algorithm, not a width check. Measure before scoping; "close with rationale" is legitimate. | v1.1.1 |
+| **P3** | Should `striptags` be version-aware? (#2286) | 224 of 4,000 values differ between 3.12.13 and 3.14.6, and 3.14 is in CI's push matrix. Pin one behaviour, track the host, or declare djust's own — argued, not assumed. | v1.1.1 |
+
+---
+
 ## v1.1.1-6 — the v1.1.1-5 chain links (drain bucket → ships in 1.1.1)
+
+**COMPLETE 4/4 ✅** — #2273 (PR #2282), #2274 (PR #2285), #2276 (PR #2278), #2277 deferred to v1.1.1-7. #2274's fix uncovered a **shipped XSS** (draft advisory GHSA-9395-2g46-rj3f); see below.
 
 Opened 2026-08-27. Four issues, each surfaced by a v1.1.1-5 PR's own differential
 rather than by inspection — and each one an axis that PR's sample did not reach.
