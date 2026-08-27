@@ -44,6 +44,74 @@ const SAFE_OUTPUT_FILTERS: [&str; 9] = [
     "linebreaksbr",
 ];
 
+/// Django's `is_safe=True` built-in filters — the ones that **preserve** the
+/// safety they were **given**.
+///
+/// This is a DIFFERENT PROPERTY from [`SAFE_OUTPUT_FILTERS`] and the two lists
+/// must never be merged (#2274):
+///
+/// * `SAFE_OUTPUT_FILTERS` — "marks its own output safe UNCONDITIONALLY",
+///   because the filter escapes its input internally and then emits markup of
+///   its own. `urlize` is one; its output is safe whatever went in.
+/// * this list — "returns safe output IF AND ONLY IF the input was already
+///   safe". `lower` is one; `{{ p|lower }}` on hostile input is still escaped
+///   at render time, and only `{{ p|safe|lower }}` comes out live.
+///
+/// A name may legitimately appear in both (`safe`, `linebreaks`, `urlize`, …):
+/// Django registers them `is_safe=True` *and* they mark their own output, and
+/// the unconditional arm simply wins first. The list below is therefore
+/// Django's `is_safe=True` registry set VERBATIM — all 36 of them — which is
+/// what makes it mechanically checkable rather than a judgement call.
+/// `test_is_safe_set_matches_djangos_registry` in
+/// `python/tests/test_safe_survives_is_safe_filter_2274.py` enumerates
+/// `django.template.defaultfilters.register.filters` at test time and fails on
+/// any drift in either direction, so a Django release that flips a flag is a
+/// red test rather than a silent divergence.
+///
+/// NOT a licence to under-escape: this arm only ever fires when the value
+/// reaching the filter was ALREADY exempt from escaping — either the context
+/// marked it safe (`mark_safe()` in the view) or an earlier `|safe` /
+/// safe-output filter did. Hostile input that was never marked safe is
+/// unaffected by every name here.
+const IS_SAFE_FILTERS: [&str; 36] = [
+    "addslashes",
+    "capfirst",
+    "center",
+    "escape",
+    "escapeseq",
+    "filesizeformat",
+    "floatformat",
+    "force_escape",
+    "iriencode",
+    "join",
+    "json_script",
+    "last",
+    "linebreaks",
+    "linebreaksbr",
+    "linenumbers",
+    "ljust",
+    "lower",
+    "phone2numeric",
+    "pprint",
+    "random",
+    "rjust",
+    "safe",
+    "safeseq",
+    "slice",
+    "slugify",
+    "stringformat",
+    "striptags",
+    "title",
+    "truncatechars",
+    "truncatechars_html",
+    "truncatewords",
+    "truncatewords_html",
+    "unordered_list",
+    "urlize",
+    "urlizetrunc",
+    "wordwrap",
+];
+
 /// Is the value a filter just produced exempt from auto-escaping?
 ///
 /// **LAST filter wins.** Call this once per filter, assigning (never OR-ing)
@@ -51,6 +119,20 @@ const SAFE_OUTPUT_FILTERS: [&str; 9] = [
 /// `FilterExpression.resolve` marks the value safe only when THE FILTER IT JUST
 /// RAN is `is_safe`, so `{{ p|linebreaks|upper }}` is escaped because `upper`
 /// is registered `is_safe=False`.
+///
+/// `input_was_safe` is the safety of the value going IN — the seed is the
+/// context's own `mark_safe` flag for the variable, and each iteration feeds
+/// its own result forward. That is Django's second term, and its absence was
+/// issue #2274: `django/template/base.py` reads
+///
+/// ```text
+/// new_obj = func(obj, *arg_vals)
+/// if getattr(func, "is_safe", False) and isinstance(obj, SafeData):
+///     obj = mark_safe(new_obj)
+/// ```
+///
+/// where `obj` is the INPUT. Without the input term `{{ p|safe|lower }}` came
+/// out escaped — `|safe` was undone by the very next filter.
 ///
 /// Extracted in #2259 because the three call sites had drifted and one of them
 /// said in a comment that they had not: `get_value_safe` applied the name check
@@ -62,14 +144,16 @@ const SAFE_OUTPUT_FILTERS: [&str; 9] = [
 /// widened the same divergence to a fourth name instead of leaving it where it
 /// was. One helper, three callers, no room to drift again (#1646).
 ///
-/// Fail-SAFE by construction: this can only ever mark FEWER values safe than the
-/// `any()` it replaces, so no value that was escaped before becomes unescaped.
-fn filter_output_is_safe(filter_name: &str, produced_safe: bool) -> bool {
+fn filter_output_is_safe(filter_name: &str, produced_safe: bool, input_was_safe: bool) -> bool {
     // `produced_safe` is a genuine runtime `SafeString` — a custom filter that
     // `mark_safe()`d its result without the static `is_safe=True` flag (#1660).
     produced_safe
         || SAFE_OUTPUT_FILTERS.contains(&filter_name)
         || crate::filter_registry::is_custom_filter_safe(filter_name)
+        // Django's case 1 (#2274): `is_safe=True` AND the input was `SafeData`.
+        // BOTH terms are load-bearing — dropping `input_was_safe` would mark
+        // `{{ hostile|lower }}` safe and is a direct XSS.
+        || (input_was_safe && IS_SAFE_FILTERS.contains(&filter_name))
 }
 
 /// Returns ``true`` if the (parser-preserved) filter argument string is a
@@ -552,7 +636,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // ``SafeString`` (Django ``mark_safe`` / ``__html__``). A later
             // plain-returning filter re-taints it (resets to false), matching
             // Django's final-value escape semantics (#1660).
-            let mut runtime_safe = false;
+            //
+            // SEEDED with the context's own safety, and fed forward through the
+            // chain, because Django's rule reads the filter's INPUT (#2274).
+            // The seed is why `{{ p|safe|lower }}` stays live and why
+            // `{{ marked_safe_in_the_view|lower }}` does too — and, in the
+            // other direction, why `{{ marked_safe_in_the_view|upper }}` is now
+            // ESCAPED: `upper` is registered `is_safe=False` in Django
+            // precisely because upper-casing `&lt;` yields `&LT;`, which every
+            // browser still decodes to `<`.
+            let mut runtime_safe = context.is_safe(var_name);
             for (filter_name, arg) in filter_specs {
                 // Strip quotes from literal filter args at render time —
                 // the parser preserves quotes so the dep-tracking
@@ -571,8 +664,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     arg_was_quoted,
                 )?;
                 value = new_value;
-                // ASSIGNED, not OR-ed: the LAST filter decides (#2259).
-                runtime_safe = filter_output_is_safe(filter_name, produced_safe);
+                // ASSIGNED, not OR-ed: the LAST filter decides (#2259) — but the
+                // value it is assigned FROM includes the previous iteration, which
+                // is Django's `isinstance(obj, SafeData)` input term (#2274).
+                runtime_safe = filter_output_is_safe(filter_name, produced_safe, runtime_safe);
             }
 
             // #2221: localize a bare number on its way into the page, which is
@@ -609,7 +704,12 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // `runtime_safe` now carries the name-based check too, applied
             // per filter rather than as an `any()` over the whole chain — see
             // `filter_output_is_safe`.
-            let is_safe = runtime_safe || context.is_safe(var_name);
+            // No trailing `|| context.is_safe(var_name)` any more (#2274): the
+            // context flag is now the SEED of the loop above, so a filter can
+            // re-taint it exactly as Django's `obj = new_obj` branch does.
+            // OR-ing it back here would make the flag un-re-taintable and leave
+            // `{{ marked_safe|upper }}` MORE permissive than Django.
+            let is_safe = runtime_safe;
             if is_safe {
                 Ok(text)
             } else if *in_attr {
@@ -640,8 +740,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
             // See the Variable arm: track the LAST filter's runtime safeness so
             // a custom filter that ``mark_safe()``s at runtime bypasses escaping
-            // (#1660); a later plain filter re-taints.
-            let mut runtime_safe = false;
+            // (#1660); a later plain filter re-taints. Seeded with the context's
+            // own safety so the chain carries Django's input term (#2274).
+            let mut runtime_safe = context.is_safe(expr);
             for (filter_name, arg) in filters {
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
@@ -654,8 +755,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     arg_was_quoted,
                 )?;
                 value = new_value;
-                // ASSIGNED, not OR-ed: the LAST filter decides (#2259).
-                runtime_safe = filter_output_is_safe(filter_name, produced_safe);
+                // ASSIGNED, not OR-ed: the LAST filter decides (#2259) — but the
+                // value it is assigned FROM includes the previous iteration, which
+                // is Django's `isinstance(obj, SafeData)` input term (#2274).
+                runtime_safe = filter_output_is_safe(filter_name, produced_safe, runtime_safe);
             }
 
             // #2221: localize a bare number on its way into the page, which is
@@ -679,7 +782,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // only by counting the matches rather than by reading the diff.
             let text = localize_if_number(&value);
             // Same shape as the Variable arm — see `filter_output_is_safe`.
-            let is_safe = runtime_safe || context.is_safe(expr);
+            // Seeded, not OR-ed — see the Variable arm (#2274).
+            let is_safe = runtime_safe;
             if is_safe {
                 Ok(text)
             } else {
@@ -2172,7 +2276,10 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 
         // Track the LAST filter's runtime safeness, mirroring the Variable arm
         // (#1660). A plain-returning filter after a runtime-safe one re-taints.
-        let mut runtime_safe = false;
+        // Seeded with the context's own safety so this arm carries Django's
+        // input term too (#2274) — the third of the three sites, kept in step
+        // with the other two by construction (#1646).
+        let mut runtime_safe = context.is_safe(var_name);
 
         // Parse and apply filters (handles chained filters too)
         for filter_part in filter_expr.split('|') {
@@ -2206,7 +2313,7 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
             // This arm always had LAST-filter semantics and its comment
             // claimed the other two matched it. They did not, until #2259
             // extracted `filter_output_is_safe` and pointed all three at it.
-            runtime_safe = filter_output_is_safe(filter_name, produced_safe);
+            runtime_safe = filter_output_is_safe(filter_name, produced_safe, runtime_safe);
         }
 
         return Ok((value, runtime_safe));
@@ -2214,7 +2321,13 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 
     // Try to get from context
     if let Some(value) = context.get(expr) {
-        return Ok((value.clone(), false));
+        // The context's own `mark_safe` flag, NOT a hard `false` (#2274). The
+        // pipe branch above seeds `runtime_safe` from exactly this, so leaving
+        // this arm at `false` would mean `{% firstof v %}` escapes while
+        // `{% firstof v|lower %}` — one identity filter later — does not.
+        // Django's `render_value_in_context` runs `conditional_escape`, which
+        // honours `SafeData` with or without a filter.
+        return Ok((value.clone(), context.is_safe(expr)));
     }
 
     // Try to parse as literal
