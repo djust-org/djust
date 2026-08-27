@@ -48,6 +48,7 @@ pytest.importorskip("django")
 
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
+from django.test import override_settings  # noqa: E402
 
 from djust import _rust  # noqa: E402
 from djust.render_env import apply_number_format  # noqa: E402
@@ -430,6 +431,42 @@ class TestKnownRemainingDivergences:
         bare_django, bare_djust = render_both("{{ p }}", float("nan"))
         assert (bare_django, bare_djust) == ("nan", "NaN")
         assert_agrees("{{ p|floatformat }}", float("nan"))
+
+    def test_the_u_suffix_ignores_overridden_number_settings(self) -> None:
+        """The `u`/`gu` gap, RUN rather than reasoned about (#1867).
+
+        Django's `u` means `use_l10n=False`, which re-reads
+        `settings.DECIMAL_SEPARATOR` / `THOUSAND_SEPARATOR` / `NUMBER_GROUPING`
+        rather than the active locale's. Only the LOCALIZED format is pushed to
+        Rust (`render_env.apply_number_format`), so djust emits Django's
+        DEFAULTS for those three — correct for every project that does not
+        override them, and this is the case that proves it is a real gap and
+        not an imagined one.
+
+        The number format is a Rust thread-local, so it is restored
+        unconditionally: leaking an overridden separator into the rest of the
+        worker is a real incident from this repo's history.
+        """
+        try:
+            with override_settings(
+                DECIMAL_SEPARATOR="!", THOUSAND_SEPARATOR="_", NUMBER_GROUPING=3
+            ):
+                apply_number_format()
+                value = Decimal("6666.6666")
+                # The gap.
+                for source, django_says, djust_says in (
+                    ('{{ p|floatformat:"2u" }}', "6666!67", "6666.67"),
+                    ('{{ p|floatformat:"2gu" }}', "6_666!67", "6666.67"),
+                ):
+                    d, u = render_both(source, value)
+                    assert d == django_says, f"Django changed for {source}"
+                    assert u == djust_says, f"the gap closed for {source} — prune this"
+                # And the localized forms, which are NOT affected, so the gap is
+                # bounded to `u` rather than being a general locale failure.
+                for source in ('{{ p|floatformat:"2" }}', '{{ p|floatformat:"2g" }}'):
+                    assert_agrees(source, value)
+        finally:
+            apply_number_format()
 
     def test_a_string_value_is_still_float_coerced_by_add(self) -> None:
         """`int("34.2")` raises in Python, so Django concatenates and then `""`.

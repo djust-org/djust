@@ -33,7 +33,10 @@
 //!   Rust (`render_env.apply_number_format`), so `u` here emits the Django
 //!   DEFAULTS for those settings (`.`, `,`, grouping 0) — correct unless a
 //!   project overrides them, in which case `u`/`gu` is unlocalized where
-//!   Django would have used the override.
+//!   Django would have used the override. Not a reasoned claim: run with
+//!   `DECIMAL_SEPARATOR="!"`, Django gives `6666!67` and this gives `6666.67`
+//!   (#1867). Pinned by `test_the_u_suffix_ignores_overridden_number_settings`
+//!   and tracked in #2266.
 //! * **Give-up paths on a `Value::Float`.** Django returns `str(text)`
 //!   verbatim when the argument is unparseable, the value is non-finite, or the
 //!   value is past the 200-digit cut-off. That string is `repr(float)`, which
