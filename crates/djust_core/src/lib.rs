@@ -41,6 +41,28 @@ pub(crate) const DECIMAL_TAG: &str = "__djust_decimal__";
 /// `decimal.Decimal`, which is the type change the variant exists to prevent.
 pub(crate) const BIGINT_TAG: &str = "__djust_bigint__";
 
+/// Marks a `Tuple` in a BINARY encoding (#2276).
+///
+/// Third instance of the same mechanism, and the one whose absence was least
+/// visible: rendering a tuple was always correct — `Value::Tuple` is reachable
+/// and `{{ p }}` gives `(1, 2)` exactly as Django does — so the issue's claim
+/// that the variant is unreachable is false. What was lost is the ROUND TRIP:
+/// msgpack has no tuple, `Tuple` serialized as an array, and a view attribute
+/// came back a `list`, so `(1, 2)` rendered `[1, 2]` after a reconnect and not
+/// before one.
+///
+/// Note the asymmetry with JSON, which is deliberate and not a gap: `json.dumps`
+/// has no tuple either, and Django's own `DjangoJSONEncoder` emits `[1.0]` for
+/// `(1.0,)` — verified. So the human-readable arm matching Django means staying
+/// an array, and only the binary arm needs the tag.
+pub(crate) const TUPLE_TAG: &str = "__djust_tuple__";
+
+/// The [`TUPLE_TAG`] value, for tests outside the crate. `#[doc(hidden)]`, not API.
+#[doc(hidden)]
+pub fn tuple_tag() -> &'static str {
+    TUPLE_TAG
+}
+
 /// The `DECIMAL_TAG` value, for tests that must exercise near-misses against
 /// the real constant rather than a copy of the literal.
 ///
@@ -197,6 +219,13 @@ impl Serialize for Value {
             Value::Integer(i) => serializer.serialize_i64(*i),
             Value::Float(f) => serializer.serialize_f64(*f),
             Value::String(st) => serializer.serialize_str(st),
+            // A tuple keeps its identity in binary formats only (#2276) — see
+            // `TUPLE_TAG` for why JSON deliberately stays an array.
+            Value::Tuple(items) if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(TUPLE_TAG, items)?;
+                m.end()
+            }
             Value::List(items) | Value::Tuple(items) => items.serialize(serializer),
             Value::Object(o) => o.serialize(serializer),
         }
@@ -312,6 +341,12 @@ impl<'de> Deserialize<'de> for Value {
                     // discrimination — anything else is a real dict.
                     if let Some(Value::String(d)) = obj.get(BIGINT_TAG) {
                         return Ok(Value::BigInt(d.clone()));
+                    }
+                    // The binary-format tuple tag (#2276). Same shape, but the
+                    // payload is a LIST rather than a string — which is also
+                    // what keeps it from colliding with the two above.
+                    if let Some(Value::List(items)) = obj.get(TUPLE_TAG) {
+                        return Ok(Value::Tuple(items.clone()));
                     }
                 }
                 Ok(Value::Object(obj))
