@@ -2301,6 +2301,56 @@ fn is_json_int_literal(s: &str) -> bool {
     body == "0" || !body.starts_with('0')
 }
 
+/// A float the way `json.dumps` writes one — which is `repr`, then three
+/// names JSON's grammar does not have (#2270).
+///
+/// CPython's encoder is `float.__repr__` for a finite value and the literal
+/// strings `NaN` / `Infinity` / `-Infinity` otherwise, because `json.dumps`
+/// defaults to `allow_nan=True` and `json_script` does not override it —
+/// `django.utils.html.json_script` calls `json.dumps(value, cls=encoder or
+/// DjangoJSONEncoder)`, and `DjangoJSONEncoder` overrides only `default()`.
+///
+/// **The non-finite spellings are a decision, not a transcription, and this is
+/// the reasoning.** `Infinity` and `NaN` are Python extensions to JSON; neither
+/// is in ECMA-404, and `JSON.parse('{"x": Infinity}')` throws
+/// `SyntaxError: Unexpected token 'I'` in every browser. So djust emitting them
+/// puts a body in `<script type="application/json">` that the client cannot
+/// parse. The alternative — `null`, which is what `JSON.stringify` does — is
+/// valid JSON and is rejected here for two reasons:
+///
+/// 1. **It is silently lossy where `Infinity` is loudly wrong.** A client
+///    reading `null` cannot tell an infinity from a `None`; a client reading
+///    `Infinity` gets an exception at the parse site with the offending token
+///    named. And Python's own `json.loads` accepts `Infinity`, so a body
+///    round-tripped server-side still carries the value.
+/// 2. **djust would be the only one of the two that changed the data.** Django
+///    is the contract this engine reproduces; a `json_script` that answers
+///    `null` where Django answers `Infinity` is a divergence a user cannot see
+///    until the value differs, which is the failure shape this whole drain
+///    exists to remove.
+///
+/// This is deliberately NOT the #2241 reasoning, which also concerned invalid
+/// JSON in a script body, because the two cases differ in both halves. There,
+/// Django emitted VALID JSON (`json.dumps` escapes a control character in a
+/// key) and djust did not, so parity and validity pointed the same way; and the
+/// mechanism was structure INJECTION — an unescaped `"` or newline in an
+/// attacker-reachable key ends the string and starts new JSON. `Infinity` is a
+/// fixed six-byte token chosen by this function from the float's own class,
+/// carries no attacker payload, and cannot inject structure. Divergence was the
+/// defect in #2241; here parity is what a strict parser rejects, so the
+/// consequence is recorded — `test_infinity_is_django_parity_and_is_not_`
+/// `parseable_json` in `python/tests/test_pprint_json_script_float_2270.py` —
+/// rather than papered over.
+fn json_float_body(f: f64) -> String {
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    if f.is_infinite() {
+        return if f < 0.0 { "-Infinity" } else { "Infinity" }.to_string();
+    }
+    djust_core::decimal::python_float_repr(f)
+}
+
 fn value_to_json(value: &Value) -> String {
     match value {
         // Both are JSON `null`: JSON cannot distinguish absent from None.
@@ -2313,7 +2363,13 @@ fn value_to_json(value: &Value) -> String {
             }
         }
         Value::Integer(n) => n.to_string(),
-        Value::Float(f) => format!("{f}"),
+        // `json.dumps`'s float, which is `repr` plus three non-finite names —
+        // see [`json_float_body`] for why `Infinity` is emitted knowing
+        // `JSON.parse` rejects it (#2270). Rust's `{}` was wrong on BOTH
+        // halves: it wrote `1.0` as `1`, changing a JSON float into a JSON
+        // integer for every integral value, and spelled the infinities `inf`,
+        // which is neither valid JSON nor what Django emits.
+        Value::Float(f) => json_float_body(*f),
         // A quoted JSON string, matching `DjangoJSONEncoder.default`, which
         // returns `str(o)` for a Decimal (#2214). Emitting a bare JSON number
         // here would put the precision loss back on the wire by the other door
@@ -2644,6 +2700,389 @@ mod value_to_json_structure {
     }
 }
 
+/// The float→string sink SET for the whole crate, pinned from Rust's own token
+/// stream (#2270, following #2249's cure for the same pin done as text).
+///
+/// #2258 fixed three of five sinks and #2270 the other two, and the only reason
+/// the other two were found at all is that someone re-ran the grep. The grep is
+/// `format!("{f}")` over `crates/djust_templates/src/`; a grep nobody re-runs is
+/// not a net, so it is mechanised here.
+///
+/// **What is pinned is the SET, not a floor.** A count-`>=` pin passes forever
+/// once satisfied; #2233's caller pin grew 2 → 3 precisely because it asserted
+/// the exact set, and the omission it caught was a real render path. So a new
+/// `Value::Float` arm that spells the binding itself fails this test until it is
+/// classified, which is the "next omission fails loudly" the issue asks for.
+///
+/// **Scope is the DIRECTORY, read at test time**, not this file. The two #2270
+/// sinks were both in `filters.rs`, but the class is not: the crate's other
+/// float→string arm is in `floatformat.rs` (#2253), and #2258's `Display` and
+/// `py_repr` sites are in `djust_core` — a sibling crate this pin cannot see,
+/// which is exactly why it must at least see every file of its own. Reading the
+/// directory means a NEW file in this crate is covered the day it is added,
+/// which an `include_str!` list of names is not. The read is asserted, so a
+/// moved or renamed directory fails rather than silently scanning nothing
+/// (#2249's third no-op mode).
+///
+/// **The rule is about the OPERATION** (#2129): an arm that binds a float and
+/// turns it into a string must route through one of the approved reprs. It is
+/// deliberately not a ban on the literal text `format!("{f}")`, which is
+/// name-dependent — `Value::Float(x) => format!("{x}")` is the same defect and
+/// the same grep misses it.
+#[cfg(test)]
+mod float_sink_set {
+    use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
+    use std::path::{Path, PathBuf};
+    use std::str::FromStr;
+
+    /// The reprs a float is allowed to become a string through.
+    ///
+    /// `python_float_repr` is CPython's `repr` (`{{ f|upper }}`, `pprint`,
+    /// `floatformat`'s give-up path, `py_repr`); `python_float_trunc_digits` is
+    /// `int(f)`'s digits (`stringformat:"d"`); `json_float_body` is
+    /// `json.dumps`'s float, which is `repr` plus three non-finite names.
+    const APPROVED: &[&str] = &[
+        "python_float_repr",
+        "python_float_trunc_digits",
+        "json_float_body",
+    ];
+
+    /// Identifiers that mean "this arm produced a string from the binding".
+    const STRINGIFIERS: &[&str] = &["format", "to_string", "push_str", "write"];
+
+    fn src_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
+    }
+
+    fn rust_files() -> Vec<PathBuf> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            let entries = std::fs::read_dir(dir).unwrap_or_else(|e| {
+                panic!("cannot read {}: {e} — did the crate move?", dir.display())
+            });
+            for entry in entries {
+                let path = entry.expect("a readable dir entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&src_dir(), &mut out);
+        out.sort();
+        out
+    }
+
+    fn file_name(p: &Path) -> String {
+        p.file_name()
+            .expect("a file")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn count_ident(toks: &[TokenTree], name: &str) -> usize {
+        let mut n = 0;
+        for tok in toks {
+            match tok {
+                TokenTree::Ident(id) if *id == name => n += 1,
+                TokenTree::Group(g) => {
+                    n += count_ident(&g.stream().into_iter().collect::<Vec<_>>(), name)
+                }
+                _ => {}
+            }
+        }
+        n
+    }
+
+    /// Is `toks[i..]` the start of `=>`?
+    fn is_fat_arrow(toks: &[TokenTree], i: usize) -> bool {
+        matches!((toks.get(i), toks.get(i + 1)),
+            (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)))
+                if a.as_char() == '=' && a.spacing() == Spacing::Joint && b.as_char() == '>')
+    }
+
+    fn is_top_level_comma(tok: &TokenTree) -> bool {
+        matches!(tok, TokenTree::Punct(p) if p.as_char() == ',')
+    }
+
+    /// Every `Value::Float(<binding>) => …` arm, as (binding, body tokens).
+    ///
+    /// `Value::Float(_)` is excluded: it binds nothing, so it cannot spell the
+    /// float — `renderer.rs`'s `localize_number` arm reaches the value through
+    /// `value.to_string()`, which is `Display`, and `Display` is the one
+    /// spelling already correct by construction (#2258 fixed it in
+    /// `djust_core`, out of this pin's reach).
+    fn float_arms(toks: &[TokenTree]) -> Vec<(String, Vec<TokenTree>)> {
+        let mut found = Vec::new();
+        for (i, tok) in toks.iter().enumerate() {
+            if let TokenTree::Group(g) = tok {
+                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                found.extend(float_arms(&inner));
+            }
+            // `Value` `:` `:` `Float` `(binding)` — `::` is two Punct tokens,
+            // the first `Joint`.
+            let is_head = matches!(
+                (&toks[i], toks.get(i + 1), toks.get(i + 2), toks.get(i + 3)),
+                (
+                    TokenTree::Ident(v),
+                    Some(TokenTree::Punct(c1)),
+                    Some(TokenTree::Punct(c2)),
+                    Some(TokenTree::Ident(f)),
+                ) if *v == "Value"
+                    && c1.as_char() == ':'
+                    && c1.spacing() == Spacing::Joint
+                    && c2.as_char() == ':'
+                    && *f == "Float"
+            );
+            if !is_head {
+                continue;
+            }
+            let Some(TokenTree::Group(pat)) = toks.get(i + 4) else {
+                continue;
+            };
+            if pat.delimiter() != Delimiter::Parenthesis {
+                continue;
+            }
+            let bound: Vec<TokenTree> = pat.stream().into_iter().collect();
+            let binding = match bound.as_slice() {
+                [TokenTree::Ident(id)] if *id != "_" => id.to_string(),
+                _ => continue,
+            };
+            // Forward to this arm's `=>`, stopping at a top-level `,` (which
+            // means the `Value::Float(x)` was not an arm head at all — a call
+            // argument, say).
+            let mut j = i + 5;
+            while j < toks.len() && !is_fat_arrow(toks, j) && !is_top_level_comma(&toks[j]) {
+                j += 1;
+            }
+            if j >= toks.len() || !is_fat_arrow(toks, j) {
+                continue;
+            }
+            let body_start = j + 2;
+            // A block arm IS its brace group; an expression arm runs to the
+            // next top-level comma. A comma nested inside a group is invisible
+            // here, because a group is one token.
+            let body: Vec<TokenTree> = match toks.get(body_start) {
+                Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
+                    vec![TokenTree::Group(g.clone())]
+                }
+                _ => toks[body_start..]
+                    .iter()
+                    .take_while(|t| !is_top_level_comma(t))
+                    .cloned()
+                    .collect(),
+            };
+            found.push((binding, body));
+        }
+        found
+    }
+
+    /// Every arm that turns a bound float into a string, as (file, helper).
+    fn stringifying_arms(files: &[PathBuf]) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for path in files {
+            let src = std::fs::read_to_string(path).expect("a readable .rs file");
+            let toks: Vec<TokenTree> = TokenStream::from_str(&src)
+                .unwrap_or_else(|e| panic!("{} must lex as Rust: {e}", path.display()))
+                .into_iter()
+                .collect();
+            for (_binding, body) in float_arms(&toks) {
+                let stringifies = STRINGIFIERS.iter().any(|s| count_ident(&body, s) > 0);
+                let approved: Vec<&str> = APPROVED
+                    .iter()
+                    .copied()
+                    .filter(|h| count_ident(&body, h) > 0)
+                    .collect();
+                if let Some(helper) = approved.first() {
+                    out.push((file_name(path), (*helper).to_string()));
+                } else if stringifies {
+                    out.push((file_name(path), "RUST_DISPLAY".to_string()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// The pin. Every entry is a float→string sink; the SET is exact.
+    ///
+    /// `filters.rs` × `python_float_repr` is two arms — the `@stringfilter`
+    /// coercion (#2258) and `pprint` (#2270). Adding a sixth sink without
+    /// classifying it fails here.
+    #[test]
+    fn every_float_to_string_sink_routes_through_an_approved_repr() {
+        let files = rust_files();
+        assert!(
+            files.len() >= 10,
+            "only {} .rs files under {} — the directory read is not seeing the crate",
+            files.len(),
+            src_dir().display()
+        );
+        for expect in [
+            "filters.rs",
+            "floatformat.rs",
+            "renderer.rs",
+            "loop_cache.rs",
+        ] {
+            assert!(
+                files.iter().any(|p| file_name(p) == expect),
+                "{expect} is missing from the scan — the pin would not see a sink in it"
+            );
+        }
+
+        let found = stringifying_arms(&files);
+        let expected: Vec<(String, String)> = [
+            ("filters.rs", "json_float_body"),
+            ("filters.rs", "python_float_repr"),
+            ("filters.rs", "python_float_repr"),
+            ("filters.rs", "python_float_trunc_digits"),
+            ("floatformat.rs", "python_float_repr"),
+        ]
+        .iter()
+        .map(|(f, h)| ((*f).to_string(), (*h).to_string()))
+        .collect();
+
+        assert_eq!(
+            found, expected,
+            "the float→string sink set moved. Every `Value::Float(x) => …` arm \
+             that spells the float must route through one of {APPROVED:?}; an \
+             entry reading RUST_DISPLAY is a new sink using Rust's `{{}}`, which \
+             is the #2258/#2270 defect. If the change is legitimate, update the \
+             expected set here — deliberately, so the next omission is visible."
+        );
+    }
+
+    /// Empirical canary (#1459) — the pin must SEE the exact defect it exists for.
+    ///
+    /// Not a re-implementation: the fixture runs through the same `float_arms` +
+    /// `count_ident` the pin uses. Both #2270 sinks are re-introduced verbatim,
+    /// plus the renamed-binding variant a text grep for `format!("{f}")` misses.
+    #[test]
+    fn a_reintroduced_rust_display_sink_is_reported() {
+        let fixture = "\
+            fn sink(value: &Value) -> String {\n\
+                match value {\n\
+                    Value::Integer(n) => n.to_string(),\n\
+                    Value::Float(f) => format!(\"{f}\"),\n\
+                    Value::String(s) => s.clone(),\n\
+                }\n\
+            }\n\
+            fn renamed(value: &Value) -> String {\n\
+                match value {\n\
+                    Value::Float(x) => format!(\"{x}\"),\n\
+                    _ => String::new(),\n\
+                }\n\
+            }\n\
+            fn ok(value: &Value) -> String {\n\
+                match value {\n\
+                    Value::Float(f) => djust_core::decimal::python_float_repr(*f),\n\
+                    _ => String::new(),\n\
+                }\n\
+            }\n\
+            fn numeric(value: &Value) -> Option<f64> {\n\
+                match value {\n\
+                    Value::Float(f) => Some(*f),\n\
+                    _ => None,\n\
+                }\n\
+            }\n";
+        let toks: Vec<TokenTree> = TokenStream::from_str(fixture)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+        let arms = float_arms(&toks);
+        assert_eq!(arms.len(), 4, "the locator missed an arm: {arms:?}");
+
+        let classify = |body: &[TokenTree]| -> Option<String> {
+            if let Some(h) = APPROVED.iter().find(|h| count_ident(body, h) > 0) {
+                return Some((*h).to_string());
+            }
+            if STRINGIFIERS.iter().any(|s| count_ident(body, s) > 0) {
+                return Some("RUST_DISPLAY".to_string());
+            }
+            None
+        };
+        let verdicts: Vec<Option<String>> = arms.iter().map(|(_, b)| classify(b)).collect();
+        assert_eq!(
+            verdicts,
+            vec![
+                Some("RUST_DISPLAY".to_string()),
+                Some("RUST_DISPLAY".to_string()),
+                Some("python_float_repr".to_string()),
+                None,
+            ],
+            "the pin cannot tell a Rust-`{{}}` sink from an approved one"
+        );
+    }
+
+    /// Prose naming the banned shape must not move the pin, in either direction.
+    ///
+    /// This is why the pin lexes instead of grepping: `filters.rs` and
+    /// `floatformat.rs` BOTH carry `format!("{f}")` inside doc comments that
+    /// explain why it is wrong, and the text grep the issue cites counts them.
+    #[test]
+    fn a_sink_named_in_a_comment_or_a_string_is_not_a_sink() {
+        let prose = "\
+            /// Why this is not `format!(\"{f}\")`: see #2258.\n\
+            fn f(value: &Value) -> String {\n\
+                match value {\n\
+                    // was: Value::Float(f) => format!(\"{f}\"),\n\
+                    Value::Float(f) => {\n\
+                        let _msg = \"never Value::Float(f) => format!(\\\"{f}\\\")\";\n\
+                        djust_core::decimal::python_float_repr(*f)\n\
+                    }\n\
+                    _ => String::new(),\n\
+                }\n\
+            }\n";
+        // The mutation IS real: raw text names the banned shape three times.
+        assert_eq!(
+            prose.matches("format!(\\\"{f}\\\")").count()
+                + prose.matches("format!(\"{f}\")").count(),
+            3
+        );
+
+        let toks: Vec<TokenTree> = TokenStream::from_str(prose)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+        let arms = float_arms(&toks);
+        assert_eq!(arms.len(), 1, "a commented-out arm was counted: {arms:?}");
+        assert_eq!(count_ident(&arms[0].1, "python_float_repr"), 1);
+        assert_eq!(
+            count_ident(&arms[0].1, "format"),
+            0,
+            "`format!` inside a string literal was counted as a call"
+        );
+    }
+
+    /// The body is the arm's, and stops at the arm's end.
+    ///
+    /// The failure this guards is a body that runs on into the NEXT arm and
+    /// borrows its helper — which would make a real sink look approved.
+    #[test]
+    fn an_arm_body_does_not_borrow_the_next_arm_s_helper() {
+        let fixture = "\
+            fn f(value: &Value) -> String {\n\
+                match value {\n\
+                    Value::Float(f) => format!(\"{f}\"),\n\
+                    Value::Decimal(d) => djust_core::decimal::python_float_repr(0.0),\n\
+                }\n\
+            }\n";
+        let toks: Vec<TokenTree> = TokenStream::from_str(fixture)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+        let arms = float_arms(&toks);
+        assert_eq!(arms.len(), 1);
+        assert_eq!(
+            count_ident(&arms[0].1, "python_float_repr"),
+            0,
+            "the body ran past its own arm into the next one"
+        );
+        assert_eq!(count_ident(&arms[0].1, "format"), 1);
+    }
+}
+
 fn escape_js(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
@@ -2799,7 +3238,16 @@ fn pprint_value(value: &Value) -> String {
         Value::Bool(true) => "True".to_string(),
         Value::Bool(false) => "False".to_string(),
         Value::Integer(n) => n.to_string(),
-        Value::Float(f) => format!("{f}"),
+        // `pprint.pformat(f)` IS `repr(f)` for a float — measured across the
+        // whole spectrum, not assumed — so this is the same `repr` the nested
+        // `py_repr` spelling uses (#2258, #2270). Rust's `{}` was neither
+        // Python spelling in three separate ways, and the ORDINARY one is not
+        // the `1e20` the issue leads with: `{}` drops the trailing `.0`, so
+        // `{{ 1.0|pprint }}` rendered `1` and `{{ 0.0|pprint }}` rendered `0`.
+        // It also never uses exponent form (`1e-05` came out as `0.00001` and
+        // `5e-324` as a 324-digit expansion) and spells NaN `NaN` where Python
+        // gives `nan`. `inf`/`-inf` agreed only by coincidence.
+        Value::Float(f) => djust_core::decimal::python_float_repr(*f),
         // `pprint` shows the constructor form, as `repr` does (#2214).
         Value::Decimal(d) => format!("Decimal('{d}')"),
         // `repr(int)` is the digits, however many there are (#2260) — the
@@ -3962,6 +4410,66 @@ mod tests {
         let value = Value::String("a\u{7f}b".to_string());
         let result = apply_filter("json_script", &value, Some("d")).unwrap();
         assert!(result.to_string().contains("\"a\u{7f}b\""));
+    }
+
+    /// `json.dumps`'s float, at the helper rather than through a render (#2270).
+    ///
+    /// Django-independent, so it holds in a Rust-only checkout: the three
+    /// non-finite names are CPython's encoder constants and the finite arm is
+    /// `repr`. The `1.0` row is the one the issue's table omits — Rust's `{}`
+    /// wrote it as `1`, turning a JSON float into a JSON integer.
+    #[test]
+    fn json_float_body_is_repr_plus_the_three_non_finite_names_2270() {
+        for (input, want) in [
+            (0.0, "0.0"),
+            (-0.0, "-0.0"),
+            (1.0, "1.0"),
+            (0.5, "0.5"),
+            (1e15, "1000000000000000.0"),
+            (1e16, "1e+16"),
+            (1e20, "1e+20"),
+            (1e300, "1e+300"),
+            (-1e300, "-1e+300"),
+            (1e-5, "1e-05"),
+            (1e-4, "0.0001"),
+            (5e-324, "5e-324"),
+            (f64::INFINITY, "Infinity"),
+            (f64::NEG_INFINITY, "-Infinity"),
+        ] {
+            assert_eq!(json_float_body(input), want, "json_float_body({input})");
+        }
+        assert_eq!(json_float_body(f64::NAN), "NaN");
+    }
+
+    /// The two sinks disagree on the non-finite values, so one helper cannot
+    /// serve both — and Rust's `{}` was accidentally right on half of each.
+    #[test]
+    fn pprint_and_json_spell_the_non_finite_floats_differently_2270() {
+        for (input, want_pprint, want_json) in [
+            (f64::INFINITY, "inf", "Infinity"),
+            (f64::NEG_INFINITY, "-inf", "-Infinity"),
+        ] {
+            assert_eq!(pprint_value(&Value::Float(input)), want_pprint);
+            assert_eq!(json_float_body(input), want_json);
+        }
+        assert_eq!(pprint_value(&Value::Float(f64::NAN)), "nan");
+        assert_eq!(json_float_body(f64::NAN), "NaN");
+    }
+
+    /// Both filters RECURSE, so the container arms are part of the surface.
+    #[test]
+    fn a_nested_float_takes_the_same_spelling_2270() {
+        let nested = Value::List(vec![Value::Object(
+            [("k".to_string(), Value::Float(1e20))]
+                .into_iter()
+                .collect(),
+        )]);
+        assert_eq!(pprint_value(&nested), "[{'k': 1e+20}]");
+        assert_eq!(value_to_json(&nested), "[{\"k\": 1e+20}]");
+
+        let integral = Value::Tuple(vec![Value::Float(1.0), Value::Float(-0.0)]);
+        assert_eq!(pprint_value(&integral), "(1.0, -0.0)");
+        assert_eq!(value_to_json(&integral), "[1.0, -0.0]");
     }
 
     #[test]
