@@ -53,9 +53,27 @@ static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
 /// actually RUNS, and a later `|safe` suppresses exactly that. It now escapes
 /// inside `add_linenumbers` and is listed below — the escape and the grant are
 /// one change, and neither is correct without the other.
+///
+/// `escape` joined this list in the same commit that made it escape its own
+/// input (#2281): Django's `escape_filter` is `conditional_escape` and returns
+/// a `SafeString`, so the grant is earned inside the filter body — and, as with
+/// every other name here, may not be present without it. It is the same defect
+/// as `linenumbers` above, found by the same sweep.
+///
+/// `join` is deliberately NOT here even though Django's returns
+/// `mark_safe(data)`, because Django's returns the value UNTOUCHED and unsafe
+/// on the `TypeError` a non-iterable raises. A name in this list cannot express
+/// "safe on one branch", so `join` reports per call through
+/// `filters::builtin_produced_safe` instead.
+///
+/// `safeseq` LEFT this list in #2283. Django's `safeseq` is
+/// `[mark_safe(obj) for obj in value]` — it marks the ITEMS and never the
+/// sequence, so `{{ items|safeseq }}` rendered on its own escapes the list's
+/// `repr` in Django while djust emitted it raw. The item-level grant it really
+/// carries now lives in [`ITEM_SAFE_OUTPUT_FILTERS`].
 const SAFE_OUTPUT_FILTERS: [&str; 10] = [
     "safe",
-    "safeseq",
+    "escape",
     "force_escape",
     "json_script",
     "urlize",
@@ -67,6 +85,59 @@ const SAFE_OUTPUT_FILTERS: [&str; 10] = [
     // body, which is what earns the grant — see `add_linenumbers`.
     "linenumbers",
 ];
+
+/// Django's THIRD safety granularity: filters whose output is a sequence of
+/// `SafeData` ITEMS while the sequence object itself is an ordinary list
+/// (#2283).
+///
+/// `safeseq` is `[mark_safe(obj) for obj in value]` and `escapeseq` is
+/// `[conditional_escape(obj) for obj in value]`. Neither calls `mark_safe` on
+/// the list, so:
+///
+/// * rendering the sequence directly escapes its `repr` — the sequence is not
+///   `SafeData`, which is why neither name belongs in [`SAFE_OUTPUT_FILTERS`];
+/// * `join` and `unordered_list` DO see the grant, because they are the two
+///   built-ins that `conditional_escape` per item rather than escaping their
+///   whole output.
+///
+/// That is the entire observable difference, and it is what makes
+/// `{{ items|safeseq|join:", " }}` — the documented reason `safeseq` exists —
+/// emit its items live while `{{ items|safeseq }}` does not.
+const ITEM_SAFE_OUTPUT_FILTERS: [&str; 2] = ["safeseq", "escapeseq"];
+
+/// Filters that hand back the SAME item objects they were given, so an
+/// item-level grant survives them — `{{ l|safeseq|slice:":3"|join:"" }}` is
+/// live in Django because `slice` returns the very `SafeString`s `safeseq`
+/// made.
+///
+/// Deliberately SHORT. Anything not named here drops the grant, which is the
+/// escaping direction: a filter that rebuilds items (`make_list`, which splits
+/// the sequence's `repr` into fresh plain characters) must not inherit it.
+const ITEM_SAFETY_PRESERVING_FILTERS: [&str; 3] = ["slice", "dictsort", "dictsortreversed"];
+
+/// Does the value this filter produced have safe ITEMS?
+///
+/// The companion of [`filter_output_is_safe`] for the item granularity, and
+/// like it, ASSIGNED per filter rather than OR-ed over the chain — a filter
+/// that is neither a producer nor a preserver re-taints the items, exactly as
+/// a plain filter re-taints the container.
+fn filter_output_items_are_safe(
+    filter_name: &str,
+    input_items_were_safe: bool,
+    input_was_safe: bool,
+) -> bool {
+    // `!input_was_safe` is Django's collapse, not a hedge. `safeseq` builds a
+    // list of `SafeString`s; `FilterExpression.resolve` then applies the
+    // `is_safe=True` arm, and `mark_safe(list)` is `SafeString(str(list))` — a
+    // STRING of the list's repr. So when the INPUT was already safe, Django's
+    // value stops being a sequence at all and the item-level grant is gone
+    // with it; only when the input was unsafe does the plain list of safe
+    // items survive to reach `join` / `unordered_list`. Granting items when
+    // the input was safe made `{{ l|safe|safeseq|unordered_list }}` emit raw
+    // `<` characters where Django escapes them.
+    (ITEM_SAFE_OUTPUT_FILTERS.contains(&filter_name) && !input_was_safe)
+        || (input_items_were_safe && ITEM_SAFETY_PRESERVING_FILTERS.contains(&filter_name))
+}
 
 /// Django's `is_safe=True` built-in filters — the ones that **preserve** the
 /// safety they were **given**.
@@ -670,6 +741,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // precisely because upper-casing `&lt;` yields `&LT;`, which every
             // browser still decodes to `<`.
             let mut runtime_safe = context.is_safe(var_name);
+            // Django's item granularity, seeded FALSE: nothing but `safeseq` /
+            // `escapeseq` ever marks a sequence's items safe, and the context
+            // flag is a container-level `mark_safe` (#2283).
+            let mut items_safe = false;
             for (filter_name, arg) in filter_specs {
                 // Strip quotes from literal filter args at render time —
                 // the parser preserves quotes so the dep-tracking
@@ -686,17 +761,29 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     stripped,
                     Some(context),
                     arg_was_quoted,
-                    // Django's `needs_autoescape` input term (#2284). Read
-                    // BEFORE the assignment below, so it is the safety of the
-                    // value going IN — the same `obj` Django's
-                    // `isinstance(obj, SafeData)` reads.
-                    runtime_safe,
+                    // Django's `needs_autoescape` input term (#2284), widened to
+                    // its two granularities (#2283). Read BEFORE the assignment
+                    // below, so both fields describe the value going IN — the
+                    // same `obj` Django's `isinstance(obj, SafeData)` reads,
+                    // plus whether its ELEMENTS are the ones marked.
+                    filters::InputSafety {
+                        container: runtime_safe,
+                        items: items_safe,
+                    },
                 )?;
                 value = new_value;
+                // Captured BEFORE the reassignment below: both rules read the
+                // safety of the value that went IN, and the item rule reads it
+                // after `runtime_safe` has already been overwritten otherwise.
+                let input_was_safe = runtime_safe;
                 // ASSIGNED, not OR-ed: the LAST filter decides (#2259) — but the
                 // value it is assigned FROM includes the previous iteration, which
                 // is Django's `isinstance(obj, SafeData)` input term (#2274).
-                runtime_safe = filter_output_is_safe(filter_name, produced_safe, runtime_safe);
+                runtime_safe = filter_output_is_safe(filter_name, produced_safe, input_was_safe);
+                // The item granularity, tracked the same way (#2283). Only
+                // `join` / `unordered_list` read it; only `safeseq` /
+                // `escapeseq` produce it.
+                items_safe = filter_output_items_are_safe(filter_name, items_safe, input_was_safe);
             }
 
             // #2221: localize a bare number on its way into the page, which is
@@ -772,6 +859,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // (#1660); a later plain filter re-taints. Seeded with the context's
             // own safety so the chain carries Django's input term (#2274).
             let mut runtime_safe = context.is_safe(expr);
+            // See the Variable arm: item-level safety, seeded false (#2283).
+            let mut items_safe = false;
             for (filter_name, arg) in filters {
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
@@ -784,13 +873,24 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     arg_was_quoted,
                     // Django's `needs_autoescape` input term (#2284) — the
                     // second of the three sites, kept in step by construction.
-                    runtime_safe,
+                    filters::InputSafety {
+                        container: runtime_safe,
+                        items: items_safe,
+                    },
                 )?;
                 value = new_value;
+                // Captured BEFORE the reassignment below: both rules read the
+                // safety of the value that went IN, and the item rule reads it
+                // after `runtime_safe` has already been overwritten otherwise.
+                let input_was_safe = runtime_safe;
                 // ASSIGNED, not OR-ed: the LAST filter decides (#2259) — but the
                 // value it is assigned FROM includes the previous iteration, which
                 // is Django's `isinstance(obj, SafeData)` input term (#2274).
-                runtime_safe = filter_output_is_safe(filter_name, produced_safe, runtime_safe);
+                runtime_safe = filter_output_is_safe(filter_name, produced_safe, input_was_safe);
+                // The item granularity, tracked the same way (#2283). Only
+                // `join` / `unordered_list` read it; only `safeseq` /
+                // `escapeseq` produce it.
+                items_safe = filter_output_items_are_safe(filter_name, items_safe, input_was_safe);
             }
 
             // #2221: localize a bare number on its way into the page, which is
@@ -2312,6 +2412,8 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         // input term too (#2274) — the third of the three sites, kept in step
         // with the other two by construction (#1646).
         let mut runtime_safe = context.is_safe(var_name);
+        // See the Variable arm: item-level safety, seeded false (#2283).
+        let mut items_safe = false;
 
         // Parse and apply filters (handles chained filters too)
         for filter_part in filter_expr.split('|') {
@@ -2333,7 +2435,8 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 
             // Thread the (Value, bool) shape out so callers in the firstof/cycle
             // emit path can honour runtime SafeStrings (#1672, follow-up to
-            // #1660). Built-ins always report `produced_safe = false`.
+            // #1660). Built-ins report it too, for the four whose safety is
+            // per-call rather than per-name (`filters::builtin_produced_safe`).
             let (new_value, produced_safe) = filters::apply_filter_full_safe(
                 filter_name,
                 &value,
@@ -2343,13 +2446,19 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
                 // Django's `needs_autoescape` input term (#2284) — the third of
                 // the three sites. `{% firstof p|safe|linebreaks %}` gets the
                 // same answer the `{{ … }}` arms do, or this is #1646 again.
-                runtime_safe,
+                filters::InputSafety {
+                    container: runtime_safe,
+                    items: items_safe,
+                },
             )?;
             value = new_value;
+            // Captured before the reassignment — see the Variable arm (#2283).
+            let input_was_safe = runtime_safe;
             // This arm always had LAST-filter semantics and its comment
             // claimed the other two matched it. They did not, until #2259
             // extracted `filter_output_is_safe` and pointed all three at it.
-            runtime_safe = filter_output_is_safe(filter_name, produced_safe, runtime_safe);
+            runtime_safe = filter_output_is_safe(filter_name, produced_safe, input_was_safe);
+            items_safe = filter_output_items_are_safe(filter_name, items_safe, input_was_safe);
         }
 
         return Ok((value, runtime_safe));

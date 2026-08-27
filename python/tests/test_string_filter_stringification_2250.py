@@ -442,10 +442,20 @@ def test_escape_and_safe_are_the_named_exclusions() -> None:
         with override_settings(USE_THOUSAND_SEPARATOR=True), translation.override("de"):
             render_env.apply_number_format()
             value = Decimal("1E-9")
-            for source in ("{{ p|escape }}", "{{ p|safe }}"):
-                expected, got = _render_both(source, value)
-                assert expected == "1E-9", f"Django changed: {source} -> {expected!r}"
-                assert got == "0,000000001", f"#2257 closed? {source} -> {got!r}"
+            # `safe` is still the pure no-op, so the `Decimal` reaches the
+            # render site and LOCALIZES there (the comma).
+            expected, got = _render_both("{{ p|safe }}", value)
+            assert expected == "1E-9", f"Django changed: {expected!r}"
+            assert got == "0,000000001", f"#2257 closed? {got!r}"
+            # `escape` stopped being a no-op in #2281 — it is `conditional_escape`
+            # now, eager, so it necessarily produces a STRING and the value no
+            # longer localizes. It stringifies through `Display` (the RENDER
+            # form) and NOT through `str(Decimal)` (`1E-9`), which is what the
+            # `@stringfilter` coercion would have selected — so the exclusion
+            # this test names still stands, and Django is still one step away.
+            expected, got = _render_both("{{ p|escape }}", value)
+            assert expected == "1E-9", f"Django changed: {expected!r}"
+            assert got == "0.000000001", f"#2257 closed? {got!r}"
             # The blocker, on a plain string so it is visibly independent of
             # anything #2250 changed. It read `("10", "1E+1")` — a divergence —
             # until #2253 ported Django's `floatformat`, whose first step is

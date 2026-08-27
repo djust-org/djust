@@ -7,6 +7,155 @@ use regex::Regex;
 
 use crate::filter_registry;
 
+/// The safety of the value going INTO a filter, at Django's TWO granularities.
+///
+/// Django has both, and conflating them is the bug behind two separate
+/// findings (#2281, #2283):
+///
+/// * `container` — the value itself is `SafeData` (`mark_safe()` in the view,
+///   `|safe`, or an earlier safe-output filter). This is what
+///   `conditional_escape` tests with `hasattr(value, "__html__")`, and it is
+///   what `escape` must consult so it does not double-escape.
+/// * `items` — the value is a SEQUENCE whose ELEMENTS are `SafeData` while the
+///   sequence itself is not. This is exactly what `safeseq` and `escapeseq`
+///   produce: `[mark_safe(o) for o in value]` marks the items, never the list.
+///   `join` and `unordered_list` `conditional_escape` per ITEM, so they are the
+///   two filters that can observe it.
+///
+/// Nothing here marks anything safe on its own — every field is *reported* by
+/// the renderer, which is the only layer that knows a value's provenance. A
+/// caller that cannot know passes [`InputSafety::default()`] (all `false`),
+/// which is the escaping, conservative direction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputSafety {
+    /// The value itself is `SafeData`.
+    pub container: bool,
+    /// The value is a sequence whose ITEMS are `SafeData`.
+    pub items: bool,
+}
+
+/// Iterate a template value the way Python's `for x in value` does — the ONE
+/// place that decision lives (#2283).
+///
+/// Five filters (`join`, `safeseq`, `escapeseq`, `unordered_list`, `random`)
+/// each grew their own `Value::List | Value::Tuple` match and fell through to
+/// the input for everything else, so every one of them returned a shape Django
+/// never produces for a string. They are the same question asked five times,
+/// which is why the answer is a function rather than five correct copies
+/// (#1646).
+///
+/// * `String` — Python iterates a `str` as its CHARACTERS. This is the whole
+///   of #2283.
+/// * `List` / `Tuple` — the elements.
+/// * `Object` — a Python `dict` iterates its KEYS.
+/// * `Missing` — an absent variable. Django substitutes `string_if_invalid`
+///   (`""`) BEFORE the filter runs, so what Django's filter iterates is the
+///   empty string: `{{ absent|safeseq }}` is `[]`, not a `TypeError`.
+/// * anything else — `None`, i.e. Python would raise `TypeError`. Callers
+///   fail SOFT (djust does not 500 a page over a filter) but must ESCAPE what
+///   they hand back if they hold an unconditional safe-output grant (#2274).
+///
+/// **Every `Value` variant that can carry markup is on the `Some` side**, which
+/// is what makes #2285's escape on the `None` side a no-op today — see
+/// `every_non_iterable_variant_is_markup_free` for the pin.
+pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
+    match value {
+        Value::String(s) => Some(s.chars().map(|c| Value::String(c.to_string())).collect()),
+        Value::List(items) | Value::Tuple(items) => Some(items.clone()),
+        Value::Object(map) => Some(map.keys().map(|k| Value::String(k.clone())).collect()),
+        Value::Missing => Some(Vec::new()),
+        _ => None,
+    }
+}
+
+/// Django's `django.utils.html.conditional_escape`: escape unless already safe.
+fn conditional_escape(value: &Value, already_safe: bool) -> String {
+    if already_safe {
+        value.to_string()
+    } else {
+        html_escape(&value.to_string())
+    }
+}
+
+/// Django's `is_safe=True` arm, applied to a sequence a filter just BUILT.
+///
+/// `FilterExpression.resolve` runs `mark_safe(new_obj)` when the filter is
+/// `is_safe=True` and the INPUT was `SafeData` — and `mark_safe` of a list is
+/// `SafeString(str(list))`, a STRING of the repr. So `safeseq` / `escapeseq`
+/// stop returning a sequence at all once their input was safe, which is why
+/// `{{ p|escape|safeseq|slice:":3" }}` is three CHARACTERS of the repr in
+/// Django and not a three-element list. Modelling it here is what keeps the
+/// item-level grant from surviving a collapse Django already performed
+/// (`renderer::filter_output_items_are_safe` refuses the grant on the same
+/// condition).
+fn collapse_if_input_safe(built: Value, input_was_safe: bool) -> Value {
+    if input_was_safe {
+        Value::String(built.to_string())
+    } else {
+        built
+    }
+}
+
+/// Per-CALL safety for a built-in, for the filters a NAME-based list cannot
+/// answer for (#2281).
+///
+/// [`renderer::SAFE_OUTPUT_FILTERS`] says "this NAME always marks its own
+/// output safe" and [`renderer::IS_SAFE_FILTERS`] says "this NAME preserves the
+/// safety it was given". Four of Django's built-ins fit neither, because their
+/// answer depends on which BRANCH of the filter body ran:
+///
+/// * `join` — `mark_safe(data)` on success, `return value` (untouched, unsafe)
+///   on the `TypeError` that a non-iterable raises.
+/// * `cut` — `if safe and arg != ";": return mark_safe(value)`. The `";"`
+///   carve-out is Django's, because cutting a semicolon can split `&lt;` into
+///   live `&lt`.
+/// * `default` / `default_if_none` — `return value or arg` hands back the INPUT
+///   OBJECT when it is truthy, `SafeData` and all.
+/// * `add` — the concatenation branch is `SafeString.__add__`, which returns a
+///   `SafeString` only when the right-hand side is also `SafeData`. A template
+///   LITERAL is (`Variable.literal` is `mark_safe`d); a context-resolved
+///   identifier is not, which is what `arg_was_quoted` distinguishes.
+///
+/// This rides the existing `produced_safe` channel — the one a custom filter's
+/// runtime `mark_safe()` uses (#1660) — so no third safety list is created.
+/// Every arm requires `input_safety.container` except `join`, which mints its
+/// own safety by escaping every item it emits.
+fn builtin_produced_safe(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    arg_was_quoted: bool,
+    result: &Value,
+    input_safety: InputSafety,
+) -> bool {
+    match filter_name {
+        // The GRANT is load-bearing: `join` escapes every item it emits, and
+        // without it the render escapes the joined text a second time.
+        //
+        // The CONDITION — `is_some()` rather than a bare `true` — is Django's
+        // and is currently UNOBSERVABLE, which is worth stating rather than
+        // pretending a test covers it. `false` here can only apply to a value
+        // `iter_values` refused, and after #2283 that is a number, a bool,
+        // `None` or a `Decimal`/`BigInt` digit string — none of which contain a
+        // character escaping would change, so granting them safety is a no-op.
+        // A gate-off mutating this arm to `true` correctly reddens nothing.
+        // It is kept for the same reason #2285's fall-through escape is: the
+        // day a non-iterable `Value` variant can carry markup, this is the
+        // line that already says the right thing.
+        "join" => iter_values(value).is_some(),
+        "cut" => input_safety.container && arg != Some(";"),
+        // Truthy input => Django returned the input object itself. A falsy one
+        // returned the ARGUMENT, and djust deliberately keeps that unsafe: in
+        // Django `{{ ""|default:"<b>" }}` emits LIVE `<b>` because the literal
+        // is `mark_safe`d, and reproducing that would make djust more
+        // permissive than it is today for a value it never inspected.
+        "default" => input_safety.container && value.is_truthy(),
+        "default_if_none" => input_safety.container && !matches!(value, Value::None),
+        "add" => input_safety.container && arg_was_quoted && matches!(result, Value::String(_)),
+        _ => false,
+    }
+}
+
 pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Result<Value> {
     apply_filter_with_context(filter_name, value, arg, None)
 }
@@ -31,12 +180,16 @@ pub fn apply_filter_with_context(
 /// fallback whether to treat the arg as a literal string (quoted) or a
 /// context-variable identifier (bare).
 ///
-/// Passes ``input_was_safe = false`` — the SAFE default. This entry point has
-/// no view of the render chain, so it cannot know whether the caller had
-/// `mark_safe`d the value; reporting "not safe" makes the four
-/// `needs_autoescape` filters escape, which is what they did unconditionally
-/// before #2284. Only [`apply_filter_full_safe`]'s renderer call sites, which
-/// track the chain's safety, ever report `true`.
+/// Passes [`InputSafety::default()`] — every field `false`, the SAFE default.
+/// This entry point has no view of the render chain, so it cannot know whether
+/// the caller had `mark_safe`d the value or its items; reporting "not safe"
+/// makes the four `needs_autoescape` filters escape, which is what they did
+/// unconditionally before #2284, and makes `escape` / `join` /
+/// `unordered_list` escape too (#2281, #2283). Only
+/// [`apply_filter_full_safe`]'s renderer call sites, which track the chain's
+/// safety, ever report `true` — which is why `InputSafety` derives `Default`
+/// rather than offering a bare constructor: a new call site that cannot answer
+/// the question fails CLOSED.
 pub fn apply_filter_full(
     filter_name: &str,
     value: &Value,
@@ -44,15 +197,25 @@ pub fn apply_filter_full(
     context: Option<&Context>,
     arg_was_quoted: bool,
 ) -> Result<Value> {
-    apply_filter_full_safe(filter_name, value, arg, context, arg_was_quoted, false).map(|(v, _)| v)
+    apply_filter_full_safe(
+        filter_name,
+        value,
+        arg,
+        context,
+        arg_was_quoted,
+        InputSafety::default(),
+    )
+    .map(|(v, _)| v)
 }
 
 /// Like [`apply_filter_full`] but also reports whether the produced value is a
 /// runtime ``SafeString`` (Django ``mark_safe`` / a value with ``__html__``).
 ///
-/// Built-in filters never produce a runtime-safe value — their output is a
+/// MOST built-in filters never produce a runtime-safe value — their output is a
 /// plain string, and the renderer's name-based ``safe_output_filters`` list
-/// governs built-in safe filters like ``safe``/``urlize``. A *custom* filter is
+/// governs built-in safe filters like ``safe``/``urlize``. The exceptions are
+/// the four whose safety depends on WHICH BRANCH ran rather than on their name;
+/// see [`builtin_produced_safe`] (#2281). A *custom* filter is
 /// runtime-safe iff its Python result has ``__html__``. The renderer threads
 /// this out so a value a filter explicitly ``mark_safe()``d at runtime bypasses
 /// auto-escaping — matching Django's ``render_value_in_context`` (escape iff the
@@ -60,7 +223,8 @@ pub fn apply_filter_full(
 /// ``is_safe=True`` (#1660). A later plain-returning filter re-taints, because
 /// it overwrites this flag with ``false``.
 ///
-/// # `input_was_safe` — Django's `needs_autoescape` term (#2284)
+/// # `input_safety` — Django's `needs_autoescape` term (#2284), at both
+/// granularities (#2283)
 ///
 /// Django registers four built-ins ``needs_autoescape=True`` — `linebreaks`,
 /// `linebreaksbr`, `urlize`, `urlizetrunc` — and each opens with
@@ -72,27 +236,38 @@ pub fn apply_filter_full(
 /// so it **skips its own internal escape** when the value handed to it was
 /// already safe. djust has no `{% autoescape %}` block (the tag is rejected by
 /// the parser), so the first term is pinned `true` and the expression reduces
-/// to `not input_was_safe` — which is the half that is observable today and
-/// was missing: `{{ p|safe|linebreaks }}` rendered `<p>&lt;b&gt;x&lt;/b&gt;</p>`
-/// where Django renders `<p><b>x</b></p>`.
+/// to `not input_safety.container` — which is the half that is observable today
+/// and was missing: `{{ p|safe|linebreaks }}` rendered
+/// `<p>&lt;b&gt;x&lt;/b&gt;</p>` where Django renders `<p><b>x</b></p>`.
 ///
-/// `input_was_safe` is the renderer's `runtime_safe` **before** this filter
-/// runs — the same value `filter_output_is_safe` consumes as its input term
-/// (#2274), so the two halves of Django's `SafeData` reading are driven off one
-/// piece of state rather than two that can drift (#1646).
+/// `input_safety.container` is #2284's `input_was_safe` parameter under a new
+/// name: the renderer's `runtime_safe` **before** this filter runs — the same
+/// value `filter_output_is_safe` consumes as its input term (#2274), so the two
+/// halves of Django's `SafeData` reading are driven off one piece of state
+/// rather than two that can drift (#1646).
 ///
-/// This does **not** loosen escaping for hostile input: the flag is `true` only
-/// when the context `mark_safe`d the value or an earlier `|safe` /
-/// safe-output filter marked it. Anything that was never marked safe still
-/// takes the escape, which is what keeps the four names' membership of
-/// `renderer::SAFE_OUTPUT_FILTERS` earned — see the `linebreaks` doc comment.
+/// `input_safety.items` is the SECOND granularity, and it exists because three
+/// of Django's built-ins read a different question. `escape` is
+/// `conditional_escape` and reads the container (#2281). `join` and
+/// `unordered_list` `conditional_escape` per ELEMENT, so what they read is
+/// whether `safeseq` / `escapeseq` marked the items — which Django never does
+/// to the sequence itself (#2283). One bool cannot answer both, and two
+/// adjacent bools would be a transposition nothing could catch, so they travel
+/// as one struct. See [`InputSafety`].
+///
+/// This does **not** loosen escaping for hostile input: both fields are `true`
+/// only when the context `mark_safe`d the value, or an earlier `|safe` /
+/// safe-output / item-safe filter marked it. Anything that was never marked
+/// safe still takes the escape, which is what keeps the four names' membership
+/// of `renderer::SAFE_OUTPUT_FILTERS` earned — see the `linebreaks` doc
+/// comment.
 pub fn apply_filter_full_safe(
     filter_name: &str,
     value: &Value,
     arg: Option<&str>,
     context: Option<&Context>,
     arg_was_quoted: bool,
-    input_was_safe: bool,
+    input_safety: InputSafety,
 ) -> Result<(Value, bool)> {
     // #2202: Django resolves a bare-identifier filter argument as a context
     // variable (`Variable(arg).resolve(context)`); only a QUOTED argument is a
@@ -141,7 +316,8 @@ pub fn apply_filter_full_safe(
     let builtin_arg = resolved_arg.as_deref().or(arg);
 
     // Built-ins take precedence over custom filters (mirrors the original
-    // dispatch order). A built-in hit is never runtime-safe.
+    // dispatch order). A built-in hit reports safety through
+    // `builtin_produced_safe`, which answers `false` for all but four names.
     // `arg_was_quoted` reaches the dispatch table because `add` needs it: a
     // quoted "1.5" is a STRING to Python's int() (which raises), while an
     // unquoted 1.5 is a float literal (which truncates). See that arm (#2203).
@@ -151,9 +327,19 @@ pub fn apply_filter_full_safe(
         builtin_arg,
         context,
         arg_was_quoted,
-        input_was_safe,
+        input_safety,
     ) {
-        return builtin.map(|v| (v, false));
+        return builtin.map(|v| {
+            let safe = builtin_produced_safe(
+                filter_name,
+                value,
+                builtin_arg,
+                arg_was_quoted,
+                &v,
+                input_safety,
+            );
+            (v, safe)
+        });
     }
     // Built-in match miss — fall through to the custom filter registry for
     // project-defined ``@register.filter`` callables (#1121).
@@ -252,7 +438,7 @@ fn apply_builtin_filter(
     arg: Option<&str>,
     context: Option<&Context>,
     arg_was_quoted: bool,
-    input_was_safe: bool,
+    input_safety: InputSafety,
 ) -> Option<Result<Value>> {
     // #2250: Django's `@stringfilter` consumes `str(value)`. For a `Decimal`
     // that is NOT the rendered form — `str(Decimal('1E-9'))` is `1E-9`, while
@@ -327,8 +513,52 @@ fn apply_builtin_filter(
                 Ok(Value::String(arg.unwrap_or("").to_string()))
             }
         }
-        "escape" => Ok(value.clone()), // No-op: auto-escaping at render time handles this
-        "safe" => Ok(value.clone()),   // No-op: renderer checks for |safe to skip auto-escaping
+        // Django's `escape_filter` is `conditional_escape(value)` — EAGER, and
+        // it returns a `SafeString`, so the escaped text is what the NEXT
+        // filter in the chain sees (#2281).
+        //
+        // This was a no-op that left the escape to render time, which is
+        // correct for `{{ p|escape }}` alone and wrong for every chain:
+        // `{{ p|escape|upper }}` upper-cased the RAW value where Django
+        // upper-cases `&lt;` to `&LT;`, `{{ p|escape|striptags }}` stripped
+        // tags Django had already turned into inert text — and
+        // `{{ p|escape|safe }}` emitted the raw payload, because `|safe`
+        // suppressed the deferred escape that was the only escaping left.
+        // That last one is a LIVE XSS: the idiom reads as "escape it, then
+        // it is safe to emit", which is precisely what Django's semantics
+        // make true, and djust turned it into `|safe` on attacker input.
+        //
+        // `escape` is in `renderer::SAFE_OUTPUT_FILTERS` — a grant this arm
+        // earns by escaping its input here, the same way `force_escape` does.
+        // The difference between the two is exactly the `input_safety.container`
+        // check: `escape` is `conditional_escape` (a `SafeString` passes
+        // through), `force_escape` is `escape` (a `SafeString` is escaped
+        // AGAIN). `{{ p|safe|escape }}` and `{{ p|safe|force_escape }}` are
+        // the cells that tell them apart.
+        "escape" => Ok(Value::String(conditional_escape(
+            value,
+            input_safety.container,
+        ))),
+        // A no-op for a scalar — the renderer's `|safe` check is what skips the
+        // auto-escape, and leaving the value alone is what lets it localize
+        // (#2257).
+        //
+        // NOT a no-op for a CONTAINER. Django's `mark_safe(obj)` is
+        // `SafeString(obj)`, i.e. `str(obj)`, so `{{ l|safe }}` hands the rest
+        // of the chain a STRING of the list's repr — which is why
+        // `{{ l|safe|slice:":3" }}` is `['<` in Django, three characters of the
+        // repr, and not a three-element list. The rendered bytes of
+        // `{{ l|safe }}` alone are identical either way (`Display` for a list
+        // IS its repr), so this was invisible until #2283 made the sequence
+        // filters iterate: keeping the list let `{{ l|safe|safeseq|... }}`
+        // reach the ITEM-safety grant with the list's own elements, and emit
+        // them live where Django escapes characters of the repr.
+        "safe" => match value {
+            Value::List(_) | Value::Tuple(_) | Value::Object(_) => {
+                Ok(Value::String(value.to_string()))
+            }
+            _ => Ok(value.clone()),
+        },
         "first" => match value {
             Value::List(l) | Value::Tuple(l) => Ok(l.first().cloned().unwrap_or(Value::Missing)),
             Value::String(s) => Ok(Value::String(
@@ -343,15 +573,46 @@ fn apply_builtin_filter(
             )),
             _ => Ok(Value::Missing),
         },
+        // Django, verbatim:
+        //
+        //     try:
+        //         if autoescape: value = [conditional_escape(v) for v in value]
+        //         data = conditional_escape(arg).join(value)
+        //     except TypeError:
+        //         return value
+        //     return mark_safe(data)
+        //
+        // Three properties, and djust had none of them (#2283):
+        //   * it ITERATES, so a string joins its CHARACTERS;
+        //   * it `conditional_escape`s each item, so `|safeseq` upstream is
+        //     honoured and a plain sequence is escaped HERE rather than at
+        //     render time — which is what earns `join` its place in
+        //     `renderer::SAFE_OUTPUT_FILTERS`;
+        //   * the SEPARATOR is escaped unconditionally (it is template text,
+        //     never `SafeData`), whatever the items' safety.
+        //
+        // The `TypeError` branch — an int, a float, `None` — is where Django
+        // returns the value untouched and UNSAFE, so the render escapes it.
+        // djust holds an unconditional safe-output grant by then, so it must
+        // escape here to land on the same bytes (#2274).
         "join" => {
-            // join with separator argument
-            let separator = arg.unwrap_or(", ");
-            match value {
-                Value::List(items) | Value::Tuple(items) => {
-                    let strings: Vec<String> = items.iter().map(|v| v.to_string()).collect();
-                    Ok(Value::String(strings.join(separator)))
+            let separator = html_escape(arg.unwrap_or(", "));
+            match iter_values(value) {
+                Some(items) => {
+                    let strings: Vec<String> = items
+                        .iter()
+                        .map(|v| conditional_escape(v, input_safety.items))
+                        .collect();
+                    Ok(Value::String(strings.join(&separator)))
                 }
-                _ => Ok(value.clone()),
+                // Django's `except TypeError: return value` — the value
+                // UNCHANGED, and NOT `mark_safe`d, so the render escapes it.
+                // Returning an escaped STRING here instead would change the
+                // TYPE an int/None presents to the rest of the chain, and
+                // `{{ n|join:", "|length }}` measured it (0 in Django, 2 for
+                // `"42"`). `builtin_produced_safe` withholds the grant on
+                // exactly this branch, which is why the value can stay raw.
+                None => Ok(value.clone()),
             }
         }
         "truncatewords" => match truncate_arg(arg, 10) {
@@ -537,7 +798,7 @@ fn apply_builtin_filter(
             // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
             Ok(Value::String(linebreaks(
                 &value.to_string(),
-                !input_was_safe,
+                !input_safety.container,
             )))
         }
         "linebreaksbr" => {
@@ -545,7 +806,7 @@ fn apply_builtin_filter(
             // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
             Ok(Value::String(linebreaksbr(
                 &value.to_string(),
-                !input_was_safe,
+                !input_safety.container,
             )))
         }
         "cut" => {
@@ -582,10 +843,13 @@ fn apply_builtin_filter(
             // belongs there, next to `Decimal`, and that is where it is.
             Ok(Value::String(format_filesize(value)))
         }
+        // `random` is `lambda value: random.choice(value)` — it INDEXES, so a
+        // string yields one CHARACTER and a dict one key (#2283). Returning
+        // the whole string was not "a random pick of one element", it was the
+        // sequence itself.
         "random" => {
-            // random filter: returns random item from list
-            match value {
-                Value::List(items) | Value::Tuple(items) if !items.is_empty() => {
+            match iter_values(value) {
+                Some(items) if !items.is_empty() => {
                     // Use simple pseudo-random selection based on list length
                     // For deterministic testing, we'll use first item
                     // In production, you'd want to use rand crate
@@ -602,8 +866,12 @@ fn apply_builtin_filter(
                     let random_index = (hasher.finish() as usize) % items.len();
                     Ok(items[random_index].clone())
                 }
-                Value::List(_) | Value::Tuple(_) => Ok(Value::Missing),
-                _ => Ok(value.clone()),
+                // An EMPTY sequence: `random.choice([])` raises `IndexError`.
+                Some(_) => Ok(Value::Missing),
+                // Not iterable at all: Python raises `TypeError`; djust fails
+                // soft with the value unchanged. `random` holds no safe-output
+                // grant, so the render still escapes this.
+                None => Ok(value.clone()),
             }
         }
         "timeuntil" => {
@@ -810,7 +1078,7 @@ fn apply_builtin_filter(
             // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
             Ok(Value::String(add_linenumbers(
                 &value.to_string(),
-                !input_was_safe,
+                !input_safety.container,
             )))
         }
         "get_digit" => {
@@ -861,46 +1129,47 @@ fn apply_builtin_filter(
             // every newline and every indent space above that width (#2277).
             Ok(Value::String(crate::pprint::pformat(value)))
         }
-        "safeseq" => {
-            // safeseq filter: marks each item in a sequence as safe (no-op at filter level)
-            match value {
-                Value::List(_) | Value::Tuple(_) => Ok(value.clone()),
-                // NOT verbatim (#2274). `safeseq` is in `SAFE_OUTPUT_FILTERS`,
-                // so whatever comes out of here is emitted WITHOUT escaping.
-                // For a sequence that grant is earned — marking each item safe
-                // is the filter's whole job. For a non-sequence the filter did
-                // literally nothing, so returning the input verbatim made
-                // `{{ hostile_string|safeseq }}` an exact synonym for
-                // `|safe` — a live XSS with no `mark_safe` anywhere in sight.
-                // Escaping here keeps the unconditional grant honest. Django
-                // reaches the same place by a different route: it builds a
-                // list of safe CHARACTERS whose `repr` the renderer escapes.
-                // The output SHAPE still differs from Django's (djust does not
-                // iterate a string as a character sequence) — that is a
-                // separate parity bug, filed; this is only the safety half.
-                _ => Ok(Value::String(html_escape(&value.to_string()))),
-            }
-        }
-        "escapeseq" => {
-            // escapeseq filter: apply HTML escaping to each item in a sequence
-            match value {
-                Value::List(items) | Value::Tuple(items) => {
-                    let escaped: Vec<Value> = items
+        // `[mark_safe(obj) for obj in value]`. It marks the ITEMS, never the
+        // list — which is why `safeseq` is NOT in `SAFE_OUTPUT_FILTERS` and is
+        // in `renderer::ITEM_SAFE_OUTPUT_FILTERS` instead (#2283). Rendering
+        // the sequence directly therefore escapes its `repr`, exactly as
+        // Django does; the grant is only visible to `join` /
+        // `unordered_list`, the two filters that `conditional_escape` per item.
+        //
+        // Iterating is what makes the string case a LIST of characters rather
+        // than the string itself. The non-iterable arm is #2274's escape and
+        // it is still load-bearing: an int, a float, a bool or `None` still
+        // reaches it, Python still raises `TypeError` there, and djust still
+        // fails soft — so the value must be escaped rather than handed back.
+        "safeseq" => match iter_values(value) {
+            Some(items) => Ok(collapse_if_input_safe(
+                Value::List(items),
+                input_safety.container,
+            )),
+            None => Ok(Value::String(html_escape(&value.to_string()))),
+        },
+        // `[conditional_escape(obj) for obj in value]` — same iteration, and
+        // the escaped items are `SafeString`s, so `escapeseq` is item-safe too
+        // and `{{ l|escapeseq|join:", " }}` must not escape a second time.
+        "escapeseq" => match iter_values(value) {
+            Some(items) => Ok(collapse_if_input_safe(
+                Value::List(
+                    items
                         .iter()
                         .map(|item| Value::String(html_escape(&item.to_string())))
-                        .collect();
-                    Ok(Value::List(escaped))
-                }
-                _ => Ok(Value::String(html_escape(&value.to_string()))),
-            }
-        }
+                        .collect(),
+                ),
+                input_safety.container,
+            )),
+            None => Ok(Value::String(html_escape(&value.to_string()))),
+        },
         "urlize" => {
             // urlize filter: convert URLs and emails to clickable links.
             // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
             Ok(Value::String(urlize(
                 &value.to_string(),
                 None,
-                !input_was_safe,
+                !input_safety.container,
             )))
         }
         "urlizetrunc" => {
@@ -910,23 +1179,21 @@ fn apply_builtin_filter(
             Ok(Value::String(urlize(
                 &value.to_string(),
                 limit,
-                !input_was_safe,
+                !input_safety.container,
             )))
         }
-        "unordered_list" => {
-            // unordered_list filter: recursively render nested lists as <li>/<ul>
-            match value {
-                Value::List(items) | Value::Tuple(items) => {
-                    Ok(Value::String(unordered_list(items, 1)))
-                }
-                // Same unearned-grant bug as `safeseq` above (#2274): the
-                // `<li>` builder escapes every item it emits, which is what
-                // earns `unordered_list` its place in `SAFE_OUTPUT_FILTERS` —
-                // but on a non-sequence it emitted nothing and handed the raw
-                // input back under that same grant.
-                _ => Ok(Value::String(html_escape(&value.to_string()))),
-            }
-        }
+        // Django's `list_formatter` wraps each item in `<li>` through
+        // `conditional_escape`, so a string becomes one `<li>` per CHARACTER
+        // (#2283) and `|safeseq` upstream suppresses the per-item escape.
+        //
+        // The non-iterable arm is #2274's escape, still load-bearing for the
+        // scalar shapes: `unordered_list` holds an unconditional grant in
+        // `SAFE_OUTPUT_FILTERS`, earned by the per-item escape below, and a
+        // value that produces no `<li>` at all must not ride that grant raw.
+        "unordered_list" => match iter_values(value) {
+            Some(items) => Ok(Value::String(unordered_list(&items, 1, input_safety.items))),
+            None => Ok(Value::String(html_escape(&value.to_string()))),
+        },
         "truncatechars_html" => match truncate_arg(arg, 20) {
             Some(n) => Ok(Value::String(crate::truncate::html_chars(
                 &value.to_string(),
@@ -2161,7 +2428,7 @@ fn split_on_blank_lines(s: &str) -> Vec<&str> {
 /// Django's registration is `needs_autoescape=True`, and the filter body opens
 /// `autoescape = autoescape and not isinstance(value, SafeData)`. The engine has
 /// no `{% autoescape %}` block (the tag is rejected by the parser), so the first
-/// term is pinned true and the caller passes `!input_was_safe` — Django's
+/// term is pinned true and the caller passes `!input_safety.container` — Django's
 /// `SafeData` clause, which #2259 left unreproduced and #2284 closed. When it is
 /// `false` the paragraph text is emitted verbatim, exactly as
 /// `django.utils.html.linebreaks(value, autoescape=False)` does, so
@@ -3550,7 +3817,7 @@ fn truncate_url_display(s: &str, limit: Option<usize>) -> String {
     }
 }
 
-fn unordered_list(items: &[Value], depth: usize) -> String {
+fn unordered_list(items: &[Value], depth: usize, items_are_safe: bool) -> String {
     let indent = "\t".repeat(depth);
     let mut result = Vec::new();
 
@@ -3570,10 +3837,10 @@ fn unordered_list(items: &[Value], depth: usize) -> String {
             None
         };
 
-        let escaped_item = html_escape(&item.to_string());
+        let escaped_item = conditional_escape(item, items_are_safe);
         match sublist {
             Some(sub) if !sub.is_empty() => {
-                let sub_content = unordered_list(sub, depth + 1);
+                let sub_content = unordered_list(sub, depth + 1, items_are_safe);
                 let sub_indent = "\t".repeat(depth + 1);
                 result.push(format!(
                     "{indent}<li>{escaped_item}\n{sub_indent}<ul>\n{sub_content}\n{sub_indent}</ul>\n{indent}</li>"
@@ -3746,18 +4013,25 @@ mod tests {
 
     /// `escape`/`safe` are Django `@stringfilter`s that djust EXCLUDES (#2257).
     ///
-    /// Pinned so the exclusion stays a decision. They stay no-ops returning the
-    /// value, which is what lets the renderer localize it — the divergence
-    /// #2257 tracks.
+    /// Pinned so the exclusion stays a decision. `safe` is still the pure no-op
+    /// that lets the renderer localize its value — the divergence #2257 tracks.
+    ///
+    /// `escape` stopped being a no-op in #2281 (it is now `conditional_escape`,
+    /// eager, so the rest of the chain sees the ESCAPED text), which means it
+    /// necessarily stringifies. It stringifies through `Display` — the RENDER
+    /// form, `0.000000001` — and NOT through `str(Decimal)`, `1E-9`, which is
+    /// what `is_string_filter` would have selected. That keeps the rendered
+    /// bytes of `{{ d|escape }}` exactly what they were before #2281 and leaves
+    /// #2257's decision to #2257.
     #[test]
     fn escape_and_safe_are_excluded_from_the_coercion() {
         assert!(!is_string_filter("escape"));
         assert!(!is_string_filter("safe"));
         let value = Value::Decimal("1E-9".to_string());
-        for name in ["escape", "safe"] {
-            let got = apply_filter(name, &value, None).unwrap();
-            assert!(matches!(got, Value::Decimal(_)), "|{name} gave {got:?}");
-        }
+        let got = apply_filter("safe", &value, None).unwrap();
+        assert!(matches!(got, Value::Decimal(_)), "|safe gave {got:?}");
+        let got = apply_filter("escape", &value, None).unwrap();
+        assert_eq!(got.to_string(), "0.000000001", "|escape gave {got:?}");
     }
 
     /// The set is Django's, transcribed — 27 of its 29, minus `escape`/`safe`.
@@ -3783,12 +4057,112 @@ mod tests {
         assert!(matches!(result, Value::Integer(2)));
     }
 
+    /// Every `Value` variant, sorted by whether [`iter_values`] iterates it —
+    /// and the answer to "is #2285's non-iterable escape still load-bearing?"
+    ///
+    /// #2285 added `html_escape` to the `safeseq` / `unordered_list`
+    /// fall-through because those two hold an unconditional safe-output grant
+    /// and were handing a hostile STRING back raw under it. #2283 moved every
+    /// markup-carrying variant — `String`, `List`, `Tuple`, `Object` — onto the
+    /// iterating side, so the only values that still reach that escape are
+    /// numeric, boolean, `None` and `Decimal`/`BigInt` digit strings, none of
+    /// which can contain a character `html_escape` changes.
+    ///
+    /// The escape is therefore a NO-OP for every input reachable today. It is
+    /// kept, and this test is why: it enumerates the enum, so ANY future
+    /// variant that lands on the non-iterating side has to be classified here —
+    /// and if that variant can carry markup, the escape is load-bearing again
+    /// the moment it exists. Deleting the escape would make that a silent XSS
+    /// instead of a red test.
     #[test]
-    fn test_escape_filter_is_noop() {
-        // |escape is a no-op at filter time; auto-escaping happens at render time
+    fn every_non_iterable_variant_is_markup_free() {
+        // Exhaustive by construction: a new variant makes this list stale, and
+        // the `match` in `iter_values` is what decides which column it lands in.
+        let variants = [
+            Value::Missing,
+            Value::None,
+            Value::Bool(true),
+            Value::Integer(-42),
+            Value::Float(1.5),
+            Value::String("<b>".to_string()),
+            Value::List(vec![Value::String("<b>".to_string())]),
+            Value::Tuple(vec![Value::String("<b>".to_string())]),
+            Value::Object(Default::default()),
+            Value::Decimal("1E-9".to_string()),
+            Value::BigInt("9".repeat(40)),
+        ];
+        let mut iterating = 0;
+        for v in &variants {
+            match iter_values(v) {
+                Some(_) => iterating += 1,
+                None => {
+                    let s = v.to_string();
+                    assert_eq!(
+                        html_escape(&s),
+                        s,
+                        "{v:?} is NOT iterated and CAN carry markup — #2285's \
+                         escape on the fall-through is load-bearing again, and \
+                         this test must say so rather than be deleted",
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            iterating, 5,
+            "the iterating set is exactly String / List / Tuple / Object / \
+             Missing — a change here is a change to what #2283 fixed",
+        );
+    }
+
+    /// `escape` is EAGER — `conditional_escape`, exactly as Django registers it
+    /// (#2281). It was a no-op deferring to render-time auto-escaping, which is
+    /// indistinguishable for `{{ p|escape }}` alone and wrong for every chain:
+    /// the next filter saw the raw value, and `{{ p|escape|safe }}` emitted it.
+    #[test]
+    fn test_escape_filter_escapes_eagerly() {
         let value = Value::String("<script>alert('xss')</script>".to_string());
         let result = apply_filter("escape", &value, None).unwrap();
-        assert_eq!(result.to_string(), "<script>alert('xss')</script>");
+        assert_eq!(
+            result.to_string(),
+            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+        );
+    }
+
+    /// The half that separates `escape` from `force_escape`: a value already
+    /// safe passes through untouched, so `{{ p|safe|escape }}` is not
+    /// double-escaped. `apply_filter` cannot know the provenance, so this goes
+    /// through the full entry point with the flag the renderer supplies.
+    #[test]
+    fn escape_does_not_double_escape_a_safe_value() {
+        let value = Value::String("<b>hi</b>".to_string());
+        let (got, _) = apply_filter_full_safe(
+            "escape",
+            &value,
+            None,
+            None,
+            true,
+            InputSafety {
+                container: true,
+                items: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(got.to_string(), "<b>hi</b>");
+        // `force_escape` is `escape()`, not `conditional_escape()` — it escapes
+        // a `SafeString` too. That is the entire difference between the two.
+        let (got, _) = apply_filter_full_safe(
+            "force_escape",
+            &value,
+            None,
+            None,
+            true,
+            InputSafety {
+                container: true,
+                items: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(got.to_string(), "&lt;b&gt;hi&lt;/b&gt;");
     }
 
     #[test]
