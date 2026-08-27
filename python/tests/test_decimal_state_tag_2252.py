@@ -14,10 +14,16 @@ loss at all — and both are measured here, not asserted:
   an ordinary handler line — raises `TypeError` after a reconnect and not
   before one (`test_the_float_roundtrip_changes_the_type`).
 * `Decimal('19.90')` comes back `19.9` and renders `19.9` where Django renders
-  `19.90`. Over {19.90, 0.00, 100.00, 2.50, 19.99} x four idioms, **10 of 20**
-  cases disagree with Django through the float round trip against **2 of 20**
-  through the tagged one — and those 2 are the separate `floatformat` gap
-  (#2253), not this boundary (`test_the_tagged_roundtrip_agrees_with_django_far_more_often`).
+  `19.90`. Over {19.90, 0.00, 100.00, 2.50, 19.99} x four idioms, **8 of 20**
+  cases disagree with Django through the float round trip against **0 of 20**
+  through the tagged one (`test_the_tagged_roundtrip_agrees_with_django_far_more_often`).
+
+  Both numbers moved after this file was written, and in the same direction:
+  they were 10 and 2, the residual 2 being the separate `floatformat` gap
+  (#2253). PR #2263 closed that gap for EVERY input type in the same drain, so
+  the tagged column went to 0 — and two of the float column's cells were
+  `floatformat` cells too, so it improved to 8. The float round trip is still
+  wrong 8 times out of 20; that is what this measurement is for.
 
 So the fix is the tagged round trip the issue proposes: write
 `{"__djust_decimal__": "19.99"}` at the one encode chokepoint
@@ -168,12 +174,15 @@ class TestTheRoundTripIsLossless:
                 got = _rust.render_template(source, restored)
                 if want != got:
                     mismatches.append((str(value), source, want, got))
-        # The only survivors are the separate `floatformat` gap (#2253), which
-        # a Decimal in the context hits identically — it is not this boundary.
-        assert mismatches == [
-            ("0.00", "{{ p|floatformat }}", "0", "0.0"),
-            ("100.00", "{{ p|floatformat }}", "100", "100.0"),
-        ], f"unexpected divergence after restore: {mismatches!r}"
+        # NO survivors. When this was written two remained — the separate
+        # `floatformat` gap (#2253), which a Decimal in the context hit
+        # identically and so was never this boundary's to fix. #2263 closed it
+        # (PR #2263, same drain), so the round trip is now exact end to end.
+        #
+        # Updated rather than relaxed: an empty list is a stronger assertion
+        # than the two-cell one it replaces, and it reddens if either fix
+        # regresses.
+        assert mismatches == [], f"unexpected divergence after restore: {mismatches!r}"
 
 
 # ===========================================================================
@@ -196,7 +205,13 @@ class TestWhatTheFloatRoundTripCost:
         assert restored + Decimal("1") == Decimal("20.99")
 
     def test_the_tagged_roundtrip_agrees_with_django_far_more_often(self) -> None:
-        """The 5x4 matrix, run both ways. 10/20 disagreements become 2/20."""
+        """The 5x4 matrix, run both ways. 8/20 disagreements become 0/20.
+
+        Both numbers were higher when written (10 and 2). The residual 2 were
+        the `floatformat` gap (#2253), which PR #2263 closed for every input
+        type in the same drain — so the tagged column went to 0, and two of the
+        float column's cells were `floatformat` cells too, taking it to 8.
+        """
         float_bad = tagged_bad = 0
         for value in MONEY:
             as_float = float(value)
@@ -207,7 +222,7 @@ class TestWhatTheFloatRoundTripCost:
                     float_bad += 1
                 if _rust.render_template(source, {"p": restored}) != want:
                     tagged_bad += 1
-        assert (float_bad, tagged_bad) == (10, 20 - 18), (
+        assert (float_bad, tagged_bad) == (8, 0), (
             f"float={float_bad}/20 tagged={tagged_bad}/20 — the measurement in "
             "the module docstring and the CHANGELOG is now wrong"
         )

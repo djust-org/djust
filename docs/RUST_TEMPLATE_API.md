@@ -772,6 +772,10 @@ let result = apply_filter("upper", &value, None)?;
 |--------|-------------|---------|--------|
 | `add` | Addition | `{{ 5\|add:3 }}` | `8` |
 | `floatformat` | Format decimal | `{{ 1.234\|floatformat:2 }}` | `"1.23"` |
+| `floatformat` (no arg) | One place, **only if there is one** | `{{ 34.0\|floatformat }}` | `"34"` |
+| `floatformat:"-N"` | At most N places | `{{ 34.0\|floatformat:"-3" }}` | `"34"` |
+| `floatformat:"Ng"` | Force thousand grouping | `{{ 6666.6666\|floatformat:"2g" }}` | `"6,666.67"` |
+| `floatformat:"Nu"` | Opt out of localization | `{{ 6666.6666\|floatformat:"2u" }}` | `"6666.67"` |
 | `divisibleby` | Divisibility check | `{{ 10\|divisibleby:2 }}` | `true` |
 | `filesizeformat` | Human file size | `{{ 1048576\|filesizeformat }}` | `"1.0 MB"` |
 | `stringformat` | Printf format | `{{ 42\|stringformat:"05d" }}` | `"00042"` |

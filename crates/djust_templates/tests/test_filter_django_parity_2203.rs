@@ -212,17 +212,24 @@ fn add_does_not_overflow() {
     // This test would PANIC rather than fail without `checked_add`, since the
     // test profile has debug assertions on — which is precisely how it was
     // found.
+    //
+    // The give-up POINT moved in #2253: the arithmetic is `i128` now, and a sum
+    // outside `i64` is carried as `Value::Decimal`'s exact digits rather than
+    // being discarded, so `i64::MAX + 1` is the answer Django gives instead of
+    // the input unchanged. What has not moved — and is what this test is for —
+    // is that no overflow may ever produce a wrapped or fabricated number.
     let ctx = ctx_with("v", Value::Integer(i64::MAX));
     let out = render("{{ v|add:1 }}", &ctx);
     assert!(
         !out.starts_with('-'),
         "adding 1 to i64::MAX produced a negative number: {out}"
     );
-    assert_eq!(
-        out,
-        i64::MAX.to_string(),
-        "overflow should leave the value unchanged"
-    );
+    assert_eq!(out, "9223372036854775808", "i64::MAX + 1, exactly");
+
+    // Past i128 there is still no answer to give, so the value comes back
+    // unchanged — the same fail-soft, one width further out.
+    let far = ctx_with("v", Value::Decimal("1E+250".to_string()));
+    assert_eq!(render("{{ v|add:1 }}", &far), "1e+250");
 
     // Same via the widened float path.
     let mut c2 = Context::new();

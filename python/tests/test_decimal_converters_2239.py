@@ -65,16 +65,17 @@ HUGE = Decimal("12345678901234567890.123456789")
 VALUES = [Decimal("19.99"), Decimal("0.00"), Decimal("-3.5"), HUGE]
 
 #: (template, str(value)) pairs where djust and Django disagree — measured, not
-#: assumed. Every one is the Rust filter layer parsing a `Value::Decimal`
-#: through f64, which is equally wrong with the pre-fix `float`; see
-#: `test_this_change_turns_no_agreeing_case_into_a_disagreeing_one`. Out of
-#: scope for #2239 (a Python-converter fix), tracked in #2253.
-KNOWN_FILTER_DIVERGENCES = {
-    ("{{ p|floatformat }}", "0.00"),
-    ("{{ p|floatformat }}", "12345678901234567890.123456789"),
-    ("{{ p|floatformat:2 }}", "12345678901234567890.123456789"),
-    ("{{ p|add:1 }}", "12345678901234567890.123456789"),
-}
+#: assumed.
+#:
+#: EMPTY since #2253. It held four cells when #2239 shipped, all in the Rust
+#: filter layer and all out of scope for a Python-converter fix. #2253 closed
+#: them by porting Django's `floatformat` algorithm (exact decimal digits,
+#: `ROUND_HALF_UP`, the `-1` default, the `g` suffix) and by widening `add`'s
+#: arithmetic to exact `i128`. The set is kept, empty, because
+#: `test_the_known_divergences_are_exactly_those_four` asserts it as a SET —
+#: so a future regression re-populates it and goes red, which a deleted
+#: constant could not do (#1125).
+KNOWN_FILTER_DIVERGENCES: set[tuple[str, str]] = set()
 
 TEMPLATES = [
     "{{ p }}",
@@ -229,7 +230,7 @@ class TestTemplatePathMatchesRealDjango:
     @pytest.mark.parametrize("source", TEMPLATES)
     @pytest.mark.parametrize("value", VALUES, ids=str)
     def test_scalar_renders_as_django_renders_it(self, source: str, value: Decimal) -> None:
-        if (source, str(value)) in KNOWN_FILTER_DIVERGENCES:
+        if (source, str(value)) in KNOWN_FILTER_DIVERGENCES:  # pragma: no cover - empty since #2253
             pytest.skip("known pre-existing Rust filter divergence; see the table")
         normalized = normalize_django_value({"p": value})
         assert _rust.render_template(source, normalized) == DjangoTemplate(source).render(
@@ -260,10 +261,11 @@ class TestTemplatePathMatchesRealDjango:
     def test_the_known_divergences_are_exactly_those_four(self) -> None:
         """Pin the divergence SET, not a floor (#1125).
 
-        All four are the Rust filter layer parsing a `Value::Decimal` through
-        f64 — `floatformat` and `add` — so they are equally wrong with the
-        pre-fix `float`, as the non-regression test above proves. They are NOT
-        this PR's to fix (#1079), but they must not grow silently either.
+        The four cells this pinned when #2239 shipped were all in the Rust
+        filter layer, and all four are closed by #2253 — so the expected set is
+        now EMPTY and this asserts full parity across the matrix. Kept as a set
+        comparison rather than a "no divergences" assertion so that a
+        regression names the cell it broke.
         """
         actual = set()
         for source in TEMPLATES:
@@ -303,17 +305,29 @@ class TestTemplatePathMatchesRealDjango:
 
         `str` is the right answer at the wire and the WRONG one here, and this
         is the measurement that says so: with the exact digits as a *string*,
-        `|floatformat` stops rounding and `>` compares lexically. Any future
-        "just make both converters return str" runs into this.
+        `>` compares lexically. Any future "just make both converters return
+        str" runs into this.
+
+        NARROWED by #2253. This used to assert the same of `|floatformat`,
+        because the filter returned a non-numeric `Value` unchanged and so
+        stopped rounding a string. Django's `floatformat` coerces a string
+        (`Decimal(str(text))` accepts one), and djust's now does too — so the
+        filter no longer distinguishes the two, and asserting that it does
+        would be asserting a bug. The comparison still does, which is what
+        keeps this gate-off load-bearing rather than decorative (#1859).
         """
         as_string = {"p": str(Decimal("19.99"))}
-        assert _rust.render_template("{{ p|floatformat }}", as_string) != DjangoTemplate(
-            "{{ p|floatformat }}"
-        ).render(DjangoContext({"p": Decimal("19.99")}))
         assert _rust.render_template(
             "{% if p > 10 %}BIG{% else %}small{% endif %}", as_string
         ) != DjangoTemplate("{% if p > 10 %}BIG{% else %}small{% endif %}").render(
             DjangoContext({"p": Decimal("19.99")})
+        )
+        # And the half that #2253 closed, stated rather than silently dropped:
+        # the filter now agrees for BOTH shapes.
+        assert (
+            _rust.render_template("{{ p|floatformat }}", as_string)
+            == DjangoTemplate("{{ p|floatformat }}").render(DjangoContext({"p": Decimal("19.99")}))
+            == "20.0"
         )
 
     def test_a_float_in_the_context_loses_the_digits(self) -> None:

@@ -185,21 +185,35 @@ def test_decimal_equality_against_a_float_literal_diverges_from_django() -> None
 def test_a_huge_decimal_loses_precision_once_a_filter_does_arithmetic() -> None:
     """The f64 contract, at the boundary where it becomes visible.
 
-    `{{ huge }}` is exact — rendering and transport keep every digit. The moment
-    a filter computes, the value goes through `as_f64()` and Django's answer and
-    djust's diverge. Pinned because the differential above only exercises
-    `19.99`, where the limit never shows (#2240 review).
+    `{{ huge }}` is exact — rendering and transport keep every digit. A filter
+    that goes through `as_f64()` diverges from Django. Pinned because the
+    differential above only exercises `19.99`, where the limit never shows
+    (#2240 review).
+
+    NARROWED by #2253, which moved `floatformat` and `add` OFF `as_f64` and
+    onto the exact digits — Django's own `floatformat` is decimal arithmetic,
+    so matching it is what the #2214 contract's "exact rendering" half asks
+    for. `stringformat:'d'` is the remaining `as_f64` consumer on this shape,
+    so the limit is pinned there instead of being deleted.
     """
     ctx = {"huge": Decimal("12345678901234567890.123456789")}
     assert _rust.render_template("{{ huge }}", ctx) == "12345678901234567890.123456789"
 
-    for source in ("{{ huge|floatformat }}", "{{ huge|stringformat:'d' }}"):
+    # Still lossy: `int()` through a double, then a saturating `as i64`.
+    for source in ("{{ huge|stringformat:'d' }}",):
         django_says = DjangoTemplate(source).render(DjangoContext(ctx))
         djust_says = _rust.render_template(source, ctx)
         assert djust_says != django_says, (
             f"{source} now agrees with Django ({django_says!r}) — if the "
             "arithmetic path gained real precision, update this limit."
         )
+
+    # No longer lossy, as of #2253. Asserted rather than dropped so that a
+    # regression to the f64 path turns this red instead of going unnoticed.
+    for source in ("{{ huge|floatformat }}", "{{ huge|floatformat:2 }}", "{{ huge|add:1 }}"):
+        assert _rust.render_template(source, ctx) == DjangoTemplate(source).render(
+            DjangoContext(ctx)
+        ), f"{source} regressed to the f64 path"
 
 
 def test_two_decimals_differing_beyond_f64_compare_equal() -> None:
