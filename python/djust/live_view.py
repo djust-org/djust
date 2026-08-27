@@ -15,6 +15,7 @@ from django.views import View
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
+    StateRoundtripJSONEncoder,
     decode_private_model_refs,
     encode_private_model_refs,
 )
@@ -931,7 +932,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 # fix: previously a mutable public attr captured here
                 # could be mutated before the snapshot was serialized
                 # and sent to the client.
-                result[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                result[key] = json.loads(json.dumps(value, cls=StateRoundtripJSONEncoder))
             except (TypeError, ValueError, OverflowError):
                 # Skip non-serializable — matches _get_private_state pattern.
                 continue
@@ -984,7 +985,9 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                     if callable(value):
                         continue
                     try:
-                        comp_state[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                        comp_state[key] = json.loads(
+                            json.dumps(value, cls=StateRoundtripJSONEncoder)
+                        )
                     except (TypeError, ValueError, OverflowError):
                         # Skip non-serializable — matches parent rule.
                         continue

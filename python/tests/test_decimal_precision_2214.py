@@ -109,24 +109,31 @@ def test_the_exact_digits_reach_the_wire() -> None:
     assert "e+" not in parsed["huge"].lower()
 
 
-def test_the_python_converters_stay_consistent_with_each_other() -> None:
-    """The Python pair is deliberately NOT fixed here, and must stay a pair.
+def test_the_python_converters_are_now_exact_too() -> None:
+    """The Python pair was deferred here and fixed in #2239.
 
-    `normalize_django_value` is documented as the fast path for djust's own
-    encoder, and `TestParityWithJSONRoundtrip` pins them equal. A first pass at
-    #2214 changed only the encoder to `str` — free parity with Django on a
-    JSON-only path, or so it looked — and split that invariant; the parity suite
-    caught it.
+    #2214 left both on `float` because they looked like one thing: the
+    normalizer is the encoder's fast path, and `TestParityWithJSONRoundtrip`
+    pinned them equal, so moving one alone split a tested invariant. #2239's
+    consumer audit showed they are one thing with TWO destinations — the
+    template context (which carries a `Decimal` exactly, as this file's own
+    differential proves) and the wire (where only the digit string is
+    lossless) — so each takes the representation its destination needs, and
+    the parity class now pins their COMPOSITION rather than raw equality.
 
-    So both stay on `float`, and this asserts they agree rather than leaving the
-    coupling implicit. Fixing them needs a consumer audit (`runtime.py` dumps
-    state with no encoder), which is why it is not in the Rust fix.
+    What both must never do again is lose digits.
     """
     from djust.serialization import DjangoJSONEncoder as DjustEncoder
     from djust.serialization import normalize_django_value
 
     for value in (Decimal("19.99"), Decimal("12345678901234567890.123456789")):
-        assert normalize_django_value(value) == json.loads(json.dumps(value, cls=DjustEncoder))
+        assert normalize_django_value(value) == value
+        assert json.loads(json.dumps(value, cls=DjustEncoder)) == str(value)
+        # Encoding the normalized value equals encoding the raw one — the
+        # invariant that licenses every caller to skip the JSON round trip.
+        assert json.dumps(normalize_django_value(value), cls=DjustEncoder) == json.dumps(
+            value, cls=DjustEncoder
+        )
 
 
 def test_uuid_still_stringifies() -> None:

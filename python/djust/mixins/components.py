@@ -137,6 +137,7 @@ class ComponentMixin:
                 component.component_id = key  # type: ignore[union-attr]
                 component_state[key] = self._extract_component_state(component)
 
-        component_state_serializable = normalize_django_value(component_state)
-        request.session[f"{view_key}_components"] = component_state_serializable
+        request.session[f"{view_key}_components"] = normalize_django_value(
+            component_state, state_roundtrip=True
+        )
         request.session.modified = True

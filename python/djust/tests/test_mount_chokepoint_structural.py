@@ -223,9 +223,14 @@ _SETATTR_WHITELIST = {
     # to live_view.py ahead of the LiveView class so the runtime's #1788
     # fail-soft wrapper can re-raise the deliberate DEBUG rejection —
     # re-verified sanctioned: still the same two DynamicLiveView
-    # developer-dict setattr lines, not a new client-controlled setattr.
-    ("live_view.py", 1316),
-    ("live_view.py", 1318),
+    # developer-dict setattr lines, not a new client-controlled setattr;
+    # shifted +3 (1316/1318 → 1319/1321) by #2239: the
+    # ``StateRoundtripJSONEncoder`` import plus the reflow of the
+    # ``_capture_components_snapshot`` capture call that now uses it —
+    # re-verified sanctioned: still the same two DynamicLiveView
+    # developer-dict setattr lines.
+    ("live_view.py", 1319),
+    ("live_view.py", 1321),
 }
 
 

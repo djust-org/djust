@@ -180,7 +180,7 @@ async def save_sticky_child_state(child: Any, save_session: Any, parent_path: st
     if hasattr(child, "_get_private_state"):
         priv = await sync_to_async(child._get_private_state)()
         if priv:
-            await save_session.aset(f"{key}__private", _normalize(priv))
+            await save_session.aset(f"{key}__private", _normalize(priv, state_roundtrip=True))
         else:
             try:
                 await save_session.apop(f"{key}__private", None)
@@ -196,7 +196,7 @@ async def save_sticky_child_state(child: Any, save_session: Any, parent_path: st
         context = await sync_to_async(gcd)()
 
     state = _collect_sticky_child_state(child, context)
-    await save_session.aset(key, _normalize(state))
+    await save_session.aset(key, _normalize(state, state_roundtrip=True))
 
 
 def save_sticky_child_state_sync(child: Any, session: Any, parent_path: str) -> None:
@@ -214,13 +214,13 @@ def save_sticky_child_state_sync(child: Any, session: Any, parent_path: str) -> 
     if hasattr(child, "_get_private_state"):
         priv = child._get_private_state()
         if priv:
-            session[f"{key}__private"] = _normalize(priv)
+            session[f"{key}__private"] = _normalize(priv, state_roundtrip=True)
         else:
             session.pop(f"{key}__private", None)
 
     context = child.get_context_data()
     state = _collect_sticky_child_state(child, context)
-    session[key] = _normalize(state)
+    session[key] = _normalize(state, state_roundtrip=True)
 
 
 def _rendered_sticky_ids(parent: Any) -> list:

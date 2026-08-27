@@ -50,16 +50,37 @@ class TestPrimitivePassthrough:
 
 
 class TestDecimal:
-    """Decimal -> float."""
+    """Decimal -> the Decimal itself, exactly (#2239).
 
-    def test_decimal_to_float(self):
+    The output goes into the template context, where the Rust renderer carries a
+    Decimal as ``Value::Decimal`` and renders it exactly as Django does. A float
+    would lose every digit past ~15 significant ones; a string would stop
+    ``|floatformat`` rounding and make ``{% if p > 10 %}`` compare lexically.
+    """
+
+    def test_decimal_is_carried_through_unconverted(self):
         result = normalize_django_value(Decimal("3.14"))
-        assert result == 3.14
-        assert isinstance(result, float)
+        assert result == Decimal("3.14")
+        assert isinstance(result, Decimal)
 
     def test_decimal_zero(self):
         result = normalize_django_value(Decimal("0"))
-        assert result == 0.0
+        assert result == Decimal("0")
+        assert isinstance(result, Decimal)
+
+    def test_a_decimal_past_float_precision_keeps_every_digit(self):
+        """The bug #2239 names: 29 significant digits do not fit in a double."""
+        huge = Decimal("12345678901234567890.123456789")
+        assert normalize_django_value(huge) == huge
+        assert str(normalize_django_value(huge)) == "12345678901234567890.123456789"
+
+    def test_state_roundtrip_converts_to_float(self):
+        """The one boundary that cannot take the Decimal — see
+        ``decimal_for_state_roundtrip``. Django's session serializer runs
+        ``json.dumps`` with no encoder, and a string restored into view state
+        would be a string in the template."""
+        result = normalize_django_value(Decimal("3.14"), state_roundtrip=True)
+        assert result == 3.14
         assert isinstance(result, float)
 
 
@@ -111,7 +132,12 @@ class TestDictRecursion:
 
     def test_dict_with_decimal(self):
         result = normalize_django_value({"price": Decimal("9.99")})
-        assert result == {"price": 9.99}
+        assert result == {"price": Decimal("9.99")}
+        assert isinstance(result["price"], Decimal)
+
+    def test_dict_with_decimal_under_state_roundtrip(self):
+        """The flag reaches nested values, not just the top-level one (#2239)."""
+        result = normalize_django_value({"price": Decimal("9.99")}, state_roundtrip=True)
         assert isinstance(result["price"], float)
 
     def test_dict_with_uuid(self):
@@ -138,7 +164,12 @@ class TestListTupleRecursion:
 
     def test_list_with_decimals(self):
         result = normalize_django_value([Decimal("1.5"), Decimal("2.5")])
-        assert result == [1.5, 2.5]
+        assert result == [Decimal("1.5"), Decimal("2.5")]
+        assert all(isinstance(x, Decimal) for x in result)
+
+    def test_list_with_decimals_under_state_roundtrip(self):
+        result = normalize_django_value([Decimal("1.5"), Decimal("2.5")], state_roundtrip=True)
+        assert all(isinstance(x, float) for x in result)
 
     def test_empty_list(self):
         assert normalize_django_value([]) == []
@@ -251,12 +282,32 @@ class TestUnknownType:
 
 
 class TestParityWithJSONRoundtrip:
-    """Assert normalize_django_value(x) == json.loads(json.dumps(x, cls=DjangoJSONEncoder))
-    for every type that both code paths handle.
+    """``normalize_django_value`` is the encoder's PRE-PASS, so encoding its
+    output must equal encoding the input:
+
+        json.dumps(normalize_django_value(x), cls=Enc) == json.dumps(x, cls=Enc)
+
+    The invariant used to be stated as raw equality —
+    ``normalize_django_value(x) == json.loads(json.dumps(x, cls=Enc))`` — which
+    held only while both converters flattened ``Decimal`` to the same float.
+    #2239 split them ON PURPOSE, because they have different destinations: the
+    normalizer feeds the template context (a ``Decimal`` renders exactly there),
+    the encoder feeds the wire (where only the digit STRING is lossless). Raw
+    equality can no longer hold, and asserting it would be asserting the bug.
+
+    Composition is the stronger property anyway: it says the pre-pass is a
+    no-op with respect to the encoded bytes, which is exactly the licence every
+    caller relies on when it skips the ``json.loads(json.dumps(...))`` round
+    trip. It also still covers ``Decimal``, which a documented exception would
+    have carved out.
 
     timedelta and Promise are intentionally excluded -- they are enhancements
     that DjangoJSONEncoder does not support (would raise TypeError).
     """
+
+    @staticmethod
+    def _encoded(value):
+        return json.loads(json.dumps(value, cls=DjangoJSONEncoder))
 
     @pytest.mark.parametrize(
         "value",
@@ -300,18 +351,15 @@ class TestParityWithJSONRoundtrip:
         ],
     )
     def test_scalar_parity(self, value):
-        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
-        assert normalize_django_value(value) == expected
+        assert self._encoded(normalize_django_value(value)) == self._encoded(value)
 
     def test_dict_parity(self):
         value = {"name": "test", "price": Decimal("19.95"), "active": True}
-        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
-        assert normalize_django_value(value) == expected
+        assert self._encoded(normalize_django_value(value)) == self._encoded(value)
 
     def test_list_parity(self):
         value = [Decimal("1.1"), UUID("abcdefab-cdef-abcd-efab-cdefabcdefab"), 42]
-        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
-        assert normalize_django_value(value) == expected
+        assert self._encoded(normalize_django_value(value)) == self._encoded(value)
 
     def test_nested_structure_parity(self):
         value = {
@@ -330,14 +378,23 @@ class TestParityWithJSONRoundtrip:
             "count": 2,
             "label": "batch",
         }
-        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
-        assert normalize_django_value(value) == expected
+        assert self._encoded(normalize_django_value(value)) == self._encoded(value)
 
     def test_tuple_becomes_list_parity(self):
         """tuple -> list matches JSON roundtrip (JSON has no tuple type)."""
         value = (Decimal("1.0"), "a", 3)
-        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
-        assert normalize_django_value(value) == expected
+        assert self._encoded(normalize_django_value(value)) == self._encoded(value)
+
+    def test_the_composition_would_catch_a_divergence(self):
+        """Gate-off for the invariant itself (#1468).
+
+        If the two converters could disagree about the encoded bytes and this
+        class still passed, it would be pinning nothing. Feed the comparison a
+        DIFFERENT value and it must fail.
+        """
+        assert self._encoded(normalize_django_value(Decimal("1.1"))) != self._encoded(
+            Decimal("1.2")
+        )
 
 
 class TestStrictSerializationMode:
