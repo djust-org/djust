@@ -49,6 +49,17 @@ use regex::Regex;
 
 use crate::truncate::py_is_space;
 
+/// HTML5 "ASCII whitespace" — `[\t\n\r\f ]`.
+///
+/// CPython's tag regexes used `\s` until the 3.12.10 spec alignment, which is
+/// a WIDER set: it also matches `\v` and, on `str` patterns, every Unicode
+/// space. `py_is_space` is still correct for the two places CPython kept `\s`
+/// (`unescape`, and the `[\s;]` probe that became `[\t\n\r\f ;]`), so the
+/// two predicates coexist deliberately.
+fn is_html_space(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\r' | '\u{c}' | ' ')
+}
+
 // ---------------------------------------------------------------------------
 // html.unescape
 // ---------------------------------------------------------------------------
@@ -266,124 +277,127 @@ fn prev_char(s: &str, i: usize) -> Option<char> {
     s[..i].chars().next_back()
 }
 
-/// `(?:\s|/(?!>))*`
-fn skip_ws_or_slash(s: &str, mut i: usize) -> usize {
-    let b = s.as_bytes();
-    let n = s.len();
-    while i < n {
-        let c = char_at(s, i).unwrap();
-        if py_is_space(c) {
-            i += c.len_utf8();
-        } else if c == '/' && !(i + 1 < n && b[i + 1] == b'>') {
-            i += 1;
-        } else {
-            break;
-        }
-    }
-    i
-}
-
-fn skip_ws(s: &str, mut i: usize) -> usize {
-    while i < s.len() {
-        let c = char_at(s, i).unwrap();
-        if py_is_space(c) {
-            i += c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    i
-}
-
-/// `attrfind_tolerant`, hand-rolled because it uses a lookbehind and a
-/// lookahead that the `regex` crate cannot express.
+/// `locatetagend.match(rawdata, pos)` -> `m.end()`, where `pos` is the offset
+/// of the tag NAME (after `<` or `</`).
 ///
-/// `((?<=['"\s/])[^\s/>][^\s/=>]*)(\s*=+\s*('[^']*'|"[^"]*"|(?!['"])[^>\s]*))?(?:\s|/(?!>))*`
-fn match_attr(s: &str, k: usize) -> Option<usize> {
-    let b = s.as_bytes();
+/// Replaces the pre-3.12.10 `locatestarttagend_tolerant`. The important
+/// structural change is the trailing `>?`: the regex always matches (the tag
+/// name is already known to start with a letter), and the caller decides
+/// whether the tag was terminated by testing `rawdata[j-1] == '>'`, rather
+/// than the old five-way lookahead on the character after the match.
+///
+/// ```text
+///   [a-zA-Z][^\t\n\r\f />]*            tag name
+///   [\t\n\r\f /]*                      whitespace before the first attribute
+///   (?:(?<=['"\t\n\r\f /])[^\t\n\r\f />][^\t\n\r\f /=>]*   attribute name
+///     (?:[\t\n\r\f ]*=[\t\n\r\f ]*     value indicator
+///       (?:'[^']*'|"[^"]*"|(?!['"])[^>\t\n\r\f ]*))?
+///     [\t\n\r\f /]*)*
+///   >?
+/// ```
+fn locate_tag_end(s: &str, pos: usize) -> usize {
     let n = s.len();
-    let prev = prev_char(s, k)?;
-    if !(prev == '\'' || prev == '"' || prev == '/' || py_is_space(prev)) {
-        return None;
-    }
-    let c = char_at(s, k)?;
-    if py_is_space(c) || c == '/' || c == '>' {
-        return None;
-    }
-    let mut q = k + c.len_utf8();
-    while q < n {
-        let c = char_at(s, q).unwrap();
-        if py_is_space(c) || c == '/' || c == '=' || c == '>' {
-            break;
-        }
-        q += c.len_utf8();
-    }
-    // (\s*=+\s*(value))?  — the whole group backtracks to empty if the value
-    // alternation fails (an unterminated quoted value is the case that matters).
-    let save = q;
-    let mut r = skip_ws(s, q);
-    let mut matched_value = false;
-    if r < n && b[r] == b'=' {
-        while r < n && b[r] == b'=' {
-            r += 1;
-        }
-        r = skip_ws(s, r);
-        if r < n && (b[r] == b'\'' || b[r] == b'"') {
-            let quote = b[r] as char;
-            if let Some(off) = s[r + 1..].find(quote) {
-                r = r + 1 + off + 1;
-                matched_value = true;
-            }
-        } else {
-            while r < n {
-                let c = char_at(s, r).unwrap();
-                if c == '>' || py_is_space(c) {
-                    break;
-                }
-                r += c.len_utf8();
-            }
-            matched_value = true;
-        }
-        if matched_value {
-            r = skip_ws(s, r);
+    let mut p = pos;
+    // `[a-zA-Z][^\t\n\r\f />]*`
+    if let Some(c) = char_at(s, p) {
+        if c.is_ascii_alphabetic() {
+            p += c.len_utf8();
         }
     }
-    let q = if matched_value { r } else { save };
-    Some(skip_ws_or_slash(s, q))
-}
-
-/// `locatestarttagend_tolerant.match(rawdata, i)`; returns `m.end()`.
-fn locate_starttag_end(s: &str, i: usize) -> Option<usize> {
-    let b = s.as_bytes();
-    let n = s.len();
-    if i + 1 >= n || !(b[i + 1] as char).is_ascii_alphabetic() {
-        return None;
-    }
-    let mut p = i + 2;
-    while p < n {
-        let c = char_at(s, p).unwrap();
-        if matches!(c, '\t' | '\n' | '\r' | '\u{c}' | ' ' | '/' | '>' | '\0') {
+    while let Some(c) = char_at(s, p) {
+        if is_html_space(c) || c == '/' || c == '>' {
             break;
         }
         p += c.len_utf8();
     }
-    // (?:[\s/]* (attr)*)?
-    let mut q = p;
-    while q < n {
-        let c = char_at(s, q).unwrap();
-        if py_is_space(c) || c == '/' {
-            q += c.len_utf8();
+    // `[\t\n\r\f /]*`
+    p = skip_space_or_slash(s, p);
+    // `(?: attr )*`
+    loop {
+        match match_attribute(s, p) {
+            Some(e) if e > p => p = e,
+            _ => break,
+        }
+    }
+    // `>?`
+    if p < n && s.as_bytes()[p] == b'>' {
+        p += 1;
+    }
+    p
+}
+
+fn skip_space_or_slash(s: &str, mut i: usize) -> usize {
+    while let Some(c) = char_at(s, i) {
+        if is_html_space(c) || c == '/' {
+            i += c.len_utf8();
         } else {
             break;
         }
     }
-    while let Some(e) = match_attr(s, q) {
-        if e <= q {
+    i
+}
+
+/// One iteration of `locate_tag_end`'s attribute group. Hand-rolled because
+/// the leading `(?<=['"\t\n\r\f /])` is a lookbehind.
+fn match_attribute(s: &str, k: usize) -> Option<usize> {
+    let n = s.len();
+    let b = s.as_bytes();
+    // `(?<=['"\t\n\r\f /])`
+    let prev = prev_char(s, k)?;
+    if !(prev == '\'' || prev == '"' || prev == '/' || is_html_space(prev)) {
+        return None;
+    }
+    // `[^\t\n\r\f />]`
+    let c = char_at(s, k)?;
+    if is_html_space(c) || c == '/' || c == '>' {
+        return None;
+    }
+    let mut p = k + c.len_utf8();
+    // `[^\t\n\r\f /=>]*`
+    while let Some(c) = char_at(s, p) {
+        if is_html_space(c) || c == '/' || c == '=' || c == '>' {
             break;
         }
-        q = e;
+        p += c.len_utf8();
     }
-    Some(skip_ws(s, q))
+    // `(?:[\t\n\r\f ]*=[\t\n\r\f ]*(value))?` — note ONE `=`, where the old
+    // `attrfind_tolerant` had `=+`.
+    let before_value = p;
+    let mut r = skip_html_space(s, p);
+    let mut took_value = false;
+    if r < n && b[r] == b'=' {
+        r = skip_html_space(s, r + 1);
+        if r < n && (b[r] == b'\'' || b[r] == b'"') {
+            let quote = b[r] as char;
+            if let Some(off) = s[r + 1..].find(quote) {
+                r = r + 1 + off + 1;
+                took_value = true;
+            }
+        } else {
+            // `(?!['"])[^>\t\n\r\f ]*`
+            while let Some(c) = char_at(s, r) {
+                if c == '>' || is_html_space(c) {
+                    break;
+                }
+                r += c.len_utf8();
+            }
+            took_value = true;
+        }
+    }
+    let p = if took_value { r } else { before_value };
+    // `[\t\n\r\f /]*`
+    Some(skip_space_or_slash(s, p))
+}
+
+fn skip_html_space(s: &str, mut i: usize) -> usize {
+    while let Some(c) = char_at(s, i) {
+        if is_html_space(c) {
+            i += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    i
 }
 
 /// `tagfind_tolerant.match(rawdata, pos)` → `(lowercased name, m.end())`.
@@ -394,187 +408,123 @@ fn tagfind(s: &str, pos: usize) -> Option<(String, usize)> {
         return None;
     }
     let mut p = pos + 1;
-    while p < n {
-        let c = char_at(s, p).unwrap();
-        if matches!(c, '\t' | '\n' | '\r' | '\u{c}' | ' ' | '/' | '>' | '\0') {
+    // `[^\t\n\r\f />]*` — `\x00` left the exclusion set in 3.12.10.
+    while let Some(c) = char_at(s, p) {
+        if is_html_space(c) || c == '/' || c == '>' {
             break;
         }
         p += c.len_utf8();
     }
+    let _ = n;
     let name = s[pos..p].to_lowercase();
-    Some((name, skip_ws_or_slash(s, p)))
+    Some((name, skip_space_or_slash(s, p)))
 }
 
-/// `endtagfind.match(rawdata, i)`: `</\s*([a-zA-Z][-.a-zA-Z0-9:_]*)\s*>`.
-fn endtagfind(s: &str, i: usize) -> Option<String> {
-    let b = s.as_bytes();
-    let n = s.len();
-    if !s[i..].starts_with("</") {
-        return None;
-    }
-    let mut p = skip_ws(s, i + 2);
-    if p >= n || !(b[p] as char).is_ascii_alphabetic() {
-        return None;
-    }
-    let start = p;
-    p += 1;
-    while p < n {
-        let c = b[p] as char;
-        if c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | ':' | '_') {
-            p += 1;
-        } else {
-            break;
-        }
-    }
-    let name = s[start..p].to_lowercase();
-    let p = skip_ws(s, p);
-    if p < n && b[p] == b'>' {
-        Some(name)
-    } else {
-        None
-    }
-}
-
-/// `_markupbase._declname_match`: `[a-zA-Z][-_.a-zA-Z0-9]*\s*` → `(name, end)`.
-fn declname(s: &str, i: usize) -> Option<(String, usize)> {
-    let b = s.as_bytes();
-    let n = s.len();
-    if i >= n || !(b[i] as char).is_ascii_alphabetic() {
-        return None;
-    }
-    let mut p = i + 1;
-    while p < n {
-        let c = b[p] as char;
-        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-            p += 1;
-        } else {
-            break;
-        }
-    }
-    let name = s[i..p].to_lowercase();
-    Some((name, skip_ws(s, p)))
-}
-
-/// Leftmost match of `--\s*>` at or after `from`; returns `m.end()`.
+/// `parse_comment`'s close: `commentclose = --!?>` searched from `from`, and
+/// if that fails `commentabruptclose = -?>` ANCHORED at `from`.
+///
+/// Before 3.12.10 this was `--\s*>`, so `<!-- x -- >` closed the comment and
+/// `<!-->` did not. Both flipped: whitespace between `--` and `>` no longer
+/// closes, and the abrupt forms `<!-->` / `<!--->` now do.
 fn comment_close(s: &str, from: usize) -> Option<usize> {
     let b = s.as_bytes();
     let n = s.len();
     let mut p = from;
     while let Some(off) = s[p..].find("--") {
         let start = p + off;
-        let e = skip_ws(s, start + 2);
+        let mut e = start + 2;
+        if e < n && b[e] == b'!' {
+            e += 1;
+        }
         if e < n && b[e] == b'>' {
             return Some(e + 1);
         }
         p = start + 1;
     }
-    None
-}
-
-/// Leftmost match of `]\s*]\s*>` (or `]\s*>` for the MS variant) → `(start, end)`.
-fn marked_section_close(s: &str, from: usize, double: bool) -> Option<(usize, usize)> {
-    let b = s.as_bytes();
-    let n = s.len();
-    let mut p = from;
-    while let Some(off) = s[p..].find(']') {
-        let start = p + off;
-        let mut e = skip_ws(s, start + 1);
-        if double {
-            if e < n && b[e] == b']' {
-                e = skip_ws(s, e + 1);
-            } else {
-                p = start + 1;
-                continue;
-            }
-        }
-        if e < n && b[e] == b'>' {
-            return Some((start, e + 1));
-        }
-        p = start + 1;
+    // `commentabruptclose.match(rawdata, i+4)` — anchored, not searched.
+    let mut e = from;
+    if e < n && b[e] == b'-' {
+        e += 1;
+    }
+    if e < n && b[e] == b'>' {
+        return Some(e + 1);
     }
     None
 }
 
+/// `HTMLParser.check_for_whole_start_tag`.
+///
+/// Since 3.12.10 this is three lines: run `locatetagend` from the character
+/// after `<` and accept only if the match ends on a `>`. The old version's
+/// five-way lookahead (`=` and a letter meaning "incomplete", a bare
+/// character meaning "stop here") is gone, which is why an unterminated
+/// `<b x=">` now returns -1 and is discarded at end of input rather than
+/// being re-emitted as data.
 fn check_for_whole_start_tag(s: &str, i: usize) -> i64 {
-    let j = match locate_starttag_end(s, i) {
-        Some(j) => j,
-        None => return (i + 1) as i64,
-    };
-    let next = char_at(s, j);
-    match next {
-        Some('>') => (j + 1) as i64,
-        Some('/') => {
-            if s[j..].starts_with("/>") {
-                (j + 2) as i64
-            } else {
-                -1
-            }
-        }
-        None => -1,
-        Some(c) if c.is_ascii_alphabetic() || c == '=' => -1,
-        Some(_) => {
-            if j > i {
-                j as i64
-            } else {
-                (i + 1) as i64
-            }
-        }
+    let j = locate_tag_end(s, i + 1);
+    if j == 0 || s.as_bytes()[j - 1] != b'>' {
+        return -1;
     }
+    j as i64
 }
 
 fn parse_html_declaration(s: &str, i: usize) -> i64 {
-    let n = s.len();
     if s[i..].starts_with("<!--") {
         return comment_close(s, i + 4).map(|e| e as i64).unwrap_or(-1);
     }
-    if s[i..].starts_with("<![") {
-        // parse_marked_section
-        if i + 3 >= n {
-            return -1;
-        }
-        let (name, end) = match declname(s, i + 3) {
-            Some(v) => v,
-            // Django raises AssertionError here; refusing to parse is the
-            // fail-soft equivalent (the alternative is a 500 on a template).
-            None => return -1,
+    // `<![CDATA[` runs to `]]>`; `unknown_decl` is a no-op for both sinks.
+    if s[i..].starts_with("<![CDATA[") {
+        return match s[i + 9..].find("]]>") {
+            Some(o) => (i + 9 + o + 3) as i64,
+            None => -1,
         };
-        if end == n {
-            return -1;
-        }
-        let double = match name.as_str() {
-            "temp" | "cdata" | "ignore" | "include" | "rcdata" => true,
-            "if" | "else" | "endif" => false,
-            _ => return -1,
-        };
-        return marked_section_close(s, i + 3, double)
-            .map(|(_, e)| e as i64)
-            .unwrap_or(-1);
     }
-    if n >= i + 9 && s[i..i + 9].eq_ignore_ascii_case("<!doctype") {
+    // `s.get(..)` rather than `s[..]`: `i + 9` is a byte offset that can land
+    // INSIDE a multi-byte character, and indexing panics there. Reachable
+    // since the `<![` arm above stopped swallowing every `<![…` input — a
+    // `<![中` used to return early and now falls through to here.
+    if s.get(i..i + 9)
+        .is_some_and(|d| d.eq_ignore_ascii_case("<!doctype"))
+    {
         return s[i + 9..]
             .find('>')
             .map(|o| (i + 9 + o + 1) as i64)
             .unwrap_or(-1);
     }
-    // parse_bogus_comment
+    // `<![` that is not a CDATA section, and the `parse_bogus_comment`
+    // fallback, are the same shape here: run to the next `>` and report
+    // nothing. `unknown_decl` and `handle_comment` are both no-ops for
+    // Django's two sinks, so the two branches CPython distinguishes collapse.
+    //
+    // This replaces a port of `_markupbase.parse_marked_section`, which
+    // raises `AssertionError` on an unrecognised section keyword — CPython
+    // dropped it in the 3.12.10 spec alignment, and djust's fail-soft stand-in
+    // discarded the whole rest of the input rather than resuming after the
+    // section. `strip_tags("x&&&one;<![</p>")` was `"x&&&one;<![</p>"` and is
+    // now `"x&&&one;"`, matching every CPython from 3.12.10 on.
     s[i + 2..]
         .find('>')
         .map(|o| (i + 2 + o + 1) as i64)
         .unwrap_or(-1)
 }
 
-/// `re.compile(r'</\s*%s\s*>' % cdata_elem, re.I).search(rawdata, i)` → start.
+/// `set_cdata_mode`'s `interesting`, searched: `</{elem}(?=[\t\n\r\f />])`.
+///
+/// Before 3.12.10 this was `</\s*{elem}\s*>`, which required the `>` to be
+/// present and tolerated whitespace after `</`. Neither holds now, so
+/// `<style></b<<a href="a>b">` leaves CDATA mode at a different offset — the
+/// value that caught this port mid-way.
 fn find_cdata_close(s: &str, from: usize, elem: &str) -> Option<usize> {
-    let b = s.as_bytes();
-    let n = s.len();
     let mut p = from;
     while let Some(off) = s[p..].find("</") {
         let start = p + off;
-        let q = skip_ws(s, start + 2);
-        if q + elem.len() <= n && s[q..q + elem.len()].eq_ignore_ascii_case(elem) {
-            let r = skip_ws(s, q + elem.len());
-            if r < n && b[r] == b'>' {
-                return Some(start);
+        let q = start + 2;
+        if s.get(q..q + elem.len())
+            .is_some_and(|d| d.eq_ignore_ascii_case(elem))
+        {
+            match char_at(s, q + elem.len()) {
+                Some(c) if is_html_space(c) || c == '/' || c == '>' => return Some(start),
+                _ => {}
             }
         }
         p = start + 1;
@@ -719,9 +669,39 @@ fn incomplete_match(s: &str, i: usize) -> Option<usize> {
 // The tokenizer
 // ---------------------------------------------------------------------------
 
+/// `HTMLParser.CDATA_CONTENT_ELEMENTS` — RAWTEXT: the body is text, and
+/// character references in it are NOT resolved.
+///
+/// 3.12.10 widened this from `("script", "style")`.
+const RAWTEXT_ELEMENTS: [&str; 7] = [
+    "script",
+    "style",
+    "xmp",
+    "iframe",
+    "noembed",
+    "noframes",
+    "plaintext",
+];
+
+/// `HTMLParser.RCDATA_CONTENT_ELEMENTS` — like RAWTEXT, except character
+/// references ARE resolved (`_escapable`).
+const RCDATA_ELEMENTS: [&str; 2] = ["textarea", "title"];
+
+fn rawtext_elem(tag: &str) -> Option<&'static str> {
+    RAWTEXT_ELEMENTS.iter().find(|e| **e == tag).copied()
+}
+
+fn rcdata_elem(tag: &str) -> Option<&'static str> {
+    RCDATA_ELEMENTS.iter().find(|e| **e == tag).copied()
+}
+
 pub(crate) struct Tokenizer<'a, S: Sink> {
     raw: &'a str,
     convert_charrefs: bool,
+    /// `HTMLParser._escapable`: false only inside a RAWTEXT element. Was
+    /// `not self.cdata_elem` until 3.12.10 introduced RCDATA, where the body
+    /// is opaque to markup but NOT to character references.
+    escapable: bool,
     /// How much of `raw` a previous `goahead` consumed. CPython carries the
     /// unconsumed tail in `self.rawdata` and re-indexes from 0 on the next
     /// call; keeping the input whole and carrying the offset is equivalent,
@@ -738,6 +718,7 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
         Tokenizer {
             raw,
             convert_charrefs,
+            escapable: true,
             pos: 0,
             cdata_elem: None,
             sink,
@@ -776,7 +757,19 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
     /// CPython tests `self.convert_charrefs and not self.cdata_elem` at four
     /// separate points and they must not drift apart.
     fn converting(&self) -> bool {
-        self.convert_charrefs && self.cdata_elem.is_none()
+        self.convert_charrefs && self.escapable
+    }
+
+    /// `set_cdata_mode(elem, escapable=...)`.
+    fn set_cdata_mode(&mut self, elem: &'static str, escapable: bool) {
+        self.cdata_elem = Some(elem);
+        self.escapable = escapable;
+    }
+
+    /// `clear_cdata_mode()`.
+    fn clear_cdata_mode(&mut self) {
+        self.cdata_elem = None;
+        self.escapable = true;
     }
 
     fn emit_text(&mut self, text: &str) -> SinkResult {
@@ -825,7 +818,21 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
                 // `self.interesting.search(rawdata, i)`: in CDATA mode that is
                 // the element's own end tag, otherwise `[&<]`.
                 let found = match self.cdata_elem {
-                    Some(elem) => find_cdata_close(raw, i, elem),
+                    // `plaintext`'s `interesting` is `\Z`: nothing ends it.
+                    Some("plaintext") => None,
+                    Some(elem) => {
+                        let close = find_cdata_close(raw, i, elem);
+                        if self.escapable && !self.convert_charrefs {
+                            // RCDATA with charrefs off: `&|</elem(?=...)`.
+                            let amp = raw[i..].find('&').map(|o| i + o);
+                            match (close, amp) {
+                                (Some(a), Some(b)) => Some(a.min(b)),
+                                (a, b) => a.or(b),
+                            }
+                        } else {
+                            close
+                        }
+                    }
                     None => raw[i..].find(['&', '<']).map(|o| i + o),
                 };
                 match found {
@@ -860,7 +867,10 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
                         .unwrap_or(-1)
                 } else if raw[i..].starts_with("<!") {
                     parse_html_declaration(raw, i)
-                } else if i + 1 < n {
+                } else if i + 1 < n || end {
+                    // `elif (i + 1) < n or end:` — a `<` that is the last
+                    // character of the input is data once there is no more
+                    // input coming.
                     self.sink.handle_data("<")?;
                     (i + 1) as i64
                 } else {
@@ -870,17 +880,8 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
                     if !end {
                         break; // wait for the rest of the construct
                     }
-                    // `k = rawdata.find('>', i+1)`, else the next `<`, else i+1;
-                    // whatever that spans is emitted as data.
-                    let kk = match raw[i + 1..].find('>') {
-                        Some(o) => i + 1 + o + 1,
-                        None => match raw[i + 1..].find('<') {
-                            Some(o) => i + 1 + o,
-                            None => i + 1,
-                        },
-                    };
-                    self.emit_text(&raw[i..kk])?;
-                    i = kk;
+                    self.finish_incomplete_construct(i)?;
+                    i = n;
                 } else {
                     i = k as usize;
                 }
@@ -934,12 +935,63 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
                 unreachable!("the interesting scan only stops on `<` or `&`");
             }
         }
-        if end && i < n && self.cdata_elem.is_none() {
+        // `if end and i < n:` — the `and not self.cdata_elem` guard was
+        // removed with the rest of this path, so an unterminated `<script>`
+        // body now reaches the sink as data instead of vanishing.
+        if end && i < n {
             self.emit_text(&raw[i..n])?;
             i = n;
         }
         // `self.rawdata = rawdata[i:]`: where the next pass picks up.
         self.pos = i;
+        Ok(())
+    }
+
+    /// The `if k < 0:` branch of `goahead(1)` — an unterminated construct at
+    /// end of input.
+    ///
+    /// Until CPython 3.12.10 this scanned forward for a `>` or a `<` and
+    /// emitted whatever it spanned as **data**. It now dispatches on what the
+    /// construct was trying to be, hands the fragment to that construct's
+    /// handler, and consumes the rest of the input either way.
+    ///
+    /// For both of Django's parsers every one of those handlers is the base
+    /// class's no-op, so the whole branch reduces to "discard to end of
+    /// input" — with one exception, a `</` that IS the end of the input, which
+    /// is data. That is the whole of the change:
+    ///
+    /// ```text
+    /// strip_tags("<b>x</b> <c")          "x <c"  ->  "x "
+    /// strip_tags("<b>x</b><!-- open")    "x<!-- open" -> "x"
+    /// ```
+    ///
+    /// Discarding is also the safer of the two: an unterminated,
+    /// attacker-controlled construct is no longer re-emitted as page text —
+    /// the same argument the depth guard in `strip_tags` makes.
+    ///
+    /// The CPython branches are enumerated here rather than collapsed to
+    /// `Ok(())` so that a future [`Sink`] which does want comments has an
+    /// obvious place to receive them.
+    fn finish_incomplete_construct(&mut self, i: usize) -> SinkResult {
+        let raw = self.raw;
+        let n = raw.len();
+        if i + 1 < n && (raw.as_bytes()[i + 1] as char).is_ascii_alphabetic() {
+            // `starttagopen.match(...)` -> `pass`: an incomplete START TAG is
+            // dropped whole. This is the `"<b>x</b> <c"` cell.
+        } else if raw[i..].starts_with("</") {
+            if i + 2 == n {
+                // A `</` with nothing after it is the one shape that is data.
+                self.sink.handle_data("</")?;
+            } else {
+                // `endtagopen` -> `pass`, otherwise a bogus comment; both are
+                // dropped by every Django sink.
+            }
+        } else {
+            // `<!--` -> handle_comment, `<![CDATA[` -> unknown_decl,
+            // `<!doctype` -> handle_decl, `<!` -> bogus comment,
+            // `<?` -> handle_pi. All no-ops here; see the `Sink` docs for why
+            // those four handlers are not trait members.
+        }
         Ok(())
     }
 
@@ -955,7 +1007,7 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
             None => return Ok(endpos as i64),
         };
         while k < endpos {
-            match match_attr(raw, k) {
+            match match_attribute(raw, k) {
                 Some(e) if e > k => k = e,
                 _ => break,
             }
@@ -969,58 +1021,54 @@ impl<'a, S: Sink> Tokenizer<'a, S> {
             self.sink.handle_startendtag(&tag, &starttag_text);
         } else {
             self.sink.handle_starttag(&tag, &starttag_text);
-            if tag == "script" {
-                self.cdata_elem = Some("script");
-            } else if tag == "style" {
-                self.cdata_elem = Some("style");
+            if let Some(elem) = rawtext_elem(&tag) {
+                self.set_cdata_mode(elem, false);
+            } else if let Some(elem) = rcdata_elem(&tag) {
+                self.set_cdata_mode(elem, true);
             }
         }
         Ok(endpos as i64)
     }
 
+    /// `HTMLParser.parse_endtag`.
+    ///
+    /// Rewritten in 3.12.10 against "13.2.5.7 End tag open state". Two
+    /// behaviours the old version had are gone: it no longer emits a
+    /// mismatched end tag as DATA while in CDATA mode (the CDATA
+    /// `interesting` regex means only the matching element's tag gets here),
+    /// and it no longer scans past the tag name for a `>` — the tag must be
+    /// terminated inside `locatetagend` or it is incomplete.
     fn parse_endtag(&mut self, i: usize) -> Result<i64, Stop> {
         let raw = self.raw;
-        let gt = match raw[i + 1..].find('>') {
-            Some(o) => i + 1 + o,
+        // Fast check: `if rawdata.find('>', i+2) < 0: return -1`.
+        if raw.len() < i + 2 || !raw[i + 2..].contains('>') {
+            return Ok(-1);
+        }
+        // `endtagopen.match(rawdata, i)` — `</` + letter.
+        let is_named_end = char_at(raw, i + 2).is_some_and(|c| c.is_ascii_alphabetic());
+        if !is_named_end {
+            if raw[i..].starts_with("</>") {
+                // "missing-end-tag-name" parser error: `</>` is ignored.
+                return Ok((i + 3) as i64);
+            }
+            // parse_bogus_comment: `handle_comment` is a no-op for both sinks.
+            return Ok(raw[i + 2..]
+                .find('>')
+                .map(|o| (i + 2 + o + 1) as i64)
+                .unwrap_or(-1));
+        }
+        let j = locate_tag_end(raw, i + 2);
+        if j == 0 || raw.as_bytes()[j - 1] != b'>' {
+            return Ok(-1);
+        }
+        let tag = match tagfind(raw, i + 2) {
+            Some((t, _)) => t,
+            // `assert match` in CPython: unreachable, since `i+2` is a letter.
             None => return Ok(-1),
         };
-        let gtpos = gt + 1;
-        if let Some(elem) = endtagfind(raw, i) {
-            if let Some(cd) = self.cdata_elem {
-                if elem != cd {
-                    self.sink.handle_data(&raw[i..gtpos])?;
-                    return Ok(gtpos as i64);
-                }
-            }
-            self.sink.handle_endtag(&elem);
-            self.cdata_elem = None;
-            return Ok(gtpos as i64);
-        }
-        if self.cdata_elem.is_some() {
-            self.sink.handle_data(&raw[i..gtpos])?;
-            return Ok(gtpos as i64);
-        }
-        match tagfind(raw, i + 2) {
-            None => {
-                if raw[i..].starts_with("</>") {
-                    Ok((i + 3) as i64)
-                } else {
-                    // parse_bogus_comment: handle_comment is a no-op.
-                    Ok(raw[i + 2..]
-                        .find('>')
-                        .map(|o| (i + 2 + o + 1) as i64)
-                        .unwrap_or(-1))
-                }
-            }
-            Some((tagname, nend)) => {
-                let gp = raw[nend..].find('>').map(|o| nend + o);
-                self.sink.handle_endtag(&tagname);
-                // Django would return 0 here and spin; there is always a `>` at
-                // or after `nend` because `endendtag` found one and `tagfind`
-                // cannot consume it, so the fallback is unreachable in practice.
-                Ok(gp.map(|g| (g + 1) as i64).unwrap_or(-1))
-            }
-        }
+        self.sink.handle_endtag(&tag);
+        self.clear_cdata_mode();
+        Ok(j as i64)
     }
 }
 
@@ -1333,23 +1381,68 @@ mod tests {
         assert_eq!(strip_tags("<b/>x&one3.5"), "x&one3;.5");
         assert_eq!(strip_tags("<b/>&a-b"), "&a;-b");
         assert_eq!(strip_tags("<b/>&nbsp-x"), "&nbsp;-x");
-        // Not an entity at all: the name must START with a letter, and a name
-        // that runs to end-of-input has no trailing character to back off to.
-        assert_eq!(strip_tags("<b/>&x9"), "&x9");
-        assert_eq!(strip_tags("<b/>&amp"), "&amp");
+        // Not an entity at all: the name must START with a letter, so the
+        // `&` falls through to `handle_data("&")`.
+        assert_eq!(strip_tags("<b/>&9a<i>x</i>"), "&9ax");
+        assert_eq!(strip_tags("<b/>&<i>x</i>"), "&x");
         // The trail can be the `<` that opens the NEXT tag, in which case the
         // greedy name is already correct and nothing is given back.
         assert_eq!(strip_tags("<i>&amp--</i>"), "&amp--;");
     }
 
-    /// `MLStripper` is fed AND closed, so an incomplete construct at the end
-    /// of the input is flushed as data rather than dropped -- the `end = true`
-    /// half of the tokenizer, which the truncators never take.
+    /// GATE-OFF for `finish_incomplete_construct`: restore the pre-3.12.10
+    /// "scan to the next `>` or `<` and emit the span as data" recovery and
+    /// every discard here reddens.
+    ///
+    /// `MLStripper` is fed AND closed, so `goahead(1)` runs and an
+    /// unterminated construct at end of input is resolved rather than left
+    /// buffered. Current CPython DISCARDS it; the `</`-at-exact-EOF row is the
+    /// single shape that is still data, and it is here so the discard cannot
+    /// be implemented as an unconditional `Ok(())`.
+    ///
+    /// Every expectation below is identical on CPython 3.12.10+, 3.13 and
+    /// 3.14 — deliberately, since these run unconditionally on every runner.
+    /// The shapes 3.13 and 3.14 disagree on are `&` / `&#` at END OF INPUT,
+    /// and they are in the version-dependent fixture instead. Checked
+    /// mechanically by `scripts/check-striptags-version-stability.py`, which
+    /// re-runs every literal in this module through each supported CPython.
     #[test]
-    fn strip_tags_flushes_an_incomplete_tail_because_end_is_set() {
-        assert_eq!(strip_tags("<b>x</b> &am"), "x &am");
-        assert_eq!(strip_tags("<b>x</b> <c"), "x <c");
-        assert_eq!(strip_tags("<b>x</b><!-- open"), "x<!-- open");
+    fn strip_tags_discards_an_incomplete_construct_at_end_of_input() {
+        // An unterminated START tag takes the whole tail with it.
+        assert_eq!(strip_tags("<b>x</b> <c"), "x ");
+        assert_eq!(strip_tags("<b>x</b></d"), "x");
+        assert_eq!(strip_tags("<b x=\">keep"), "");
+        // ...as do an unterminated comment, declaration, PI and CDATA section.
+        assert_eq!(strip_tags("<b>x</b><!-- open"), "x");
+        assert_eq!(strip_tags("<b>x</b><!"), "x");
+        assert_eq!(strip_tags("<b>x</b><?"), "x");
+        assert_eq!(strip_tags("<b>x</b><![CDATA["), "x");
+        // The two shapes that are still DATA: a bare `<` at the very end, and
+        // a `</` that is exactly the end of the input.
+        assert_eq!(strip_tags("<b>x</b><"), "x<");
+        assert_eq!(strip_tags("<b>x</b></"), "x</");
+        // A CDATA body with no closing tag now reaches the sink, because the
+        // tail flush lost its `and not self.cdata_elem` guard.
+        assert_eq!(strip_tags("<script>abc"), "abc");
+        assert_eq!(strip_tags("<style>q{}"), "q{}");
+    }
+
+    /// GATE-OFF for the `<![` branch of `parse_html_declaration`: restore the
+    /// `parse_marked_section` port's `-1` and these reddens.
+    ///
+    /// That port refused unrecognised section keywords, which under
+    /// `goahead(1)` discarded the rest of the input; CPython 3.12.10 replaced
+    /// `parse_marked_section` with "run to the next `>`", so parsing resumes
+    /// after the section. It also removes the `AssertionError` that Django
+    /// used to raise on these values — 496 cells of the #2273 differential
+    /// that had no reference answer at all.
+    #[test]
+    fn an_unrecognised_marked_section_runs_to_the_next_gt() {
+        assert_eq!(strip_tags("x&&&one;<![</p>"), "x&&&one;");
+        assert_eq!(strip_tags("<![foo[x]]>"), "");
+        assert_eq!(strip_tags("<!--a--!><![</p>"), "");
+        // A real CDATA section still runs to `]]>`, so what follows survives.
+        assert_eq!(strip_tags("<![CDATA[y]]>z"), "z");
     }
 
     /// GATE-OFF for the `&#`-bail arm's `continue`: turn it back into
