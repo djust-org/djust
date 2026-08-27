@@ -2266,7 +2266,38 @@ fn int_eq_float(a: i64, b: f64) -> bool {
     b as i64 == a
 }
 
+/// A bool as the integer Python says it is, or `None` for anything else (#2244).
+///
+/// `bool` subclasses `int` in Python: `True` IS `1` numerically, so `True == 1`,
+/// `False == 0`, `True > 0` and `True == Decimal('1')` are all true and Django
+/// says so. Substituting the integer — rather than adding a pairwise arm per
+/// numeric type — is exactly what Python does, and it routes a bool through the
+/// SAME arm its integer value takes, so the two can never drift (#1646).
+///
+/// The two traps `int_eq_float` documents do not bite here, and it is worth
+/// saying why rather than inheriting its guards blind: a bool is only ever 0 or
+/// 1, so there is no float residue near it to mistake for zero and nothing
+/// anywhere near 2^53 to round. The substitution inherits the exact comparison
+/// regardless, by going THROUGH the Integer arms rather than around them.
+fn bool_as_int(v: &Value) -> Option<Value> {
+    match v {
+        Value::Bool(b) => Some(Value::Integer(i64::from(*b))),
+        _ => None,
+    }
+}
+
 fn values_equal(a: &Value, b: &Value) -> bool {
+    // A bool against a NON-bool is compared as the integer it is (#2244).
+    //
+    // Bool-vs-bool is excluded because it has its own arm below with the same
+    // answer — excluding it keeps that arm live rather than dead, and bounds
+    // this at one substitution per side (after either, that operand is an
+    // `Integer` and cannot match again).
+    match (bool_as_int(a), bool_as_int(b)) {
+        (Some(_), Some(_)) | (None, None) => {}
+        (Some(a), None) => return values_equal(&a, b),
+        (None, Some(b)) => return values_equal(a, &b),
+    }
     match (a, b) {
         // BOTH variants, same as `values_identity` below (#2203 review). The
         // `None` literal resolves to `Value::None` and Python None converts to
@@ -2345,6 +2376,21 @@ fn values_identity(a: &Value, b: &Value) -> bool {
 /// Compare two values and return -1 (less), 0 (equal), or 1 (greater).
 /// Returns 0 for incomparable types.
 fn compare_values(a: &Value, b: &Value) -> i32 {
+    // Ordering has the same hole `values_equal` had, from the other side
+    // (#2244): there is no `Bool` arm here at all, so `{% if flag > 0 %}` fell
+    // to `numeric_pair`, which admits only {Integer, Float, Decimal}, returned
+    // `None`, and yielded 0 — "equal", so BOTH `>` and `<` were false while
+    // `>=` and `<=` were both true. Django says `True > 0`.
+    //
+    // Unlike `values_equal` there is no bool-vs-bool arm to defer to, so this
+    // covers that pair too: `{% if a > b %}` on `True`/`False` was 0/"equal"
+    // and is now 1, which is what Django answers.
+    match (bool_as_int(a), bool_as_int(b)) {
+        (None, None) => {}
+        (Some(a), Some(b)) => return compare_values(&a, &b),
+        (Some(a), None) => return compare_values(&a, b),
+        (None, Some(b)) => return compare_values(a, &b),
+    }
     match (a, b) {
         (Value::Integer(a), Value::Integer(b)) => a.cmp(b) as i32,
         (Value::Float(a), Value::Float(b)) => {
@@ -4027,8 +4073,112 @@ mod tests {
             &Value::Integer(5)
         ));
         assert!(!values_equal(&Value::None, &Value::Integer(0)));
-        // Pinned as-is, NOT as correct: Django says `True == 1` is true, since
-        // `bool` subclasses `int`. Out of scope here (#1079) — filed as #2244.
-        assert!(!values_equal(&Value::Bool(true), &Value::Integer(1)));
+        // Was pinned as-is here, NOT as correct, and #2244 corrected it: Django
+        // says `True == 1` is true, since `bool` subclasses `int`.
+        assert!(values_equal(&Value::Bool(true), &Value::Integer(1)));
+    }
+
+    // -----------------------------------------------------------------------
+    // #2244 — a bool IS an integer to Python, in both comparison functions.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_2244_bool_as_int_substitutes_only_bools() {
+        // `Value` has no `PartialEq`, so match the variant rather than compare.
+        assert!(matches!(
+            bool_as_int(&Value::Bool(true)),
+            Some(Value::Integer(1))
+        ));
+        assert!(matches!(
+            bool_as_int(&Value::Bool(false)),
+            Some(Value::Integer(0))
+        ));
+        // Everything else is left alone — the substitution must not widen to
+        // strings or None, which Django compares as themselves (#1079).
+        assert!(bool_as_int(&Value::Integer(1)).is_none());
+        assert!(bool_as_int(&Value::Float(1.0)).is_none());
+        assert!(bool_as_int(&Value::String("1".to_string())).is_none());
+        assert!(bool_as_int(&Value::None).is_none());
+        assert!(bool_as_int(&Value::Missing).is_none());
+    }
+
+    #[test]
+    fn test_2244_values_equal_compares_a_bool_as_its_integer() {
+        // Both operand orders — half a two-sided guard pinned is half a guard
+        // (#1859).
+        let t = Value::Bool(true);
+        let f = Value::Bool(false);
+        assert!(values_equal(&t, &Value::Integer(1)));
+        assert!(values_equal(&Value::Integer(1), &t));
+        assert!(values_equal(&f, &Value::Integer(0)));
+        assert!(values_equal(&Value::Integer(0), &f));
+        assert!(!values_equal(&t, &Value::Integer(0)));
+        assert!(!values_equal(&f, &Value::Integer(1)));
+        assert!(!values_equal(&t, &Value::Integer(2)));
+
+        // Floats reach the exact `int_eq_float` arms, not an epsilon.
+        assert!(values_equal(&t, &Value::Float(1.0)));
+        assert!(values_equal(&Value::Float(0.0), &f));
+        assert!(values_equal(&Value::Float(-0.0), &f));
+        assert!(!values_equal(&t, &Value::Float(1.5)));
+        assert!(!values_equal(&f, &Value::Float(f64::NAN)));
+
+        // NOT widened: Django says `"1" == True` and `None == False` are both
+        // false, and both were false before this.
+        assert!(!values_equal(&t, &Value::String("1".to_string())));
+        assert!(!values_equal(&Value::String("True".to_string()), &t));
+        assert!(!values_equal(&f, &Value::None));
+        assert!(!values_equal(&Value::Missing, &f));
+    }
+
+    #[test]
+    fn test_2244_values_equal_bool_vs_bool_is_untouched() {
+        // The arm the substitution deliberately skips, so it stays live.
+        assert!(values_equal(&Value::Bool(true), &Value::Bool(true)));
+        assert!(values_equal(&Value::Bool(false), &Value::Bool(false)));
+        assert!(!values_equal(&Value::Bool(true), &Value::Bool(false)));
+        assert!(!values_equal(&Value::Bool(false), &Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_2244_compare_values_orders_a_bool_as_its_integer() {
+        assert_eq!(compare_values(&Value::Bool(true), &Value::Integer(0)), 1);
+        assert_eq!(compare_values(&Value::Integer(0), &Value::Bool(true)), -1);
+        assert_eq!(compare_values(&Value::Bool(false), &Value::Integer(1)), -1);
+        assert_eq!(compare_values(&Value::Integer(1), &Value::Bool(false)), 1);
+        assert_eq!(compare_values(&Value::Bool(true), &Value::Integer(1)), 0);
+        assert_eq!(compare_values(&Value::Bool(false), &Value::Integer(0)), 0);
+
+        assert_eq!(compare_values(&Value::Bool(true), &Value::Float(0.5)), 1);
+        assert_eq!(compare_values(&Value::Float(0.5), &Value::Bool(true)), -1);
+        assert_eq!(compare_values(&Value::Bool(false), &Value::Float(0.0)), 0);
+
+        // No bool-vs-bool arm existed here, so this pair was 0 — "equal" — and
+        // `{% if a > b %}` was false for `True > False`. Python orders them.
+        assert_eq!(compare_values(&Value::Bool(true), &Value::Bool(false)), 1);
+        assert_eq!(compare_values(&Value::Bool(false), &Value::Bool(true)), -1);
+        assert_eq!(compare_values(&Value::Bool(true), &Value::Bool(true)), 0);
+
+        // Still incomparable, as before: a bool against a string is 0.
+        assert_eq!(
+            compare_values(&Value::Bool(true), &Value::String("1".to_string())),
+            0
+        );
+        assert_eq!(compare_values(&Value::Bool(true), &Value::None), 0);
+    }
+
+    #[test]
+    fn test_2244_values_identity_does_not_widen() {
+        // The asymmetry to preserve: `True is 1` is FALSE in Python, so `is`
+        // must NOT get the substitution `==` and `<`/`>` just got.
+        assert!(!values_identity(&Value::Bool(true), &Value::Integer(1)));
+        assert!(!values_identity(&Value::Integer(1), &Value::Bool(true)));
+        assert!(!values_identity(&Value::Bool(false), &Value::Integer(0)));
+        assert!(!values_identity(&Value::Integer(0), &Value::Bool(false)));
+        assert!(!values_identity(&Value::Bool(true), &Value::Float(1.0)));
+        assert!(!values_identity(&Value::Bool(false), &Value::Float(0.0)));
+        // `is` between two bools is unchanged — they are singletons.
+        assert!(values_identity(&Value::Bool(true), &Value::Bool(true)));
+        assert!(!values_identity(&Value::Bool(true), &Value::Bool(false)));
     }
 }
