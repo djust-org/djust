@@ -1405,22 +1405,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         The suppression this answers used to live inside `_send_update`, and
         that was the bug: Python evaluates arguments before the call, so the
-        armed `version=` kwarg was already spent by the time the guard ran, and
-        the version went to a frame that never left. Asking HERE — at the one
-        `hotreload=True` call site, before allocating — is the whole fix.
+        armed `version=self._next_version_armed(html)` kwarg was already spent
+        by the time the guard ran, and the version went to a frame that never
+        left. Asking HERE — at the one `hotreload=True` call site, before
+        allocating — is the whole fix.
 
         It is the ONLY place the question is asked; the guard inside
         `_send_update` is deliberately gone rather than kept as a backstop, so
         the two cannot drift and there is no second, silent way to fail
         (#1646, #2233). The comment where it used to be explains why that
         direction is the safe one.
-
-        (Deliberately NOT spelling that kwarg literally: the structural pin
-        `test_every_client_checked_send_path_uses_next_version` counts
-        occurrences with a regex over raw source, so prose naming the pattern
-        is counted as a call site. This docstring tripped it. Tracked as its
-        own fragility in #2238 — a pin that counts comments is the #2213 class.)
-
         """
         return patches == []
 
