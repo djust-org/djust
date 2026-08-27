@@ -722,3 +722,149 @@ fn safe_filter_nested_dict_without_safe_escapes() {
         result
     );
 }
+
+// ===========================================================================
+// 11. #2274 — the INPUT's safety, which only the Rust side can reach
+// ===========================================================================
+//
+// Django's rule marks a filter's output safe when the filter is `is_safe=True`
+// AND ITS INPUT WAS ALREADY SAFE. The `|safe` half of that is exercised from
+// Python in `python/tests/test_safe_survives_is_safe_filter_2274.py`, which is
+// where the Django differential lives. The CONTEXT half — a view doing
+// `self.html = mark_safe(...)`, which reaches the renderer as
+// `Context::mark_safe` — cannot be reached through `_rust.render_template`,
+// because `normalize_django_value` flattens a `SafeString` to a plain `str`
+// before it ever crosses the boundary. So it is pinned here or nowhere.
+
+fn safe_ctx(key: &str, val: &str) -> Context {
+    let mut ctx = ctx_with(key, val);
+    ctx.mark_safe(key.to_string());
+    ctx
+}
+
+#[test]
+fn context_marked_safe_survives_an_is_safe_filter() {
+    // The seed. `lower` is `is_safe=True` in Django, so a value the view
+    // marked safe stays safe through it.
+    let ctx = safe_ctx("html", "<B>trusted</B>");
+    assert_eq!(render("{{ html|lower }}", &ctx), "<b>trusted</b>");
+}
+
+#[test]
+fn context_marked_safe_is_re_tainted_by_a_plain_filter() {
+    // The direction that matters, and the reason the trailing
+    // `|| context.is_safe(var_name)` had to GO rather than stay OR-ed on: a
+    // context flag that no filter can clear is strictly more permissive than
+    // Django. `upper` is registered `is_safe=False` in Django precisely
+    // because `&lt;` upper-cases to `&LT;`.
+    let ctx = safe_ctx("html", "<b>trusted</b>");
+    let out = render("{{ html|upper }}", &ctx);
+    assert!(
+        !out.contains("<B>"),
+        "a non-is_safe filter must re-taint a context-safe value, got: {out:?}"
+    );
+    assert_eq!(out, "&lt;B&gt;TRUSTED&lt;/B&gt;");
+}
+
+#[test]
+fn context_marked_safe_with_no_filter_is_unchanged() {
+    // Guards the refactor itself: moving the flag from a trailing OR to the
+    // loop's seed must not change the zero-filter case.
+    let ctx = safe_ctx("html", "<b>trusted</b>");
+    assert_eq!(render("{{ html }}", &ctx), "<b>trusted</b>");
+}
+
+#[test]
+fn an_unsafe_context_value_is_not_helped_by_an_is_safe_filter() {
+    // BOTH terms of Django's rule are load-bearing. Dropping the input term
+    // would make `{{ hostile|lower }}` safe, which is a direct XSS — so assert
+    // the term is actually consulted, not just present.
+    let ctx = ctx_with("html", "<img src=x onerror=alert(1)>");
+    let out = render("{{ html|lower }}", &ctx);
+    assert!(
+        !out.contains("<img"),
+        "hostile input must stay escaped, got: {out:?}"
+    );
+    assert!(out.contains("&lt;img"), "{out:?}");
+}
+
+#[test]
+fn firstof_and_the_variable_arm_agree_about_a_context_safe_value() {
+    // `{% firstof %}` reads `get_value_safe`, the third of the three sites.
+    // Before #2274 its no-filter branch returned a hard `false`, so adding an
+    // identity filter CHANGED the escaping — `{% firstof v %}` escaped while
+    // `{% firstof v|lower %}` did not.
+    let ctx = safe_ctx("html", "<b>trusted</b>");
+    assert_eq!(render("{% firstof html %}", &ctx), "<b>trusted</b>");
+    assert_eq!(render("{% firstof html|lower %}", &ctx), "<b>trusted</b>");
+    assert_eq!(render("{% cycle html %}", &ctx), "<b>trusted</b>");
+}
+
+#[test]
+fn firstof_still_escapes_an_unsafe_value() {
+    let ctx = ctx_with("html", "<img src=x onerror=alert(1)>");
+    assert!(!render("{% firstof html %}", &ctx).contains("<img"));
+    assert!(!render("{% firstof html|lower %}", &ctx).contains("<img"));
+}
+
+#[test]
+fn a_non_sequence_never_gets_an_unearned_safe_grant() {
+    // `unordered_list` / `safeseq` are in `safe_output_filters` because they
+    // escape every item they emit. On a non-sequence they emitted nothing and
+    // handed the raw input back under that same grant — `|safe` by another
+    // name, live on an unmodified build.
+    for src in [
+        "{{ html|unordered_list }}",
+        "{{ html|safeseq }}",
+        "{{ html|unordered_list|lower }}",
+        "{{ html|safeseq|lower }}",
+    ] {
+        let ctx = ctx_with("html", "<img src=x onerror=alert(1)>");
+        let out = render(src, &ctx);
+        assert!(!out.contains("<img"), "{src} leaked live markup: {out:?}");
+    }
+}
+
+#[test]
+fn a_real_list_still_gets_its_markup() {
+    // The other direction, so the fix above is not "escape everything": the
+    // shape these filters are actually for keeps emitting live `<li>` while
+    // escaping the items inside it.
+    let mut ctx = Context::new();
+    ctx.set(
+        "items".to_string(),
+        Value::List(vec![Value::String("<i>a</i>".to_string())]),
+    );
+    let out = render("{{ items|unordered_list }}", &ctx);
+    assert!(out.contains("<li>"), "lost its own markup: {out:?}");
+    assert!(out.contains("&lt;i&gt;"), "stopped escaping items: {out:?}");
+}
+
+#[test]
+fn inline_if_arm_honours_the_context_safe_flag() {
+    // The InlineIf arm's seed, which nothing else in either suite reaches: the
+    // Python differential drives it through `_rust.render_template`, where
+    // `normalize_django_value` has already flattened away every `SafeString`,
+    // so `Context::is_safe` is false for every variable and the seed is a
+    // no-op there. Gate-off proved it: reverting this one seed to `false` left
+    // both suites green until this test existed.
+    let mut ctx = safe_ctx("html", "<B>trusted</B>");
+    ctx.set("c".to_string(), Value::Bool(true));
+    assert_eq!(render("{{ html if c else \"\" }}", &ctx), "<B>trusted</B>");
+    assert_eq!(
+        render("{{ html if c else \"\" |lower }}", &ctx),
+        "<b>trusted</b>"
+    );
+}
+
+#[test]
+fn inline_if_arm_re_taints_an_unsafe_value() {
+    // Same shape, opposite side — without this the test above would also pass
+    // on an engine that never escapes anything in the inline-if arm.
+    let mut ctx = ctx_with("html", "<img src=x onerror=alert(1)>");
+    ctx.set("c".to_string(), Value::Bool(true));
+    assert!(!render("{{ html if c else \"\" |lower }}", &ctx).contains("<img"));
+    let mut safe = safe_ctx("html", "<b>t</b>");
+    safe.set("c".to_string(), Value::Bool(true));
+    assert!(!render("{{ html if c else \"\" |upper }}", &safe).contains("<B>"));
+}

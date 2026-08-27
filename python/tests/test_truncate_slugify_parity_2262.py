@@ -289,19 +289,19 @@ _SUITES = [
 #:   LAST filter (#2257 residue 1). 4,349 divergent cells of 13,500 in a sweep
 #:   where `upper|` and `lower|` diverge on exactly the unchained cells.
 #:   Pinned in :class:`TestEscapeChainIsBlockedOn2257`.
-#: * `safe|` — djust decides escaping from a NAME whitelist, while Django's
-#:   rule is `is_safe=True` **and the input was already safe**, so `|safe` does
-#:   not survive any subsequent filter here. Measured against a real
-#:   `origin/main` build: **24 of Django's 27 `is_safe=True` filters** diverge
-#:   on `{{ p|safe|X }}` there, versus 23 on this branch (this port fixes
-#:   `slugify`); without `|safe` it is 5 on main and 1 here. Pre-existing and
-#:   framework-wide, not a truncation bug. Pinned in :class:`TestSafeMarking`.
 #: * `striptags|` — 478 cells, and `striptags` itself diverges on 198 of 3,000
 #:   plain values (it deletes everything after a lone `<`, which Django keeps).
 #:
+#: `safe|` was excluded here for the same reason until #2274: djust decided
+#: escaping from a NAME whitelist alone, while Django's rule is `is_safe=True`
+#: **and the input was already safe**, so `|safe` did not survive any
+#: subsequent filter. That is now fixed — `filter_output_is_safe` takes the
+#: input's safety and feeds it forward — so `safe|` is back in the sweep, and
+#: :class:`TestSafeMarking` asserts agreement rather than pinning divergence.
+#:
 #: `upper|` and `lower|` stay, because they are the two that measure THESE
 #: filters rather than a neighbour's bug.
-_CHAINS = ["", "upper|", "lower|"]
+_CHAINS = ["", "upper|", "lower|", "safe|"]
 
 
 def _sweep(name: str, template: str, args: list, gen, chains, n: int, seed: int):
@@ -473,40 +473,30 @@ class TestSafeMarking:
         for value in ["<b>&'\"</b>", "a & b", "<script>x</script>", "'q'"]:
             assert_agrees(source, value)
 
-    def test_safe_does_not_survive_these_filters_and_that_is_framework_wide(self) -> None:
-        """`{{ p|safe|X }}` diverges, and it is not a truncation bug.
+    def test_safe_now_survives_these_filters(self) -> None:
+        """`{{ p|safe|X }}` agrees. This pin was inverted by #2274.
 
-        Django's `FilterExpression.resolve` marks a filter's output safe when
-        the filter has `is_safe=True` **and the input was already `SafeData`**.
-        djust models only the first half, as a name whitelist, so `|safe` does
-        not survive any subsequent filter.
+        It used to assert the DIVERGENCE, with the instruction "closing it
+        turns this red deliberately" — which is exactly what happened. Django's
+        `FilterExpression.resolve` marks a filter's output safe when the filter
+        has `is_safe=True` **and the input was already `SafeData`**; djust
+        modelled only the first half, so `|safe` did not survive any subsequent
+        filter. `filter_output_is_safe` now takes the input's safety and feeds
+        it forward, so these agree and `safe|` is back in `_CHAINS`.
 
-        Measured against a real `origin/main` build with the probe in
-        `scratch/2262/safe-chain-scope.py`: **24 of Django's 27 `is_safe=True`
-        filters** diverge on `{{ p|safe|X }}` there — `lower`, `capfirst`,
-        `wordwrap`, `addslashes`, `urlize` and the rest, none of which this PR
-        touches — versus 23 on this branch, the difference being `slugify`,
-        which this port fixes. Without the `|safe`, main diverges on 5 of 27
-        and this branch on 1 (`striptags`, untouched here).
-
-        So: pre-existing, framework-wide, and strictly improved by this PR on
-        both axes. Pinned so it is visible rather than discovered, and so
-        closing it turns this red deliberately.
+        `title` and `truncatechars` are both `is_safe=True`, so the markup must
+        come through LIVE — an "escape everything" implementation fails here.
         """
         for source in ("{{ p|safe|title }}", "{{ p|safe|truncatechars:20 }}"):
             django_out, djust_out = render_both(source, "<b>&x</b>")
-            # Django leaves the markup unescaped (the SafeString survived);
-            # `title` uppercases the tag name, hence the case-insensitive form.
             assert "<" in django_out and "&lt;" not in django_out, (
                 f"Django changed: {source} -> {django_out!r}"
             )
-            assert "&lt;" in djust_out, (
-                f"{source} now agrees — djust's safe rule learned Django's "
-                f"`is_safe`-and-input-was-safe contract. Drop this pin and put "
-                f"`safe|` back in _CHAINS."
-            )
-        # Without `|safe` the same filters agree, which localizes the fault to
-        # the safe rule rather than to anything ported here.
+            assert djust_out == django_out, f"{source}: django={django_out!r} djust={djust_out!r}"
+        # And the re-taint direction, so the above is not "stop escaping":
+        # `upper` is `is_safe=False` in Django, so it undoes the `|safe`.
+        assert_agrees("{{ p|safe|upper }}", "<b>&x</b>")
+        # Without `|safe` the same filters still escape.
         assert_agrees("{{ p|title }}", "<b>&x</b>")
         assert_agrees("{{ p|truncatechars:20 }}", "<b>&x</b>")
 

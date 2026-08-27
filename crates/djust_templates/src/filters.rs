@@ -798,7 +798,23 @@ fn apply_builtin_filter(
         }
         "safeseq" => {
             // safeseq filter: marks each item in a sequence as safe (no-op at filter level)
-            Ok(value.clone())
+            match value {
+                Value::List(_) | Value::Tuple(_) => Ok(value.clone()),
+                // NOT verbatim (#2274). `safeseq` is in `SAFE_OUTPUT_FILTERS`,
+                // so whatever comes out of here is emitted WITHOUT escaping.
+                // For a sequence that grant is earned — marking each item safe
+                // is the filter's whole job. For a non-sequence the filter did
+                // literally nothing, so returning the input verbatim made
+                // `{{ hostile_string|safeseq }}` an exact synonym for
+                // `|safe` — a live XSS with no `mark_safe` anywhere in sight.
+                // Escaping here keeps the unconditional grant honest. Django
+                // reaches the same place by a different route: it builds a
+                // list of safe CHARACTERS whose `repr` the renderer escapes.
+                // The output SHAPE still differs from Django's (djust does not
+                // iterate a string as a character sequence) — that is a
+                // separate parity bug, filed; this is only the safety half.
+                _ => Ok(Value::String(html_escape(&value.to_string()))),
+            }
         }
         "escapeseq" => {
             // escapeseq filter: apply HTML escaping to each item in a sequence
@@ -828,7 +844,12 @@ fn apply_builtin_filter(
                 Value::List(items) | Value::Tuple(items) => {
                     Ok(Value::String(unordered_list(items, 1)))
                 }
-                _ => Ok(value.clone()),
+                // Same unearned-grant bug as `safeseq` above (#2274): the
+                // `<li>` builder escapes every item it emits, which is what
+                // earns `unordered_list` its place in `SAFE_OUTPUT_FILTERS` —
+                // but on a non-sequence it emitted nothing and handed the raw
+                // input back under that same grant.
+                _ => Ok(Value::String(html_escape(&value.to_string()))),
             }
         }
         "truncatechars_html" => match truncate_arg(arg, 20) {
