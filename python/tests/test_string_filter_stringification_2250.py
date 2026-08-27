@@ -431,13 +431,23 @@ def test_escape_and_safe_are_the_named_exclusions() -> None:
     djust's ``escape``/``safe`` return the value unchanged, so a ``Decimal``
     stays a ``Decimal`` to the render site and localizes there. Django's are
     ``@stringfilter``s and return a ``str``, which ``localize()`` leaves alone.
-    Different mechanism from the other 27; coercing them regresses
-    ``{{ d|escape|floatformat }}`` because ``floatformat`` cannot parse a
-    numeric string. Both measured in #2257.
+    Different mechanism from the other 27. Measured in #2257.
 
     Asserting the CURRENT divergence (a characterization test, like the one this
     file's fix turned red in ``test_scientific_localization_2242``) so whoever
     closes #2257 has to come here and update it deliberately.
+
+    **Updated deliberately by #2253**, which is what this docstring asked for.
+    The second half of the reason above — *"coercing them regresses
+    ``{{ d|escape|floatformat }}`` because ``floatformat`` cannot parse a
+    numeric string"* — was #2257's residue 2, and it is closed: Django's
+    ``floatformat`` begins ``Decimal(str(text))`` on **every** input type, and
+    djust's port now does too, so ``{{ "1E+1"|upper|floatformat }}`` is ``10``
+    on both sides. The exclusion itself still stands on residue 1 alone (the
+    ``escape``/``safe`` no-op), which the first two assertions below pin.
+    Whoever closes residue 1 should re-measure the 1,168 cells #2257 records as
+    the cost of coercing them — that count was taken while the blocker was
+    still open.
     """
     assert NAMED_EXCLUSIONS <= _django_string_filters(), (
         "escape/safe are no longer Django stringfilters — the exclusion needs rethinking"
@@ -450,9 +460,13 @@ def test_escape_and_safe_are_the_named_exclusions() -> None:
                 expected, got = _render_both(source, value)
                 assert expected == "1E-9", f"Django changed: {source} -> {expected!r}"
                 assert got == "0,000000001", f"#2257 closed? {source} -> {got!r}"
-            # And the blocker, on a plain string so it is visibly independent of
-            # anything #2250 changed.
-            assert _render_both("{{ p|upper|floatformat }}", "1E+1") == ("10", "1E+1")
+            # The blocker, on a plain string so it is visibly independent of
+            # anything #2250 changed. It read `("10", "1E+1")` — a divergence —
+            # until #2253 ported Django's `floatformat`, whose first step is
+            # `Decimal(str(text))` on every input type. Now both say `10`, and
+            # asserting the pair (rather than just djust) keeps it a
+            # differential: if Django ever changed, this reddens too.
+            assert _render_both("{{ p|upper|floatformat }}", "1E+1") == ("10", "10")
     finally:
         render_env.apply_number_format()
 
