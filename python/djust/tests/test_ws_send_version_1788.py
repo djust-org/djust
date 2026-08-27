@@ -26,13 +26,16 @@ drift and would give a FALSE PASS. The TRUE baseline-loss trigger is
 
 from __future__ import annotations
 
+import ast
 import inspect
+import re
 
 import pytest
 from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.tests._source_scan import without_prose
 
 
 class _WSVersionView(LiveView):
@@ -341,6 +344,61 @@ def test_next_version_is_monotonic():
     assert seq == [1, 2, 3, 4, 5], f"_next_version must be monotonic from 1, got {seq}"
 
 
+# --------------------------------------------------------------------------- #
+# The #1817 render-send pin, and the canaries that prove it counts CODE (#2238).
+# --------------------------------------------------------------------------- #
+
+# Render-send sites route through ``self._next_version_armed(html)`` in two
+# shapes, distinguished by the spacing the source actually uses: the inline
+# keyword argument ``version=self._next_version_armed(html)``, and the
+# assignment ``X = self._next_version_armed(html)`` where a local is reused
+# below (e.g. ``wire_version`` for telemetry / a separate strip-extract).
+ARMED_INLINE = re.compile(r"version=self\._next_version_armed\(")
+ARMED_ASSIGN = re.compile(r"\b[a-z_]+ = self\._next_version_armed\(")
+# The bare form is reserved for NON-render frames.
+BARE_INLINE = re.compile(r"version=self\._next_version\(\)")
+BARE_ASSIGN = re.compile(r"\b[a-z_]+ = self\._next_version\(\)")
+
+# The pinned counts, at module level so the canaries below can assert that a
+# deleted render-send path actually breaks the pin (#2238).
+EXPECTED_ARMED_INVOCATIONS = 13
+EXPECTED_BARE_SEND_SITES = 0
+
+
+def _count_version_sites(ws_src: str, helper_src: str) -> dict:
+    """Count the ``_next_version*`` call sites in ``ws_src``.
+
+    Both sources are run through ``without_prose`` FIRST (#2238). Counting raw
+    source made the pin wrong in both directions: a docstring naming the
+    pattern inflated the count (observed in #2237 — the fix there was to reword
+    the prose, which is backwards), and a call site inside a commented-out
+    block still counted, so deleting a render-send path left the pin green.
+    ``without_prose`` keeps string literals, which are code — the sibling
+    assertions below grep for names passed to ``getattr``.
+
+    Split out as a function so the canaries can run the REAL counting logic
+    against a mutated copy of the source (#1459) rather than re-implementing it.
+    """
+    src = without_prose(ws_src)
+    helper = without_prose(helper_src)
+    armed_inline = len(ARMED_INLINE.findall(src))
+    armed_assign = len(ARMED_ASSIGN.findall(src))
+    bare_inline = len(BARE_INLINE.findall(src))
+    bare_assign = len(BARE_ASSIGN.findall(src))
+    # The helper body contains one ``version = self._next_version()``
+    # delegation; exclude it so this counts only true send-site allocations.
+    helper_internal = len(BARE_ASSIGN.findall(helper))
+    return {
+        "armed_inline": armed_inline,
+        "armed_assign": armed_assign,
+        "armed_invocations": armed_inline + armed_assign,
+        "bare_inline": bare_inline,
+        "bare_assign": bare_assign,
+        "helper_internal": helper_internal,
+        "bare_send_sites": bare_inline + bare_assign - helper_internal,
+    }
+
+
 def test_every_client_checked_send_path_uses_next_version():
     """Source-pin: every ``_send_update(...)`` call that stamps a client-checked frame
     must route through the consumer counter — RENDER-SEND paths via
@@ -358,21 +416,22 @@ def test_every_client_checked_send_path_uses_next_version():
     event path — its ``result['html']`` shape is not the pre-strip render the recovery
     path expects). The shared helper ``_next_version_armed(html)`` (which internally
     calls ``_next_version()`` once) is the canonical primitive for render-send paths.
-    """
-    import re
 
+    Every count below is taken over PROSE-STRIPPED source (#2238) — see
+    ``_count_version_sites``. The two canaries that follow prove that in both
+    directions against the real module.
+    """
     import djust.streaming as streaming_mod
     import djust.websocket as ws_mod
 
     ws_src = inspect.getsource(ws_mod)
+    helper_src = inspect.getsource(ws_mod.LiveViewConsumer._next_version_armed)
+    counts = _count_version_sites(ws_src, helper_src)
 
     # --- RENDER-SEND paths: must route through _next_version_armed(html) (#1817) ---
-    # Both the inline kwarg form ``version=self._next_version_armed(html)`` and the
-    # assignment form ``X = self._next_version_armed(html)`` (where a local is reused
-    # below — e.g. wire_version for telemetry / a separate strip/extract).
-    armed_inline = len(re.findall(r"version=self\._next_version_armed\(", ws_src))
-    armed_assign = len(re.findall(r"\b[a-z_]+ = self\._next_version_armed\(", ws_src))
-    armed_invocations = armed_inline + armed_assign
+    armed_inline = counts["armed_inline"]
+    armed_assign = counts["armed_assign"]
+    armed_invocations = counts["armed_invocations"]
 
     # Render-send sites routed through the armed helper (verified at #1817;
     # event sites removed at #1907 THE FLIP — see below):
@@ -400,7 +459,7 @@ def test_every_client_checked_send_path_uses_next_version():
     # wire-version + recovery arming on the WS event path is end-to-end pinned by
     # ``test_recovery_version_staleness_1817`` + ``test_ws_send_version_1788``'s
     # WebsocketCommunicator integration cases (which DID stay green across the flip).
-    EXPECTED_ARMED_INVOCATIONS = 13
+    # (pinned at module level — see EXPECTED_ARMED_INVOCATIONS)
     assert armed_invocations == EXPECTED_ARMED_INVOCATIONS, (
         f"expected {EXPECTED_ARMED_INVOCATIONS} self._next_version_armed() invocations "
         f"across RENDER-SEND paths; found {armed_invocations} "
@@ -414,13 +473,10 @@ def test_every_client_checked_send_path_uses_next_version():
     # The bare form is now reserved for: the helper body's single delegated call, the
     # mount baseline (non-render), and the actor event path (left unarmed, #1817
     # follow-up). Count send-site bare invocations EXCLUDING the helper-internal one.
-    bare_inline = len(re.findall(r"version=self\._next_version\(\)", ws_src))
-    bare_assign = len(re.findall(r"\b[a-z_]+ = self\._next_version\(\)(?!_armed)", ws_src))
-    # The helper body contains one ``version = self._next_version()`` delegation;
-    # exclude it so this counts only true send-site baseline allocations.
-    helper_src = inspect.getsource(ws_mod.LiveViewConsumer._next_version_armed)
-    helper_internal = len(re.findall(r"\b[a-z_]+ = self\._next_version\(\)", helper_src))
-    bare_send_sites = bare_inline + bare_assign - helper_internal
+    bare_inline = counts["bare_inline"]
+    bare_assign = counts["bare_assign"]
+    helper_internal = counts["helper_internal"]
+    bare_send_sites = counts["bare_send_sites"]
 
     # Bare send-site invocations (verified at #1817; actor site moved at #1907;
     # mount baseline moved at #1919):
@@ -434,7 +490,7 @@ def test_every_client_checked_send_path_uses_next_version():
     # ``consumer._next_version()`` (still the consumer counter, still the NO-ARM
     # mount baseline), but the call site is now in runtime.py, so this consumer-file
     # grep no longer counts it. No bare send-site remains in websocket.py.
-    EXPECTED_BARE_SEND_SITES = 0
+    # (pinned at module level — see EXPECTED_BARE_SEND_SITES)
     assert bare_send_sites == EXPECTED_BARE_SEND_SITES, (
         f"expected {EXPECTED_BARE_SEND_SITES} bare self._next_version() send-site "
         f"invocations in websocket.py (mount baseline moved to the next_mount_version "
@@ -450,7 +506,10 @@ def test_every_client_checked_send_path_uses_next_version():
         "LiveViewConsumer must define _next_version_armed(html) — the canonical "
         "render-send primitive that advances the wire version AND arms recovery (#1817)."
     )
-    assert "self._next_version()" in helper_src and "self._arm_recovery(" in helper_src, (
+    # Prose-stripped: the helper's own docstring names both symbols, so a raw-source
+    # `in` would pass on a body that had been emptied (#2238).
+    helper_code = without_prose(helper_src)
+    assert "self._next_version()" in helper_code and "self._arm_recovery(" in helper_code, (
         "_next_version_armed must delegate to _next_version() AND _arm_recovery(html) "
         "so the version allocation and recovery baseline can never drift (#1817)."
     )
@@ -462,7 +521,7 @@ def test_every_client_checked_send_path_uses_next_version():
     # NO-ARM (mount has no prior frame to recover to). Pin it at its converged home.
     import djust.runtime as rt_mod
 
-    mount_ver_src = inspect.getsource(rt_mod.WSConsumerTransport.next_mount_version)
+    mount_ver_src = without_prose(inspect.getsource(rt_mod.WSConsumerTransport.next_mount_version))
     assert "self._consumer._next_version()" in mount_ver_src, (
         "WSConsumerTransport.next_mount_version must stamp the mount frame version via "
         "the consumer counter (consumer._next_version()) so the client baseline = 1 and "
@@ -472,19 +531,142 @@ def test_every_client_checked_send_path_uses_next_version():
     # handle_request_html must send the consumer-owned recovery version, NOT a fresh
     # Rust version (the client sets clientVdomVersion = data.version directly on
     # html_recovery — 03-websocket.js:727).
-    req_html_src = inspect.getsource(ws_mod.LiveViewConsumer.handle_request_html)
+    req_html_src = without_prose(inspect.getsource(ws_mod.LiveViewConsumer.handle_request_html))
     assert "_recovery_version" in req_html_src, (
         "handle_request_html must send self._recovery_version (the consumer version of "
         "the frame being replaced), not a fresh Rust version (#1788)."
     )
 
     # HIDDEN #2 — streaming push_state must route through the consumer counter.
-    stream_src = inspect.getsource(streaming_mod.StreamingMixin.push_state)
+    stream_src = without_prose(inspect.getsource(streaming_mod.StreamingMixin.push_state))
     assert stream_src.count("self._ws_consumer._next_version()") >= 2, (
         "StreamingMixin.push_state bypasses _send_update and sends patch + html_update "
         "directly; both MUST stamp self._ws_consumer._next_version() (HIDDEN #2, #1788). "
         f"Found {stream_src.count('self._ws_consumer._next_version()')} of 2."
     )
+
+
+def _comment_out_statement_containing(src: str, needle: str) -> str:
+    """Comment out the whole statement whose source contains ``needle``.
+
+    The realistic shape of the false negative: a developer comments out a
+    render-send block and leaves the text behind. Commenting a single line of a
+    multi-line call would not parse, and an unparseable source is returned
+    unchanged by ``without_prose`` — which would make the canary measure a
+    build break rather than the behaviour (#2129/#2135). So the enclosing
+    statement is found with ``ast``, every one of its lines is commented, and a
+    ``pass`` is inserted at the same indent to keep the block valid. The caller
+    asserts the result still parses.
+    """
+    lines = src.splitlines(keepends=True)
+    target_line = next((i for i, line in enumerate(lines, start=1) if needle in line), None)
+    assert target_line is not None, f"MUTATION TARGET NOT FOUND: {needle!r}"
+
+    innermost = None
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.stmt):
+            continue
+        end = getattr(node, "end_lineno", None)
+        if end is None or not (node.lineno <= target_line <= end):
+            continue
+        if innermost is None or node.lineno > innermost.lineno:
+            innermost = node
+    assert innermost is not None, f"no enclosing statement for {needle!r}"
+
+    out = list(lines)
+    for i in range(innermost.lineno - 1, innermost.end_lineno):
+        out[i] = "# " + out[i]
+    out.insert(innermost.lineno - 1, " " * innermost.col_offset + "pass\n")
+    mutated = "".join(out)
+    assert mutated != src, "NO-OP MUTATION"
+    ast.parse(mutated)  # a mutation that breaks the build measures nothing
+    return mutated
+
+
+def test_the_pin_does_not_count_prose_that_names_the_pattern():
+    """Empirical canary (#1459), false-positive direction — the OBSERVED bug.
+
+    #2237 added a docstring containing the literal ``version=self._next_version_armed(html)``
+    while explaining an argument-evaluation defect, and this pin went red with
+    "expected 13 ... found 14". The prose was reworded to appease the checker,
+    which is backwards: the code was correct.
+
+    The mutation appends a function whose docstring AND comments name every
+    counted shape. The raw-source counts are asserted to rise, so the canary
+    cannot pass by failing to apply (#2129).
+    """
+    import djust.websocket as ws_mod
+
+    ws_src = inspect.getsource(ws_mod)
+    helper_src = inspect.getsource(ws_mod.LiveViewConsumer._next_version_armed)
+    baseline = _count_version_sites(ws_src, helper_src)
+
+    prose = '''
+
+def _prose_that_names_every_counted_shape():
+    """Explains the pattern without using it.
+
+    Render-send paths stamp version=self._next_version_armed(html), or keep the
+    allocation in a local: wire_version = self._next_version_armed(html).
+    Non-render frames use version=self._next_version() and the helper body does
+    version = self._next_version().
+    """
+    # version=self._next_version_armed(html)
+    # wire_version = self._next_version_armed(html)
+    # version=self._next_version()
+    return None
+'''
+    mutated = ws_src + prose
+    assert mutated != ws_src, "NO-OP MUTATION"
+
+    # The mutation is real: a raw-source count DOES inflate. (This is the
+    # pre-#2238 behaviour, reproduced here so the canary cannot pass vacuously.)
+    assert len(ARMED_INLINE.findall(mutated)) == len(ARMED_INLINE.findall(ws_src)) + 2
+    assert len(ARMED_ASSIGN.findall(mutated)) == len(ARMED_ASSIGN.findall(ws_src)) + 2
+    assert len(BARE_INLINE.findall(mutated)) == len(BARE_INLINE.findall(ws_src)) + 2
+
+    after = _count_version_sites(mutated, helper_src)
+    assert after == baseline, (
+        "prose naming the pattern changed the counts — the pin is counting comments "
+        f"and docstrings again (#2238). baseline={baseline} after={after}"
+    )
+
+
+def test_the_pin_notices_a_render_send_path_that_was_commented_out():
+    """Empirical canary (#1459), false-negative direction — the LATENT half.
+
+    Nothing caught this before #2238: a real render-send call site commented out
+    still matched the raw-source regex, so deleting a path the pin exists to
+    protect left it green. The mutation comments out one genuine
+    ``version=self._next_version_armed(html)`` statement; the raw count is
+    asserted UNCHANGED (that IS the old bug) while the prose-stripped count must
+    drop, so the pin's own assertion goes red.
+    """
+    import djust.websocket as ws_mod
+
+    ws_src = inspect.getsource(ws_mod)
+    helper_src = inspect.getsource(ws_mod.LiveViewConsumer._next_version_armed)
+    baseline = _count_version_sites(ws_src, helper_src)
+
+    mutated = _comment_out_statement_containing(ws_src, "version=self._next_version_armed(html)")
+
+    # The old, raw-source pin would NOT have noticed: the text is still there.
+    assert len(ARMED_INLINE.findall(mutated)) == len(ARMED_INLINE.findall(ws_src)), (
+        "the mutation was expected to leave the raw text intact (that is the "
+        "false negative being demonstrated)"
+    )
+
+    after = _count_version_sites(mutated, helper_src)
+    assert after["armed_inline"] == baseline["armed_inline"] - 1, (
+        "commenting out a real render-send site must DROP the counted sites; the pin "
+        f"still cannot see the deletion. baseline={baseline} after={after}"
+    )
+    assert after["armed_invocations"] == baseline["armed_invocations"] - 1
+
+    # And that is what turns the pin RED: the count no longer equals the pinned
+    # constant the pin asserts against.
+    assert baseline["armed_invocations"] == EXPECTED_ARMED_INVOCATIONS
+    assert after["armed_invocations"] != EXPECTED_ARMED_INVOCATIONS
 
 
 def test_arm_recovery_stores_consumer_version():
@@ -495,7 +677,10 @@ def test_arm_recovery_stores_consumer_version():
     """
     import djust.websocket as ws_mod
 
-    arm_src = inspect.getsource(ws_mod.LiveViewConsumer._arm_recovery)
+    # ``without_prose`` and not ``code_only``: the name is passed as a STRING —
+    # ``getattr(self, "_last_sent_version", 0)`` — so blanking string literals
+    # would blank the very thing this asserts (#2238).
+    arm_src = without_prose(inspect.getsource(ws_mod.LiveViewConsumer._arm_recovery))
     assert "_last_sent_version" in arm_src, (
         "_arm_recovery must store self._recovery_version = self._last_sent_version so the "
         "html_recovery frame carries the consumer version of the frame it replaces (#1788)."
