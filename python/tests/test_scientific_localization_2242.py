@@ -22,10 +22,13 @@ What this file does NOT cover, deliberately
 The issue's comment folds in two more consequences — ``truncatechars`` and
 ``make_list|first`` seeing the scientific form where Django's string filters see
 ``str(Decimal)`` — on the premise that "one fix covers all three". Measured after
-this fix, that premise is **false**, and the measurement is pinned below by
-:func:`test_the_string_filter_divergence_is_a_separate_root_cause`: those filters
-never reach ``localize_number`` at all, and their divergence is not even confined
-to values past the cutoff. Tracked separately as #2250 (#1079).
+this fix, that premise was **false**, and the measurement is pinned below by
+:func:`test_the_string_filter_divergence_was_a_separate_root_cause`: those
+filters never reach ``localize_number`` at all, and their divergence was not
+even confined to values past the cutoff. Fixed separately in #2250 (#1079) by a
+coercion at the filter boundary; that test now asserts the parity rather than
+the divergence, and per-filter coverage lives in
+``test_string_filter_stringification_2250.py``.
 
 The number format is process-global (a Rust thread-local), so every test here
 restores it in a ``finally``. A reset fixture leaking ``NUMBER_GROUPING=0`` into
@@ -247,45 +250,51 @@ def test_floatformat_is_untouched_by_the_scientific_branch() -> None:
         render_env.apply_number_format()
 
 
-def test_the_string_filter_divergence_is_a_separate_root_cause() -> None:
-    """#2242's comment folds in `truncatechars` / `make_list|first`. This fix does NOT close them.
+def test_the_string_filter_divergence_was_a_separate_root_cause() -> None:
+    """#2242's comment folded in `truncatechars` / `make_list|first`; #2250 closed them.
 
-    The comment's premise was "one fix covers all three". It is wrong twice, and
-    this test pins both halves so the residue is a measurement rather than an
-    expectation:
+    The comment's premise was "one fix covers all three". It was wrong twice —
+    a different mechanism (Django's string filters are `@stringfilter` and
+    consume ``str(Decimal)``; djust's consumed `Display`, the number-rendered
+    form, and neither side goes anywhere near `localize_number`), and not
+    confined to the cutoff (``Decimal('1E-9')`` is nine digits and diverged).
 
-    1. **Different mechanism.** Django's string filters are `@stringfilter`, so
-       they consume ``str(Decimal)``; djust's consume the number-rendered form
-       (`expand_decimal_exponent`). Neither side goes anywhere near
-       `localize_number`, which is all this fix touches.
-    2. **Not confined to the cutoff.** ``Decimal('1E-9')`` is nowhere near 200
-       digits, and it diverges too: Django's `truncatechars` sees ``1E-9``,
-       djust's sees ``0.000000001``.
+    This started life as a *characterization* test asserting that divergence, so
+    that whoever fixed the string-filter class would have to turn it red and
+    update it deliberately. #2250 did: a `Value::Decimal` reaching one of
+    Django's `@stringfilter`s is now coerced to the ``str()`` form the variant
+    already carries. The assertions below are the same four cases, flipped from
+    "these diverge" to "these agree".
 
-    Kept as a *characterization* test, asserting today's divergence rather than
-    parity, so that a future fix for the string-filter class turns it red and
-    has to update it deliberately. Tracked at #2250.
+    The *separate-root-cause* half of the claim survives the fix and is what
+    this file still needs to state: #2250's coercion is at the filter boundary
+    and touches nothing `localize_number` does, which is why the bare-render
+    assertion at the bottom is unchanged. Per-filter coverage lives in
+    ``test_string_filter_stringification_2250.py``.
     """
     try:
         render_env.apply_number_format()
-        # Past the cutoff: the forms agree except for `str()`'s uppercase `E`.
+        # Past the cutoff: the forms differed only in `str()`'s uppercase `E`.
         big = Decimal("6.25E-2244")
         dj, du = _render_both("{{ p|truncatechars:8 }}", big)
-        assert dj == "6.25E-2…" and du == "6.25e-2…", (dj, du)
+        assert dj == "6.25E-2…" and du == dj, (dj, du)
 
-        # BELOW the cutoff, and still divergent — which the issue's framing
-        # ("only values past the 200-digit cutoff") does not predict.
+        # BELOW the cutoff, and it diverged too — which #2242's framing
+        # ("only values past the 200-digit cutoff") did not predict.
         small = Decimal("1E-9")
         _, digits, exponent = small.as_tuple()
         assert abs(exponent) + len(digits) <= 200, "this case must be BELOW the cutoff"
         dj, du = _render_both("{{ p|truncatechars:8 }}", small)
-        assert dj == "1E-9" and du == "0.00000…", (dj, du)
+        assert dj == "1E-9" and du == dj, (dj, du)
         dj, du = _render_both("{{ p|make_list|first }}", small)
-        assert dj == "1" and du == "0", (dj, du)
+        assert dj == "1" and du == dj, (dj, du)
 
-        # And the bare render — what this fix DOES cover — agrees for all three.
+        # And the bare render — what THIS fix covers — still agrees, and still
+        # expands rather than showing `str()`. #2250 moved the filter boundary,
+        # not the render path.
         for value in (big, small, Decimal("1.230E-250")):
             expected, got = _render_both("{{ p }}", value)
             assert got == expected, f"{value}: django={expected!r} djust={got!r}"
+        assert _rust.render_template("{{ p }}", {"p": small}) == "0.000000001"
     finally:
         render_env.apply_number_format()
