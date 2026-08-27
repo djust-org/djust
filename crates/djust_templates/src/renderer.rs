@@ -308,7 +308,18 @@ fn resolve_tag_arg(arg: &str, context: &Context) -> String {
 /// variable-output sites cannot drift (#1646).
 fn localize_if_number(value: &Value) -> String {
     match value {
-        Value::Integer(_) | Value::Float(_) => {
+        // Decimal included: a German site must localize it the same way it
+        // localizes a float — which it did before #2214, when a Decimal simply
+        // WAS a float (#2221).
+        //
+        // NOT "renders as bare digits", which an earlier version of this
+        // comment claimed: over Django's >200-digit cutoff a Decimal renders in
+        // scientific form, and `localize_number_with` bails on anything holding
+        // an `e`. So `1.230E-250` stays `1.230e-250` where Django gives
+        // `1,230e-250` — it localizes the coefficient. A residual gap, filed as
+        // #2242, and still a strict improvement: on the previous release the
+        // same value was an f64 and rendered further from Django than either.
+        Value::Integer(_) | Value::Float(_) | Value::Decimal(_) => {
             djust_core::locale::localize_number(&value.to_string())
         }
         _ => value.to_string(),
@@ -524,9 +535,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // would turn `1234567` into `1,234,567` and break every such lookup
             // against a dict Python keyed without one.
             //
-            // Only `Integer` and `Float` — a `String` that happens to hold
-            // digits is the user's own text, and a filter that already returned
-            // a localized string (`floatformat`) must not be localized twice.
+            // Only `Integer`, `Float` and `Decimal` — a `String` that happens
+            // to hold digits is the user's own text, and a filter that already
+            // returned a localized string (`floatformat`) must not be localized
+            // twice. (`Decimal` since #2214; this comment said "Only Integer
+            // and Float" at both sites for six review rounds — the same
+            // comment-narrower-than-the-code shape that let the equality
+            // widening leak past two reviews.)
             //
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
@@ -603,9 +618,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // would turn `1234567` into `1,234,567` and break every such lookup
             // against a dict Python keyed without one.
             //
-            // Only `Integer` and `Float` — a `String` that happens to hold
-            // digits is the user's own text, and a filter that already returned
-            // a localized string (`floatformat`) must not be localized twice.
+            // Only `Integer`, `Float` and `Decimal` — a `String` that happens
+            // to hold digits is the user's own text, and a filter that already
+            // returned a localized string (`floatformat`) must not be localized
+            // twice. (`Decimal` since #2214; this comment said "Only Integer
+            // and Float" at both sites for six review rounds — the same
+            // comment-narrower-than-the-code shape that let the equality
+            // widening leak past two reviews.)
             //
             // Applied at BOTH variable-output sites (`Node::Variable` and the
             // inline-if expression), which are byte-identical and were found
@@ -2191,6 +2210,34 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
     Ok((Value::Missing, false))
 }
 
+/// Does this pair involve a `Decimal` at all? (#2214)
+///
+/// Guards the equality widening so it cannot reach `(Float, Integer)`, which
+/// has its own long-standing semantics. Ordering (`<`, `>`) needs no such guard:
+/// `compare_values` already carried explicit `(Float, Integer)` and
+/// `(Integer, Float)` arms before this change, and `numeric_pair` admits only
+/// {Integer, Float, Decimal}² — all four non-Decimal combinations of which have
+/// their own arms — so nothing without a Decimal reaches its wildcard.
+fn is_decimal_pair(a: &Value, b: &Value) -> bool {
+    matches!(a, Value::Decimal(_)) || matches!(b, Value::Decimal(_))
+}
+
+/// Both operands as f64, but ONLY when both are genuinely numeric (#2214).
+///
+/// Deliberately narrower than `ToF64`, which also parses strings: widening `==`
+/// and `<`/`>` to strings would make `{% if "5" == 5 %}` true, where Django
+/// says false. This exists so a Decimal compares against an Integer or a Float
+/// — which it did before the variant, when it was a Float — without opening
+/// that door.
+fn numeric_pair(a: &Value, b: &Value) -> Option<(f64, f64)> {
+    let numeric = |v: &Value| matches!(v, Value::Integer(_) | Value::Float(_) | Value::Decimal(_));
+    if numeric(a) && numeric(b) {
+        Some((a.as_f64()?, b.as_f64()?))
+    } else {
+        None
+    }
+}
+
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         // BOTH variants, same as `values_identity` below (#2203 review). The
@@ -2205,6 +2252,27 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
+        // Pairs involving a DECIMAL, and only those. Without this
+        // `{% if p == 19.99 %}` went false the moment a Decimal stopped being a
+        // Float (#2214).
+        //
+        // The `is_decimal_pair` restriction is load-bearing and was missing.
+        // `numeric_pair` alone also catches `(Float, Integer)` — no Decimal in
+        // sight — which on the previous release fell to `_ => false` and now
+        // took an absolute `f64::EPSILON` tolerance. That silently changed
+        // `{% if delta == 0 %}` for ordinary float residues: `0.1 + 0.2 - 0.3`
+        // is `5.55e-17`, which Django calls non-zero and this called zero.
+        //
+        // A scope leak, not a design choice — the comment here even said "every
+        // pair involving a Decimal" while the code did more, which is how it
+        // survived review twice (#1079, #1867).
+        _ if is_decimal_pair(a, b) => match numeric_pair(a, b) {
+            Some((a, b)) => (a - b).abs() < f64::EPSILON,
+            None => false,
+        },
+        // Everything else keeps the pre-#2214 answer. A guarded arm is not
+        // exhaustive, and this is the arm that must stay `false` — it is where
+        // `(Float, Integer)` lands.
         _ => false,
     }
 }
@@ -2270,8 +2338,24 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
         (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
         // Null comparisons
         (Value::Missing, Value::Missing) => 0,
-        // Incomparable types return 0 (treated as equal, so < and > fail)
-        _ => 0,
+        // Any remaining numeric pair — which is every pair involving a Decimal
+        // (#2214). This is the `{% if p > 10 %}` case: without it the arm below
+        // returns 0, `>` and `<` both fail, and the template silently takes the
+        // wrong branch. It is the second of the two regressions measured against
+        // serializing a Decimal as a plain string.
+        _ => match numeric_pair(a, b) {
+            Some((a, b)) => {
+                if (a - b).abs() < f64::EPSILON {
+                    0
+                } else if a < b {
+                    -1
+                } else {
+                    1
+                }
+            }
+            // Incomparable types return 0 (treated as equal, so < and > fail)
+            None => 0,
+        },
     }
 }
 
@@ -2287,6 +2371,9 @@ impl ToF64 for Value {
             Value::Float(f) => Some(*f),
             Value::String(s) => s.parse::<f64>().ok(),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            // Delegates rather than re-parsing: `Value::as_f64` is the one
+            // definition of what a Decimal is worth numerically (#1646).
+            Value::Decimal(_) => self.as_f64(),
             _ => None,
         }
     }

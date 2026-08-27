@@ -26,8 +26,24 @@ pub use errors::{DjangoRustError, Result};
 /// With `#[serde(untagged)]`, `rmp_serde` could deserialize a msgpack map as
 /// `List` because the untagged deserializer tries variants in declaration order
 /// and msgpack maps can be reinterpreted as sequences of pairs (#612).
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
+/// Map key marking a `Decimal` in a BINARY encoding. See `impl Serialize`.
+///
+/// Deliberately ugly: `visit_map` treats a one-key map under this exact name as
+/// a Decimal, so a user dict with the same single key would be misread. The
+/// name is chosen to make that collision a thing you have to try to do.
+pub(crate) const DECIMAL_TAG: &str = "__djust_decimal__";
+
+/// The `DECIMAL_TAG` value, for tests that must exercise near-misses against
+/// the real constant rather than a copy of the literal.
+///
+/// `#[doc(hidden)]`: public only because the integration tests live outside the
+/// crate. Not API.
+#[doc(hidden)]
+pub fn decimal_tag() -> &'static str {
+    DECIMAL_TAG
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     /// An absent key or attribute. Renders as `""` — Django's
     /// `string_if_invalid` — and is DISTINCT from Python `None` (#2203).
@@ -51,6 +67,70 @@ pub enum Value {
     /// per process, so dict repr would differ between renders of the same
     /// template. Python dicts are insertion-ordered (#2203).
     Object(IndexMap<String, Value>),
+    /// A Python `Decimal`, carried as its EXACT digit string (#2214).
+    ///
+    /// Not a `Float`, because that is the bug: PyO3's `extract::<f64>()` goes
+    /// through `PyFloat_AsDouble`, which honours `Decimal.__float__`, so every
+    /// `Decimal` silently became a binary double before any special case could
+    /// see it. `DecimalField` is what Django projects use for money, and a
+    /// binary double is precisely what it exists to avoid.
+    ///
+    /// Not a `String` either, which was the fix the issue suggested: the
+    /// serialized value is written back into the template context, so the Rust
+    /// renderer sees the same value the wire does. As a string,
+    /// `{{ p|floatformat }}` stops rounding and `{% if p > 10 %}` compares
+    /// lexically — measured, both regress.
+    ///
+    /// So: exact digits for rendering and transport, and `as_f64()` for
+    /// arithmetic and comparison. Arithmetic keeps today's float behaviour
+    /// rather than claiming a precision it does not have; what changes is that
+    /// the value no longer LOSES its digits on the way to the browser or to
+    /// `{{ p }}`.
+    Decimal(String),
+}
+
+/// Untagged in human-readable formats, with ONE exception (#2214).
+///
+/// Untagged is what puts a bare `19.99` on the wire rather than a wrapper
+/// object, and that is the right JSON. But it also means a `Decimal` encodes as
+/// a plain string, and the deserializer below cannot tell that string from any
+/// other — so `Decimal` came back as `Value::String`.
+///
+/// That is not cosmetic. `SerializableViewState.state` round-trips through
+/// msgpack on EVERY read of the default `InMemoryStateBackend` and of the Redis
+/// backend, so one cache hit silently turned a Decimal into a string and
+/// reproduced both regressions this variant exists to prevent —
+/// `{{ p|floatformat }}` stopped rounding, `{% if p > 10 %}` took the wrong
+/// branch — plus `bool(Decimal('0.00'))` flipping to true under the
+/// non-empty-string rule. The first version of this fix shipped with a test
+/// asserting only the ENCODE direction, which stayed green throughout (#2135).
+///
+/// So: `is_human_readable()` splits the two. JSON (human-readable) keeps the
+/// bare string and the wire format is unchanged. msgpack (binary) gets a
+/// one-key tagged map that `visit_map` recognises, so state survives the trip.
+impl Serialize for Value {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            Value::Decimal(d) if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(DECIMAL_TAG, d)?;
+                m.end()
+            }
+            // Everything else is exactly the untagged derive it replaces.
+            Value::Decimal(d) => serializer.serialize_str(d),
+            Value::Missing | Value::None => serializer.serialize_none(),
+            Value::Bool(b) => serializer.serialize_bool(*b),
+            Value::Integer(i) => serializer.serialize_i64(*i),
+            Value::Float(f) => serializer.serialize_f64(*f),
+            Value::String(st) => serializer.serialize_str(st),
+            Value::List(items) | Value::Tuple(items) => items.serialize(serializer),
+            Value::Object(o) => o.serialize(serializer),
+        }
+    }
 }
 
 /// Custom Deserialize that uses the deserializer's type hints to distinguish
@@ -151,6 +231,13 @@ impl<'de> Deserialize<'de> for Value {
                 while let Some((key, value)) = map.next_entry()? {
                     obj.insert(key, value);
                 }
+                // The binary-format Decimal tag (#2214). Exactly one key, that
+                // key, and a string payload — anything else is a real dict.
+                if obj.len() == 1 {
+                    if let Some(Value::String(d)) = obj.get(DECIMAL_TAG) {
+                        return Ok(Value::Decimal(d.clone()));
+                    }
+                }
                 Ok(Value::Object(obj))
             }
         }
@@ -159,7 +246,221 @@ impl<'de> Deserialize<'de> for Value {
     }
 }
 
+/// Is this a `decimal.Decimal`? (#2214)
+///
+/// A real `isinstance`, not `type().__name__ == "Decimal"`: a name match would
+/// also claim any unrelated user class called `Decimal` and stringify it. A
+/// `Decimal` SUBCLASS is correctly claimed, which a name match would miss.
+///
+/// The type is resolved once per interpreter, NOT per call. An earlier version
+/// said `py.import` "is cached by Python, so this costs a dict lookup" — true
+/// of the import, and still 18-24% on context conversion once the `getattr` and
+/// the `is_instance` were measured rather than reasoned about (#2240 review).
+/// Every context value that is not None/bool/int reaches this.
+///
+/// Fails CLOSED — if `decimal` cannot be imported or the check raises, the
+/// answer is "no" and the value takes its previous path. A serialization helper
+/// must not raise on an odd object.
+pub fn is_decimal(ob: &Bound<'_, PyAny>) -> bool {
+    static DECIMAL_TYPE: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    // `PyOnceLock`, not `GILOnceCell` — pyo3 0.29 renamed it.
+    let py = ob.py();
+    let Ok(cls) = DECIMAL_TYPE.get_or_try_init(py, || {
+        py.import("decimal")
+            .and_then(|m| m.getattr("Decimal"))
+            .map(|c| c.unbind())
+    }) else {
+        return false;
+    };
+    ob.is_instance(cls.bind(py)).unwrap_or(false)
+}
+
+/// Render a Decimal's `str()` form the way Django renders a number (#2214).
+///
+/// Django's `{{ }}` path is `localize()` -> `numberformat.format()`, which is
+/// NOT `str()`. Two rules, both taken from
+/// `django/utils/numberformat.py` rather than inferred:
+///
+/// 1. **`"{:f}".format(number)`** — the non-exponent form. `str()` gives `1E-9`
+///    where Django gives `0.000000001`, and `Decimal('1')/Decimal('1000000000')`
+///    is `1E-9`, as is `.normalize()` on many values. Rendering `str()` verbatim
+///    was a REGRESSION against the previous release, where these were floats and
+///    rendered correctly.
+/// 2. **`abs(exponent) + len(digits) > 200` switches to `"{:e}"`**, which
+///    Django added *"to avoid high memory usage in `{:f}'.format()`"*. Without
+///    it `Decimal('1E-10000000')` — twelve bytes — expands to a ten-megabyte
+///    string. `main` had no such amplification because the value was an f64.
+///
+/// Both were missed by the first version of this function, which claimed in its
+/// own doc-comment to implement `format(d, 'f')` and did not: it rendered
+/// `0E+3` as `0000` where Python gives `0`, reachable from ordinary money
+/// arithmetic (`Decimal('1000').quantize(Decimal('1E+2'))` minus itself is
+/// `Decimal('0E+2')`, so a zero balance rendered `000`). Verified now by a
+/// randomized differential against real Django rather than by reading.
+///
+/// Non-finite forms (`NaN`, `sNaN`, `Infinity`) have no exponent and pass
+/// through, matching `format(Decimal('NaN'), 'f')`.
+pub(crate) fn expand_decimal_exponent(raw: &str) -> String {
+    // Parse TOWARD Python's `as_tuple()` shape: sign, digit string, exponent.
+    // Not identical to it — see `significant` below, which is where a previous
+    // version's claim of equivalence went wrong.
+    let (sign, rest) = match raw.strip_prefix('-') {
+        Some(r) => ("-", r),
+        None => ("", raw.strip_prefix('+').unwrap_or(raw)),
+    };
+    let (mantissa, str_exp) = match rest.find(['e', 'E']) {
+        Some(i) => {
+            let Ok(e) = rest[i + 1..].parse::<i64>() else {
+                return raw.to_string();
+            };
+            (&rest[..i], e)
+        }
+        None => (rest, 0),
+    };
+    let (int_part, frac_part) = match mantissa.split_once('.') {
+        Some((i, f)) => (i, f),
+        None => (mantissa, ""),
+    };
+    // Non-finite (or otherwise unparseable) forms pass through untouched.
+    //
+    // LOAD-BEARING. A previous version of this comment said the opposite —
+    // "measured to be so: no input distinguishes this guard" — and that
+    // measurement ran only the guard-ON arm and called it a comparison. With
+    // no control, of course nothing looked different.
+    //
+    // Removing it, `""` renders `0`, `-` renders `-0`, and `.`, `+`, `E+5`,
+    // `e5` all render `0`: the general path treats an absent coefficient as
+    // zero. Reachable, because the binary tag lets a `Value::Decimal` hold any
+    // string. Pinned by
+    // `test_decimal_value_2214.rs::the_empty_and_punctuation_guard_is_load_bearing`.
+    if int_part.is_empty() && frac_part.is_empty() {
+        return raw.to_string();
+    }
+    // Also load-bearing, and a DIFFERENT guard from the one above: these have
+    // both a coefficient and an exponent, so they get past the empty check.
+    // Without this, `abcE+5` renders `abc00000` and `xyzE+200` renders
+    // `x.yze+202` — the exponent machinery applied to letters. Pinned by
+    // `the_non_digit_guard_is_load_bearing`.
+    if !int_part
+        .bytes()
+        .chain(frac_part.bytes())
+        .all(|b| b.is_ascii_digit())
+    {
+        return raw.to_string();
+    }
+    let digits: String = format!("{int_part}{frac_part}");
+    // `as_tuple()`'s exponent counts the fractional digits in.
+    // SATURATING: `str_exp` comes from a `parse::<i64>()` on attacker-chosen
+    // text — the binary tag lets a `Value::Decimal` hold any string — so a
+    // payload like `1.5E-9223372036854775808` overflows this subtraction. In
+    // debug that panics on the render path; in release, where `overflow-checks`
+    // is off, it wraps silently and renders nonsense.
+    //
+    // Saturating picks the right BRANCH — a magnitude this large is far past
+    // the cutoff below, so the scientific arm takes it either way. It does NOT
+    // reproduce unbounded-integer arithmetic: a saturated exponent renders off
+    // by a few from the mathematically exact one
+    // (`1.5E-9223372036854775808` gives `…807`, not `…808`).
+    //
+    // That is acceptable only because it is UNREACHABLE from a real value:
+    // CPython's `MAX_EMAX` is 999999999999999999, far short of `i64::MAX`, so
+    // no `Decimal` can saturate. It matters solely for tag-supplied strings,
+    // where not crashing is the requirement and the digits were never
+    // meaningful. An earlier version of this comment said "saturating is
+    // correct either way", which asserted more than the reasoning under it
+    // establishes (#2240 round 7).
+    let exponent = str_exp.saturating_sub(frac_part.len() as i64);
+
+    // `as_tuple().digits` drops LEADING zeros; this string form keeps them — the
+    // `0` in `0.xxx`, and any zeros after the point. Counting those inflates the
+    // length and corrupts both rules below: the cutoff fires up to several places
+    // early, and when it does the coefficient and exponent are shifted by one.
+    //
+    // A previous version said in its own comment that it split "into Python's
+    // `as_tuple()` shape" and did not. It diverged from Django for EVERY `0.xxx`
+    // value near the cutoff — including `Decimal(1)/Decimal(7)` under
+    // `localcontext(prec=120)`, which is ordinary code. The boundary test missed
+    // it because all six of its cases had `1` as their integer part, so not one
+    // exercised a `0.xxx` form: true on the axis it enumerated, blind on the one
+    // it did not (#1867).
+    //
+    // Only the two rules below use this. The fixed-point path further down needs
+    // the leading zeros to place the point.
+    let significant = {
+        let trimmed = digits.trim_start_matches('0');
+        // `Decimal('0.00').as_tuple().digits` is `(0,)`, not empty — and this
+        // floor is also the only thing between an all-zero coefficient over the
+        // cutoff and a PANIC: without it `significant` is `""` and the
+        // scientific branch's `split_at(1)` is out of bounds. `Decimal("0E-250")`
+        // is an ordinary value Django renders fine. Pinned by
+        // `an_all_zero_coefficient_over_the_cutoff_does_not_panic`.
+        if trimmed.is_empty() {
+            "0"
+        } else {
+            trimmed
+        }
+    };
+
+    // Django's cutoff (rule 2), on `as_tuple()`'s values, as Django computes it.
+    if exponent.unsigned_abs() + significant.len() as u64 > 200 {
+        // `format(d, 'e')`: one digit before the point, exponent adjusted.
+        let (first, tail) = significant.split_at(1);
+        let coefficient = if tail.is_empty() {
+            first.to_string()
+        } else {
+            format!("{first}.{tail}")
+        };
+        // `{:+}`: Python writes the exponent sign explicitly — `1e+212`, not
+        // `1e212`. A randomized differential caught this; reading the format
+        // spec did not.
+        // Saturating for the same reason as `exponent` above.
+        let adjusted = exponent
+            .saturating_add(significant.len() as i64)
+            .saturating_sub(1);
+        return format!("{sign}{coefficient}e{adjusted:+}");
+    }
+
+    // A zero coefficient never grows trailing zeros: `format(Decimal('0E+3'),
+    // 'f')` is `0`, not `0000`. With a negative exponent it keeps that many
+    // decimal places, as `0E-3` -> `0.000` does.
+    if digits.bytes().all(|b| b == b'0') {
+        return if exponent >= 0 {
+            format!("{sign}0")
+        } else {
+            format!("{sign}0.{}", "0".repeat(exponent.unsigned_abs() as usize))
+        };
+    }
+
+    // Position of the decimal point within `digits`, after the exponent.
+    let point = int_part.len() as i64 + str_exp;
+    let body = if point <= 0 {
+        format!("0.{}{}", "0".repeat(point.unsigned_abs() as usize), digits)
+    } else if point as usize >= digits.len() {
+        format!("{}{}", digits, "0".repeat(point as usize - digits.len()))
+    } else {
+        let (l, r) = digits.split_at(point as usize);
+        format!("{l}.{r}")
+    };
+    format!("{sign}{body}")
+}
+
 impl Value {
+    /// The numeric view of a value, for arithmetic and comparison (#2214).
+    ///
+    /// `Decimal` parses its digit string on demand. That is lossy for more than
+    /// ~15 significant digits — deliberately, because it is exactly what
+    /// happened before this variant existed, so no arithmetic or comparison
+    /// changes behaviour. Rendering and transport keep the exact digits, which
+    /// is where the loss was actually reaching users.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Integer(i) => Some(*i as f64),
+            Value::Float(f) => Some(*f),
+            Value::Decimal(d) => d.parse::<f64>().ok(),
+            _ => None,
+        }
+    }
+
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Missing => false,
@@ -168,6 +469,9 @@ impl Value {
             Value::Bool(b) => *b,
             Value::Integer(i) => *i != 0,
             Value::Float(f) => *f != 0.0,
+            // Django/Python: `bool(Decimal('0.00'))` is False. Parsing is
+            // enough — a value too large to parse is certainly non-zero.
+            Value::Decimal(d) => d.parse::<f64>().map(|f| f != 0.0).unwrap_or(true),
             Value::String(s) => !s.is_empty(),
             Value::List(l) => !l.is_empty(),
             Value::Tuple(t) => !t.is_empty(),
@@ -236,6 +540,11 @@ impl Value {
                     format!("'{}'", escaped.replace('\'', "\\'"))
                 }
             }
+            // `repr(Decimal('19.99'))` is `Decimal('19.99')`, so a Decimal
+            // nested in a list or dict renders the constructor form while a
+            // top-level one renders bare digits — the same str/repr split that
+            // makes containers unable to reuse Display (#2203, #2214).
+            Value::Decimal(d) => format!("Decimal('{d}')"),
             other => other.to_string(),
         }
     }
@@ -247,6 +556,10 @@ impl Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Integer(i) => write!(f, "{i}"),
             Value::Float(fl) => write!(f, "{fl}"),
+            // Exact digits even on the legacy path: `django_value_repr` is the
+            // #2203 repr switch, and restoring the #2214 precision loss through
+            // it would make a rendering-parity flag silently lossy.
+            Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
             Value::String(s) => write!(f, "{s}"),
             Value::List(_) | Value::Tuple(_) => write!(f, "[List]"),
             Value::Object(o) => match o.get("__str__") {
@@ -282,6 +595,11 @@ impl fmt::Display for Value {
                     write!(f, "{fl}")
                 }
             }
+            // Django renders a number through `numberformat.format()`, which
+            // uses `"{:f}".format(...)`, so an exponent-form Decimal expands:
+            // `1E-9` renders `0.000000001`. NOT `str()` — see
+            // `expand_decimal_exponent`.
+            Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
             Value::String(s) => write!(f, "{s}"),
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
@@ -333,6 +651,14 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             Ok(Value::Bool(b))
         } else if let Ok(i) = ob.extract::<i64>() {
             Ok(Value::Integer(i))
+        } else if is_decimal(&ob.to_owned()) {
+            // BEFORE the f64 arm, and that ordering is the whole point (#2214).
+            // `extract::<f64>()` goes through `PyFloat_AsDouble`, which honours
+            // `Decimal.__float__`, so a Decimal placed after it is unreachable
+            // — silently, because the arms have different types and neither
+            // rustc nor clippy can see a dead if-else branch. That is exactly
+            // how the `serialize_python_value` branch died.
+            Ok(Value::Decimal(ob.str()?.extract::<String>()?))
         } else if let Ok(f) = ob.extract::<f64>() {
             Ok(Value::Float(f))
         } else if let Ok(s) = ob.extract::<String>() {
@@ -459,6 +785,18 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::Integer(i) => Ok(i.into_pyobject(py)?.to_owned().into_any()),
             Value::Float(f) => Ok(f.into_pyobject(py)?.to_owned().into_any()),
             Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any()),
+            // Back to a real `decimal.Decimal`, not a str: a value that made
+            // the round-trip as a Decimal must come back as one, or handlers
+            // reading it from the context see their type change under them.
+            // Falls back to the string if `Decimal(s)` raises, which it should
+            // not for a string we produced from a Decimal.
+            Value::Decimal(d) => {
+                let decimal_cls = py.import("decimal")?.getattr("Decimal")?;
+                match decimal_cls.call1((d.as_str(),)) {
+                    Ok(obj) => Ok(obj),
+                    Err(_) => Ok(d.into_pyobject(py)?.to_owned().into_any()),
+                }
+            }
             Value::List(l) => {
                 let py_list = PyList::empty(py);
                 for item in l {

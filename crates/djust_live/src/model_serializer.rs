@@ -97,6 +97,12 @@ fn python_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<JsonValue>
         return Ok(JsonValue::Number(i.into()));
     }
 
+    // Decimal before float (#2214) — the two exported model serializers
+    // disagreed with each other until this landed.
+    if djust_core::is_decimal(obj) {
+        return Ok(JsonValue::String(obj.str()?.extract::<String>()?));
+    }
+
     // Handle float
     if let Ok(f) = obj.extract::<f64>() {
         if let Some(num) = serde_json::Number::from_f64(f) {

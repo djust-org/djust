@@ -1666,6 +1666,10 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
         Ok(JsonValue::Bool(b))
     } else if let Ok(i) = obj.extract::<i64>() {
         Ok(JsonValue::Number(i.into()))
+    } else if djust_core::is_decimal(obj) {
+        // Before f64, and a JSON *string* — `DjangoJSONEncoder` parity, and the
+        // only JSON shape that carries the digits (#2214).
+        Ok(JsonValue::String(obj.str()?.extract::<String>()?))
     } else if let Ok(f) = obj.extract::<f64>() {
         Ok(serde_json::Number::from_f64(f)
             .map(JsonValue::Number)
@@ -2112,6 +2116,15 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::Integer(i));
     }
 
+    // DECIMAL BEFORE FLOAT (#2214). This is the actor path — `dispatch_mount`
+    // passes the whole `get_context_data()` through here, and component props
+    // come this way too — so leaving it on f64 while the other converters were
+    // fixed would make the same Decimal render differently by path, which is
+    // exactly what the comment below warns about.
+    if djust_core::is_decimal(obj) {
+        return Ok(Value::Decimal(obj.str()?.extract::<String>()?));
+    }
+
     // Float
     if let Ok(f) = obj.extract::<f64>() {
         return Ok(Value::Float(f));
@@ -2442,6 +2455,23 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
     if let Ok(i) = value.extract::<i64>() {
         return Ok(i.into_pyobject(py)?.to_owned().into_any().unbind());
     }
+    // DECIMAL BEFORE FLOAT (#2214), the same shape as BOOL BEFORE INT above and
+    // the second instance of that class. `extract::<f64>()` goes through
+    // `PyFloat_AsDouble`, which honours `Decimal.__float__`, so the
+    // `type_name == "Decimal"` branch further down was DEAD CODE and every
+    // Decimal reached the client as a binary double —
+    // `Decimal('12345678901234567890.123456789')` as `1.2345678901234567e+19`.
+    // `DecimalField` is Django's money type; a binary double is what it exists
+    // to avoid.
+    //
+    // Emitting `str(value)` matches `DjangoJSONEncoder.default`, so the value
+    // arrives as a JSON string with its digits intact. That is a wire-format
+    // change for clients doing arithmetic on it — a JSON *number* cannot carry
+    // the precision, so there is no version of this fix that keeps both.
+    if djust_core::is_decimal(value) {
+        let str_repr = value.str()?.to_string();
+        return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
+    }
     if let Ok(f) = value.extract::<f64>() {
         return Ok(f.into_pyobject(py)?.to_owned().into_any().unbind());
     }
@@ -2477,8 +2507,11 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         }
     }
 
-    // Decimal, UUID: convert to string
-    if type_name == "Decimal" || type_name == "UUID" {
+    // UUID: convert to string. Decimal is handled ABOVE, before the numeric
+    // extracts — leaving it here made it unreachable (#2214). UUID is safe here
+    // only because it is not float-convertible, which is why the same bug did
+    // not affect it.
+    if type_name == "UUID" {
         let str_repr = value.str()?.to_string();
         return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
     }
@@ -2759,6 +2792,11 @@ fn python_to_json(_py: Python, value: &Bound<'_, PyAny>) -> PyResult<serde_json:
     // Try int
     if let Ok(i) = value.extract::<i64>() {
         return Ok(serde_json::Value::Number(i.into()));
+    }
+
+    // Decimal before float (#2214): exact digits as a JSON string.
+    if djust_core::is_decimal(value) {
+        return Ok(serde_json::Value::String(value.str()?.extract::<String>()?));
     }
 
     // Try float

@@ -252,6 +252,10 @@ fn apply_builtin_filter(
                     Value::Integer(n) => Some(*n),
                     // `int()` truncates toward zero, so int(1.5) == 1.
                     Value::Float(f) => Some(*f as i64),
+                    // `int(Decimal('19.99'))` is 19 — truncation, same as float
+                    // (#2214). Via `as_f64` so the Decimal->number rule has one
+                    // definition rather than one per consumption site (#1646).
+                    Value::Decimal(_) => v.as_f64().map(|f| f as i64),
                     // `int(True)` is 1 in Python, so Django's first branch
                     // handles bools: `{{ True|add:1 }}` is 2.
                     Value::Bool(b) => Some(i64::from(*b)),
@@ -385,6 +389,15 @@ fn apply_builtin_filter(
             let rendered = match value {
                 Value::Float(f) => format!("{f:.decimals$}"),
                 Value::Integer(n) => format!("{:.prec$}", *n as f64, prec = decimals),
+                // Without this a Decimal hits the `_` arm and is returned
+                // UNCHANGED — `{{ p|floatformat }}` would stop rounding. That is
+                // one of the two regressions measured against the one-line fix
+                // the issue suggested, and the reason this needed a variant
+                // rather than a string (#2214).
+                Value::Decimal(_) => match value.as_f64() {
+                    Some(f) => format!("{f:.decimals$}"),
+                    None => return Some(Ok(value.clone())),
+                },
                 _ => return Some(Ok(value.clone())),
             };
             // Localized HERE, not at the render site, because by the time the
@@ -401,6 +414,10 @@ fn apply_builtin_filter(
             match value {
                 Value::Integer(n) => Ok(Value::String(format_filesize(*n))),
                 Value::Float(f) => Ok(Value::String(format_filesize(*f as i64))),
+                Value::Decimal(_) => Ok(match value.as_f64() {
+                    Some(f) => Value::String(format_filesize(f as i64)),
+                    None => value.clone(),
+                }),
                 _ => Ok(value.clone()),
             }
         }
@@ -1653,7 +1670,22 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
                 .partial_cmp(b_float)
                 .unwrap_or(std::cmp::Ordering::Equal),
             (Value::Bool(a_bool), Value::Bool(b_bool)) => a_bool.cmp(b_bool),
-            _ => std::cmp::Ordering::Equal,
+            // Any pair that is numeric on BOTH sides. Two deltas, not one:
+            // a Decimal column used to sort as all-Equal, i.e. not at all
+            // (#2214) — and so did a MIXED int/float column, since the arms
+            // above cover only like-for-like and `sort_dicts_by_key` has no
+            // `(Integer, Float)` arm.
+            //
+            // The mixed case is a strict improvement, not a regression: against
+            // Django, an all-permutations sweep of a mixed pool agreed 938/2184
+            // before and 2184/2184 after. Deliberately left unguarded for that
+            // reason, unlike `values_equal`'s wildcard, which was restricted to
+            // Decimal pairs because widening it there CHANGED answers for the
+            // worse (#2240 round 6).
+            _ => match (a_val.as_f64(), b_val.as_f64()) {
+                (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
+                _ => std::cmp::Ordering::Equal,
+            },
         }
     });
 
@@ -1740,6 +1772,7 @@ fn apply_stringformat(value: &Value, spec: &str) -> String {
             let int_val = match value {
                 Value::Integer(n) => *n,
                 Value::Float(f) => *f as i64,
+                Value::Decimal(_) => value.as_f64().unwrap_or(0.0) as i64,
                 Value::Bool(b) => {
                     if *b {
                         1
@@ -1848,6 +1881,26 @@ fn json_escape_for_script(s: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
+/// The escaped BODY of a JSON string, without the surrounding quotes.
+///
+/// One helper for the `String` and `Decimal` arms: a value that can reach a
+/// `<script type="application/json">` body must be escaped whatever variant
+/// carries it (#2214 review).
+///
+/// A THIRD copy survives, in `value_to_json`'s object-KEY path, escaping only
+/// `\` and `"`. So a dict key containing a newline still emits a raw control
+/// character and the result does not parse. Pre-existing and outside this
+/// issue, so it is filed rather than fixed here (#1079) — but named, because
+/// "one helper rather than the same chain written per arm" would otherwise read
+/// as complete when it is not.
+fn json_string_body(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
 fn value_to_json(value: &Value) -> String {
     match value {
         // Both are JSON `null`: JSON cannot distinguish absent from None.
@@ -1861,16 +1914,22 @@ fn value_to_json(value: &Value) -> String {
         }
         Value::Integer(n) => n.to_string(),
         Value::Float(f) => format!("{f}"),
-        Value::String(s) => {
-            // JSON string: escape special chars
-            let escaped = s
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
-            format!("\"{escaped}\"")
-        }
+        // A quoted JSON string, matching `DjangoJSONEncoder.default`, which
+        // returns `str(o)` for a Decimal (#2214). Emitting a bare JSON number
+        // here would put the precision loss back on the wire by the other door
+        // — `json_script` is a path to the browser too.
+        // Escaped through the SAME helper as `String`, deliberately.
+        //
+        // The first version reasoned it was exempt: `str(Decimal)` yields only
+        // digits, `.`, sign, `E`/`e` and `NaN`/`Infinity`, none JSON-significant.
+        // True of a Python-sourced Decimal and false of the variant — since
+        // #2214 gave binary encodings a tag, a `Value::Decimal` can be
+        // deserialized holding an ARBITRARY string, and the unescaped form let
+        // it inject JSON structure into a `<script type="application/json">`
+        // body that client code parses. Found by review; the argument was sound
+        // about the values it considered and wrong about the type.
+        Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
+        Value::String(s) => format!("\"{}\"", json_string_body(s)),
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
         Value::List(items) | Value::Tuple(items) => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();
@@ -1993,6 +2052,8 @@ fn pprint_value(value: &Value) -> String {
         Value::Bool(false) => "False".to_string(),
         Value::Integer(n) => n.to_string(),
         Value::Float(f) => format!("{f}"),
+        // `pprint` shows the constructor form, as `repr` does (#2214).
+        Value::Decimal(d) => format!("Decimal('{d}')"),
         Value::String(s) => format!("'{s}'"),
         // List-only: `pprint` renders a tuple with parentheses, so the arm
         // below must stay reachable. (A blanket Tuple twin here made it dead

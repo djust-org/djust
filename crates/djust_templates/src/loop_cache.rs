@@ -588,7 +588,10 @@ fn is_foster_unsafe_tag(tag: &str) -> bool {
 ///
 /// `Value` does not derive `Hash` (it holds f64 / nested maps), so we hash a
 /// canonical byte encoding. Floats are hashed by their bit pattern; map keys
-/// are sorted for order-independence.
+/// are hashed in INSERTION order — this doc said "sorted for
+/// order-independence" and was contradicted by the `Object` arm's own
+/// comment ever since #2203 made rendering insertion-ordered. Corrected
+/// rather than left, since it sits above the arm a #2240 regression hid in.
 fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
     use djust_core::Value;
     match value {
@@ -597,6 +600,16 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
         // ("" vs "None"), so sharing a tag would let a cached fragment rendered
         // from one be served for the other.
         Value::None => 7u8.hash(hasher),
+        // Tag 9, distinct from both Float and String: a Decimal renders and
+        // encodes differently from either, so sharing a tag would let a cached
+        // fragment built from one be served for the other (#2214).
+        //
+        // Hashes the DIGIT STRING, not a parsed float — two Decimals differing
+        // beyond f64 precision are different values and must not collide.
+        Value::Decimal(d) => {
+            9u8.hash(hasher);
+            d.hash(hasher);
+        }
         Value::Bool(b) => {
             1u8.hash(hasher);
             b.hash(hasher);

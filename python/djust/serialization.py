@@ -314,9 +314,22 @@ class DjangoJSONEncoder(json.JSONEncoder):
         if isinstance(obj, UUID):
             return str(obj)
 
-        # Handle Decimal — float, not str. Diverges from
-        # ``DjangoJSONEncoder.default`` (which returns ``str(o)``) and loses
-        # precision; see the note in ``normalize_django_value`` below and #2214.
+        # Decimal -> float, and NOT ``str`` despite that being what
+        # ``DjangoJSONEncoder.default`` returns (#2214).
+        #
+        # This looks like a free parity fix and is not. ``normalize_django_value``
+        # below is documented as the fast path for exactly this encoder, and
+        # ``tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip``
+        # pins the two as equal for every shared type. Changing one alone splits
+        # a tested invariant; changing both moves the precision loss into a
+        # template regression, because ``normalize_django_value``'s output is
+        # written into the template context and the Rust engine treats a string
+        # as a string.
+        #
+        # The Rust converters keep full precision as of #2214. This pair is the
+        # remaining half; it is reachable from ``mixins/jit.py``'s fallbacks and
+        # is not a rare path. See the note in ``normalize_django_value`` and
+        # #2239.
         if isinstance(obj, Decimal):
             return float(obj)
 
@@ -974,7 +987,7 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
 
     Supported types:
     - None, bool, int, float, str  -- pass through
-    - Decimal                      -- float()
+    - Decimal                      -- float() (lossy; see the note at the branch, #2214)
     - UUID                         -- str()
     - datetime, date, time         -- .isoformat()
     - timedelta                    -- ISO-8601 duration string (via Django util)
@@ -1027,12 +1040,41 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     # ``Decimal('12345678901234567890.123456789')`` becomes
     # ``1.2345678901234567e+19``.
     #
-    # Left as float ON PURPOSE rather than corrected in place, because the
-    # obvious fix is not free: the Rust template engine treats a string as a
-    # string, so switching this to ``str`` regresses ``{{ p|floatformat }}``
-    # and ``{% if p > 10 %}`` — both measured. The three converters that
-    # disagree about this (here, ``__default__`` above, and Rust's
-    # ``serialize_python_value``) need one decision, tracked in #2214.
+    # Decimal -> float, diverging from ``DjangoJSONEncoder`` (which returns
+    # ``str(o)``) and losing precision beyond ~15 significant digits (#2214).
+    #
+    # Kept, together with ``__default__`` above, which this function mirrors.
+    # Three things block the obvious fix, and they pull in different directions:
+    #
+    # - ``str`` regresses templates. This output is written into the template
+    #   context (``mixins/context.py``), so the Rust renderer sees it too, and a
+    #   string is a string there: ``{{ p|floatformat }}`` stops rounding and
+    #   ``{% if p > 10 %}`` compares lexically. Both measured.
+    # - Returning the ``Decimal`` unchanged would let the Rust extractor build a
+    #   ``Value::Decimal`` — the right shape — but breaks this function's
+    #   documented "JSON-safe primitives" contract. At least one consumer
+    #   (``runtime.py``'s ``json.dumps(public_state, ...)``) passes no encoder
+    #   and would raise ``TypeError``.
+    # - Changing only one of this pair splits the parity invariant that
+    #   ``tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip``
+    #   exists to hold.
+    #
+    # The exposure is NOT small, and an earlier version of this comment said it
+    # was — claiming model fields reach the client through the Rust path, which
+    # keeps full precision. False, and caught in review (#1867):
+    # ``python/djust/mixins/jit.py`` imports THIS function and calls it at
+    # SEVEN sites (197, 202, 210, 293, 302, 307, 347 — line 316 is a comment, so
+    # ``grep -n`` returns nine lines: seven calls, one comment at
+    # 316, and the import at 12), and its fallbacks are ordinary — JIT unavailable, no template paths
+    # extracted for the variable, or the Rust serializer not capturing every
+    # expected path (it cannot read ``@property`` attributes). A model with a
+    # ``@property`` in the template sends the whole object down this path, so a
+    # ``DecimalField`` beside one still arrives as
+    # ``1.2345678901234567e+19``.
+    #
+    # Still deferred, because the blockers above are real and the fix is a
+    # consumer audit rather than a branch — but deferred at its true size, not a
+    # smaller one. Tracked in #2239.
     if isinstance(value, Decimal):
         return float(value)
 

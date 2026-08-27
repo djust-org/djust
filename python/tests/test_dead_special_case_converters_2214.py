@@ -233,18 +233,13 @@ def test_the_measured_capture_table_matches_what_pyo3_does() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "#2214 is open by design: the one-line fix the issue suggests (move the "
-        "Decimal branch above the numeric extracts) was measured to REGRESS two "
-        "template behaviours, so the fix needs a decision rather than a patch. "
-        "See the issue for the evidence. This marker is the tripwire: when #2214 "
-        "is fixed, the test XPASSes and this file fails, which is the signal to "
-        "drop the marker."
-    ),
-    strict=True,
-)
 def test_no_special_case_sits_below_an_extract_that_swallows_it() -> None:
+    """No dead special cases. The `xfail` this carried is gone (#2214 fixed).
+
+    It was `strict=True` precisely so fixing the bug would fail the build rather
+    than leave a stale marker asserting a defect that no longer exists — and it
+    did, as an `XPASS(strict)`, which is what sent the fix back here.
+    """
     swallowed = _swallowed()
     assert not swallowed, "\n".join(
         [f"{len(swallowed)} dead special-case branch(es):"]
@@ -264,14 +259,13 @@ def test_the_sweep_currently_finds_exactly_the_known_dead_branch() -> None:
     one failure and would stay green if a new dead branch joined it.
     """
     actual = {(p, fn, t, x) for p, fn, t, x in _swallowed()}
-    assert actual == {
-        ("crates/djust_live/src/lib.rs", "serialize_python_value", "Decimal", "f64")
-    }, (
-        "the set of dead special-case branches changed.\n"
+    assert actual == set(), (
+        "a dead special-case branch appeared.\n"
         f"  found: {sorted(actual)}\n"
-        "If one was FIXED, drop it here (and drop the xfail if the set is now "
-        "empty). If a NEW one appeared, it is a fresh instance of the #2212/#2214 "
-        "class and wants its own issue."
+        "The set has been empty since #2214. Anything here is a fresh instance "
+        "of the #2212/#2214 class — a `type_name ==` special case placed below "
+        "an `extract::<T>()` that accepts the same type, which neither rustc nor "
+        "clippy can see — and wants its own issue."
     )
 
 
@@ -280,14 +274,19 @@ def test_the_sweep_currently_finds_exactly_the_known_dead_branch() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_decimal_precision_loss_is_pinned_as_a_known_defect() -> None:
-    """Document the cost end to end, so the structural finding is not abstract.
+def test_the_decimal_precision_loss_is_fixed() -> None:
+    """The flip side of the pin this used to be (#2214).
 
-    Asserts the CURRENT (wrong) behaviour deliberately. An xfail would be
-    satisfied by any failure, including an unrelated one; this pins the exact
-    value that arrives, so a fix flips it here with a diff that says what
-    changed. `test_no_special_case_sits_below_an_extract_that_swallows_it` is
-    the tripwire for the fix landing.
+    It asserted the CURRENT (wrong) values on purpose — an xfail is satisfied by
+    any failure, including an unrelated one, while pinning the exact bytes means
+    a fix arrives as a diff that says what changed. This is that diff: `float`
+    became `str`, and the 29-digit value stopped collapsing to
+    `1.2345678901234567e+19`.
+
+    Behavioural coverage lives in `test_decimal_precision_2214.py`, which is a
+    differential against real Django. This stays because it is the counterpart
+    of the structural sweep above, in the same file, and reads as the before/after
+    of the same finding.
     """
     import json
 
@@ -309,15 +308,20 @@ def test_decimal_precision_loss_is_pinned_as_a_known_defect() -> None:
     )
     parsed = json.loads(out) if isinstance(out, (str, bytes)) else out
 
-    # `19.99` survives *display* — the readable case is not the damaging one,
-    # which is why "a price arrives as a float" understates and overstates the
-    # bug at the same time.
-    assert isinstance(parsed["price"], float)
-    assert str(parsed["price"]) == "19.99"
+    # A JSON string now, matching `DjangoJSONEncoder`. `19.99` read the same
+    # either way — the readable case was never the damaging one, which is why
+    # "a price arrives as a float" both understated and overstated the bug.
+    assert isinstance(parsed["price"], str)
+    assert parsed["price"] == "19.99"
 
-    # This is the damage: 29 significant digits do not fit in a binary double.
-    assert isinstance(parsed["huge"], float)
-    assert parsed["huge"] == pytest.approx(1.2345678901234567e19)
+    # The damage, gone: 29 significant digits do not fit in a binary double, so
+    # this used to arrive as 1.2345678901234567e+19.
+    assert isinstance(parsed["huge"], str)
+    assert parsed["huge"] == "12345678901234567890.123456789"
+
+    # UUID shared the branch and was never affected — not float-convertible, so
+    # it always reached the check. Unchanged by the split.
+    assert parsed["uid"] == str(__import__("uuid").UUID(int=1))
     assert parsed["huge"] != Decimal("12345678901234567890.123456789")
 
     # UUID reaches the same branch correctly, because it is not
