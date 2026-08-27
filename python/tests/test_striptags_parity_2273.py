@@ -62,6 +62,13 @@ being shared-tokenizer changes (comment close, `locatetagend`, the widened
 CDATA element set) that also affect the truncators and are deliberately not in
 this PR's scope.
 
+Two chain divergences that remain are NOT `striptags`: `|escape|striptags`
+(#2281) and `|striptags|length` (#2279). Both are pinned in
+`TestKnownRemainingDivergences` together with a proof that `striptags` itself
+is byte-exact on the same value, so neither gets re-diagnosed as this filter's
+bug. The third, `|safe|striptags` (#2280), was fixed by #2285 while this PR
+was open.
+
 Two defects in the port survived a curated table and were found only by the
 randomized differential:
 
@@ -345,6 +352,12 @@ class TestUnreportedDivergences:
 
 CHAINS = [
     "{{ p|striptags }}",
+    # #2280 (a filter's `is_safe=True` was not honoured) was fixed by #2285
+    # while this PR was open, so `|safe|striptags` is a tested chain rather
+    # than a pinned divergence. `TestKnownRemainingDivergences` fired on its
+    # own instruction the moment that landed, which is what the "now AGREES --
+    # delete this row" assertion is for.
+    "{{ p|safe|striptags }}",
     "{{ p|striptags|upper }}",
     "{{ p|striptags|lower }}",
     "{{ p|striptags|escape }}",
@@ -359,9 +372,10 @@ class TestChains:
     #2250 caught a 1,195-cell regression in its own candidate fix only because
     it tested chains, and #2272 found 243 cells where two bugs were cancelling.
 
-    `{{ p|escape|striptags }}` and `{{ p|safe|striptags }}` are deliberately
-    absent: both diverge for reasons that have nothing to do with `striptags`
-    (#2280, #2281), pinned in `TestKnownRemainingDivergences`.
+    `{{ p|escape|striptags }}` is deliberately absent: it diverges for a
+    reason that has nothing to do with `striptags` (#2281), pinned in
+    `TestKnownRemainingDivergences`. `{{ p|safe|striptags }}` was in the same
+    position until #2285 fixed #2280, and is now tested here.
     """
 
     @pytest.mark.parametrize("source", CHAINS)
@@ -582,9 +596,6 @@ class TestKnownRemainingDivergences:
             # `|escape|striptags`: djust strips the UNESCAPED value, so the
             # tags Django's `escape` had already neutralised are removed.
             ("{{ p|escape|striptags }}", "a<b>c</b>d"),
-            # `|safe|striptags`: djust does not carry the safe flag through
-            # `striptags`, so the output is escaped where Django's is not.
-            ("{{ p|safe|striptags }}", "a < b"),
             # `|striptags|length`: djust's `length` counts BYTES.
             ("{{ p|striptags|length }}", "中<b"),
         ],
