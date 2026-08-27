@@ -35,6 +35,7 @@ from ..serialization import normalize_django_value
 from ..utils import is_model_list
 from ..validation import validate_handler_params
 from ..security import safe_setattr
+from ..serialization import decode_state_roundtrip
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
 from ..hooks import run_on_mount_hooks
@@ -628,6 +629,12 @@ class RequestMixin:
             # Restore state from session
             view_key = f"liveview_{request.path}"
             saved_state = request.session.get(view_key, {})
+
+            # #2252: the write side tagged every Decimal
+            # (``normalize_django_value(..., state_roundtrip=True)`` above), so
+            # decode before anything is applied to the view — an undecoded tag
+            # reaches the template as a dict.
+            saved_state = decode_state_roundtrip(saved_state)
 
             for key, value in saved_state.items():
                 if not key.startswith("_") and not callable(value):

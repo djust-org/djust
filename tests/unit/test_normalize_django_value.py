@@ -74,14 +74,22 @@ class TestDecimal:
         assert normalize_django_value(huge) == huge
         assert str(normalize_django_value(huge)) == "12345678901234567890.123456789"
 
-    def test_state_roundtrip_converts_to_float(self):
+    def test_state_roundtrip_converts_to_the_tagged_form(self):
         """The one boundary that cannot take the Decimal — see
         ``decimal_for_state_roundtrip``. Django's session serializer runs
-        ``json.dumps`` with no encoder, and a string restored into view state
-        would be a string in the template."""
+        ``json.dumps`` with no encoder, and a bare string restored into view
+        state would be a string in the template.
+
+        #2252 replaced the lossy ``float`` with a tagged form that
+        ``decode_state_roundtrip`` restores to a real ``Decimal`` at the other
+        end. The full contract lives in
+        ``python/tests/test_decimal_state_tag_2252.py``.
+        """
+        from djust.serialization import decode_state_roundtrip
+
         result = normalize_django_value(Decimal("3.14"), state_roundtrip=True)
-        assert result == 3.14
-        assert isinstance(result, float)
+        assert result == {"__djust_decimal__": "3.14"}
+        assert decode_state_roundtrip(result) == Decimal("3.14")
 
 
 class TestUUID:
@@ -138,7 +146,7 @@ class TestDictRecursion:
     def test_dict_with_decimal_under_state_roundtrip(self):
         """The flag reaches nested values, not just the top-level one (#2239)."""
         result = normalize_django_value({"price": Decimal("9.99")}, state_roundtrip=True)
-        assert isinstance(result["price"], float)
+        assert result["price"] == {"__djust_decimal__": "9.99"}
 
     def test_dict_with_uuid(self):
         u = UUID("12345678-1234-5678-1234-567812345678")
@@ -168,8 +176,11 @@ class TestListTupleRecursion:
         assert all(isinstance(x, Decimal) for x in result)
 
     def test_list_with_decimals_under_state_roundtrip(self):
+        from djust.serialization import decode_state_roundtrip
+
         result = normalize_django_value([Decimal("1.5"), Decimal("2.5")], state_roundtrip=True)
-        assert all(isinstance(x, float) for x in result)
+        assert result == [{"__djust_decimal__": "1.5"}, {"__djust_decimal__": "2.5"}]
+        assert decode_state_roundtrip(result) == [Decimal("1.5"), Decimal("2.5")]
 
     def test_empty_list(self):
         assert normalize_django_value([]) == []

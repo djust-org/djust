@@ -62,14 +62,25 @@ class EventSnapshot:
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """JSON-safe dict view of the snapshot for wire transport."""
+        """JSON-safe dict view of the snapshot for wire transport.
+
+        The buffered state carries ``Decimal``s in the tagged round-trip form
+        (#2252) so :func:`restore_snapshot` can put a real ``Decimal`` back on
+        the view. This is the DISPLAY view — the debug panel shows these fields
+        rather than restoring from them — so the tag is rendered as the bare
+        digit string, which is what every other client-bound djust boundary
+        emits for a ``Decimal``. Restoring still reads ``state_before`` /
+        ``state_after`` off the dataclass, never off this dict.
+        """
+        from .serialization import decimal_tags_to_strings
+
         return {
             "event_name": self.event_name,
             "params": self.params,
             "ref": self.ref,
             "ts": self.ts,
-            "state_before": self.state_before,
-            "state_after": self.state_after,
+            "state_before": decimal_tags_to_strings(self.state_before),
+            "state_after": decimal_tags_to_strings(self.state_after),
             "error": self.error,
         }
 
@@ -230,8 +241,13 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     if which not in ("before", "after"):
         raise ValueError("which must be 'before' or 'after', got %r" % (which,))
     from djust.security import safe_setattr
+    from djust.serialization import decode_state_roundtrip
 
     state = snapshot.state_before if which == "before" else snapshot.state_after
+    # #2252: the capture ran through ``StateRoundtripJSONEncoder``, so every
+    # Decimal in here is tagged. Decode before ANY of it is applied to the view
+    # — including the component entries, which this pass reaches too.
+    state = decode_state_roundtrip(state)
     # Pull components out before computing parent-state keys so they
     # don't get mistaken for top-level ghost-attr candidates.
     components_state = state.get(_COMPONENTS_SNAPSHOT_KEY, {})
@@ -359,6 +375,11 @@ def restore_component_snapshot(
     state = snapshot.state_before if which == "before" else snapshot.state_after
     components_state = state.get(_COMPONENTS_SNAPSHOT_KEY, {}) or {}
     component_snap = components_state.get(component_id)
+    if component_snap is not None:
+        # #2252: the capture ran through ``StateRoundtripJSONEncoder``.
+        from djust.serialization import decode_state_roundtrip
+
+        component_snap = decode_state_roundtrip(component_snap)
     if component_snap is None:
         logger.warning(
             "time_travel: restore_component_snapshot — no entry for %r in snapshot",
