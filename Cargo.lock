@@ -370,6 +370,7 @@ dependencies = [
  "djust_core",
  "djust_vdom",
  "indexmap",
+ "markup5ever",
  "once_cell",
  "proc-macro2",
  "pulldown-cmark",
