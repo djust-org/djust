@@ -375,17 +375,17 @@ def restore_component_snapshot(
     state = snapshot.state_before if which == "before" else snapshot.state_after
     components_state = state.get(_COMPONENTS_SNAPSHOT_KEY, {}) or {}
     component_snap = components_state.get(component_id)
-    if component_snap is not None:
-        # #2252: the capture ran through ``StateRoundtripJSONEncoder``.
-        from djust.serialization import decode_state_roundtrip
-
-        component_snap = decode_state_roundtrip(component_snap)
     if component_snap is None:
         logger.warning(
             "time_travel: restore_component_snapshot — no entry for %r in snapshot",
             component_id,
         )
         return False
+    # #2252: the capture ran through ``StateRoundtripJSONEncoder``, so every
+    # Decimal in here is tagged. Decode before any of it reaches the component.
+    from djust.serialization import decode_state_roundtrip
+
+    component_snap = decode_state_roundtrip(component_snap)
     registry = getattr(view, "_components", None) or {}
     component = registry.get(component_id)
     if component is None:

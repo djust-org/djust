@@ -31,11 +31,10 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db import models
 
-from ..serialization import normalize_django_value
+from ..serialization import decode_state_roundtrip, normalize_django_value
 from ..utils import is_model_list
 from ..validation import validate_handler_params
 from ..security import safe_setattr
-from ..serialization import decode_state_roundtrip
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
 from ..hooks import run_on_mount_hooks
