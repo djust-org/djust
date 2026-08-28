@@ -183,13 +183,18 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         live XSS.
 
         Reproduced with ``linenumbers`` rather than ``dictsort``, and the
-        substitution is forced rather than convenient: #2296's fix REMOVED
-        ``dictsort`` from ``ITEM_SAFETY_PRESERVING_FILTERS`` (the constant's own
-        doc-comment keeps it as the worked example), so the historical name is
-        no longer in the engine-derived requirement set at all and cannot be
-        made missing from it. ``linenumbers`` has the identical shape — granted
-        output safety by ``SAFE_OUTPUT_FILTERS``, and itself the subject of a
-        shipped XSS (#2291, ``{{ p|linenumbers|safe }}``).
+        substitution is forced rather than convenient. ``dictsort`` was in
+        ``ITEM_SAFETY_PRESERVING_FILTERS`` for one review round of #2296 and
+        the review took it back out, so it never reached a merged version of
+        the constant — ``git log -S`` on the constant returns exactly one
+        commit, #2296's own, already carrying ``[&str; 1]``. The historical
+        name is therefore not in the engine-derived requirement set at all and
+        cannot be made missing from it; the constant's doc-comment keeps it as
+        the worked example instead.
+
+        ``linenumbers`` has the identical shape — granted output safety by
+        ``SAFE_OUTPUT_FILTERS``, and itself the subject of a shipped XSS
+        (#2291, ``{{ p|linenumbers|safe }}``).
         """
         script = mutated_script(tmp_path, ('    "linenumbers",\n', ""))
         missing = rows(run_manifest(script))["chain"]["missing"]
