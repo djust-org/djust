@@ -1041,9 +1041,18 @@ def _required_whitespace() -> dict[str, str]:
 
 
 def _swept_whitespace() -> set[str]:
-    return {
-        f"U+{ord(c):04X}" for v in INPUTS.values() if isinstance(v, str) for c in v if c.isspace()
-    } | {f"U+{ord(c):04X}" for v in INPUTS.values() if isinstance(v, str) for c in v}
+    """EVERY character the corpus's string inputs contain, not just the spaces.
+
+    Deliberately unfiltered. The requirement is "the engine branches on this
+    character somewhere", and a first draft OR-ed an `isspace()`-filtered set
+    with this one — a strict subset, so the filtered half could never change
+    the answer. Two mechanisms where one is doing the work is the shape this
+    file's own manifest exists to make visible; it is one comprehension now.
+
+    `truncate::py_is_space` also counts `\\x1c`-`\\x1f`, which `str.isspace()`
+    does not, so filtering would additionally have been wrong.
+    """
+    return {f"U+{ord(c):04X}" for v in INPUTS.values() if isinstance(v, str) for c in v}
 
 
 #: Every `format!` in `filters.rs` naming a FILTER and its ARGUMENT — i.e. the
