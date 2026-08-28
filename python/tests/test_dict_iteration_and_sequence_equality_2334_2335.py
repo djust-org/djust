@@ -30,7 +30,7 @@ not — which is why the fix is at the sink and not at ``{% for %}``'s caller.
 --------------------------------------------------------------
 ``values_equal`` had no structural arm, so ``{% if a == b %}`` over two equal
 lists answered False and the template took the ``{% else %}`` branch. Same
-hole in ``compare_values`` from the ordering side. Both now recurse, so the
+hole in ``try_compare`` from the ordering side. Both now recurse, so the
 numeric widening (``[1] == [1.0]``, ``[True] == [1]``) comes along rather than
 being re-implemented.
 
@@ -43,8 +43,9 @@ differential below settles by running Django:
   walk. ``[{}, 1] < [{}, 2]`` is True even though two dicts cannot be ordered
   — they never need to be, because they are equal. And an unequal pair
   DECIDES, including one that cannot be ordered at all (a ``TypeError`` in
-  Python, False in Django, 0 here). The first draft asked "is this pair
-  ordered?" first and continued on a 0, which conflates the two and falls
+  Python, False in Django, ``None`` here since #2338). The first draft asked
+  "is this pair ordered?" first and continued on a 0, which conflates the two
+  and falls
   through to the length tie-break: ``[[], 'a', ('b',)] > [1]`` answered True
   because three elements beat one. The randomised sweep found it in 27 of
   28,500 cells; no curated case here had the shape.
@@ -489,7 +490,13 @@ class TestSequenceComparisonRandomised:
     """
 
     ATOMS = [1, 0, 2, -1, 1.0, 0.0, 2.5, True, False, None, "a", "b", "", "1", XSS]
-    OPS = ["==", "!=", "<", ">", "in"]
+    #: ``<=`` and ``>=`` were EXCLUDED when this sweep was written, because
+    #: every incomparable pair diverged on them (#2338) and including them
+    #: would have made the assertion permanently red for a bug this PR was
+    #: deliberately not fixing. #2338 fixed it, so they are in — and they are
+    #: the half of the ordering surface a corpus that samples only ``<`` / ``>``
+    #: cannot see, which is precisely how the divergence survived.
+    OPS = ["==", "!=", "<", ">", "<=", ">=", "in"]
 
     @classmethod
     def _value(cls, rng: random.Random, depth: int = 0):
@@ -776,7 +783,7 @@ class TestTheCorpusGapsThatHidTheseFromTheDifferential:
         src = self.SCRIPT.read_text()
         assert "CMP_OPS" in src and '"q": copy.deepcopy(' in src, (
             "the differential binds no second operand, so values_equal and "
-            "compare_values are unmeasured — which is how #2335 shipped"
+            "try_compare are unmeasured — which is how #2335 shipped"
         )
         for op in ("==", "!=", "<", ">", "<=", ">=", "in"):
             assert f'"{op}"' in src, f"the comparison axis is missing {op!r}"
@@ -795,30 +802,6 @@ class TestKnownAdjacentDivergencesNotFixedHere:
     Pinned so the exclusion cannot quietly become a blind spot, and so whoever
     fixes one is told to delete the pin.
     """
-
-    def test_an_incomparable_pair_still_answers_true_for_le_and_ge(self) -> None:
-        """``compare_values`` collapses "incomparable" to 0, so ``<=`` and
-        ``>=`` read it as "equal" and answer True where Django answers False.
-
-        Pre-existing for EVERY incomparable pair (``{% if "a" >= 1 %}`` has
-        always done this), measured identically on both builds of the #2334 /
-        #2335 differential — 842 cells, unchanged. ``try_compare`` now makes
-        the fix small; tracked at #2338 rather than widened into a
-        sequence-comparison PR.
-        """
-        for src in (
-            "{% if p >= q %}Y{% else %}N{% endif %}",
-            "{% if p <= q %}Y{% else %}N{% endif %}",
-        ):
-            d, r = both(src, {"p": "a", "q": 1})
-            assert (d, r) == ("N", "Y"), (
-                f"{src} on a string-vs-int pair now agrees — the incomparable-pair "
-                "collapse is fixed, so delete this test and close #2338"
-            )
-            # And it is the same answer for a sequence pair, which is the arm
-            # this PR added: no NEW shape of it was introduced.
-            d, r = both(src, {"p": [1], "q": (1,)})
-            assert (d, r) == ("N", "Y")
 
     def test_in_over_a_dict_still_stringifies_its_needle(self) -> None:
         """The second arm of ``in``, and the one this PR did NOT change.

@@ -3,7 +3,7 @@
 `values_equal` in `crates/djust_templates/src/renderer.rs` had arms for
 `(Integer, Integer)` and `(Float, Float)` and nothing for the mixed pair, so a
 float compared against an integer literal was NEVER equal: `{% if x == 0 %}`
-answered "not zero" for `0.0`. `compare_values` next to it has carried mixed
+answered "not zero" for `0.0`. `try_compare` next to it has carried mixed
 arms all along, so `{% if x > 0 %}` was right the whole time — only equality
 diverged.
 
