@@ -203,6 +203,40 @@ def _field_type_excluded_for(model_class: Any, field_name: str) -> bool:
 _IDENTITY_KEYS = frozenset({"pk", "id", "__str__", "__model__"})
 
 
+def model_identity(obj: Any) -> Dict[str, Any]:
+    """The identity map standing in for a Django model — the ONLY producer.
+
+    Six sites used to build this by hand, and they had drifted (#2322): only
+    two stamped ``"__model__"``, and the two that did disagreed about key
+    ORDER (``id, pk`` here, ``pk, id`` in ``jit.py``), which survives to the
+    wire. Which producer fires depends on prefetch depth, on whether the
+    template referenced a field, and on whether serialization raised — none of
+    it visible from the consuming side, so a consumer keying on
+    ``"__model__"`` was right in development and wrong in production the
+    moment a relation crossed ``max_depth``.
+
+    The cure is one producer rather than six correct copies (#1646): with a
+    single place to answer "what does a model's identity map contain?", the
+    marker is universal by construction and the next key added to
+    :data:`_IDENTITY_KEYS` cannot land at five sites out of six.
+
+    ``id`` and ``pk`` stay NATIVE types (``int``/``UUID``): the client compares
+    them in ``{% if item.id == selected_id %}``, and stringifying either would
+    break every such comparison silently.
+
+    The key ORDER is part of the contract, not incidental — a dict's order
+    survives ``json.dumps`` and msgpack, so two producers ordering differently
+    is a wire-shape difference. It is the order the main path
+    (``_serialize_model_safely``) has always emitted.
+    """
+    return {
+        "id": obj.pk,
+        "pk": obj.pk,
+        "__str__": str(obj),
+        "__model__": obj.__class__.__name__,
+    }
+
+
 def _resolve_sensitive_fields() -> FrozenSet[str]:
     """Return the set of field names to always drop during model serialization.
 
@@ -404,12 +438,9 @@ class DjangoJSONEncoder(json.JSONEncoder):
                     type(obj).__name__,
                 )
 
-        result = {
-            "id": obj.pk,  # Native type (int/UUID) for {% if %} comparisons
-            "pk": obj.pk,
-            "__str__": str(obj),
-            "__model__": obj.__class__.__name__,
-        }
+        # The identity keys first, then the model's fields on top. One producer
+        # for that map (#2322) — see `model_identity`.
+        result = model_identity(obj)
 
         # Resolve the effective denylist / allowlist / sensitive-opt-out once.
         denied = self._get_denied_fields(obj)
@@ -457,11 +488,12 @@ class DjangoJSONEncoder(json.JSONEncoder):
                     if related and DjangoJSONEncoder._depth < self._get_max_depth():
                         result[field_name] = self._serialize_model_safely(related)
                     elif related:
-                        result[field_name] = {
-                            "id": related.pk,
-                            "pk": related.pk,
-                            "__str__": str(related),
-                        }
+                        # Past the depth limit: the identity map and no fields.
+                        # It carries `__model__` like every other producer since
+                        # #2322 — before that, a consumer keying on the marker
+                        # saw this related model as "not a model" purely because
+                        # of how deep the prefetch happened to be.
+                        result[field_name] = model_identity(related)
                     else:
                         result[field_name] = None
                 else:
@@ -1318,12 +1350,8 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     if isinstance(value, models.Model):
         max_depth = DjangoJSONEncoder._get_max_depth()
         if _depth >= max_depth:
-            # At max depth, return a minimal representation
-            return {
-                "id": value.pk,
-                "pk": value.pk,
-                "__str__": str(value),
-            }
+            # At max depth, the identity map and no fields (#2322).
+            return model_identity(value)
         # Increment DjangoJSONEncoder._depth so _serialize_model_safely
         # respects the depth limit for prefetched relations.
         DjangoJSONEncoder._depth += 1

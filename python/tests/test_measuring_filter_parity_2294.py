@@ -442,38 +442,54 @@ class TestLengthOfAnObject:
         assert djust_out == "0"
 
     def test_model_at_the_depth_limit_still_answers_zero(self) -> None:
-        """The shape that rules ``"__model__"`` out as the marker.
+        """The shape that ruled ``"__model__"`` out as the marker, kept.
 
-        FOUR of the SIX sites that stamp ``__str__`` omit ``__model__``:
-        ``serialization.py``'s depth-limited-FK (line 463) and max-depth (line
-        1325) shorthands, and both ``template/rendering.py`` fallbacks (lines
-        209 and 219). Each emits ``{"id", "pk", "__str__"}``, so keying on
-        ``__model__`` would make every one of them answer 3. Only
-        ``_serialize_model_safely`` (line 410) and ``jit.py``'s identity-only
-        subset (line 321) carry it. Filed as #2322.
+        When #2294 landed, four of the six sites stamping ``__str__`` omitted
+        ``__model__``, so keying `length` on the marker would have made every
+        depth-limited model answer its key count. #2322 closed that at the
+        source — one producer, ``serialization.model_identity``, so every
+        model-shorthand now carries it.
+
+        This row stays, and is now about a stronger property than the one that
+        motivated it: ``object_str()`` keys on ``__str__``, which means a map
+        reaching the engine from an OLD wire payload, a hand-built dict, or any
+        producer outside djust is read the same way. `length` must not depend
+        on which key set the producer happened to emit, so the marker-less
+        shorthand — still the exact shape a pre-#2322 client-side snapshot
+        holds — is asserted directly.
         """
         shorthand = {"id": 7, "pk": 7, "__str__": "bob"}
         assert "__model__" not in shorthand
         got = _rust.render_template("{{ p|length }}", {"p": shorthand})
         assert got == "0", "a depth-limited model must not answer its key count"
+        # And the shape djust emits TODAY, which does carry the marker.
+        from djust.serialization import model_identity
 
-    def test_the_model_marker_sites_are_counted_from_the_source_not_from_prose(
-        self,
-    ) -> None:
-        """The 4-of-6 claim, made executable (#2322).
+        class _Bob:
+            pk = 7
 
-        The prose version of this said "three of five" and was wrong — the
-        exact citation-discipline failure #1197 is about, in a PR whose whole
-        argument rests on the count. So the count is now GREPPED: every site
-        that stamps ``"__str__": str(...)`` is found in the source, and each is
-        classified by whether ``"__model__"`` appears within the same dict
-        literal. A new serialization site, or an existing one that gains or
-        loses the key, fails here instead of quietly making the docstrings
-        false.
+            def __str__(self) -> str:
+                return "bob"
 
-        Deliberately a source grep rather than a behavioural test: the failure
-        mode is a PRODUCER that forgets the key, which no amount of rendering
-        the producers we already know about can detect.
+        current = model_identity(_Bob())
+        assert current["__model__"] == "_Bob"
+        assert _rust.render_template("{{ p|length }}", {"p": current}) == "0"
+
+    def test_there_is_exactly_one_producer_of_a_model_identity_map(self) -> None:
+        """What the 4-of-6 count pin became once #2322 closed the split.
+
+        The count pin was right for its moment and cannot survive its own fix:
+        with the split closed it can only ever read 6-with / 0-without, and a
+        SEVENTH hand-rolled literal that happened to carry ``__model__`` would
+        pass it while re-opening the drift on the next key — a pin that cannot
+        go red is decorative (#1859). What is load-bearing after #2322 is that
+        exactly one place BUILDS the map, which is why this asserts that
+        instead.
+
+        Kept here, next to the `length` cases that motivated it, and duplicated
+        nowhere: the behavioural half — all six producers driven and their
+        shapes compared — lives in
+        ``python/djust/tests/test_model_identity_shape_2322.py``.
         """
         import re
         from pathlib import Path
@@ -486,37 +502,19 @@ class TestLengthOfAnObject:
             root / "mixins" / "jit.py",
             root / "template" / "rendering.py",
         ]
-        with_marker: list[str] = []
-        without_marker: list[str] = []
-        for path in files:
-            text = path.read_text(encoding="utf-8")
-            lines = text.splitlines()
-            for i, line in enumerate(lines):
-                if not re.search(r'"__str__":\s*str\(', line):
-                    continue
-                # The dict literal this stamp belongs to: scan the surrounding
-                # window for a sibling `"__model__"` before the closing brace.
-                window = "\n".join(lines[max(0, i - 6) : i + 4])
-                site = f"{path.name}:{i + 1}"
-                (with_marker if '"__model__"' in window else without_marker).append(site)
-
-        assert len(with_marker) + len(without_marker) == 6, (
-            f'the set of `"__str__": str(...)` stamps changed: '
-            f"with={with_marker} without={without_marker}. Re-read them, decide "
-            f"whether the new one carries `__model__`, and update this pin AND "
-            f"the docstrings that cite the count."
+        sites = [
+            f"{path.name}:{i}"
+            for path in files
+            for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if re.search(r'"__str__":\s*str\(', line)
+        ]
+        assert len(sites) == 1, (
+            f"{len(sites)} sites build a model identity map by hand: {sites}. "
+            f"There must be exactly ONE — `serialization.model_identity` — and "
+            f"every other producer must call it (#2322). Six hand-rolled copies "
+            f"is what made `__model__` unusable as a marker in the first place."
         )
-        assert len(without_marker) == 4, (
-            f"expected FOUR sites to omit `__model__`, found {len(without_marker)}: "
-            f"{without_marker}"
-        )
-        assert sorted(with_marker) == ["jit.py:321", "serialization.py:410"], with_marker
-        assert sorted(without_marker) == [
-            "rendering.py:209",
-            "rendering.py:219",
-            "serialization.py:1325",
-            "serialization.py:463",
-        ], without_marker
+        assert sites[0].startswith("serialization.py:"), sites
 
     def test_the_length_and_the_rendering_agree_about_what_a_map_is(self) -> None:
         """One predicate, so ``{{ p }}`` and ``{{ p|length }}`` cannot drift.

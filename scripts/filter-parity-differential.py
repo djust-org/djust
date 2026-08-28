@@ -302,6 +302,20 @@ INPUTS = {
     # dict at the top, where no per-item rule can see it.
     "l-dict": [{"k": "<v>"}, "x"],
     "d-plain": {"k": "<v>", "j": 2},
+    # The map a serialized Django MODEL arrives as (#2322). No other entry
+    # carries the `"__str__"` key `Value::object_str` branches on, so until this
+    # row the corpus could not construct a single cell that reaches the model
+    # arm of `{{ p }}` or `{{ p|length }}` — the shape every djust page holding
+    # a model renders through, and the one whose key set #2322 made uniform.
+    # Its `__str__` carries a live payload because a model's `str()` is app
+    # data and can hold anything a user typed; `__model__` cannot, being
+    # `obj.__class__.__name__`.
+    "d-model": {
+        "id": 7,
+        "pk": 7,
+        "__str__": "<img src=x onerror=alert(1)>",
+        "__model__": "Doc",
+    },
     "i-int": 42,
     "f-float": 1.5,
     "n-none": None,
@@ -359,6 +373,21 @@ LIVE_FRAGMENTS = {
     # permissiveness check is always djust-vs-DJANGO (`_leaks` subtracts
     # Django's own live fragments), but leaving these out keeps the report
     # readable. `l-mixed`'s UNMARKED element is the one that must never appear.
+    #
+    # `d-model` is out for a THIRD reason, measured rather than assumed (#2322):
+    # a fragment entry on it reports 65 cells, identically on both builds, and
+    # none of them is a leak this tool can judge. The two engines disagree about
+    # what that value IS — djust reads a `"__str__"`-carrying map as an OBJECT
+    # and renders the `__str__`, Django reads a plain `dict` and renders its
+    # repr — which is the divergence already pinned as known-wrong in
+    # `test_measuring_filter_parity_2294.py::
+    # test_a_dict_carrying___str___is_WRONGLY_read_as_an_object`. Most of the 65
+    # are the deliberately-broad `onerror=` matching inside ESCAPED text; the
+    # rest are `|safe` chains where djust emits the `__str__` live and Django
+    # emits a truncated dict repr. Neither is reachable from a real page, where
+    # Django is handed the MODEL and renders `str(model)` too — the tool can
+    # only hand both engines a dict, so the comparison is structurally unfair
+    # on this key. 65 permanent false leaks would drown a real one.
     "l-mixed": ["<img", "onerror="],
 }
 
@@ -478,6 +507,11 @@ INPUTS_2 = [
     "t-nested",
     "l-scalars",
     "l-dict",
+    # The serialized-model map (#2322), on the chain axis too: what a SECOND
+    # filter does with a value the renderer reads as an OBJECT rather than a
+    # dict is a different question from what one filter does, and `object_str`
+    # is the branch nothing else in this corpus reaches.
+    "d-model",
 ]
 #: The 3-chain axis stays a small hot subset — 16³ chains is already the
 #: dominant cost — and the item-type axis above is measured at length 2, where
