@@ -1,0 +1,33 @@
+# Code owners for djust.
+#
+# GitHub requests a review from the owner of every path a PR touches. Paired
+# with "Require review from Code Owners" in branch protection, this makes the
+# reviewer explicit in the PR UI rather than something a contributor has to
+# guess at.
+#
+# Note on scope: this names the reviewer, it does not enforce that an external
+# contributor waits for one — branch protection cannot condition on who
+# authored a PR. That is what `.github/workflows/external-pr-gate.yml` does.
+
+# Everything, by default.
+*                                   @johnrtipton
+
+# Security-boundary code. Called out separately not because the owner differs
+# but because the diff deserves a slower read: four live XSSes were fixed in
+# these paths in a single drain (2026-08-28), every one of them a filter or a
+# grant that escaped nothing itself and leaned on the render-time auto-escape
+# that something downstream then removed.
+/crates/djust_templates/src/renderer.rs    @johnrtipton
+/crates/djust_templates/src/filters.rs     @johnrtipton
+/crates/djust_live/src/lib.rs              @johnrtipton
+/python/djust/auth/                        @johnrtipton
+/python/djust/security.py                  @johnrtipton
+/python/djust/serialization.py             @johnrtipton
+/python/djust/websocket.py                 @johnrtipton
+
+# Anything that changes how the project is built, released, or gated.
+/.github/                                  @johnrtipton
+/scripts/                                  @johnrtipton
+/Makefile                                  @johnrtipton
+/pyproject.toml                            @johnrtipton
+/Cargo.toml                                @johnrtipton
