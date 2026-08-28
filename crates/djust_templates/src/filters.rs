@@ -3469,7 +3469,34 @@ fn apply_stringformat(value: &Value, spec: &str) -> String {
     // Common specifiers: "s" (string), "d" (integer), "f" (float),
     // "05d" (zero-padded int), ".2f" (2 decimal places).
 
-    let last_char = spec.chars().last().unwrap_or('s');
+    // An EMPTY spec is not a conversion at all. Django's filter body is
+    // `("%" + arg) % value`, so an empty arg makes the format string `"%"` —
+    // a `%` with nothing after it, which CPython answers with
+    // `ValueError: incomplete format`. That is one of the two exceptions
+    // Django's `except (ValueError, TypeError)` catches, so `{{ p|stringformat:"" }}`
+    // renders `""` (measured on Django 5.2.16, for an int, a str and None).
+    //
+    // This was `spec.chars().last().unwrap_or('s')` before #2343, and the
+    // default was not a harmless fallback: an empty spec entered the `'s'` arm
+    // and hit `&spec[..spec.len() - 1]`, where `0usize - 1` underflows. Debug
+    // catches it as `attempt to subtract with overflow`; release wraps to
+    // `usize::MAX` and the slice panics one line later with
+    // `end byte index 18446744073709551615 is out of bounds`. Every other arm
+    // (`d`/`i`, `f`/`F`, `e`/`E`) carries the same `spec.len() - 1`, so the
+    // guard belongs here, above the dispatch, rather than in the arm that
+    // happened to be reachable.
+    //
+    // A PANIC is categorically worse than a filter raising, which is why this
+    // one bug forced a boundary change as well: PyO3 converts an unwind into
+    // `pyo3_runtime.PanicException`, whose MRO is
+    // `[PanicException, BaseException, object]` — it is NOT an `Exception`, so
+    // it walks straight past `LiveViewConsumer.receive`'s `except Exception`
+    // and takes the WebSocket session down instead of producing an error
+    // frame. See `guard_panic` in `crates/djust_live/src/lib.rs` for the
+    // backstop; this guard is the fix, that is the net.
+    let Some(last_char) = spec.chars().last() else {
+        return String::new();
+    };
 
     match last_char {
         's' => {

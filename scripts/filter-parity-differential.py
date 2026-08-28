@@ -111,6 +111,27 @@ could reach them:
 TestTheCorpusGapsThatHidTheseFromTheDifferential` pins both, because a corpus
 gap is silent by construction and this is the third time one has hidden a
 shipped bug.
+
+Since #2345 it carries an **argument** axis, and `render_both` records a Rust
+PANIC as a cell rather than dying on one. Both were the same blind spot seen
+from two sides. `FILTER_ARGS` gave every filter exactly ONE argument and it was
+always VALID, so:
+
+* #2328 changed what every argument-taking built-in does with an unparseable
+  or unresolvable argument and this tool reported **0 moved cells in both
+  directions** — while its first pass shipped 508 regressed cells that neither
+  this script nor the full green suite saw;
+* `{{ p|stringformat:"" }}` (#2343) did not merely diverge, it PANICKED — and
+  because `pyo3_runtime.PanicException` derives from `BaseException`, the
+  `except Exception` in `render_both` did not catch it and the sweep ABORTED.
+  #2343 was found by that traceback, not by a cell.
+
+So `ARG_SPELLINGS` sweeps nineteen argument spellings per argument-taking
+filter, and a panic is recorded as `<<PANIC …>>` — kept distinct from
+`<<EXC …>>` on purpose, because a raise is contained by
+`LiveViewConsumer.receive` and a panic is not. `--compare` reports newly
+panicking cells on their own line and exits non-zero on any, since "how many
+cells agree" is the wrong number to read a transport-level failure off.
 """
 
 from __future__ import annotations
@@ -581,6 +602,17 @@ def render_both(tpl: str, ctx: dict, safe_keys: list[str] | None = None) -> tupl
             du = _rust.render_template(tpl, ctx)
     except Exception as exc:  # noqa: BLE001
         du = f"<<EXC {type(exc).__name__}: {exc}>>"
+    except BaseException as exc:  # noqa: BLE001
+        # A Rust PANIC (#2343/#2345). `pyo3_runtime.PanicException` derives
+        # from `BaseException`, so an `except Exception` here does not catch it
+        # and the sweep ABORTS mid-run — which is literally how #2343 was
+        # found: by the traceback, not by a cell. Recorded with its own marker
+        # rather than folded into `<<EXC …>>`, because a panic and a raise are
+        # not the same outcome: a raise is contained by
+        # `LiveViewConsumer.receive`'s `except Exception` and produces an error
+        # frame, while a panic walks past it and takes the session down. Two
+        # builds that differ only in whether a cell panics MUST show as moved.
+        du = f"<<PANIC {type(exc).__name__}: {exc}>>"
     return dj, du
 
 
@@ -715,6 +747,58 @@ def cmp_cells():
                 yield op, ka, kb
 
 
+#: The ARGUMENT axis (#2345).
+#:
+#: `FILTER_ARGS` gives every filter exactly ONE argument and it is always a
+#: VALID one, so the whole corpus above is blind on the argument axis. Measured,
+#: not asserted: #2328 changed what EVERY argument-taking built-in does with an
+#: unparseable or unresolvable argument and this tool reported **0 moved cells
+#: in both directions** — while its first pass shipped 508 regressed cells that
+#: neither this script nor the full green suite saw. #2343 is the sharper case:
+#: `{{ p|stringformat:"" }}` PANICKED, and a panic is not a cell this tool could
+#: report at all, because it aborted the run (see `render_both`).
+#:
+#: The spellings are the ones a throwaway harness used for #2328; every one of
+#: them was load-bearing at least once. They are grouped by what they exercise:
+#:
+#: * VALID — the parse itself, including the spellings Python's `int()` accepts
+#:   and Rust's `parse()` does not (` 5 `, `+5`, `1_0`), and the
+#:   quoted-vs-bare distinction that decides whether `2.7` is a `str` (so
+#:   `int()` raises and Django concatenates) or a float literal (so `int()`
+#:   truncates).
+#: * INVALID — `"notanumber"` and `""`. The empty one is #2343's cell.
+#: * LOOKUPS — a miss, a dotted miss, and a resolvable name, which are three
+#:   different answers since #2328 made an unresolvable bare identifier raise.
+#: * LITERALS Django resolves WITHOUT a lookup — `True`/`None` are
+#:   `django.template.context.builtins` keys and RESOLVE (#2347); `7.` and
+#:   `0x10` are the spellings `Variable.__init__` reads as a float and as a
+#:   name respectively.
+#:
+#: Swept over the HOT input subset rather than all of `INPUTS`: the axis under
+#: test is the ARGUMENT, the value axis is already swept exhaustively above at
+#: one argument each, and the full product would roughly double the corpus for
+#: no new question.
+ARG_SPELLINGS = [
+    '"5"', "5", '"2.7"', "2.7", '" 5 "', '"+5"', '"1_0"', '"-3"', "-3", '"0"',
+    '"notanumber"', '""',
+    "missingvar", "no.such.path", "known",
+    "True", "None", "7.", "0x10",
+]
+
+#: Bound so the `known` spelling above has something to resolve TO. A plain
+#: string, because the question it asks is "did the lookup happen", not "what
+#: does this filter do with a list".
+ARG_CONTEXT = {"known": "3"}
+
+
+def arg_cells():
+    """Every argument-taking built-in × every spelling × the hot inputs."""
+    for name in sorted(FILTER_ARGS):
+        for arg in ARG_SPELLINGS:
+            for key in INPUTS_2:
+                yield name, arg, key
+
+
 def measure(out_path: str) -> None:
     result: dict[str, list[str]] = {}
     for chain, key in cells():
@@ -781,8 +865,30 @@ def measure(out_path: str) -> None:
         )
         result[cid] = [dj, du]
 
+    # The ARGUMENT axis (#2345). Four fields, `@arg` first, so no id above is
+    # renamed. The context carries `known` alongside `p` for the resolvable-
+    # lookup spelling.
+    for name, arg, key in arg_cells():
+        cid = f"@arg {name}:{arg}\t{key}\targ"
+        if cid in result:
+            continue
+        ctx = {"p": INPUTS[key], **ARG_CONTEXT}
+        dj, du = render_both(
+            "{{ p|" + name + ":" + arg + " }}",
+            ctx,
+            CONTEXT_SAFE_KEYS.get(key),
+        )
+        if name in NONDET:
+            dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
+        result[cid] = [dj, du]
+
     agree = sum(1 for v in result.values() if v[0] == v[1])
+    panicked = sum(1 for v in result.values() if v[1].startswith("<<PANIC "))
     print(f"cells={len(result)}  agree={agree}  disagree={len(result) - agree}")
+    # Printed separately and always, even at zero: a panic is a transport-level
+    # failure rather than a rendering one, so "how many cells disagree" is the
+    # wrong number to read it off (#2343).
+    print(f"cells where djust PANICKED: {panicked}")
     with open(out_path, "w") as fh:
         json.dump(result, fh)
     print(f"wrote {out_path}")
@@ -876,6 +982,20 @@ def compare(base_path: str, after_path: str) -> int:
                 found[cid] = sorted(extra)
         return found, raised
 
+    # PANICS, reported as their own line and gating on their own (#2343/#2345).
+    # A panic is not a wrong answer; it is a transport-level failure that
+    # `except Exception` cannot contain, so it must never be read off the
+    # agreement count. Newly-panicking cells fail the run outright.
+    panic_b = {k for k, (_, du) in base.items() if du.startswith("<<PANIC ")}
+    panic_a = {k for k, (_, du) in after.items() if du.startswith("<<PANIC ")}
+    print()
+    print(f"cells where djust PANICKED before: {len(panic_b)}")
+    print(f"cells where djust PANICKED after : {len(panic_a)}")
+    print(f"  closed                         : {len(panic_b - panic_a)}")
+    print(f"  INTRODUCED                     : {len(panic_a - panic_b)}")
+    for cid in sorted(panic_a - panic_b):
+        print(f"  !! {cid}  {after[cid][1][:160]!r}")
+
     lb, raised = leaks(base)
     la, _ = leaks(after)
     new = sorted(set(la) - set(lb))
@@ -900,9 +1020,12 @@ def compare(base_path: str, after_path: str) -> int:
         print(f"       django={after[cid][0][:160]!r}")
         print(f"       djust ={after[cid][1][:160]!r}")
 
-    if regressions or hot:
+    if regressions or hot or (panic_a - panic_b):
         return 1
-    print("\nOK: no agreeing cell regressed, and nothing became more permissive.")
+    print(
+        "\nOK: no agreeing cell regressed, nothing became more permissive, "
+        "and no cell newly panics."
+    )
     return 0
 
 
