@@ -407,6 +407,29 @@ INPUTS = {
     },
     "i-int": 42,
     "f-float": 1.5,
+    # NON-FINITE floats (#2349). Every numeric entry above is finite, so the
+    # corpus could not construct a single cell where the
+    # `(a - b).abs() < f64::EPSILON` idiom is UNDEFINED — and it is undefined
+    # for exactly these: `(inf - inf)` is NaN and every comparison against NaN
+    # is false, so the tolerance answered "not equal" for two infinities and
+    # the ordering chain fell through its `else` to "greater" for every NaN
+    # pair. 26 divergent cells, and this tool reported clean over all of them
+    # because `INPUTS` had no `inf` and no `nan`.
+    #
+    # All three, not one: `inf` and `-inf` order NORMALLY in Python while a NaN
+    # answers False for all four operators, so a corpus carrying only one of
+    # them cannot tell an `is_nan` guard (correct) from an `!is_finite` guard
+    # (which would break `-inf < 1`). They matter most on the `@cmp` axis,
+    # where `q` is the second operand, but are swept through the filters too:
+    # `floatformat`, `add` and `stringformat` all branch on finiteness.
+    "f-inf": float("inf"),
+    "f-ninf": float("-inf"),
+    "f-nan": float("nan"),
+    # The same three as DECIMALS, which reach the `numeric_pair` WILDCARD
+    # rather than any typed arm — two of the six sites the fix touches are
+    # reachable only this way.
+    "dec-inf": Decimal("Infinity"),
+    "dec-nan": Decimal("NaN"),
     "n-none": None,
     "l-empty": [],
     # Context ITEM safety (#2287). `mark_safe` on the ELEMENTS and never on the
@@ -850,17 +873,23 @@ ARG_SPELLINGS = [
     "missingvar",
     "no.such.path",
     "known",
+    # All THREE builtins, not the two #2345 listed. `False` is the one whose
+    # answer differs from both of the others — `int(False)` is 0, where `True`
+    # is 1 and `None` raises — so a corpus carrying only `True` and `None`
+    # cannot distinguish a fix that READS the bool from one that hardcodes 1
+    # (#2347).
     "True",
+    "False",
     "None",
     "7.",
     "0x10",
     # A width that PARSES and saturates past `isize`. Added because the
     # reachability manifest reported `pad_width`'s cap — the guard standing
     # between a template-supplied width and an allocator ABORT (#2328) —
-    # UNREACHABLE from the nineteen above: every one of them either parses to
-    # a small number, fails to parse, or fails to resolve. The manifest
-    # reporting a gap in the corpus it ships alongside is the whole point of
-    # it, and `test_the_nineteen_spellings_leave_the_pad_cap_unreachable`
+    # UNREACHABLE from the nineteen above: every one of them either parses
+    # to a small number, fails to parse, or fails to resolve. The manifest
+    # reporting a gap in the corpus it ships alongside is the whole point
+    # of it, and `test_the_nineteen_spellings_leave_the_pad_cap_unreachable`
     # removes this row again to prove the report was real.
     '"99999999999999999999"',
 ]
@@ -898,6 +927,46 @@ def arg_cells():
         for arg in ARG_SPELLINGS:
             for key in INPUTS_2:
                 yield name, arg, key
+
+
+#: The BUILTIN-VALUE axis (#2347).
+#:
+#: Every cell above binds `p` and writes `p` as the expression, so the corpus
+#: could not construct a bare `True` / `False` / `None` in the VALUE position
+#: at all — and that is precisely where djust diverged: `{{ True }}` rendered
+#: the empty string where Django renders `True`, because
+#: `django.template.context.builtins` puts the three names in every context and
+#: djust's `Context::resolve` had no arm for them. The argument axis above
+#: reaches them as ARGUMENTS; this reaches them as the value.
+#:
+#: Swept through every filter, not just bare, because the divergence composes:
+#: `{{ True|yesno }}` was `maybe` (the `Missing` answer) rather than `yes`, and
+#: a fix that only special-cased the bare form would leave that.
+#:
+#: The tag shapes are here for the opposite reason — `{% if True %}` and
+#: `{% firstof None False True %}` were ALREADY right, because
+#: `renderer::get_value_safe` carried its own literal arms. They are the
+#: non-regression half: the fix converges both resolvers onto one helper, and
+#: these cells are what would go red if that convergence changed the answer on
+#: the side that was already correct.
+BUILTIN_NAMES = ["True", "False", "None"]
+BUILTIN_SHAPES = {
+    "var": "{{ @NAME@ }}",
+    "if": "{% if @NAME@ %}Y{% else %}N{% endif %}",
+    "with": "{% with q=@NAME@ %}[{{ q }}]{% endwith %}",
+    "for": "{% for x in @NAME@ %}[{{ x }}]{% empty %}E{% endfor %}",
+    "firstof": "{% firstof @NAME@ p %}",
+    "eq": "{% if p == @NAME@ %}Y{% else %}N{% endif %}",
+    "is": "{% if p is @NAME@ %}Y{% else %}N{% endif %}",
+}
+
+
+def builtin_cells():
+    for lit in BUILTIN_NAMES:
+        for name in sorted(register.filters):
+            yield lit, name, "var-filtered"
+        for shape in BUILTIN_SHAPES:
+            yield lit, None, shape
 
 
 # ---------------------------------------------------------------------------
@@ -1299,8 +1368,7 @@ AXES = [
         # could never go red).
         swept=lambda: {name for name, _arg, _key in arg_cells()},
         required=lambda: {
-            n: "django defaultfilters.register (argspec >= 2)"
-            for n in django_argument_filters()
+            n: "django defaultfilters.register (argspec >= 2)" for n in django_argument_filters()
         },
     ),
     Axis(
@@ -1384,9 +1452,19 @@ META_PREFIX = "@@"
 
 
 def axis_of(cid: str) -> str:
-    """Which declared axis a cell id belongs to. Mechanical, from the id alone."""
+    """Which declared axis a cell id belongs to. Mechanical, from the id alone.
+
+    A cell whose prefix is not listed here falls through to the `{{ }}` split
+    at the bottom and is reported as `filter` or `chain` — which is WRONG
+    rather than merely imprecise, because the per-axis movement report is what
+    tells a reader an axis moved nothing. Any new `@`-prefixed cell family
+    needs a line here, and `test_every_cell_prefix_has_an_axis` fails until it
+    gets one.
+    """
     if cid.startswith("@arg "):
         return "argument"
+    if cid.startswith("@builtin "):
+        return "builtin"
     if cid.startswith("@cmp "):
         return "cmp"
     if cid.startswith("@path"):
@@ -1515,6 +1593,22 @@ def measure(out_path: str) -> None:
             ctx,
             CONTEXT_SAFE_KEYS.get(key),
         )
+        if name in NONDET:
+            dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
+        result[cid] = [dj, du]
+
+    # The BUILTIN-VALUE axis (#2347). `p` stays bound so the `firstof` / `==` /
+    # `is` shapes have a second operand; the LITERAL is what varies.
+    for lit, name, shape in builtin_cells():
+        if name is not None:
+            source = "{{ " + lit + "|" + spec(name) + " }}"
+            cid = f"@builtin {lit}|{spec(name)}\ts-plain\tbuiltin"
+        else:
+            source = BUILTIN_SHAPES[shape].replace("@NAME@", lit)
+            cid = f"@builtin {lit}\ts-plain\t{shape}"
+        if cid in result:
+            continue
+        dj, du = render_both(source, {"p": INPUTS["s-plain"]})
         if name in NONDET:
             dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
         result[cid] = [dj, du]

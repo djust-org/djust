@@ -6,6 +6,41 @@ use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
+/// Django's three template builtins, or `None` for any other name (#2347).
+///
+/// `django.template.context.builtins` is
+/// `[{"True": True, "False": False, "None": None}]`, added to EVERY Django
+/// `Context` at `dicts[0]`. So these three names RESOLVE — they are not
+/// literals, and `Variable.__init__` does not special-case them. `{{ True }}`
+/// renders `True`, `{{ p|add:True }}` hands the filter the real `True`, and a
+/// custom filter receives a Python `bool`.
+///
+/// **The single statement of the rule.** Two resolvers can reach a bare name
+/// (#1646): [`Context::resolve`], which serves `{{ }}` output, built-in filter
+/// arguments and the custom-filter argument channel; and
+/// `renderer::get_value_safe`, which serves `{% if %}` / `{% for %}` /
+/// `{% with %}` / `{% firstof %}` / `{% cycle %}` and the filtered tag-operand
+/// channel. The second already answered these three from inline arms while the
+/// first did not, which is the drift #2347 is. Both call this now.
+///
+/// Case-sensitive, because Django is: `true` / `none` are ordinary undefined
+/// variables to Django and render empty. `get_value_safe` additionally accepts
+/// the lowercase spellings as a djust extension; that behaviour is unchanged
+/// and deliberately does NOT live here, so this function stays exactly the
+/// Django set.
+///
+/// `None` maps to [`Value::None`] and not [`Value::Missing`]: the two are
+/// distinct (#2203) — `Missing` denotes an ABSENT variable, `None` the Python
+/// singleton — and this name denotes the singleton.
+pub fn template_builtin(name: &str) -> Option<Value> {
+    match name {
+        "True" => Some(Value::Bool(true)),
+        "False" => Some(Value::Bool(false)),
+        "None" => Some(Value::None),
+        _ => None,
+    }
+}
+
 /// A context for template rendering, similar to Django's Context
 ///
 /// In addition to JSON-friendly `Value` entries, `Context` can hold a
@@ -419,6 +454,43 @@ impl Context {
     /// auto-called method* (Django propagates those); lookup failures
     /// stay `Ok(None)` as before.
     pub fn resolve(&self, key: &str) -> crate::Result<Option<Value>> {
+        // Django's THREE template builtins, tried LAST (#2347).
+        //
+        // `django.template.context.builtins` is `[{"True": True, "False":
+        // False, "None": None}]` and lives at `Context.dicts[0]`, so every
+        // Django template carries them and `{{ True }}` renders `True` rather
+        // than the empty string an unresolvable name renders. They are not
+        // literals — `Variable.__init__` does not special-case them — they
+        // RESOLVE, through the ordinary context lookup.
+        //
+        // Position is the whole of the semantics. `Context.__getitem__` walks
+        // `reversed(self.dicts)`, so `dicts[0]` is the LAST place looked and a
+        // user variable named `True` SHADOWS the builtin. Measured against
+        // Django 5.2.16, not assumed. Hence: after `get`, after the dict-view
+        // methods, and after the raw-Python sidecar walk — the fallback runs
+        // only where this function used to answer `None`, which is what bounds
+        // the change to exactly the cells that rendered empty.
+        //
+        // This is the deeper of the TWO resolvers a bare name can reach
+        // (#1646): `renderer::get_value_safe` has its own literal arms for
+        // `{% if %}` / `{% with %}` / `{% firstof %}` / `{% cycle %}`, and
+        // those already answered these three. Both now go through
+        // `template_builtin` so there is one statement of the rule; the
+        // renderer's arms additionally accept the LOWERCASE spellings, which
+        // are a djust extension Django does not have and are deliberately kept
+        // separate from this function (see the note there).
+        match self.resolve_without_builtins(key)? {
+            Some(value) => Ok(Some(value)),
+            None => Ok(template_builtin(key)),
+        }
+    }
+
+    /// [`Context::resolve`] without the Django template-builtin fallback.
+    ///
+    /// Split out so the fallback is applied at ONE place rather than at each
+    /// of the several `Ok(None)` returns below — a per-branch fallback is the
+    /// shape that leaves one branch behind.
+    fn resolve_without_builtins(&self, key: &str) -> crate::Result<Option<Value>> {
         if let Some(v) = self.get(key) {
             return Ok(Some(v.clone()));
         }

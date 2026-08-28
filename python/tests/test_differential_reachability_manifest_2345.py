@@ -394,6 +394,69 @@ def _results(build: str, moved: bool) -> dict:
     }
 
 
+class TestEveryCellFamilyHasAnAxis:
+    """`axis_of` must classify every cell the corpus builds.
+
+    An unlisted `@`-prefix does not fail loudly — it falls through to the
+    `{{ }}` split and is reported as `filter` or `chain`. That is worse than
+    imprecise: the per-axis movement report is what tells a reader an axis
+    moved nothing, and a misfiled family makes a blind axis look busy.
+
+    #2347's `@builtin` family arrived while this was in flight and would have
+    been misfiled exactly that way; this is the check that would have said so.
+    """
+
+    def test_every_at_prefix_in_measure_is_classified(self, tmp_path: pathlib.Path) -> None:
+        """MEASURED from a real run, not read off the source: every distinct
+        `@`-family the corpus emits is claimed by a named axis, and none of
+        them lands in the `{{ }}` fallback."""
+        out = tmp_path / "cells.json"
+        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+            [sys.executable, str(SCRIPT), str(out)],
+            capture_output=True,
+            text=True,
+            env=_env(),
+            cwd=str(REPO),
+            check=True,
+        )
+        payload = json.loads(out.read_text())
+        families = {
+            k.split(" ", 1)[0].split("\t", 1)[0]
+            for k in payload
+            if k.startswith("@") and not k.startswith("@@")
+        }
+        assert families, "the corpus emits no @-prefixed cells at all"
+
+        source = SCRIPT.read_text(encoding="utf-8")
+        body = source.split("def axis_of(", 1)[1].split("\ndef ", 1)[0]
+        unlisted = [f for f in families if f'"{f}' not in body]
+        assert not unlisted, (
+            f"{sorted(unlisted)} are cell families `axis_of` does not classify, so their "
+            "cells are reported under `filter`/`chain` and the per-axis movement report "
+            "lies about them. Add a branch in the SAME commit as the family."
+        )
+
+    def test_the_builtin_family_is_reported_under_its_own_name(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Non-vacuity for the branch #2347's family needed: the count under
+        `builtin` must be exactly the number of `@builtin` cells, so a
+        fallthrough would show up as zero here and a surplus elsewhere."""
+        out = tmp_path / "cells.json"
+        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+            [sys.executable, str(SCRIPT), str(out)],
+            capture_output=True,
+            text=True,
+            env=_env(),
+            cwd=str(REPO),
+            check=True,
+        )
+        payload = json.loads(out.read_text())
+        built = [k for k in payload if k.startswith("@builtin ")]
+        assert built, "#2347's builtin-value axis built no cells"
+        assert payload["@@cells_by_axis"].get("builtin") == len(built)
+
+
 class TestTheSameBuildGuardIsAnswered:
     """The misdiagnosis #2345 names, and the mechanism that replaces it."""
 
@@ -516,13 +579,22 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
     hand-added axis cannot do for itself.
     """
 
-    #: #2354's nineteen, verbatim. A SET check would let a resolution swap one
-    #: spelling for another and stay green; this is the list it shipped.
-    LANDED_IN_2354 = [
+    #: Every spelling that came from UPSTREAM: #2354's nineteen, plus the
+    #: `False` #2347 added (the third context builtin, and the one whose answer
+    #: differs from both others — `int(False)` is 0 where `True` is 1 and
+    #: `None` raises).
+    #:
+    #: A transcription, deliberately, and the only one in this file. Everything
+    #: else here is recomputed from the engine, but the job of THIS check is to
+    #: detect a DELETION during a merge resolution — and a set derived from the
+    #: file under test could not, because it would move with the deletion. The
+    #: companion test below keeps it honest by asserting the complement: what
+    #: this branch adds is exactly one entry.
+    LANDED_UPSTREAM = [
         '"5"', "5", '"2.7"', "2.7", '" 5 "', '"+5"', '"1_0"', '"-3"', "-3", '"0"',
         '"notanumber"', '""',
         "missingvar", "no.such.path", "known",
-        "True", "None", "7.", "0x10",
+        "True", "False", "None", "7.", "0x10",
     ]  # fmt: skip
 
     @staticmethod
@@ -542,20 +614,20 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
         )
         return ast.literal_eval(node)
 
-    def test_every_spelling_2354_landed_is_still_swept(self) -> None:
+    def test_every_spelling_upstream_landed_is_still_swept(self) -> None:
         spellings = self.literal("ARG_SPELLINGS")
-        dropped = [s for s in self.LANDED_IN_2354 if s not in spellings]
+        dropped = [s for s in self.LANDED_UPSTREAM if s not in spellings]
         assert not dropped, (
-            f"{dropped} were in #2354's ARG_SPELLINGS and are gone. This resolution "
-            "reverted a merged fix; the manifest is meant to ABSORB that corpus, not "
-            "replace it."
+            f"{dropped} came from upstream (#2354, #2347) and are gone. A merge "
+            "resolution reverted a merged fix; the manifest is meant to ABSORB that "
+            "corpus, not replace it."
         )
 
     def test_the_only_addition_is_the_one_the_manifest_asked_for(self) -> None:
         """Non-vacuity for the test above, and scope discipline for this PR:
         the corpus grew by exactly the spelling the manifest reported missing,
         and by nothing else."""
-        added = [s for s in self.literal("ARG_SPELLINGS") if s not in self.LANDED_IN_2354]
+        added = [s for s in self.literal("ARG_SPELLINGS") if s not in self.LANDED_UPSTREAM]
         assert added == ['"99999999999999999999"'], added
 
     def test_the_resolvable_lookup_binding_survives(self) -> None:

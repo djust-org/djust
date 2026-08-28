@@ -828,8 +828,16 @@ not a silently-substituted default.
 string `x`; `{{ p|default:x }}` looks `x` up in the context. A bare identifier
 that does not resolve raises, exactly as Django's `VariableDoesNotExist` does —
 so a typo in a filter argument fails loudly instead of rendering the typo. The
-exceptions are the spellings Django resolves without a lookup: numeric literals
-(`7`, `-3`, `2.7`, `1e3`, `1_0`), and `True` / `False` / `None`.
+exception is a numeric literal (`7`, `-3`, `2.7`, `1e3`, `1_0`), which Django
+resolves without a lookup at all.
+
+`True` / `False` / `None` do not raise either, but for a different reason, and
+the difference is worth knowing (#2347): they are **not** literals. They are
+keys of `django.template.context.builtins`, which every context carries, so
+they RESOLVE through the ordinary lookup — which is also why `{{ True }}`
+renders `True` rather than the empty string, and why a context variable of that
+name **shadows** them (`builtins` is the outermost dict, and lookup walks
+inwards-out).
 
 **A numeric argument is `int(arg)`, with Python's spellings.** `" 5 "`, `"+5"`
 and `"1_0"` all parse, because `int()` accepts them. `True` is `1` and `False`

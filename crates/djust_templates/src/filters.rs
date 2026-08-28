@@ -902,9 +902,29 @@ fn apply_builtin_filter(
             // float coercion is always allowed. Only the ARGUMENT's quoting is
             // in question.
             let lhs = int_digits_of(value, true);
-            let rhs = arg_value
-                .as_ref()
-                .and_then(|a| int_digits_of(a, !arg_was_quoted));
+            // A bare `True`/`False` first, through the ONE helper that states
+            // that rule (#2347/#1646). `int_digits_of` is `int()` for a
+            // NUMERIC spelling and answers `None` for the text `"True"` — which
+            // is what a resolved builtin arrives as, since the argument channel
+            // is `Option<&str>`. Without this arm `{{ p|add:True }}` fell to
+            // the concatenation branch and rendered its input unchanged (5)
+            // where Django computes `int(5) + int(True)` = 6, while
+            // `{{ p|center:True }}` was already right because `center` reads
+            // its argument through #2328's `python_int_arg`, the helper's other
+            // caller. Two `int()`s, one of which knew the rule: #1646.
+            //
+            // `add` cannot simply use `python_int_arg`: that returns an `i64`
+            // and `add` carries exact DIGITS, because a sum past `i64`
+            // saturated and silently returned the input unchanged (#2253,
+            // #2260). The shared piece is the rule, not the parse.
+            let rhs = arg
+                .and_then(|a| bare_bool_arg_as_int(a, arg_was_quoted))
+                .map(|n| n.to_string())
+                .or_else(|| {
+                    arg_value
+                        .as_ref()
+                        .and_then(|a| int_digits_of(a, !arg_was_quoted))
+                });
             match lhs.zip(rhs) {
                 // A sum outside `i64` is carried as its exact digits rather than
                 // being thrown away: `Value::Integer` is an i64 and Python's is
@@ -1744,20 +1764,22 @@ pub(crate) fn filter_int_arg(
 ///    That exact branch is why `7`, `-3`, `+3`, `7.5`, `.5`, `1e3`, `1_0` and
 ///    `07` are literals while `7.`, `0x10`, `nan` and `inf` are lookups —
 ///    verified cell by cell against Django 5.2.
-/// 2. **`True` / `False` / `None`**, which are not literals at all: they are
-///    keys of `django.template.context.builtins`, so they RESOLVE. djust's
-///    `Context` does not carry them (`{{ p|add:True }}` is 6 in Django and 5
-///    here — a separate, pre-existing gap, #2347), so they are listed here to
-///    keep this fix from turning that wrong answer into a raise.
-/// 3. **`_("…")`**, the translation marker, which `Variable` unwraps to a
+/// 2. **`_("…")`**, the translation marker, which `Variable` unwraps to a
 ///    quoted literal.
+///
+/// `True` / `False` / `None` used to be listed here as a third mechanism, and
+/// are NOT any more (#2347). They are not literals — they are keys of
+/// `django.template.context.builtins` — and now that `Context::resolve`
+/// carries them, `ctx.resolve("True")` answers `Some(Value::Bool(true))` and
+/// the resolve-miss branch that consults this predicate is never reached for
+/// them. Keeping the arm would have been a second mechanism shadowing the
+/// first: unreachable, so no test could tell whether it or the resolution was
+/// doing the work (#2233). Gating the resolution off now makes a bare `True`
+/// argument RAISE, which is the correct signal that the two are coupled.
 ///
 /// A QUOTED argument never reaches this — `arg_was_quoted` short-circuits the
 /// whole resolution — so only the bare spellings are listed.
 fn is_literal_filter_arg(a: &str) -> bool {
-    if matches!(a, "True" | "False" | "None") {
-        return true;
-    }
     if a.starts_with("_(") && a.ends_with(')') {
         return true;
     }
@@ -1841,6 +1863,48 @@ fn pad_width(filter_name: &str, parsed: Option<i64>) -> Result<usize> {
 /// digits — and an UNQUOTED float literal additionally truncates, because
 /// Django's `Variable` has already turned it into a Python `float` by the time
 /// `int()` sees it.
+/// A bare `True` / `False` argument as the INTEGER Python reads it (#2347).
+///
+/// `bool` IS an `int` in Python, and #2347 made djust's `Context` carry
+/// Django's `True`/`False`/`None` builtins, so a bare `True` now RESOLVES —
+/// but it resolves to a `Value::Bool`, and the built-in filter argument
+/// channel is `Option<&str>`, so what arrives at a filter is `str(True)`, the
+/// text `"True"`. Django's filter receives the object and `int(True)` is 1.
+/// This is the rule that recovers the integer from the text.
+///
+/// **Why #2347 did not delete this.** The issue predicted that resolving the
+/// builtins would make this coercion redundant. Measured after doing exactly
+/// that, it does not: the resolved `Value::Bool(true)` is stringified back to
+/// `"True"` at `apply_filter_full_safe`'s resolution site, so every built-in
+/// still sees the text and nothing on the argument axis moved — 69 divergent
+/// cells before the resolve fix, 69 after. Only the CUSTOM-filter channel
+/// (`filter_registry`, which hands the resolved value to Python via
+/// `into_pyobject`) gets the real `bool`. The gate-off proves it: reverting
+/// this helper reddens argument cells with the builtins in place.
+///
+/// **One statement of the rule, two callers** (#1646). [`python_int_arg`] is
+/// #2328's chokepoint for every numeric filter argument, and `add` has its own
+/// `int()` — `int_digits_of`, which is arbitrary-precision because `add` must
+/// carry a sum past `i64` (#2253/#2260) and so cannot share the chokepoint's
+/// body. Before this helper existed only the chokepoint knew the bool rule,
+/// which is why `{{ p|add:True }}` was 5 where Django says 6 while
+/// `{{ p|center:True }}` was already right.
+///
+/// `None` is deliberately absent: `int(None)` is a `TypeError` in Python, so
+/// falling through to the caller's own policy is the right answer.
+fn bare_bool_arg_as_int(raw: &str, arg_was_quoted: bool) -> Option<i64> {
+    if arg_was_quoted {
+        // `int("True")` raises — a QUOTED argument is a `str` to Python, and
+        // the coercion is for the BOOL, not for its name.
+        return None;
+    }
+    match raw {
+        "True" => Some(1),
+        "False" => Some(0),
+        _ => None,
+    }
+}
+
 fn python_int_arg(raw: &str, arg_was_quoted: bool) -> Option<i64> {
     if let Some(n) = python_int(raw) {
         return Some(n as i64);
@@ -1850,20 +1914,8 @@ fn python_int_arg(raw: &str, arg_was_quoted: bool) -> Option<i64> {
         // `int("True")` — the coercion below is for the BOOL, not its name.
         return None;
     }
-    // `bool` IS an `int` in Python, and Django's `Context.builtins` resolve a
-    // bare `True`/`False` to the real objects, so `{{ p|center:True }}` is
-    // `"ab".center(1)`. djust's `Context` does not carry the builtins (a
-    // separate gap, #2347 — DELETE THIS once it lands), so the identifier
-    // arrives here as its own text and has to
-    // be coerced — without this, exempting it from the resolve-miss raise just
-    // moved the failure one step later, which the argument-axis differential
-    // caught as 240 regressed cells. `None` is deliberately absent: `int(None)`
-    // is a `TypeError` in Python, so falling through to the caller's policy is
-    // the right answer.
-    match raw {
-        "True" => return Some(1),
-        "False" => return Some(0),
-        _ => {}
+    if let Some(n) = bare_bool_arg_as_int(raw, arg_was_quoted) {
+        return Some(n);
     }
     // Django's `Variable.__init__` reads a bare `2.7` as a float only when it
     // contains a `.` or an `e`; `int()` then truncates toward zero.
