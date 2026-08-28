@@ -53,9 +53,13 @@ The corpus
 ----------
 Every filter in Django's LIVE `defaultfilters` registry (57 on Django 5.2),
 read from the registry rather than transcribed, so a Django release that adds
-or drops one is picked up instead of diverging silently. 22 input shapes
+or drops one is picked up instead of diverging silently. The `INPUTS` shapes
 cover the axes filters actually branch on — string, list, tuple, dict, int,
-float, `None`, empty — with hostile payloads in each. Chains of length 2 and 3
+float, `None`, empty, and (since #2293) a string carrying line breaks, tabs and
+runs of spaces — with hostile payloads in each. The count is deliberately NOT
+written here: it read "Sixteen" over a dict of 21, and #2327 and #2293 both
+found that independently within a day of each other, which is the argument for
+`len(INPUTS)` being the only place it is stated. Chains of length 2 and 3
 over a hot subset are NOT optional: a candidate fix can be clean on 1-chains
 and regress a thousand cells at length 2 (#2250 measured exactly that), and the
 `escape`/`safe` interaction #2281 is about is invisible without them.
@@ -221,6 +225,30 @@ INPUTS = {
     "s-quote": '" onmouseover="x',
     "s-plain": "abc",
     "s-empty": "",
+    # A string with STRUCTURE, which no other entry has (#2293). Every other
+    # `s-` input is one line of ASCII-ish text with single spaces, so the whole
+    # corpus could not construct a cell where `wordwrap` — a re-joiner that
+    # flattened line breaks, collapsed runs of spaces, dropped indentation and
+    # measured in bytes — differed from Django at all: the tool reported
+    # `agree BEFORE == agree AFTER` over a fix that moved four behaviours.
+    # Carries, in order: leading indentation, a run of spaces, a `\n`, a tab, a
+    # `U+2028` (a line break to `splitlines` and NOT to `split("\n")`), a
+    # `\xa0` (whitespace to `str.strip` and NOT a `textwrap` chunk boundary),
+    # multi-byte words, and a live payload so the permissiveness half of the
+    # tool reads it too. Spelled with escapes: the invisible ones do not
+    # survive an editor as literals.
+    "s-lines": (
+        # leading indentation (ONE space: the run of spaces lives in the next
+        # piece, so a mutation can remove either without removing the other),
+        # a `\n`, a tab, and a live payload
+        " <img src=x\n\tonerror=alert(1)>"
+        # multi-byte words, and the two `str.isspace()` members that neither
+        # the splitlines set nor the textwrap set contains
+        "\u2028\u5b57\u65e5\xa0\xe9  x\x1f"
+        # the remaining `py_is_line_break` boundaries, so no line boundary the
+        # engine branches on is unreachable from the corpus
+        "\r\x0b\x0c\x1c\x1d\x1e\x85\u2029 y"
+    ),
     "s-unicode": "héllo→",
     "s-digits": "123",
     "l-plain": ["<b>", "x"],
@@ -280,6 +308,7 @@ LIVE_FRAGMENTS = {
     "s-script": ["<script", "</script"],
     "s-lt": ["a < b"],
     "s-quote": ['" onmouseover="'],
+    "s-lines": ["<img", "onerror="],
     "l-plain": ["<b>"],
     "t-plain": ["<b>"],
     "t-nested": ["<b>"],
@@ -343,6 +372,14 @@ HOT2 = [
     # axis `|safe`'s stringify moves (#2303): this list missed the regression
     # `{{ n|safe|divisibleby:"2" }}` and a wider sweep found it.
     "divisibleby",
+    # Also not in any safety set. It is here because it is the one built-in that
+    # INSERTS structure — newlines — into a string, and half the hot list reads
+    # whitespace (`linebreaks`, `linebreaksbr`, `striptags`, `urlize`,
+    # `truncatechars_html`, `pprint`). #2293 changed what it emits for every
+    # input carrying a line break, a run of spaces or a tab, and at length 1 the
+    # sweep can only ask whether the output matches; at length 2 it can ask what
+    # the NEXT filter does with it.
+    "wordwrap",
 ]
 HOT3 = [
     "safe",
@@ -378,6 +415,10 @@ INPUTS_2 = [
     # on a TUPLE, and the tuple-vs-list distinction survives the whole chain
     # (`slice` of a tuple is a tuple, `first` of one is its element).
     "t-marked",
+    # The only input with STRUCTURE (#2293). Without it no chain the tool builds
+    # contains a newline, a tab, a run of spaces or a `U+2028`, so every filter
+    # that reads whitespace is composed only over inputs that have none.
+    "s-lines",
 ]
 #: `t-nested` is on the 1-chain axis only, exactly as its list twin `l-nested`
 #: is. Chaining a NESTED input is a cell class this corpus does not measure for

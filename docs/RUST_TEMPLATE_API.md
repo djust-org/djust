@@ -757,7 +757,7 @@ let result = apply_filter("upper", &value, None)?;
 | `addslashes` | Escape quotes | `{{ text\|addslashes }}` | `it\'s` |
 | `striptags` | Strip HTML tags | `{{ "<b>Hi</b>"\|striptags }}` | `"Hi"` |
 | `wordcount` | Count words | `{{ text\|wordcount }}` | `4` |
-| `wordwrap` | Wrap at width | `{{ text\|wordwrap:40 }}` | Newlines at word boundaries |
+| `wordwrap` | Wrap at width | `{{ text\|wordwrap:40 }}` | `textwrap.TextWrapper`: wraps each line separately, keeps existing breaks and interior whitespace, never splits a word; raises for a width <= 0 |
 | `ljust` | Left-align, pad | `{{ "hi"\|ljust:10 }}` | `"hi        "` |
 | `rjust` | Right-align, pad | `{{ "hi"\|rjust:10 }}` | `"        hi"` |
 | `center` | Center, pad | `{{ "hi"\|center:10 }}` | `"    hi    "` |

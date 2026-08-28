@@ -1209,9 +1209,21 @@ fn apply_builtin_filter(
             Ok(Value::Integer(count as i64))
         }
         "wordwrap" => {
-            // wordwrap filter: wrap text at N characters (word boundary)
-            let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(75);
-            Ok(Value::String(word_wrap(&value.to_string(), width)))
+            // Django is `wrap(value, int(arg))`, and `int()` raises for a
+            // non-numeric argument. djust keeps its historical 75 default there
+            // rather than raising, for the reason `apply_filter_full_safe`
+            // documents about an unresolvable bare-identifier argument: it
+            // arrives here as its own NAME, and turning that into a site-wide
+            // 500 on upgrade is worse than the wrong width. A PARSED width of
+            // <= 0 is a different case — that is Django's own `_wrap_chunks`
+            // guard, and it raises (#2293).
+            let width = match arg {
+                None => 75,
+                Some(a) => a.trim().parse::<i64>().unwrap_or(75),
+            };
+            crate::textwrap::wrap(&value.to_string(), width)
+                .map(Value::String)
+                .map_err(|e| DjangoRustError::TemplateError(e.to_string()))
         }
         "striptags" => {
             // striptags filter: strip HTML tags from string
@@ -3053,66 +3065,6 @@ fn apply_stringformat(value: &Value, spec: &str) -> String {
         }
         _ => value.to_string(),
     }
-}
-
-/// `django.utils.text.wrap`, which is what the `wordwrap` filter calls.
-///
-/// The greedy re-joiner this replaces was not Django's algorithm and diverged
-/// three ways at once (#2279 named the first):
-///
-/// 1. **Byte widths.** `word.len()` is bytes; Django counts code points, so
-///    every non-ASCII word measured long and broke the line early.
-/// 2. **Whitespace was destroyed.** `split_whitespace()` + `" "`-join dropped
-///    leading indentation, collapsed runs of spaces, and — the visible one —
-///    turned every existing newline into a space. `wordwrap` is supposed to
-///    wrap each line of the input independently and PRESERVE what it does not
-///    have to break.
-/// 3. **`width=0` returned the text unchanged**, where Django breaks at every
-///    space.
-///
-/// Django's own `max_width` line is `min(width + 1 if line.endswith("\n") else
-/// width, width)`, which is unconditionally `width`; it is dead arithmetic in
-/// the reference and is not reproduced.
-/// **`word.len()` below is BYTES, and that is deliberately left alone (#2279).**
-///
-/// #2279 lists `wordwrap` as a place to check for the byte-vs-char sink, and it
-/// is one. But this is NOT `django.utils.text.wrap` and the sink cannot be fixed
-/// on its own. Django 5.x delegates to `textwrap.TextWrapper(width,
-/// break_long_words=False, break_on_hyphens=False, replace_whitespace=False)`,
-/// which preserves existing line breaks and interior whitespace, drops
-/// whitespace only at a break, restores a whitespace-only line, re-appends a
-/// trailing newline, and raises `ValueError` for `width=0`. The greedy re-joiner
-/// below does none of that: it splits on whitespace and rejoins on single
-/// spaces, so it flattens every line break, collapses runs of spaces, and drops
-/// leading indentation. At `width=0` it returns the text where Django raises.
-///
-/// Changing `.len()` to `.chars().count()` was implemented and MEASURED against
-/// a randomized differential: it fixes 21 cells and **regresses 6** — every
-/// regression a string containing `U+2028`, where Django's `splitlines()` breaks
-/// the line and this rejoiner emits a space. The byte overcount had been putting
-/// a break at that position by accident. Two bugs cancelling, so removing one
-/// alone makes the output worse; the pair goes with the `TextWrapper` port and
-/// is tracked separately.
-fn word_wrap(text: &str, width: usize) -> String {
-    if width == 0 {
-        return text.to_string();
-    }
-    let mut result = String::new();
-    let mut line_len = 0;
-
-    for (i, word) in text.split_whitespace().enumerate() {
-        let word_len = word.len();
-        if i > 0 && line_len + 1 + word_len > width {
-            result.push('\n');
-            line_len = 0;
-        } else if i > 0 {
-            result.push(' ');
-            line_len += 1;
-        }
-        result.push_str(word);
-        line_len += word_len;
-    }
-    result
 }
 
 /// `django.utils.html.strip_tags`, ported in `crate::htmlparser` (#2273).

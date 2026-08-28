@@ -301,25 +301,16 @@ fn format_str(s: &str, out: &mut String, indent: isize, allowance: isize, level:
 /// NOT `str::lines()`, which splits on `\n` alone. Python splits on eight more
 /// boundaries — and two of them, `U+2028` and `U+2029`, are exactly the kind of
 /// character that reaches a template from user text.
+///
+/// The boundary SET lives in [`py_is_line_break`] so the keepends and
+/// no-keepends forms cannot disagree about what a line is (#1646).
 pub(crate) fn py_splitlines_keepends(s: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         current.push(c);
-        let is_break = matches!(
-            c,
-            '\n' | '\r'
-                | '\u{0b}'
-                | '\u{0c}'
-                | '\u{1c}'
-                | '\u{1d}'
-                | '\u{1e}'
-                | '\u{85}'
-                | '\u{2028}'
-                | '\u{2029}'
-        );
-        if is_break {
+        if py_is_line_break(c) {
             // `\r\n` is ONE boundary.
             if c == '\r' && chars.peek() == Some(&'\n') {
                 current.push('\n');
@@ -332,6 +323,51 @@ pub(crate) fn py_splitlines_keepends(s: &str) -> Vec<String> {
         out.push(current);
     }
     out
+}
+
+/// The ten boundaries Python's `str.splitlines()` recognises.
+///
+/// This is one of THREE different whitespace sets the `wordwrap` port has to
+/// keep apart — the other two are `textwrap._whitespace` (six ASCII characters)
+/// and `str.isspace()` (`crate::truncate::py_is_space`). `\u{1f}` is in the
+/// third and in neither of the first two; `\u{a0}` is in the third only. Every
+/// known `wordwrap` defect lived in a gap between two of them (#2293), so none
+/// of the three is ever spelled inline.
+pub(crate) fn py_is_line_break(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r'
+            | '\u{0b}'
+            | '\u{0c}'
+            | '\u{1c}'
+            | '\u{1d}'
+            | '\u{1e}'
+            | '\u{85}'
+            | '\u{2028}'
+            | '\u{2029}'
+    )
+}
+
+/// Python's `str.splitlines()` (the default, `keepends=False`).
+///
+/// Derived from [`py_splitlines_keepends`] rather than re-scanning: the
+/// terminator is by construction the last character of each piece (a `\r\n`
+/// pair counts as one), so dropping it is a truncation, and the two forms
+/// cannot drift on the boundary set.
+pub(crate) fn py_splitlines(s: &str) -> Vec<String> {
+    py_splitlines_keepends(s)
+        .into_iter()
+        .map(|mut line| {
+            if line.ends_with("\r\n") {
+                line.truncate(line.len() - 2);
+            } else if let Some(last) = line.chars().next_back() {
+                if py_is_line_break(last) {
+                    line.truncate(line.len() - last.len_utf8());
+                }
+            }
+            line
+        })
+        .collect()
 }
 
 /// `re.findall(r'\S*\s*', line)` with its always-empty final match dropped.

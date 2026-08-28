@@ -27,6 +27,7 @@ pub mod pprint;
 pub mod registry;
 pub mod renderer;
 pub mod tags;
+pub mod textwrap;
 pub mod timezone;
 pub mod truncate;
 
