@@ -953,6 +953,9 @@ class TestAdjacentDivergencesNotFixedHere:
     mechanism from the four operand sites. Pinned so the exclusion cannot
     quietly become a blind spot, and so whoever fixes one is told to delete
     the pin.
+
+    Filed as #2333 (``{% regroup %}``), #2334 (``{% for %}`` over a dict) and
+    #2335 (sequence equality in ``{% if %}``).
     """
 
     def test_regroup_does_not_resolve_a_filtered_source(self) -> None:
@@ -964,8 +967,7 @@ class TestAdjacentDivergencesNotFixedHere:
         ctx = {"p": [{"k": 2}, {"k": 1}]}
         d, r = both(src, ctx)
         assert d != r, (
-            "{% regroup %} with a filtered source now agrees — fix the tracking "
-            "issue's reference to this pin and delete this test"
+            "{% regroup %} with a filtered source now agrees — close #2333 and delete this test"
         )
 
     def test_for_over_a_dict_items_call_is_a_separate_resolution_gap(self) -> None:
@@ -973,9 +975,7 @@ class TestAdjacentDivergencesNotFixedHere:
         Unrelated to #2325's operand channel.
         """
         d, r = both("{% for k, v in p.items %}{{ k }}{{ v }}{% endfor %}", {"p": {"a": 1}})
-        assert d != r, (
-            "{% for %} over .items now agrees — delete this test and its tracking issue reference"
-        )
+        assert d != r, "{% for %} over .items now agrees — close #2334 and delete this test"
 
     def test_sequence_equality_in_an_if_condition_is_a_separate_gap(self) -> None:
         """``{% if p == q %}`` over two equal lists — ``values_equal``, not the
@@ -983,9 +983,7 @@ class TestAdjacentDivergencesNotFixedHere:
         touch (its filter arm is deliberately LAST, after every operator).
         """
         d, r = both("{% if p == q %}Y{% else %}N{% endif %}", {"p": ["a"], "q": ["a"]})
-        assert d != r, (
-            "sequence equality now agrees — delete this test and its tracking issue reference"
-        )
+        assert d != r, "sequence equality now agrees — close #2335 and delete this test"
 
     def test_forloop_is_not_available_through_render_template(self) -> None:
         """Pinned so the string-iteration tests above are not read as having
