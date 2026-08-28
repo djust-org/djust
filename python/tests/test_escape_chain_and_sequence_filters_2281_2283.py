@@ -478,12 +478,18 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
         Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / "filters.rs"
     ).read_text()
     body = source.split("fn apply_builtin_filter", 1)[1]
-    arms = set(re.findall(r'"(\w+)" =>[^\n]*\n?[^\n]*iter_values\(value\)', body))
-    arms |= {
-        name
-        for name in ("join", "safeseq", "escapeseq", "unordered_list", "random")
-        if re.search(r'"%s" =>(?:.|\n){0,400}?iter_values\(value\)' % name, body)
-    }
+    # Each arm's OWN body, delimited by the next arm at the same indent — not a
+    # fixed character window. The window was 400 chars, and #2340 pushed
+    # ``random``'s call past it by adding a guard with a comment above it, so
+    # the pin reported that a filter had stopped routing through the sink when
+    # it had not. A delimiter cannot drift that way, and it is strictly TIGHTER
+    # than a window: it can never reach into a NEIGHBOURING arm's call either.
+    arm_starts = [(m.start(), m.group(1)) for m in re.finditer(r'\n        "(\w+)" =>', body)]
+    arms = set()
+    for i, (pos, name) in enumerate(arm_starts):
+        end = arm_starts[i + 1][0] if i + 1 < len(arm_starts) else len(body)
+        if "iter_values(value)" in body[pos:end]:
+            arms.add(name)
     assert arms == {"join", "safeseq", "escapeseq", "unordered_list", "random"}, arms
 
 
