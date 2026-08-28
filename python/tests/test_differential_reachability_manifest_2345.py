@@ -22,8 +22,23 @@ sixth bespoke test — it is for the corpus to DECLARE its axes and for each axi
 to name the set the ENGINE says it must cover, recomputed from the engine at
 check time rather than transcribed.
 
+What #2354 landed, and what this adds
+-------------------------------------
+#2354 closed the *corpus* half of #2345 while this was in flight: it widened
+``FILTER_ARGS``'s single always-valid argument into ``ARG_SPELLINGS``, and made
+``render_both`` record a Rust panic as a ``<<PANIC …>>`` cell rather than dying
+on one. All of that is untouched here.
+
+What it did not do is the part the issue asks for in its own words — *make
+corpus-reachability structural rather than a habit, so the tool can tell you
+what it CANNOT reach*. That is this file's subject, and it earned its keep on
+its first run against the merged corpus: the manifest reported ``pad_width``'s
+cap UNREACHABLE from #2354's nineteen spellings, which is why there is a
+twentieth. It also fixes the misdiagnosis #2345 names by number — the
+same-build guard, which #2354 left as it was.
+
 :class:`TestItWouldHaveCaughtTheHistoricalBlindSpots` is the empirical canary
-(#1459) for that claim: each case reconstructs the pre-fix corpus by editing a
+(#1459) for the claim: each case reconstructs the pre-fix corpus by editing a
 COPY of the script, runs the manifest against it, and asserts what the manifest
 says. **#2296, #2325, #2290 and #2345 go red** — plus #2305, a sixth from the
 same family. **#2334 does not**, in either of its halves, and
@@ -42,6 +57,7 @@ stronger check — it proves the tool works end to end, which an import does not
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import pathlib
@@ -150,6 +166,7 @@ class TestTheManifestIsCleanOnMain:
             "chain",
             "whitespace",
             "argument",
+            "argument-filter",
             "tag",
             "entrypoint",
             "grant-shape",
@@ -242,6 +259,10 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
                 '    "t-marked": (mark_safe("<b>x</b>"), mark_safe("<i>y</i>")),',
                 '    "t-marked-PRE_2305": [mark_safe("<b>x</b>"), mark_safe("<i>y</i>")],',
             ),
+            # And in the chain axis's key list, or the corpus references a key
+            # `INPUTS` no longer has and the manifest raises instead of
+            # reporting. A canary that crashes is not a canary (#2135).
+            ('    "t-marked",\n', '    "t-marked-PRE_2305",\n'),
         )
         missing = rows(run_manifest(script))["grant-shape"]["missing"]
         assert missing == ["Tuple"], missing
@@ -255,8 +276,8 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         script = mutated_script(
             tmp_path,
             (
-                "ARG_SPELLINGS = {\n",
-                "ARG_SPELLINGS: dict[str, str] = {}\n_PRE_2345_SPELLINGS = {\n",
+                "ARG_SPELLINGS = [\n",
+                "ARG_SPELLINGS: list[str] = []\n_PRE_2345_SPELLINGS = [\n",
             ),
         )
         missing = rows(run_manifest(script))["argument"]["missing"]
@@ -266,32 +287,28 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         assert any("is a TypeError" in m for m in missing)
         assert any("past djust's" in m for m in missing)
 
-    def test_the_issues_nineteen_spellings_leave_the_pad_cap_unreachable(
+    def test_the_nineteen_spellings_leave_the_pad_cap_unreachable(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """The manifest earning its keep on its own first run.
+        """The manifest earning its keep against the corpus it ships beside.
 
-        #2345 proposed nineteen spellings. Measured against the engine's
-        argument errors, they reach every one but the pad-width cap: no
-        spelling of the nineteen parses to a width past ``MAX_PAD_WIDTH``, so
-        the cap's error — the guard standing between a template-supplied width
-        and an allocator ABORT (#2328) — is unreachable. ``q-huge`` is the
-        twentieth, added because of this.
+        #2354's ``ARG_SPELLINGS`` has nineteen entries and they reach three of
+        the engine's four argument errors. The fourth — ``pad_width``'s cap,
+        the guard standing between a template-supplied width and an allocator
+        ABORT (#2328) — needs a width that PARSES and saturates past ``isize``,
+        and every one of the nineteen either parses to a small number, fails to
+        parse, or fails to resolve. So there is a twentieth, and this removes
+        it again to prove the report was real rather than decorative.
 
-        Literally the nineteen: all three of the corpus's later additions are
-        removed, not just the one under test, or this would be measuring 21
-        spellings and calling them nineteen.
+        This is the manifest reporting a gap in live, already-merged code, not
+        in a synthetic reconstruction — which is the strongest form the claim
+        has.
         """
-        script = mutated_script(
-            tmp_path,
-            ('    "q-huge": \'"99999999999999999999"\',\n', ""),
-            ('    "hit-datetime": "instant",\n', ""),
-            ('    "q-datetime": \'"2020-01-01 15:30:00"\',\n', ""),
-        )
+        script = mutated_script(tmp_path, ("\n    '\"99999999999999999999\"',\n]", "\n]"))
         missing = rows(run_manifest(script))["argument"]["missing"]
         assert len(missing) == 1 and "past djust's" in missing[0], missing
-        # And the other three errors ARE reachable from the nineteen, so the
-        # report names the gap rather than blaming the whole axis.
+        # And the other three ARE reachable from the nineteen, so the report
+        # names the gap rather than blaming the whole axis.
         assert len(rows(run_manifest(script))["argument"]["required"]) == 4
 
 
@@ -472,173 +489,122 @@ class TestTheSameBuildGuardIsAnswered:
         assert "if not k.startswith(META_PREFIX)" in source
 
 
-class TestTheArgumentAxisCorpus:
-    """The corpus #2345 asks for, and the properties it must have."""
+class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
+    """#2354 shipped the corpus half of #2345 while this was in flight.
 
-    def test_the_spellings_cover_every_class_the_issue_names(self) -> None:
+    A rebase resolution that dropped it would look CLEAN — this file's tests
+    would still pass, because they are about the manifest — and the loss would
+    be invisible. So the absorption is asserted here, by PARSING the corpus
+    literals out of the AST rather than grepping the file: a grep matches a
+    comment, and the prose about `ARG_SPELLINGS` would survive its deletion.
+
+    Are the two mechanisms redundant? **No, and the evidence is that the
+    manifest CHANGED the corpus twice.** They are the two halves of one thing:
+    `ARG_SPELLINGS` / `arg_cells` BUILD the cells, and the manifest is the
+    check that the built set covers what the engine can do. A redundant second
+    mechanism could not have moved the first — this one did, twice:
+
+    * it reported `pad_width`'s cap unreachable from the nineteen spellings, so
+      there is a twentieth;
+    * it reported four of Django's 29 argument-taking built-ins absent from the
+      sweep entirely (`json_script`, `timesince`, `timeuntil`, `urlencode`),
+      because `arg_cells` iterated `FILTER_ARGS` — the ESCAPING axis's table of
+      one benign argument per filter, which is a different question with a
+      25/29 overlap. It iterates `django_argument_filters()` now.
+
+    Both were live, already-merged code. That is the manifest doing the job the
+    hand-added axis cannot do for itself.
+    """
+
+    #: #2354's nineteen, verbatim. A SET check would let a resolution swap one
+    #: spelling for another and stay green; this is the list it shipped.
+    LANDED_IN_2354 = [
+        '"5"', "5", '"2.7"', "2.7", '" 5 "', '"+5"', '"1_0"', '"-3"', "-3", '"0"',
+        '"notanumber"', '""',
+        "missingvar", "no.such.path", "known",
+        "True", "None", "7.", "0x10",
+    ]  # fmt: skip
+
+    @staticmethod
+    def literal(name: str):
+        """A module-level literal, read from the AST.
+
+        Never imported: the script configures Django settings and mutates the
+        global filter registry at import time.
+        """
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        node = next(
+            n.value
+            for n in tree.body
+            if isinstance(n, ast.Assign)
+            for t in n.targets
+            if isinstance(t, ast.Name) and t.id == name
+        )
+        return ast.literal_eval(node)
+
+    def test_every_spelling_2354_landed_is_still_swept(self) -> None:
+        spellings = self.literal("ARG_SPELLINGS")
+        dropped = [s for s in self.LANDED_IN_2354 if s not in spellings]
+        assert not dropped, (
+            f"{dropped} were in #2354's ARG_SPELLINGS and are gone. This resolution "
+            "reverted a merged fix; the manifest is meant to ABSORB that corpus, not "
+            "replace it."
+        )
+
+    def test_the_only_addition_is_the_one_the_manifest_asked_for(self) -> None:
+        """Non-vacuity for the test above, and scope discipline for this PR:
+        the corpus grew by exactly the spelling the manifest reported missing,
+        and by nothing else."""
+        added = [s for s in self.literal("ARG_SPELLINGS") if s not in self.LANDED_IN_2354]
+        assert added == ['"99999999999999999999"'], added
+
+    def test_the_resolvable_lookup_binding_survives(self) -> None:
+        assert "known" in self.literal("ARG_CONTEXT")
+
+    def test_render_both_still_records_a_panic_as_a_cell(self) -> None:
+        """#2354's other half. Asserted on the `render_both` BODY rather than
+        the whole file, so a mention in the module docstring cannot satisfy it.
+        """
+        body = SCRIPT.read_text(encoding="utf-8").split("def render_both(", 1)[1]
+        body = body.split("\ndef ", 1)[0]
+        assert "<<PANIC " in body, "the PANIC marker was dropped from render_both"
+        assert "except BaseException as exc:" in body
+
+    def test_compare_still_gates_on_newly_panicking_cells(self) -> None:
+        comp = SCRIPT.read_text(encoding="utf-8").split("def compare(", 1)[1]
+        assert 'du.startswith("<<PANIC ")' in comp, "compare lost its panic accounting"
+        assert "(panic_a - panic_b)" in comp, "compare no longer gates on new panics"
+
+    def test_the_argument_sweep_covers_every_filter_django_takes_one_for(self) -> None:
+        """The gap the manifest found in merged code, asserted from the other
+        side: 29, not the 25 `FILTER_ARGS` happens to list."""
+        row = rows(run_manifest())["argument-filter"]
+        assert len(row["required"]) == 29
+        assert row["missing"] == [], row["missing"]
+
+
+class TestTheArgumentAxisCorpus:
+    """#2354's corpus, and the one thing the manifest still says about it."""
+
+    def test_the_spellings_reach_every_error_the_chokepoint_can_raise(self) -> None:
+        """The requirement side is the engine's argument errors, parsed from
+        `filters.rs`; the swept side is MEASURED by rendering. Both are
+        recomputed, so this asserts the corpus reaches them rather than that a
+        list has N entries."""
         data = run_manifest()
-        # The requirement side is the engine's four argument errors; the swept
-        # side is measured by rendering. Both are recomputed, so this asserts
-        # the corpus reaches them rather than that a list has 20 entries.
         assert rows(data)["argument"]["missing"] == []
         assert len(rows(data)["argument"]["required"]) == 4
 
-    def test_the_argument_mode_builds_cells_and_they_are_argument_cells(
-        self, tmp_path: pathlib.Path
-    ) -> None:
-        out = tmp_path / "arg.json"
-        proc = subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), "--axis", "argument", str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=False,
-        )
-        assert proc.returncode == 0, proc.stderr[-4000:]
-        payload = json.loads(out.read_text())
-        cells = [k for k in payload if not k.startswith("@@")]
-        assert cells, "the argument mode built no cells"
-        assert all(k.startswith("@arg ") for k in cells)
-        assert payload["@@mode"] == "argument"
-        assert payload["@@cells_by_axis"] == {"argument": len(cells)}
-        # Enough of the corpus to be a corpus: every argument-taking built-in,
-        # every spelling. The product is recomputed from the emitted cells.
-        filters = {k.split("@arg ", 1)[1].split(":", 1)[0] for k in cells}
-        assert len(filters) == 29, sorted(filters)
-
-    def test_a_cell_where_both_engines_raise_agrees(self, tmp_path: pathlib.Path) -> None:
-        """The raise-BIT is what this axis compares, never the message.
-
-        Django raises `ValueError` / `TypeError` / `VariableDoesNotExist` from
-        Python; djust raises a `RuntimeError` wrapping a Rust error whose text
-        names the filter and the argument. Those strings can never match, so
-        recording them marks every raising cell as permanently disagreeing —
-        and the axis then cannot tell "djust now raises where Django does not",
-        which is a real regression and the whole point of #2328, from "both
-        raise, as they always did".
-
-        Measured on the 22-spelling corpus: with the messages kept, 2,251 of
-        4,466 cells disagree and NO filter is clean; with them collapsed, 1,222
-        and six are (`center`, `join`, `ljust`, `rjust`, `slice`, `wordwrap`).
-        A clean filter is only possible at all because of the collapse.
-        """
-        out = tmp_path / "arg.json"
-        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), "--axis", "argument", str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=True,
-        )
-        payload = json.loads(out.read_text())
-        # `center:"notanumber"` raises on both sides for the SAME reason — the
-        # argument is not an integer — and the two messages have nothing in
-        # common. It is the cell the collapse exists for.
-        cell = payload["@arg center:q-word\thappy\tvar"]
-        assert cell == ["<<RAISED>>", "<<RAISED>>"], cell
-        raising = [
-            k
-            for k, v in payload.items()
-            if not k.startswith("@@") and v[0] == "<<RAISED>>" and v[1] == "<<RAISED>>"
-        ]
-        assert len(raising) > 200, (
-            f"only {len(raising)} cells raise on both sides — the corpus is not "
-            "reaching the raise bit this axis exists to measure"
-        )
-
-    def test_a_clock_dependent_cell_records_its_AGREEMENT_not_its_bytes(
-        self, tmp_path: pathlib.Path
-    ) -> None:
-        """The corpus gap this axis had on its first day, found by using it.
-
-        The default corpus rewrites a `NONDET` cell to `<NONDET len=N>` on both
-        sides and `load()` collapses that to a bare `<NONDET>`, so the two
-        sides always compare EQUAL. That is right for `random`, whose draw
-        cannot be compared at all, and BLIND for `timesince`/`timeuntil`: they
-        read the wall clock only when their argument is absent or falsy, and
-        with a real instant they are fully deterministic. Collapsing them by
-        NAME made this axis unable to see #2344 — a change to exactly those
-        cells — which is the corpus-gap failure mode one level in, inside the
-        tool built to report corpus gaps.
-
-        Recording whether the two engines AGREED keeps the cell comparable
-        without pinning bytes a clock moves.
-        """
-        out = tmp_path / "arg.json"
-        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), "--axis", "argument", str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=True,
-        )
-        payload = json.loads(out.read_text())
-        nondet = {
-            k: v
-            for k, v in payload.items()
-            if not k.startswith("@@") and v[0].startswith("<NONDET")
-        }
-        assert nondet, "no clock-dependent cell in the argument corpus"
-        assert all(v[0] == "<NONDET>" for v in nondet.values())
-        assert set(v[1] for v in nondet.values()) <= {"<NONDET>", "<NONDET differs>"}
-        # The corpus must CARRY a legitimate comparison instant, or the axis has
-        # no cell in which `timesince`'s argument is the shape it exists to take.
-        assert any("timesince:hit-datetime" in k for k in nondet), (
-            "no `timesince` cell takes a real datetime argument — the axis cannot "
-            "see the one thing #2344 is about"
-        )
-        # Non-vacuity, and the half a marker-shaped-but-never-produced encoding
-        # would fail: the writer must ACTUALLY emit `<NONDET differs>`. An
-        # assertion that only allowed the two spellings passes when every cell
-        # is `<NONDET>`, which is the collapse this replaced.
-        differs = [k for k, v in nondet.items() if v[1] == "<NONDET differs>"]
-        assert differs, (
-            "no clock-dependent cell records a disagreement, so the marker is "
-            "shaped like a measurement and is not one. If every `timesince` cell "
-            "now agrees with Django, replace this with a synthetic disagreement — "
-            "do not delete it."
-        )
-        # Deliberately NOT keyed on the `happy` value: those converge when #2344
-        # lands. These are VALUE-axis divergences — djust fails soft on a value
-        # it cannot read where Django returns "" or raises — which are
-        # pre-existing and independent of the argument.
-        assert any(k.split("\t")[1] != "happy" for k in differs), differs[:5]
-
-    def test_the_nondet_agreement_marker_survives_load(self, tmp_path: pathlib.Path) -> None:
-        """Non-vacuity for the marker: `load()` rewrites `<NONDET len=N>` to a
-        bare `<NONDET>`, and a rewrite that also swallowed `<NONDET differs>`
-        would put the collapse back with extra steps."""
-
-        def cell(differs: bool) -> dict:
-            return {
-                "@arg timesince:hit-datetime\thappy\tvar": [
-                    "<NONDET>",
-                    "<NONDET differs>" if differs else "<NONDET>",
-                ],
-                "@arg center:q-int\thappy\tvar": ["  ab ", "  ab "],
-                "@@build": "aaa" if differs else "bbb",
-                "@@mode": "argument",
-            }
-
-        proc = run_compare(tmp_path, cell(True), cell(False))
-        assert proc.returncode == 0, proc.stdout
-        assert "newly AGREEING: 1" in proc.stdout, proc.stdout
-
-    def test_an_unparseable_argument_actually_disagrees_somewhere(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_the_argument_cells_exist_and_disagree_somewhere(self, tmp_path: pathlib.Path) -> None:
         """Non-vacuity for the whole axis (#1468 in corpus form).
 
         A corpus that built argument cells which all AGREED would be
         coverage-shaped and blind — worse than absent, because it would make
         the axis look measured. These are the divergences #2344 and #2346 name.
         """
-        out = tmp_path / "arg.json"
+        out = tmp_path / "cells.json"
         subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
-            [sys.executable, str(SCRIPT), "--axis", "argument", str(out)],
+            [sys.executable, str(SCRIPT), str(out)],
             capture_output=True,
             text=True,
             env=_env(),
@@ -646,8 +612,72 @@ class TestTheArgumentAxisCorpus:
             check=True,
         )
         payload = json.loads(out.read_text())
-        disagree = [k for k, v in payload.items() if not k.startswith("@@") and v[0] != v[1]]
-        assert disagree, "no argument cell disagrees — the axis measures nothing"
+        arg_cells = {
+            k: v for k, v in payload.items() if not k.startswith("@@") and k.startswith("@arg ")
+        }
+        assert arg_cells, "the corpus built no argument cells"
+        assert [k for k, v in arg_cells.items() if v[0] != v[1]], (
+            "no argument cell disagrees — the axis measures nothing"
+        )
+        assert payload["@@cells_by_axis"]["argument"] == len(arg_cells)
+
+    def test_a_clock_dependent_argument_cell_cannot_be_compared(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The residue the manifest CANNOT report, measured and named.
+
+        `timesince`/`timeuntil` are in `NONDET`, so every cell of theirs is
+        rewritten to `<NONDET len=N>` on both sides and `load()` collapses that
+        to a bare `<NONDET>` — the two sides then always compare EQUAL. That is
+        right for `random`, whose draw is not comparable at all, and it means
+        the argument axis is structurally blind on the two filters whose whole
+        subject is their argument (#2344).
+
+        The manifest does not catch this, and it is not the `input-shape` class
+        either: it is a property of the ENCODING rather than of the corpus, and
+        no axis asks "is this cell's answer comparable at all". Stated here
+        rather than left to be rediscovered, because #2344's own differential
+        run is what surfaced it.
+        """
+        out = tmp_path / "cells.json"
+        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+            [sys.executable, str(SCRIPT), str(out)],
+            capture_output=True,
+            text=True,
+            env=_env(),
+            cwd=str(REPO),
+            check=True,
+        )
+        payload = json.loads(out.read_text())
+        clock = {
+            k: v
+            for k, v in payload.items()
+            if k.startswith("@arg timesince:") or k.startswith("@arg timeuntil:")
+        }
+        assert clock, "no clock-dependent argument cell in the corpus"
+        assert all(
+            v[0].startswith("<NONDET") and v[1].startswith("<NONDET") for v in clock.values()
+        )
+
+        # The collapse itself, applied with the SCRIPT'S OWN regex rather than a
+        # transcription of it: after `load()`, every clock cell's two sides are
+        # byte-identical, so none of them can ever report a difference.
+        source = SCRIPT.read_text(encoding="utf-8")
+        found = re.search(r'NONDET_MARKER = re\.compile\(r"(.+?)"\)', source)
+        assert found, "NONDET_MARKER did not parse out of the script"
+        marker = re.compile(found.group(1))
+        collapsed = [
+            (marker.sub("<NONDET>", a), marker.sub("<NONDET>", b)) for a, b in clock.values()
+        ]
+        assert all(a == b for a, b in collapsed), (
+            "a clock-dependent argument cell now survives the collapse — the blind "
+            "spot is closed, so assert the catch instead of this"
+        )
+        # Non-vacuity: the RAW pairs are NOT all identical, so the collapse is
+        # what erases the difference rather than there being none to erase.
+        assert any(a != b for a, b in clock.values()), (
+            "the raw pairs already agree, so this proves nothing about the collapse"
+        )
 
 
 class TestRenderBothSurvivesAPanic:
@@ -664,30 +694,31 @@ class TestRenderBothSurvivesAPanic:
         body = body.split("\ndef ", 1)[0]
         assert "except BaseException" in body
         assert "except (KeyboardInterrupt, SystemExit):" in body, (
-            "an interruptible sweep still has to be interruptible"
+            "an interruptible sweep still has to be interruptible: the "
+            "`except BaseException` that makes a panic a cell also catches "
+            "Ctrl-C, so the two operator signals are re-raised ahead of it"
         )
 
-    def test_a_panicking_cell_is_recorded_rather_than_fatal(self, tmp_path: pathlib.Path) -> None:
-        """Empirical, against the real panic: `{{ 42|stringformat:"" }}`."""
-        out = tmp_path / "panic.py"
-        out.write_text(
-            "from djust import _rust\n"
-            "try:\n"
-            "    r = _rust.render_template('{{ p|stringformat:\"\" }}', {'p': 42})\n"
-            "    print('NO PANIC', repr(r))\n"
-            "except BaseException as exc:\n"
-            "    print('CAUGHT', type(exc).__mro__[1].__name__)\n",
-            encoding="utf-8",
-        )
-        proc = subprocess.run(  # noqa: S603 — a file this test wrote, no shell
-            [sys.executable, str(out)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            cwd=str(REPO),
-            check=False,
-        )
-        assert proc.returncode == 0, proc.stderr[-2000:]
-        if proc.stdout.startswith("NO PANIC"):
-            pytest.skip("#2343 is fixed; this cell no longer panics")
-        assert proc.stdout.startswith("CAUGHT BaseException"), proc.stdout
+    def test_the_interrupt_reraise_precedes_the_baseexception_arm(self) -> None:
+        """ORDER, not just presence.
+
+        `except BaseException` catches Ctrl-C as well as a panic, so the
+        re-raise has to come FIRST or it never runs — and an except-clause
+        order bug is invisible to every test that does not interrupt the
+        process.
+
+        The empirical half of this class used to render
+        ``{{ 42|stringformat:"" }}`` and assert the panic became a cell.
+        #2354 FIXED that panic, so the probe began skipping on every run — a
+        test that can no longer go red is worse than absent. The panic
+        BOUNDARY has its own coverage in
+        ``python/tests/test_panic_boundary_2343.py``; what is left here is the
+        property that file does not assert.
+        """
+        body = SCRIPT.read_text(encoding="utf-8").split("def render_both(", 1)[1]
+        body = body.split("\ndef ", 1)[0]
+        # Two `try` blocks, one per engine, and BOTH must re-raise ahead of
+        # their catch-all. A SET, not a floor (#1125).
+        assert body.count("except (KeyboardInterrupt, SystemExit):") == 2, body
+        for arm in ("except Exception as exc:", "except BaseException as exc:"):
+            assert body.index("except (KeyboardInterrupt, SystemExit):") < body.index(arm), arm

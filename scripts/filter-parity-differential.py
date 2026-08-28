@@ -112,42 +112,69 @@ TestTheCorpusGapsThatHidTheseFromTheDifferential` pins both, because a corpus
 gap is silent by construction and this is the third time one has hidden a
 shipped bug.
 
+Since #2345 it carries an **argument** axis, and `render_both` records a Rust
+PANIC as a cell rather than dying on one. Both were the same blind spot seen
+from two sides. `FILTER_ARGS` gave every filter exactly ONE argument and it was
+always VALID, so:
+
+* #2328 changed what every argument-taking built-in does with an unparseable
+  or unresolvable argument and this tool reported **0 moved cells in both
+  directions** — while its first pass shipped 508 regressed cells that neither
+  this script nor the full green suite saw;
+* `{{ p|stringformat:"" }}` (#2343) did not merely diverge, it PANICKED — and
+  because `pyo3_runtime.PanicException` derives from `BaseException`, the
+  `except Exception` in `render_both` did not catch it and the sweep ABORTED.
+  #2343 was found by that traceback, not by a cell.
+
+So `ARG_SPELLINGS` sweeps nineteen argument spellings per argument-taking
+filter, and a panic is recorded as `<<PANIC …>>` — kept distinct from
+`<<EXC …>>` on purpose, because a raise is contained by
+`LiveViewConsumer.receive` and a panic is not. `--compare` reports newly
+panicking cells on their own line and exits non-zero on any, since "how many
+cells agree" is the wrong number to read a transport-level failure off.
+
 Since #2345 the axes are DECLARED, and the corpus reports what it cannot reach
 ---------------------------------------------------------------------------
-Five blind spots, five hand-added axes, five bespoke coupling tests. #2345 was
-the fifth, and the point at which adding a sixth stopped being the answer: the
-corpus now declares its axes in `AXES`, each naming the set the ENGINE says it
-must cover — recomputed from Django's live registry or from the Rust source,
-never transcribed. `--manifest` prints what is covered and what is not; a run's
-results file carries its own manifest, so a baseline says what it could see.
+The paragraphs above are five blind spots, five hand-added axes and five
+bespoke coupling tests — and #2345 was the fifth, the point at which adding a
+sixth stopped being the answer. A corpus gap is silent BY CONSTRUCTION: "no
+axis reported a problem" and "no axis exists for the problem" print the same
+thing.
 
-Two more things follow from that, both of which #2345 asked for by name:
+So the corpus now DECLARES its axes in `AXES`, each naming the set the ENGINE
+says it must cover — recomputed at check time from Django's live registry or
+from the Rust source, never transcribed. `--manifest` prints what is covered
+and what is NOT; a results file carries its own manifest and the `_rust`
+build's digest, so a baseline states what it could see.
 
-* **`--axis argument`** is the corpus this tool could not build. `FILTER_ARGS`
-  gives every filter ONE argument and it is always a VALID one, so #2328 — a
-  change to what every argument-taking built-in does with an argument that does
-  not parse or does not resolve — moved ZERO cells in both directions, and
-  shipped 508 regressed ones that nothing here or in the unit suite could see.
-* **The same-build guard is answered rather than inferred.** It used to read
-  identical agreement counts as "the baseline is not real"; that is one of two
-  causes, and #2328 hit the other. Each results file now records the `_rust`
-  build's digest, so the question has an answer, and a genuinely two-build run
-  with no movement is reported as what it is: a change on an axis this corpus
-  does not sweep. `--require-moved <axis>` makes that a failure rather than a
-  note, for a change that declares which axis it is about.
+Eight axes: `filter`, `chain`, `whitespace`, `argument`, `tag`, `entrypoint`,
+`grant-shape`, and `input-shape` — declared UNVERIFIED, because nothing in
+either engine's source says a dict's keys must be hostile (#2334) or that a
+tuple must sit at the nesting position (#2317). That is the class this design
+does NOT close, and it is printed rather than left as a silence.
+
+Two more things follow from it:
+
+* **The same-build guard is answered rather than inferred.** Identical
+  agreement counts used to mean "the baseline is not real"; that is one of TWO
+  causes, and #2328 hit the other — two genuinely different builds, zero moved
+  cells, because the change was on an axis the corpus could not construct.
+  Each file now records the `_rust` build's digest, so a two-build run with no
+  movement is reported as what it is.
+* **`--require-moved <axis>`** turns that note into a failure, for a change
+  that declares which axis it is about.
 
 `python/tests/test_differential_reachability_manifest_2345.py` is the empirical
-canary: it reconstructs each pre-fix corpus in a COPY of this file and asserts
-what the manifest says. It goes red for #2296, #2305, #2325, #2290 and #2345 —
-and NOT for #2334, whose two halves are pinned there as the limit this design
-does not close.
+canary: it rebuilds each pre-fix corpus in a COPY of this file and asserts what
+the manifest says. It goes red for #2296, #2305, #2325, #2290 and #2345, and
+NOT for #2334 — whose two halves are pinned there as the limit.
 
 Usage
 -----
 ::
 
     python scripts/filter-parity-differential.py --manifest
-    python scripts/filter-parity-differential.py --axis argument after-args.json
+    python scripts/filter-parity-differential.py after.json
     python scripts/filter-parity-differential.py --compare base.json after.json \\
         --require-moved argument
 """
@@ -155,8 +182,8 @@ Usage
 from __future__ import annotations
 
 import copy
-import datetime
 import hashlib
+import inspect
 import itertools
 import json
 import pathlib
@@ -598,132 +625,7 @@ INPUTS_2 = [
 #: "what does the NEXT filter do with this item" is already answerable.
 INPUTS_3 = ["s-img", "l-plain", "i-int", "l-marked"]
 
-#: The ARGUMENT axis (#2345), swept by `--axis argument` rather than by default.
-#:
-#: `FILTER_ARGS` above gives every filter exactly ONE argument, and it is always
-#: a VALID one — chosen so the filter runs, because that axis exists to compare
-#: ESCAPING. The consequence, measured: #2328 changed what every
-#: argument-taking built-in does with an unparseable or unresolvable argument,
-#: and the two-build compare reported `newly AGREEING: 0 / no longer agreeing:
-#: 0` — zero moved cells in BOTH directions over a change that moves 1,601 of
-#: these. Its first pass also shipped 508 REGRESSED cells that this tool and the
-#: whole unit suite were silent over.
-#:
-#: Crossing 20 spellings into the default sweep would grow it ~20x, so the
-#: argument axis is its own mode with its own cell ids and its own results file.
-#:
-#: The spellings are not a sample: each was load-bearing at least once while
-#: #2328 was being built, and `q-huge` was added because the reachability
-#: manifest (below) reported the pad-width cap's error as UNREACHABLE from the
-#: other nineteen — which is the manifest doing its job on its first run.
-ARG_SPELLINGS = {
-    # Valid, including the `int()` spellings every scattered `parse::<usize>`
-    # refused (` 5 `, `+5`, `1_0`) and the quoted/bare split that decides
-    # between `int("2.7")` (raises) and `int(2.7)` (truncates).
-    "q-int": '"5"',
-    "b-int": "5",
-    "q-float": '"2.7"',
-    "b-float": "2.7",
-    "q-spaced": '" 5 "',
-    "q-plus": '"+5"',
-    "q-underscore": '"1_0"',
-    "q-neg": '"-3"',
-    "b-neg": "-3",
-    "q-zero": '"0"',
-    # Unparseable.
-    "q-word": '"notanumber"',
-    "q-empty": '""',
-    # A width that PARSES and saturates past `isize` — the only spelling that
-    # reaches `pad_width`'s cap, and absent until the manifest said so.
-    "q-huge": '"99999999999999999999"',
-    # Lookups. `known` and `instant` are bound only in this mode, so the
-    # `{{ }}` ids of the default sweep stay byte-identical and an older
-    # baseline is comparable.
-    "miss": "missingvar",
-    "miss-path": "no.such.path",
-    "hit": "known",
-    # A resolvable DATETIME, and a quoted date-shaped literal. Without them the
-    # axis has no cell in which an argument is a legitimate comparison instant
-    # — the one shape `timesince`/`timeuntil` exist to take (#2344) — and the
-    # two spellings answer differently on purpose: Django accepts NO string
-    # here, quoted or not, so the quoted one raises while the resolved one is
-    # the datetime it crossed the wire as.
-    "hit-datetime": "instant",
-    "q-datetime": '"2020-01-01 15:30:00"',
-    # Bare spellings Django resolves WITHOUT a context lookup, and two that
-    # look like it and are lookups (`7.` and `0x10` — `Variable.__init__`
-    # rejects both, so they raise `VariableDoesNotExist`).
-    "lit-true": "True",
-    "lit-none": "None",
-    "lit-trailing-dot": "7.",
-    "lit-hex": "0x10",
-}
-
-#: The value each argument-taking filter is happy with, so a cell measures the
-#: ARGUMENT and not a type error in the value. Mirrors the same dict in
-#: `python/tests/test_filter_argument_contract_2328.py` in purpose; kept here
-#: because the script never imports a test module.
-ARG_TEXT = "the quick brown fox jumps over the lazy dog and keeps running onward"
-ARG_VALUES = {
-    "date": "2020-01-01 12:00:00",
-    "time": "2020-01-01 12:00:00",
-    "timesince": "2020-01-01 12:00:00",
-    "timeuntil": "2020-01-01 12:00:00",
-    "dictsort": [{"k": 2, "n": "b"}, {"k": 1, "n": "a"}],
-    "dictsortreversed": [{"k": 2, "n": "b"}, {"k": 1, "n": "a"}],
-    "join": ["a", "b", "c"],
-    "add": 5,
-    "divisibleby": 10,
-    "floatformat": 3.14159,
-    "get_digit": 123456,
-    "pluralize": 2,
-    "slice": [1, 2, 3, 4, 5],
-    "stringformat": 42,
-    "yesno": True,
-    "default": "",
-    "default_if_none": None,
-    "urlizetrunc": "see http://example.com/aaaa now",
-}
-
-#: The value keys each argument cell is swept over: the filter's own happy
-#: value, plus three shapes from `INPUTS` so the permissiveness half of the
-#: tool reads this axis too and a wrong-typed value is not the only case.
-ARG_INPUT_KEYS = ["s-img", "l-plain", "n-none"]
-
-#: The resolvable identifier `hit` binds to. `2` so it is usable as a width, a
-#: divisor and a string alike.
-ARG_KNOWN = 2
-
-#: What `hit-datetime` binds to: a real `datetime`, three and a half hours after
-#: the `timesince`/`timeuntil` happy value, so a cell that reads the argument as
-#: a comparison instant answers `3 hours, 30 minutes` and a cell that discards
-#: it answers the years since 2020 (#2344).
-ARG_INSTANT = datetime.datetime(2020, 1, 1, 15, 30, 0)
-
-
-def django_argument_filters() -> list[str]:
-    """Django's built-ins that take a TEMPLATE argument, read from the registry.
-
-    ``needs_autoescape=True`` injects an ``autoescape`` kwarg that is not a
-    template argument; excluded, as ``FilterExpression.args_check`` excludes it.
-    """
-    import inspect
-
-    names = []
-    for name, fn in sorted(register.filters.items()):
-        args = [a for a in inspect.getfullargspec(inspect.unwrap(fn)).args if a != "autoescape"]
-        if len(args) >= 2:
-            names.append(name)
-    return names
-
-
 #: Time- or randomness-dependent: recorded as a marker, never as a value.
-#:
-#: `timesince`/`timeuntil` are here because they read the wall clock when their
-#: argument is absent or falsy, which is every cell the DEFAULT corpus builds.
-#: On the argument axis a cell whose argument is a real instant is fully
-#: deterministic (#2344), so that mode records the AGREEMENT rather than
-#: collapsing the pair — see `measure_argument_axis`.
 NONDET = {"random", "timesince", "timeuntil"}
 NONDET_MARKER = re.compile(r"<NONDET len=\d+>")
 
@@ -734,38 +636,39 @@ def spec(name: str) -> str:
 
 
 def render_both(tpl: str, ctx: dict, safe_keys: list[str] | None = None) -> tuple[str, str]:
-    """Both engines' answer for one cell, with a RAISE as a comparable outcome.
-
-    `BaseException`, not `Exception` (#2345). A `pyo3` panic surfaces as
-    `pyo3_runtime.PanicException`, whose MRO is `BaseException` DIRECTLY — so
-    an `except Exception` here does not catch it and the whole sweep dies
-    mid-run on one cell. That is how #2343 was found: by the traceback that
-    ended the run, rather than by a cell that could be compared. Panics are
-    exactly the class this tool exists to surface, so one becomes a cell.
-
-    `KeyboardInterrupt` and `SystemExit` are re-raised: they are the operator
-    ending the run, not the engine failing, and swallowing them would make a
-    90,000-cell sweep un-interruptible.
-    """
-
-    def _render(fn):
-        try:
-            return fn()
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except BaseException as exc:  # noqa: BLE001 — a raise is an outcome
-            return f"<<EXC {type(exc).__name__}: {exc}>>"
-
-    dj = _render(lambda: Template(tpl).render(Context(ctx)))
-    # `render_template` has no `safe_keys` parameter, so the CONTEXT-safety
-    # axis has to go through `render_template_with_dirs` — the only Python
-    # entry point that carries it (#2287). Same renderer either way; the
-    # empty `template_dirs` keeps `{% include %}` resolution identical.
-    du = _render(
-        (lambda: _rust.render_template_with_dirs(tpl, ctx, [], safe_keys))
-        if safe_keys
-        else (lambda: _rust.render_template(tpl, ctx))
-    )
+    try:
+        dj = Template(tpl).render(Context(ctx))
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 — a raise is a comparable outcome
+        dj = f"<<EXC {type(exc).__name__}: {exc}>>"
+    try:
+        # `render_template` has no `safe_keys` parameter, so the CONTEXT-safety
+        # axis has to go through `render_template_with_dirs` — the only Python
+        # entry point that carries it (#2287). Same renderer either way; the
+        # empty `template_dirs` keeps `{% include %}` resolution identical.
+        if safe_keys:
+            du = _rust.render_template_with_dirs(tpl, ctx, [], safe_keys)
+        else:
+            du = _rust.render_template(tpl, ctx)
+    except (KeyboardInterrupt, SystemExit):
+        # Re-raised BEFORE the `BaseException` arm below, which would otherwise
+        # swallow them and make a 95,000-cell sweep un-interruptible. They are
+        # the operator ending the run, not the engine failing.
+        raise
+    except Exception as exc:  # noqa: BLE001
+        du = f"<<EXC {type(exc).__name__}: {exc}>>"
+    except BaseException as exc:  # noqa: BLE001
+        # A Rust PANIC (#2343/#2345). `pyo3_runtime.PanicException` derives
+        # from `BaseException`, so an `except Exception` here does not catch it
+        # and the sweep ABORTS mid-run — which is literally how #2343 was
+        # found: by the traceback, not by a cell. Recorded with its own marker
+        # rather than folded into `<<EXC …>>`, because a panic and a raise are
+        # not the same outcome: a raise is contained by
+        # `LiveViewConsumer.receive`'s `except Exception` and produces an error
+        # frame, while a panic walks past it and takes the session down. Two
+        # builds that differ only in whether a cell panics MUST show as moved.
+        du = f"<<PANIC {type(exc).__name__}: {exc}>>"
     return dj, du
 
 
@@ -900,22 +803,101 @@ def cmp_cells():
                 yield op, ka, kb
 
 
-def arg_cells():
-    """The ARGUMENT axis: every argument-taking built-in x 20 spellings x 4
-    values x 4 render shapes (#2345).
+#: The ARGUMENT axis (#2345).
+#:
+#: `FILTER_ARGS` gives every filter exactly ONE argument and it is always a
+#: VALID one, so the whole corpus above is blind on the argument axis. Measured,
+#: not asserted: #2328 changed what EVERY argument-taking built-in does with an
+#: unparseable or unresolvable argument and this tool reported **0 moved cells
+#: in both directions** — while its first pass shipped 508 regressed cells that
+#: neither this script nor the full green suite saw. #2343 is the sharper case:
+#: `{{ p|stringformat:"" }}` PANICKED, and a panic is not a cell this tool could
+#: report at all, because it aborted the run (see `render_both`).
+#:
+#: The spellings are the ones a throwaway harness used for #2328; every one of
+#: them was load-bearing at least once. They are grouped by what they exercise:
+#:
+#: * VALID — the parse itself, including the spellings Python's `int()` accepts
+#:   and Rust's `parse()` does not (` 5 `, `+5`, `1_0`), and the
+#:   quoted-vs-bare distinction that decides whether `2.7` is a `str` (so
+#:   `int()` raises and Django concatenates) or a float literal (so `int()`
+#:   truncates).
+#: * INVALID — `"notanumber"` and `""`. The empty one is #2343's cell.
+#: * LOOKUPS — a miss, a dotted miss, and a resolvable name, which are three
+#:   different answers since #2328 made an unresolvable bare identifier raise.
+#: * LITERALS Django resolves WITHOUT a lookup — `True`/`None` are
+#:   `django.template.context.builtins` keys and RESOLVE (#2347); `7.` and
+#:   `0x10` are the spellings `Variable.__init__` reads as a float and as a
+#:   name respectively.
+#:
+#: Swept over the HOT input subset rather than all of `INPUTS`: the axis under
+#: test is the ARGUMENT, the value axis is already swept exhaustively above at
+#: one argument each, and the full product would roughly double the corpus for
+#: no new question.
+ARG_SPELLINGS = [
+    '"5"',
+    "5",
+    '"2.7"',
+    "2.7",
+    '" 5 "',
+    '"+5"',
+    '"1_0"',
+    '"-3"',
+    "-3",
+    '"0"',
+    '"notanumber"',
+    '""',
+    "missingvar",
+    "no.such.path",
+    "known",
+    "True",
+    "None",
+    "7.",
+    "0x10",
+    # A width that PARSES and saturates past `isize`. Added because the
+    # reachability manifest reported `pad_width`'s cap — the guard standing
+    # between a template-supplied width and an allocator ABORT (#2328) —
+    # UNREACHABLE from the nineteen above: every one of them either parses to
+    # a small number, fails to parse, or fails to resolve. The manifest
+    # reporting a gap in the corpus it ships alongside is the whole point of
+    # it, and `test_the_nineteen_spellings_leave_the_pad_cap_unreachable`
+    # removes this row again to prove the report was real.
+    '"99999999999999999999"',
+]
 
-    The tag shapes are included because one of the 508 cells #2328's first pass
-    regressed was `{% if %}` no longer swallowing `VariableDoesNotExist` —
-    a divergence with no `{{ }}` twin, since `IfNode.render` is the ONLY
-    construct in Django that catches it.
+#: Bound so the `known` spelling above has something to resolve TO. A plain
+#: string, because the question it asks is "did the lookup happen", not "what
+#: does this filter do with a list".
+ARG_CONTEXT = {"known": "3"}
+
+
+def django_argument_filters() -> list[str]:
+    """Django's built-ins that take a TEMPLATE argument, read from the registry.
+
+    NOT `FILTER_ARGS`, which is a different question with a 25/29 overlap:
+    that dict is the ESCAPING axis's table of one benign argument per filter,
+    and using it here left `json_script`, `timesince`, `timeuntil` and
+    `urlencode` out of the argument sweep entirely — reported by the
+    reachability manifest's `argument-filter` axis, which exists so the two
+    cannot drift again.
+
+    `needs_autoescape=True` injects an `autoescape` kwarg that is not a
+    template argument; excluded, as `FilterExpression.args_check` excludes it.
     """
+    names = []
+    for name, fn in sorted(register.filters.items()):
+        args = [a for a in inspect.getfullargspec(inspect.unwrap(fn)).args if a != "autoescape"]
+        if len(args) >= 2:
+            names.append(name)
+    return names
+
+
+def arg_cells():
+    """Every argument-taking built-in × every spelling × the hot inputs."""
     for name in django_argument_filters():
-        for spelling in ARG_SPELLINGS:
-            yield "var", name, spelling, "happy"
-            for key in ARG_INPUT_KEYS:
-                yield "var", name, spelling, key
-            for shape in TAG_SHAPES:
-                yield shape, name, spelling, "happy"
+        for arg in ARG_SPELLINGS:
+            for key in INPUTS_2:
+                yield name, arg, key
 
 
 # ---------------------------------------------------------------------------
@@ -1104,24 +1086,27 @@ def _signature_matches(signature: str, observed: str) -> bool:
 
 
 def _swept_argument_errors() -> set[str]:
-    """The argument errors `ARG_SPELLINGS` actually reaches, MEASURED.
+    """The argument errors the corpus's spellings actually reach, MEASURED.
 
     Rendered rather than reasoned about: which spelling triggers which arm of
     the chokepoint is exactly the thing this axis exists to stop guessing at.
+    Swept over the same product `arg_cells` builds — every name in
+    `FILTER_ARGS` x every spelling — so this measures the corpus rather than a
+    convenient subset of it.
     """
     required = _required_argument_errors()
     reached: set[str] = set()
-    for name in django_argument_filters():
-        value = ARG_VALUES.get(name, ARG_TEXT)
-        for spelling in ARG_SPELLINGS.values():
-            _, du = render_both(
-                "{{ p|%s:%s }}" % (name, spelling), {"p": value, "known": ARG_KNOWN}
-            )
-            if not du.startswith("<<EXC "):
-                continue
-            for signature in required:
-                if _signature_matches(signature, du):
-                    reached.add(signature)
+    for name in sorted(FILTER_ARGS):
+        for spelling in ARG_SPELLINGS:
+            for key in INPUTS_2:
+                _, du = render_both(
+                    "{{ p|%s:%s }}" % (name, spelling), {"p": INPUTS[key], **ARG_CONTEXT}
+                )
+                if not du.startswith("<<EXC "):
+                    continue
+                for signature in required:
+                    if _signature_matches(signature, du):
+                        reached.add(signature)
     return reached
 
 
@@ -1275,9 +1260,6 @@ class Axis(typing.NamedTuple):
     required: typing.Callable[[], dict[str, str]] | None = None
     exempt: dict[str, str] = {}  # noqa: RUF012 — a NamedTuple default, never mutated
     unverified: str = ""
-    #: The mode(s) whose cells exercise this axis. `compare` reports an axis
-    #: outside the run's mode as NOT COVERED rather than as "moved 0 cells".
-    modes: tuple[str, ...] = ("default",)
 
 
 AXES = [
@@ -1308,7 +1290,18 @@ AXES = [
         what="the argument spellings, over every failure the chokepoint can raise",
         swept=_swept_argument_errors,
         required=_required_argument_errors,
-        modes=("argument",),
+    ),
+    Axis(
+        name="argument-filter",
+        what="the FILTERS the argument spellings are swept over",
+        # Derived from the cells the corpus BUILDS, so a sweep that narrowed
+        # back to a convenient subset fails here (#1859: a self-comparison
+        # could never go red).
+        swept=lambda: {name for name, _arg, _key in arg_cells()},
+        required=lambda: {
+            n: "django defaultfilters.register (argspec >= 2)"
+            for n in django_argument_filters()
+        },
     ),
     Axis(
         name="tag",
@@ -1345,15 +1338,13 @@ AXES = [
 ]
 
 
-def manifest(modes: tuple[str, ...] = ("default",)) -> dict:
+def manifest() -> dict:
     """What this corpus can and cannot reach, computed rather than asserted."""
     rows = []
     for axis in AXES:
         row: dict = {
             "axis": axis.name,
             "what": axis.what,
-            "modes": list(axis.modes),
-            "covered_by_this_run": any(m in modes for m in axis.modes),
             "unverified": axis.unverified,
             "exempt": dict(axis.exempt),
         }
@@ -1392,9 +1383,60 @@ def build_digest() -> str:
 META_PREFIX = "@@"
 
 
-def measure(out_path: str, mode: str = "default") -> None:
-    if mode == "argument":
-        return measure_argument_axis(out_path)
+def axis_of(cid: str) -> str:
+    """Which declared axis a cell id belongs to. Mechanical, from the id alone."""
+    if cid.startswith("@arg "):
+        return "argument"
+    if cid.startswith("@cmp "):
+        return "cmp"
+    if cid.startswith("@path"):
+        return "path"
+    expr, _key, *shape = cid.split("\t")
+    if shape:
+        return "tag"
+    names = expr.split("|")
+    if any(n.split(":")[0] in CUSTOM for n in names):
+        return "custom"
+    return "chain" if len(names) > 1 else "filter"
+
+
+def _cells_by_axis(result: dict[str, list[str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for cid in result:
+        counts[axis_of(cid)] = counts.get(axis_of(cid), 0) + 1
+    return counts
+
+
+def report_manifest(data: dict) -> int:
+    """Print the manifest; return the number of axes with a missing member."""
+    print()
+    print("reachability manifest — what this corpus can and cannot reach")
+    broken = 0
+    for row in data["axes"]:
+        if row["unverified"]:
+            print(f"  ~  {row['axis']:12} UNVERIFIED — {row['unverified'].splitlines()[0]}")
+            continue
+        mark = "!!" if row["missing"] else "  "
+        print(
+            f"  {mark} {row['axis']:12} {len(row['required'])} required, "
+            f"{len(row['exempt'])} exempt, {len(row['missing'])} MISSING"
+        )
+        for member in row["missing"]:
+            print(f"       missing: {member!r}  (from {row['required'][member]})")
+        for member in row.get("stale_exemptions", []):
+            print(f"       STALE EXEMPTION, now swept — delete its row: {member!r}")
+        if row["missing"]:
+            broken += 1
+    if broken:
+        print(
+            f"\n  {broken} axis/axes have a member the corpus cannot reach. Every cell "
+            "\n  the sweep builds is blind to any behaviour that turns on it — which is "
+            "\n  how #2296, #2325, #2334, #2290 and #2345 each reported clean."
+        )
+    return broken
+
+
+def measure(out_path: str) -> None:
     result: dict[str, list[str]] = {}
     for chain, key in cells():
         expr = "|".join(spec(c) for c in chain)
@@ -1460,139 +1502,45 @@ def measure(out_path: str, mode: str = "default") -> None:
         )
         result[cid] = [dj, du]
 
-    _write(out_path, result, "default")
-
-
-def measure_argument_axis(out_path: str) -> None:
-    """The `--axis argument` corpus (#2345), in its own results file.
-
-    Its cell ids all begin `@arg`, so a file from this mode and one from the
-    default mode never compare — which is correct: they are different corpora
-    and `compare`'s cell-set equality check is what says so.
-    """
-    result: dict[str, list[str]] = {}
-    for shape, name, spelling, key in arg_cells():
-        cid = f"@arg {name}:{spelling}\t{key}\t{shape}"
+    # The ARGUMENT axis (#2345). Four fields, `@arg` first, so no id above is
+    # renamed. The context carries `known` alongside `p` for the resolvable-
+    # lookup spelling.
+    for name, arg, key in arg_cells():
+        cid = f"@arg {name}:{arg}\t{key}\targ"
         if cid in result:
             continue
-        value = ARG_VALUES.get(name, ARG_TEXT) if key == "happy" else INPUTS[key]
-        expr = "%s:%s" % (name, ARG_SPELLINGS[spelling])
-        source = (
-            "{{ p|" + expr + " }}" if shape == "var" else TAG_SHAPES[shape].replace("@EXPR@", expr)
+        ctx = {"p": INPUTS[key], **ARG_CONTEXT}
+        dj, du = render_both(
+            "{{ p|" + name + ":" + arg + " }}",
+            ctx,
+            CONTEXT_SAFE_KEYS.get(key),
         )
-        dj, du = render_both(source, {"p": value, "known": ARG_KNOWN, "instant": ARG_INSTANT})
-        dj, du = _raise_bit(dj), _raise_bit(du)
         if name in NONDET:
-            # The AGREEMENT is the comparable property here, not the bytes.
-            #
-            # The default corpus rewrites a NONDET cell to `<NONDET len=N>` on
-            # both sides and `load()` collapses that to a bare `<NONDET>`, so
-            # the two sides always compare EQUAL — which is right for `random`
-            # and blind for these two. `timesince`/`timeuntil` read the wall
-            # clock only when their argument is absent or falsy; with a real
-            # instant they are fully deterministic, and #2344 is a change to
-            # exactly those cells. Collapsing them by NAME made this axis
-            # unable to see the fix it exists for, which is the corpus-gap
-            # failure mode one level in.
-            #
-            # Recording whether the two engines agreed keeps the cell
-            # comparable without pinning bytes that a clock moves: a
-            # clock-dependent cell's agreement bit is stable (both engines read
-            # the same clock microseconds apart), and #2344 shows up as cells
-            # moving from `differs` to `<NONDET>`.
-            dj, du = "<NONDET>", "<NONDET>" if dj == du else "<NONDET differs>"
+            dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
         result[cid] = [dj, du]
-    _write(out_path, result, "argument")
 
-
-def _raise_bit(out: str) -> str:
-    """A raise collapsed to its RAISE-NESS, for argument cells only.
-
-    The comparable property on this axis is whether the render failed — which
-    is exactly the bit #2328 is about — and the message never can be. Django
-    raises `VariableDoesNotExist` / `ValueError` / `TypeError` from Python;
-    djust raises a `RuntimeError` wrapping a Rust error whose text names the
-    filter and the argument. Those strings cannot match, so recording them
-    would mark every raising cell as permanently disagreeing, and the axis
-    would be unable to tell "djust now raises where Django does not" — a real
-    regression — from "both raise, as they always did".
-
-    Measured rather than assumed: keeping the messages, this corpus reports
-    2,251 of 4,466 cells disagreeing and NO filter clean; collapsed, 1,222 and
-    six filters clean.
-    The default `{{ }}` corpus keeps its `<<EXC Type: msg>>` encoding — raises
-    are rare there, the type carries information a passing cell does not, and
-    changing it would rename every cell in an existing baseline.
-    """
-    return "<<RAISED>>" if out.startswith("<<EXC ") else out
-
-
-def _write(out_path: str, result: dict[str, list[str]], mode: str) -> None:
     agree = sum(1 for v in result.values() if v[0] == v[1])
-    print(f"mode={mode}  cells={len(result)}  agree={agree}  disagree={len(result) - agree}")
+    panicked = sum(1 for v in result.values() if v[1].startswith("<<PANIC "))
+    print(f"cells={len(result)}  agree={agree}  disagree={len(result) - agree}")
+    # Printed separately and always, even at zero: a panic is a transport-level
+    # failure rather than a rendering one, so "how many cells disagree" is the
+    # wrong number to read it off (#2343).
+    print(f"cells where djust PANICKED: {panicked}")
     payload: dict = dict(result)
     payload[META_PREFIX + "build"] = build_digest()
-    payload[META_PREFIX + "mode"] = mode
     payload[META_PREFIX + "cells_by_axis"] = _cells_by_axis(result)
-    payload[META_PREFIX + "manifest"] = manifest((mode,))
+    payload[META_PREFIX + "manifest"] = manifest()
     with open(out_path, "w") as fh:
         json.dump(payload, fh)
     print(f"wrote {out_path}  (_rust build {payload[META_PREFIX + 'build']})")
     report_manifest(payload[META_PREFIX + "manifest"])
 
 
-def axis_of(cid: str) -> str:
-    """Which declared axis a cell id belongs to. Mechanical, from the id alone."""
-    if cid.startswith("@arg "):
-        return "argument"
-    if cid.startswith("@cmp "):
-        return "cmp"
-    if cid.startswith("@path"):
-        return "path"
-    expr, _key, *shape = cid.split("\t")
-    if shape:
-        return "tag"
-    names = expr.split("|")
-    if any(n.split(":")[0] in CUSTOM for n in names):
-        return "custom"
-    return "chain" if len(names) > 1 else "filter"
-
-
-def _cells_by_axis(result: dict[str, list[str]]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for cid in result:
-        counts[axis_of(cid)] = counts.get(axis_of(cid), 0) + 1
-    return counts
-
-
-def report_manifest(data: dict) -> int:
-    """Print the manifest; return the number of axes with a missing member."""
-    print()
-    print("reachability manifest — what this corpus can and cannot reach")
-    broken = 0
-    for row in data["axes"]:
-        if row["unverified"]:
-            print(f"  ~  {row['axis']:12} UNVERIFIED — {row['unverified'].splitlines()[0]}")
-            continue
-        mark = "!!" if row["missing"] else ("  " if row["covered_by_this_run"] else "--")
-        scope = "" if row["covered_by_this_run"] else f"  (mode {'/'.join(row['modes'])} only)"
-        print(
-            f"  {mark} {row['axis']:12} {len(row['required'])} required, "
-            f"{len(row['exempt'])} exempt, {len(row['missing'])} MISSING{scope}"
-        )
-        for member in row["missing"]:
-            print(f"       missing: {member!r}  (from {row['required'][member]})")
-        for member in row.get("stale_exemptions", []):
-            print(f"       STALE EXEMPTION, now swept — delete its row: {member!r}")
-        if row["missing"]:
-            broken += 1
-    if broken:
-        print(
-            f"\n  {broken} axis/axes have a member the corpus cannot reach. Every cell "
-            "\n  the sweep builds is blind to any behaviour that turns on it — which is "
-            "\n  how #2296, #2325, #2334, #2290 and #2345 each reported clean."
-        )
-    return broken
+#: Metadata rows in a results file. Prefixed `@@` so they cannot collide with a
+#: cell id (`@path`/`@cmp`/`@arg` cells use one `@`), and STRIPPED by `load()`
+#: so a baseline written before #2345 stays comparable — it simply carries no
+#: metadata, and `compare` says so rather than failing.
+META_PREFIX = "@@"
 
 
 def load(path: str) -> dict[str, list[str]]:
@@ -1603,10 +1551,10 @@ def load(path: str) -> dict[str, list[str]]:
     # (a, b) in ...` target destructures every row the comprehension iterates,
     # including the ones the `if` would have dropped, so a metadata value that
     # is not a 2-sequence raises there rather than being skipped.
-    cells = ((k, v) for k, v in raw.items() if not k.startswith(META_PREFIX))
+    cells_only = ((k, v) for k, v in raw.items() if not k.startswith(META_PREFIX))
     return {
         k: [NONDET_MARKER.sub("<NONDET>", a), NONDET_MARKER.sub("<NONDET>", b)]
-        for k, (a, b) in cells
+        for k, (a, b) in cells_only
     }
 
 
@@ -1696,14 +1644,14 @@ def compare(base_path: str, after_path: str, require_moved: tuple[str, ...] = ()
                 "      not a stale baseline. Either the change moves nothing, or it moves\n"
                 "      an axis this corpus does not sweep. The axes with zero moved cells\n"
                 "      are listed above; the manifest below lists what cannot be reached\n"
-                "      at all. #2328 was the second case: 1,601 argument-axis cells moved\n"
-                "      and this corpus built none of them."
+                "      at all. #2328 was the second case: it moved 1,601 argument-axis\n"
+                "      cells and this corpus built none of them."
             )
     elif len(agree_b) == len(agree_a):
         print(
             "\nFAIL: identical agreement counts, and at least one file predates the build\n"
-            "      digest (#2345), so the same-build question cannot be answered. Re-measure\n"
-            "      both sides with a current build of this script."
+            "      digest (#2345), so the same-build question cannot be answered.\n"
+            "      Re-measure both sides with a current build of this script."
         )
         return 1
 
@@ -1744,6 +1692,20 @@ def compare(base_path: str, after_path: str, require_moved: tuple[str, ...] = ()
                 found[cid] = sorted(extra)
         return found, raised
 
+    # PANICS, reported as their own line and gating on their own (#2343/#2345).
+    # A panic is not a wrong answer; it is a transport-level failure that
+    # `except Exception` cannot contain, so it must never be read off the
+    # agreement count. Newly-panicking cells fail the run outright.
+    panic_b = {k for k, (_, du) in base.items() if du.startswith("<<PANIC ")}
+    panic_a = {k for k, (_, du) in after.items() if du.startswith("<<PANIC ")}
+    print()
+    print(f"cells where djust PANICKED before: {len(panic_b)}")
+    print(f"cells where djust PANICKED after : {len(panic_a)}")
+    print(f"  closed                         : {len(panic_b - panic_a)}")
+    print(f"  INTRODUCED                     : {len(panic_a - panic_b)}")
+    for cid in sorted(panic_a - panic_b):
+        print(f"  !! {cid}  {after[cid][1][:160]!r}")
+
     lb, raised = leaks(base)
     la, _ = leaks(after)
     new = sorted(set(la) - set(lb))
@@ -1768,9 +1730,12 @@ def compare(base_path: str, after_path: str, require_moved: tuple[str, ...] = ()
         print(f"       django={after[cid][0][:160]!r}")
         print(f"       djust ={after[cid][1][:160]!r}")
 
-    if regressions or hot or unreachable:
+    if regressions or hot or unreachable or (panic_a - panic_b):
         return 1
-    print("\nOK: no agreeing cell regressed, and nothing became more permissive.")
+    print(
+        "\nOK: no agreeing cell regressed, nothing became more permissive, "
+        "and no cell newly panics."
+    )
     return 0
 
 
@@ -1781,17 +1746,9 @@ def main(argv: list[str]) -> int:
         index = argv.index("--require-moved")
         require_moved.append(argv[index + 1])
         del argv[index : index + 2]
-    mode = "default"
-    if "--axis" in argv:
-        index = argv.index("--axis")
-        mode = argv[index + 1]
-        del argv[index : index + 2]
-        if mode not in {"default", "argument"}:
-            print(f"unknown --axis {mode!r}: one of default, argument")
-            return 2
 
     if argv[:1] == ["--manifest"]:
-        data = manifest((mode,))
+        data = manifest()
         if "--json" in argv:
             print(json.dumps(data))
             return 0
@@ -1804,7 +1761,7 @@ def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print(__doc__)
         return 2
-    measure(argv[0], mode)
+    measure(argv[0])
     return 0
 
 
