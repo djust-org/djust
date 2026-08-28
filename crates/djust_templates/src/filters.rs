@@ -588,15 +588,34 @@ fn apply_builtin_filter(
         //     honoured and a plain sequence is escaped HERE rather than at
         //     render time — which is what earns `join` its place in
         //     `renderer::SAFE_OUTPUT_FILTERS`;
-        //   * the SEPARATOR is escaped unconditionally (it is template text,
-        //     never `SafeData`), whatever the items' safety.
+        //   * the SEPARATOR gets `conditional_escape(arg)`, which is NOT the
+        //     same as "escape it". A QUOTED filter argument is `SafeData` —
+        //     `Variable.__init__` does
+        //     `self.literal = mark_safe(unescape_string_literal(var))` — so
+        //     `{{ l|join:"<br>" }}` renders a real `<br>`. A BARE identifier is
+        //     resolved from the context (#2202), is not `SafeData`, and IS
+        //     escaped. `arg_was_quoted` is exactly that distinction, and it is
+        //     the same fact the `add` arm of `builtin_produced_safe` relies on.
+        //
+        //     Escaping unconditionally was a regression, not just a wrong
+        //     comment. `main`'s `join` joined RAW and let the render escape the
+        //     result, which lands on Django's bytes whenever a later `|safe`
+        //     suppresses that render escape — 34 such cells. They are invisible
+        //     unless the differential's separator carries HTML, which is why
+        //     `FILTER_ARGS["join"]` is now `"<br>"`.
         //
         // The `TypeError` branch — an int, a float, `None` — is where Django
         // returns the value untouched and UNSAFE, so the render escapes it.
         // djust holds an unconditional safe-output grant by then, so it must
         // escape here to land on the same bytes (#2274).
         "join" => {
-            let separator = html_escape(arg.unwrap_or(", "));
+            let raw_sep = arg.unwrap_or(", ");
+            // `conditional_escape(arg)`: a template LITERAL is already safe.
+            let separator = if arg_was_quoted {
+                raw_sep.to_string()
+            } else {
+                html_escape(raw_sep)
+            };
             match iter_values(value) {
                 Some(items) => {
                     let strings: Vec<String> = items
@@ -952,26 +971,51 @@ fn apply_builtin_filter(
                 }
             }
         }
-        "dictsort" => {
-            // dictsort filter: sorts list of dicts by key
+        // Django, verbatim:
+        //
+        //     try:    return sorted(value, key=_property_resolver(arg))
+        //     except (AttributeError, TypeError): return ""
+        //
+        // djust had the sort and NOT the failure branch, returning the input
+        // UNCHANGED where Django destroys it. That is a security defect once
+        // anything downstream can grant safety, and #2283 made two things
+        // downstream do exactly that: `{{ l|dictsort:"k"|safeseq|unordered_list }}`
+        // emitted raw markup on a list Django had already thrown away, on data
+        // nothing ever marked safe.
+        //
+        // The point fix was to keep `dictsort` out of
+        // `renderer::ITEM_SAFETY_PRESERVING_FILTERS` — which closes
+        // `safeseq|dictsort` and leaves `dictsort|safeseq`, the same class one
+        // step over. The failure branch closes BOTH orders, and every future
+        // one, because the value Django discarded is discarded here too.
+        "dictsort" | "dictsortreversed" => {
             let sort_key = arg.unwrap_or("name");
-            match value {
-                Value::List(items) | Value::Tuple(items) => {
-                    Ok(Value::List(sort_dicts_by_key(items, sort_key)))
+            // An UNQUOTED integer literal is an `int` to Python, so
+            // `itemgetter(n)` indexes. A quoted one is a `str` and looks up a
+            // key. `arg_was_quoted` is the only thing that separates them, and
+            // `{{ p|dictsort:0 }}` vs `{{ p|dictsort:"1" }}` on the same list
+            // of strings is the cell that proves it.
+            let index = if arg_was_quoted {
+                None
+            } else {
+                sort_key.parse::<usize>().ok()
+            };
+            let sorted = match value {
+                Value::List(items) | Value::Tuple(items) => match index {
+                    Some(n) => dictsort_by_index(items, n),
+                    None => dictsort_by_key(items, sort_key),
+                },
+                // Not a sequence at all: `sorted()` raises `TypeError`.
+                _ => None,
+            };
+            match sorted {
+                Some(mut items) => {
+                    if filter_name == "dictsortreversed" {
+                        items.reverse();
+                    }
+                    Ok(Value::List(items))
                 }
-                _ => Ok(value.clone()),
-            }
-        }
-        "dictsortreversed" => {
-            // dictsortreversed filter: sorts list of dicts by key in reverse
-            let sort_key = arg.unwrap_or("name");
-            match value {
-                Value::List(items) | Value::Tuple(items) => {
-                    let mut sorted = sort_dicts_by_key(items, sort_key);
-                    sorted.reverse();
-                    Ok(Value::List(sorted))
-                }
-                _ => Ok(value.clone()),
+                None => Ok(Value::String(String::new())),
             }
         }
         "urlencode" => {
@@ -2330,7 +2374,15 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
         let a_val = get_dict_value(a, sort_key);
         let b_val = get_dict_value(b, sort_key);
 
-        // Compare values
+        compare_sort_values(&a_val, &b_val)
+    });
+
+    sorted_items
+}
+
+/// The one ordering used by every `dictsort` path (#1646).
+fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
+    {
         match (&a_val, &b_val) {
             (Value::String(a_str), Value::String(b_str)) => a_str.cmp(b_str),
             (Value::Integer(a_int), Value::Integer(b_int)) => a_int.cmp(b_int),
@@ -2355,9 +2407,73 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
                 _ => std::cmp::Ordering::Equal,
             },
         }
-    });
+    }
+}
 
-    sorted_items
+/// Django's `_property_resolver(arg)` applied to every item, reporting only
+/// whether it would RAISE — which is the half `dictsort` needs and the half
+/// djust never had.
+///
+/// ```python
+/// def _property_resolver(arg):
+///     try:
+///         float(arg)
+///     except ValueError:
+///         if VARIABLE_ATTRIBUTE_SEPARATOR + "_" in arg or arg[0] == "_":
+///             raise AttributeError("Access to private variables is forbidden.")
+///         ...  # dotted attribute path
+///     else:
+///         return itemgetter(arg)
+/// ```
+///
+/// A NUMERIC key is `operator.itemgetter(n)` — it INDEXES, so `dictsort:0` over
+/// a list of strings sorts them by first character and does NOT raise. That
+/// case is why this cannot simply refuse every non-`Object` item: doing so
+/// would turn a cell that agrees with Django into `""`.
+///
+/// A key that resolves for no item is Django's raise, and the caller returns
+/// `""` there. Deliberately NARROWER than Django in one direction: djust does
+/// not walk dotted paths, so `dictsort:"a.b"` over a dict-of-dicts answers
+/// `None` here where Django would sort. That is the fail-CLOSED direction (the
+/// value is discarded rather than emitted), and it is the same answer djust
+/// already gave for the security-relevant shapes.
+fn dictsort_by_key(items: &[Value], key: &str) -> Option<Vec<Value>> {
+    // Django's `_property_resolver` refuses private access before touching any
+    // item, so it raises even for an empty sequence.
+    if key.starts_with('_') || key.contains("._") {
+        return None;
+    }
+    // `itemgetter(key)` / `getattr` raises for any item that cannot resolve it,
+    // and one raise discards the WHOLE sequence.
+    for item in items {
+        if matches!(get_dict_value(item, key), Value::Missing) {
+            return None;
+        }
+    }
+    Some(sort_dicts_by_key(items, key))
+}
+
+/// `operator.itemgetter(n)` — an UNQUOTED integer argument INDEXES.
+///
+/// djust previously returned the sequence unsorted here, because
+/// `sort_dicts_by_key` resolves through `get_dict_value`, which answers
+/// `Missing` for every non-`Object` and so compared every pair Equal.
+/// `{{ ['ba','ab']|dictsort:0 }}` is `['ab', 'ba']` in Django and was
+/// `['ba', 'ab']` here.
+fn dictsort_by_index(items: &[Value], n: usize) -> Option<Vec<Value>> {
+    let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(items.len());
+    for item in items {
+        let k = match item {
+            Value::String(s) => s.chars().nth(n).map(|c| Value::String(c.to_string())),
+            Value::List(v) | Value::Tuple(v) => v.get(n).cloned(),
+            // `itemgetter(0)` on a str-keyed dict is a `KeyError`, and on a
+            // scalar a `TypeError`. Both are Django's raise.
+            _ => None,
+        }?;
+        keyed.push((k, item.clone()));
+    }
+    keyed.sort_by(|a, b| compare_sort_values(&a.0, &b.0));
+    Some(keyed.into_iter().map(|(_, item)| item).collect())
 }
 
 fn get_dict_value(value: &Value, key: &str) -> Value {
@@ -4074,10 +4190,34 @@ mod tests {
     /// and if that variant can carry markup, the escape is load-bearing again
     /// the moment it exists. Deleting the escape would make that a silent XSS
     /// instead of a red test.
+    /// The compiler-checked half of the claim. This `match` has NO wildcard,
+    /// so adding a `Value` variant fails to build until it is named here — and
+    /// the sample list below must then grow to keep `seen.len()` at the pinned
+    /// count. `iter_values` itself ends in `_ => None`, so it cannot provide
+    /// that guarantee on its own; without this function the test's
+    /// "exhaustive by construction" claim was decorative, and deleting sample
+    /// entries left it green (#1859).
+    fn variant_name(v: &Value) -> &'static str {
+        match v {
+            Value::Missing => "Missing",
+            Value::None => "None",
+            Value::Bool(_) => "Bool",
+            Value::Integer(_) => "Integer",
+            Value::Float(_) => "Float",
+            Value::String(_) => "String",
+            Value::List(_) => "List",
+            Value::Tuple(_) => "Tuple",
+            Value::Object(_) => "Object",
+            Value::Decimal(_) => "Decimal",
+            Value::BigInt(_) => "BigInt",
+        }
+    }
+
     #[test]
     fn every_non_iterable_variant_is_markup_free() {
-        // Exhaustive by construction: a new variant makes this list stale, and
-        // the `match` in `iter_values` is what decides which column it lands in.
+        // Exhaustive in BOTH directions: `variant_name`'s wildcard-free `match`
+        // rejects a new variant at compile time, and the distinct-name count
+        // below rejects a DELETED sample at test time.
         let variants = [
             Value::Missing,
             Value::None,
@@ -4111,6 +4251,16 @@ mod tests {
             iterating, 5,
             "the iterating set is exactly String / List / Tuple / Object / \
              Missing — a change here is a change to what #2283 fixed",
+        );
+        // The half that makes "exhaustive" true rather than aspirational: every
+        // arm `variant_name` can return is exercised by a sample. Deleting a
+        // sample drops this count; adding a `Value` variant fails to compile in
+        // `variant_name` first.
+        let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
+        assert_eq!(
+            seen.len(),
+            11,
+            "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }
 

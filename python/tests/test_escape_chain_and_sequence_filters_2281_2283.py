@@ -467,3 +467,324 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
         if re.search(r'"%s" =>(?:.|\n){0,400}?iter_values\(value\)' % name, body)
     }
     assert arms == {"join", "safeseq", "escapeseq", "unordered_list", "random"}, arms
+
+
+def _rust_const(name: str) -> list[str]:
+    """The string literals of a `const NAME: [&str; N] = [...]` in renderer.rs."""
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "crates"
+        / "djust_templates"
+        / "src"
+        / "renderer.rs"
+    ).read_text()
+    body = src.split(f"const {name}: [&str;", 1)[1].split("[", 1)[1].split("];", 1)[0]
+    return re.findall(r'"(\w+)"', body)
+
+
+def test_every_safety_set_member_is_in_the_differential_hot_sets() -> None:
+    """The coupling that would have caught the `dictsort` XSS.
+
+    `dictsort` was added to ``ITEM_SAFETY_PRESERVING_FILTERS`` and not to the
+    differential's ``HOT2``/``HOT3``. The sweep therefore never composed it, and
+    the two-build compare reported ``REGRESSIONS: 0 / INTRODUCED: 0`` across a
+    live XSS: djust's ``dictsort`` does not reproduce Django's
+    ``except (AttributeError, TypeError): return ""``, so it carried the
+    item-safety grant onto a list Django had destroyed, and
+    ``{{ hostile|safeseq|dictsort:"x"|join:"" }}`` emitted raw markup.
+
+    The individual `dictsort` decision is not the durable fix — this is. A name
+    granted safety in `renderer.rs` and absent from the sweep is a blind spot
+    aimed exactly where the change was made, so the two lists are coupled here
+    rather than by memory.
+
+    Deliberately one-directional: the hot sets may contain names in no safety
+    set (`upper`, `pprint`, …), because composing extra filters only widens the
+    sweep. What must never happen is a safety-set member missing from it.
+    """
+    hot = (
+        Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
+    ).read_text()
+    swept = set(re.findall(r'"(\w+)"', hot.split("HOT2 = [", 1)[1].split("]", 1)[0]))
+    swept |= set(re.findall(r'"(\w+)"', hot.split("HOT3 = [", 1)[1].split("]", 1)[0]))
+
+    granted: set[str] = set()
+    for const in (
+        "SAFE_OUTPUT_FILTERS",
+        "ITEM_SAFE_OUTPUT_FILTERS",
+        "ITEM_SAFETY_PRESERVING_FILTERS",
+    ):
+        granted |= set(_rust_const(const))
+    assert len(granted) > 5, f"the constants did not parse: {granted}"
+
+    missing = granted - swept
+    assert not missing, (
+        f"{sorted(missing)} are granted safety in renderer.rs but are not composed "
+        f"by scripts/filter-parity-differential.py. Add them to HOT2 and HOT3 in "
+        f"the SAME commit — this is the check the `dictsort` XSS defeated."
+    )
+
+
+class TestItemSafetyIsNeverMorePermissiveThanDjango:
+    """The sweep the #2283 half was missing.
+
+    ``test_no_chain_containing_escape_is_more_permissive_than_django`` covers
+    the #2281 half and sweeps only chains containing ``escape``. The `dictsort`
+    XSS was a 3-chain with no ``escape`` in it — producer → preserver →
+    consumer — so no sweep in this file could see it.
+
+    This composes the item-safety machinery against itself: every producer,
+    every candidate preserver, every consumer that reads the grant, on hostile
+    data nothing marked safe.
+    """
+
+    #: What a browser would execute FROM THE PAYLOAD. `tag:li`/`tag:p`/`tag:br`
+    #: are deliberately absent: those are the consumer's own markup.
+    PAYLOAD_CAPS = frozenset(
+        {"tag:img", "tag:script", "tag:svg", "evt:onerror", "evt:onload", "url:href"}
+    )
+
+    PRODUCERS = ["safeseq", "escapeseq"]
+    #: Deliberately WIDER than ``ITEM_SAFETY_PRESERVING_FILTERS``. A sweep
+    #: restricted to the current set could never catch a name being ADDED to
+    #: it, which is the bug this exists for.
+    CANDIDATE_PRESERVERS = [
+        "slice:':2'",
+        "dictsort:'x'",
+        "dictsort:0",
+        "dictsortreversed:'x'",
+        "make_list",
+        "first",
+        "last",
+        "safe",
+        "escape",
+        "force_escape",
+        "striptags",
+        "upper",
+        "default:'D'",
+        "cut:'b'",
+        "add:'1'",
+        "length",
+    ]
+    CONSUMERS = ["join:''", "join:', '", "unordered_list"]
+
+    @pytest.mark.parametrize("producer", PRODUCERS)
+    def test_no_producer_preserver_consumer_chain_out_grants_django(self, producer):
+        payload = ["<img src=x onerror=alert(1)>", "<script>alert(2)</script>"]
+        leaks, compared = [], 0
+        for preserver in self.CANDIDATE_PRESERVERS:
+            for consumer in self.CONSUMERS:
+                source = "{{ p|%s|%s|%s }}" % (producer, preserver, consumer)
+                try:
+                    django_out = DjangoTemplate(source).render(DjangoContext({"p": payload}))
+                except Exception:  # noqa: BLE001 — Django raises: no bar to compare
+                    continue
+                try:
+                    djust_out = _rust.render_template(
+                        source, normalize_django_value({"p": payload})
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
+                compared += 1
+                # Only capabilities traceable to the PAYLOAD count. `tag:li` /
+                # `tag:p` are markup the consumer generates for itself, and
+                # djust legitimately emits them where Django emitted nothing at
+                # all (Django's `dictsort` returns `""` for a list of strings,
+                # so its `unordered_list` gets an empty sequence). Diffing the
+                # raw capability sets flags that as a leak — the same
+                # false-positive shape the crude tag-count metric had.
+                extra = (
+                    capabilities(djust_out) - capabilities(django_out)
+                ) & self.PAYLOAD_CAPS
+                if extra:
+                    leaks.append((source, sorted(extra), djust_out[:90]))
+        assert compared > 20, f"only {compared} cells compared — the sweep is not sweeping"
+        assert leaks == [], f"{len(leaks)} chains grant capabilities Django does not: {leaks[:3]}"
+
+    def test_the_grant_still_reaches_its_one_legitimate_preserver(self) -> None:
+        """Direction 2: the sweep above must not be satisfiable by revoking
+        everything. ``slice`` genuinely preserves item identity in Django, and
+        ``{{ l|safeseq|slice:":1"|join:"" }}`` is live in BOTH.
+        """
+        assert_agrees("{{ p|safeseq|slice:':1'|join:'' }}", ["<b>", "x"])
+        _, djust_out = render_both("{{ p|safeseq|slice:':1'|join:'' }}", ["<b>", "x"])
+        assert djust_out == "<b>", djust_out
+
+
+class TestPerCallSafetyArmsThatHadNoCoverage:
+    """`builtin_produced_safe`'s four arms, two of which nothing exercised.
+
+    The `cut` `;` carve-out and `add`'s `arg_was_quoted` term both survived the
+    gate-off with the whole suite green — mutating either made
+    `{{ p|safe|cut:";" }}` / `{{ p|safe|add:q }}` emit live markup and nothing
+    went red. A surviving mutation is a question, not a pass; here the answer
+    was simply missing coverage, so these are the asserting tests.
+    """
+
+    def test_cut_preserves_safety_except_for_a_semicolon(self) -> None:
+        """Django's `cut` body is::
+
+            safe = isinstance(value, SafeData)
+            value = value.replace(arg, "")
+            if safe and arg != ";":
+                return mark_safe(value)
+            return value
+
+        The `";"` carve-out exists because cutting semicolons splits `&lt;`
+        into a live `&lt` — so Django deliberately RE-TAINTS there, and djust
+        must too. Both directions, because a fix that dropped either half would
+        pass a one-sided test.
+        """
+        # Not ";" — safety survives, and both engines emit the markup live.
+        assert_agrees("{{ p|safe|cut:'b' }}", "<i>x</i>")
+        _, djust_out = render_both("{{ p|safe|cut:'b' }}", "<i>x</i>")
+        assert capabilities(djust_out) == {"tag:i"}, djust_out
+
+        # ";" — the carve-out fires and the value is escaped again.
+        assert_agrees("{{ p|safe|cut:';' }}", "<i>x</i>")
+        _, djust_out = render_both("{{ p|safe|cut:';' }}", "&lt;i&gt;x")
+        assert capabilities(djust_out) == set(), djust_out
+        assert "&amp;lt" in djust_out, djust_out
+
+    def test_add_preserves_safety_only_for_a_quoted_literal_argument(self) -> None:
+        """`SafeString.__add__` returns a `SafeString` only when the right-hand
+        side is ALSO `SafeData`. A template LITERAL is (`Variable.literal` is
+        `mark_safe`d); a context-resolved identifier is not, and
+        `arg_was_quoted` is what separates them.
+        """
+        # Quoted literal: Django concatenates two SafeStrings and stays safe.
+        assert_agrees("{{ p|safe|add:'!' }}", "<i>x</i>")
+        _, djust_out = render_both("{{ p|safe|add:'!' }}", "<i>x</i>")
+        assert capabilities(djust_out) == {"tag:i"}, djust_out
+
+        # Bare identifier resolved from the context: NOT SafeData in Django, so
+        # the concatenation re-taints and the whole thing is escaped.
+        source = "{{ p|safe|add:q }}"
+        ctx = {"p": "<i>x</i>", "q": "!"}
+        django_out = DjangoTemplate(source).render(DjangoContext(ctx))
+        djust_out = _rust.render_template(source, normalize_django_value(ctx))
+        assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
+        assert capabilities(djust_out) == set(), djust_out
+
+    def test_a_quoted_separator_is_safe_and_a_context_one_is_not(self) -> None:
+        """Django's `join` applies `conditional_escape(arg)`, and that is NOT
+        "escape the separator" (F3).
+
+        A QUOTED filter argument is `SafeData` — `Variable.__init__` does
+        `self.literal = mark_safe(unescape_string_literal(var))` — so
+        `{{ l|join:"<br>" }}` renders a real `<br>`. A BARE identifier is
+        resolved from the context, is not `SafeData`, and is escaped.
+
+        Escaping unconditionally was a REGRESSION, not just a wrong comment:
+        `main`'s `join` joined raw and let the render escape the result, which
+        matches Django whenever a later `|safe` suppresses that escape. The
+        differential could not see it until `FILTER_ARGS["join"]` carried HTML.
+        """
+        # Quoted literal: live in both, because the template author wrote it.
+        assert_agrees("{{ p|join:'<br>' }}", ["a", "b"])
+        _, djust_out = render_both("{{ p|join:'<br>' }}", ["a", "b"])
+        assert djust_out == "a<br>b", djust_out
+
+        # The cell class that regressed: a trailing `|safe` removes the render
+        # escape, so an eagerly-escaped separator is visible as `&lt;br&gt;`.
+        assert_agrees("{{ p|escapeseq|join:'<br>'|safe }}", ["<b>", "x"])
+
+        # Bare identifier from the CONTEXT: not `SafeData`, so it is escaped —
+        # the half that keeps a user-supplied separator inert.
+        source = "{{ p|join:sep }}"
+        ctx = {"p": ["a", "b"], "sep": "<br>"}
+        django_out = DjangoTemplate(source).render(DjangoContext(ctx))
+        djust_out = _rust.render_template(source, normalize_django_value(ctx))
+        assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
+        assert capabilities(djust_out) == set(), djust_out
+
+    def test_the_items_are_still_escaped_whatever_the_separator_is(self) -> None:
+        """Direction 2: making the separator safe must not make the ITEMS safe.
+        The separator is template source; the items are data."""
+        payload = ["<img src=x onerror=alert(1)>"]
+        _, djust_out = render_both("{{ p|join:'<br>' }}", payload)
+        assert capabilities(djust_out) == set(), djust_out
+
+
+class TestDictsortHasDjangosFailureBranch:
+    """`dictsort`'s `except (AttributeError, TypeError): return ""` (F1).
+
+    djust had the sort and not the failure branch, returning the input
+    UNCHANGED where Django destroys it. That is harmless until something
+    downstream can grant safety — and #2283 gave `safeseq`/`escapeseq` exactly
+    that, so `{{ hostile|dictsort:"x"|safeseq|unordered_list }}` emitted raw
+    markup on a list Django had already thrown away.
+
+    Dropping the two names from ``ITEM_SAFETY_PRESERVING_FILTERS`` closes
+    `safeseq|dictsort` and leaves `dictsort|safeseq` — the same class one step
+    over. The failure branch closes both orders at the root, which is why it is
+    the fix that shipped.
+    """
+
+    HOSTILE = ["<img src=x onerror=alert(1)>", "<script>alert(2)</script>"]
+
+    @pytest.mark.parametrize("name", ["dictsort", "dictsortreversed"])
+    @pytest.mark.parametrize("arg", ["'x'", "'name'", "'a.b'", "''", "'1'"])
+    def test_an_unresolvable_key_destroys_the_sequence(self, name, arg) -> None:
+        """Django returns `""`; anything else keeps a sequence alive that
+        Django discarded."""
+        source = "{{ p|%s:%s }}" % (name, arg)
+        try:
+            django_out = DjangoTemplate(source).render(DjangoContext({"p": self.HOSTILE}))
+        except Exception:  # noqa: BLE001 — Django's own IndexError on `''`
+            django_out = None
+        djust_out = _rust.render_template(source, normalize_django_value({"p": self.HOSTILE}))
+        assert djust_out == "", f"{source} kept the sequence: {djust_out!r}"
+        if django_out is not None:
+            assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "{{ p|dictsort:'x'|safeseq|unordered_list }}",
+            "{{ p|dictsort:'x'|safeseq|join:'' }}",
+            "{{ p|dictsortreversed:'x'|escapeseq|join:'' }}",
+            "{{ p|safeseq|dictsort:'x'|join:'' }}",
+            "{{ p|safeseq|dictsort:'x'|unordered_list }}",
+        ],
+    )
+    def test_neither_chain_order_revives_the_discarded_sequence(self, source: str) -> None:
+        """BOTH orders, because fixing only the cited one is how this class
+        re-formed after the first fix."""
+        django_out = DjangoTemplate(source).render(DjangoContext({"p": self.HOSTILE}))
+        djust_out = _rust.render_template(source, normalize_django_value({"p": self.HOSTILE}))
+        assert capabilities(djust_out) == set(), f"{source} is LIVE: {djust_out!r}"
+        assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
+
+    def test_an_unquoted_integer_indexes_and_a_quoted_one_does_not(self) -> None:
+        """Direction 2, and the premise correction that produced this shape.
+
+        `_property_resolver` branches on `float(arg)` succeeding — but `arg`
+        keeps the Python TYPE the template gave it. `dictsort:0` passes an
+        `int`, so `itemgetter(0)` INDEXES and sorts strings by first character.
+        `dictsort:"1"` passes a `str`, so `itemgetter("1")` raises `TypeError`
+        on those same strings and Django returns `""`.
+
+        "Looks numeric" is therefore the wrong discriminator — `arg_was_quoted`
+        is the right one. This test exists because the first version used the
+        former and this cell disagreed with Django.
+        """
+        # Unquoted: indexes, and actually SORTS. djust returned the sequence
+        # untouched here before, because `get_dict_value` answers `Missing` for
+        # every non-`Object` and the comparator saw every pair as Equal.
+        assert_agrees("{{ p|dictsort:0 }}", ["ba", "ab"])
+        _, djust_out = render_both("{{ p|dictsort:0 }}", ["ba", "ab"])
+        assert djust_out.index("ab") < djust_out.index("ba"), djust_out
+
+        # Quoted: a string key, unresolvable on a string item, so Django raises
+        # and the sequence is discarded.
+        assert_agrees("{{ p|dictsort:'1' }}", ["ba", "ab"])
+        _, djust_out = render_both("{{ p|dictsort:'1' }}", ["ba", "ab"])
+        assert djust_out == "", djust_out
+
+    def test_a_real_dict_sequence_still_sorts(self) -> None:
+        """Direction 2 again: the shape `dictsort` is actually for."""
+        rows = [{"n": "b"}, {"n": "a"}]
+        assert_agrees("{{ p|dictsort:'n' }}", rows)
+        _, djust_out = render_both("{{ p|dictsort:'n' }}", rows)
+        assert djust_out.index("a") < djust_out.index("b"), djust_out

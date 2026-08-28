@@ -108,7 +108,11 @@ FILTER_ARGS = {
     "divisibleby": '"2"',
     "floatformat": '"2"',
     "get_digit": '"1"',
-    "join": '", "',
+    # Contains HTML on purpose. With a plain `", "` the sweep cannot see the
+    # separator axis at all, which is how `join`'s separator divergence (Django
+    # `mark_safe`s a quoted filter argument via `Variable.literal`; djust
+    # escapes it) went unmeasured.
+    "join": '"<br>"',
     "ljust": '"20"',
     "pluralize": '"s"',
     "rjust": '"20"',
@@ -158,16 +162,30 @@ LIVE_FRAGMENTS = {
 
 #: Names worth composing: the safety- and shape-relevant ones. Keeps the chain
 #: axis tractable while still covering every filter that can mark output safe.
+#:
+#: **Every name in any of `renderer.rs`'s safety sets MUST be here.** That is not
+#: style — it is the lesson of the `dictsort` XSS this tool failed to report.
+#: `dictsort` was added to `ITEM_SAFETY_PRESERVING_FILTERS` and NOT to these
+#: lists, so the sweep never composed it, and the compare printed
+#: `REGRESSIONS: 0 / INTRODUCED: 0` over a live XSS. With `dictsort` present the
+#: same tool reports 18 regressions and 12 introduced leaks. A sweep is only as
+#: good as its axes, and the filter you just granted safety to is precisely the
+#: one that must be on them.
+#:
+#: `python/tests/test_escape_chain_and_sequence_filters_2281_2283.py::
+#: test_every_safety_set_member_is_in_the_differential_hot_sets` enforces this
+#: mechanically, so the coupling cannot rot back.
 HOT2 = [
     "safe", "escape", "force_escape", "safeseq", "escapeseq", "join",
-    "unordered_list", "upper", "lower", "striptags", "linebreaks", "urlize",
-    "first", "last", "slice", "make_list", "truncatechars_html", "title",
-    "cut", "add", "default", "pprint", "length", "linenumbers",
+    "unordered_list", "upper", "lower", "striptags", "linebreaks", "linebreaksbr",
+    "urlize", "urlizetrunc", "json_script", "first", "last", "slice", "make_list",
+    "truncatechars_html", "title", "cut", "add", "default", "default_if_none",
+    "pprint", "length", "linenumbers", "dictsort", "dictsortreversed",
 ]
 HOT3 = [
     "safe", "escape", "force_escape", "safeseq", "escapeseq", "join",
     "unordered_list", "upper", "striptags", "first", "slice", "make_list",
-    "pprint", "linebreaks",
+    "pprint", "linebreaks", "dictsort", "dictsortreversed",
 ]
 INPUTS_2 = ["s-img", "s-lt", "l-plain", "d-plain", "i-int", "n-none"]
 INPUTS_3 = ["s-img", "l-plain", "i-int"]

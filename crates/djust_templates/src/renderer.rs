@@ -113,7 +113,31 @@ const ITEM_SAFE_OUTPUT_FILTERS: [&str; 2] = ["safeseq", "escapeseq"];
 /// Deliberately SHORT. Anything not named here drops the grant, which is the
 /// escaping direction: a filter that rebuilds items (`make_list`, which splits
 /// the sequence's `repr` into fresh plain characters) must not inherit it.
-const ITEM_SAFETY_PRESERVING_FILTERS: [&str; 3] = ["slice", "dictsort", "dictsortreversed"];
+///
+/// `dictsort` / `dictsortreversed` were here for one review round and are a
+/// worked example of why the list stays short. They preserve item identity in
+/// Django — but only on the path Django reaches, and Django's body is
+/// `except (AttributeError, TypeError): return ""`, so for a list of STRINGS
+/// (every quoted key) it destroys the sequence entirely. djust's `dictsort`
+/// does not reproduce that failure, so it returned the list intact and carried
+/// the grant onto items Django had already thrown away:
+/// `{{ hostile|safeseq|dictsort:"x"|join:"" }}` was LIVE in djust and `''` in
+/// Django, on data nothing had ever marked safe — 32 such cells across the two
+/// names, ten argument spellings and both consumers.
+///
+/// Only a bare-integer key (`dictsort:0`) reaches Django's sorting path for a
+/// list of strings, so the grant this bought was worth ~nothing and cost an
+/// XSS.
+///
+/// `filters::dictsort_resolve_all` has since given `dictsort` Django's
+/// `except (AttributeError, TypeError): return ""` branch, which retires the
+/// class at its root — the sequence Django discarded is discarded here too, in
+/// BOTH chain orders rather than only `safeseq|dictsort`. That makes re-adding
+/// these names *permissible* and not *necessary*, so they stay out: the only
+/// cell it would buy is `{{ l|safeseq|dictsort:0|join }}`, and the residual
+/// divergence there is djust escaping where Django does not — the safe
+/// direction, and unchanged from before #2283.
+const ITEM_SAFETY_PRESERVING_FILTERS: [&str; 1] = ["slice"];
 
 /// Does the value this filter produced have safe ITEMS?
 ///
@@ -741,9 +765,12 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // precisely because upper-casing `&lt;` yields `&LT;`, which every
             // browser still decodes to `<`.
             let mut runtime_safe = context.is_safe(var_name);
-            // Django's item granularity, seeded FALSE: nothing but `safeseq` /
-            // `escapeseq` ever marks a sequence's items safe, and the context
-            // flag is a container-level `mark_safe` (#2283).
+            // Django's item granularity, seeded FALSE: djust does not track
+            // item safety arriving from the CONTEXT. A view passing
+            // `[mark_safe(x), …]` has genuinely marked the items, and Django
+            // honours that; djust's context flag is container-level only, so
+            // the seed is `false` and such a list is escaped. Fail-closed, and
+            // unchanged from before #2283 — the remaining gap is #2287.
             let mut items_safe = false;
             for (filter_name, arg) in filter_specs {
                 // Strip quotes from literal filter args at render time —
