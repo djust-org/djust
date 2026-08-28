@@ -266,15 +266,28 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
     ) -> None:
         """The manifest earning its keep on its own first run.
 
-        #2345 proposed nineteen spellings. Measured against the engine's four
-        argument errors, they reach three: no spelling parses to a width past
-        ``MAX_PAD_WIDTH``, so the cap's error — the guard standing between a
-        template-supplied width and an allocator ABORT (#2328) — is
-        unreachable. ``q-huge`` is the twentieth, added because of this.
+        #2345 proposed nineteen spellings. Measured against the engine's
+        argument errors, they reach every one but the pad-width cap: no
+        spelling of the nineteen parses to a width past ``MAX_PAD_WIDTH``, so
+        the cap's error — the guard standing between a template-supplied width
+        and an allocator ABORT (#2328) — is unreachable. ``q-huge`` is the
+        twentieth, added because of this.
+
+        Literally the nineteen: all three of the corpus's later additions are
+        removed, not just the one under test, or this would be measuring 21
+        spellings and calling them nineteen.
         """
-        script = mutated_script(tmp_path, ('    "q-huge": \'"99999999999999999999"\',\n', ""))
+        script = mutated_script(
+            tmp_path,
+            ('    "q-huge": \'"99999999999999999999"\',\n', ""),
+            ('    "hit-datetime": "instant",\n', ""),
+            ('    "q-datetime": \'"2020-01-01 15:30:00"\',\n', ""),
+        )
         missing = rows(run_manifest(script))["argument"]["missing"]
         assert len(missing) == 1 and "past djust's" in missing[0], missing
+        # And the other three errors ARE reachable from the nineteen, so the
+        # report names the gap rather than blaming the whole axis.
+        assert len(rows(run_manifest(script))["argument"]["required"]) == 4
 
 
 class TestTheLimitTheManifestDoesNotClose:
