@@ -284,13 +284,54 @@ impl RustLiveViewBackend {
 
     /// Update state with a dictionary
     fn update_state(&mut self, updates: HashMap<String, Value>) {
+        // Replacing a value REVOKES the safety granted to the old one (#2300).
+        //
+        // Relying on the caller to re-send the full safe-key set every render
+        // is the weaker guarantee: it holds only while every call site
+        // remembers, and the bug this fixes was exactly a call site that did
+        // not. Tying the grant to the value instead makes staleness
+        // structurally impossible — a grant cannot outlive the value it was
+        // granted for, whoever is driving the API.
+        //
+        // Scoped per key rather than wholesale, because `update_state` is a
+        // partial merge: clearing everything would revoke grants for keys this
+        // call never touched. Updating `p` drops `p` and its `p.0` / `p.items`
+        // descendants; a grant on an untouched `q` survives.
+        if !self.safe_keys.is_empty() {
+            for key in updates.keys() {
+                self.safe_keys.remove(key);
+                let prefix = format!("{key}.");
+                self.safe_keys.retain(|k| !k.starts_with(&prefix));
+            }
+        }
         self.state.extend(updates);
     }
 
-    /// Mark context keys as safe (skip auto-escaping).
-    /// Called from Python when SafeString values are detected.
+    /// Set the context keys that are safe (skip auto-escaping) for THIS
+    /// render, replacing whatever the previous render set.
+    ///
+    /// Called from Python when `SafeString` values are detected.
+    ///
+    /// **Replaces, never accumulates (#2300).** This used to `extend`, so a
+    /// key marked safe once stayed safe for the lifetime of the view — which
+    /// spans every event on a WebSocket connection. A view that rendered
+    /// trusted markup into `p` and later rendered an attacker-controlled `p`
+    /// emitted it live, with no filter chain and no `|safe` in the template:
+    ///
+    /// ```text
+    /// sync(view, mark_safe("<b>safe</b>"));  view.render()  // '<b>safe</b>'
+    /// sync(view, "<img src=x onerror=alert(1)>");
+    /// view.render()                                          // LIVE
+    /// ```
+    ///
+    /// The caller must invoke this on EVERY render including when the key set
+    /// is empty — that is the case that clears a stale grant, and it is the
+    /// half a replace alone cannot fix. `set_raw_py_values` immediately below
+    /// already had exactly this discipline, and the comment at its call site
+    /// says why; `safe_keys` is the adjacent per-render cache that did not get
+    /// it (#1646).
     fn mark_safe_keys(&mut self, keys: Vec<String>) {
-        self.safe_keys.extend(keys);
+        self.safe_keys = keys.into_iter().collect();
     }
 
     /// Attach a map of raw Python objects for `getattr`-fallback
