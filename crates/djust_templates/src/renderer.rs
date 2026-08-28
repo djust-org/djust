@@ -1136,6 +1136,12 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     Value::List(djust_core::object_key::dict_iteration_values(&map)),
                     true,
                 ),
+                // A dict VIEW iterates its own items (#2340). `normalised`
+                // stays true for the same reason a dict's does: the loop is
+                // iterating something built from the resolved value, not that
+                // value's own indexable elements — which is exactly what the
+                // safe-key mapping below must not assume.
+                Value::DictView { items, .. } => (Value::List(items), true),
                 other => (other, false),
             };
 
@@ -2513,6 +2519,12 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
             let haystack = get_value(parts[1], context)?;
             return match haystack {
                 Value::List(items) | Value::Tuple(items) => {
+                    Ok(items.iter().any(|item| values_equal(&needle, item)))
+                }
+                // `'a' in d.keys()` / `1 in d.values()` / `('a', 1) in
+                // d.items()` all work in Python, by the same element
+                // comparison a list uses (#2340).
+                Value::DictView { items, .. } => {
                     Ok(items.iter().any(|item| values_equal(&needle, item)))
                 }
                 Value::String(s) => {
