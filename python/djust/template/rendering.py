@@ -24,6 +24,13 @@ if TYPE_CHECKING:
 
 from .serialization import serialize_context
 
+# OUTSIDE the JIT try-block below on purpose (#2322): the two sites that call
+# this are the JIT-unavailable and serialization-raised fallbacks, so importing
+# it alongside `DjangoJSONEncoder` would leave it undefined in exactly the two
+# cases that need it. `djust.serialization` is pure Python and is already a
+# hard dependency of this module's happy path.
+from ..serialization import model_identity
+
 logger = logging.getLogger(__name__)
 
 # Try to import JIT optimization utilities
@@ -202,22 +209,19 @@ class DjustTemplate:
             Serialized dictionary with 'id' and 'pk' keys (both native types)
         """
         if not JIT_AVAILABLE or DjangoJSONEncoder is None:
-            # Fallback to basic serialization
-            return {
-                "id": model_instance.pk,
-                "pk": model_instance.pk,
-                "__str__": str(model_instance),
-            }
+            # Fallback to the identity map — one producer for it (#2322), so
+            # this answers exactly what the main path does. Before that, whether
+            # a serialized model carried `__model__` depended on whether the JIT
+            # extension happened to be importable.
+            return model_identity(model_instance)
 
         try:
             return cast(dict, normalize_django_value(model_instance))
         except Exception as e:
             logger.warning("Model serialization failed for '%s': %s", variable_name, e)
-            return {
-                "id": model_instance.pk,
-                "pk": model_instance.pk,
-                "__str__": str(model_instance),
-            }
+            # Same map on the raised path: a consumer must not be able to tell
+            # that serialization failed by the SHAPE it got back (#2322).
+            return model_identity(model_instance)
 
     def _resolve_template_inheritance(self) -> str:
         """

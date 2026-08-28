@@ -9,7 +9,7 @@ import re
 import sys
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
-from ..serialization import normalize_django_value
+from ..serialization import model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
@@ -315,12 +315,12 @@ class JITMixin:
                 # the template. The other fallbacks (JIT unavailable, extraction
                 # None, exception) still call normalize_django_value because they
                 # genuinely need the data; the denylist there keeps them safe.
-                return {
-                    "pk": obj.pk,
-                    "id": obj.pk,
-                    "__str__": str(obj),
-                    "__model__": obj.__class__.__name__,
-                }
+                # One producer for the identity map (#2322). This site DID
+                # stamp `__model__`, and still disagreed with the main path
+                # about key ORDER (`pk, id` here, `id, pk` there) — which
+                # survives `json.dumps` and msgpack, so it is a wire-shape
+                # difference between two producers of "the same" map.
+                return model_identity(obj)
 
             model_class = obj.__class__
             _tc_id = id(template_content)

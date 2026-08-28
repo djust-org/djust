@@ -243,10 +243,22 @@ class TestMaxRecursionDepth:
         obj = FakeModel.__new__(FakeModel)
         obj.pk = 99
 
-        # _depth at or above max_depth should produce minimal output
+        # _depth at or above max_depth should produce the identity map — the
+        # same one every other model-shorthand producer emits since #2322,
+        # `__model__` included. It used to omit the marker here and carry it in
+        # `_serialize_model_safely`, which is what made the key unusable as a
+        # "is this a serialized model?" discriminator.
+        from djust.serialization import model_identity
+
         max_depth = DjangoJSONEncoder._get_max_depth()
         result = normalize_django_value(obj, _depth=max_depth)
-        assert result == {"id": 99, "pk": 99, "__str__": "fake"}
+        assert result == {
+            "id": 99,
+            "pk": 99,
+            "__str__": "fake",
+            "__model__": "FakeModel",
+        }
+        assert result == model_identity(obj)
 
     def test_depth_counter_is_reset_after_call(self):
         """DjangoJSONEncoder._depth is properly reset even after errors."""
