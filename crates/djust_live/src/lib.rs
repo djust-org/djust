@@ -80,6 +80,18 @@ use std::time::Duration;
 /// `panic = "abort"` in a profile would likewise disable this entirely; the
 /// workspace release profile does not set it, and
 /// `test_panic_boundary_2343.py` fails if that ever changes.
+///
+/// It also does not cover ARGUMENT CONVERSION. PyO3 runs `FromPyObject` on
+/// every parameter — including the recursive Python-to-`Value` converter — in
+/// the generated wrapper, BEFORE the annotated function body runs, so a panic
+/// in there is still a `PanicException`. Stating that plainly rather than
+/// letting "the entry points are guarded" imply otherwise: the guard covers
+/// everything the engine does with the arguments, not the act of receiving
+/// them. Closing that gap would mean moving the conversion inside the closure
+/// (taking `&Bound<'_, PyAny>` and extracting by hand at each site), which is
+/// a much larger change than the panic it would net, and no such panic is
+/// known — the 30,780-cell sweep in `test_panic_boundary_2343.py` reaches
+/// conversion on every cell.
 fn guard_panic<T>(entry: &'static str, f: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
     // `AssertUnwindSafe` because essentially nothing crossing this boundary is
     // `UnwindSafe` — `Python<'_>`, `&Bound<'_, PyAny>` and `&mut self` all
