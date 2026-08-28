@@ -2703,18 +2703,39 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         return Ok((value.clone(), context.is_safe(expr)));
     }
 
-    // Try to parse as literal
-    if expr == "True" || expr == "true" {
-        return Ok((Value::Bool(true), false));
-    }
-    if expr == "False" || expr == "false" {
-        return Ok((Value::Bool(false), false));
-    }
-    if expr == "None" || expr == "none" {
-        // `Value::None`, not `Missing` (#2203). The literal in
-        // `{% if x is None %}` denotes Python's None singleton; `Missing`
-        // denotes an ABSENT variable, which Django treats separately.
-        return Ok((Value::None, false));
+    // Django's `True` / `False` / `None` have NO arm here, deliberately (#2347).
+    //
+    // They used to: this function spelled them inline while `Context::resolve`
+    // — the resolver `{{ }}` output and the filter-argument channels use — had
+    // no arm at all, which is why `{% if True %}` was right and `{{ True }}`
+    // rendered the empty string. Same three names, two resolvers, one of them
+    // wrong: #1646.
+    //
+    // The fix put them in `Context::resolve`, and this function ALREADY ends
+    // with a `context.resolve(expr)` fallback — so an arm here would be a
+    // second mechanism shadowing the first. It was measured as exactly that:
+    // with the arm present, gating it off reddened only a source-grep pin,
+    // because every behavioural case still resolved through the fallback
+    // (#2129/#2135). Deleted rather than tested around (#2233), which leaves
+    // one statement of the rule and makes the `{% if %}` / `{% with %}` /
+    // `{% firstof %}` operands and `{{ }}` answer from the same place by
+    // construction rather than by agreement.
+    //
+    // Precedence is unchanged and is Django's: `context.get` above wins,
+    // because `builtins` is `Context.dicts[0]` and `__getitem__` walks
+    // `reversed(self.dicts)`, so a user variable named `True` shadows it.
+    //
+    // The LOWERCASE spellings below are a djust extension rather than Django
+    // parity — `{% if true %}` is an undefined variable to Django and answers
+    // False — so they stay HERE, in the tag-operand resolver where they have
+    // always been, and are deliberately absent from `template_builtin`, which
+    // is exactly the Django set. `Value::None` for `none`, not `Missing`: the
+    // two are distinct (#2203) and this spelling denotes the singleton.
+    match expr {
+        "true" => return Ok((Value::Bool(true), false)),
+        "false" => return Ok((Value::Bool(false), false)),
+        "none" => return Ok((Value::None, false)),
+        _ => {}
     }
 
     if let Ok(i) = expr.parse::<i64>() {
