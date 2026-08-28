@@ -470,7 +470,14 @@ fn value_to_arg_string(v: &Value) -> String {
     match v {
         // Tuple included: a structured arg must be JSON-encoded, not collapsed
         // to its Display form — the #2042 `[List]`-collapse class (#2203).
-        Value::List(_) | Value::Tuple(_) | Value::Object(_) => {
+        //
+        // And a dict VIEW (#2340), for exactly the same reason one variant
+        // over: `{% regroup p.items by … %}` hands its source through here,
+        // and before this arm existed the view fell to `_ => v.to_string()`
+        // and the handler received the text `dict_items([…])` instead of the
+        // rows. That is the #2042 collapse with a different placeholder — and
+        // the compiler could not ask about it, because this match has a `_`.
+        Value::List(_) | Value::Tuple(_) | Value::Object(_) | Value::DictView { .. } => {
             serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
         }
         _ => v.to_string(),

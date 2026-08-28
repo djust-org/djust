@@ -205,24 +205,57 @@ FILTER_ARGS = {
 }
 
 
+#: A SECOND arg for the filters whose behaviour turns on it.
+#:
+#: One arg per filter is a curated sample wearing a sweep's clothes, and it hid
+#: ``dictsort`` entirely: the chosen ``'0'`` is a case where DJANGO ALSO FAILS
+#: (a quoted ``'0'`` is a key lookup, and a tuple has no key ``'0'``), so the
+#: cell agreed about a filter that diverges for every arg that resolves.
+SECOND_ARGS = {
+    "dictsort": "k",
+    "dictsortreversed": "k",
+    "slice": "1:",
+    "join": "",
+    "default": "",
+    "truncatewords": "1",
+    "get_digit": "2",
+    "floatformat": "-3",
+    "stringformat": "r",
+    "yesno": "y,n,m",
+    "add": "abc",
+    "center": "3",
+    "cut": "d",
+    "divisibleby": "1",
+    "ljust": "3",
+    "rjust": "3",
+}
+
+
 class TestEveryFilter:
     """A curated list samples one axis and blinds you on the next.
 
-    Every Django built-in against every view kind, rather than the six names
-    the issue happened to think of — which is what showed ``slice`` does not
-    raise and that five more filters do.
+    Every Django built-in against every view kind AND every dict size AND a
+    second arg where the arg matters — rather than the six names the issue
+    happened to think of, which is what showed ``slice`` does not raise and
+    that five more filters do.
     """
 
+    #: EVERY size, not one. `pluralize` answers `""` for a 1-entry view and
+    #: `"s"` otherwise, so a sweep pinned to a 2-entry dict agrees by luck at
+    #: the one length where the two implementations differ — which is exactly
+    #: what happened: the divergence was found by auditing the `List | Tuple`
+    #: or-patterns, not here. A size-dependent axis needs its sizes swept.
+    DICTS = [{}, {"a": 1}, {"a": 1, "b": 2}, {"a": 1, "b": 2, "c": 3}]
     P = {"a": 1, "b": 2}
 
-    @classmethod
-    def _equivalent_list(cls, kind: str) -> list:
+    @staticmethod
+    def _equivalent_list(kind: str, d: dict) -> list:
         """What ``list(view)`` is — the twin every exempt cell is judged against."""
         if kind == "keys":
-            return list(cls.P.keys())
+            return list(d.keys())
         if kind == "values":
-            return list(cls.P.values())
-        return list(cls.P.items())
+            return list(d.values())
+        return list(d.items())
 
     def _sweep(self) -> tuple[int, dict[str, set[str]], list]:
         """Returns (cells, exempt names per kind, unexplained disagreements).
@@ -239,30 +272,35 @@ class TestEveryFilter:
         bad: list = []
         exempt: dict[str, set[str]] = {k: set() for k in KINDS}
         cells = 0
-        for kind in KINDS:
-            twin = self._equivalent_list(kind)
-            for name in sorted(register.filters):
-                arg = FILTER_ARGS.get(name)
-                suffix = f":'{arg}'" if arg else ""
-                src = "{{ p.%s|%s%s }}" % (kind, name, suffix)
-                cells += 1
-                d, r = both(src, {"p": self.P})
-                # Where DJANGO raises, djust renders nothing instead. That is
-                # the accepted shape (#2325) and is never more permissive.
-                if d.startswith("<<EXC") and r == "":
-                    continue
-                if d == r:
-                    continue
-                twin_d, twin_r = both("{{ q|%s%s }}" % (name, suffix), {"q": twin})
-                if twin_d != twin_r:
-                    exempt[kind].add(name)
-                    continue
-                bad.append((src, d, r))
+        for p_dict in self.DICTS:
+            for kind in KINDS:
+                twin = self._equivalent_list(kind, p_dict)
+                for name in sorted(register.filters):
+                    args = [FILTER_ARGS.get(name)]
+                    if name in SECOND_ARGS:
+                        args.append(SECOND_ARGS[name])
+                    for arg in args:
+                        suffix = f":'{arg}'" if arg else ""
+                        src = "{{ p.%s|%s%s }}" % (kind, name, suffix)
+                        cells += 1
+                        d, r = both(src, {"p": p_dict})
+                        # Where DJANGO raises, djust renders nothing instead.
+                        # That is the accepted shape (#2325), never more
+                        # permissive.
+                        if d.startswith("<<EXC") and r == "":
+                            continue
+                        if d == r:
+                            continue
+                        twin_d, twin_r = both("{{ q|%s%s }}" % (name, suffix), {"q": twin})
+                        if twin_d != twin_r:
+                            exempt[kind].add(name)
+                            continue
+                        bad.append((src, d, r))
         return cells, exempt, bad
 
     def test_every_builtin_filter_over_every_view_kind(self) -> None:
         cells, exempt, bad = self._sweep()
-        assert cells >= 3 * 50, cells
+        assert cells >= len(self.DICTS) * 3 * 50, cells
         assert not bad, f"{len(bad)}/{cells} unexplained:\n" + "\n".join(
             f"  {s}: django={a!r} djust={b!r}" for s, a, b in bad[:30]
         )
@@ -280,6 +318,81 @@ class TestEveryFilter:
         _, exempt, _ = self._sweep()
         assert exempt["keys"], "the exemption never fired — it is a dead allowance"
         assert exempt["keys"] == exempt["items"] == exempt["values"], exempt
+
+    def test_pluralize_counts_a_views_entries(self) -> None:
+        """The one the fixed-size sweep could not see.
+
+        Django's ``pluralize`` does ``len(value)`` in a try, and a view answers
+        it — so a 1-entry view is singular. djust reached this through the
+        ``_`` arm, which returns the suffix unconditionally: right for two
+        entries by luck, wrong for one.
+        """
+        for n, d in ((0, {}), (1, {"a": 1}), (2, {"a": 1, "b": 2})):
+            for kind in KINDS:
+                src = "[{{ p.KIND|pluralize }}]".replace("KIND", kind)
+                assert_agrees(src, {"p": d})
+        assert djust_render("[{{ p.keys|pluralize }}]", {"p": {"a": 1}}) == "[]"
+        assert djust_render("[{{ p.keys|pluralize }}]", {"p": {"a": 1, "b": 2}}) == "[s]"
+
+    def test_dictsort_sorts_a_view(self) -> None:
+        """Django's ``dictsort`` is ``sorted(value, key=…)``, and ``sorted()``
+        takes any iterable — so ``{{ d.values|dictsort:"k" }}`` is a real,
+        working idiom that returns a LIST.
+
+        djust answered ``''`` for every kind and every arg. The or-pattern
+        audit first classified this arm as correct on the ONE arg the sweep
+        carried, ``'0'`` — a case where Django also fails, so it said "agree"
+        about a filter that diverged everywhere else.
+        """
+        rows = {"a": {"k": 2}, "b": {"k": 1}}
+        for src in (
+            '{{ p.values|dictsort:"k" }}',
+            '{{ p.values|dictsortreversed:"k" }}',
+            "{{ p.keys|dictsort:0 }}",
+            "{{ p.items|dictsort:0 }}",
+            "{{ p.items|dictsortreversed:0 }}",
+        ):
+            assert_agrees(src, {"p": rows})
+            assert_agrees(src, {"p": {"b": 2, "a": 1}})
+
+    def test_a_view_survives_a_tag_operand_as_structured_data(self) -> None:
+        """``{% regroup %}`` hands its source through ``value_to_arg_string``.
+
+        That match has a ``_`` fallback, so the compiler could not ask about a
+        view — and the view fell to ``to_string()``, handing the Python
+        handler the TEXT ``dict_items([…])`` instead of the rows. Same shape as
+        the #2042 ``[List]`` collapse, one placeholder over.
+        """
+        p = {"a": {"k": 2}, "b": {"k": 1}}
+        assert_agrees("{% regroup p.values by k as g %}{{ g|length }}", {"p": p})
+        assert djust_render("{% regroup p.values by k as g %}{{ g|length }}", {"p": p}) == "2"
+
+    def test_the_differential_corpus_can_reach_the_raising_half(self) -> None:
+        """The dict-view axis (#2334) built only sequence-like cells.
+
+        `{{ d.items|first }}`, `|last`, `|json_script` and `|slice` are where
+        a view differs from a list at all, and the corpus constructed none of
+        them — so the whole of #2340 was invisible to the two-build
+        differential. A corpus gap is silent by construction, which is why it
+        is pinned rather than remembered.
+        """
+        from pathlib import Path
+
+        src = (
+            Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
+        ).read_text()
+        for shape in (
+            "{{ p.items|first }}",
+            "{{ p.keys|last }}",
+            "{{ p.keys|json_script:'i' }}",
+            "{{ p.keys|slice:':1' }}",
+            "{{ p.keys|safe }}",
+            "{{ p.values }}",
+        ):
+            assert shape in src, (
+                f"the differential builds no {shape!r} cell — the raising and "
+                "str()-consuming halves of the view model are unmeasured"
+            )
 
     def test_the_sweep_actually_covers_the_raising_filters(self) -> None:
 
@@ -308,6 +421,43 @@ class TestNotMorePermissive:
                 d, r = both(s, {"p": p})
                 assert r == d, f"{s}: django={d!r} djust={r!r}"
                 assert "<img" not in r, f"LIVE PAYLOAD from {s}: {r!r}"
+
+    def test_looping_a_view_never_resolves_a_siblings_safety_mark(self) -> None:
+        """The loop safe-key mapping asserts the loop variable IS
+        ``<iterable>.<index>``; for a view that path does not exist, because a
+        view is not subscriptable. So the mapping is gated off — the same
+        ``!normalised`` condition a dict and a string already take.
+
+        Measured rather than assumed, both directions: a hostile key must stay
+        escaped, AND the gate must not have started emitting something Django
+        does not. It is defence in depth — ``_collect_safe_keys`` writes
+        ``p.<key>`` while the mapping would look up ``p.keys.<index>``, so no
+        collision is reachable through a view today — and the probe exists so
+        that a future collector that DID write such a path fails here rather
+        than in a page.
+
+        That the two spellings never meet is also why a *legitimately* marked
+        value LOSES its mark through ``.values`` / ``.items``. Measured on both
+        builds — flipping the gate changes no output, because
+        ``p.values.<index>`` is not in ``safe_keys`` either way — so it is
+        upstream of this gate, and is filed as #2361 rather than widened into
+        here (#1079).
+        """
+        from django.utils.safestring import mark_safe
+
+        from djust.mixins.rust_bridge import _collect_safe_keys
+
+        for d in (
+            {"1": mark_safe("<b>ok</b>"), XSS: "v"},
+            {"0": mark_safe("<b>ok</b>"), XSS: "v"},
+            {XSS: mark_safe("<b>ok</b>"), "1": "v"},
+        ):
+            safe_keys = _collect_safe_keys(d, "p")
+            for kind in KINDS:
+                # `.replace`, not `%`: the template's own `%}` is a format spec.
+                src = "{% for x in p.KIND %}[{{ x }}]{% endfor %}".replace("KIND", kind)
+                out = _rust.render_template_with_dirs(src, {"p": d}, [], safe_keys)
+                assert "<img" not in out, f"LIVE PAYLOAD from {src} on {d!r}: {out!r}"
 
     def test_marking_the_view_safe_matches_django_exactly(self) -> None:
         """``|safe`` on a view emits its repr LIVE in Django too, so djust

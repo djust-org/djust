@@ -979,7 +979,15 @@ fn apply_builtin_filter(
                         Ok(Value::String(suffix.to_string()))
                     }
                 }
-                Value::List(l) | Value::Tuple(l) => {
+                // A dict VIEW answers `len()` in Python, so `pluralize` counts
+                // its entries like any other sized value (#2340). Reached
+                // through the `_` arm before, which returns the SUFFIX
+                // unconditionally — right for a 2-entry view by luck, wrong for
+                // a 1-entry one. Found by auditing the 19 `List | Tuple`
+                // or-patterns, NOT by the filter sweep: that used a fixed
+                // 2-entry dict, so the one length where the two answers differ
+                // was the one length it never tried.
+                Value::List(l) | Value::Tuple(l) | Value::DictView { items: l, .. } => {
                     if l.len() == 1 {
                         Ok(Value::String(String::new()))
                     } else {
@@ -1244,10 +1252,26 @@ fn apply_builtin_filter(
                 sort_key.parse::<usize>().ok()
             };
             let sorted = match value {
-                Value::List(items) | Value::Tuple(items) => match index {
-                    Some(n) => dictsort_by_index(items, n),
-                    None => dictsort_by_key(items, sort_key),
-                },
+                // A dict VIEW sorts (#2340). Django's `dictsort` is
+                // `sorted(value, key=…)` and `sorted()` takes ANY iterable, so
+                // `{{ d.values|dictsort:"k" }}` is a real, working idiom — and
+                // it returns a LIST, which the `Ok(Value::List(items))` below
+                // already produces.
+                //
+                // The or-pattern audit first classified this arm's `_ => None`
+                // as CORRECT, on the measurement `{{ p.items|dictsort:'0' }}`
+                // -> `''`. That is a case where DJANGO ALSO FAILS — a quoted
+                // `'0'` is a key lookup and a tuple has no key `'0'` — so one
+                // arg value said "agree" about a filter that diverges for
+                // every arg that resolves. The exhaustive filter sweep missed
+                // it for the same reason: `FILTER_ARGS` carries ONE arg per
+                // filter, which is a curated sample wearing a sweep's clothes.
+                Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
+                    match index {
+                        Some(n) => dictsort_by_index(items, n),
+                        None => dictsort_by_key(items, sort_key),
+                    }
+                }
                 // Not a sequence at all: `sorted()` raises `TypeError`.
                 _ => None,
             };

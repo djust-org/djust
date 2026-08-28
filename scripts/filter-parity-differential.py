@@ -759,6 +759,25 @@ PATH_SHAPES = {
     "for-keys-len": "[{{ p.keys|length }}]",
     "for-keys-join": "[{{ p.keys|join:'-' }}]",
     "for-items-slice": "{% for x in p.items|slice:':2' %}[{{ x }}]{% empty %}E{% endfor %}",
+    # A view is not a list (#2340), and the axis could not see the half of that
+    # which MATTERS: Python's view is not subscriptable and not
+    # JSON-serializable, so Django RAISES on these, while `slice` catches the
+    # TypeError and returns the view UNCHANGED. None of those cells existed.
+    "var-values": "[{{ p.values }}]",
+    "var-items-first": "[{{ p.items|first }}]",
+    "var-keys-last": "[{{ p.keys|last }}]",
+    "var-keys-json": "[{{ p.keys|json_script:'i' }}]",
+    "var-keys-slice": "[{{ p.keys|slice:':1' }}]",
+    # A third of the filter registry sees the view's `str()` rather than its
+    # elements, so the container's spelling is an INPUT and not a cosmetic
+    # detail. `safe` is the sharpest: Django emits the repr LIVE there too, so
+    # the cell is a genuine permissiveness comparison rather than a parity nit.
+    "var-keys-safe": "[{{ p.keys|safe }}]",
+    "var-keys-pprint": "[{{ p.keys|pprint }}]",
+    "var-keys-trunc": "[{{ p.keys|truncatewords:2 }}]",
+    # NOT `random` / `timesince` / `timeuntil`: this axis has no `NONDET`
+    # collapse, so a nondeterministic cell would differ between two runs of the
+    # SAME build and read as a regression.
 }
 
 

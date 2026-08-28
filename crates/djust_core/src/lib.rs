@@ -953,13 +953,6 @@ impl Value {
     fn legacy_display(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Missing | Value::None => write!(f, ""),
-            // The container spelling is Python's on BOTH display paths: a view
-            // that read `[…]` under the legacy flag would be the very
-            // divergence #2340 is about (#1646).
-            Value::DictView { kind, items } => {
-                let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
-                write!(f, "{}([{}])", kind.container_name(), inner.join(", "))
-            }
             Value::Bool(b) => write!(f, "{b}"),
             Value::Integer(i) => write!(f, "{i}"),
             Value::Float(fl) => write!(f, "{fl}"),
@@ -970,7 +963,19 @@ impl Value {
             Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
             Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
-            Value::List(_) | Value::Tuple(_) => write!(f, "[List]"),
+            // A dict VIEW joins the `[List]` placeholder rather than naming
+            // itself (#2340), and that is deliberate: this arm is the
+            // pre-#2203 rendering, and before #2340 a view WAS a
+            // `Value::List`, so `[List]` is exactly what `{{ d.items }}`
+            // printed here. Spelling it `dict_items([…])` under the flag would
+            // make a legacy-rendering switch less legacy.
+            //
+            // The first version of this change did name it, on a comment
+            // asserting "the container spelling is Python's on BOTH display
+            // paths" — a prose invariant that had never been run. The gate-off
+            // surfaced it as a surviving mutation and the test written to close
+            // that gap failed on the first execution (CLAUDE.md #1867).
+            Value::List(_) | Value::Tuple(_) | Value::DictView { .. } => write!(f, "[List]"),
             Value::Object(_) => match self.object_str() {
                 Some(s) => write!(f, "{s}"),
                 None => write!(f, "[Object]"),
