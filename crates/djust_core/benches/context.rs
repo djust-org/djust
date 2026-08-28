@@ -17,7 +17,10 @@ fn create_test_value(depth: usize, width: usize) -> Value {
     } else {
         let mut obj = IndexMap::new();
         for i in 0..width {
-            obj.insert(format!("field_{i}"), create_test_value(depth - 1, width));
+            obj.insert(
+                format!("field_{i}").into(),
+                create_test_value(depth - 1, width),
+            );
         }
         Value::Object(obj)
     }
@@ -46,19 +49,19 @@ fn bench_context_nested_get(c: &mut Criterion) {
 
     // Create nested object: user.profile.settings.theme
     let mut theme = IndexMap::new();
-    theme.insert("name".to_string(), Value::String("dark".to_string()));
+    theme.insert("name".into(), Value::String("dark".to_string()));
 
     let mut settings = IndexMap::new();
-    settings.insert("theme".to_string(), Value::Object(theme));
-    settings.insert("notifications".to_string(), Value::Bool(true));
+    settings.insert("theme".into(), Value::Object(theme));
+    settings.insert("notifications".into(), Value::Bool(true));
 
     let mut profile = IndexMap::new();
-    profile.insert("settings".to_string(), Value::Object(settings));
-    profile.insert("bio".to_string(), Value::String("Developer".to_string()));
+    profile.insert("settings".into(), Value::Object(settings));
+    profile.insert("bio".into(), Value::String("Developer".to_string()));
 
     let mut user = IndexMap::new();
-    user.insert("profile".to_string(), Value::Object(profile));
-    user.insert("name".to_string(), Value::String("John".to_string()));
+    user.insert("profile".into(), Value::Object(profile));
+    user.insert("name".into(), Value::String("John".to_string()));
 
     let mut ctx = Context::new();
     ctx.set("user".to_string(), Value::Object(user));

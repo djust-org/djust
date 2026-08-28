@@ -130,18 +130,15 @@ fn a_user_dict_with_the_tag_name_but_a_second_key_is_still_a_dict() {
     // Same discrimination `DECIMAL_TAG` uses: exactly one key, that key, a
     // string payload. Anything else is a real dict.
     let mut m = IndexMap::new();
-    m.insert(
-        djust_core::bigint_tag().to_string(),
-        Value::String(BIG.into()),
-    );
-    m.insert("other".to_string(), Value::Integer(1));
+    m.insert(djust_core::bigint_tag().into(), Value::String(BIG.into()));
+    m.insert("other".into(), Value::Integer(1));
     let bytes = rmp_serde::to_vec(&Value::Object(m)).expect("encode");
     let back: Value = rmp_serde::from_slice(&bytes).expect("decode");
     assert!(matches!(back, Value::Object(_)), "{back:?}");
 
     // Wrong payload type, one key: still a dict.
     let mut wrong = IndexMap::new();
-    wrong.insert(djust_core::bigint_tag().to_string(), Value::Integer(5));
+    wrong.insert(djust_core::bigint_tag().into(), Value::Integer(5));
     let bytes = rmp_serde::to_vec(&Value::Object(wrong)).expect("encode");
     let back: Value = rmp_serde::from_slice(&bytes).expect("decode");
     assert!(matches!(back, Value::Object(_)), "{back:?}");

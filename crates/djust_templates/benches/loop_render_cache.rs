@@ -24,9 +24,9 @@ fn make_items(n: usize) -> Vec<Value> {
     (0..n)
         .map(|i| {
             let mut m = IndexMap::new();
-            m.insert("id".to_string(), Value::Integer(i as i64));
-            m.insert("name".to_string(), Value::String(format!("item-{i}")));
-            m.insert("detail".to_string(), Value::String(format!("detail-{i}")));
+            m.insert("id".into(), Value::Integer(i as i64));
+            m.insert("name".into(), Value::String(format!("item-{i}")));
+            m.insert("detail".into(), Value::String(format!("detail-{i}")));
             Value::Object(m)
         })
         .collect()

@@ -123,14 +123,14 @@ fn a_dict_renders_in_insertion_order() {
     // template could render `{'a': 1, 'b': 2}` and `{'b': 2, 'a': 1}` on
     // successive runs. Python dicts are insertion-ordered.
     let mut m = IndexMap::new();
-    m.insert("a".to_string(), Value::Integer(1));
-    m.insert("b".to_string(), Value::Integer(2));
+    m.insert("a".into(), Value::Integer(1));
+    m.insert("b".into(), Value::Integer(2));
     assert_eq!(Value::Object(m).to_string(), "{'a': 1, 'b': 2}");
 
     // Insertion order, not sorted order — build it backwards to tell them apart.
     let mut rev = IndexMap::new();
-    rev.insert("b".to_string(), Value::Integer(2));
-    rev.insert("a".to_string(), Value::Integer(1));
+    rev.insert("b".into(), Value::Integer(2));
+    rev.insert("a".into(), Value::Integer(1));
     assert_eq!(Value::Object(rev).to_string(), "{'b': 2, 'a': 1}");
 }
 
@@ -142,7 +142,7 @@ fn dict_rendering_is_stable_across_repeated_construction() {
     let build = || {
         let mut m = IndexMap::new();
         for k in ["alpha", "beta", "gamma", "delta", "epsilon"] {
-            m.insert(k.to_string(), Value::Integer(1));
+            m.insert(k.into(), Value::Integer(1));
         }
         Value::Object(m).to_string()
     };
@@ -158,8 +158,8 @@ fn an_object_with_a_dunder_str_still_uses_it() {
     // Guard: a Django model instance carries `__str__`, and that must keep
     // winning over dict repr — it is how `{{ obj }}` renders a model.
     let mut m = IndexMap::new();
-    m.insert("__str__".to_string(), Value::String("Model object".into()));
-    m.insert("pk".to_string(), Value::Integer(1));
+    m.insert("__str__".into(), Value::String("Model object".into()));
+    m.insert("pk".into(), Value::Integer(1));
     assert_eq!(Value::Object(m).to_string(), "Model object");
 }
 
@@ -217,7 +217,7 @@ fn the_flag_restores_the_previous_rendering_verbatim() {
         "[List]"
     );
     let mut m = IndexMap::new();
-    m.insert("a".to_string(), Value::Integer(1));
+    m.insert("a".into(), Value::Integer(1));
     assert_eq!(Value::Object(m).to_string(), "[Object]");
 }
 
@@ -239,7 +239,7 @@ fn a_dunder_str_object_renders_the_same_either_way() {
     // Guard: a model instance must render via `__str__` regardless of the flag,
     // so flipping it never changes how `{{ obj }}` shows a model.
     let mut m = IndexMap::new();
-    m.insert("__str__".to_string(), Value::String("Model object".into()));
+    m.insert("__str__".into(), Value::String("Model object".into()));
     assert_eq!(Value::Object(m.clone()).to_string(), "Model object");
 
     djust_core::set_django_value_repr(false);
