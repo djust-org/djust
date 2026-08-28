@@ -369,6 +369,58 @@ class TestTheFalsinessResidueIsNamed:
     false.
     """
 
+    def test_the_legacy_render_mode_spells_False_differently_and_is_handled(self) -> None:
+        """`Display` has TWO modes, and only one of them is the default.
+
+        `django_value_repr` (on by default since #2203) spells a bool
+        `True`/`False`; `legacy_display` — the flag's OFF path — spells it
+        Rust's `true`/`false`, and renders `None` as the empty string. A
+        falsiness rule that only knew the default would answer differently
+        under a flag whose entire purpose is rendering parity, which is the
+        parallel-path shape one mode over (#1646).
+
+        Django is unaffected by the flag: `False` is falsy either way, so the
+        expected answer is the same and only djust's input text changes.
+        """
+        _rust.set_django_value_repr(False)
+        try:
+            for value in (False, None, ""):
+                out = djust_render("{{ p|timesince:q }}", {"p": NOON, "q": value})
+                assert out == djust_render("{{ p|timesince }}", {"p": NOON}), repr(value)
+            # And a truthy non-date still raises in legacy mode.
+            assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": "notadate"})
+            assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": True})
+        finally:
+            _rust.set_django_value_repr(True)
+        # The default mode is restored, and still right.
+        assert djust_render("{{ p|timesince:q }}", {"p": NOON, "q": False}) == djust_render(
+            "{{ p|timesince }}", {"p": NOON}
+        )
+
+    def test_the_legacy_mode_cannot_tell_an_empty_sequence_from_a_full_one(self) -> None:
+        """The one residue the two-mode rule does NOT close, stated.
+
+        `legacy_display` renders EVERY sequence as the literal `[List]`, so an
+        empty list is indistinguishable from a full one — and both are
+        non-dates, so Django measures from now for the first and raises for the
+        second. djust raises for both.
+
+        In the DEFAULT mode there is no such gap: `[]` and `['a']` have
+        different texts, and the first is in the falsy set. This is a
+        legacy-flag residue, not a general one.
+        """
+        _rust.set_django_value_repr(False)
+        try:
+            assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": []})
+            assert not raises_django("{{ p|timesince:q }}", {"p": NOON, "q": []})
+        finally:
+            _rust.set_django_value_repr(True)
+        # The default mode: no divergence, which is what bounds this to the flag.
+        assert not raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": []})
+        assert djust_render("{{ p|timesince:q }}", {"p": NOON, "q": []}) == djust_render(
+            "{{ p|timesince }}", {"p": NOON}
+        )
+
     def test_every_display_arm_that_can_be_falsy_is_handled(self) -> None:
         """Mechanical, against `Value`'s `Display` (#1859: a pin that is not
         derived from the thing it pins is decorative).

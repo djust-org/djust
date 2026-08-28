@@ -2404,13 +2404,25 @@ enum ComparisonInstant {
 /// is the whole of that distinction, the same term `add` and `floatformat`
 /// carry.
 ///
-/// Unquoted, every falsy spelling `Display` can produce is here: the empty
-/// string (`Value::String("")` and `Value::Missing`), `None`, `False`, a
-/// numeric zero in any spelling, and the empty containers. What is NOT
-/// recoverable is an object with a non-empty `str()` whose `__bool__` is False;
-/// djust's wire format has no such value, and
-/// `TestTheFalsinessResidueIsNamed` pins the enumeration so a new `Display` arm
-/// has to be considered here.
+/// Unquoted, every falsy spelling `Display` can produce is here — and `Display`
+/// has TWO modes, which is easy to miss because only one of them is the
+/// default. `django_value_repr` (on by default, #2203) spells a bool
+/// `True`/`False`; `legacy_display` spells it Rust's `true`/`false` and renders
+/// `None` as the empty string. Both spellings are accepted, because a rule that
+/// only knew the default would answer differently under a flag whose whole
+/// point is rendering parity.
+///
+/// So: the empty string (`Value::String("")`, `Value::Missing`, and legacy
+/// `None`), `None`, `False`/`false`, a numeric zero in any spelling, and the
+/// empty containers.
+///
+/// What is NOT recoverable, in either mode, is a value whose `Display` text is
+/// shared by a truthy and a falsy object. `legacy_display` renders EVERY
+/// sequence as `[List]`, so an empty list is indistinguishable from a full one
+/// there — and both are non-dates, so Django raises for one and measures from
+/// now for the other. `TestTheFalsinessResidueIsNamed` states that rather than
+/// hoping it away, and pins the `Display` arm enumeration so a new variant has
+/// to be considered here.
 fn timesince_arg_is_falsy(arg: &str, arg_was_quoted: bool) -> bool {
     if arg.is_empty() {
         return true; // `""` is falsy whether it was quoted or not.
@@ -2418,7 +2430,7 @@ fn timesince_arg_is_falsy(arg: &str, arg_was_quoted: bool) -> bool {
     if arg_was_quoted {
         return false; // Every other `str` is truthy to Python.
     }
-    matches!(arg, "None" | "False" | "[]" | "{}" | "()")
+    matches!(arg, "None" | "False" | "false" | "[]" | "{}" | "()")
         || python_float(arg).is_some_and(|f| f == 0.0)
 }
 
