@@ -5,7 +5,9 @@
 The djust Rust template engine (`djust_templates` crate) provides a high-performance Django-compatible template processor written in Rust. This engine delivers sub-millisecond rendering and is fully compatible with Django template syntax.
 
 **Performance Benefits:**
-- **10-100x faster** template rendering vs Django
+- **Roughly 7-11x faster** template rendering vs Django on variable- and
+  filter-heavy templates, and no faster on static markup — see the README's
+  Performance section for the measured table and `benchmarks/benchmark.py`
 - **Sub-millisecond** parsing and rendering for typical templates
 - **Zero Python overhead** for template processing
 - **Compiled AST** for efficient re-rendering

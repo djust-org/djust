@@ -65,7 +65,8 @@ class MyListView(BaseViewWithNavbar):
         # JIT will automatically:
         # - Extract ALL field paths used in template
         # - Apply optimal select_related/prefetch_related
-        # - Serialize using fast Rust code (10-100x faster than Python)
+        # - Serialize using fast Rust code (faster than the Python path; this
+        #   subsystem has no published measurement — see #TBD)
         # - Auto-generate count variables (e.g., items_count)
         self.items = self._items
 
@@ -239,7 +240,7 @@ When you assign a QuerySet to a public instance variable and call `super().get_c
    - You don't need to manually optimize (though you can for complex cases)
    - `_djust_annotations` on the model class are applied automatically
 
-3. **Rust Serialization with Python Fallback**: QuerySet serialized using Rust (10-100x faster than Python)
+3. **Rust Serialization with Python Fallback**: QuerySet serialized using Rust (faster than the Python path; unmeasured — see #TBD)
    - Sub-millisecond serialization for hundreds of objects
    - Automatic type conversion and JSON formatting
    - Falls back to Python codegen for `@property` attributes that Rust can't access
@@ -339,7 +340,8 @@ def get_context_data(self, **kwargs):
 
 Using the JIT pattern provides:
 
-- **10-100x faster serialization** - Rust vs Python
+- **Faster serialization** - Rust vs Python (unmeasured; the published
+  figure was carried over from template-rendering claims and did not apply)
 - **Sub-millisecond VDOM diffing** - Fast template rendering
 - **Automatic query optimization** - No N+1 queries
 - **Smaller payloads** - Efficient serialization format

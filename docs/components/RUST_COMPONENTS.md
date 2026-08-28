@@ -5,7 +5,9 @@ High-performance UI components backed by Rust with a Pythonic API, similar to Ju
 ## Overview
 
 Rust components provide:
-- **10-100x faster rendering** through Rust implementation
+- **Faster rendering** through Rust implementation — the template engine
+  measures roughly 7-11x on variable- and filter-heavy templates (see the
+  README's Performance section); component rendering specifically is unmeasured
 - **Type-safe HTML generation** with auto-escaping
 - **Framework-agnostic** - renders to Bootstrap5, Tailwind, or Plain HTML
 - **Pythonic API** with both kwargs and builder pattern

@@ -166,7 +166,7 @@ icon_tip = Tooltip(
 ```python
 from djust._rust import RustTooltip
 
-# ~0.4μs per render (10-100x faster than Python)
+# ~0.4μs per render (the cross-engine multiple here is unmeasured)
 tooltip = RustTooltip("Hover me", "Tooltip text", "top", "hover", True)
 html = tooltip.render()
 ```

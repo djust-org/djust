@@ -172,7 +172,7 @@ class ProductListView(LiveView):
 
 ## 2. JIT Serialization Pattern (CRITICAL) ⚡
 
-### The Pattern (10-100x Performance Boost)
+### The Pattern (Rust-backed serialization)
 
 ```python
 # ✅ CORRECT: Private → Public in get_context_data

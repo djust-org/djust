@@ -68,7 +68,7 @@ These types are safe to store in state:
 |------|----------|-------|
 | Primitives | `str`, `int`, `float`, `bool`, `None` | ✓ Always safe |
 | Collections | `list`, `dict`, `tuple`, `set` | ✓ Safe if contents are serializable |
-| Django models | `User`, `Product`, etc. | ✓ Serialized via JIT (10-100x faster) |
+| Django models | `User`, `Product`, etc. | ✓ Serialized via JIT (Rust-backed) |
 | Django QuerySets | `Product.objects.filter(...)` | ✓ Use private → public pattern |
 | Date/time | `datetime`, `date`, `time` | ✓ Auto-converted to ISO strings |
 | UUID | `uuid.UUID` | ✓ Auto-converted to string |
@@ -199,7 +199,7 @@ class ProductListView(LiveView):
 
 ### Why the private → public pattern?
 
-Assigning a QuerySet to a public variable inside `get_context_data()` lets djust's Rust JIT serializer handle the conversion — 10-100x faster than Python serialization. This is the single biggest performance optimization in djust.
+Assigning a QuerySet to a public variable inside `get_context_data()` lets djust's Rust JIT serializer handle the conversion. The serialization path is unmeasured — the figure previously quoted here was carried over from template-rendering claims, which measure roughly 7-11x on filter-heavy templates (README Performance).
 
 ```python
 # GOOD: Let Rust JIT serialize

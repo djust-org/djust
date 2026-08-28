@@ -7,7 +7,7 @@
 `DjustTemplateBackend` is a Django template backend that enables **any Django view** to use djust's high-performance Rust template rendering engine, **without requiring LiveView**.
 
 This provides the best of both worlds:
-- ✅ **10-100x faster rendering** (Rust vs Python)
+- ✅ **Faster rendering** (Rust vs Python) — measured at roughly 7-11x on variable- and filter-heavy templates, and no faster on static markup; see the README's Performance section
 - ✅ **Standard Django views** (`TemplateView`, `render()`, etc.)
 - ✅ **No client.js injection** (smaller page sizes, better caching)
 - ✅ **Drop-in replacement** for Django's default backend
@@ -21,7 +21,7 @@ Add `DjustTemplateBackend` to your `TEMPLATES` setting:
 ```python
 # settings.py
 TEMPLATES = [
-    # Djust backend (Rust rendering, 10-100x faster)
+    # Djust backend (Rust rendering; ~7-11x faster on filter-heavy templates)
     {
         'BACKEND': 'djust.template_backend.DjustTemplateBackend',
         'DIRS': [BASE_DIR / 'templates'],
@@ -98,7 +98,7 @@ def my_view(request):
 ┌─────────────────────────────────────┐
 │  Rust Template Engine               │
 │  render_template(template, context) │
-│  - 10-100x faster than Django       │
+│  - ~7-11x faster (filter-heavy)     │
 │  - Automatic template caching       │
 │  - Sub-millisecond compilation      │
 └─────────────────────────────────────┘
@@ -114,7 +114,7 @@ def my_view(request):
 
 | Feature | DjustTemplateBackend | LiveView |
 |---------|---------------------|----------|
-| **Rendering** | Rust (10-100x faster) | Rust (10-100x faster) |
+| **Rendering** | Rust (~7-11x faster) | Rust (~7-11x faster) |
 | **Client.js** | ❌ No (smaller pages) | ✅ Yes (~58 KB gz) |
 | **WebSocket** | ❌ No | ✅ Yes |
 | **Interactivity** | ❌ Static only | ✅ Real-time updates |
