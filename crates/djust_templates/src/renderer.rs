@@ -490,11 +490,12 @@ fn value_to_arg_string(v: &Value) -> String {
 /// - Names **not** in the context are returned unchanged (kept literal),
 ///   so keyword operands such as regroup's `by` / `as` tokens and bare
 ///   attribute names survive rather than collapsing to an empty string.
+/// - **Filter chains apply** (#2333) — see [`resolve_tag_operand`].
 ///
 /// Shared by the [`Node::AssignTag`] and [`Node::BlockCustomTag`]
-/// dispatch paths (both use plain context lookup). [`Node::CustomTag`]
-/// keeps its own filter-aware `get_value` resolver but shares the same
-/// [`value_to_arg_string`] encoding.
+/// dispatch paths. [`Node::CustomTag`] keeps its own filter-aware
+/// `get_value` resolver but shares the same [`value_to_arg_string`]
+/// encoding.
 fn resolve_tag_arg(arg: &str, context: &Context) -> String {
     let arg_trimmed = arg.trim();
     if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
@@ -510,15 +511,56 @@ fn resolve_tag_arg(arg: &str, context: &Context) -> String {
         {
             return arg.to_string();
         }
-        return match context.get(value) {
-            Some(resolved) => format!("{}={}", key, value_to_arg_string(resolved)),
+        return match resolve_tag_operand(value, context) {
+            Some(resolved) => format!("{key}={resolved}"),
             None => arg.to_string(),
         };
     }
-    match context.get(arg_trimmed) {
-        Some(resolved) => value_to_arg_string(resolved),
+    match resolve_tag_operand(arg_trimmed, context) {
+        Some(resolved) => resolved,
         None => arg.to_string(),
     }
+}
+
+/// The one operand resolution for the assign-tag / block-custom-tag arg
+/// channel. `None` means "did not resolve", and the caller keeps the raw
+/// token — the contract that lets regroup's `by` / `as` / `<attr>` operands
+/// through untouched.
+///
+/// **Filter-aware for a pipe-bearing expression** (#2333). Django compiles an
+/// assign tag's source with `parser.compile_filter`, so
+/// `{% regroup cities|dictsort:"country" by country as by_country %}` — close
+/// to the canonical idiom, since Django's own `regroup` docs open by noting
+/// the input usually needs sorting first — must apply the chain. Before this
+/// the plain `context.get` asked for a variable literally NAMED
+/// `cities|dictsort:"country"`, missed, and passed the template's own source
+/// text to the handler, which decoded nothing: `{{ g|length }}` rendered `0`
+/// and every `{% for %}` over the groups rendered nothing. That is the fourth
+/// and last operand channel of the four #2325 enumerated (#1646).
+///
+/// The pipe is the guard, and it is load-bearing rather than a shortcut:
+/// unlike the renderer's four sites, this channel's contract is "unresolved ⇒
+/// pass the raw token", and `get_value`'s literal arms have no way to say
+/// "unresolved" — they would answer `Bool(true)` for regroup's own `by`-style
+/// keyword operand spelled `True`, `Integer(5)` for a bare `5`, and so turn a
+/// literal token into a value. Routing only pipe-bearing expressions through
+/// `get_value` changes exactly the cells that resolve to the raw source today.
+fn resolve_tag_operand(expr: &str, context: &Context) -> Option<String> {
+    if expr.contains('|') {
+        // The runtime-safe flag `get_value_safe` also reports is discarded, as
+        // at the renderer's four sites: this value is JSON-encoded and handed
+        // to a Python handler whose output is escaped by the normal rules, so
+        // a filtered operand can only ever be escaped at least as hard as the
+        // raw token it replaces.
+        return match get_value(expr, context) {
+            // A miss anywhere in the chain leaves `Missing`, which is this
+            // channel's "did not resolve" — the caller keeps the raw token,
+            // exactly as an unknown bare name does today.
+            Ok(Value::Missing) | Err(_) => None,
+            Ok(value) => Some(value_to_arg_string(&value)),
+        };
+    }
+    context.get(expr).map(value_to_arg_string)
 }
 
 /// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared
@@ -1070,11 +1112,28 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // fourth match arm so the string shares the whole loop body —
             // `{% empty %}`, `reversed`, `{% cycle %}`, nested loops — instead
             // of growing a parallel copy of it (#1646).
-            let iterable_value = match iterable_value {
-                Value::String(s) => {
-                    Value::List(s.chars().map(|c| Value::String(c.to_string())).collect())
-                }
-                other => other,
+            //
+            // A dict iterates its KEYS, by the same argument (#2334): a
+            // `Value::Object` otherwise fell to the `_ =>` arm below and
+            // rendered the `{% empty %}` block, so `{% for k in d %}` — and,
+            // once `d.items` resolves, everything reached through it — was the
+            // same silent-empty region. `{{ d|length }}`, `{{ d|join }}` and
+            // `{% if k in d %}` have all agreed with Django on a dict all
+            // along; `{% for %}` was the one iteration sink that did not.
+            //
+            // `normalised` records that the sequence being iterated is NOT the
+            // resolved value's own indexable elements. See the safe-key
+            // mapping below, which must not be registered in that case.
+            let (iterable_value, normalised) = match iterable_value {
+                Value::String(s) => (
+                    Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
+                    true,
+                ),
+                Value::Object(map) => (
+                    Value::List(map.keys().map(|k| Value::String(k.clone())).collect()),
+                    true,
+                ),
+                other => (other, false),
             };
 
             match iterable_value {
@@ -1166,7 +1225,22 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             // safety mark belonging to a DIFFERENT element
                             // (#2325). Registering nothing costs only
                             // over-escaping, which is the direction to fail in.
-                            if !iterable.contains('|') {
+                            //
+                            // `!normalised` is the same argument for the same
+                            // reason, and for a dict it is a LIVE XSS rather
+                            // than a theoretical one (#2334). `_collect_safe_keys`
+                            // writes a dict's paths BY KEY NAME (`d.<key>`),
+                            // while this mapping asserts `k` is `d.<index>`.
+                            // Give a dict a key spelled `"1"` whose value is
+                            // `mark_safe(...)` and `safe_keys` holds `d.1`; the
+                            // loop's SECOND key — an entirely different string,
+                            // and attacker-controlled if keys are user data —
+                            // then resolves that mark and is emitted UNESCAPED.
+                            // A string operand cannot collide the same way
+                            // (`_collect_safe_keys` never descends into a str)
+                            // but the correspondence is just as false, so both
+                            // normalised shapes are excluded by one condition.
+                            if !normalised && !iterable.contains('|') {
                                 ctx.set_loop_mapping(var_names[0].clone(), iterable.clone(), index);
                             }
                         } else {
@@ -2409,7 +2483,23 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     }
                 }
                 Value::Object(map) => {
-                    // Django: "x in dict" checks dict keys
+                    // Django: "x in dict" checks dict keys.
+                    //
+                    // The needle is STRINGIFIED, which is not what Python does
+                    // — `0 in {"0": 1}` is False there, because `0 == "0"` is
+                    // False. The #2335 randomised sweep found it and it is
+                    // NOT fixed here (#1079): djust's own wire format coerces
+                    // every dict key to a string, so a view holding
+                    // `{1234567: "x"}` reaches this arm as `{"1234567": …}`
+                    // and the coercion is the only thing that keeps
+                    // `{% if pk in d %}` working — a behaviour
+                    // `test_localization_does_not_reach_dict_lookup_keys`
+                    // (#2221) pins deliberately. Removing it moves djust
+                    // TOWARDS Django for a string-keyed dict and AWAY from it
+                    // for an int-keyed one, which is a design decision about
+                    // the wire format rather than a comparison fix. Tracked
+                    // at #2339; pinned in
+                    // `TestKnownAdjacentDivergencesNotFixedHere`.
                     let key = needle.to_string();
                     Ok(map.contains_key(&key))
                 }
@@ -2752,6 +2842,35 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Integer(a), Value::Float(b)) => int_eq_float(*a, *b),
         (Value::Float(a), Value::Integer(b)) => int_eq_float(*b, *a),
         (Value::String(a), Value::String(b)) => a == b,
+        // Two sequences of the SAME kind: same length, pairwise equal (#2335).
+        // Without this arm two lists fell to `_ => false` and were never equal
+        // — not even to themselves — so `{% if a == b %}` silently took the
+        // `{% else %}` branch, the direction that HIDES content.
+        //
+        // Recursion, not element-wise `==`, is what carries the numeric
+        // widening down: `[1] == [1.0]` and `[True] == [1]` are both true in
+        // Python, and both go through the same `bool_as_int` / `int_eq_float`
+        // arms above rather than a second copy of those rules (#1646).
+        //
+        // List-against-Tuple is deliberately NOT matched. Python's `[1] ==
+        // (1,)` is **False**, so a "both are sequences" arm would be wrong in
+        // the one direction a curated test is least likely to cover; the
+        // randomised differential in
+        // `test_dict_iteration_and_sequence_equality_2334_2335.py` samples the
+        // cross-type case explicitly.
+        (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
+        }
+        // Python compares dicts by key/value pairs, ORDER-INDEPENDENTLY:
+        // `{"a": 1, "b": 2} == {"b": 2, "a": 1}` is true. `IndexMap`'s own
+        // `PartialEq` agrees, but is spelled out here so the element
+        // comparison recurses through `values_equal` (numeric widening again)
+        // rather than through `Value`'s — which it does not derive.
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(k, v)| b.get(k).is_some_and(|other| values_equal(v, other)))
+        }
         // Pairs involving a DECIMAL, and only those. Without this
         // `{% if p == 19.99 %}` went false the moment a Decimal stopped being a
         // Float (#2214).
@@ -2802,6 +2921,13 @@ fn values_identity(a: &Value, b: &Value) -> bool {
 
 /// Compare two values and return -1 (less), 0 (equal), or 1 (greater).
 /// Returns 0 for incomparable types.
+///
+/// 0 for "cannot be ordered" is what every `{% if a > b %}` operand pair has
+/// always done, and it is right: Python raises `TypeError`, Django's
+/// `{% if %}` catches it and answers False, and 0 makes both `>` and `<`
+/// false. (`<=` / `>=` read it as "equal" and answer True where Django answers
+/// False — a pre-existing property of EVERY incomparable pair, measured
+/// unchanged on both builds of the #2335 differential; tracked at #2338.)
 fn compare_values(a: &Value, b: &Value) -> i32 {
     // Ordering has the same hole `values_equal` had, from the other side
     // (#2244): there is no `Bool` arm here at all, so `{% if flag > 0 %}` fell
@@ -2855,6 +2981,45 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
             }
         }
         (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
+        // Lexicographic, as Python orders two sequences of the same kind
+        // (#2335): the first differing element decides, and if one is a prefix
+        // of the other the shorter is smaller. The mirror of the `values_equal`
+        // arm above, and it must stay in step with it — the two answered
+        // differently for a list on the previous release, which is the shape
+        // #2244 and #2243 both had.
+        //
+        // Cross-kind (list vs tuple) and `Object` are deliberately absent:
+        // Python RAISES `TypeError` for both, Django's `{% if %}` catches it
+        // and answers False, and `compare_values`'s `unwrap_or(0)` reproduces
+        // that for `<` and `>`. (`<=` / `>=` read 0 as "equal" and answer True
+        // where Django answers False — a pre-existing property of every
+        // incomparable pair, measured and pinned, not introduced here.)
+        //
+        // Python's own algorithm, not an approximation of it: it walks with
+        // `==`, and ONLY AN EQUAL PAIR CONTINUES the walk. That one rule
+        // carries both halves.
+        //
+        // `[{}, 1] < [{}, 2]` is True in Python even though two dicts cannot
+        // be ORDERED — they never need to be, because they are equal, so the
+        // walk moves on. And an unequal pair DECIDES the comparison, whatever
+        // it answers, including the 0 an incomparable pair yields: a
+        // `TypeError` in Python, False for `<` and `>` in Django, 0 here.
+        //
+        // The first draft asked `compare_values` FIRST and continued whenever
+        // it answered 0 — which conflates "equal" with "incomparable" and
+        // falls through to the length tie-break, so
+        // `[[], 'a', ('b',)] > [1]` answered True (3 elements beats 1) where
+        // Django answers False. The randomised differential caught it in 27 of
+        // 28,500 cells; no curated case here had the shape.
+        (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
+            for (x, y) in a.iter().zip(b.iter()) {
+                if values_equal(x, y) {
+                    continue;
+                }
+                return compare_values(x, y);
+            }
+            a.len().cmp(&b.len()) as i32
+        }
         // Null comparisons
         (Value::Missing, Value::Missing) => 0,
         // Any remaining numeric pair — which is every pair involving a Decimal
@@ -3436,7 +3601,14 @@ mod tests {
         // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
 
-        // Integer key converted to string for lookup
+        // Integer key converted to string for lookup.
+        //
+        // Python answers False here (`5 == "5"` is False) and the #2335
+        // randomised sweep reports it; it is deliberately NOT changed. See the
+        // `Value::Object` arm of the `in` operator for why — djust's wire
+        // format coerces dict keys to strings, so this coercion is what keeps
+        // `{% if pk in d %}` working (#2221), and removing it trades one
+        // divergence for another. Tracked at #2339.
         context.set("key".to_string(), Value::Integer(5));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
     }
@@ -4611,5 +4783,155 @@ mod tests {
         // `is` between two bools is unchanged — they are singletons.
         assert!(values_identity(&Value::Bool(true), &Value::Bool(true)));
         assert!(!values_identity(&Value::Bool(true), &Value::Bool(false)));
+    }
+
+    // -- #2335: sequence comparison ------------------------------------
+
+    fn l(items: Vec<Value>) -> Value {
+        Value::List(items)
+    }
+
+    fn t(items: Vec<Value>) -> Value {
+        Value::Tuple(items)
+    }
+
+    #[test]
+    fn test_2335_two_sequences_of_the_same_kind_compare_structurally() {
+        assert!(values_equal(&l(vec![]), &l(vec![])));
+        assert!(values_equal(
+            &l(vec![Value::Integer(1), Value::Integer(2)]),
+            &l(vec![Value::Integer(1), Value::Integer(2)])
+        ));
+        assert!(!values_equal(
+            &l(vec![Value::Integer(1)]),
+            &l(vec![Value::Integer(1), Value::Integer(1)])
+        ));
+        assert!(values_equal(
+            &t(vec![Value::Integer(1)]),
+            &t(vec![Value::Integer(1)])
+        ));
+        // Nested.
+        assert!(values_equal(
+            &l(vec![Value::Integer(1), l(vec![Value::Integer(2)])]),
+            &l(vec![Value::Integer(1), l(vec![Value::Integer(2)])])
+        ));
+    }
+
+    #[test]
+    fn test_2335_a_list_is_never_equal_to_a_tuple() {
+        // Python: `[1] == (1,)` is False. A "both are sequences" arm would be
+        // wrong here, in the direction a curated table is least likely to probe.
+        assert!(!values_equal(
+            &l(vec![Value::Integer(1)]),
+            &t(vec![Value::Integer(1)])
+        ));
+        assert!(!values_equal(
+            &t(vec![Value::Integer(1)]),
+            &l(vec![Value::Integer(1)])
+        ));
+        assert_eq!(
+            compare_values(&l(vec![Value::Integer(1)]), &t(vec![Value::Integer(2)])),
+            0,
+            "cross-kind ordering is a TypeError in Python; 0 is what makes < and > both false"
+        );
+    }
+
+    #[test]
+    fn test_2335_elements_widen_through_the_scalar_arms() {
+        // Recursion, not element-wise `==`: the #2243 / #2244 widening arms
+        // are REACHED rather than re-implemented.
+        assert!(values_equal(
+            &l(vec![Value::Integer(1)]),
+            &l(vec![Value::Float(1.0)])
+        ));
+        assert!(values_equal(
+            &l(vec![Value::Bool(true)]),
+            &l(vec![Value::Integer(1)])
+        ));
+        assert!(values_equal(
+            &l(vec![Value::None]),
+            &l(vec![Value::Missing])
+        ));
+        assert!(!values_equal(
+            &l(vec![Value::Integer(1)]),
+            &l(vec![Value::Float(1.5)])
+        ));
+    }
+
+    #[test]
+    fn test_2335_dicts_compare_by_pairs_ignoring_order() {
+        let mut a = indexmap::IndexMap::new();
+        a.insert("a".to_string(), Value::Integer(1));
+        a.insert("b".to_string(), Value::Integer(2));
+        let mut b = indexmap::IndexMap::new();
+        b.insert("b".to_string(), Value::Integer(2));
+        b.insert("a".to_string(), Value::Integer(1));
+        assert!(values_equal(&Value::Object(a.clone()), &Value::Object(b)));
+
+        let mut c = indexmap::IndexMap::new();
+        c.insert("a".to_string(), Value::Integer(1));
+        assert!(!values_equal(&Value::Object(a), &Value::Object(c)));
+    }
+
+    #[test]
+    fn test_2335_ordering_is_lexicographic() {
+        assert_eq!(
+            compare_values(&l(vec![Value::Integer(1)]), &l(vec![Value::Integer(2)])),
+            -1
+        );
+        assert_eq!(
+            compare_values(&l(vec![Value::Integer(2)]), &l(vec![Value::Integer(1)])),
+            1
+        );
+        assert_eq!(
+            compare_values(
+                &l(vec![Value::Integer(1), Value::Integer(2)]),
+                &l(vec![Value::Integer(1)])
+            ),
+            1,
+            "a prefix is smaller"
+        );
+        assert_eq!(
+            compare_values(&l(vec![Value::Integer(1)]), &l(vec![Value::Integer(1)])),
+            0
+        );
+    }
+
+    #[test]
+    fn test_2335_only_an_equal_pair_continues_the_walk() {
+        // Python compares with `==` FIRST, so equal-but-unorderable elements
+        // do not stop the walk...
+        let d = Value::Object(indexmap::IndexMap::new());
+        assert_eq!(
+            compare_values(
+                &l(vec![d.clone(), Value::Integer(1)]),
+                &l(vec![d.clone(), Value::Integer(2)])
+            ),
+            -1
+        );
+        // ...and an UNEQUAL pair DECIDES, even when it cannot be ordered.
+        // Continuing past it — which is what asking `compare_values` first and
+        // treating its 0 as a tie does — falls through to the length tie-break
+        // and answers "greater" (3 elements beats 1), which Django does not.
+        // The randomised differential caught exactly this on the first draft.
+        assert_eq!(
+            compare_values(
+                &l(vec![l(vec![]), Value::String("a".into()), d]),
+                &l(vec![Value::Integer(1)])
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn test_2335_an_incomparable_top_level_pair_is_unchanged() {
+        // The scalar contract every operand pair has always had: 0, so `>` and
+        // `<` are both false — Python raises and Django answers False.
+        assert_eq!(
+            compare_values(&Value::String("a".into()), &Value::Integer(1)),
+            0
+        );
+        assert_eq!(compare_values(&Value::Missing, &Value::Missing), 0);
+        assert_eq!(compare_values(&Value::Integer(1), &Value::Integer(2)), -1);
     }
 }
