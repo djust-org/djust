@@ -152,6 +152,44 @@ fn builtin_produced_safe(
         "default" => input_safety.container && value.is_truthy(),
         "default_if_none" => input_safety.container && !matches!(value, Value::None),
         "add" => input_safety.container && arg_was_quoted && matches!(result, Value::String(_)),
+        // The three EXTRACTORS, and the THIRD consumer of the item grant
+        // (#2299). Django's bodies are `value[0]`, `value[-1]` and
+        // `random.choice(value)` — each hands back the ELEMENT OBJECT, so when
+        // the elements are `SafeData` the item grant becomes the RESULT's own
+        // container safety and `render_value_in_context`'s
+        // `conditional_escape` honours it. That is structurally different from
+        // `join` / `unordered_list`, which consume the SAME grant per element
+        // inside their own body and emit a joined string — which is why
+        // #2287's seed reached those two and left these three escaping.
+        //
+        // `container` is deliberately NOT a term here. Django's `first` is
+        // registered `is_safe=False`, and its `last` / `random` get the
+        // `is_safe=True` arm through `renderer::IS_SAFE_FILTERS` already; a
+        // `container` term would additionally mark `{{ p|safe|first }}` safe,
+        // where Django's `SafeString[0]` is a plain `str` and the render
+        // escapes it. That is the permissive direction, so it stays out.
+        //
+        // No shape narrowing, and that is a finding rather than an omission:
+        // EVERY producer of `items` already guarantees that every element is
+        // safe, so whichever one is extracted is safe.
+        //
+        //   * `Context::items_are_safe` — `List`/`Tuple` only, non-empty,
+        //     every index in `safe_keys`, every element a `String`.
+        //   * `renderer::filter_output_items_are_safe` — `safeseq` /
+        //     `escapeseq`, which are `[… for o in value]` over the WHOLE
+        //     sequence, plus `slice`, which hands back the same objects.
+        //
+        // The one shape that arrives here without being a sequence is the
+        // `safeseq`/`escapeseq` non-iterable arm — an int, a float, `None`, a
+        // `Decimal`/`BigInt` — which returns an escaped DIGIT STRING and still
+        // carries the name-based grant. All three extractors answer a string
+        // with one of its characters (`first`/`last` in their own arms,
+        // `random` through `iter_values`), and no digit is a character
+        // escaping would change, so the grant there is the same no-op the
+        // `join` arm above documents. A `Value::Object` cannot reach here at
+        // all: `items_are_safe` refuses it, and both sequence filters have
+        // already turned it into a `List` of its keys.
+        "first" | "last" | "random" => input_safety.items,
         _ => false,
     }
 }

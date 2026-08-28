@@ -645,35 +645,126 @@ class TestACustomFilterSeesContextSourcedItemSafety:
         assert django_render(source, value) == "list[True,False]"
         assert djust_render(source, value) == "list[False,False]"
 
-    def test_a_raw_tuple_reaches_a_custom_filter_unwrapped(self) -> None:
-        """A KNOWN residual, pinned so the comment describing it cannot go
-        stale (#2305).
+    def test_a_raw_tuple_reaches_a_custom_filter_marked(self) -> None:
+        """The pin this class shipped with, flipped to parity by #2305.
 
-        #2290 deleted a ``PyTuple`` arm from ``mark_input_safety`` as
-        unreachable, correctly at the time: the only producer of an item grant
-        was ``safeseq``, a list comprehension. This issue added a second
-        producer that accepts ``Value::Tuple``, so the arm IS reachable now —
-        but only by calling ``render_template_with_dirs`` DIRECTLY with an
-        un-normalized tuple, because ``normalize_django_value`` collapses a
-        Python tuple to a list before it crosses into Rust and
-        ``SimpleLiveView`` passes no ``safe_keys`` at all.
+        It was written as a residual — ``tuple[False,False]`` — with a failure
+        message saying that if the answer ever became ``tuple[True,True]`` then
+        #2305 was fixed and the pin should assert parity instead. It did, and
+        this is that assertion.
 
-        djust hands the filter ``tuple[False,False]`` where Django hands it
-        ``tuple[True,True]`` — the ESCAPING direction, which is why it is
-        tracked rather than fixed inside this change.
+        The history is the point. #2290 deleted a ``PyTuple`` arm from
+        ``mark_input_safety`` as unreachable, and was RIGHT on the evidence it
+        had: the only producer of an item grant was ``safeseq``, a list
+        comprehension, so a tuple had already become a list before the grant
+        existed. #2287 added ``Context::items_are_safe``, a second producer
+        that accepts ``Value::Tuple``, and the claim expired the moment the two
+        changes met.
         """
         self._register_probe()
         source = "{{ p|_ctx_item_probe }}"
         raw = ("<b>x</b>", "<i>y</i>")
 
         expected = django_render(source, tuple(mark_safe(v) for v in raw))
-        assert expected == "tuple[True,True]"
-
-        got = _rust.render_template_with_dirs(source, {"p": raw}, [], ["p.0", "p.1"])
-        assert got == "tuple[False,False]", (
-            f"the tuple residual moved — if this is now 'tuple[True,True]', "
-            f"#2305 is fixed and this pin should assert parity instead: {got!r}"
+        assert expected == "tuple[True,True]", (
+            f"Django stopped marking the tuple's items — premise moved: {expected!r}"
         )
+        assert _rust.render_template_with_dirs(source, {"p": raw}, [], ["p.0", "p.1"]) == expected
+
+    def test_the_second_entry_point_the_issue_did_not_name(self) -> None:
+        """``RustLiveView`` + ``mark_safe_keys`` reaches the arm too.
+
+        #2305 names one caller — a 4-argument ``render_template_with_dirs``.
+        There is a second, equally public in ``_rust.pyi``: build a view,
+        ``update_state`` an un-normalized tuple, ``mark_safe_keys`` its item
+        paths. It is the same channel ``rust_bridge._sync_state_to_rust`` uses,
+        minus the ``normalize_django_value`` call that is the only reason the
+        FRAMEWORK paths never reach here.
+        """
+        self._register_probe()
+        source = "{{ p|_ctx_item_probe }}"
+        raw = ("<b>x</b>", "<i>y</i>")
+
+        view = _rust.RustLiveView(source)
+        view.update_state({"p": raw})
+        view.mark_safe_keys(["p.0", "p.1"])
+        assert view.render() == django_render(source, tuple(mark_safe(v) for v in raw))
+
+    def test_a_tuple_keeps_its_type_across_the_boundary(self) -> None:
+        """The wrap must rebuild a ``tuple``, not a ``list``.
+
+        Django marks the ELEMENTS and leaves the sequence object alone, so a
+        filter branching on ``isinstance(value, tuple)`` keeps its answer. A
+        ``PyTuple`` arm that appended into a ``PyList`` would fix the safety
+        half and silently break the shape half — which the probe reports,
+        because it prints ``type(value).__name__`` alongside the flags.
+        """
+        self._register_probe()
+        got = _rust.render_template_with_dirs(
+            "{{ p|_ctx_item_probe }}", {"p": ("<b>x</b>", "<i>y</i>")}, [], ["p.0", "p.1"]
+        )
+        assert got.startswith("tuple["), got
+
+    def test_an_unmarked_tuple_still_arrives_plain(self) -> None:
+        """The direction that keeps the assertion above from passing on a build
+        that marks every sequence unconditionally."""
+        self._register_probe()
+        source = "{{ p|_ctx_item_probe }}"
+        raw = ("<b>x</b>", "<i>y</i>")
+        assert django_render(source, raw) == "tuple[False,False]"
+        assert _rust.render_template_with_dirs(source, {"p": raw}, [], []) == "tuple[False,False]"
+
+    def test_a_partially_marked_tuple_arrives_wholly_plain(self) -> None:
+        """The same one-bool narrowing the list arm has, on the tuple arm.
+
+        ``Context::items_are_safe`` requires EVERY index, so a tuple with only
+        ``p.0`` marked gets no grant at all — djust withholds what Django gives
+        element 0. Over-escaping, and it is what stops the restored arm from
+        widening anything the list arm does not already.
+        """
+        self._register_probe()
+        source = "{{ p|_ctx_item_probe }}"
+        raw = ("<b>x</b>", "<i>y</i>")
+        assert django_render(source, (mark_safe(raw[0]), raw[1])) == "tuple[True,False]"
+        assert (
+            _rust.render_template_with_dirs(source, {"p": raw}, [], ["p.0"]) == "tuple[False,False]"
+        )
+
+    def test_a_non_string_element_is_passed_through_untouched(self) -> None:
+        """``mark_item``'s ``str``-only policy, and where it is REACHABLE.
+
+        ``mark_safe`` STRINGIFIES a non-``str``, which would change the TYPE a
+        filter receives — the reason ``mark_input_safety`` wraps ``str`` only.
+
+        The observable case is on the LIST arm, via a ``safeseq`` grant. The
+        first version of this test claimed to be "the tuple half"; that claim
+        is FALSE and running it is what showed so. Every producer that can grant
+        a TUPLE requires all-``String`` elements — ``Context::items_are_safe``
+        refuses a sequence holding an ``int`` or a nested container outright, and
+        ``safeseq``/``escapeseq`` return a ``list``, not a tuple. So
+        ``mark_item``'s non-``str`` branch is unreachable *through the tuple
+        arm*, and what makes the tuple arm right there is that the two arms
+        share one helper rather than a second copy that could drift (#1646).
+        The refusals are asserted below, because "unreachable" is a claim and
+        not an excuse.
+        """
+        self._register_probe()
+        got = _rust.render_template_with_dirs(
+            "{{ p|safeseq|_ctx_item_probe }}", {"p": ("a", 2)}, []
+        )
+        assert got == "list[True,False]", got
+
+        # The two refusals that make the tuple arm's non-`str` branch dead:
+        # marking every index does NOT grant a tuple holding a non-`String`.
+        for value in (("a", 2), ("a", ["b"])):
+            unreached = _rust.render_template_with_dirs(
+                "{{ p|_ctx_item_probe }}", {"p": value}, [], ["p.0", "p.1"]
+            )
+            assert unreached == "tuple[False,False]", (
+                f"a tuple holding a non-String element was granted item safety, so "
+                f"`mark_item`'s non-`str` branch IS reachable on the tuple arm and "
+                f"this test's reasoning is stale: {value!r} -> {unreached!r}"
+            )
 
     def test_but_the_tuple_still_renders_live_through_join(self) -> None:
         """The same raw tuple through the BUILT-IN path is already correct, so
@@ -722,3 +813,274 @@ def test_a_context_item_grant_is_per_render() -> None:
     # bridge (today) skips the call entirely — there is no way to clear `p.0`.
     view.update_state(normalize_django_value({"p": ["<img src=x onerror=alert(1)>"]}))
     assert payload_capabilities(view.render()) == set(), view.render()
+
+
+# ---------------------------------------------------------------------------
+# #2299 — the THIRD consumer of the item grant: the extractors
+# ---------------------------------------------------------------------------
+
+#: The two filters that pull ONE item out of a sequence and hand it back as the
+#: whole value, and that are byte-comparable. Django's bodies are ``value[0]``
+#: and ``value[-1]`` — each returns the ELEMENT OBJECT, so a ``SafeString``
+#: element survives to ``render_value_in_context``'s ``conditional_escape``.
+#: ``random`` is the third and gets its own class below, because djust's RNG
+#: picks a different element than Django's.
+EXTRACTORS = {"first": "{{ p|first }}", "last": "{{ p|last }}"}
+
+
+class TestTheExtractorsConsumeTheItemGrant:
+    """#2299. ``join`` / ``unordered_list`` consume the grant PER ELEMENT
+    inside their own body; ``first`` / ``last`` / ``random`` consume it by
+    becoming the RESULT's container safety. #2287 seeded the grant and repaired
+    the first mechanism only, so these three kept escaping.
+    """
+
+    ITEMS_SAFE = [mark_safe("<b>x</b>"), mark_safe("<i>y</i>")]
+
+    @pytest.mark.parametrize("name", sorted(EXTRACTORS))
+    def test_the_reported_divergence(self, name: str) -> None:
+        """The issue body's two cells, verbatim."""
+        source = EXTRACTORS[name]
+        expected = django_render(source, self.ITEMS_SAFE)
+        assert "<" in expected and "&lt;" not in expected, (
+            f"Django stopped returning the element object — premise moved: {expected!r}"
+        )
+        assert djust_render(source, self.ITEMS_SAFE) == expected
+
+    @pytest.mark.parametrize("name", sorted(EXTRACTORS))
+    def test_a_tuple_is_the_same_shape(self, name: str) -> None:
+        """The contract is "sequence", not "list" (#1108)."""
+        assert_agrees(EXTRACTORS[name], tuple(self.ITEMS_SAFE))
+
+    @pytest.mark.parametrize("name", sorted(EXTRACTORS))
+    @pytest.mark.parametrize("payload", HOSTILE)
+    def test_an_unmarked_list_is_still_escaped(self, name: str, payload: str) -> None:
+        """The cell the fix must NOT move: nothing marked the items, so nothing
+        may come through live."""
+        value = [payload, payload]
+        assert_agrees(EXTRACTORS[name], value)
+        assert payload_capabilities(djust_render(EXTRACTORS[name], value)) == set()
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # The FILTER-sourced grant. `safeseq` marks every element, so the
+            # extracted one is safe in Django whatever the input was — these
+            # diverged before this fix even with nothing marked in the context.
+            "{{ p|safeseq|first }}",
+            "{{ p|safeseq|last }}",
+            # `escapeseq` marks the ESCAPED elements, so djust was escaping a
+            # second time and emitting `&amp;lt;b&amp;gt;`.
+            "{{ p|escapeseq|first }}",
+            "{{ p|escapeseq|last }}",
+            # `slice` hands back the same objects, so the grant survives it —
+            # ITEM_SAFETY_PRESERVING_FILTERS, one hop before the extractor.
+            "{{ p|slice:':2'|first }}",
+            "{{ p|slice:':2'|last }}",
+            # The CONTEXT-sourced grant feeding the extractor, then a filter
+            # DOWNSTREAM of it: `first` mints container safety here, and `upper`
+            # is `is_safe=True`, so Django keeps it and so must djust.
+            "{{ p|first|upper }}",
+            "{{ p|last|upper }}",
+            # `escape` is eager (#2281): it must see the value as already safe
+            # and not escape a second time.
+            "{{ p|first|escape }}",
+            "{{ p|last|escape }}",
+        ],
+    )
+    def test_the_chain_cells(self, source: str) -> None:
+        assert_agrees(source, self.ITEMS_SAFE)
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "{{ p|safeseq|first }}",
+            "{{ p|escapeseq|last }}",
+            "{{ p|slice:':2'|first }}",
+            "{{ p|first|escape }}",
+            "{{ p|last|upper }}",
+        ],
+    )
+    @pytest.mark.parametrize("payload", HOSTILE)
+    def test_the_same_chains_on_unmarked_items(self, source: str, payload: str) -> None:
+        """``safeseq`` on hostile input is Django emitting it live too — the
+        bar is Django's own output, not "nothing is live" (#2259)."""
+        assert_agrees(source, [payload, payload])
+
+    def test_the_grant_does_not_survive_the_extraction(self) -> None:
+        """``first`` is neither a producer nor a preserver of ITEM safety, so
+        the grant is re-taken after it. Otherwise ``{{ p|first|make_list }}``
+        would carry item safety onto characters nothing ever marked."""
+        assert_agrees("{{ p|first|make_list|join:'' }}", self.ITEMS_SAFE)
+        assert_no_more_permissive_than_django(
+            "{{ p|first|make_list|join:'' }}", [mark_safe("<img src=x onerror=alert(1)>")]
+        )
+
+
+class TestTheNarrowingsTheExtractorsInherit:
+    """The grant's PRODUCERS do all the narrowing, so the extractor arm needs
+    none of its own — and these are the cells that prove it rather than assert
+    it.
+
+    Each is a shape ``Context::items_are_safe`` REFUSES, so djust escapes where
+    Django does not. Over-escaping, deliberately, and unchanged by #2299.
+    """
+
+    @pytest.mark.parametrize("name", sorted(EXTRACTORS))
+    def test_a_partially_marked_list_is_escaped_whole(self, name: str) -> None:
+        """One bool cannot express Django's per-element answer, so a mixed list
+        gets no grant at all."""
+        source = EXTRACTORS[name]
+        value = [mark_safe("<b>x</b>"), "<i>y</i>"]
+        assert "&lt;" in djust_render(source, value)
+        assert_no_more_permissive_than_django(source, value)
+
+    @pytest.mark.parametrize("name", sorted(EXTRACTORS))
+    def test_a_nested_container_is_refused(self, name: str) -> None:
+        """The ``String``-element narrowing, and the one that is a SECURITY
+        property rather than a limitation: granting it would emit a sublist's
+        raw ``<`` where Django escapes the repr."""
+        value = [mark_safe("<b>x</b>"), [mark_safe("<i>y</i>")]]
+        assert_no_more_permissive_than_django(EXTRACTORS[name], value)
+
+    @pytest.mark.parametrize("name", sorted(EXTRACTORS))
+    def test_a_dict_grants_nothing_to_its_keys(self, name: str) -> None:
+        """``iter_values`` yields a dict's KEYS while ``_collect_safe_keys``
+        records its VALUES by name, so a by-index check can never confuse the
+        two — a hostile KEY must never ride a grant its value earned.
+
+        Django is not the bar here and cannot be: its ``first`` is ``value[0]``
+        and its ``last`` is ``value[-1]``, both a ``KeyError`` on a dict, so it
+        500s rather than producing output to compare against. That is a
+        pre-existing shape divergence (djust fails soft), unrelated to safety —
+        so the assertion is the absolute one: nothing live, whatever the grant.
+        """
+        value = {"<img src=x onerror=alert(1)>": mark_safe("z")}
+        with pytest.raises(Exception):
+            django_render(EXTRACTORS[name], value)
+        out = djust_render(EXTRACTORS[name], value)
+        assert payload_capabilities(out) == set(), out
+
+    @pytest.mark.parametrize("name", sorted(EXTRACTORS))
+    def test_an_empty_sequence_grants_nothing(self, name: str) -> None:
+        assert_agrees(EXTRACTORS[name], [])
+
+    @pytest.mark.parametrize("name", sorted(EXTRACTORS))
+    def test_a_safe_container_does_not_grant_the_extraction(self, name: str) -> None:
+        """``container`` is deliberately NOT a term in the extractor arm.
+
+        Django's ``mark_safe(list)`` is ``SafeString(str(list))`` and indexing a
+        ``SafeString`` yields a plain ``str``, so ``{{ p|safe|first }}`` is
+        escaped in Django. ``last`` still gets Django's ``is_safe=True`` arm,
+        which ``IS_SAFE_FILTERS`` already models — a ``container`` term here
+        would be a SECOND, redundant route to ``last``'s answer and a plainly
+        permissive one for ``first``.
+        """
+        source = EXTRACTORS[name].replace("p|", "p|safe|")
+        assert_no_more_permissive_than_django(source, ["<img src=x onerror=alert(1)>"])
+        assert_no_more_permissive_than_django(source, [mark_safe("<img src=x onerror=alert(1)>")])
+
+
+class TestRandomIsCoveredByCapabilityNotByBytes:
+    """``random`` is the third extractor and the only one that is not
+    byte-comparable: djust's RNG picks a different element than Django's, a
+    pre-existing and unrelated divergence. The two-build differential is blind
+    to it for the same reason — ``NONDET`` collapses every ``random`` cell to a
+    marker before the compare — so this class is the coverage it has.
+
+    The assertions are therefore capability-level: what MAY come through live,
+    and what may not, on every draw.
+    """
+
+    def test_the_rng_really_does_move(self) -> None:
+        """First, because the loops below prove nothing without it: if djust's
+        ``random`` always returned element 0, twenty draws would be one draw."""
+        seen = {djust_render("{{ p|random }}", list("abcdefgh")) for _ in range(200)}
+        assert len(seen) > 1, f"random never moved — the loops below prove nothing: {seen}"
+
+    def test_a_marked_item_comes_through_live(self) -> None:
+        """Both elements identical, so the pick does not matter and the cell is
+        byte-comparable after all — the one shape that makes ``random``
+        assertable against Django."""
+        value = [mark_safe("<b>x</b>"), mark_safe("<b>x</b>")]
+        assert djust_render("{{ p|random }}", value) == django_render("{{ p|random }}", value)
+
+    @pytest.mark.parametrize("payload", HOSTILE)
+    def test_an_unmarked_item_never_does(self, payload: str) -> None:
+        for _ in range(20):
+            out = djust_render("{{ p|random }}", [payload, payload, payload])
+            assert payload_capabilities(out) == set(), out
+
+    def test_a_partially_marked_list_never_does(self) -> None:
+        """The grant is all-or-nothing, so the hostile UNMARKED element cannot
+        ride the marked one's grant on any draw."""
+        value = [mark_safe("<b>ok</b>"), "<img src=x onerror=alert(1)>"]
+        for _ in range(20):
+            out = djust_render("{{ p|random }}", value)
+            assert payload_capabilities(out) == set(), out
+
+    def test_a_safeseq_grant_reaches_it(self) -> None:
+        """The filter-sourced half, made deterministic the same way."""
+        value = ["<b>x</b>", "<b>x</b>"]
+        source = "{{ p|safeseq|random }}"
+        assert djust_render(source, value) == django_render(source, value) == "<b>x</b>"
+
+
+class TestEverySeedSiteReachesTheExtractorArm:
+    """#1104 — the renderer seeds ``items_safe`` at THREE sites and each decides
+    for itself whether to consume the ``produced_safe`` a filter reports.
+
+    ``TestAllThreeSeedSitesAndTheLoopAlias`` pins the SEED for the per-element
+    consumers; this pins that the EXTRACTOR arm's grant is honoured at each of
+    them, which is the half a ``{{ … }}``-only test cannot see. Two sites are
+    Django-comparable and asserted as parity; the inline conditional and
+    ``{% cycle %}`` with a filtered argument are djust extensions Django parses
+    as a ``TemplateSyntaxError``, so their bar is an unmarked control rather
+    than Django's bytes.
+    """
+
+    ITEMS_SAFE = [mark_safe("<b>x</b>"), mark_safe("<i>y</i>")]
+    EXTRAS = {"q": ["<z>"], "flag": False, "nope": False}
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # Site 1 — `Node::Variable`.
+            "{{ p|first }}",
+            "{{ p|last }}",
+            # Site 3 — `get_value_safe`, via the `{% firstof %}` emit path.
+            "{% firstof p|first %}",
+            "{% firstof p|last %}",
+            # The loop alias `is_safe` resolves — `row`'s items live at
+            # `rows.<i>.<j>`, a different prefix from the bare key.
+            "{% for row in rows %}{{ row|first }}{% endfor %}",
+        ],
+    )
+    def test_the_django_comparable_sites(self, source: str) -> None:
+        ctx = {"p": self.ITEMS_SAFE, "rows": [self.ITEMS_SAFE], **self.EXTRAS}
+        expected = DjangoTemplate(source).render(DjangoContext(ctx))
+        assert _render_with_extras(source, ctx) == expected
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # Site 2 — `Node::InlineIf`. The filters bind to the whole
+            # conditional and `p` must be reached through BOTH branches.
+            "{{ q if nope else p|first }}",
+            "{{ q if nope else p|last }}",
+            "{% cycle p|first %}",
+        ],
+    )
+    def test_the_djust_only_sites(self, source: str) -> None:
+        """Django cannot be the bar — it raises on this syntax — so the control
+        is the SAME template on an unmarked list, which must stay escaped."""
+        marked = _render_with_extras(source, {"p": self.ITEMS_SAFE, "rows": [], **self.EXTRAS})
+        assert "<b>x</b>" in marked or "<i>y</i>" in marked, (
+            f"{source} escaped items the context marked safe: {marked!r}"
+        )
+        plain = _render_with_extras(
+            source, {"p": ["<b>x</b>", "<i>y</i>"], "rows": [], **self.EXTRAS}
+        )
+        assert "&lt;" in plain and "<b>" not in plain, (
+            f"{source} emitted an UNMARKED item live: {plain!r}"
+        )
