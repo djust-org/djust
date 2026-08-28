@@ -1,0 +1,124 @@
+name: external-pr-gate
+
+# Blocks a PR from outside the org until a maintainer with write access has
+# approved it.
+#
+# WHY THIS EXISTS
+# ---------------
+# Branch protection cannot condition on WHO authored a PR — "require review" is
+# all-or-nothing, and turning it on for everyone would block the automated
+# internal pipeline. This job is the author-conditional half: it is a no-op for
+# a PR from someone with write access, and RED for an external PR until a
+# maintainer approves.
+#
+# It was added after an external contributor's PR (#2306) was merged with
+# `gh pr merge --admin`, which bypassed the review requirement. The fix is not
+# only this check — an admin can still force past a red check — but a red
+# required check makes the state visible rather than silent, which is what the
+# failure mode actually was.
+#
+# SECURITY NOTE
+# -------------
+# This uses `pull_request_target`, which runs with repository context and a
+# writable token even for fork PRs. It therefore MUST NOT check out or execute
+# any code from the PR. It reads API metadata only. Do not add
+# `actions/checkout` here without a `ref` pinned to the base branch, and do not
+# run any build, install, or test step in this workflow.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: external-pr-gate-${{ github.event.pull_request.number || github.event.number }}
+  cancel-in-progress: true
+
+jobs:
+  maintainer-approval:
+    name: external PRs require a maintainer approval
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check author permission, then require an approval if external
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const author = pr.user.login;
+
+            // Bots that open PRs against this repo as part of normal operation.
+            const AUTOMATION = new Set(['dependabot[bot]', 'github-actions[bot]']);
+            if (AUTOMATION.has(author)) {
+              core.info(`${author} is repository automation — gate does not apply.`);
+              return;
+            }
+
+            // Decide "internal" from the collaborator permission API rather than
+            // from author_association alone: association is a per-PR snapshot and
+            // reports CONTRIBUTOR for an org member who simply is not a direct
+            // collaborator on this repo.
+            let permission = 'none';
+            try {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner, repo, username: author,
+              });
+              permission = data.permission;  // admin | maintain | write | triage | read | none
+            } catch (e) {
+              // 404 means "not a collaborator", which is a valid answer, not a failure.
+              if (e.status !== 404) throw e;
+            }
+
+            const TRUSTED = new Set(['admin', 'maintain', 'write']);
+            if (TRUSTED.has(permission)) {
+              core.info(`${author} has '${permission}' access — internal PR, gate does not apply.`);
+              return;
+            }
+
+            core.info(`${author} has '${permission}' access — EXTERNAL PR, a maintainer approval is required.`);
+
+            // An approval only counts if the reviewer themselves has write access.
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number: pr.number, per_page: 100,
+            });
+
+            // Latest state per reviewer wins: an APPROVED that was later dismissed
+            // or changed to REQUEST_CHANGES must not keep the gate green.
+            const latest = new Map();
+            for (const r of reviews) {
+              if (r.state === 'COMMENTED') continue;  // does not change approval state
+              latest.set(r.user.login, r.state);
+            }
+
+            const approvers = [];
+            for (const [login, state] of latest) {
+              if (state !== 'APPROVED') continue;
+              if (login === author) continue;  // cannot approve your own PR
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner, repo, username: login,
+                });
+                if (TRUSTED.has(data.permission)) approvers.push(`${login} (${data.permission})`);
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+            }
+
+            if (approvers.length > 0) {
+              core.info(`Approved by: ${approvers.join(', ')}`);
+              return;
+            }
+
+            core.setFailed(
+              `This PR is from an external contributor (${author}) and has no approving ` +
+              `review from a maintainer with write access.\n\n` +
+              `This is not a problem with the contribution — it is the review gate doing ` +
+              `its job. A maintainer should review the diff and submit an approving review; ` +
+              `this check re-runs on review submission and will turn green.\n\n` +
+              `Do NOT merge past this with admin privileges.`
+            );
