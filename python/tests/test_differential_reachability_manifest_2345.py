@@ -529,6 +529,85 @@ class TestTheArgumentAxisCorpus:
             "reaching the raise bit this axis exists to measure"
         )
 
+    def test_a_clock_dependent_cell_records_its_AGREEMENT_not_its_bytes(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The corpus gap this axis had on its first day, found by using it.
+
+        The default corpus rewrites a `NONDET` cell to `<NONDET len=N>` on both
+        sides and `load()` collapses that to a bare `<NONDET>`, so the two
+        sides always compare EQUAL. That is right for `random`, whose draw
+        cannot be compared at all, and BLIND for `timesince`/`timeuntil`: they
+        read the wall clock only when their argument is absent or falsy, and
+        with a real instant they are fully deterministic. Collapsing them by
+        NAME made this axis unable to see #2344 — a change to exactly those
+        cells — which is the corpus-gap failure mode one level in, inside the
+        tool built to report corpus gaps.
+
+        Recording whether the two engines AGREED keeps the cell comparable
+        without pinning bytes a clock moves.
+        """
+        out = tmp_path / "arg.json"
+        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+            [sys.executable, str(SCRIPT), "--axis", "argument", str(out)],
+            capture_output=True,
+            text=True,
+            env=_env(),
+            cwd=str(REPO),
+            check=True,
+        )
+        payload = json.loads(out.read_text())
+        nondet = {
+            k: v
+            for k, v in payload.items()
+            if not k.startswith("@@") and v[0].startswith("<NONDET")
+        }
+        assert nondet, "no clock-dependent cell in the argument corpus"
+        assert all(v[0] == "<NONDET>" for v in nondet.values())
+        assert set(v[1] for v in nondet.values()) <= {"<NONDET>", "<NONDET differs>"}
+        # The corpus must CARRY a legitimate comparison instant, or the axis has
+        # no cell in which `timesince`'s argument is the shape it exists to take.
+        assert any("timesince:hit-datetime" in k for k in nondet), (
+            "no `timesince` cell takes a real datetime argument — the axis cannot "
+            "see the one thing #2344 is about"
+        )
+        # Non-vacuity, and the half a marker-shaped-but-never-produced encoding
+        # would fail: the writer must ACTUALLY emit `<NONDET differs>`. An
+        # assertion that only allowed the two spellings passes when every cell
+        # is `<NONDET>`, which is the collapse this replaced.
+        differs = [k for k, v in nondet.items() if v[1] == "<NONDET differs>"]
+        assert differs, (
+            "no clock-dependent cell records a disagreement, so the marker is "
+            "shaped like a measurement and is not one. If every `timesince` cell "
+            "now agrees with Django, replace this with a synthetic disagreement — "
+            "do not delete it."
+        )
+        # Deliberately NOT keyed on the `happy` value: those converge when #2344
+        # lands. These are VALUE-axis divergences — djust fails soft on a value
+        # it cannot read where Django returns "" or raises — which are
+        # pre-existing and independent of the argument.
+        assert any(k.split("\t")[1] != "happy" for k in differs), differs[:5]
+
+    def test_the_nondet_agreement_marker_survives_load(self, tmp_path: pathlib.Path) -> None:
+        """Non-vacuity for the marker: `load()` rewrites `<NONDET len=N>` to a
+        bare `<NONDET>`, and a rewrite that also swallowed `<NONDET differs>`
+        would put the collapse back with extra steps."""
+
+        def cell(differs: bool) -> dict:
+            return {
+                "@arg timesince:hit-datetime\thappy\tvar": [
+                    "<NONDET>",
+                    "<NONDET differs>" if differs else "<NONDET>",
+                ],
+                "@arg center:q-int\thappy\tvar": ["  ab ", "  ab "],
+                "@@build": "aaa" if differs else "bbb",
+                "@@mode": "argument",
+            }
+
+        proc = run_compare(tmp_path, cell(True), cell(False))
+        assert proc.returncode == 0, proc.stdout
+        assert "newly AGREEING: 1" in proc.stdout, proc.stdout
+
     def test_an_unparseable_argument_actually_disagrees_somewhere(
         self, tmp_path: pathlib.Path
     ) -> None:

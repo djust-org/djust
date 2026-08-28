@@ -155,6 +155,7 @@ Usage
 from __future__ import annotations
 
 import copy
+import datetime
 import hashlib
 import itertools
 import json
@@ -635,11 +636,20 @@ ARG_SPELLINGS = {
     # A width that PARSES and saturates past `isize` — the only spelling that
     # reaches `pad_width`'s cap, and absent until the manifest said so.
     "q-huge": '"99999999999999999999"',
-    # Lookups. `known` is bound only in this mode, so the `{{ }}` ids of the
-    # default sweep stay byte-identical and an older baseline is comparable.
+    # Lookups. `known` and `instant` are bound only in this mode, so the
+    # `{{ }}` ids of the default sweep stay byte-identical and an older
+    # baseline is comparable.
     "miss": "missingvar",
     "miss-path": "no.such.path",
     "hit": "known",
+    # A resolvable DATETIME, and a quoted date-shaped literal. Without them the
+    # axis has no cell in which an argument is a legitimate comparison instant
+    # — the one shape `timesince`/`timeuntil` exist to take (#2344) — and the
+    # two spellings answer differently on purpose: Django accepts NO string
+    # here, quoted or not, so the quoted one raises while the resolved one is
+    # the datetime it crossed the wire as.
+    "hit-datetime": "instant",
+    "q-datetime": '"2020-01-01 15:30:00"',
     # Bare spellings Django resolves WITHOUT a context lookup, and two that
     # look like it and are lookups (`7.` and `0x10` — `Variable.__init__`
     # rejects both, so they raise `VariableDoesNotExist`).
@@ -684,6 +694,12 @@ ARG_INPUT_KEYS = ["s-img", "l-plain", "n-none"]
 #: divisor and a string alike.
 ARG_KNOWN = 2
 
+#: What `hit-datetime` binds to: a real `datetime`, three and a half hours after
+#: the `timesince`/`timeuntil` happy value, so a cell that reads the argument as
+#: a comparison instant answers `3 hours, 30 minutes` and a cell that discards
+#: it answers the years since 2020 (#2344).
+ARG_INSTANT = datetime.datetime(2020, 1, 1, 15, 30, 0)
+
 
 def django_argument_filters() -> list[str]:
     """Django's built-ins that take a TEMPLATE argument, read from the registry.
@@ -703,10 +719,11 @@ def django_argument_filters() -> list[str]:
 
 #: Time- or randomness-dependent: recorded as a marker, never as a value.
 #:
-#: `timesince`/`timeuntil` are here because they read the wall clock. Once
-#: #2344 threads a comparison instant through them, a cell whose ARGUMENT is a
-#: datetime is deterministic — but the argument axis sweeps unparseable and
-#: unresolvable spellings too, which still fall back to "now", so both stay.
+#: `timesince`/`timeuntil` are here because they read the wall clock when their
+#: argument is absent or falsy, which is every cell the DEFAULT corpus builds.
+#: On the argument axis a cell whose argument is a real instant is fully
+#: deterministic (#2344), so that mode records the AGREEMENT rather than
+#: collapsing the pair — see `measure_argument_axis`.
 NONDET = {"random", "timesince", "timeuntil"}
 NONDET_MARKER = re.compile(r"<NONDET len=\d+>")
 
@@ -1454,10 +1471,28 @@ def measure_argument_axis(out_path: str) -> None:
         source = (
             "{{ p|" + expr + " }}" if shape == "var" else TAG_SHAPES[shape].replace("@EXPR@", expr)
         )
-        dj, du = render_both(source, {"p": value, "known": ARG_KNOWN})
+        dj, du = render_both(source, {"p": value, "known": ARG_KNOWN, "instant": ARG_INSTANT})
+        dj, du = _raise_bit(dj), _raise_bit(du)
         if name in NONDET:
-            dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
-        result[cid] = [_raise_bit(dj), _raise_bit(du)]
+            # The AGREEMENT is the comparable property here, not the bytes.
+            #
+            # The default corpus rewrites a NONDET cell to `<NONDET len=N>` on
+            # both sides and `load()` collapses that to a bare `<NONDET>`, so
+            # the two sides always compare EQUAL — which is right for `random`
+            # and blind for these two. `timesince`/`timeuntil` read the wall
+            # clock only when their argument is absent or falsy; with a real
+            # instant they are fully deterministic, and #2344 is a change to
+            # exactly those cells. Collapsing them by NAME made this axis
+            # unable to see the fix it exists for, which is the corpus-gap
+            # failure mode one level in.
+            #
+            # Recording whether the two engines agreed keeps the cell
+            # comparable without pinning bytes that a clock moves: a
+            # clock-dependent cell's agreement bit is stable (both engines read
+            # the same clock microseconds apart), and #2344 shows up as cells
+            # moving from `differs` to `<NONDET>`.
+            dj, du = "<NONDET>", "<NONDET>" if dj == du else "<NONDET differs>"
+        result[cid] = [dj, du]
     _write(out_path, result, "argument")
 
 
