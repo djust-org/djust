@@ -101,6 +101,7 @@ import itertools
 import json
 import re
 import sys
+from decimal import Decimal
 
 import django
 from django.conf import settings
@@ -285,6 +286,21 @@ INPUTS = {
     # `<li>` where Django nests a `<ul>`. Every axis of a surface, not the one
     # you happened to notice.
     "t-nested": ["<b>", ("c", ("d",))],
+    # ITEMS that are not strings (#2324). Every other `l-`/`t-` entry holds
+    # strings or a nested sequence, so the corpus could not construct the cell
+    # `safeseq`'s per-item stringify moves for a NUMBER — and that is the half
+    # of the fix with a second spelling to get right: `mark_safe(1e20)` is
+    # `'1e+20'`, CPython's `repr`, where `{{ f }}` renders the expanded
+    # `100000000000000000000`, because `Display` is `numberformat.format()`.
+    # Django really does spell one float two ways depending on the path, and
+    # before this row the tool measured neither. The `Decimal` is the same split
+    # (`str` is `1E-9`, the render is `0.000000001`); `None`/`True` are here
+    # because `str(None)` is the text `None` and a mistake there puts it on the
+    # page. Carries a live payload so the permissiveness half reads the row too.
+    "l-scalars": [1e20, Decimal("1E-9"), 42, None, True, "<img src=x onerror=alert(1)>"],
+    # A MAP at an ITEM position, which no other entry has — `d-plain` puts the
+    # dict at the top, where no per-item rule can see it.
+    "l-dict": [{"k": "<v>"}, "x"],
     "d-plain": {"k": "<v>", "j": 2},
     "i-int": 42,
     "f-float": 1.5,
@@ -335,6 +351,8 @@ LIVE_FRAGMENTS = {
     "l-plain": ["<b>"],
     "t-plain": ["<b>"],
     "t-nested": ["<b>"],
+    "l-scalars": ["<img", "onerror="],
+    "l-dict": ["<v>"],
     "d-plain": ["<v>"],
     # `l-marked` / `s-marked` carry markup Django ITSELF emits live, so a
     # fragment entry for them would report every correct cell as a leak. The
@@ -442,16 +460,28 @@ INPUTS_2 = [
     # contains a newline, a tab, a run of spaces or a `U+2028`, so every filter
     # that reads whitespace is composed only over inputs that have none.
     "s-lines",
+    # The ITEM-TYPE axis (#2324). Every other 2-chain input is a scalar, a
+    # string, or a sequence of strings, so no chain the tool built could ask
+    # what a SECOND filter does with an item that is a number, a `Decimal`, a
+    # map or a nested sequence — which is the whole of what `safeseq`'s
+    # per-item `str()` moves, and the axis on which a wrong spelling
+    # (`Display` rather than `py_str`) is visible.
+    #
+    # `l-nested` and `t-nested` were deliberately held off this list until now,
+    # and the reason was #2324 itself: chaining them reported
+    # `safeseq|unordered_list` disagreeing identically for both containers,
+    # which was a pre-existing defect rather than anything #2317 introduced.
+    # With that defect fixed they belong here, and they arrive TOGETHER — the
+    # asymmetry the old note warned about is a real hazard, since a list-only
+    # addition is exactly how #2317's tuple gap stayed invisible.
+    "l-nested",
+    "t-nested",
+    "l-scalars",
+    "l-dict",
 ]
-#: `t-nested` is on the 1-chain axis only, exactly as its list twin `l-nested`
-#: is. Chaining a NESTED input is a cell class this corpus does not measure for
-#: either container, and adding it for the tuple alone would be asymmetric —
-#: the first thing it reports is `safeseq|unordered_list`, where djust and
-#: Django disagree identically for `l-nested` and `t-nested` because `safeseq`
-#: does not stringify its items the way `mark_safe` does. That is a separate,
-#: pre-existing defect (#2324; pinned for both containers in
-#: `python/tests/test_sequence_shape_preservation_2317_2321.py::
-#: TestKnownAdjacentDivergences`), not something #2317 introduced.
+#: The 3-chain axis stays a small hot subset — 16³ chains is already the
+#: dominant cost — and the item-type axis above is measured at length 2, where
+#: "what does the NEXT filter do with this item" is already answerable.
 INPUTS_3 = ["s-img", "l-plain", "i-int", "l-marked"]
 
 #: Time- or randomness-dependent: recorded as a marker, never as a value.

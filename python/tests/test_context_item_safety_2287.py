@@ -748,40 +748,54 @@ class TestACustomFilterSeesContextSourcedItemSafety:
             _rust.render_template_with_dirs(source, {"p": raw}, [], ["p.0"]) == "tuple[False,False]"
         )
 
-    def test_a_non_string_element_is_passed_through_untouched(self) -> None:
-        """``mark_item``'s ``str``-only policy, and where it is REACHABLE.
+    def test_safeseq_hands_the_filter_marked_strings_even_for_a_non_string_item(
+        self,
+    ) -> None:
+        """``mark_item``'s ``str``-only policy, and what is left REACHABLE.
 
         ``mark_safe`` STRINGIFIES a non-``str``, which would change the TYPE a
         filter receives — the reason ``mark_input_safety`` wraps ``str`` only.
 
-        The observable case is on the LIST arm, via a ``safeseq`` grant. The
-        first version of this test claimed to be "the tuple half"; that claim
-        is FALSE and running it is what showed so. Every producer that can grant
-        a TUPLE requires all-``String`` elements — ``Context::items_are_safe``
-        refuses a sequence holding an ``int`` or a nested container outright, and
-        ``safeseq``/``escapeseq`` return a ``list``, not a tuple. So
-        ``mark_item``'s non-``str`` branch is unreachable *through the tuple
-        arm*, and what makes the tuple arm right there is that the two arms
-        share one helper rather than a second copy that could drift (#1646).
-        The refusals are asserted below, because "unreachable" is a claim and
-        not an excuse.
+        This test used to read ``list[True,False]`` and assert that djust hands
+        the ``int`` through unmarked where Django hands over
+        ``SafeString('2')``. That was a real divergence wearing a policy's
+        clothes, and #2324 closed it at the source: ``safeseq`` now replaces
+        every item with the item's ``str()``, exactly as
+        ``[mark_safe(o) for o in value]`` does, so by the time
+        ``mark_input_safety`` sees the list there is no non-``str`` element
+        left. Django's own answer for this cell is ``list[True,True]``, which
+        ``test_marked_items_arrive_as_SafeData``'s sibling assertion below
+        measures rather than assumes.
+
+        What that leaves: no *known* producer of an item grant can present a
+        non-``str`` element — ``safeseq``/``escapeseq`` return all-``String``
+        lists, and ``Context::items_are_safe`` refuses a sequence holding an
+        ``int`` or a nested container outright (asserted below, because
+        "unreachable" is a claim and not an excuse). Whether ``mark_item``'s
+        non-``str`` branch therefore has any remaining producer at all — and if
+        not, whether it should be deleted rather than tested around — is
+        tracked in #2337; keeping the pass-through is the ESCAPING direction,
+        so it is the safe side to be wrong on.
         """
         self._register_probe()
-        got = _rust.render_template_with_dirs(
-            "{{ p|safeseq|_ctx_item_probe }}", {"p": ("a", 2)}, []
+        source = "{{ p|safeseq|_ctx_item_probe }}"
+        expected = django_render(source, ("a", 2))
+        assert expected == "list[True,True]", (
+            f"Django stopped marking the stringified item — premise moved: {expected!r}"
         )
-        assert got == "list[True,False]", got
+        got = _rust.render_template_with_dirs(source, {"p": ("a", 2)}, [])
+        assert got == expected, got
 
-        # The two refusals that make the tuple arm's non-`str` branch dead:
-        # marking every index does NOT grant a tuple holding a non-`String`.
+        # The two refusals that keep `Context::items_are_safe` off the non-`str`
+        # branch: marking every index does NOT grant a sequence holding one.
         for value in (("a", 2), ("a", ["b"])):
             unreached = _rust.render_template_with_dirs(
                 "{{ p|_ctx_item_probe }}", {"p": value}, [], ["p.0", "p.1"]
             )
             assert unreached == "tuple[False,False]", (
                 f"a tuple holding a non-String element was granted item safety, so "
-                f"`mark_item`'s non-`str` branch IS reachable on the tuple arm and "
-                f"this test's reasoning is stale: {value!r} -> {unreached!r}"
+                f"`mark_item`'s non-`str` branch IS reachable through the context "
+                f"grant and this test's reasoning is stale: {value!r} -> {unreached!r}"
             )
 
     def test_but_the_tuple_still_renders_live_through_join(self) -> None:

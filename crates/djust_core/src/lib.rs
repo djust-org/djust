@@ -807,11 +807,52 @@ impl Value {
         }
     }
 
+    /// Python `str()`.
+    ///
+    /// Sibling of [`Value::py_repr`], and the same `Float`/`Decimal` split one
+    /// nesting level out: `str()` is what Django's `@stringfilter` hands its
+    /// 28 decorated built-ins, and what `mark_safe(obj)` — `SafeString(str(obj))`
+    /// — makes of ANY input, which is `|safe` (#2303) and `|safeseq` (#2324).
+    ///
+    /// **Not `Display`, for two variants.** `Display` is Django's
+    /// `numberformat.format()` — the RENDER form — which expands an exponent
+    /// (#2214, #2258):
+    ///
+    /// ```text
+    ///                      py_str()   Display
+    /// 1e20                 1e+20      100000000000000000000
+    /// Decimal("1E-9")      1E-9       0.000000001
+    /// ```
+    ///
+    /// Django really does spell one number two ways depending on which path it
+    /// takes, so djust needs both spellings and neither is a special case: the
+    /// renderer keeps `Display`, and everything that wants Python's `str()`
+    /// calls this. The coercion is free for a `Decimal` — `Value::Decimal`
+    /// already CARRIES `str(Decimal)`, built from `ob.str()` at the PyO3
+    /// boundary, and it is `Display` that applies the expansion.
+    ///
+    /// Every other variant's `Display` already IS Python's `str()`, including
+    /// `Missing` (`""`, Django's `string_if_invalid` substituted before the
+    /// chain runs) and `Object` (its `__str__` for a model, dict repr
+    /// otherwise). ONE definition, so no caller re-derives the split (#1646).
+    pub fn py_str(&self) -> String {
+        match self {
+            Value::Decimal(d) => d.clone(),
+            Value::Float(f) => decimal::python_float_repr(*f),
+            other => other.to_string(),
+        }
+    }
+
     /// Python `repr()`, used for values NESTED inside a container.
     ///
     /// `str(['a'])` is `"['a']"` while `str('a')` is `"a"` — a nested string is
     /// quoted, a top-level one is not. Containers therefore cannot reuse
     /// `Display` for their elements.
+    ///
+    /// The `Decimal`/`Float` arms are [`Value::py_str`]'s split with `repr`'s
+    /// own wrapping applied: `repr(Decimal('19.99'))` is the constructor form,
+    /// and a nested float is spelled by `repr` exactly as `py_str` spells a
+    /// top-level one.
     pub fn py_repr(&self) -> String {
         match self {
             Value::String(s) => py_repr_string(s),
@@ -1299,5 +1340,74 @@ mod tests {
         // `str([1, 2])` (#2203).
         let list = Value::List(vec![Value::Integer(1), Value::Integer(2)]);
         assert_eq!(list.to_string(), "[1, 2]");
+    }
+
+    /// `py_str` is Python's `str()`, which for a `Float`/`Decimal` is NOT the
+    /// render form (#2324). Every row is CPython's answer.
+    #[test]
+    fn py_str_is_cpython_str_not_the_render_form() {
+        for (value, expected) in [
+            (Value::Float(1e20), "1e+20"),
+            (Value::Float(1e-200), "1e-200"),
+            (Value::Float(2.0), "2.0"),
+            (Value::Float(f64::NAN), "nan"),
+            (Value::Float(f64::INFINITY), "inf"),
+            (Value::Decimal("1E-9".to_string()), "1E-9"),
+            (Value::Decimal("19.99".to_string()), "19.99"),
+        ] {
+            assert_eq!(value.py_str(), expected, "py_str of {value:?}");
+        }
+        // And the render form still expands, which is the half `Display` owns.
+        assert_eq!(Value::Float(1e20).to_string(), "100000000000000000000");
+        assert_eq!(
+            Value::Decimal("1E-9".to_string()).to_string(),
+            "0.000000001"
+        );
+    }
+
+    /// For every OTHER variant `py_str` is `Display`, so no caller needs to
+    /// know which is which. A new variant whose `Display` is not its `str()`
+    /// fails here rather than silently taking the wrong branch.
+    #[test]
+    fn py_str_is_display_for_every_variant_but_float_and_decimal() {
+        let mut map: IndexMap<String, Value> = IndexMap::new();
+        map.insert("k".to_string(), Value::Integer(1));
+        for value in [
+            Value::Missing,
+            Value::None,
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Integer(-7),
+            Value::BigInt("1000000000000000000000000000000".to_string()),
+            Value::String("a < b".to_string()),
+            Value::String(String::new()),
+            Value::List(vec![Value::Integer(1), Value::String("a".to_string())]),
+            Value::Tuple(vec![Value::String("a".to_string())]),
+            Value::Object(map),
+        ] {
+            assert_eq!(
+                value.py_str(),
+                value.to_string(),
+                "py_str diverged from Display for {value:?}"
+            );
+        }
+    }
+
+    /// `py_str` and `py_repr` are the SAME split one nesting level apart:
+    /// `str('a')` is bare where `repr('a')` is quoted, and `str(Decimal(..))`
+    /// is the digits where `repr` is the constructor form. Pinned together so
+    /// a future edit to one has to answer for the other.
+    #[test]
+    fn py_str_and_py_repr_differ_exactly_where_python_does() {
+        assert_eq!(Value::String("a".to_string()).py_str(), "a");
+        assert_eq!(Value::String("a".to_string()).py_repr(), "'a'");
+        assert_eq!(Value::Decimal("19.99".to_string()).py_str(), "19.99");
+        assert_eq!(
+            Value::Decimal("19.99".to_string()).py_repr(),
+            "Decimal('19.99')"
+        );
+        // A float is spelled identically either way — `repr` IS `str` for a
+        // float in Python 3, which is why both route through the same helper.
+        assert_eq!(Value::Float(1e20).py_str(), Value::Float(1e20).py_repr());
     }
 }

@@ -43,6 +43,7 @@ Rust side does.
 from __future__ import annotations
 
 import random
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -213,6 +214,8 @@ class TestNeighbouringSequenceFiltersAreUnchanged:
             "{{ p|dictsort:0 }}",
             "{{ p|dictsortreversed:0 }}",
             "{{ p|unordered_list }}",
+            # Joined the nested table when #2324 landed — see below.
+            "{{ p|safeseq }}",
         ],
     )
     @pytest.mark.parametrize(
@@ -227,8 +230,12 @@ class TestNeighbouringSequenceFiltersAreUnchanged:
     def test_nested_sequences_agree_with_django(self, src, value) -> None:
         """Same table, restricted to the filters that handle NESTED sequences.
 
-        ``safeseq`` is absent on purpose — see
-        :class:`TestKnownAdjacentDivergences` (#2324).
+        ``safeseq`` joined this table in #2324, which made it replace each item
+        with the item's ``str()`` the way ``mark_safe`` does. Before that it was
+        the one filter here that read a sublist as a sublist, and its exclusion
+        was pinned by ``TestKnownAdjacentDivergences``; that pin is gone and the
+        rows it named live in
+        ``python/tests/test_safeseq_stringifies_its_items_2324.py``.
         """
         assert_agrees(src, value)
 
@@ -241,35 +248,6 @@ class TestKnownAdjacentDivergences:
     them is what keeps their exclusion from the tables above honest: if one is
     fixed, this class goes red and points at the row to delete.
     """
-
-    def test_safeseq_does_not_stringify_its_items(self) -> None:
-        """#2324. ``mark_safe(obj)`` is ``SafeString(obj)`` — a ``str`` for ANY input.
-
-        Django's ``safeseq`` therefore replaces every item with its ``str()``;
-        djust keeps the typed value. Visible only on a direct render or when a
-        LATER filter reads the item's type — ``{{ p|safeseq|unordered_list }}``
-        nests in djust because the item is still a sequence, where Django sees
-        the string it made of it.
-
-        Not fixable inside this PR's rule: matching ``mark_safe`` needs a
-        Python-``str()``-of-a-``Value`` helper, and ``Value``'s ``Display`` is
-        deliberately Django's ``numberformat.format`` for ``Float`` and
-        ``Decimal`` (see the arms in ``djust_core/src/lib.rs``), so ``1e20``
-        and ``Decimal('1E-9')`` would need their own spelling. That is a
-        numeric-formatting change, not a container-shape one. Filed as #2324.
-        """
-        for value in (["<b>", ["c", ["d"]]], ["<b>", ("c", ("d",))]):
-            src = "{{ p|safeseq|unordered_list }}"
-            assert djust_render(src, value) != django_render(src, value), (
-                f"safeseq now agrees with Django for {value!r} — the gap this "
-                "test pins is closed. Delete this test and restore safeseq to "
-                "TestNeighbouringSequenceFiltersAreUnchanged's nested table."
-            )
-        # The point of the pin: the divergence is the SAME for both containers,
-        # so it is not the tuple-ness rule and #2317 did not introduce it.
-        assert djust_render("{{ p|safeseq }}", [1, 2]) != django_render(
-            "{{ p|safeseq }}", [1, 2]
-        ), "a plain list of ints diverges too — the gap is not about tuples"
 
     def test_make_list_of_a_tuple_is_the_repr_characters_because_django_says_so(
         self,
@@ -534,20 +512,35 @@ class TestEveryRebuildSiteIsAccountedFor:
     which is the point: it forces the author to say which column it belongs in.
     """
 
-    #: FILTER site → why it is allowed to produce a list unconditionally.
-    #: Every reason is Django's own implementation, not a djust convention.
+    #: FILTER site → (how many times that exact line appears, why it is allowed
+    #: to produce a list unconditionally). Every reason is Django's own
+    #: implementation, not a djust convention.
+    #:
+    #: The multiplicity is pinned, not just the set: ``safeseq`` and
+    #: ``escapeseq`` now spell their construction identically — both map every
+    #: item through a function, since #2324 made ``safeseq``'s items
+    #: ``str(item)`` the way ``mark_safe`` does — so a set alone could not tell
+    #: two such sites from three.
     LIST_ALWAYS = {
-        "Ok(Value::List(items))": "dictsort/dictsortreversed — Django is sorted(), which returns a list",
-        "Ok(Value::List(chars))": "make_list — Django is @stringfilter + list(str(value))",
-        "Value::List(items),": "safeseq — Django is a list comprehension",
-        "Value::List(": "escapeseq — Django is a list comprehension",
+        "Ok(Value::List(items))": (
+            1,
+            "dictsort/dictsortreversed — Django is sorted(), which returns a list",
+        ),
+        "Ok(Value::List(chars))": (
+            1,
+            "make_list — Django is @stringfilter + list(str(value))",
+        ),
+        "Value::List(": (
+            2,
+            "safeseq and escapeseq — Django is a list comprehension in both",
+        ),
     }
 
     #: Not a filter: ``rebuild_like``'s own total-function default, for a
     #: non-sequence input no caller can reach today. Enumerated rather than
     #: excluded — a wildcard arm producing a list is exactly the shape this
     #: test exists to make somebody justify.
-    HELPER_DEFAULT = {"_ => Value::List(items),"}
+    HELPER_DEFAULT = {"_ => Value::List(items),": (1, "rebuild_like's default arm")}
 
     #: ``slice`` routes through the helper on its ONE sequence exit. It had two
     #: — populated and empty — until #2326 replaced the hand-rolled index math
@@ -579,18 +572,26 @@ class TestEveryRebuildSiteIsAccountedFor:
             for n, ln in _production_lines()
             if "Value::List(" in ln and "| Value::Tuple(" not in ln
         ]
-        found = {ln for _, ln in built}
-        expected = set(self.LIST_ALWAYS) | self.HELPER_DEFAULT
+        found = Counter(ln for _, ln in built)
+        expected = Counter(
+            {
+                line: count
+                for line, (count, _reason) in {
+                    **self.LIST_ALWAYS,
+                    **self.HELPER_DEFAULT,
+                }.items()
+            }
+        )
         assert found == expected, (
-            "the set of bare Value::List sites in filters.rs changed.\n"
-            f"  new/changed: {sorted(found - expected)}\n"
-            f"  gone:        {sorted(expected - found)}\n"
+            "the bare Value::List sites in filters.rs changed.\n"
+            f"  new/more:  {sorted((found - expected).elements())}\n"
+            f"  gone/less: {sorted((expected - found).elements())}\n"
             "Every one is a place tuple-ness can be lost (#2317/#2321). Decide it "
             "explicitly: add it to LIST_ALWAYS with Django's own reason for "
             "returning a list, route it through rebuild_like(), or pair the match "
             "with | Value::Tuple(x)."
         )
-        assert len(built) == len(expected)
+        assert len(built) == sum(expected.values())
 
     def test_slices_sequence_exit_routes_through_the_shared_helper(self) -> None:
         """The other column of the table, and the count the PR body states.
@@ -619,4 +620,5 @@ class TestEveryRebuildSiteIsAccountedFor:
         assert len(all_calls) == self.SHAPE_PRESERVING_CALLS, (
             f"rebuild_like gained a caller outside apply_slice: {all_calls}"
         )
-        assert len(self.LIST_ALWAYS) + self.SHAPE_PRESERVING_CALLS == self.TOTAL_REBUILD_SITES
+        list_always_sites = sum(count for count, _reason in self.LIST_ALWAYS.values())
+        assert list_always_sites + self.SHAPE_PRESERVING_CALLS == self.TOTAL_REBUILD_SITES
