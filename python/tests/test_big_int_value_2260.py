@@ -202,7 +202,7 @@ def test_the_comparison_operators_still_work() -> None:
     """The #2244 hole, one variant over.
 
     A big int arrived as a ``Float`` before this variant and took
-    ``compare_values``' ``(Float, Integer)`` arm. As a variant with no arm it
+    ``try_compare``' ``(Float, Integer)`` arm. As a variant with no arm it
     fell to the numeric-pair wildcard, which admitted only
     {Integer, Float, Decimal}, returned ``None``, and yielded 0 — "equal", so
     BOTH ``>`` and ``<`` were false and the template silently took the wrong

@@ -2475,12 +2475,20 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     }
 
     // Handle >= (must be before > to avoid false match)
+    //
+    // `is_some_and`, not `unwrap_or(0) >= 0` (#2338). An incomparable pair is
+    // `None`, and Django answers False for it — Python raises `TypeError` and
+    // `{% if %}` catches it. Defaulting to 0 reads "cannot be ordered" as
+    // "equal" and answers True, which is the permissive direction: a
+    // `{% if x >= threshold %}` gate opened on operands with no ordering at
+    // all. Its mirror below must stay in step — fixing one and leaving the
+    // other is the same bug reflected (#1646).
     if condition.contains(">=") {
         let parts: Vec<&str> = condition.split(">=").map(|s| s.trim()).collect();
         if parts.len() == 2 {
             let left = get_value(parts[0], context)?;
             let right = get_value(parts[1], context)?;
-            return Ok(compare_values(&left, &right) >= 0);
+            return Ok(try_compare(&left, &right).is_some_and(|c| c >= 0));
         }
     }
 
@@ -2490,7 +2498,7 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         if parts.len() == 2 {
             let left = get_value(parts[0], context)?;
             let right = get_value(parts[1], context)?;
-            return Ok(compare_values(&left, &right) <= 0);
+            return Ok(try_compare(&left, &right).is_some_and(|c| c <= 0));
         }
     }
 
@@ -2543,7 +2551,7 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         if parts.len() == 2 {
             let left = get_value(parts[0], context)?;
             let right = get_value(parts[1], context)?;
-            return Ok(compare_values(&left, &right) > 0);
+            return Ok(try_compare(&left, &right).is_some_and(|c| c > 0));
         }
     }
 
@@ -2553,7 +2561,7 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         if parts.len() == 2 {
             let left = get_value(parts[0], context)?;
             let right = get_value(parts[1], context)?;
-            return Ok(compare_values(&left, &right) < 0);
+            return Ok(try_compare(&left, &right).is_some_and(|c| c < 0));
         }
     }
 
@@ -2745,7 +2753,7 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
 /// Guards the equality widening so it cannot reach `(Float, Integer)`, which
 /// has its own arms — `_ => false` when this guard was written, exact since
 /// #2243, and an epsilon in neither case. Ordering (`<`, `>`) needs no such
-/// guard: `compare_values` already carried explicit `(Float, Integer)` and
+/// guard: `try_compare` already carried explicit `(Float, Integer)` and
 /// `(Integer, Float)` arms before this change, and every remaining combination
 /// `numeric_pair` admits involves one of the two exact-digit variants, which
 /// have no arms of their own — so nothing without one reaches its wildcard.
@@ -2769,7 +2777,7 @@ fn numeric_pair(a: &Value, b: &Value) -> Option<(f64, f64)> {
     // it was a real regression the #2260 differential caught: a Python int past
     // `i64` used to arrive as a `Float` and take the `(Float, Integer)` arm, so
     // `{% if p > 10 %}` answered `gt`. As a `BigInt` with no arm it fell to this
-    // wildcard, got `None`, and `compare_values` returned 0 — "equal", so BOTH
+    // wildcard, got `None`, and the ordering came back 0 — "equal", so BOTH
     // `>` and `<` were false and the template silently took the wrong branch.
     // Exactly the #2244 hole, one variant over.
     let numeric = |v: &Value| {
@@ -2858,7 +2866,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
         // Mixed int/float, EXACTLY — `{% if x == 0 %}` on `0.0` (#2243).
         //
-        // `compare_values` has carried `(Integer, Float)` and `(Float, Integer)`
+        // `try_compare` has carried `(Integer, Float)` and `(Float, Integer)`
         // arms all along, so `{% if x > 0 %}` was right for a float while
         // `{% if x == 0 %}` fell to `_ => false` and was unconditionally wrong.
         // Django says true, because Python does.
@@ -2948,16 +2956,25 @@ fn values_identity(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Compare two values and return -1 (less), 0 (equal), or 1 (greater).
-/// Returns 0 for incomparable types.
+/// Order two values as Python does: `Some(-1 | 0 | 1)`, or **`None` when
+/// Python cannot order them at all** (#2338).
 ///
-/// 0 for "cannot be ordered" is what every `{% if a > b %}` operand pair has
-/// always done, and it is right: Python raises `TypeError`, Django's
-/// `{% if %}` catches it and answers False, and 0 makes both `>` and `<`
-/// false. (`<=` / `>=` read it as "equal" and answer True where Django answers
-/// False — a pre-existing property of EVERY incomparable pair, measured
-/// unchanged on both builds of the #2335 differential; tracked at #2338.)
-fn compare_values(a: &Value, b: &Value) -> i32 {
+/// The `None` is the whole point, and returning an `i32` with 0 standing in for
+/// it is the bug this replaced. 0 reproduced Django exactly for `>` and `<` —
+/// Python raises `TypeError`, Django's `{% if %}` catches it and answers False,
+/// and 0 makes both of those false — but `>=` and `<=` read the same 0 as
+/// "equal" and answered **True** for every pair with no ordering arm: a string
+/// against an int, a list against a tuple, a dict against anything, two
+/// `None`s. Silent, and permissive: `{% if x >= threshold %}` opened its gate
+/// on operands that cannot be compared.
+///
+/// So there is deliberately NO `compare_values(a, b) -> i32` wrapper left. One
+/// existed briefly in #2335 and was removed before merge precisely because,
+/// with every caller reading only the `i32`, the `Option` was observationally
+/// equivalent to 0 — a second mechanism shadowing the first. The `Option` is
+/// only worth having if the operators consume it, so all four do
+/// (`is_some_and`) and nothing else may re-collapse it.
+fn try_compare(a: &Value, b: &Value) -> Option<i32> {
     // Ordering has the same hole `values_equal` had, from the other side
     // (#2244): there is no `Bool` arm here at all, so `{% if flag > 0 %}` fell
     // to `numeric_pair`, which admits only the numeric variants, returned
@@ -2973,43 +2990,43 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
     // and is now 1, which is what Django answers.
     match (bool_as_int(a), bool_as_int(b)) {
         (None, None) => {}
-        (Some(a), Some(b)) => return compare_values(&a, &b),
-        (Some(a), None) => return compare_values(&a, b),
-        (None, Some(b)) => return compare_values(a, &b),
+        (Some(a), Some(b)) => return try_compare(&a, &b),
+        (Some(a), None) => return try_compare(&a, b),
+        (None, Some(b)) => return try_compare(a, &b),
     }
     match (a, b) {
-        (Value::Integer(a), Value::Integer(b)) => a.cmp(b) as i32,
+        (Value::Integer(a), Value::Integer(b)) => Some(a.cmp(b) as i32),
         (Value::Float(a), Value::Float(b)) => {
             if (a - b).abs() < f64::EPSILON {
-                0
+                Some(0)
             } else if a < b {
-                -1
+                Some(-1)
             } else {
-                1
+                Some(1)
             }
         }
         // Allow comparing integers and floats
         (Value::Integer(a), Value::Float(b)) => {
             let a_f = *a as f64;
             if (a_f - b).abs() < f64::EPSILON {
-                0
+                Some(0)
             } else if a_f < *b {
-                -1
+                Some(-1)
             } else {
-                1
+                Some(1)
             }
         }
         (Value::Float(a), Value::Integer(b)) => {
             let b_f = *b as f64;
             if (a - b_f).abs() < f64::EPSILON {
-                0
+                Some(0)
             } else if *a < b_f {
-                -1
+                Some(-1)
             } else {
-                1
+                Some(1)
             }
         }
-        (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
+        (Value::String(a), Value::String(b)) => Some(a.cmp(b) as i32),
         // Lexicographic, as Python orders two sequences of the same kind
         // (#2335): the first differing element decides, and if one is a prefix
         // of the other the shorter is smaller. The mirror of the `values_equal`
@@ -3018,11 +3035,9 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
         // #2244 and #2243 both had.
         //
         // Cross-kind (list vs tuple) and `Object` are deliberately absent:
-        // Python RAISES `TypeError` for both, Django's `{% if %}` catches it
-        // and answers False, and `compare_values`'s `unwrap_or(0)` reproduces
-        // that for `<` and `>`. (`<=` / `>=` read 0 as "equal" and answer True
-        // where Django answers False — a pre-existing property of every
-        // incomparable pair, measured and pinned, not introduced here.)
+        // Python RAISES `TypeError` for both, so they fall to the wildcard and
+        // come back `None` — false for all four of `<`, `>`, `<=`, `>=`, which
+        // is what Django answers.
         //
         // Python's own algorithm, not an approximation of it: it walks with
         // `==`, and ONLY AN EQUAL PAIR CONTINUES the walk. That one rule
@@ -3031,43 +3046,54 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
         // `[{}, 1] < [{}, 2]` is True in Python even though two dicts cannot
         // be ORDERED — they never need to be, because they are equal, so the
         // walk moves on. And an unequal pair DECIDES the comparison, whatever
-        // it answers, including the 0 an incomparable pair yields: a
-        // `TypeError` in Python, False for `<` and `>` in Django, 0 here.
+        // it answers — including the `None` an incomparable pair yields, which
+        // propagates out of the WHOLE comparison rather than being read as a
+        // tie. `[[], 'a', ('b',)] >= [1]` is False in Python for the same
+        // reason `>` is: the first pair raises, and the length never enters it.
         //
-        // The first draft asked `compare_values` FIRST and continued whenever
+        // The first draft asked for an ordering FIRST and continued whenever
         // it answered 0 — which conflates "equal" with "incomparable" and
         // falls through to the length tie-break, so
         // `[[], 'a', ('b',)] > [1]` answered True (3 elements beats 1) where
         // Django answers False. The randomised differential caught it in 27 of
-        // 28,500 cells; no curated case here had the shape.
+        // 28,500 cells; no curated case here had the shape. Returning `None`
+        // rather than 0 is what keeps that closed on the `>=` / `<=` side too,
+        // where a 0 would have re-opened it as "equal" (#2338).
         (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
             for (x, y) in a.iter().zip(b.iter()) {
                 if values_equal(x, y) {
                     continue;
                 }
-                return compare_values(x, y);
+                return try_compare(x, y);
             }
-            a.len().cmp(&b.len()) as i32
+            Some(a.len().cmp(&b.len()) as i32)
         }
-        // Null comparisons
-        (Value::Missing, Value::Missing) => 0,
+        // No `(Missing, Missing) => 0` arm, and its absence is deliberate
+        // (#2338): Python's `None < None` RAISES, so Django answers False for
+        // all four operators, and the 0 this used to return made `>=` and `<=`
+        // both true. `{% if a >= b %}` over two variables the context does not
+        // define now answers False, as Django does. `==` is unaffected — it
+        // goes through `values_equal`, where `Missing`/`None` ARE equal,
+        // matching Django's `ignore_failures` resolution of an absent variable
+        // to `None`.
+        //
         // Any remaining numeric pair — which is every pair involving a Decimal
-        // (#2214). This is the `{% if p > 10 %}` case: without it the arm below
-        // returns 0, `>` and `<` both fail, and the template silently takes the
-        // wrong branch. It is the second of the two regressions measured against
-        // serializing a Decimal as a plain string.
+        // or a BigInt (#2214, #2260). This is the `{% if p > 10 %}` case:
+        // without it the fallthrough is `None`, `>` and `<` both fail, and the
+        // template silently takes the wrong branch. It is the second of the two
+        // regressions measured against serializing a Decimal as a plain string.
         _ => match numeric_pair(a, b) {
             Some((a, b)) => {
                 if (a - b).abs() < f64::EPSILON {
-                    0
+                    Some(0)
                 } else if a < b {
-                    -1
+                    Some(-1)
                 } else {
-                    1
+                    Some(1)
                 }
             }
-            // Incomparable types return 0 (treated as equal, so < and > fail)
-            None => 0,
+            // Python cannot order this pair: `None`, so every operator is false.
+            None => None,
         },
     }
 }
@@ -4773,30 +4799,56 @@ mod tests {
     }
 
     #[test]
-    fn test_2244_compare_values_orders_a_bool_as_its_integer() {
-        assert_eq!(compare_values(&Value::Bool(true), &Value::Integer(0)), 1);
-        assert_eq!(compare_values(&Value::Integer(0), &Value::Bool(true)), -1);
-        assert_eq!(compare_values(&Value::Bool(false), &Value::Integer(1)), -1);
-        assert_eq!(compare_values(&Value::Integer(1), &Value::Bool(false)), 1);
-        assert_eq!(compare_values(&Value::Bool(true), &Value::Integer(1)), 0);
-        assert_eq!(compare_values(&Value::Bool(false), &Value::Integer(0)), 0);
+    fn test_2244_try_compare_orders_a_bool_as_its_integer() {
+        assert_eq!(try_compare(&Value::Bool(true), &Value::Integer(0)), Some(1));
+        assert_eq!(
+            try_compare(&Value::Integer(0), &Value::Bool(true)),
+            Some(-1)
+        );
+        assert_eq!(
+            try_compare(&Value::Bool(false), &Value::Integer(1)),
+            Some(-1)
+        );
+        assert_eq!(
+            try_compare(&Value::Integer(1), &Value::Bool(false)),
+            Some(1)
+        );
+        assert_eq!(try_compare(&Value::Bool(true), &Value::Integer(1)), Some(0));
+        assert_eq!(
+            try_compare(&Value::Bool(false), &Value::Integer(0)),
+            Some(0)
+        );
 
-        assert_eq!(compare_values(&Value::Bool(true), &Value::Float(0.5)), 1);
-        assert_eq!(compare_values(&Value::Float(0.5), &Value::Bool(true)), -1);
-        assert_eq!(compare_values(&Value::Bool(false), &Value::Float(0.0)), 0);
+        assert_eq!(try_compare(&Value::Bool(true), &Value::Float(0.5)), Some(1));
+        assert_eq!(
+            try_compare(&Value::Float(0.5), &Value::Bool(true)),
+            Some(-1)
+        );
+        assert_eq!(
+            try_compare(&Value::Bool(false), &Value::Float(0.0)),
+            Some(0)
+        );
 
         // No bool-vs-bool arm existed here, so this pair was 0 — "equal" — and
         // `{% if a > b %}` was false for `True > False`. Python orders them.
-        assert_eq!(compare_values(&Value::Bool(true), &Value::Bool(false)), 1);
-        assert_eq!(compare_values(&Value::Bool(false), &Value::Bool(true)), -1);
-        assert_eq!(compare_values(&Value::Bool(true), &Value::Bool(true)), 0);
-
-        // Still incomparable, as before: a bool against a string is 0.
         assert_eq!(
-            compare_values(&Value::Bool(true), &Value::String("1".to_string())),
-            0
+            try_compare(&Value::Bool(true), &Value::Bool(false)),
+            Some(1)
         );
-        assert_eq!(compare_values(&Value::Bool(true), &Value::None), 0);
+        assert_eq!(
+            try_compare(&Value::Bool(false), &Value::Bool(true)),
+            Some(-1)
+        );
+        assert_eq!(try_compare(&Value::Bool(true), &Value::Bool(true)), Some(0));
+
+        // Incomparable — and `None` rather than the `Some(0)` this used to
+        // return (#2338). Python raises for `True > "1"`, so all four operators
+        // are false; `Some(0)` made `>=` and `<=` answer True.
+        assert_eq!(
+            try_compare(&Value::Bool(true), &Value::String("1".to_string())),
+            None
+        );
+        assert_eq!(try_compare(&Value::Bool(true), &Value::None), None);
     }
 
     #[test]
@@ -4859,9 +4911,9 @@ mod tests {
             &l(vec![Value::Integer(1)])
         ));
         assert_eq!(
-            compare_values(&l(vec![Value::Integer(1)]), &t(vec![Value::Integer(2)])),
-            0,
-            "cross-kind ordering is a TypeError in Python; 0 is what makes < and > both false"
+            try_compare(&l(vec![Value::Integer(1)]), &t(vec![Value::Integer(2)])),
+            None,
+            "cross-kind ordering is a TypeError in Python; None is what makes all four operators false"
         );
     }
 
@@ -4905,24 +4957,24 @@ mod tests {
     #[test]
     fn test_2335_ordering_is_lexicographic() {
         assert_eq!(
-            compare_values(&l(vec![Value::Integer(1)]), &l(vec![Value::Integer(2)])),
-            -1
+            try_compare(&l(vec![Value::Integer(1)]), &l(vec![Value::Integer(2)])),
+            Some(-1)
         );
         assert_eq!(
-            compare_values(&l(vec![Value::Integer(2)]), &l(vec![Value::Integer(1)])),
-            1
+            try_compare(&l(vec![Value::Integer(2)]), &l(vec![Value::Integer(1)])),
+            Some(1)
         );
         assert_eq!(
-            compare_values(
+            try_compare(
                 &l(vec![Value::Integer(1), Value::Integer(2)]),
                 &l(vec![Value::Integer(1)])
             ),
-            1,
+            Some(1),
             "a prefix is smaller"
         );
         assert_eq!(
-            compare_values(&l(vec![Value::Integer(1)]), &l(vec![Value::Integer(1)])),
-            0
+            try_compare(&l(vec![Value::Integer(1)]), &l(vec![Value::Integer(1)])),
+            Some(0)
         );
     }
 
@@ -4932,35 +4984,62 @@ mod tests {
         // do not stop the walk...
         let d = Value::Object(indexmap::IndexMap::new());
         assert_eq!(
-            compare_values(
+            try_compare(
                 &l(vec![d.clone(), Value::Integer(1)]),
                 &l(vec![d.clone(), Value::Integer(2)])
             ),
-            -1
+            Some(-1)
         );
         // ...and an UNEQUAL pair DECIDES, even when it cannot be ordered.
-        // Continuing past it — which is what asking `compare_values` first and
+        // Continuing past it — which is what asking for an ordering first and
         // treating its 0 as a tie does — falls through to the length tie-break
         // and answers "greater" (3 elements beats 1), which Django does not.
         // The randomised differential caught exactly this on the first draft.
+        //
+        // `None`, not `Some(0)` (#2338): an incomparable element makes the
+        // WHOLE comparison incomparable, so `>=` cannot read it back as a tie
+        // and answer True. That is the length tie-break bug again, one operator
+        // over — and it is what a plain `i32` return could not express.
         assert_eq!(
-            compare_values(
+            try_compare(
                 &l(vec![l(vec![]), Value::String("a".into()), d]),
                 &l(vec![Value::Integer(1)])
             ),
-            0
+            None
         );
     }
 
     #[test]
-    fn test_2335_an_incomparable_top_level_pair_is_unchanged() {
-        // The scalar contract every operand pair has always had: 0, so `>` and
-        // `<` are both false — Python raises and Django answers False.
+    fn test_2338_an_incomparable_pair_is_none_not_a_tie() {
+        // The contract the `Option` exists for: a pair Python refuses to order
+        // is `None`, so `>`, `<`, `>=` and `<=` are ALL false — which is what
+        // Django answers, because Python raises `TypeError` and `{% if %}`
+        // catches it. Returning 0 made `>=` and `<=` read it as "equal".
         assert_eq!(
-            compare_values(&Value::String("a".into()), &Value::Integer(1)),
-            0
+            try_compare(&Value::String("a".into()), &Value::Integer(1)),
+            None
         );
-        assert_eq!(compare_values(&Value::Missing, &Value::Missing), 0);
-        assert_eq!(compare_values(&Value::Integer(1), &Value::Integer(2)), -1);
+        // `None`/`Missing` too, and they are the pair most likely to be
+        // mistaken for a legitimate tie: `values_equal` DOES call them equal
+        // (Django resolves an absent variable to `None`, so `==` is True), but
+        // Python's `None < None` still raises, so ORDERING them is `None`.
+        // The two functions disagree here on purpose.
+        assert_eq!(try_compare(&Value::Missing, &Value::Missing), None);
+        assert_eq!(try_compare(&Value::None, &Value::None), None);
+        assert_eq!(try_compare(&Value::None, &Value::Integer(1)), None);
+        assert!(values_equal(&Value::Missing, &Value::Missing));
+        // A dict against anything, including itself.
+        let d = Value::Object(indexmap::IndexMap::new());
+        assert_eq!(try_compare(&d, &d), None);
+        // And the orderable pairs still answer, so `None` is not swallowing
+        // everything.
+        assert_eq!(
+            try_compare(&Value::Integer(1), &Value::Integer(2)),
+            Some(-1)
+        );
+        assert_eq!(
+            try_compare(&Value::String("b".into()), &Value::String("a".into())),
+            Some(1)
+        );
     }
 }

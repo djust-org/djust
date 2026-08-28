@@ -750,7 +750,7 @@ def test_decimal_equality_with_an_integer_is_epsilon_bounded() -> None:
     Net-positive — `Decimal('0.00') == 0` is now right where it used to be
     wrong — but it has a boundary, and an unqualified "agrees with Django" is
     false below it. Pinned exactly so the limit is a decision rather than a
-    discovery. `<` and `>` are unaffected: `compare_values` already carried the
+    discovery. `<` and `>` are unaffected: `try_compare` already carried the
     same epsilon arm for `(Float, Integer)`.
     """
     source = "{% if p == 0 %}Z{% else %}NZ{% endif %}"

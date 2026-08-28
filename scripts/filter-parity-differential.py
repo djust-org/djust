@@ -104,7 +104,7 @@ could reach them:
   common Django loop idioms there is — rendered NOTHING, because `.items` is a
   callable rather than a key and `{% for %}` had no `Value::Object` arm.
 * a **sequence-comparison** axis. Every `{% if %}` cell was a truthiness test on
-  ONE operand; the tool bound no `q` at all, so `values_equal` / `compare_values`
+  ONE operand; the tool bound no `q` at all, so `values_equal` / `try_compare`
   — which answered False for a list against itself — were entirely unmeasured.
 
 `python/tests/test_dict_iteration_and_sequence_equality_2334_2335.py::
@@ -694,7 +694,7 @@ PATH_SHAPES = {
 #:
 #: Every `{% if %}` cell above is a TRUTHINESS test on one operand — the tool
 #: could not construct a comparison at all, because it binds only `p`. So
-#: `values_equal` and `compare_values`, which two sequences reach and which
+#: `values_equal` and `try_compare`, which two sequences reach and which
 #: answered False for a list against ITSELF, were entirely unmeasured.
 #:
 #: `in` is here because it is the third caller of `values_equal` and would

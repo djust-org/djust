@@ -3,7 +3,7 @@
 `bool` subclasses `int` in Python, so `True == 1`, `False == 0` and `True > 0`
 are all true and Django agrees. djust said false to all three: `values_equal` in
 `crates/djust_templates/src/renderer.rs` had a `(Bool, Bool)` arm and no mixed
-Bool/numeric arm, so a bool against a number fell to `_ => false`; `compare_values`
+Bool/numeric arm, so a bool against a number fell to `_ => false`; `try_compare`
 had no `Bool` arm at all, so a bool reached `numeric_pair` — which admits only
 `{Integer, Float, Decimal}` — got `None`, and yielded 0, "equal". Both `>` and
 `<` were therefore false while `>=` and `<=` were both true, which is how the
@@ -22,7 +22,7 @@ and a bool now inherits them rather than having answers of its own. Pinning the
 equivalence rather than an exclusion list means the day those are fixed for
 integers, bools are fixed with them and this file needs no edit.
 
-The extra hole `compare_values` had: `{% if a > b %}` on two bools was also 0,
+The extra hole `try_compare` had: `{% if a > b %}` on two bools was also 0,
 "equal", because there is no bool-vs-bool ordering arm either. The substitution
 covers that pair too. `values_equal`'s `(Bool, Bool)` arm is deliberately NOT
 substituted — same answer, and skipping it keeps that arm live.
@@ -103,7 +103,7 @@ def test_both_operand_orders_and_both_equality_operators() -> None:
 
 
 def test_all_four_ordering_operators() -> None:
-    """`compare_values` yielded 0 for a bool, so `>`/`<` were false and
+    """`try_compare` yielded 0 for a bool, so `>`/`<` were false and
 
     `>=`/`<=` were true — half of which looked correct by accident.
     """
@@ -117,7 +117,7 @@ def test_all_four_ordering_operators() -> None:
 
 
 def test_two_bools_can_be_ordered() -> None:
-    """`compare_values` has no bool-vs-bool arm either, so this was 0/"equal"."""
+    """`try_compare` has no bool-vs-bool arm either, so this was 0/"equal"."""
     for source, ctx, expected in (
         ("{% if a > b %}T{% else %}F{% endif %}", {"a": True, "b": False}, "T"),
         ("{% if a < b %}T{% else %}F{% endif %}", {"a": True, "b": False}, "F"),
