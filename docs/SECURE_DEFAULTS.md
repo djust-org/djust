@@ -106,8 +106,17 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 - `_field_is_serializable(field_name, denied, allowed, optout=frozenset())`
   (line 391) — the actual per-field precedence, **floor-first (#1868)**
   (body lines 406–417):
-  1. **Identity keys** (`_IDENTITY_KEYS = {"pk", "id", "__str__", "__model__"}`,
-     line 60) always pass.
+  1. **Identity keys** (`_IDENTITY_KEYS = {"pk", "id", "__str__", "__model__"}`)
+     always pass. `model_identity(obj)` is the **single producer** of that map
+     (#2322) — every model shorthand in the codebase calls it: the main path,
+     the depth-limited FK, the max-depth shorthand, the JIT identity-only
+     subset, and both `template/rendering.py` fallbacks. Before that they were
+     six hand-rolled literals and only two carried `__model__`, so whether a
+     serialized model was recognisable as one depended on prefetch depth. If
+     you are writing a consumer that must tell a serialized model from a plain
+     dict, key on `"__str__"` — that is what the engine itself does
+     (`Value::object_str`), and it is the marker every producer has always
+     emitted.
   2. **The floor wins first.** If `field_name` is in `denied` (floor ∪
      `DJUST_SENSITIVE_FIELDS` ∪ `djust_exclude_fields`) it is dropped
      **regardless of any allowlist** — UNLESS the developer deliberately
