@@ -28,18 +28,12 @@
 //! [`Value`] is a tree built by the serializer, so it cannot be cyclic, and
 //! `depth` is `None`.
 //!
-//! Known residual — non-ASCII non-printable code points
-//! ----------------------------------------------------
+//! Former residual — non-ASCII non-printable code points, closed by #2292
+//! ----------------------------------------------------------------------
 //! Scalars are spelled by [`djust_core::py_repr_string`], the one definition the
-//! `{{ list }}` path also uses (#1646). It escapes the ASCII controls and stops
-//! there, because CPython's rule is `str.isprintable()` — Unicode-version data
-//! that DISAGREES ACROSS THE CI MATRIX: 3.12/3.13 carry Unicode 15.0 and call
-//! 148998 code points printable, 3.14 carries 16.0 and calls 154810 printable.
-//! Same situation as the `striptags` port (#2273) — the reference moves, so no
-//! fixed table is green everywhere.
-//!
-//! Measured, against real `pprint.pformat` on randomized corpora (a Python model
-//! of exactly this algorithm, so the layout is what is being measured):
+//! `{{ list }}` path also uses (#1646). It used to escape the ASCII controls
+//! and stop there, because CPython's rule is `str.isprintable()` — Unicode
+//! version data that DISAGREES ACROSS THE CI MATRIX. That measurement was:
 //!
 //! | corpus | divergence |
 //! |---|---|
@@ -48,8 +42,13 @@
 //! | + `U+00A0` / `U+200B` / `U+2028` / `U+FEFF` | 1488 / 4000 |
 //! | the same, with an exact `repr` substituted | 0 / 4000 |
 //!
-//! The last row is the proof that the layout is exact and the residual is
-//! entirely the scalar spelling.
+//! The last row was the proof that the LAYOUT — this module — was already
+//! exact and the residual was entirely the scalar spelling, i.e. not a bug
+//! here. #2292 then closed the spelling half: the escaper carries a 28-range
+//! table of the seven general categories that never move for an assigned code
+//! point, so the third row is now 0 / 4000 too. See [`djust_core::py_repr_string`]
+//! for why a fixed table is right despite the matrix spanning five Unicode
+//! versions.
 
 use djust_core::{py_repr_string, Value};
 

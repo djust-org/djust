@@ -30,6 +30,10 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 # already pulls markup5ever into this workspace for djust_vdom, so this only
 # adds an edge, not a crate.
 markup5ever = "0.39"
+# `Truncator.chars`'s NFC and `slugify`'s NFKD fold (#2319) — see the
+# workspace Cargo.toml for why a Unicode table is safe here when the
+# `isprintable` one (#2292) was not.
+unicode-normalization = { workspace = true }
 djust_core = { path = "../djust_core" }
 djust_vdom = { path = "../djust_vdom" }
 djust_components = { path = "../djust_components" }

@@ -595,6 +595,76 @@ pub fn django_value_repr() -> bool {
     DJANGO_VALUE_REPR.load(Ordering::Relaxed)
 }
 
+/// The code points CPython's `repr()` escapes: the union of the general
+/// categories `Cc`, `Cf`, `Cs`, `Co`, `Zl`, `Zp` and `Zs`, minus `U+0020`.
+///
+/// Generated from Unicode 16.0.0 (CPython 3.14). 139769 code points collapse
+/// to 28 ranges, because the set is dominated by three contiguous private-use
+/// blocks — which is why this is a hand-written table rather than a
+/// Unicode-general-category dependency. See [`py_repr_string`] for why a fixed
+/// table is correct here even though `str.isprintable()` is version-dependent.
+///
+/// `python/tests/test_py_repr_isprintable_table_2292.py` REGENERATES this set
+/// from the running interpreter's `unicodedata` and asserts equality over
+/// every assigned code point, so a future Unicode version that adds a `Cf`
+/// fails the suite rather than silently drifting.
+const NON_PRINTABLE: [(u32, u32); 28] = [
+    (0x0000, 0x001F),     // Cc          (U+0020 SPACE excluded: printable)
+    (0x007F, 0x00A0),     // Cc + Zs
+    (0x00AD, 0x00AD),     // Cf  SOFT HYPHEN
+    (0x0600, 0x0605),     // Cf
+    (0x061C, 0x061C),     // Cf
+    (0x06DD, 0x06DD),     // Cf
+    (0x070F, 0x070F),     // Cf
+    (0x0890, 0x0891),     // Cf
+    (0x08E2, 0x08E2),     // Cf
+    (0x1680, 0x1680),     // Zs  OGHAM SPACE MARK
+    (0x180E, 0x180E),     // Cf
+    (0x2000, 0x200F),     // Zs + Cf     (includes U+200B ZERO WIDTH SPACE)
+    (0x2028, 0x202F),     // Zl + Zp + Zs + Cf
+    (0x205F, 0x2064),     // Zs + Cf
+    (0x2066, 0x206F),     // Cf
+    (0x3000, 0x3000),     // Zs  IDEOGRAPHIC SPACE
+    (0xD800, 0xF8FF),     // Cs + Co     (Cs unreachable from a Rust `char`)
+    (0xFEFF, 0xFEFF),     // Cf  ZERO WIDTH NO-BREAK SPACE
+    (0xFFF9, 0xFFFB),     // Cf
+    (0x110BD, 0x110BD),   // Cf
+    (0x110CD, 0x110CD),   // Cf
+    (0x13430, 0x1343F),   // Cf
+    (0x1BCA0, 0x1BCA3),   // Cf
+    (0x1D173, 0x1D17A),   // Cf
+    (0xE0001, 0xE0001),   // Cf
+    (0xE0020, 0xE007F),   // Cf
+    (0xF0000, 0xFFFFD),   // Co  private use plane 15
+    (0x100000, 0x10FFFD), // Co  private use plane 16
+];
+
+/// Whether CPython's `str.isprintable()` is false for `c`, for every code
+/// point assigned on any interpreter djust supports.
+///
+/// See [`py_repr_string`] for the measurement behind "for every assigned code
+/// point" and for the unassigned-code-point residual.
+fn is_py_non_printable(c: char) -> bool {
+    let cp = c as u32;
+    // ASCII fast path: printable is U+0020..=U+007E, so only C0 and DEL are
+    // escaped. This is also the only branch the overwhelming majority of real
+    // strings ever reach.
+    if cp < 0x80 {
+        return cp < 0x20 || cp == 0x7F;
+    }
+    NON_PRINTABLE
+        .binary_search_by(|&(lo, hi)| {
+            if cp < lo {
+                std::cmp::Ordering::Greater
+            } else if cp > hi {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
 /// Python's `repr()` of a `str`, for every code point CPython spells the same
 /// way on every interpreter this project supports.
 ///
@@ -604,27 +674,66 @@ pub fn django_value_repr() -> bool {
 /// path and the `pprint` path drifted in the first place — `pprint` used a bare
 /// `format!("'{s}'")` that escaped nothing at all.
 ///
-/// **Deliberately incomplete, on the same reasoning as the `striptags` port
-/// (#2273): the reference moves.** CPython escapes any code point for which
-/// `str.isprintable()` is false, and that predicate is Unicode-version data —
-/// 3.12/3.13 carry Unicode 15.0, 3.14 carries 16.0, and the two disagree about
-/// **5812** code points (measured: 148998 printable vs 154810). No fixed table
-/// in Rust can be right on every runner in the CI matrix, so this escapes only
-/// the range every Unicode version agrees on — the ASCII controls `U+0000`–
-/// `U+001F` and `U+007F`, which are `Cc` and can never be reclassified. A
-/// non-ASCII non-printable (`U+00A0`, `U+200B`, `U+2028`, `U+FEFF`, …) is
-/// emitted literally where CPython emits `\xa0` / `\u200b`.
+/// # Which code points are escaped, and why a fixed table is right after all
 ///
-/// **What completing it would take** — the decision lands in #2292, not
-/// here. Only `Cn` (unassigned) actually drifts between Unicode versions;
-/// `Cc`, `Cf`, `Cs`, `Co`, `Zl`, `Zp` and `Zs` are small, stable sets. So
-/// either (a) carry a table of those seven categories and treat `Cn` as
-/// printable, which is exact for every ASSIGNED code point and diverges only
-/// where the interpreters already diverge — needing a hand-written range
-/// table or a Unicode-category dependency, which is a dependency discussion;
-/// or (b) accept a pinned divergence, the route `striptags` took (#2273),
-/// where the reference is captured per interpreter in a fixture rather than
-/// ported. What is NOT available is one fixed table green on every runner.
+/// CPython escapes every code point for which `str.isprintable()` is false,
+/// and that predicate is Unicode-version data. This escaper originally stopped
+/// at ASCII on the reasoning that the reference moves (the `striptags`
+/// argument, #2273). It does move — and by MORE than #2292 measured. Across
+/// djust's whole supported matrix, `python3.10`–`3.14` carry FIVE different
+/// Unicode versions and disagree about **11130** code points, not the 5812 the
+/// issue reported from a single 3.12-vs-3.14 pair (which also missed that 3.13
+/// carries 15.1, not 15.0):
+///
+/// | interpreter | `unidata_version` | printable code points |
+/// |---|---|---|
+/// | 3.10 | 13.0.0 | 143680 |
+/// | 3.11 | 14.0.0 | 144516 |
+/// | 3.12 | 15.0.0 | 148998 |
+/// | 3.13 | 15.1.0 | 149625 |
+/// | 3.14 | 16.0.0 | 154810 |
+///
+/// But the drift has a SHAPE, and that is what makes a fixed table correct.
+/// Measured end to end (13.0 → 16.0): of those 11130 code points, **11130
+/// became printable and 0 became non-printable**. Every single change is a
+/// code point going from *unassigned* (`Cn`) to assigned — 9473 `Lo`, 945
+/// `So`, 183 `Mn` and so on. Nothing that was ever printable stopped being
+/// printable, and nothing already assigned was reclassified.
+///
+/// So `not str.isprintable()` decomposes into two parts:
+///
+/// * the seven categories `Cc`, `Cf`, `Cs`, `Co`, `Zl`, `Zp`, `Zs` — which
+///   over 13.0 → 16.0 gained **exactly one** member among already-assigned
+///   code points, and that member is `U+0020 SPACE`, which Python
+///   special-cases as printable anyway. This part is *stable*, and it is the
+///   table in [`NON_PRINTABLE`];
+/// * plus `Cn`, which is the entire moving part.
+///
+/// This escapes the seven categories and treats `Cn` as printable. That rule
+/// reproduces `str.isprintable()` **exactly for every code point assigned on
+/// every interpreter in the matrix** — the residual disagreement is the
+/// unassigned space and nothing else, which is precisely where the
+/// interpreters already disagree with each other. The claim is not asserted
+/// here but recomputed against the running interpreter's own `unicodedata` by
+/// `python/tests/test_py_repr_isprintable_table_2292.py`, so it goes red on
+/// whichever runner it stops being true for.
+///
+/// Choosing "never escape `Cn`" over "escape `Cn` per some pinned Unicode
+/// version" is deliberate: the former is version-INDEPENDENT, so djust's
+/// output is identical on all five interpreters. Pinning a version would make
+/// djust exact on one runner and wrong by up to 11130 code points on the
+/// others — the failure #2292 was right to refuse.
+///
+/// **The documented residual**: an unassigned code point is emitted literally
+/// where CPython emits `\uXXXX`. Unassigned code points do not occur in real
+/// template data, and no fixed table can do better than this without becoming
+/// wrong somewhere else.
+///
+/// Two representational notes. `Cs` (surrogates) is in the table for
+/// completeness but is unreachable — a Rust `char` cannot hold one, so a lone
+/// surrogate cannot cross the PyO3 boundary at all. And `U+0020` is excluded
+/// from the table itself rather than special-cased at the call site.
+///
 /// See also the module docs of `djust_templates::pprint`.
 pub fn py_repr_string(s: &str) -> String {
     // Python's quote rule: single quotes, UNLESS the string contains a `'` and
@@ -647,10 +756,19 @@ pub fn py_repr_string(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
-            // The rest of C0, plus DEL. `\x1b` really is spelled `\x1b` by
-            // CPython — there is no `\e`, and no `\v`/`\f`/`\a`/`\b` either.
-            _ if (c as u32) < 0x20 || (c as u32) == 0x7F => {
-                out.push_str(&format!("\\x{:02x}", c as u32));
+            // Everything else CPython considers non-printable. `\x1b` really
+            // is spelled `\x1b` — there is no `\e`, and no `\v`/`\f`/`\a`/`\b`
+            // either. The width of the escape is chosen by magnitude, exactly
+            // as CPython's `unicode_repr` does it.
+            _ if is_py_non_printable(c) => {
+                let cp = c as u32;
+                if cp < 0x100 {
+                    out.push_str(&format!("\\x{cp:02x}"));
+                } else if cp < 0x10000 {
+                    out.push_str(&format!("\\u{cp:04x}"));
+                } else {
+                    out.push_str(&format!("\\U{cp:08x}"));
+                }
             }
             _ => out.push(c),
         }

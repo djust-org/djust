@@ -42,6 +42,23 @@ chrono = "0.4"  # DateTime handling for timesince filter
 # been free but is wrong across a DST boundary, which a single render can
 # straddle (Jan renders -0500, Aug -0400 for the same zone).
 chrono-tz = "0.10"
+# Unicode normalization for `Truncator.chars`'s NFC + combining-class skip and
+# `slugify`'s NFKD ASCII fold (#2319). NFC needs canonical decomposition,
+# canonical ordering AND the composition-exclusion set; there is no
+# hand-rollable subset, which is what separates this from the `py_repr_string`
+# table (#2292), where the stable part collapsed to 28 ranges and needed no
+# crate.
+#
+# Safe to pin a table here in a way `str.isprintable()` was not: canonical
+# combining class and canonical decomposition are covered by the Unicode
+# Character Encoding Stability Policies and are immutable once a code point is
+# assigned. Measured across CPython 3.10-3.14 (Unicode 13.0 -> 16.0), ZERO
+# existing code points changed either — against 11130 that changed
+# printability. Re-derived on the running interpreter by
+# `python/tests/test_truncate_nfc_slugify_fold_2319.py`.
+#
+# unicode-rs, MIT/Apache-2.0, one transitive dep (`tinyvec`, `alloc`).
+unicode-normalization = "0.1"
 
 # Actor system dependencies
 parking_lot = "0.12"  # Faster sync primitives

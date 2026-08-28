@@ -44,17 +44,29 @@ reordered it against every other. 6.4% of a 4000-value corpus; zero cells in
 the curated table, and zero in the broad differential whose keys were all
 `k000`-shaped.
 
-Known residual: non-ASCII non-printable code points
----------------------------------------------------
-`py_repr_string` escapes `\\`, the active quote, `\t`, `\n`, `\r`, the rest of
-C0 and DEL -- and stops. CPython escapes any code point for which
-`str.isprintable()` is false, and that predicate is Unicode-version data that
-**disagrees across this project's CI matrix**: 3.12/3.13 carry Unicode 15.0 and
-call 148998 code points printable, 3.14 carries 16.0 and calls 154810
-printable. Same situation as the `striptags` port (#2273) -- the reference
-moves, so no fixed table in Rust is green on every runner. `U+00A0`, `U+200B`,
-`U+2028` and `U+FEFF` therefore render literally where CPython writes `\\xa0` /
-`\\u200b` / `\\u2028` / `\\ufeff`. Pinned in `TestKnownResidualDivergences`.
+Former residual, closed by #2292: non-ASCII non-printables
+----------------------------------------------------------
+`py_repr_string` used to escape `\\`, the active quote, `\t`, `\n`, `\r`, the
+rest of C0 and DEL -- and stop, so `U+00A0`, `U+200B`, `U+2028` and `U+FEFF`
+rendered literally where CPython writes `\\xa0` / `\\u200b` / `\\u2028` /
+`\\ufeff`. The reason given was that `str.isprintable()` is Unicode-version
+data which **disagrees across this project's CI matrix**, so no fixed table in
+Rust could be green on every runner -- the `striptags` situation (#2273), where
+the reference moves and the port cannot.
+
+The disagreement is real and is in fact LARGER than first measured (five
+Unicode versions across 3.10-3.14, 11130 code points, not 5812 across a
+3.12/3.14 pair -- and 3.13 carries 15.1, which the original count missed). But
+it has a shape: every disagreeing code point is one that went from UNASSIGNED
+to assigned. The seven general categories that make up the rest of
+"non-printable" (`Cc`, `Cf`, `Cs`, `Co`, `Zl`, `Zp`, `Zs`) never move for a
+code point already assigned. #2292 ports those seven as a 28-range table and
+treats unassigned `Cn` as printable, which is exact for every assigned code
+point on every interpreter and identical across all five.
+
+Coverage lives in `test_py_repr_isprintable_table_2292.py`, which recomputes
+the table from the running interpreter's `unicodedata` rather than restating a
+version. The rows here are the inverted pins.
 
 Measured, on the broad filter differential this file's harness re-runs
 (13,751 cells over every measuring filter):
@@ -514,20 +526,24 @@ class TestContainerReprUsesTheSameEscaper:
 
 
 class TestKnownResidualDivergences:
-    """**Every test here pins a KNOWN-WRONG answer, not a correct one.**
+    """**Historically a pin class; every row in it is now CLOSED.**
 
-    djust's output in each case differs from Django's; the assertion is that it
-    STILL differs, so the row fails the day someone closes the gap and the
-    obsolete pin gets deleted with the issue. Read no row here as a statement
-    that djust's answer is right -- the filed issue number is on each one:
-    #2292 for the escaping gap.
+    Rows here used to assert a KNOWN-WRONG answer -- that djust STILL differed
+    from Django -- so that each would fail the day someone closed its gap. Two
+    gaps have since closed, and both rows survive renamed and inverted:
 
-    `{{ dict|length }}` used to be pinned here for #2294 and is now FIXED; the
-    row survives, renamed and inverted, as
-    `test_length_of_a_dict_now_agrees_fixed_by_2294` plus the model-instance
-    half that explains why the pin existed. Converting a closed pin rather than
-    deleting it is deliberate: the reasoning for the original divergence is the
-    reasoning the fix had to answer, and it is the part a future reader needs.
+    * `{{ dict|length }}` (#2294) -> `test_length_of_a_dict_now_agrees_fixed_by_2294`,
+      plus the model-instance half that explains why the pin existed;
+    * non-ASCII non-printable escaping (#2292) ->
+      `test_non_ascii_non_printables_are_now_escaped_fixed_by_2292` and
+      `test_the_layout_agreed_even_while_the_escape_did_not`, with the
+      exhaustive coverage in `test_py_repr_isprintable_table_2292.py`.
+
+    Converting a closed pin rather than deleting it is deliberate: the
+    reasoning for the original divergence is the reasoning the fix had to
+    answer, and it is the part a future reader needs. Nothing in this class
+    asserts a wrong answer any more -- a NEW residual would be added as a pin
+    in the old style, with its issue number on it.
 
     The failure mode this framing guards against is real and recent: three
     artifacts pinned a buggy arrangement as if correct and let a shipped XSS
@@ -545,43 +561,53 @@ class TestKnownResidualDivergences:
             "\ue000",  # Co -- a private-use code point
         ],
     )
-    def test_non_ascii_non_printables_are_WRONGLY_not_escaped_bug_2292(self, value: str) -> None:
-        """**Pins a KNOWN-WRONG answer.** CPython escapes each of these code
-        points; djust emits it literally. Filed as #2292.
+    def test_non_ascii_non_printables_are_now_escaped_fixed_by_2292(self, value: str) -> None:
+        """**FIXED, and inverted from a pin to a regression test.**
 
-        Not fixed here because `str.isprintable()` is Unicode-version data and
-        no fixed table is green on every runner -- see the module docstring for
-        the 5812-code-point measurement between Unicode 15.0 and 16.0, and
-        `djust_core::py_repr_string`'s doc comment for the two routes that would
-        close it.
+        This row used to assert djust still DISAGREED with Django, and carried
+        a "now AGREES -- delete this row" message for whoever closed the gap.
+        #2292 closed it: `py_repr_string` now carries a 28-range table of the
+        seven stable general categories (`Cc`, `Cf`, `Cs`, `Co`, `Zl`, `Zp`,
+        `Zs`) and escapes them, treating unassigned `Cn` as printable.
+
+        The reasoning that kept it open was that `str.isprintable()` is
+        Unicode-version data and no fixed table is green on every runner. That
+        premise is true -- and understated: djust's matrix spans FIVE Unicode
+        versions and 11130 disagreeing code points, not the 5812 in a
+        3.12-vs-3.14 pair. What it misses is that every one of those 11130 is
+        an unassigned code point BECOMING assigned; the seven categories
+        themselves never move for anything already assigned. See
+        `test_py_repr_isprintable_table_2292.py`, which recomputes that claim
+        from the running interpreter rather than restating it.
         """
         django_out, djust_out = render_both("{{ p|pprint }}", value)
-        assert django_out != djust_out, (
-            f"{value!r} now AGREES -- delete this row and the follow-up issue it documents"
-        )
-        # The value is emitted LITERALLY rather than mangled: only the escape
-        # is missing, and the ASCII escapes it does do are still right.
-        assert _rust.render_template("{{ p|pprint|safe }}", {"p": value}) == f"'{value}'"
-        assert _pprint.pformat(value) != f"'{value}'"
+        assert django_out == djust_out
+        # Escaped, not merely passed through -- the literal spelling this row
+        # used to pin must now be gone.
+        rendered = _rust.render_template("{{ p|pprint|safe }}", {"p": value})
+        assert rendered != f"'{value}'"
+        assert rendered == _pprint.pformat(value)
 
-    def test_the_residual_is_the_escape_and_not_the_layout(self) -> None:
+    def test_the_layout_agreed_even_while_the_escape_did_not(self) -> None:
         """A `U+2028` string long enough to reach `_pprint_str`.
 
-        The wrap points, the chunking and the parentheses all agree with
-        `pformat`; substituting the literal code point back into Django's output
-        makes the two identical. That is what makes the residual a spelling gap
-        rather than a layout one -- and note the wrap depends on `\\u2028` being
-        a `splitlines` boundary, which djust does honour.
+        While #2292 was open this asserted the two outputs differed ONLY by the
+        spelling, by substituting the literal code point back into Django's
+        output. That was the evidence the gap was a spelling gap and not a
+        layout one -- so with the spelling fixed, the two must now agree
+        outright, with no substitution. Keeping the case (rather than deleting
+        it with the pin) keeps the wrap path covered: it depends on `\\u2028`
+        being a `splitlines` boundary, which djust honours.
         """
         value = ("word " * 10) + "\u2028" + ("word " * 10)
         django_out, djust_out = render_both("{{ p|pprint }}", value)
-        assert django_out != djust_out
-        assert djust_out == django_out.replace("\\u2028", "\u2028")
+        assert django_out == djust_out
+        assert "\\u2028" in djust_out, "the escape did not survive the wrap path"
         assert "\n" in djust_out, "the case does not reach the wrapping path"
 
     def test_ascii_controls_in_the_same_string_are_escaped(self) -> None:
-        """The half that IS portable, so the residual above is not read as
-        "escaping is not implemented"."""
+        """The ASCII half, which was correct before #2292 and must stay so:
+        the named escapes still win over the numeric form."""
         for value, want in [
             ("a\tb", "'a\\tb'"),
             ("a\nb", "'a\\nb'"),

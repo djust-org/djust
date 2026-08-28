@@ -516,38 +516,52 @@ def _is_known_remaining(value: Any) -> bool:
 
 
 class TestKnownRemainingDivergences:
-    """Two classes are open, both needing Unicode normalization tables.
+    """**Both classes are now CLOSED (#2319); the rows survive inverted.**
 
     `django.utils.text.slugify` opens with
     `unicodedata.normalize("NFKD", value).encode("ascii", "ignore")` and
     `Truncator.chars` with `unicodedata.normalize("NFC", text)` plus a
-    `unicodedata.combining()` skip. Neither NFKD nor NFC is available without
-    adding a Unicode normalization crate to the workspace, so neither is
-    implemented and the residue is confined to non-ASCII input.
+    `unicodedata.combining()` skip. Neither NFKD nor NFC was available without
+    adding a Unicode normalization crate to the workspace, so neither was
+    implemented and the residue was confined to non-ASCII input.
 
-    Measured over the randomized sweep in this file (13,500 unchained cells):
-    45 cells for `slugify`'s ASCII fold, 30 for `Truncator.chars`'s NFC — and
-    zero for anything else. The tests below PIN the current behaviour so that
-    closing the gap is a deliberate, visible change rather than a silent one.
+    Measured over the randomized sweep in this file (13,500 unchained cells)
+    while they were open: 45 cells for `slugify`'s ASCII fold, 30 for
+    `Truncator.chars`'s NFC — and zero for anything else. Both are now zero.
+
+    #2319 adopted `unicode-normalization`, on the measured grounds that
+    canonical combining class and canonical decomposition — unlike
+    `str.isprintable()`, the sibling question in #2292 — do not change for a
+    code point once it is assigned. Full coverage, including the randomized
+    differential and the correction that the HTML path needs NFC but NOT the
+    combining skip, lives in `test_truncate_nfc_slugify_fold_2319.py`.
     """
 
-    def test_slugify_does_not_ascii_fold(self) -> None:
+    def test_slugify_now_ascii_folds_fixed_by_2319(self) -> None:
         django_out, djust_out = render_both("{{ p|slugify }}", "café")
         assert django_out == "cafe"
-        # Not folded: the accented letter is kept rather than decomposed. It is
-        # NOT dropped either — dropping it (the faithful-minus-NFKD reading)
-        # would turn every non-English slug into rubble.
-        assert djust_out == "café"
+        # Folded, not dropped: NFKD splits the accent off and the ASCII filter
+        # discards only the mark, leaving the bare `e`. Dropping the character
+        # outright (the faithful-minus-NFKD reading) would give "caf" and turn
+        # every non-English slug into rubble.
+        assert djust_out == "cafe"
 
-    def test_truncator_chars_does_not_normalize(self) -> None:
-        decomposed = "éx"  # 'éx' as e + COMBINING ACUTE
-        assert unicodedata.normalize("NFC", decomposed) != decomposed
+    def test_truncator_chars_now_normalizes_fixed_by_2319(self) -> None:
+        # Spelled as an ESCAPE: a literal decomposed sequence is NFC-normalized
+        # on the way to disk by editors and agent file-writers, and that is
+        # precisely the transformation under test — so a normalized literal
+        # would make this pass against the unfixed code (#2319).
+        decomposed = "e\u0301x"
+        assert unicodedata.normalize("NFC", decomposed) != decomposed, (
+            "the value is not decomposed — it was normalized on the way to disk"
+        )
         django_out, djust_out = render_both("{{ p|truncatechars:2 }}", decomposed)
-        assert django_out == "éx"  # NFC-composed to 2 characters, so untouched
-        assert djust_out == "e…"  # 3 characters here, so truncated
+        assert django_out == "\u00e9x"  # NFC-composed to 2 characters, untouched
+        assert djust_out == django_out  # was "e\u2026" — truncated at 3 characters
 
-    def test_ascii_input_is_unaffected_by_either_gap(self) -> None:
-        """The gap is exactly non-ASCII: no ASCII input may hit it."""
+    def test_ascii_input_is_unaffected_by_either_fix(self) -> None:
+        """The gap was exactly non-ASCII: no ASCII input may have hit it, and
+        none may be perturbed by closing it."""
         for value in ["3.5", "-1.5e+300", "  spaced  ", "<b>x</b>", "a.b.c", "_a_"]:
             assert_agrees("{{ p|slugify }}", value)
             assert_agrees("{{ p|truncatechars:2 }}", value)
