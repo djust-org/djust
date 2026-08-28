@@ -439,8 +439,8 @@ class TestTheGrantIsRefusedForShapesItCannotDescribe:
         markup for the sublist, so neither may djust's.
 
         Byte equality is deliberately NOT asserted for the ``unordered_list``
-        half: nested sublists carry a separate, pre-existing indentation
-        divergence (#2301) that reproduces with nothing marked safe at all.
+        half: nested safe-item propagation is a separate concern from the
+        indentation parity covered by ``test_nested_unmarked_list_matches_django``.
         """
         value = [mark_safe("<b>a</b>"), [mark_safe("<i>b</i>")]]
         expected = django_render('{{ p|join:", " }}', value)
@@ -450,6 +450,10 @@ class TestTheGrantIsRefusedForShapesItCannotDescribe:
         )
         assert_no_more_permissive_than_django('{{ p|join:", " }}', value)
         assert_no_more_permissive_than_django("{{ p|unordered_list }}", value)
+
+    def test_nested_unmarked_list_matches_django(self) -> None:
+        """The nested list wrapper stays at the parent indent (#2301)."""
+        assert_agrees("{{ p|unordered_list }}", ["a", ["b"]])
 
     @pytest.mark.parametrize("name", sorted(PER_ELEMENT))
     def test_a_stale_grant_cannot_reach_a_non_string_item(self, name: str) -> None:
