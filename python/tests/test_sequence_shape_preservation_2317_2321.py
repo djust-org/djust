@@ -481,8 +481,22 @@ class TestNotMorePermissiveThanDjango:
 
 
 def _production_lines() -> list[tuple[int, str]]:
-    """``filters.rs`` with every ``#[cfg(test)]`` module removed."""
-    lines = FILTERS_RS.read_text().splitlines()
+    """``filters.rs`` with every ``#[cfg(test)]`` module removed, and with
+    ``//`` comments stripped.
+
+    Comments must not decide the verdict — only real code does, which is the
+    same rule ``test_bool_before_int_converters_2212._strip_comments`` states.
+    Without it, a comment that merely NAMES ``Value::List(items)`` while
+    explaining an adjacent arm reads as a new construction site: #2340 tripped
+    exactly that, and "reword the comment" would have been fixing the prose to
+    suit the grep.
+    """
+    lines = [
+        # Only a whole-line or trailing `//`; a `//` inside a string literal
+        # would be mangled, and `filters.rs` has none on a `Value::List(` line.
+        ln.split("//", 1)[0] if "//" in ln else ln
+        for ln in FILTERS_RS.read_text().splitlines()
+    ]
     skip: set[int] = set()
     i = 0
     while i < len(lines):

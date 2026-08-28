@@ -120,3 +120,50 @@ fn a_tuple_is_iterable_in_a_for_loop() {
     let t = Template::new("{% for x in rows %}[{{ x }}]{% endfor %}").unwrap();
     assert_eq!(t.render(&c).unwrap(), "[1][2]");
 }
+
+#[test]
+fn a_dict_view_and_a_list_of_the_same_items_do_not_share_a_cache_entry() {
+    // #2340: a view renders `dict_keys(['a'])` and a list of the same items
+    // renders `['a']`, so a shared key serves one for the other — the same
+    // argument the Tuple/List case above makes, one variant over.
+    //
+    // Through the REAL cached render path, not `hash_value` directly: this
+    // file's own docstring records that a first version testing the hash in
+    // isolation gate-off'd to zero because it never consulted the cache.
+    let items = vec![Value::String("a".into())];
+    let (a, b) = render_twice(
+        Value::List(items.clone()),
+        Value::DictView {
+            kind: djust_core::DictViewKind::Keys,
+            items: items.clone(),
+        },
+    );
+    assert_eq!(a, "<i>[&#x27;a&#x27;]</i>");
+    assert_eq!(b, "<i>dict_keys([&#x27;a&#x27;])</i>");
+    assert_ne!(a, b, "a view and a list must not collide in the loop cache");
+}
+
+#[test]
+fn two_dict_view_kinds_do_not_share_a_cache_entry() {
+    // The kind is IN the hash, not merely in `Display`: `dict_keys([1])` and
+    // `dict_values([1])` are different renderings of the same items, so the
+    // kind has to reach the cache key or the first is served for the second.
+    let items = vec![Value::Integer(1)];
+    let (a, b) = render_twice(
+        Value::DictView {
+            kind: djust_core::DictViewKind::Keys,
+            items: items.clone(),
+        },
+        Value::DictView {
+            kind: djust_core::DictViewKind::Values,
+            items,
+        },
+    );
+    assert_eq!(a, "<i>dict_keys([1])</i>");
+    assert_eq!(
+        b, "<i>dict_values([1])</i>",
+        "the view KIND must survive the loop cache; a kind-blind hash would \
+         serve the first rendering here"
+    );
+    assert_ne!(a, b);
+}
