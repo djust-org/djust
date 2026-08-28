@@ -144,24 +144,39 @@ fn a_quoted_arg_stays_a_literal() {
 }
 
 #[test]
-fn an_unresolvable_bare_identifier_falls_back_to_its_raw_text() {
-    // This is a DELIBERATE DIVERGENCE from Django, not parity. Django raises
-    // `VariableDoesNotExist` for an unresolvable filter argument (verified:
-    // `{{ n|pluralize:es }}` with no `es` in context raises rather than
-    // rendering). djust falls back to the argument's raw text instead.
+fn an_unresolvable_bare_identifier_raises() {
+    // #2202 left this as a DELIBERATE DIVERGENCE: Django raises
+    // `VariableDoesNotExist` for an unresolvable filter argument, and djust
+    // fell back to the argument's raw text, so `{{ n|pluralize:es }}` rendered
+    // the literal word "es" and `{{ e|default:nosuchvar }}` rendered
+    // "nosuchvar". The defence was that raising would turn a silent
+    // wrong-output bug into a site-wide 500 on upgrade.
     //
-    // Kept because `{{ n|pluralize:es }}` "works" today only by that accident,
-    // templates in the wild rely on it, and it is what djust's own
-    // custom-filter path already does. Raising here would turn a silent
-    // wrong-output bug into a site-wide 500 on upgrade — a strictly worse
-    // trade for a parity fix.
+    // #2328 closed it. Measurement settled the scope — Django raises for ALL
+    // TWENTY-NINE argument-taking built-ins and djust for none of them — and
+    // the 500 argument turned out not to hold: `LiveViewConsumer.receive`
+    // catches a render error and sends a safe error frame without dropping the
+    // socket, so the degradation decision is already made, once, at the
+    // transport, where it can be environment-aware.
     let mut c = Context::new();
     c.set("n".to_string(), Value::Integer(2));
-    assert_eq!(render("{{ n|pluralize:es }}", &c), "es");
+    let t = Template::new("{{ n|pluralize:es }}").expect("template should parse");
+    let err = t.render(&c).expect_err("an unresolvable arg must raise");
+    assert!(
+        err.to_string().contains("does not resolve"),
+        "message should name the failure: {err}"
+    );
+    assert!(
+        err.to_string().contains("es"),
+        "message should name the identifier: {err}"
+    );
 
     let mut c2 = Context::new();
     c2.set("e".to_string(), Value::String(String::new()));
-    assert_eq!(render("{{ e|default:nosuchvar }}", &c2), "nosuchvar");
+    assert!(Template::new("{{ e|default:nosuchvar }}")
+        .expect("template should parse")
+        .render(&c2)
+        .is_err());
 }
 
 #[test]
@@ -185,4 +200,164 @@ fn a_numeric_literal_arg_still_works() {
     assert_eq!(render("{{ a|add:7 }}", &c), "12");
     c.set("f".to_string(), Value::Float(1.23456));
     assert_eq!(render("{{ f|floatformat:2 }}", &c), "1.23");
+}
+
+// ---------------------------------------------------------------------------
+// #2328 — the literal escape hatch that keeps the raise above from firing on
+// every numeric argument. Django's `Variable.__init__` decides this, and each
+// row here was measured against Django 5.2 rather than reasoned about.
+// ---------------------------------------------------------------------------
+
+/// Every spelling Django resolves WITHOUT a context lookup.
+///
+/// `7.` is the sharp one: `float("7.")` succeeds in Python, and Django rejects
+/// it anyway with an explicit `if var[-1] == ".": raise ValueError`. Dropping
+/// that guard would silently make a trailing dot a literal here and a lookup
+/// there.
+#[test]
+fn a_literal_argument_is_not_a_lookup() {
+    let mut c = Context::new();
+    c.set("a".to_string(), Value::Integer(5));
+    for arg in ["7", "-3", "+3", "7.5", ".5", "1e3", "1_0", "07"] {
+        let source = format!("{{{{ a|add:{arg} }}}}");
+        let t = Template::new(&source).expect("template should parse");
+        assert!(
+            t.render(&c).is_ok(),
+            "{arg} is a Django literal and must not be looked up"
+        );
+    }
+}
+
+/// The near-misses, which ARE lookups in Django and must raise.
+#[test]
+fn a_non_literal_argument_is_a_lookup() {
+    let mut c = Context::new();
+    c.set("a".to_string(), Value::Integer(5));
+    for arg in ["7.", "0x10", "nan", "inf", "es"] {
+        let source = format!("{{{{ a|add:{arg} }}}}");
+        let t = Template::new(&source).expect("template should parse");
+        assert!(
+            t.render(&c).is_err(),
+            "{arg} is a Django lookup and must raise"
+        );
+    }
+}
+
+/// `True` / `False` / `None` are not literals — they are keys of Django's
+/// `Context.builtins`, so they RESOLVE. djust's `Context` does not carry them
+/// (a separate, pre-existing gap), and they are exempted from the raise so
+/// this fix does not turn that wrong answer into a hard error.
+#[test]
+fn the_context_builtins_do_not_raise() {
+    let mut c = Context::new();
+    c.set("a".to_string(), Value::Integer(5));
+    for arg in ["True", "False", "None"] {
+        let source = format!("{{{{ a|add:{arg} }}}}");
+        let t = Template::new(&source).expect("template should parse");
+        assert!(t.render(&c).is_ok(), "{arg} must not raise");
+    }
+}
+
+/// The chokepoint's `Raise` arm, through the real render path.
+#[test]
+fn an_unparseable_numeric_argument_raises_naming_the_filter() {
+    let mut c = Context::new();
+    c.set("p".to_string(), Value::String("ab".into()));
+    let t = Template::new(r#"{{ p|center:"nope" }}"#).expect("template should parse");
+    let err = t.render(&c).expect_err("int(\"nope\") has no answer");
+    let message = err.to_string();
+    assert!(
+        message.contains("center"),
+        "should name the filter: {message}"
+    );
+    assert!(
+        message.contains("nope"),
+        "should name the argument: {message}"
+    );
+}
+
+/// The chokepoint's `ReturnInput` arm, which must NOT raise on the same input.
+/// Both arms reachable, or the policy parameter is decorative.
+#[test]
+fn a_return_input_filter_gives_its_value_back() {
+    let mut c = Context::new();
+    c.set("p".to_string(), Value::String("abcdefghij".into()));
+    assert_eq!(render(r#"{{ p|truncatechars:"nope" }}"#, &c), "abcdefghij");
+}
+
+/// `int()`'s spellings, which every scattered `parse::<usize>` refused.
+#[test]
+fn the_chokepoint_carries_pythons_int_spellings() {
+    let mut c = Context::new();
+    c.set("p".to_string(), Value::String("ab".into()));
+    assert_eq!(render(r#"{{ p|ljust:" 5 " }}"#, &c), "ab   ");
+    assert_eq!(render(r#"{{ p|ljust:"+5" }}"#, &c), "ab   ");
+    assert_eq!(render(r#"{{ p|ljust:"1_0" }}"#, &c), "ab        ");
+}
+
+/// A bare float truncates (`int(2.7)`); a QUOTED one raises (`int("2.7")`).
+/// One character of template syntax separates them.
+#[test]
+fn the_quoting_hint_separates_truncation_from_a_raise() {
+    let mut c = Context::new();
+    c.set("p".to_string(), Value::String("aa bb".into()));
+    assert_eq!(render("{{ p|wordwrap:2.7 }}", &c), "aa\nbb");
+    assert!(Template::new(r#"{{ p|wordwrap:"2.7" }}"#)
+        .expect("template should parse")
+        .render(&c)
+        .is_err());
+}
+
+/// Rust's format spec holds its width in a `u16`, so `format!("{s:<width$}")`
+/// panics at exactly one past `u16::MAX` with "Formatting argument out of
+/// range" — a `PanicException` across the PyO3 boundary, which derives from
+/// `BaseException` and so escapes every `except Exception`. Pinned as a
+/// BOUNDARY: `65535` was always fine and `65536` was the smallest failure, so
+/// a single large sample says nothing about where the edge is.
+#[test]
+fn the_formatter_width_cap_no_longer_panics() {
+    let mut c = Context::new();
+    c.set("p".to_string(), Value::String("ab".into()));
+    for width in [1usize, 65535, 65536, 70000] {
+        for name in ["ljust", "rjust", "center"] {
+            let source = format!("{{{{ p|{name}:\"{width}\" }}}}");
+            assert_eq!(
+                render(&source, &c).chars().count(),
+                width.max(2),
+                "{name} at width {width}"
+            );
+        }
+    }
+}
+
+/// The regression the boundary test above found in #2328's own first pass.
+///
+/// `python_int` SATURATES past `isize` rather than failing — correct for
+/// `slice`, where a magnitude past `isize` selects the same elements, and
+/// wrong for a filter that then ALLOCATES that many spaces. A Rust allocation
+/// failure is a process ABORT, not a catchable error, so the pad filters cap
+/// the width and raise instead. Python answers `MemoryError` / `OverflowError`
+/// here; both fail the render, and so does this.
+#[test]
+fn a_width_past_the_pad_cap_raises_rather_than_aborting() {
+    let mut c = Context::new();
+    c.set("p".to_string(), Value::String("ab".into()));
+    for width in ["1000001", "99999999999999999999", "999999999999999999999"] {
+        for name in ["ljust", "rjust", "center"] {
+            let source = format!("{{{{ p|{name}:\"{width}\" }}}}");
+            let err = Template::new(&source)
+                .expect("template should parse")
+                .render(&c)
+                .expect_err("an unallocatable width must raise");
+            assert!(
+                err.to_string().contains("past djust"),
+                "{name} at {width}: {err}"
+            );
+        }
+    }
+    // Non-vacuity: the cap admits every width a page could want.
+    assert_eq!(
+        render(r#"{{ p|ljust:"1000000" }}"#, &c).chars().count(),
+        1_000_000
+    );
 }

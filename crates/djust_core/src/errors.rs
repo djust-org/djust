@@ -11,6 +11,21 @@ pub enum DjangoRustError {
     #[error("Template error: {0}")]
     TemplateError(String),
 
+    /// Django's `VariableDoesNotExist`, kept as its own variant because ONE
+    /// construct treats it differently from every other render error (#2328).
+    ///
+    /// `django.template.defaulttags.IfNode.render` wraps its condition in
+    /// `except VariableDoesNotExist: match = None` — so `{% if p|f:missing %}`
+    /// takes the false branch, while `{{ p|f:missing }}`, `{% for %}` and
+    /// `{% with %}` all propagate. It does NOT catch the `ValueError` from an
+    /// unparseable argument, so a single "template error" kind cannot express
+    /// the distinction and `{% if %}` would swallow real failures with it.
+    ///
+    /// Crosses to Python as a `RuntimeError` like every other variant; the
+    /// distinction is consumed inside the renderer.
+    #[error("Template error: {0}")]
+    VariableDoesNotExist(String),
+
     #[error("Context error: {0}")]
     ContextError(String),
 

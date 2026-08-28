@@ -7,6 +7,32 @@ use regex::Regex;
 
 use crate::filter_registry;
 
+/// [`filter_int_arg`] from inside an `apply_builtin_filter` match arm.
+///
+/// The arm's type is `Result<Value>` but the FUNCTION's is
+/// `Option<Result<Value>>`, so `?` does not compile here. This is the one
+/// place that hand-off is written down.
+/// [`pad_width`] from inside an `apply_builtin_filter` match arm, for the same
+/// reason [`int_arg!`] exists: `?` targets the function's `Option`, not the
+/// arm's `Result`.
+macro_rules! pad_width {
+    ($name:expr, $parsed:expr) => {
+        match pad_width($name, $parsed) {
+            Ok(width) => width,
+            Err(e) => return Some(Err(e)),
+        }
+    };
+}
+
+macro_rules! int_arg {
+    ($name:expr, $arg:expr, $quoted:expr, $missing:expr, $bad:expr) => {
+        match filter_int_arg($name, $arg, $quoted, $missing, $bad) {
+            Ok(parsed) => parsed,
+            Err(e) => return Some(Err(e)),
+        }
+    };
+}
+
 /// The safety of the value going INTO a filter, at Django's TWO granularities.
 ///
 /// Django has both, and conflating them is the bug behind two separate
@@ -367,13 +393,25 @@ pub fn apply_filter_full_safe(
     // ``Context::resolve`` distinguishes two outcomes, and they are NOT treated
     // alike:
     //
-    //   * ``Ok(None)`` — a lookup MISS. Falls back to the raw string via
-    //     ``.or(arg)``, matching the custom-filter path and preserving templates
-    //     that rely on the accident (`{{ n|pluralize:es }}` renders "es" because
-    //     `es` does not resolve). Numeric args (`add:7`) take the same path.
-    //     This is a DELIBERATE divergence from Django, which raises
-    //     ``VariableDoesNotExist`` here — raising would turn a silent
-    //     wrong-output bug into a site-wide 500 on upgrade.
+    //   * ``Ok(None)`` — a lookup MISS. RAISES, as Django does (#2328).
+    //     Django's ``FilterExpression.resolve`` protects only the MAIN
+    //     variable with ``string_if_invalid``; each ARGUMENT goes through a
+    //     bare ``arg.resolve(context)`` whose ``VariableDoesNotExist`` nothing
+    //     catches. Measured: all TWENTY-NINE argument-taking built-ins raise
+    //     for `{{ p|f:missingvar }}`, and djust degraded silently for all
+    //     twenty-nine — `{{ n|pluralize:es }}` rendered the literal text "es",
+    //     which is exactly the silent-wrong-output class this whole area keeps
+    //     producing. Earlier comments here defended the fallback as protection
+    //     against a site-wide 500 on upgrade; that reasoning is superseded,
+    //     because ``LiveViewConsumer.receive`` already catches a render error
+    //     and sends a safe error frame WITHOUT dropping the socket, so the
+    //     degradation decision is made once, at the transport, in the place
+    //     that can be environment-aware.
+    //
+    //     A LITERAL never reaches the lookup — see ``is_literal_filter_arg``.
+    //     This is Django's own split: `{{ p|add:7 }}` is a float/int literal
+    //     and resolves without a context at all, while `{{ p|add:seven }}` is
+    //     a variable and raises.
     //
     //   * ``Err`` — an exception raised INSIDE a method auto-called during
     //     resolution (ADR-024). Propagated with ``?``. Django propagates it
@@ -386,7 +424,16 @@ pub fn apply_filter_full_safe(
     //     reintroduced on the error branch. Converging the resolver but not its
     //     error policy would still be #1646 drift, just subtler.
     let resolved_arg: Option<String> = match (arg, arg_was_quoted, context) {
-        (Some(a), false, Some(ctx)) => ctx.resolve(a)?.map(|v| v.to_string()),
+        (Some(a), false, Some(ctx)) => match ctx.resolve(a)? {
+            Some(v) => Some(v.to_string()),
+            None if !is_literal_filter_arg(a) => {
+                return Err(DjangoRustError::VariableDoesNotExist(format!(
+                    "filter '{filter_name}' argument {a:?} does not resolve — Django \
+                     raises VariableDoesNotExist here"
+                )));
+            }
+            None => None,
+        },
         _ => None,
     };
     let builtin_arg = resolved_arg.as_deref().or(arg);
@@ -767,22 +814,26 @@ fn apply_builtin_filter(
                 None => Ok(value.clone()),
             }
         }
-        "truncatewords" => match truncate_arg(arg, 10) {
-            Some(n) => Ok(Value::String(crate::truncate::text_words(
-                &value.to_string(),
-                n,
-                Some(WORDS_TRUNCATE),
-            ))),
-            None => Ok(value.clone()),
-        },
-        "truncatechars" => match truncate_arg(arg, 20) {
-            Some(n) => Ok(Value::String(crate::truncate::text_chars(
-                &value.to_string(),
-                n,
-                None,
-            ))),
-            None => Ok(value.clone()),
-        },
+        "truncatewords" => {
+            match int_arg!(filter_name, arg, arg_was_quoted, 10, BadArg::ReturnInput) {
+                Some(n) => Ok(Value::String(crate::truncate::text_words(
+                    &value.to_string(),
+                    n,
+                    Some(WORDS_TRUNCATE),
+                ))),
+                None => Ok(value.clone()),
+            }
+        }
+        "truncatechars" => {
+            match int_arg!(filter_name, arg, arg_was_quoted, 20, BadArg::ReturnInput) {
+                Some(n) => Ok(Value::String(crate::truncate::text_chars(
+                    &value.to_string(),
+                    n,
+                    None,
+                ))),
+                None => Ok(value.clone()),
+            }
+        }
         "slice" => {
             // slice filter supports Python slice syntax: ":5", "2:", "2:5".
             // Return the Result directly (no `?`): this arm's value IS the
@@ -975,13 +1026,12 @@ fn apply_builtin_filter(
             // answering `False` where it (and Django) said `True`. Found by the
             // two-build differential, not by inspection.
             //
-            // Django RAISES on anything `int()` rejects (a float string, `None`,
-            // a list). djust fails soft — a filter does not 500 a page — so the
-            // reach stops at what `int(str)` accepts unambiguously: surrounding
-            // whitespace, an optional sign, ASCII digits. `int`'s underscore and
-            // non-ASCII-digit spellings stay `False`, which is the same answer
-            // this arm already gave them.
-            let divisor = arg.and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
+            // Django RAISES on anything `int()` rejects, and since #2328 so
+            // does this: the ARGUMENT goes through the one chokepoint, which
+            // also brings `int()`'s whitespace, sign and `_` spellings with it.
+            // (The VALUE below keeps its fail-soft `False`; that is the other
+            // half of Django's `int(value) % int(arg)` and a separate question.)
+            let divisor = int_arg!(filter_name, arg, arg_was_quoted, 1, BadArg::Raise).unwrap_or(1);
             let dividend = match value {
                 Value::Integer(n) => Some(*n),
                 Value::String(s) => s.trim().parse::<i64>().ok(),
@@ -1003,7 +1053,11 @@ fn apply_builtin_filter(
             // (#2253). Localization happens INSIDE it, because by the time the
             // renderer sees the result it is a `Value::String` and
             // indistinguishable from a user's own digits (#2221).
-            Ok(crate::floatformat::floatformat(value, arg, arg_was_quoted))
+            // Returns a `Result` since #2328: `int(None)` is a TypeError past
+            // its `except ValueError`, and that raise has to happen at the
+            // argument-parse point INSIDE the module, because Django parses the
+            // value first and a value that fails never reaches `int(arg)`.
+            crate::floatformat::floatformat(value, arg, arg_was_quoted)
         }
         "filesizeformat" => {
             // Django coerces with `int(bytes_)` and formats EVERY input,
@@ -1210,17 +1264,12 @@ fn apply_builtin_filter(
         }
         "wordwrap" => {
             // Django is `wrap(value, int(arg))`, and `int()` raises for a
-            // non-numeric argument. djust keeps its historical 75 default there
-            // rather than raising, for the reason `apply_filter_full_safe`
-            // documents about an unresolvable bare-identifier argument: it
-            // arrives here as its own NAME, and turning that into a site-wide
-            // 500 on upgrade is worse than the wrong width. A PARSED width of
-            // <= 0 is a different case — that is Django's own `_wrap_chunks`
-            // guard, and it raises (#2293).
-            let width = match arg {
-                None => 75,
-                Some(a) => a.trim().parse::<i64>().unwrap_or(75),
-            };
+            // non-numeric argument. #2293 recorded djust's historical 75
+            // default here as a deliberate divergence; #2328 closed it — the
+            // argument goes through the one chokepoint and raises, as Django
+            // does. A PARSED width of <= 0 is a different case again: that is
+            // Django's own `_wrap_chunks` guard, inside `textwrap::wrap`.
+            let width = int_arg!(filter_name, arg, arg_was_quoted, 75, BadArg::Raise).unwrap_or(75);
             crate::textwrap::wrap(&value.to_string(), width)
                 .map(Value::String)
                 .map_err(|e| DjangoRustError::TemplateError(e.to_string()))
@@ -1239,16 +1288,51 @@ fn apply_builtin_filter(
             Ok(Value::String(escaped))
         }
         "ljust" => {
-            // ljust filter: left-align string, pad to width with spaces
-            let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            // `value.ljust(int(arg))` — `int()` raises, so the argument takes
+            // the chokepoint's `Raise` arm (#2328).
+            let width = pad_width!(
+                filter_name,
+                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+            );
             let s = value.to_string();
-            Ok(Value::String(format!("{s:<width$}")))
+            // NOT `format!("{s:<width$}")`, which was here: Rust's format spec
+            // holds its width in a `u16`, so a width of **65536 or more** — one
+            // past `u16::MAX` — panics with "Formatting argument out of range".
+            // `{{ p|ljust:"65536" }}` therefore aborted the render with a
+            // `PanicException`, whose MRO is `BaseException` directly: it does
+            // not inherit from `Exception` at all, so it walks past the
+            // consumer's `except Exception` and kills the SESSION rather than
+            // producing an error frame. Confirmed in release as well as debug.
+            //
+            // The width must PARSE to reach the panic, which is what makes this
+            // easy to miss: `ljust:"999999999999999999999"` is 21 digits, past
+            // `usize::MAX`, so the old `parse::<usize>()` failed and fell back
+            // to width 0. `ljust:"18446744073709551615"` — one digit shorter,
+            // exactly `usize::MAX` — parses, and panicked.
+            //
+            // Padding explicitly is what `center` below already does, which is
+            // why `center` never had the bug.
+            let len = s.chars().count();
+            Ok(Value::String(if width <= len {
+                s
+            } else {
+                format!("{s}{}", " ".repeat(width - len))
+            }))
         }
         "rjust" => {
-            // rjust filter: right-align string, pad to width with spaces
-            let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            // `value.rjust(int(arg))` — see `ljust` for both halves: the
+            // chokepoint argument and why the padding is explicit (#2328).
+            let width = pad_width!(
+                filter_name,
+                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+            );
             let s = value.to_string();
-            Ok(Value::String(format!("{s:>width$}")))
+            let len = s.chars().count();
+            Ok(Value::String(if width <= len {
+                s
+            } else {
+                format!("{}{s}", " ".repeat(width - len))
+            }))
         }
         "center" => {
             // center filter: `value.center(int(arg))`.
@@ -1267,7 +1351,10 @@ fn apply_builtin_filter(
             // table sampling `'a'.center(4)` and `'abc'.center(6)` finds
             // nothing. Both halves of the formula are load-bearing and are
             // gate-off tested separately.
-            let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let width = pad_width!(
+                filter_name,
+                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+            );
             let s = value.to_string();
             // Code points, like `len()` — and like `{:^}`, which also counted
             // chars, so this is not the byte-vs-char defect (#2279).
@@ -1327,10 +1414,13 @@ fn apply_builtin_filter(
             // became wrong the moment #2258 made `{{ 1e-200 }}` render `1e-200`,
             // whose third-from-last character is `2`. The #2260 differential
             // caught it as a regression against `main`.
-            let n = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
-            if n == 0 {
-                return Some(Ok(value.clone()));
-            }
+            //
+            // `except ValueError: return value` and `if arg < 1: return value`
+            // are the same answer, so both reach the guard below (#2328).
+            let n = match int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::ReturnInput) {
+                Some(n) if n >= 1 => n as usize,
+                _ => return Some(Ok(value.clone())),
+            };
             match int_digits_of(value, false) {
                 // `str(value)` INCLUDES the sign, and Django indexes into that,
                 // so `-123` has four characters. Out of range is `0`; landing on
@@ -1441,7 +1531,25 @@ fn apply_builtin_filter(
         "urlizetrunc" => {
             // urlizetrunc filter: like urlize but truncates displayed URL.
             // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
-            let limit = arg.and_then(|s| s.parse::<usize>().ok());
+            //
+            // Django is `urlize(value, trim_url_limit=int(limit))`, a bare
+            // `int()`, so the argument takes the chokepoint's `Raise` arm
+            // (#2328). A NEGATIVE limit reaches `Truncator.chars(-3)`, which
+            // keeps nothing — clamping to 0 is the same answer. Before this,
+            // `parse::<usize>` refused a negative and the URL was not truncated
+            // at all.
+            //
+            // Deliberately NOT `pad_width`: this limit is a COMPARISON bound,
+            // never an allocation, so the `MAX_PAD_WIDTH` cap that stops the
+            // pad filters from asking for an unbounded `repeat` would be a
+            // divergence here for nothing. A huge limit simply means "do not
+            // truncate", which is what Django does too.
+            //
+            // NOT `arg.map(|_| int_arg!(..))`: the macro's `return` would leave
+            // the CLOSURE, not the filter, so the error would be swallowed into
+            // the `Option`. Same trap as the `?`-in-a-match-arm one above.
+            let parsed = int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise);
+            let limit = arg.map(|_| parsed.unwrap_or(0).max(0) as usize);
             Ok(Value::String(urlize(
                 &value.to_string(),
                 limit,
@@ -1460,22 +1568,26 @@ fn apply_builtin_filter(
             Some(items) => Ok(Value::String(unordered_list(&items, 1, input_safety.items))),
             None => Ok(Value::String(html_escape(&value.to_string()))),
         },
-        "truncatechars_html" => match truncate_arg(arg, 20) {
-            Some(n) => Ok(Value::String(crate::truncate::html_chars(
-                &value.to_string(),
-                n,
-                None,
-            ))),
-            None => Ok(value.clone()),
-        },
-        "truncatewords_html" => match truncate_arg(arg, 10) {
-            Some(n) => Ok(Value::String(crate::truncate::html_words(
-                &value.to_string(),
-                n,
-                Some(WORDS_TRUNCATE),
-            ))),
-            None => Ok(value.clone()),
-        },
+        "truncatechars_html" => {
+            match int_arg!(filter_name, arg, arg_was_quoted, 20, BadArg::ReturnInput) {
+                Some(n) => Ok(Value::String(crate::truncate::html_chars(
+                    &value.to_string(),
+                    n,
+                    None,
+                ))),
+                None => Ok(value.clone()),
+            }
+        }
+        "truncatewords_html" => {
+            match int_arg!(filter_name, arg, arg_was_quoted, 10, BadArg::ReturnInput) {
+                Some(n) => Ok(Value::String(crate::truncate::html_words(
+                    &value.to_string(),
+                    n,
+                    Some(WORDS_TRUNCATE),
+                ))),
+                None => Ok(value.clone()),
+            }
+        }
         // Not a built-in — signal the caller to try the custom-filter
         // registry. (The custom fallback lives in ``apply_filter_full_safe``
         // so it can capture the result's runtime safeness, #1660.)
@@ -1514,17 +1626,290 @@ pub fn html_escape_attr(s: &str) -> String {
 /// `truncatechars` take `Truncator`'s default. The leading space is genuine.
 const WORDS_TRUNCATE: &str = " \u{2026}";
 
-/// `int(arg)` with Django's fail-silently contract.
+/// What Django does when a filter's numeric argument is not one.
 ///
-/// `Some(n)` is a usable limit; `None` means the filter must return its input
-/// unchanged, which is what Django's `except ValueError: return value` does.
-/// A missing argument is a `TemplateSyntaxError` in Django; djust keeps its
-/// historical per-filter default rather than raising.
-fn truncate_arg(arg: Option<&str>, default: i64) -> Option<i64> {
-    match arg {
-        None => Some(default),
-        Some(a) => a.trim().parse::<i64>().ok(),
+/// The two arms are not a style choice — they are the two shapes Django's own
+/// source takes, and which one a filter has is observable:
+///
+/// ```python
+/// def center(value, arg):        return value.center(int(arg))   # ValueError escapes
+/// def truncatechars(value, arg):
+///     try:    length = int(arg)
+///     except ValueError:  return value                           # caught
+/// ```
+///
+/// Measured against Django 5.2 for every argument-taking built-in; the table
+/// is `python/tests/test_filter_argument_contract_2328.py`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BadArg {
+    /// Django writes the bare `int(arg)` and lets `ValueError` escape, so the
+    /// render fails: `center`, `ljust`, `rjust`, `divisibleby`, `wordwrap`,
+    /// `urlizetrunc`.
+    Raise,
+    /// Django wraps it in `except ValueError: return value`, so the filter
+    /// hands back its INPUT untouched: `truncatechars`, `truncatewords`,
+    /// `truncatechars_html`, `truncatewords_html`, `get_digit`, `floatformat`.
+    ReturnInput,
+}
+
+/// **THE** numeric-filter-argument chokepoint (#2328).
+///
+/// Before this, TWELVE dispatch arms read their argument as a number through
+/// FOUR different parsers: six spelled
+/// `arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(N)` inline with its own `N`,
+/// `wordwrap` had a seventh spelling of the same thing, the `truncate_arg`
+/// helper served four more, and `floatformat::parse_int_like` was a fourth
+/// parser in its own module. They
+/// and they disagreed with Django and with each other in four separate ways at
+/// once — `int(" 5 ")` is 5 and `parse` refuses it, `int("1_0")` is 10 and
+/// `parse` refuses it, `int(2.7)` is 2 for an UNQUOTED float literal while
+/// `int("2.7")` raises, and an unparseable argument silently became the
+/// per-filter default where Django raises. Fixing twelve filters in twelve
+/// places is the #1646 drift this codebase has paid for repeatedly, and the
+/// thirteenth filter — the next one anybody adds — would not have got the fix.
+/// So every built-in that reads its argument as a number parses it here.
+///
+/// The pin is mechanical, not a comment:
+/// `python/tests/test_filter_argument_contract_2328.py::TestChokepointIsTheOnlyParser`
+/// fails if a bare `parse::<..>()` on the argument reappears in the dispatch
+/// table.
+///
+/// # The `arg_was_quoted` term
+///
+/// `{{ x|center:2.7 }}` hands Python the FLOAT `2.7`, and `int(2.7)` is `2`.
+/// `{{ x|center:"2.7" }}` hands it the STRING, and `int("2.7")` raises. One
+/// character of template syntax decides between truncation and a 500, so the
+/// quoting hint is load-bearing rather than cosmetic — the same term `add`
+/// (#2203) and `floatformat` already carry.
+///
+/// # Return shape
+///
+/// * `Ok(Some(n))` — parsed, or the argument was absent and `missing` applies.
+/// * `Ok(None)` — unparseable under [`BadArg::ReturnInput`]; the caller must
+///   return its input value unchanged.
+/// * `Err(..)` — unparseable under [`BadArg::Raise`]. Surfaces to Python as
+///   `RuntimeError: Template error: …` naming the filter and the argument,
+///   through the same `?` chain every other filter error takes.
+///
+/// A MISSING argument is a `TemplateSyntaxError` at Django's PARSE time — a
+/// different mechanism (arity, before any filter runs), so it is out of scope
+/// here and each caller keeps its historical default.
+///
+/// # Why the dispatch table reaches this through a macro
+///
+/// `apply_builtin_filter` returns `Option<Result<Value>>`, so a `?` inside a
+/// match arm would target the OPTION and not compile — the same trap the
+/// `slice` arm's comment records. [`int_arg!`] is the one spelling of the
+/// `Err` hand-off, so ten call sites cannot each invent their own (and get one
+/// of them wrong, which is the shape of this whole issue).
+pub(crate) fn filter_int_arg(
+    filter_name: &str,
+    arg: Option<&str>,
+    arg_was_quoted: bool,
+    missing: i64,
+    on_bad: BadArg,
+) -> Result<Option<i64>> {
+    let Some(raw) = arg else {
+        return Ok(Some(missing));
+    };
+    if arg_is_none_literal(arg, arg_was_quoted) {
+        return Err(none_argument_error(filter_name));
     }
+    match python_int_arg(raw, arg_was_quoted) {
+        Some(n) => Ok(Some(n)),
+        None => match on_bad {
+            BadArg::ReturnInput => Ok(None),
+            BadArg::Raise => Err(DjangoRustError::TemplateError(format!(
+                "filter '{filter_name}' needs an integer argument, and int({raw:?}) \
+                 is a ValueError — Django raises here too"
+            ))),
+        },
+    }
+}
+
+/// Is this bare filter argument something Django resolves WITHOUT a context
+/// lookup — so a lookup miss is not a `VariableDoesNotExist` (#2328)?
+///
+/// Three separate mechanisms in Django answer "yes", and all three had to be
+/// enumerated or the raise would have broken working templates:
+///
+/// 1. **A numeric literal**, `django.template.base.Variable.__init__`:
+///    ```python
+///    if "." in var or "e" in var.lower():
+///        self.literal = float(var)
+///        if var[-1] == ".":  raise ValueError    # "2." is NOT a literal
+///    else:
+///        self.literal = int(var)
+///    ```
+///    That exact branch is why `7`, `-3`, `+3`, `7.5`, `.5`, `1e3`, `1_0` and
+///    `07` are literals while `7.`, `0x10`, `nan` and `inf` are lookups —
+///    verified cell by cell against Django 5.2.
+/// 2. **`True` / `False` / `None`**, which are not literals at all: they are
+///    keys of `django.template.context.builtins`, so they RESOLVE. djust's
+///    `Context` does not carry them (`{{ p|add:True }}` is 6 in Django and 5
+///    here — a separate, pre-existing gap, #2347), so they are listed here to
+///    keep this fix from turning that wrong answer into a raise.
+/// 3. **`_("…")`**, the translation marker, which `Variable` unwraps to a
+///    quoted literal.
+///
+/// A QUOTED argument never reaches this — `arg_was_quoted` short-circuits the
+/// whole resolution — so only the bare spellings are listed.
+fn is_literal_filter_arg(a: &str) -> bool {
+    if matches!(a, "True" | "False" | "None") {
+        return true;
+    }
+    if a.starts_with("_(") && a.ends_with(')') {
+        return true;
+    }
+    if a.contains('.') || a.contains(['e', 'E']) {
+        return python_float(a).is_some();
+    }
+    python_int(a).is_some()
+}
+
+/// Is this argument a bare `None`, the one spelling `int()` rejects with a
+/// **TypeError** rather than a ValueError?
+///
+/// The distinction is observable, and it is why this is a predicate rather
+/// than another arm of [`BadArg`]: every `ReturnInput` filter's Django source
+/// catches `ValueError` ONLY, so `{{ p|truncatechars:None }}` raises while
+/// `{{ p|truncatechars:"nope" }}` returns its input. A QUOTED `"None"` is the
+/// string, and `int("None")` IS a ValueError, so it takes the normal policy.
+///
+/// Two call sites — [`filter_int_arg`] and the `floatformat` arm, whose own
+/// `parse_arg` returns an `Option` with no room for an error. One definition,
+/// because two copies of a rule is the shape this whole issue is about.
+pub(crate) fn arg_is_none_literal(arg: Option<&str>, arg_was_quoted: bool) -> bool {
+    arg == Some("None") && !arg_was_quoted
+}
+
+/// The error [`arg_is_none_literal`] implies, worded once.
+pub(crate) fn none_argument_error(filter_name: &str) -> DjangoRustError {
+    DjangoRustError::TemplateError(format!(
+        "filter '{filter_name}' needs an integer argument, and int(None) is a \
+         TypeError — Django raises here too, past its except-ValueError"
+    ))
+}
+
+/// The widest padding a template argument may ask `center`/`ljust`/`rjust` to
+/// materialise.
+///
+/// Mirrors [`crate::floatformat::MAX_PLACES`] and exists for the same reason,
+/// with one difference that raises the stakes: **a Rust allocation failure is a
+/// process ABORT, not a catchable error.** Python's answers here are a
+/// `MemoryError` or, past `ssize_t`, an `OverflowError` — both fail the render
+/// and both are catchable. `String::repeat` has no such answer, so a width a
+/// template can name must never reach an allocator unbounded.
+///
+/// One megabyte of padding is past any real template. Django will keep going
+/// well beyond it (`ljust:"9999999999"` really does build a ten-gigabyte
+/// string), so this is a deliberate divergence at widths nothing renders.
+const MAX_PAD_WIDTH: i64 = 1_000_000;
+
+/// A parsed width as a `usize`: clamped at zero, refused past [`MAX_PAD_WIDTH`].
+///
+/// `str.center(-5)`, `ljust(-5)` and `rjust(-5)` are all the string unchanged
+/// in CPython, and so is a width of 0, so a negative collapses to 0 with no
+/// loss. Takes the chokepoint's `Option` directly because the three width
+/// filters all pass a `missing` default, so `None` is unreachable for them.
+///
+/// The upper guard is #2328's own regression, caught by a boundary test added
+/// after review could not reproduce the panic this replaced. [`python_int`]
+/// SATURATES past `isize` rather than failing — deliberately, because for
+/// `slice` a magnitude past `isize` selects the same elements — so routing the
+/// pad filters through it turned `{{ p|ljust:"99999999999999999999999" }}` from
+/// a harmless width-0 no-op (the old `parse::<usize>()` simply failed) into a
+/// request for `isize::MAX` spaces, which aborts the process. Saturation is
+/// right for the parser and wrong for this consumer; the cap is where those
+/// meet.
+fn pad_width(filter_name: &str, parsed: Option<i64>) -> Result<usize> {
+    let width = parsed.unwrap_or(0).max(0);
+    if width > MAX_PAD_WIDTH {
+        return Err(DjangoRustError::TemplateError(format!(
+            "filter '{filter_name}' asks for a width of {width}, past djust's \
+             {MAX_PAD_WIDTH} cap — Python answers a MemoryError or an OverflowError \
+             for a width this large, and an unbounded Rust allocation would abort \
+             the process rather than raise"
+        )));
+    }
+    Ok(width as usize)
+}
+
+/// `int(arg)` for a filter argument, honouring the quoting hint.
+///
+/// [`python_int`] is CPython's `int(str)` — whitespace, a sign and `_` between
+/// digits — and an UNQUOTED float literal additionally truncates, because
+/// Django's `Variable` has already turned it into a Python `float` by the time
+/// `int()` sees it.
+fn python_int_arg(raw: &str, arg_was_quoted: bool) -> Option<i64> {
+    if let Some(n) = python_int(raw) {
+        return Some(n as i64);
+    }
+    if arg_was_quoted {
+        // `int("2.5")` raises: a quoted argument is a `str` to Python. So does
+        // `int("True")` — the coercion below is for the BOOL, not its name.
+        return None;
+    }
+    // `bool` IS an `int` in Python, and Django's `Context.builtins` resolve a
+    // bare `True`/`False` to the real objects, so `{{ p|center:True }}` is
+    // `"ab".center(1)`. djust's `Context` does not carry the builtins (a
+    // separate gap, #2347 — DELETE THIS once it lands), so the identifier
+    // arrives here as its own text and has to
+    // be coerced — without this, exempting it from the resolve-miss raise just
+    // moved the failure one step later, which the argument-axis differential
+    // caught as 240 regressed cells. `None` is deliberately absent: `int(None)`
+    // is a `TypeError` in Python, so falling through to the caller's policy is
+    // the right answer.
+    match raw {
+        "True" => return Some(1),
+        "False" => return Some(0),
+        _ => {}
+    }
+    // Django's `Variable.__init__` reads a bare `2.7` as a float only when it
+    // contains a `.` or an `e`; `int()` then truncates toward zero.
+    if !raw.contains('.') && !raw.contains(['e', 'E']) {
+        return None;
+    }
+    match python_float(raw) {
+        Some(f) if f.is_finite() => Some(f.trunc() as i64),
+        _ => None,
+    }
+}
+
+/// `float(x)` for the spellings a bare template literal can carry.
+///
+/// Rust's `parse::<f64>()` differs from Python's `float()` twice, and both
+/// differences are reachable from a template: `float()` accepts `_` between
+/// digits (`1_0.5`), and Rust accepts `inf`/`nan` spellings that Django's
+/// `Variable` never treats as literals (it reaches `float()` only when the
+/// text holds a `.` or an `e`, so `nan` and `inf` take the `int()` branch and
+/// fail there).
+fn python_float(raw: &str) -> Option<f64> {
+    let t = raw.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.contains("inf") || lower.contains("nan") {
+        return None;
+    }
+    // `_` is legal only between digits, exactly as in `python_int`.
+    let bytes = t.as_bytes();
+    let mut cleaned = String::with_capacity(t.len());
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'_' {
+            let prev = i > 0 && bytes[i - 1].is_ascii_digit();
+            let next = bytes.get(i + 1).is_some_and(u8::is_ascii_digit);
+            if !prev || !next {
+                return None;
+            }
+        } else {
+            cleaned.push(b as char);
+        }
+    }
+    // Django's own guard: `float("2.")` succeeds in Python but `Variable`
+    // rejects a trailing `.`, so `{{ x|add:2. }}` is a lookup, not a literal.
+    if cleaned.ends_with('.') {
+        return None;
+    }
+    cleaned.parse::<f64>().ok()
 }
 
 /// Django's `slice`: `value[slice(*bits)]`, where `bits` is

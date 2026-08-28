@@ -695,8 +695,14 @@ class TestFilterArgErrorPolicy2202:
     #2202 made built-in filters resolve a bare-identifier argument against the
     context. Its first pass used ``.ok().flatten()``, which discarded the one
     thing ``Context::resolve`` returns ``Err`` for: an exception raised inside
-    a method auto-called during resolution (ADR-024). A lookup MISS is
-    ``Ok(None)`` and is unaffected.
+    a method auto-called during resolution (ADR-024).
+
+    A lookup MISS is ``Ok(None)`` and was a separate question. #2202 answered
+    it "fall back to the argument's raw text"; #2328 changed that answer to
+    "raise, as Django does", once measurement showed all twenty-nine
+    argument-taking built-ins raise ``VariableDoesNotExist`` in Django and none
+    of them did here. So BOTH outcomes now reach the caller as an error, by two
+    different routes and for two different reasons.
 
     Swallowing it would have left ``{{ x|default:obj.raising }}`` rendering the
     literal text ``obj.raising`` into the page — the exact silent-wrong-output
@@ -712,9 +718,19 @@ class TestFilterArgErrorPolicy2202:
         with pytest.raises(Exception, match="must propagate"):
             _render("<div>{{ blank|default:probe.raises_valueerror }}</div>")
 
-    def test_a_lookup_miss_in_a_filter_arg_still_falls_back(self):
-        # The miss is Ok(None), NOT an error — it must keep falling back to the
-        # argument's raw text. If the fix had propagated both outcomes, this
-        # would raise instead, turning `{{ n|pluralize:es }}` into a 500.
-        html, _ = _render("<div>{{ blank|default:nosuchvariable }}</div>")
-        assert "nosuchvariable" in html
+    def test_a_lookup_miss_in_a_filter_arg_raises(self):
+        # This asserted the OPPOSITE until #2328: the miss fell back to the
+        # argument's raw text, so the page rendered the literal word
+        # "nosuchvariable". Django raises `VariableDoesNotExist`, and the two
+        # error routes carry different messages so a reader can tell which
+        # one fired.
+        with pytest.raises(Exception, match="does not resolve"):
+            _render("<div>{{ blank|default:nosuchvariable }}</div>")
+
+    def test_the_two_error_routes_are_distinguishable(self):
+        # Guards against a future refactor collapsing them: an auto-call
+        # exception must NOT be reported as a resolution miss, or the ADR-024
+        # propagation above would be indistinguishable from a typo'd variable.
+        with pytest.raises(Exception) as raised:
+            _render("<div>{{ blank|default:probe.raises_valueerror }}</div>")
+        assert "does not resolve" not in str(raised.value)

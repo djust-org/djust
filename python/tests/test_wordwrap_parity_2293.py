@@ -31,16 +31,18 @@ apart — ``str.splitlines()``, ``textwrap._whitespace`` and ``str.isspace()`` �
 because every known defect in this filter lived in a gap between two of them and
 an alphabet drawn from only one of the three cannot construct those cells.
 
-What is deliberately NOT changed
---------------------------------
-``int(arg)`` raises in Django for a non-numeric argument; djust keeps its
-historical 75 default there. A bare-identifier filter argument that does not
-resolve arrives at the filter as its own NAME (``apply_filter_full_safe``
-documents that as a deliberate divergence — raising would turn a silent
-wrong-width bug into a site-wide 500 on upgrade), so raising on an unparseable
-argument would escalate that class. A PARSED width of <= 0 is a different
-question and does raise, because that is Django's own ``_wrap_chunks`` guard.
-:meth:`TestWidthArgument` pins both halves of that split.
+The argument half, closed later by #2328
+----------------------------------------
+This file originally recorded ``int(arg)`` as a deliberate divergence: Django
+raises for a non-numeric argument and djust kept a historical 75. #2328 closed
+that — and not for ``wordwrap`` alone, because the same shape was at eleven
+other dispatch arms, so every built-in that reads its argument as a number now
+parses it at one chokepoint that raises exactly where Django's bare ``int()``
+does. The same PR made an unresolvable bare-identifier argument raise
+``VariableDoesNotExist``-style rather than arriving at the filter as its own
+NAME. A PARSED width of <= 0 is a different question and raises for a different
+reason — Django's own ``_wrap_chunks`` guard. :meth:`TestWidthArgument` pins
+each of those separately.
 """
 
 from __future__ import annotations
@@ -335,15 +337,15 @@ class TestWidthArgument:
         with pytest.raises(RuntimeError):
             _rust.render_template('{{ p|wordwrap:"0" }}', {"p": "\n"})
 
-    def test_an_unparseable_width_keeps_the_historical_default(self) -> None:
-        # Django raises here; djust does not, on purpose — see the module
-        # docstring. Pinned so the divergence is a decision and not a surprise.
+    def test_an_unparseable_width_raises_in_both_engines(self) -> None:
+        # This used to pin the OPPOSITE — djust wrapped at its historical 75
+        # where Django raised — as a deliberate divergence. #2328 closed it for
+        # every argument-taking filter at once, so the two now agree that
+        # `int("nope")` has no answer.
         with pytest.raises(ValueError):
             DjangoTemplate('{{ p|wordwrap:"nope" }}').render(DjangoContext({"p": "a"}))
-        wide = "word " * 30
-        assert _rust.render_template(
-            '{{ p|wordwrap:"nope" }}', {"p": wide}
-        ) == _rust.render_template('{{ p|wordwrap:"75" }}', {"p": wide})
+        with pytest.raises(RuntimeError, match="needs an integer argument"):
+            _rust.render_template('{{ p|wordwrap:"nope" }}', {"p": "word " * 30})
 
     def test_a_width_with_surrounding_space_parses_as_django_parses_it(self) -> None:
         _assert_agrees('{{ p|wordwrap:" 5 " }}', "aaa bbb ccc")
