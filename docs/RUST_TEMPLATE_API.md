@@ -817,6 +817,45 @@ let result = apply_filter("upper", &value, None)?;
 | `default_if_none` | Null default | `{{ None\|default_if_none:"N/A" }}` | `"N/A"` |
 | `json_script` | JSON in `<script>` | `{{ data\|json_script:"my-id" }}` | Safe `<script>` tag |
 
+#### Filter arguments (#2328)
+
+A filter argument follows Django's rules, and getting one wrong is an **error**,
+not a silently-substituted default.
+
+**Quoted is a literal; bare is a variable.** `{{ p|default:"x" }}` uses the
+string `x`; `{{ p|default:x }}` looks `x` up in the context. A bare identifier
+that does not resolve raises, exactly as Django's `VariableDoesNotExist` does —
+so a typo in a filter argument fails loudly instead of rendering the typo. The
+exceptions are the spellings Django resolves without a lookup: numeric literals
+(`7`, `-3`, `2.7`, `1e3`, `1_0`), and `True` / `False` / `None`.
+
+**A numeric argument is `int(arg)`, with Python's spellings.** `" 5 "`, `"+5"`
+and `"1_0"` all parse, because `int()` accepts them. `True` is `1` and `False`
+is `0`, because a `bool` is an `int`. An unquoted float truncates
+(`{{ p|center:2.7 }}` is `center(2)`) while a **quoted** one raises, because
+`int("2.7")` is a `ValueError` — one character of syntax separates them.
+
+**What an unparseable argument does depends on the filter, and mirrors Django's
+own source.** These raise, because Django writes a bare `int(arg)`:
+
+| raises | returns its input unchanged |
+|---|---|
+| `center`, `ljust`, `rjust`, `wordwrap`, `urlizetrunc`, `divisibleby` | `truncatechars`, `truncatewords`, `truncatechars_html`, `truncatewords_html`, `get_digit`, `floatformat` |
+
+A bare `None` raises for **all** of them: `int(None)` is a `TypeError`, and the
+second column's `except ValueError` does not catch it.
+
+**`{% if %}` is the one place a bad argument does not fail the render.** Django's
+`IfNode` treats an unresolvable condition as falsy, so
+`{% if p|center:missing %}` takes the `{% else %}` branch. That applies to the
+unresolvable case only — `{% if p|center:"nope" %}` still raises.
+
+A raised filter error reaches Python as
+`RuntimeError: Template error: …`, naming the filter and the offending argument.
+Over a LiveView WebSocket it is caught by the consumer, which sends an error
+frame and keeps the connection open — a stack trace under `DEBUG`, a generic
+message otherwise.
+
 ---
 
 ## Error Handling

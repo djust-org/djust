@@ -651,6 +651,16 @@ Pass them via `context` / `self.*`; the serializer handles the rest.
 
 ### Filters (all 57 Django built-ins)
 
+> **Filter arguments are Django's, and a wrong one is an error.** Quoted is a
+> literal (`|default:"x"`); bare is a context variable (`|default:x`) and raises
+> if it does not resolve — so a typo fails loudly rather than rendering the typo.
+> Numeric arguments are `int(arg)`, so `" 5 "`, `"+5"`, `"1_0"` and `True` all
+> work, an unquoted `2.7` truncates to `2`, and a quoted `"2.7"` raises. An
+> unparseable argument raises for `center`, `ljust`, `rjust`, `wordwrap`,
+> `urlizetrunc` and `divisibleby`, and returns the value unchanged for the
+> `truncate*` family, `get_digit` and `floatformat` — matching each filter's
+> Django source. Full rules: `docs/RUST_TEMPLATE_API.md`, "Filter arguments".
+
 **String**
 
 | Filter | Example |
