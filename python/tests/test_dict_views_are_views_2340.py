@@ -355,17 +355,41 @@ class TestEveryFilter:
             assert_agrees(src, {"p": rows})
             assert_agrees(src, {"p": {"b": 2, "a": 1}})
 
-    def test_a_view_survives_a_tag_operand_as_structured_data(self) -> None:
-        """``{% regroup %}`` hands its source through ``value_to_arg_string``.
+    def test_a_view_reaches_a_tag_operand_through_the_pipe_branch_only(self) -> None:
+        """Two halves, and only one of them is this PR's.
 
-        That match has a ``_`` fallback, so the compiler could not ask about a
-        view — and the view fell to ``to_string()``, handing the Python
-        handler the TEXT ``dict_items([…])`` instead of the rows. Same shape as
-        the #2042 ``[List]`` collapse, one placeholder over.
+        ``{% regroup %}`` hands its source through ``value_to_arg_string``,
+        whose match has a ``_`` fallback — so the compiler could not ask about
+        a view, and the view fell to ``to_string()``, handing the Python
+        handler the TEXT ``dict_items([…])`` instead of the rows. That is the
+        #2042 ``[List]``-collapse class one placeholder over, it is fixed here,
+        and the PIPE-branch cell below is what proves the arm is live rather
+        than decoration.
+
+        The BARE dotted path still misses, and that is NOT this model:
+        ``resolve_tag_operand``'s non-pipe branch uses ``Context::get``, and
+        ``d.values`` resolves in ``Context::resolve``. Measured identical on
+        the pre-#2340 build, so the variant neither caused nor changed it —
+        filed as #2368 (the #2333 channel, one operand form over) rather than
+        widened into here (#1079).
+
+        **Delete the second half of this test when #2368 is fixed.**
         """
-        p = {"a": {"k": 2}, "b": {"k": 1}}
-        assert_agrees("{% regroup p.values by k as g %}{{ g|length }}", {"p": p})
-        assert djust_render("{% regroup p.values by k as g %}{{ g|length }}", {"p": p}) == "2"
+        rows = {"a": {"k": 2}, "b": {"k": 1}}
+        SRC = "{% regroup p.values|slice:':2' by k as g %}{{ g|length }}"
+        assert_agrees(SRC, {"p": rows})
+        assert djust_render(SRC, {"p": rows}) == "2", (
+            "the view must reach the handler as its ROWS — a `to_string()` "
+            "collapse hands it the text `dict_values([…])` and regroup finds "
+            "nothing to group"
+        )
+
+        bare = "{% regroup p.values by k as g %}{{ g|length }}"
+        dj, du = both(bare, {"p": rows})
+        assert (dj, du) == ("2", "0"), (
+            f"the bare dotted path now resolves — #2368 has been fixed, so "
+            f"delete this half and close it. got django={dj!r} djust={du!r}"
+        )
 
     def test_the_differential_corpus_can_reach_the_raising_half(self) -> None:
         """The dict-view axis (#2334) built only sequence-like cells.
