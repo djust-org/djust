@@ -774,7 +774,7 @@ class TestACustomFilterSeesContextSourcedItemSafety:
         "unreachable" is a claim and not an excuse). Whether ``mark_item``'s
         non-``str`` branch therefore has any remaining producer at all — and if
         not, whether it should be deleted rather than tested around — is
-        tracked separately; keeping the pass-through is the ESCAPING direction,
+        tracked in #2337; keeping the pass-through is the ESCAPING direction,
         so it is the safe side to be wrong on.
         """
         self._register_probe()

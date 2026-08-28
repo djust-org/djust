@@ -387,7 +387,8 @@ class TestItemSafety:
         ``SafeString('2')`` seen from the other side: ``mark_safe`` STRINGIFIES,
         so Django's ``safeseq`` never produces a non-``str`` item either. The
         ``str``-only policy in ``mark_input_safety`` is unchanged and still the
-        conservative half; what changed is that ``safeseq`` stopped being a way
+        conservative half (whether it still has ANY producer is #2337); what
+        changed is that ``safeseq`` stopped being a way
         to reach it. Measured against Django rather than asserted, since the
         whole point is that the two now agree.
         """
