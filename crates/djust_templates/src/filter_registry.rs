@@ -379,12 +379,20 @@ fn mark_input_safety<'py>(
 /// Deleting the guard rather than keeping it is #1859: an unreachable branch is
 /// decorative, not defensive, and while both mechanisms exist no test can tell
 /// them apart (v1.1.1-2 retro). What replaces it is a test of the REACHABLE
-/// paths — `TestEveryProducerRefusesANonStrSequence` sweeps every producer ×
-/// every non-`str` element shape and asserts each element arrives as its own
-/// type and NOT `SafeData`. If a future producer starts granting on a sequence
-/// holding a non-`str`, `mark_safe` STRINGIFIES it (`mark_safe(42)` is
-/// `SafeString("42")`) and that test goes red — which is the property the
-/// guard was silently providing and the one worth keeping.
+/// paths — `TestANonConvertingProducerRefusesANonStrSequence` sweeps every
+/// producer that does NOT itself convert its elements (arm 1 above, and arm 3
+/// over it) × every non-`str` element shape, and asserts each element arrives
+/// as its own type and NOT `SafeData`. If a future producer starts granting on
+/// a sequence holding a non-`str`, `mark_safe` STRINGIFIES it (`mark_safe(42)`
+/// is `SafeString("42")`) and every one of those goes red — which is the
+/// property the guard was silently providing and the one worth keeping.
+///
+/// Arm 2 needs the other shape, because `safeseq`/`escapeseq` stringify FIRST
+/// and there is then nothing left for a probe to observe: that axis is covered
+/// by the structural pin on their constructors plus Django parity on the
+/// downstream sinks. `TestAConvertingProducerLeavesNoNonStrElement` carries it,
+/// and its own comment records the gate-off that proved the obvious assertion
+/// there could not go red.
 fn mark_item<'py>(
     mark_safe: &Bound<'py, PyAny>,
     item: Bound<'py, PyAny>,
