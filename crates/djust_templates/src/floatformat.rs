@@ -58,7 +58,11 @@ pub const MAX_PLACES: i64 = 1_000_000;
 /// `arg_was_quoted` separates Django's `int(arg)` on a *string* (`"2.5"` raises
 /// `ValueError`, so the filter gives up) from `int()` on a *float literal*
 /// (`2.5` truncates to 2). Same distinction `add` draws, same reason (#2203).
-pub fn floatformat(value: &Value, arg: Option<&str>, arg_was_quoted: bool) -> Value {
+pub fn floatformat(
+    value: &Value,
+    arg: Option<&str>,
+    arg_was_quoted: bool,
+) -> djust_core::Result<Value> {
     // `str(text)` — what Django returns verbatim from all three give-up paths,
     // and what it feeds to `Decimal(...)`.
     let input_val: String = match value {
@@ -89,7 +93,7 @@ pub fn floatformat(value: &Value, arg: Option<&str>, arg_was_quoted: bool) -> Va
         // `Decimal('NaN')` and `Decimal('Infinity')` PARSE in Python; it is the
         // `int(d)` below that raises, and Django catches that and returns the
         // input. Same destination, reached one step earlier.
-        None if decimal::is_non_finite(trimmed) => return Value::String(input_val),
+        None if decimal::is_non_finite(trimmed) => return Ok(Value::String(input_val)),
         // `except InvalidOperation: d = Decimal(str(float(text)))` — the branch
         // that makes `{{ True|floatformat }}` render `1`.
         None => match coerce_float(value, trimmed) {
@@ -99,12 +103,12 @@ pub fn floatformat(value: &Value, arg: Option<&str>, arg_was_quoted: bool) -> Va
                 Some(p) => p,
                 // Unreachable: `python_float_repr` of a finite float always
                 // parses. Fail soft rather than unwrap on the render path.
-                None => return Value::String(input_val),
+                None => return Ok(Value::String(input_val)),
             },
             // `float('nan')`/`float('inf')` -> `Decimal` fine -> `int(d)` raises.
-            Some(_) => return Value::String(input_val),
+            Some(_) => return Ok(Value::String(input_val)),
             // `except (ValueError, InvalidOperation, TypeError): return ""`.
-            None => return Value::String(String::new()),
+            None => return Ok(Value::String(String::new())),
         },
     };
 
@@ -112,18 +116,27 @@ pub fn floatformat(value: &Value, arg: Option<&str>, arg_was_quoted: bool) -> Va
     // `p` keeps its SIGN: `abs(p)` is the precision and `p <= 0` selects
     // Django's drop-the-fraction branch, so both come off ONE parse rather than
     // two that could disagree (#1646).
+    // `int(None)` is a TypeError, and Django's `except ValueError` does not
+    // catch it — so a bare `None` argument raises. It has to be asked HERE and
+    // not in the dispatch arm: the order above is load-bearing, and a value
+    // that never parsed returns `""` in Django without `int(arg)` ever running.
+    // #2328's argument-axis differential caught 36 cells of exactly that, where
+    // an arm-level guard raised for a dict or a datetime value.
+    if crate::filters::arg_is_none_literal(arg, arg_was_quoted) {
+        return Err(crate::filters::none_argument_error("floatformat"));
+    }
     let (p, force_grouping, use_l10n) = match parse_arg(arg, arg_was_quoted) {
         Some(spec) => spec,
-        None => return Value::String(input_val),
+        None => return Ok(Value::String(input_val)),
     };
     let places = p.unsigned_abs();
 
     // Django's DoS cut-off, before anything allocates from the exponent.
     if parts.over_django_digit_cutoff() {
-        return Value::String(input_val);
+        return Ok(Value::String(input_val));
     }
     if places > MAX_PLACES as u64 {
-        return Value::String(input_val);
+        return Ok(Value::String(input_val));
     }
     let places = places as usize;
 
@@ -136,7 +149,11 @@ pub fn floatformat(value: &Value, arg: Option<&str>, arg_was_quoted: bool) -> Va
         let digits = strip_leading_zeros(&int_str);
         // `"%d" % int(Decimal('-0.0'))` is `0`, not `-0`.
         let sign = if parts.neg && digits != "0" { "-" } else { "" };
-        return Value::String(finish(&format!("{sign}{digits}"), use_l10n, force_grouping));
+        return Ok(Value::String(finish(
+            &format!("{sign}{digits}"),
+            use_l10n,
+            force_grouping,
+        )));
     }
 
     let (rint, rfrac) = quantize_half_up(&int_str, &frac_str, places);
@@ -153,7 +170,7 @@ pub fn floatformat(value: &Value, arg: Option<&str>, arg_was_quoted: bool) -> Va
     } else {
         format!("{sign}{rint}.{rfrac}")
     };
-    Value::String(finish(&number, use_l10n, force_grouping))
+    Ok(Value::String(finish(&number, use_l10n, force_grouping)))
 }
 
 /// `(p, force_grouping, use_l10n)`, or `None` for Django's
@@ -196,19 +213,26 @@ fn parse_arg(arg: Option<&str>, arg_was_quoted: bool) -> Option<(i64, bool, bool
 
 /// Python's `int(arg)`: exact for an integer, truncating for a float, and a
 /// `ValueError` for a STRING that merely looks like a float.
+///
+/// Delegates to the one filter-argument chokepoint (#2328) rather than owning
+/// a second `int()`. This module had the quoting rule right and the `int()`
+/// spellings wrong — `parse::<i64>` refuses `" 2 "` and `"1_0"`, both of which
+/// CPython accepts — so `{{ p|floatformat:"1_0" }}` gave back the input where
+/// Django formats to ten places. `floatformat` catches the `ValueError`, so it
+/// is a [`BadArg::ReturnInput`] customer; `center` and friends are the `Raise`
+/// half. Two customers with OPPOSITE policies is what keeps that parameter
+/// load-bearing rather than decorative.
 fn parse_int_like(body: &str, arg_was_quoted: bool) -> Option<i64> {
-    let s = body.trim();
-    if let Ok(v) = s.parse::<i64>() {
-        return Some(v);
-    }
-    if arg_was_quoted {
-        // `int("2.5")` raises; Django gives up and returns the input.
-        return None;
-    }
-    match s.parse::<f64>() {
-        Ok(f) if f.is_finite() => Some(f.trunc() as i64),
-        _ => None,
-    }
+    crate::filters::filter_int_arg(
+        "floatformat",
+        Some(body),
+        arg_was_quoted,
+        // Unreachable: `parse_arg` returns early for a `None` argument.
+        -1,
+        crate::filters::BadArg::ReturnInput,
+    )
+    .ok()
+    .flatten()
 }
 
 /// Python's `float(text)` for the values that reach Django's second `Decimal`
@@ -294,7 +318,7 @@ mod tests {
     use super::*;
 
     fn ff(v: Value, arg: Option<&str>) -> String {
-        match floatformat(&v, arg, true) {
+        match floatformat(&v, arg, true).expect("no None-argument case in this table") {
             Value::String(s) => s,
             other => other.to_string(),
         }
@@ -363,7 +387,7 @@ mod tests {
         assert_eq!(ff(Value::Decimal("1.5555".into()), Some("2.5")), "1.5555");
         // ...but an UNQUOTED float literal truncates.
         match floatformat(&Value::Decimal("1.5555".into()), Some("2.5"), false) {
-            Value::String(s) => assert_eq!(s, "1.56"),
+            Ok(Value::String(s)) => assert_eq!(s, "1.56"),
             other => panic!("expected a string, got {other:?}"),
         }
     }
@@ -375,6 +399,34 @@ mod tests {
         assert_eq!(ff(Value::String("abc".into()), Some("x")), "");
         assert_eq!(ff(Value::None, Some("x")), "");
         assert_eq!(ff(Value::List(vec![Value::Integer(1)]), Some("x")), "");
+    }
+
+    /// The same ordering, for the argument that RAISES (#2328).
+    ///
+    /// `int(None)` is a TypeError past Django's `except ValueError`, so a bare
+    /// `None` argument fails — but only once the VALUE has parsed. A first pass
+    /// put this guard in the dispatch arm, ahead of the value parse, and the
+    /// argument-axis differential reported 36 cells where djust raised for a
+    /// dict or a datetime value that Django renders as `""`.
+    #[test]
+    fn a_none_argument_raises_but_only_after_the_value_parses() {
+        assert!(floatformat(&Value::Float(1.5), Some("None"), false).is_err());
+        // Value first: these never reach `int(arg)` in Django either.
+        for unusable in [
+            Value::String("abc".into()),
+            Value::None,
+            Value::List(vec![Value::Integer(1)]),
+        ] {
+            let got = floatformat(&unusable, Some("None"), false)
+                .expect("the value parse decides first, so this must not raise");
+            assert!(
+                matches!(&got, Value::String(s) if s.is_empty()),
+                "{unusable:?} must give Django's empty string, got {got:?}"
+            );
+        }
+        // QUOTED `"None"` is the string, and `int("None")` IS a ValueError, so
+        // it takes the caught path and gives the input back.
+        assert_eq!(ff(Value::Float(1.5), Some("None")), "1.5");
     }
 
     #[test]

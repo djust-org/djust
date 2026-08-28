@@ -917,7 +917,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             false_expr,
             filters,
         } => {
-            let expr = if evaluate_condition(condition, context)? {
+            let expr = if evaluate_condition_for_if(condition, context)? {
                 true_expr.as_str()
             } else {
                 false_expr.as_str()
@@ -1002,7 +1002,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             in_tag_context,
             marker_id,
         } => {
-            let condition_result = evaluate_condition(condition, context)?;
+            let condition_result = evaluate_condition_for_if(condition, context)?;
 
             // Render the body that fires (truthy/falsy branch).
             let body = if condition_result {
@@ -2373,6 +2373,35 @@ fn get_prop(key: &str, props: &[(String, String)], context: &Context) -> Result<
     Err(DjangoRustError::TemplateError(format!(
         "Missing required prop: {key}"
     )))
+}
+
+/// [`evaluate_condition`] with Django's `IfNode.render` error policy.
+///
+/// ```python
+/// try:
+///     match = condition.eval(context)
+/// except VariableDoesNotExist:
+///     match = None
+/// ```
+///
+/// `{% if %}` — alone among the constructs that take a filtered operand — turns
+/// an unresolvable variable into a FALSY condition rather than a render error.
+/// `{{ }}`, `{% for %}`, `{% with %}` and `{% ifchanged %}` all propagate,
+/// verified against Django 5.2 (`scratch` probe in #2328).
+///
+/// The catch is narrow on purpose: Django does NOT catch the `ValueError` an
+/// unparseable filter argument raises, so `{% if p|center:"nope" %}` still
+/// fails. That is why the resolve miss carries its own error variant — with one
+/// "template error" kind, this would swallow genuine failures too.
+///
+/// Applied to djust's own `{% if %}`-shaped inline conditional as well: two
+/// spellings of one construct answering differently is the drift this codebase
+/// keeps paying for (#1646).
+fn evaluate_condition_for_if(condition: &str, context: &Context) -> Result<bool> {
+    match evaluate_condition(condition, context) {
+        Err(DjangoRustError::VariableDoesNotExist(_)) => Ok(false),
+        other => other,
+    }
 }
 
 fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {

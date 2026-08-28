@@ -46,6 +46,7 @@ pytest.importorskip("django")
 
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
+from django.template.base import VariableDoesNotExist  # noqa: E402
 from django.test import override_settings  # noqa: E402
 from django.utils import translation  # noqa: E402
 
@@ -248,10 +249,12 @@ def test_floatformat_is_untouched_by_the_scientific_branch() -> None:
             for source, value, expected in (
                 ("{{ p|floatformat }}", Decimal("1234.56"), "1.234,6"),
                 ("{{ p|floatformat:2 }}", Decimal("1234.567"), "1.234,57"),
-                # Unquoted: Django reads `2u` as a VARIABLE and raises
-                # `VariableDoesNotExist`; djust falls back to the literal. A
-                # djust-internal pin, not a parity claim.
-                ("{{ p|floatformat:2u }}", Decimal("1234.567"), "1234.57"),
+                # The `u` suffix suppresses localization. It has to be QUOTED:
+                # Django reads a bare `2u` as a VARIABLE. This row used to
+                # spell it unquoted and pin djust's literal fallback as a
+                # deliberate divergence; #2328 closed that, so the row is a
+                # parity claim now and the raise is asserted below.
+                ('{{ p|floatformat:"2u" }}', Decimal("1234.567"), "1234.57"),
                 ("{{ p|floatformat:2 }}", Decimal("1E-250"), "1E-250"),
             ):
                 got = _rust.render_template(source, {"p": value})
@@ -262,10 +265,19 @@ def test_floatformat_is_untouched_by_the_scientific_branch() -> None:
                 ("{{ p|floatformat }}", Decimal("1234.56")),
                 ("{{ p|floatformat:2 }}", Decimal("1234.567")),
                 ("{{ p|floatformat:2 }}", Decimal("1E-250")),
+                ('{{ p|floatformat:"2u" }}', Decimal("1234.567")),
             ):
                 assert _rust.render_template(source, {"p": value}) == DjangoTemplate(source).render(
                     DjangoContext({"p": value})
                 ), f"{source} on {value}"
+            # And the UNQUOTED suffix, which is a lookup in both engines
+            # (#2328). Django raises `VariableDoesNotExist`; djust used to
+            # render `1234.57` from the literal fallback.
+            unquoted = "{{ p|floatformat:2u }}"
+            with pytest.raises(Exception, match="does not resolve"):
+                _rust.render_template(unquoted, {"p": Decimal("1234.567")})
+            with pytest.raises(VariableDoesNotExist):
+                DjangoTemplate(unquoted).render(DjangoContext({"p": Decimal("1234.567")}))
     finally:
         render_env.apply_number_format()
 
