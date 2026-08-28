@@ -49,7 +49,12 @@ Why each is its own bug
 from __future__ import annotations
 
 import datetime
+import json
+import os
 import pathlib
+import re
+import subprocess
+import sys
 from decimal import Decimal
 from typing import Any
 
@@ -71,6 +76,17 @@ FILTERS_RS = (
 )
 
 URL_TEXT = "see http://example.com/aaaa now"
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+DIFFERENTIAL = REPO / "scripts" / "filter-parity-differential.py"
+
+
+def _env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO / "python"), *([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])]
+    )
+    return env
 
 
 def django_render(source: str, value: Any) -> str:
@@ -283,6 +299,103 @@ class TestFloatformatEmptyArgument:
         them, so the guard must be on the argument as given, not on the
         remainder after the suffix is stripped."""
         assert_agrees("{{ p|floatformat:%s }}" % arg, 3.14159)
+
+
+class TestTheManifestDemandsTheNewErrorsBeReachable:
+    """The reachability manifest (#2345) on its first live encounter with a PR
+    that adds to the surface it measures.
+
+    Two of the three fixes here raise an argument error the engine could not
+    raise before, so the manifest's `argument` axis — whose requirement set is
+    RECOMPUTED from the Rust source — should demand each be reachable from the
+    corpus. It did for one and not the other, and both gaps were in the
+    manifest rather than in this PR:
+
+    1. it read only `filters.rs`, and only messages carrying the
+       `{filter_name}` PLACEHOLDER. `divisibleby`'s new `ZeroDivisionError` has
+       both properties and was picked up automatically (4 required -> 5).
+       `floatformat`'s new `IndexError` has NEITHER — it lives in
+       `floatformat.rs` and names its filter literally, because that module
+       knows which filter it is — so no requirement row demanded it. A
+       requirement source that can miss a requirement is the failure the
+       manifest exists to prevent, one level in.
+    2. once it was found, the signature still did not match: requirement text
+       is read out of Rust SOURCE, where a quote inside a string is written
+       ``\\"``, while the raised message has a real quote. The first five
+       argument errors contain no escape at all, so a missing decoder was
+       invisible until this PR's message quoted its argument.
+
+    Both are fixed here rather than worked around, which is what the mechanism
+    asks for. These tests are the pins.
+    """
+
+    @staticmethod
+    def manifest() -> dict:
+        proc = subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+            [sys.executable, str(DIFFERENTIAL), "--manifest", "--json"],
+            capture_output=True,
+            text=True,
+            env=_env(),
+            cwd=str(REPO),
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr[-3000:]
+        data = json.loads(proc.stdout)
+        return next(r for r in data["axes"] if r["axis"] == "argument")
+
+    def test_both_new_errors_are_required_and_reachable(self) -> None:
+        row = self.manifest()
+        assert row["missing"] == [], row["missing"]
+        joined = "\n".join(row["required"])
+        assert "ZeroDivisionError" in joined, (
+            "divisibleby's zero-divisor error is not in the requirement set, so "
+            "nothing demands the corpus be able to reach it"
+        )
+        assert "IndexError" in joined, (
+            "floatformat's empty-argument error is not in the requirement set — the "
+            "source reads only filters.rs, or only the {filter_name} spelling"
+        )
+
+    def test_the_requirement_source_reads_floatformat_too(self) -> None:
+        """The first gap, pinned structurally: a module that raises its own
+        argument error must be a requirement source."""
+        source = DIFFERENTIAL.read_text(encoding="utf-8")
+        modules = re.search(r"_ARG_ERROR_MODULES = \(([^)]*)\)", source)
+        assert modules, "the requirement source no longer enumerates its modules"
+        assert "floatformat" in modules.group(1), modules.group(1)
+        assert "filters" in modules.group(1), modules.group(1)
+
+    def test_a_literally_named_filter_is_matched_as_well_as_the_placeholder(
+        self,
+    ) -> None:
+        """The other half of the first gap. A message from shared code
+        interpolates the name; one from a module that knows its own filter
+        names it literally. Both are argument errors."""
+        source = DIFFERENTIAL.read_text(encoding="utf-8")
+        mark = re.search(r"_ARG_ERROR_MARK = re\.compile\(r\"(.+?)\"\)", source)
+        assert mark, "the argument-error mark is no longer a pattern"
+        pattern = re.compile(mark.group(1))
+        assert pattern.search("filter '{filter_name}' needs an integer argument")
+        assert pattern.search("filter 'floatformat' indexes its argument")
+        # Non-vacuity: it must not match every string with the word `filter`.
+        assert not pattern.search("the filter registry"), mark.group(1)
+
+    def test_the_rust_literal_decoder_is_applied_before_matching(self) -> None:
+        """The second gap. `\\"` in source is `"` at runtime, and a signature
+        that keeps the backslash matches nothing.
+
+        Asserted end-to-end rather than on the helper: the message this PR adds
+        is the one that carries an escape, and it must be REACHED — which is
+        the assertion in `test_both_new_errors_are_required_and_reachable`. This
+        pins the mechanism so the two cannot be satisfied by luck.
+        """
+        source = DIFFERENTIAL.read_text(encoding="utf-8")
+        assert "def _rust_unescape(" in source
+        body = source.split("def _error_signature(", 1)[1].split("\ndef ", 1)[0]
+        assert "_rust_unescape(" in body, (
+            "the signature is built from raw source text again, so any message "
+            "containing an escape reports as unreachable"
+        )
 
 
 class TestTheEmptyArgumentIsAskedFirst:
