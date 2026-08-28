@@ -500,9 +500,10 @@ class TestTheArgumentAxisCorpus:
         which is a real regression and the whole point of #2328, from "both
         raise, as they always did".
 
-        Measured: with the messages kept, this corpus reports 2,014 of 4,060
-        cells disagreeing and NO filter clean; with them collapsed, 1,117 and
-        ten filters clean — including every filter #2328 fixed.
+        Measured on the 22-spelling corpus: with the messages kept, 2,251 of
+        4,466 cells disagree and NO filter is clean; with them collapsed, 1,222
+        and six are (`center`, `join`, `ljust`, `rjust`, `slice`, `wordwrap`).
+        A clean filter is only possible at all because of the collapse.
         """
         out = tmp_path / "arg.json"
         subprocess.run(  # noqa: S603 — a repo file, argv list, no shell

@@ -1509,7 +1509,8 @@ def _raise_bit(out: str) -> str:
     regression — from "both raise, as they always did".
 
     Measured rather than assumed: keeping the messages, this corpus reports
-    2,014 of 4,060 cells disagreeing, and every filter disagreeing somewhere.
+    2,251 of 4,466 cells disagreeing and NO filter clean; collapsed, 1,222 and
+    six filters clean.
     The default `{{ }}` corpus keeps its `<<EXC Type: msg>>` encoding — raises
     are rare there, the type carries information a passing cell does not, and
     changing it would rename every cell in an existing baseline.
