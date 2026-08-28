@@ -19,7 +19,7 @@
     "happy-dom": "^20.11.6",
     "jsdom": "^30.0.1",
     "terser": "^5.50.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "flatted": ">=3.4.2"
