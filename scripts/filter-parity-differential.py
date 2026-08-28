@@ -93,10 +93,29 @@ this tool is only ever as good as the shapes it builds, and a corpus gap is
 silent by construction. Tag cells carry a third `\\t`-separated field in their
 id so `{{ }}` ids stay byte-identical and an older baseline file remains
 comparable.
+
+Since #2334 / #2335 it carries two more, for the same reason both times — the
+tool reported clean over the whole of both bugs because it built no cell that
+could reach them:
+
+* a **dict-view path** axis. Every tag cell writes `p|<filter>` as its operand,
+  so the corpus contained no DOTTED path and nothing that iterated a dict
+  without a filter in the way. `{% for k, v in p.items %}` — one of the most
+  common Django loop idioms there is — rendered NOTHING, because `.items` is a
+  callable rather than a key and `{% for %}` had no `Value::Object` arm.
+* a **sequence-comparison** axis. Every `{% if %}` cell was a truthiness test on
+  ONE operand; the tool bound no `q` at all, so `values_equal` / `compare_values`
+  — which answered False for a list against itself — were entirely unmeasured.
+
+`python/tests/test_dict_iteration_and_sequence_equality_2334_2335.py::
+TestTheCorpusGapsThatHidTheseFromTheDifferential` pins both, because a corpus
+gap is silent by construction and this is the third time one has hidden a
+shipped bug.
 """
 
 from __future__ import annotations
 
+import copy
 import itertools
 import json
 import re
@@ -344,6 +363,21 @@ INPUTS = {
     # plain `str` where Django hands it a tuple of `SafeString`. With only
     # `l-marked` on the axis the tool could not construct that cell at all.
     "t-marked": (mark_safe("<b>x</b>"), mark_safe("<i>y</i>")),
+    # A dict whose KEYS are hostile (#2334). `{% for k in d %}` iterates a
+    # dict's keys, so the KEY is what reaches the page — and `d-plain`'s keys
+    # are `k` and `j`, which cannot show a key-escaping defect at all.
+    #
+    # It also carries a key spelled `"1"` whose value is marked safe, which is
+    # the exact collision shape the loop safe-key mapping has on a dict:
+    # `_collect_safe_keys` writes a dict's paths BY NAME (`p.1`), while the
+    # mapping asserts the loop variable is `p.<INDEX>`. Index 1 is the SECOND
+    # key — a different, attacker-controlled string — so registering the
+    # mapping for a dict would emit it unescaped. Ordered so the payload is at
+    # index 1; a corpus with the marked key second could not build that cell.
+    "d-hostile-key": {
+        "1": mark_safe("<b>ok</b>"),
+        "<img src=x onerror=alert(1)>": "v",
+    },
 }
 
 #: Inputs whose SAFETY the context declares. Rendered through
@@ -389,6 +423,9 @@ LIVE_FRAGMENTS = {
     # only hand both engines a dict, so the comparison is structurally unfair
     # on this key. 65 permanent false leaks would drown a real one.
     "l-mixed": ["<img", "onerror="],
+    # The KEY is the payload here, and it is never marked. `<b>ok</b>` IS
+    # marked and Django emits it live, which is why it is not listed.
+    "d-hostile-key": ["<img", "onerror="],
 }
 
 #: Names worth composing: the safety- and shape-relevant ones. Keeps the chain
@@ -619,6 +656,65 @@ def tag_cells():
                 yield shape, (a, b), key
 
 
+#: The DICT-VIEW PATH axis (#2334).
+#:
+#: The tag axis above only ever writes `p|<filter>` as its operand, so every
+#: cell's operand is a bare name plus a filter chain. A DOTTED path that ends
+#: in a dict method — `{% for k, v in p.items %}`, one of the most common
+#: Django loop idioms there is — is a third resolution shape: `.items` is a
+#: CALLABLE, not a key, so `Context::get`'s nested walk missed it and the loop
+#: rendered nothing. Neither did anything iterate a dict at all without a
+#: filter in the way.
+#:
+#: Same corpus-gap failure mode as #2325 and #2281 before it, one shape over:
+#: the tool reported clean across the whole of #2334 because it built no cell
+#: that could see it.
+#:
+#: Swept over EVERY input, not just the dicts. A non-dict `p` is the arm that
+#: must keep answering exactly what it answered before, and leaving it out
+#: would make the axis measure only the half expected to change.
+PATH_SHAPES = {
+    "for-bare": "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}",
+    "for-items": "{% for k, v in p.items %}[{{ k }}={{ v }}]{% empty %}E{% endfor %}",
+    "for-keys": "{% for x in p.keys %}[{{ x }}]{% empty %}E{% endfor %}",
+    "for-values": "{% for x in p.values %}[{{ x }}]{% empty %}E{% endfor %}",
+    "for-rev": "{% for x in p reversed %}[{{ x }}]{% empty %}E{% endfor %}",
+    "var-items": "[{{ p.items }}]",
+    "var-keys": "[{{ p.keys }}]",
+    "if-items": "{% if p.items %}Y{% else %}N{% endif %}",
+    "with-keys": "{% with q=p.keys %}[{{ q }}]{% endwith %}",
+    # The path AND a filter, which is where the two resolution shapes meet.
+    "for-keys-len": "[{{ p.keys|length }}]",
+    "for-keys-join": "[{{ p.keys|join:'-' }}]",
+    "for-items-slice": "{% for x in p.items|slice:':2' %}[{{ x }}]{% empty %}E{% endfor %}",
+}
+
+
+#: The SEQUENCE-COMPARISON axis (#2335).
+#:
+#: Every `{% if %}` cell above is a TRUTHINESS test on one operand — the tool
+#: could not construct a comparison at all, because it binds only `p`. So
+#: `values_equal` and `compare_values`, which two sequences reach and which
+#: answered False for a list against ITSELF, were entirely unmeasured.
+#:
+#: `in` is here because it is the third caller of `values_equal` and would
+#: otherwise be the one arm the axis misses (#1646).
+CMP_OPS = ["==", "!=", "<", ">", "<=", ">=", "in"]
+
+
+def path_cells():
+    for shape in PATH_SHAPES:
+        for key in INPUTS:
+            yield shape, key
+
+
+def cmp_cells():
+    for op in CMP_OPS:
+        for ka in INPUTS:
+            for kb in INPUTS:
+                yield op, ka, kb
+
+
 def measure(out_path: str) -> None:
     result: dict[str, list[str]] = {}
     for chain, key in cells():
@@ -651,6 +747,38 @@ def measure(out_path: str) -> None:
         )
         if any(c in NONDET for c in chain):
             dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
+        result[cid] = [dj, du]
+
+    # The dict-view PATH axis (#2334). A fourth-field-free three-field id, the
+    # same shape the tag axis uses, so nothing above is renamed.
+    for shape, key in path_cells():
+        cid = f"@path\t{key}\t{shape}"
+        if cid in result:
+            continue
+        dj, du = render_both(
+            PATH_SHAPES[shape],
+            {"p": INPUTS[key]},
+            CONTEXT_SAFE_KEYS.get(key),
+        )
+        result[cid] = [dj, du]
+
+    # The sequence-COMPARISON axis (#2335). Four fields: the second operand's
+    # key is the last. `q` is a DEEP COPY so the two operands are never the
+    # same object — Python's `==` would answer True on identity alone for a
+    # list, and a corpus that could only compare a value to itself would not
+    # be able to tell a structural comparison from an identity one.
+    #
+    # No `safe_keys`: every cell's output is `Y` or `N`, so the escaping axis
+    # has nothing to say here, and passing them would mean two entry points
+    # for one question.
+    for op, ka, kb in cmp_cells():
+        cid = f"@cmp {op}\t{ka}\tcmp\t{kb}"
+        if cid in result:
+            continue
+        dj, du = render_both(
+            "{%% if p %s q %%}Y{%% else %%}N{%% endif %%}" % op,
+            {"p": INPUTS[ka], "q": copy.deepcopy(INPUTS[kb])},
+        )
         result[cid] = [dj, du]
 
     agree = sum(1 for v in result.values() if v[0] == v[1])

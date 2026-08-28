@@ -298,6 +298,57 @@ impl Context {
         }
     }
 
+    /// Python's `dict.items()` / `.keys()` / `.values()`, reached as the LAST
+    /// segment of a dotted path over a [`Value::Object`] (#2334).
+    ///
+    /// These are METHODS, not keys, so [`Context::get`]'s nested walk — which
+    /// only ever does `obj.get(part)` — misses them and `{% for k, v in
+    /// d.items %}` renders nothing. Django reaches them through
+    /// `Variable._resolve_lookup`'s attribute step plus its auto-call, which
+    /// is why they work there.
+    ///
+    /// Returns an owned `Value`, which is why this cannot live inside
+    /// `Context::get` (that returns a borrow into the value stack, and these
+    /// sequences are constructed on demand).
+    ///
+    /// **The container is a `Value::List`, not a live dict view.** Python's
+    /// `dict_items` differs from `list(d.items())` in exactly two observable
+    /// ways: `str()` reads `dict_items([…])` rather than `[…]`, and it is not
+    /// subscriptable or JSON-serializable (so Django RAISES on
+    /// `{{ d.items|first }}` / `|last` / `|json_script`). Both residues are
+    /// measured and pinned by
+    /// `python/tests/test_dict_iteration_and_sequence_equality_2334_2335.py`
+    /// and tracked at #2340; modelling them faithfully would mean a new
+    /// `Value` variant threaded
+    /// through every `Value::List | Value::Tuple` or-pattern in the workspace,
+    /// which buys a debug-only repr at the cost of a wide edit in escaping
+    /// machinery. Neither residue is more permissive than Django.
+    ///
+    /// Order is the `IndexMap`'s insertion order — Python's dict order. A
+    /// `HashMap` here would make `{% for k in d %}` nondeterministic across
+    /// renders and thrash the VDOM.
+    fn dict_view(&self, key: &str) -> Option<Value> {
+        let (prefix, last) = key.rsplit_once('.')?;
+        if !matches!(last, "items" | "keys" | "values") {
+            return None;
+        }
+        let Value::Object(map) = self.get(prefix)? else {
+            return None;
+        };
+        Some(Value::List(match last {
+            "keys" => map.keys().map(|k| Value::String(k.clone())).collect(),
+            "values" => map.values().cloned().collect(),
+            // `items` — each entry a 2-`Tuple`, which is what makes
+            // `{% for k, v in d.items %}` unpack through the renderer's
+            // existing tuple-unpacking branch, and what makes `{{ x }}` over
+            // one render `('a', 1)` as Python does.
+            _ => map
+                .iter()
+                .map(|(k, v)| Value::Tuple(vec![Value::String(k.clone()), v.clone()]))
+                .collect(),
+        }))
+    }
+
     pub fn set(&mut self, key: String, value: Value) {
         if let Some(frame) = self.stack.last_mut() {
             frame.insert(key, value);
@@ -370,6 +421,23 @@ impl Context {
     pub fn resolve(&self, key: &str) -> crate::Result<Option<Value>> {
         if let Some(v) = self.get(key) {
             return Ok(Some(v.clone()));
+        }
+        // `d.items` / `d.keys` / `d.values` on a plain dict (#2334). Placed
+        // AFTER `get` because Django's `Variable._resolve_lookup` tries
+        // mapping-item access FIRST and attribute access second, so a dict
+        // that HAS a key named `items` resolves to that key's value and never
+        // reaches the method — which is what the `get` above already does.
+        //
+        // Placed BEFORE the `raw_py_objects` guard because the common case has
+        // no sidecar at all: a dict in the JSON state is a `Value::Object` in
+        // the value stack, and the sidecar walk (which reaches these methods
+        // for a raw Python dict through `getattr` + `maybe_call`) never runs
+        // for it. One chokepoint here serves every operand site — `{{ }}`
+        // resolves through this function directly, and `{% for %}` /
+        // `{% if %}` / `{% with %}` / `{% include … with %}` reach it as
+        // `get_value_safe`'s last arm (#1646).
+        if let Some(view) = self.dict_view(key) {
+            return Ok(Some(view));
         }
         let Some(raw) = self.raw_py_objects.as_deref() else {
             return Ok(None);
@@ -817,5 +885,103 @@ mod tests {
         ctx.set("row".to_string(), unmarked);
         ctx.set_loop_mapping("row".to_string(), "rows".to_string(), 1);
         assert!(!ctx.items_are_safe("row"));
+    }
+
+    // -- #2334: dict views --------------------------------------------
+
+    fn dict_ctx() -> Context {
+        let mut map = indexmap::IndexMap::new();
+        map.insert("a".to_string(), Value::Integer(1));
+        map.insert("b".to_string(), Value::Integer(2));
+        let mut ctx = Context::new();
+        ctx.set("d".to_string(), Value::Object(map));
+        ctx
+    }
+
+    #[test]
+    fn dict_items_keys_and_values_resolve_in_insertion_order() {
+        let ctx = dict_ctx();
+        match ctx.resolve("d.keys").unwrap().unwrap() {
+            Value::List(items) => assert_eq!(
+                items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+                vec!["a", "b"],
+                "Python's dict order, not a hash order — a HashMap here would \
+                 make `{{% for k in d %}}` nondeterministic across renders"
+            ),
+            other => panic!("expected a list, got {other:?}"),
+        }
+        match ctx.resolve("d.values").unwrap().unwrap() {
+            Value::List(items) => {
+                assert_eq!(
+                    items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+                    vec!["1", "2"]
+                )
+            }
+            other => panic!("expected a list, got {other:?}"),
+        }
+        match ctx.resolve("d.items").unwrap().unwrap() {
+            Value::List(items) => {
+                assert_eq!(items.len(), 2);
+                // Each entry is a 2-TUPLE, which is what makes
+                // `{% for k, v in d.items %}` unpack through the renderer's
+                // existing tuple-unpacking branch.
+                match &items[0] {
+                    Value::Tuple(pair) => {
+                        assert_eq!(pair.len(), 2);
+                        assert_eq!(pair[0].to_string(), "a");
+                        assert_eq!(pair[1].to_string(), "1");
+                    }
+                    other => panic!("expected a 2-tuple, got {other:?}"),
+                }
+            }
+            other => panic!("expected a list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_real_key_named_items_shadows_the_method() {
+        // Django's `Variable._resolve_lookup` tries mapping-item access FIRST
+        // and attribute access second, which is why the view resolution is
+        // placed AFTER `Context::get` rather than inside its walk.
+        let mut map = indexmap::IndexMap::new();
+        map.insert("items".to_string(), Value::Integer(5));
+        let mut ctx = Context::new();
+        ctx.set("d".to_string(), Value::Object(map));
+        assert_eq!(ctx.resolve("d.items").unwrap().unwrap().to_string(), "5");
+    }
+
+    #[test]
+    fn a_dict_view_is_not_offered_for_a_non_object_or_a_deeper_path() {
+        let mut ctx = dict_ctx();
+        ctx.set("s".to_string(), Value::String("x".to_string()));
+        ctx.set("l".to_string(), Value::List(vec![Value::Integer(1)]));
+        // Only a mapping has these methods.
+        assert!(ctx.resolve("s.items").unwrap().is_none());
+        assert!(ctx.resolve("l.keys").unwrap().is_none());
+        // A single-segment name is never a view.
+        assert!(ctx.resolve("items").unwrap().is_none());
+        // Python's `dict_items` has no `.0` and no `.keys`, and neither does
+        // this: the walk resolves the PREFIX through `get`, which misses.
+        assert!(ctx.resolve("d.items.0").unwrap().is_none());
+        assert!(ctx.resolve("d.items.keys").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_nested_dict_view_resolves_through_the_prefix_walk() {
+        let mut inner = indexmap::IndexMap::new();
+        inner.insert("x".to_string(), Value::Integer(9));
+        let mut outer = indexmap::IndexMap::new();
+        outer.insert("inner".to_string(), Value::Object(inner));
+        let mut ctx = Context::new();
+        ctx.set("d".to_string(), Value::Object(outer));
+        match ctx.resolve("d.inner.keys").unwrap().unwrap() {
+            Value::List(items) => {
+                assert_eq!(
+                    items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+                    vec!["x"]
+                )
+            }
+            other => panic!("expected a list, got {other:?}"),
+        }
     }
 }

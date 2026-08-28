@@ -33,8 +33,17 @@ silently corrupting the grouping.
 Known limitations vs. Django:
 
 * The ``<expr>`` source must resolve to a JSON-encodable sequence
-  (django-normalised context values always are). Filter expressions on
-  the source (``cities|dictsort:"country"``) are not supported.
+  (django-normalised context values always are).
+
+Filter expressions on the source (``cities|dictsort:"country"``) ARE
+supported as of #2333 — the renderer's ``resolve_tag_operand`` resolves a
+pipe-bearing operand through ``get_value``, the same filter-aware resolver
+``{{ }}`` uses. Before that this channel asked for a variable literally NAMED
+``cities|dictsort:"country"``, missed, and handed the handler the template's
+own source text, so ``{{ g|length }}`` rendered ``0`` and every ``{% for %}``
+over the groups rendered nothing — silently. Django's own ``regroup`` docs
+open by noting the input usually needs sorting first, so that idiom is close
+to canonical.
 """
 
 from __future__ import annotations

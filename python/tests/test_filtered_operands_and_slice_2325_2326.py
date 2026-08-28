@@ -487,12 +487,20 @@ class TestNotMorePermissiveThanDjango:
         belonging to a DIFFERENT element. The fix registers nothing when the
         operand carries a filter; this pins the guard in the source, because
         the effect is invisible without a ``safe_keys``-carrying context.
+
+        The guard grew a second term in #2334 — ``!normalised`` — for the same
+        argument one shape over: a string or a dict is turned INTO a sequence
+        before the loop, so the loop index is not an index into the resolved
+        value at all. For a dict that one is a live XSS, exercised end to end
+        in ``test_dict_iteration_and_sequence_equality_2334_2335.py``.
         """
         src = RENDERER_RS.read_text()
-        assert "if !iterable.contains('|') {" in src, (
+        assert "if !normalised && !iterable.contains('|') {" in src, (
             "the {% for %} arm must gate set_loop_mapping on the operand being "
-            "a bare variable path — a filtered operand's indices do not "
-            "correspond to the source sequence's (#2325)"
+            "a bare variable path AND on the iterated sequence being the "
+            "resolved value's own elements — neither a filtered operand's "
+            "indices nor a normalised one's correspond to the source's "
+            "(#2325, #2334)"
         )
 
 
@@ -949,41 +957,13 @@ class TestTheCorpusGapThatHidThisFromTheDifferential:
 class TestAdjacentDivergencesNotFixedHere:
     """Scope discipline (CLAUDE.md #1079): found, filed, pinned — not fixed.
 
-    Each is a real divergence the #2325 sink sweep surfaced, in a DIFFERENT
-    mechanism from the four operand sites. Pinned so the exclusion cannot
-    quietly become a blind spot, and so whoever fixes one is told to delete
-    the pin.
-
-    Filed as #2333 (``{% regroup %}``), #2334 (``{% for %}`` over a dict) and
-    #2335 (sequence equality in ``{% if %}``).
+    Three of the divergences this class pinned — ``{% regroup %}`` with a
+    filtered source (#2333), ``{% for k, v in d.items %}`` (#2334) and
+    sequence equality in ``{% if %}`` (#2335) — have since been FIXED, so
+    their pins are gone and their coverage lives in
+    ``test_dict_iteration_and_sequence_equality_2334_2335.py``. That is the
+    contract those pins carried: each named itself as the thing to delete.
     """
-
-    def test_regroup_does_not_resolve_a_filtered_source(self) -> None:
-        """``{% regroup %}`` is a Python-side assign tag with its own operand
-        channel (``RESOLVE_ARG_POSITIONS`` + a JSON hop), not the renderer's
-        ``get_value``. Its own module docstring already names this limitation.
-        """
-        src = '{% regroup p|dictsort:"k" by k as g %}{{ g|length }}'
-        ctx = {"p": [{"k": 2}, {"k": 1}]}
-        d, r = both(src, ctx)
-        assert d != r, (
-            "{% regroup %} with a filtered source now agrees — close #2333 and delete this test"
-        )
-
-    def test_for_over_a_dict_items_call_is_a_separate_resolution_gap(self) -> None:
-        """``{% for k, v in d.items %}`` — a callable mid-path, not a filter.
-        Unrelated to #2325's operand channel.
-        """
-        d, r = both("{% for k, v in p.items %}{{ k }}{{ v }}{% endfor %}", {"p": {"a": 1}})
-        assert d != r, "{% for %} over .items now agrees — close #2334 and delete this test"
-
-    def test_sequence_equality_in_an_if_condition_is_a_separate_gap(self) -> None:
-        """``{% if p == q %}`` over two equal lists — ``values_equal``, not the
-        operand channel. Reached through the ``==`` arm, which #2325 did not
-        touch (its filter arm is deliberately LAST, after every operator).
-        """
-        d, r = both("{% if p == q %}Y{% else %}N{% endif %}", {"p": ["a"], "q": ["a"]})
-        assert d != r, "sequence equality now agrees — close #2335 and delete this test"
 
     def test_forloop_is_not_available_through_render_template(self) -> None:
         """Pinned so the string-iteration tests above are not read as having
