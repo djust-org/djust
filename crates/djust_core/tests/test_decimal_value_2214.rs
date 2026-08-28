@@ -147,6 +147,17 @@ fn the_decimal_tag_does_not_capture_an_ordinary_dict() {
 
 #[test]
 fn an_exponent_form_decimal_expands_for_display() {
+    // A guard even though this test only READS the flag, which is what
+    // `value_repr_flag`'s docstring requires and what this test was missing:
+    // its last assertion renders a `Value::List`, and a CONTAINER is spelled
+    // `[List]` on the legacy path and `[Decimal('1E-9')]` on the parity one.
+    // `the_legacy_display_path_is_not_lossy` below holds the flag OFF, cargo
+    // runs them on parallel threads in one binary, and this read the flag
+    // mid-flip — exactly the "roughly one run in three red" the helper
+    // records. It survives 25/25 runs in ISOLATION, because the race needs
+    // the contention of the full workspace run to open the window; it was
+    // caught by `make test-rust`.
+    let _g = FlagGuard::on();
     // Django renders through `"{:f}".format(...)`, not `str()`. Verified
     // against Django by a 6,901-case randomized sweep; these are the shapes
     // that sweep found, kept as a fast in-suite guard.
