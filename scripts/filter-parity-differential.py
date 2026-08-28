@@ -358,6 +358,29 @@ INPUTS = {
     },
     "i-int": 42,
     "f-float": 1.5,
+    # NON-FINITE floats (#2349). Every numeric entry above is finite, so the
+    # corpus could not construct a single cell where the
+    # `(a - b).abs() < f64::EPSILON` idiom is UNDEFINED — and it is undefined
+    # for exactly these: `(inf - inf)` is NaN and every comparison against NaN
+    # is false, so the tolerance answered "not equal" for two infinities and
+    # the ordering chain fell through its `else` to "greater" for every NaN
+    # pair. 26 divergent cells, and this tool reported clean over all of them
+    # because `INPUTS` had no `inf` and no `nan`.
+    #
+    # All three, not one: `inf` and `-inf` order NORMALLY in Python while a NaN
+    # answers False for all four operators, so a corpus carrying only one of
+    # them cannot tell an `is_nan` guard (correct) from an `!is_finite` guard
+    # (which would break `-inf < 1`). They matter most on the `@cmp` axis,
+    # where `q` is the second operand, but are swept through the filters too:
+    # `floatformat`, `add` and `stringformat` all branch on finiteness.
+    "f-inf": float("inf"),
+    "f-ninf": float("-inf"),
+    "f-nan": float("nan"),
+    # The same three as DECIMALS, which reach the `numeric_pair` WILDCARD
+    # rather than any typed arm — two of the six sites the fix touches are
+    # reachable only this way.
+    "dec-inf": Decimal("Infinity"),
+    "dec-nan": Decimal("NaN"),
     "n-none": None,
     "l-empty": [],
     # Context ITEM safety (#2287). `mark_safe` on the ELEMENTS and never on the

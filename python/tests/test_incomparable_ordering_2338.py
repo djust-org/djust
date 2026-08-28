@@ -467,44 +467,41 @@ class TestTheCorpusMeasuresBothArms:
 # ===========================================================================
 
 
-class TestKnownAdjacentDivergenceNotFixedHere:
-    """#1079: found while fixing #2338, measured, filed — not fixed."""
+class TestTheAdjacentNonFiniteDivergence:
+    """The #1079 boundary between #2338 and #2349, now that both have landed.
 
-    def test_non_finite_floats_still_diverge(self) -> None:
-        """The epsilon idiom is undefined for a non-finite float (#2349).
+    #2338 found the non-finite divergence, measured it, filed it as #2349 and
+    did NOT fix it — and this class held the self-naming pin that asserted it
+    still existed. #2349 has since landed, so the pin has closed itself: it now
+    asserts the same cells AGREE. The line between the two issues, which is the
+    genuinely useful thing this class records, is unchanged and asserted below.
+    """
 
-        A DIFFERENT mechanism from #2338 and out of scope for it: a NaN is not
-        a pair Python refuses to order — ``float("nan") >= float("nan")``
-        raises nothing, it evaluates to ``False`` — so ``try_compare`` is never
-        asked the question this PR taught it to answer. Both operands reach the
-        ``(Float, Float)`` arm and get a real ordering back, because
-        ``(a - b).abs() < f64::EPSILON`` is false for NaN and the chain falls
-        through its ``else`` to "greater".
+    def test_non_finite_floats_no_longer_diverge(self) -> None:
+        """#2349 is FIXED, and this is the self-naming pin closing itself.
 
-        The same idiom is why ``inf == inf`` is False: ``(inf - inf)`` is NaN,
-        so the equality test answers "not equal" for two values Python calls
-        equal. Six sites across ``try_compare`` and ``values_equal`` spell it.
+        The version of this method that shipped with #2338 asserted the
+        divergence STILL EXISTED and said "delete this test when #2349 is
+        fixed". It is replaced rather than deleted, because the assertion it
+        was making is worth keeping in the inverse: the cells it named are
+        exactly the ones #2349's `order_floats` / `floats_equal` closed, and
+        pinning them HERE keeps them covered from the #2338 side too — the two
+        mechanisms meet on these operands and a future change to either could
+        take them back.
 
-        Measured pre-existing rather than assumed: the same probe against the
-        pre-#2338 build reports 28 divergent non-finite cells to this build's
-        26, and the 26 are identical. The 2 this PR closed are ``nan`` against
-        a ``str`` — a genuinely incomparable pair, asserted below.
-
-        Delete this test when #2349 is fixed.
+        The line between the two issues is asserted immediately below and is
+        unchanged: a NaN against a STRING is a pair Python REFUSES to order
+        (#2338's `None`), while a NaN against a NUMBER evaluates and answers
+        False for every operator (#2349's `is_nan` branch).
         """
         nan = float("nan")
-        for op in (">", ">="):
-            d, r = both(op, nan, nan)
-            assert (d, r) == ("N", "Y"), (
-                f"NaN's `{op}` now agrees with Django — the float arms have "
-                "been fixed, so delete this test and close #2349"
-            )
-        d, r = both("==", float("inf"), float("inf"))
-        assert (d, r) == ("Y", "N"), "`inf == inf` now agrees with Django — close #2349"
-        # `<` and `<=` already agree for two NaNs, which is what makes this a
-        # fallthrough in two arms rather than a whole missing mechanism.
-        for op in ("<", "<=", "!="):
+        for op in ORDER_OPS:
             assert_agrees(op, nan, nan)
+            assert_agrees(op, nan, 1)
+            assert_agrees(op, 1, nan)
+        assert_agrees("==", float("inf"), float("inf"))
+        assert_agrees("!=", float("inf"), float("inf"))
+        assert_agrees("<=", float("inf"), float("inf"))
 
     def test_the_incomparable_nan_pairs_ARE_fixed_here(self) -> None:
         """The line between #2338 and #2349, asserted rather than described.
