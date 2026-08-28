@@ -340,12 +340,16 @@ class TestRandomisedUnorderedListWithTupleSublists:
         assert not bad, f"{len(bad)}/3000 disagree, first: {bad[0]!r}"
 
 
-#: Slice specs djust's ``parse_slice_indices`` supports: two parts, both
-#: non-negative or empty. Negative indices and a step are a SEPARATE,
-#: pre-existing gap (``{{ p|slice:"-1:" }}`` diverges for a list too), so
-#: including them here would measure that instead of the shape axis this file
-#: is about. :meth:`test_the_negative_index_gap_is_list_shaped_too` pins that
-#: separation so the exclusion cannot quietly become a blind spot.
+#: Every slice spec, across the whole shape axis.
+#:
+#: This list used to be two-part non-negative specs ONLY, because djust's
+#: ``parse_slice_indices`` clamped instead of wrapping and ignored ``:step``;
+#: negative indices and steps were excluded as a separate, pre-existing gap,
+#: and a ``test_the_negative_index_gap_is_list_shaped_too`` guard kept that
+#: exclusion honest by going red the day it was fixed. #2326 fixed it, so the
+#: guard is gone and the specs it named are here — including the one-part form
+#: (``"2"`` is ``slice(stop)``, i.e. ``p[:2]``), which the old code read as a
+#: START and so answered with the complement.
 SLICE_SPECS = [
     ":",
     ":0",
@@ -362,6 +366,29 @@ SLICE_SPECS = [
     "0:3",
     "2:2",
     "1:9",
+    # One part — `slice(stop)`.
+    "0",
+    "2",
+    "9",
+    "-1",
+    # Negative indices, which wrap rather than clamping.
+    "-1:",
+    ":-1",
+    "-2:-1",
+    "-9:",
+    ":-9",
+    "-3:2",
+    "1:-1",
+    # Steps, including the negative step that reverses and swaps the defaults.
+    "::2",
+    "1::2",
+    ":3:2",
+    "::-1",
+    "::-2",
+    "3:1:-1",
+    "-1::-1",
+    ":-4:-1",
+    "0:4:3",
 ]
 
 
@@ -397,8 +424,11 @@ class TestRandomisedSliceShape:
         for _ in range(200):
             items = [rng.choice(["a", "b", "c", "d"]) for _ in range(rng.randint(0, 5))]
             for spec in SLICE_SPECS:
-                lo, _, hi = spec.partition(":")
-                sl = slice(int(lo) if lo else None, int(hi) if hi else None)
+                # Django's own parse: `[None if not x else int(x) for x in
+                # arg.split(":")]`, then `slice(*bits)`. One part is
+                # `slice(stop)`, which is why this cannot partition on the
+                # first colon.
+                sl = slice(*[int(x) if x else None for x in spec.split(":")])
                 for container in (list, tuple):
                     value = container(items)
                     got = djust_render('{{ p|slice:"%s" }}' % spec, value)
@@ -407,19 +437,21 @@ class TestRandomisedSliceShape:
                         f"slice:{spec!r} of {value!r}: djust={got!r} python={want!r}"
                     )
 
-    def test_the_negative_index_gap_is_list_shaped_too(self) -> None:
-        """#2326: a pre-existing, SHAPE-INDEPENDENT divergence, not fixed here.
+    def test_the_specs_the_old_gap_excluded_are_now_in_slice_specs(self) -> None:
+        """#2326 is fixed, so its specs are measured rather than excluded.
 
-        ``parse_slice_indices`` clamps rather than wrapping, so negative
-        indices diverge for a list exactly as much as for a tuple. Pinning it
-        keeps ``SLICE_SPECS``'s exclusion honest: it is excluded because it is
-        a different bug, not because the tuple half of it fails.
+        The guard this replaces asserted the negative-index gap still EXISTED,
+        and named itself as the thing to delete once it did not. Rather than
+        delete it outright, it inverts: the exclusion is gone, and this pins
+        that the specs it excluded really did come back — otherwise "extend
+        SLICE_SPECS" could be quietly skipped and the coverage lost with the
+        guard that was protecting it.
         """
-        src = '{{ p|slice:"-1:" }}'
-        as_list = djust_render(src, ["a", "b", "c"])
-        assert as_list != django_render(src, ["a", "b", "c"]), (
-            "the #2326 negative-index gap has been fixed — extend SLICE_SPECS and delete this test"
-        )
+        for spec in ("-1:", ":-1", "::2", "::-1", "2"):
+            assert spec in SLICE_SPECS, (
+                f"slice:{spec!r} was excluded by the pre-#2326 gap and must now "
+                "be measured by TestRandomisedSliceShape"
+            )
 
 
 class TestNotMorePermissiveThanDjango:
@@ -490,11 +522,13 @@ def _production_lines() -> list[tuple[int, str]]:
 class TestEveryRebuildSiteIsAccountedFor:
     """Pins the enumeration this PR's decision table is written against.
 
-    Six production sites in ``filters.rs`` construct a ``Value::List``. Four
+    Five production sites in ``filters.rs`` construct a ``Value::List``. Four
     are list-always because Django's own implementation is a list
-    comprehension or ``sorted()``; two are ``slice``'s and now rebuild in the
-    input's shape. A seventh site — ``unordered_list``'s sublist test — MATCHED
-    ``Value::List`` alone and now matches both.
+    comprehension or ``sorted()``; one is ``slice``'s single sequence exit,
+    which rebuilds in the input's shape. (It was two until #2326 collapsed
+    ``slice``'s populated and empty branches into one.) A sixth site —
+    ``unordered_list``'s sublist test — MATCHED ``Value::List`` alone and now
+    matches both.
 
     A new sequence filter that builds a bare ``Value::List`` fails this test,
     which is the point: it forces the author to say which column it belongs in.
@@ -515,15 +549,20 @@ class TestEveryRebuildSiteIsAccountedFor:
     #: test exists to make somebody justify.
     HELPER_DEFAULT = {"_ => Value::List(items),"}
 
-    #: ``slice`` has exactly two return branches — populated and empty — and
-    #: both must route through the helper. Pinned as a COUNT inside
-    #: ``apply_slice`` rather than as literal source lines, because ``rustfmt``
-    #: rewraps a long call across lines and a line-literal pin would go red on
-    #: formatting rather than on meaning.
-    SHAPE_PRESERVING_CALLS = 2
+    #: ``slice`` routes through the helper on its ONE sequence exit. It had two
+    #: — populated and empty — until #2326 replaced the hand-rolled index math
+    #: with Python's own slice algorithm, which computes a (possibly empty)
+    #: position list and rebuilds from it unconditionally. One exit is the
+    #: STRONGER form of the same guarantee: with two, the pin was "neither
+    #: branch forgot"; with one there is no branch left that could.
+    #:
+    #: Pinned as a COUNT inside ``apply_slice`` rather than as literal source
+    #: lines, because ``rustfmt`` rewraps a long call across lines and a
+    #: line-literal pin would go red on formatting rather than on meaning.
+    SHAPE_PRESERVING_CALLS = 1
 
     #: The prose claim this PR makes, as a number.
-    TOTAL_REBUILD_SITES = 6
+    TOTAL_REBUILD_SITES = 5
 
     def test_every_bare_list_site_is_one_of_the_documented_list_always_four(self) -> None:
         """The grep that catches BOTH halves of the rule.
@@ -553,7 +592,7 @@ class TestEveryRebuildSiteIsAccountedFor:
         )
         assert len(built) == len(expected)
 
-    def test_both_slice_branches_route_through_the_shared_helper(self) -> None:
+    def test_slices_sequence_exit_routes_through_the_shared_helper(self) -> None:
         """The other column of the table, and the count the PR body states.
 
         A separate grep from the one above, because after the fix ``slice``'s
@@ -566,8 +605,9 @@ class TestEveryRebuildSiteIsAccountedFor:
         end = next(n for n, ln in lines if n > start and ln.startswith("}"))
         in_slice = [(n, ln) for n, ln in lines if start < n < end and "rebuild_like(" in ln]
         assert len(in_slice) == self.SHAPE_PRESERVING_CALLS, (
-            "apply_slice must route BOTH its return branches — populated and "
-            f"empty — through rebuild_like; found {len(in_slice)}: {in_slice}"
+            "apply_slice's sequence arm must return through rebuild_like, and "
+            "must have exactly one exit that does — a second would be a branch "
+            f"that could forget (#2321/#2326); found {len(in_slice)}: {in_slice}"
         )
         # And nothing else in production calls it, so the helper has exactly
         # the two consumers the decision table names.
