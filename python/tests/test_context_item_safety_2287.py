@@ -48,9 +48,12 @@ The six that remain are all still djust escaping where Django does not:
   deliberately, and ``test_a_nested_container_is_refused_because_granting_it_
   would_out_permit_django`` shows the grant would be an UNDER-escape, which is
   why the narrowing is a security property and not a limitation. The nested
-  ``unordered_list`` cell ALSO carries a separate, pre-existing indentation
-  divergence (#2301), which is why the nested assertions are
-  ``assert_no_more_permissive_than_django`` and not ``assert_agrees``.
+  ``unordered_list`` cell ALSO carried a separate, pre-existing indentation
+  divergence, which is why the nested assertions are
+  ``assert_no_more_permissive_than_django`` and not ``assert_agrees``. #2306
+  fixed that indentation half (#2301); the refusal keeps these two cells off
+  byte equality on its own, so what that case gained is an ``assert_agrees``
+  on the same nesting with nothing marked safe.
 
 Two further gaps this measurement surfaced are filed rather than fixed here
 (#1079): ``first`` / ``last`` / ``random`` extract an ITEM and so need the
@@ -438,9 +441,19 @@ class TestTheGrantIsRefusedForShapesItCannotDescribe:
         emits ``&lt;``. Django's own output is the bar: it contains no live
         markup for the sublist, so neither may djust's.
 
-        Byte equality is deliberately NOT asserted for the ``unordered_list``
-        half: nested safe-item propagation is a separate concern from the
-        indentation parity covered by ``test_nested_unmarked_list_matches_django``.
+        Byte equality is still NOT asserted for the marked value: the refusal
+        itself is an over-escape, so djust and Django legitimately differ here.
+        When this case was written there was a SECOND, unrelated reason — a
+        nested sublist was indented one level deeper than Django's (#2301,
+        which reproduced with nothing marked safe at all). That one is fixed
+        (#2306), so the two reasons can now be told apart, which is what the
+        last assertion below does: it pins the SAME nesting, with the same
+        markup, unmarked, to Django byte-for-byte. Anything still differing
+        above is therefore the refusal and nothing else.
+
+        ``test_nested_unmarked_list_matches_django`` pins the plain ``a``/``b``
+        shape for the same reason; this one is deliberately the markup-carrying
+        cell, so the two are not the same assertion twice.
         """
         value = [mark_safe("<b>a</b>"), [mark_safe("<i>b</i>")]]
         expected = django_render('{{ p|join:", " }}', value)
@@ -450,6 +463,11 @@ class TestTheGrantIsRefusedForShapesItCannotDescribe:
         )
         assert_no_more_permissive_than_django('{{ p|join:", " }}', value)
         assert_no_more_permissive_than_django("{{ p|unordered_list }}", value)
+        # #2301 (the indentation half) is fixed, so the SAME nesting with
+        # nothing marked safe is now byte-identical to Django. What still
+        # differs above is only the refusal — an over-escape, deliberate — and
+        # asserting the unmarked shape here is what separates the two reasons.
+        assert_agrees("{{ p|unordered_list }}", ["<b>a</b>", ["<i>b</i>"]])
 
     def test_nested_unmarked_list_matches_django(self) -> None:
         """The nested list wrapper stays at the parent indent (#2301)."""

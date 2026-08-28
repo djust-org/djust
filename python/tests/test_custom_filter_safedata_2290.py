@@ -269,24 +269,31 @@ class TestContainerSafety:
         assert_agrees("{{ p|%s }}" % IDENT, {"p": P})
         assert capabilities(djust_render("{{ p|%s }}" % IDENT, {"p": P})) == set()
 
-    @pytest.mark.parametrize("value,expected_type", [(42, "int"), (1.5, "float"), (True, "bool")])
-    def test_a_non_string_is_passed_through_unwrapped(self, value, expected_type) -> None:
-        """The documented boundary of the wrap, pinned rather than asserted in
-        prose (#1867).
+    @pytest.mark.parametrize("value", [42, 1.5, True], ids=["int", "float", "bool"])
+    def test_a_non_string_now_arrives_stringified_and_marked(self, value) -> None:
+        """The documented boundary of the wrap — **moved by #2303**.
 
-        Django's ``mark_safe`` STRINGIFIES a non-``str`` — ``mark_safe(42)`` is
-        ``SafeString('42')`` — so Django really does hand ``{{ n|safe|probe }}``
-        a ``SafeString``. djust deliberately does not follow it there: doing so
-        would change the TYPE an existing filter receives (an ``int`` becoming a
-        string), which is a pre-existing ``|safe``-on-a-non-``str`` SHAPE
-        divergence with its own blast radius rather than the safety gap #2290 is
-        about. The residue is djust reporting ``SafeData`` False where Django
-        reports True — the ESCAPING direction, and unchanged by this fix.
-        Tracked separately; see the PR body.
+        This case originally pinned the opposite: ``{{ 42|safe|probe }}`` handed
+        the filter a bare ``int``, because #2290 wrapped only a ``str``. The
+        residue that left — djust reporting ``SafeData`` False where Django
+        reports True — was #2303, and it is closed by making ``|safe`` do what
+        Django's ``mark_safe`` does for every variant and not just for a
+        container: ``SafeString(str(value))``.
+
+        Kept here rather than deleted because the boundary itself is still worth
+        a pin, and because a reader of #2290 should find the row it named.
         """
         out = djust_render("{{ p|safe|%s }}" % PROBE, {"p": value})
-        assert f"&#x27;{expected_type}&#x27;, False" in out, out
-        assert "SafeString" in django_render("{{ p|safe|%s }}" % PROBE, {"p": value})
+        assert "&#x27;SafeString&#x27;, True" in out, out
+        assert out == django_render("{{ p|safe|%s }}" % PROBE, {"p": value})
+
+    @pytest.mark.parametrize("value", [42, 1.5, True], ids=["int", "float", "bool"])
+    def test_the_wrap_still_does_nothing_without_a_grant(self, value) -> None:
+        """The gate-off sibling: with no ``|safe`` the value is unmarked, so the
+        row above is not "djust marks every non-string safe"."""
+        out = djust_render("{{ p|%s }}" % PROBE, {"p": value})
+        assert ", False" in out, out
+        assert out == django_render("{{ p|%s }}" % PROBE, {"p": value})
 
 
 class TestTheWiderScope:

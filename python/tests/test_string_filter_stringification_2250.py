@@ -18,14 +18,19 @@ decorator fails these tests rather than passing them.
 
 What is NOT covered, deliberately
 ---------------------------------
-``escape`` and ``safe`` are Django ``@stringfilter``s that djust implements as
-no-ops (they return the value unchanged; auto-escaping is decided by filter NAME
-at the render site). Their ``Decimal`` divergence has a different mechanism — the
-value stays a ``Decimal`` and the renderer localizes it — and coercing them
-changes the type flowing down the rest of the chain, which ``floatformat`` cannot
-absorb. Measured, both directions, in #2257;
-:func:`test_escape_and_safe_are_the_named_exclusions` pins the exclusion so it
-stays deliberate.
+``escape`` is a Django ``@stringfilter`` that djust does not coerce. It became
+eager in #2281 (it is ``conditional_escape`` now, so it necessarily produces a
+string), but it stringifies through ``Display`` — the RENDER form, which expands
+an exponent — and not through ``str(Decimal)``, which is what the coercion would
+select. So ``{{ d|escape }}`` is ``0.000000001`` where Django says ``1E-9``:
+still one step away, and the residue #2257 records.
+
+``safe`` **was** on this list and no longer is. #2303 made it Django's
+``mark_safe`` for every variant — ``SafeString(str(value))``, spelled by
+``Value::py_str`` — so it now takes the coercion in the only sense this file
+measures: a ``Decimal`` behind ``|safe`` IS its ``str()``, byte for byte with
+Django, and it no longer localizes at the render site because it is a string by
+then. :func:`test_escape_is_the_named_exclusion` pins what remains.
 
 The number format is process-global (a Rust thread-local); every test restores it
 in a ``finally``. A leaked ``NUMBER_GROUPING`` has poisoned a whole worker in this
@@ -55,8 +60,9 @@ from djust import _rust, render_env  # noqa: E402
 LANGUAGES = ["en-us", "de", "fr", "hi", "ja"]
 
 #: djust implements every one of Django's `@stringfilter`s, but only these take
-#: the coercion — see the module docstring for `escape`/`safe`.
-NAMED_EXCLUSIONS = frozenset({"escape", "safe"})
+#: the coercion — see the module docstring for `escape`. `safe` left this set in
+#: #2303.
+NAMED_EXCLUSIONS = frozenset({"escape"})
 
 #: **Nothing is left in ``UNCOMPARABLE``.** It held the filters that took the
 #: coercion but could not be diffed against Django byte-for-byte, because each
@@ -74,7 +80,7 @@ NAMED_EXCLUSIONS = frozenset({"escape", "safe"})
 #:   `truncatewords_html` escaped once where Django escapes twice, and
 #:   `urlencode` encoded `/` (#2262) — closed.
 #:
-#: All 27 are in the compared set, which is what
+#: All 28 are in the compared set, which is what
 #: :func:`test_the_uncomparable_filters_are_excluded_for_a_reason_that_still_holds`
 #: was written to force. Keeping the machinery (rather than deleting it) means
 #: a future filter with the same shape has somewhere to go, and the empty-set
@@ -318,7 +324,7 @@ def test_every_django_stringfilter_agrees_on_the_named_decimals() -> None:
 
 
 def test_a_randomized_sweep_over_every_stringfilter_matches_django() -> None:
-    """120 values x 27 filters x 5 locales x 2 grouping flags.
+    """120 values x 28 filters x 5 locales x 2 grouping flags.
 
     A curated table samples the axis its author thought of; the reference
     implementation is importable, so the answer is a call away (v1.1.1-2 retro).
@@ -362,7 +368,7 @@ def test_every_covered_filter_treats_a_decimal_as_its_str() -> None:
     the coercion happened, which is the only thing #2250 changes.
     """
     covered = sorted(_django_string_filters() - NAMED_EXCLUSIONS)
-    assert len(covered) == 27, f"expected 27 covered filters, derived {len(covered)}: {covered}"
+    assert len(covered) == 28, f"expected 28 covered filters, derived {len(covered)}: {covered}"
     try:
         render_env.apply_number_format()
         for name in covered:
@@ -411,13 +417,12 @@ def test_the_uncomparable_filters_are_excluded_for_a_reason_that_still_holds() -
         render_env.apply_number_format()
 
 
-def test_escape_and_safe_are_the_named_exclusions() -> None:
+def test_escape_is_the_named_exclusion() -> None:
     """The exclusion is deliberate and characterized, not an oversight.
 
-    djust's ``escape``/``safe`` return the value unchanged, so a ``Decimal``
-    stays a ``Decimal`` to the render site and localizes there. Django's are
-    ``@stringfilter``s and return a ``str``, which ``localize()`` leaves alone.
-    Different mechanism from the other 27. Measured in #2257.
+    djust's ``escape`` stringifies through ``Display`` — the RENDER form — while
+    Django's ``@stringfilter`` hands the filter ``str(value)``. Different
+    mechanism from the other 28. Measured in #2257.
 
     Asserting the CURRENT divergence (a characterization test, like the one this
     file's fix turned red in ``test_scientific_localization_2242``) so whoever
@@ -429,24 +434,31 @@ def test_escape_and_safe_are_the_named_exclusions() -> None:
     numeric string"* — was #2257's residue 2, and it is closed: Django's
     ``floatformat`` begins ``Decimal(str(text))`` on **every** input type, and
     djust's port now does too, so ``{{ "1E+1"|upper|floatformat }}`` is ``10``
-    on both sides. The exclusion itself still stands on residue 1 alone (the
-    ``escape``/``safe`` no-op), which the first two assertions below pin.
-    Whoever closes residue 1 should re-measure the 1,168 cells #2257 records as
-    the cost of coercing them — that count was taken while the blocker was
-    still open.
+    on both sides.
+
+    **Updated deliberately again by #2303**, and this is what the paragraph
+    above asked for: residue 1 is now closed for ``safe``. ``|safe`` is
+    ``SafeString(str(value))`` for every variant, so a ``Decimal`` behind it is
+    its ``str()`` and matches Django byte for byte — the first assertion below
+    used to read ``"0,000000001"`` (the localized form) and now reads Django's
+    answer. ``escape`` is unchanged and keeps the exclusion; the two-build
+    differential for the ``safe`` half measured 208 newly agreeing cells and 0
+    regressions, not the 1,168-cell cost #2257 recorded while the
+    ``floatformat`` blocker was still open.
     """
     assert NAMED_EXCLUSIONS <= _django_string_filters(), (
-        "escape/safe are no longer Django stringfilters — the exclusion needs rethinking"
+        "escape is no longer a Django stringfilter — the exclusion needs rethinking"
     )
     try:
         with override_settings(USE_THOUSAND_SEPARATOR=True), translation.override("de"):
             render_env.apply_number_format()
             value = Decimal("1E-9")
-            # `safe` is still the pure no-op, so the `Decimal` reaches the
-            # render site and LOCALIZES there (the comma).
+            # `safe` is a stringify since #2303, so the `Decimal` is a `str` by
+            # the time it reaches the render site and `localize()` leaves it
+            # alone — exactly what Django's `mark_safe` already did. No comma.
             expected, got = _render_both("{{ p|safe }}", value)
             assert expected == "1E-9", f"Django changed: {expected!r}"
-            assert got == "0,000000001", f"#2257 closed? {got!r}"
+            assert got == "1E-9", f"#2303 regressed? {got!r}"
             # `escape` stopped being a no-op in #2281 — it is `conditional_escape`
             # now, eager, so it necessarily produces a STRING and the value no
             # longer localizes. It stringifies through `Display` (the RENDER

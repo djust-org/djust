@@ -329,6 +329,11 @@ HOT2 = [
     "linenumbers",
     "dictsort",
     "dictsortreversed",
+    # Not in any safety set, so the enforcing test does not require it. It is
+    # here because it reads the input's TYPE rather than its value, which is the
+    # axis `|safe`'s stringify moves (#2303): this list missed the regression
+    # `{{ n|safe|divisibleby:"2" }}` and a wider sweep found it.
+    "divisibleby",
 ]
 HOT3 = [
     "safe",
