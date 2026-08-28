@@ -15,6 +15,7 @@
 
 use djust_core::Value;
 use djust_templates::filter_registry::{apply_custom_filter, is_custom_filter_safe};
+use djust_templates::filters::InputSafety;
 
 #[test]
 fn test_atomicbool_short_circuit_when_no_filters_registered() {
@@ -37,6 +38,7 @@ fn test_atomicbool_short_circuit_when_no_filters_registered() {
         None,
         false,
         true,
+        InputSafety::default(),
     );
     assert!(result.is_none());
 }
@@ -55,6 +57,7 @@ fn test_apply_custom_filter_short_circuits_for_provably_unregistered_name() {
         None,
         false,
         true,
+        InputSafety::default(),
     );
     assert!(result.is_none());
 }

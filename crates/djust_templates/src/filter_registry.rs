@@ -36,11 +36,12 @@
 //! - return — the result. ``is_safe=True`` filters' results bypass
 //!   auto-escape via [`is_custom_filter_safe`] consulted by the renderer.
 
+use crate::filters::InputSafety;
 use crate::Value;
 use djust_core::Context;
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
@@ -193,6 +194,129 @@ pub fn is_custom_filter_safe(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Restore Django's `SafeData` markers on the value crossing INTO Python
+/// (#2290).
+///
+/// A `Value` carries no safety of its own — it is a plain data enum, so
+/// `Value::String("<b>x</b>")` is the same object whether the chain reached it
+/// through `|safe` or straight off an unescaped context variable. The renderer
+/// is the only layer that knows which, and after #2284/#2283 it reports the
+/// answer as [`InputSafety`]. Without this function that answer stopped at the
+/// PyO3 boundary: `into_pyobject` hands Python a bare `str`, so every custom
+/// filter saw `isinstance(value, SafeData) == False` and Django's canonical
+/// `needs_autoescape` opening line
+///
+/// ```text
+/// autoescape = autoescape and not isinstance(value, SafeData)
+/// ```
+///
+/// could never take its second branch.
+///
+/// # Which field drives which wrap
+///
+/// Measured against Django 5.2 with a live `@register.filter` probe on one side
+/// and this registry on the other (`p = "<b>x</b>"`, `L = [p, "<i>y</i>"]`):
+///
+/// | template | what Django hands the filter |
+/// |---|---|
+/// | `{{ p\|safe\|probe }}` | `SafeString`, `isinstance(_, SafeData)` **true** |
+/// | `{{ p\|escape\|probe }}` | `SafeString` — `escape` returns one (#2281) |
+/// | `{{ L\|safeseq\|probe }}` | a PLAIN `list` of `SafeString` ITEMS |
+/// | `{{ L\|escapeseq\|probe }}` | ditto |
+/// | `{{ L\|safeseq\|slice:':1'\|probe }}` | ditto — `slice` returns the same objects |
+///
+/// So **both** fields drive a wrap, each at its own granularity, because they
+/// are two different Django states and one cannot stand in for the other:
+///
+/// * `container` — `mark_safe` the VALUE. `safeseq`'s output is not `SafeData`,
+///   so answering this field for it would be wrong in the permissive direction.
+/// * `items` — `mark_safe` each ELEMENT of a list/tuple and leave the sequence
+///   itself plain, which is exactly what
+///   `[mark_safe(o) for o in value]` produces. Answering `container` here would
+///   hand a custom filter a safety Django never granted.
+///
+/// # Only `str` is wrapped, and that is the conservative half
+///
+/// Django's `mark_safe` STRINGIFIES a non-`str` (`mark_safe(42)` is
+/// `SafeString("42")`), and reproducing that would change the TYPE an existing
+/// filter receives — `{{ n|safe|my_filter }}` would start handing `my_filter` a
+/// string where djust hands it an `int` today, and `{{ absent|safe|f }}` would
+/// hand it the text `"None"` (djust passes `None`; Django's
+/// `string_if_invalid` had already made it `""`). Those are pre-existing
+/// SHAPE divergences with their own blast radius, not the safety gap #2290 is
+/// about, so a non-`str` is passed through untouched: the filter keeps seeing
+/// `isinstance(_, SafeData) == False`, which is the ESCAPING direction and is
+/// exactly what it saw before this function existed.
+///
+/// # It can only ever narrow the gap, never open one
+///
+/// Every wrap is gated on a field the renderer set to `true`, and the renderer
+/// sets those only when the context `mark_safe`d the value or an earlier
+/// `|safe` / safe-output / item-safe filter marked it (see
+/// `renderer::filter_output_is_safe` / `filter_output_items_are_safe`). A value
+/// nothing ever marked reaches Python exactly as it did before. That is the
+/// property #2290 requires: djust may stop over-escaping, and must not become
+/// more permissive than Django anywhere.
+fn mark_input_safety<'py>(
+    py: Python<'py>,
+    obj: Bound<'py, PyAny>,
+    input_safety: InputSafety,
+) -> PyResult<Bound<'py, PyAny>> {
+    // The overwhelmingly common case — nothing upstream marked anything — pays
+    // one branch and never touches `sys.modules`.
+    if !input_safety.container && !input_safety.items {
+        return Ok(obj);
+    }
+    // `py.import` resolves out of `sys.modules` after the first call, so this
+    // is a dict lookup on the warm path. Django is a hard dependency of the
+    // engine's only caller; if it somehow cannot be imported the value is
+    // handed over UNMARKED, which is the escaping direction and identical to
+    // pre-#2290 behaviour.
+    let Ok(safestring) = py.import("django.utils.safestring") else {
+        return Ok(obj);
+    };
+    let Ok(mark_safe) = safestring.getattr("mark_safe") else {
+        return Ok(obj);
+    };
+
+    if input_safety.container {
+        // `is_instance_of::<PyString>()` — Django's own reading. A `SafeString`
+        // IS a `str` subclass, and `render_value_in_context` stringifies any
+        // non-`str` before it looks for `__html__` at all.
+        if obj.is_instance_of::<PyString>() {
+            return mark_safe.call1((obj,));
+        }
+        return Ok(obj);
+    }
+
+    // `items` — Django marks the ELEMENTS and rebuilds nothing else, so the
+    // sequence stays a `list` and a filter branching on its type keeps its
+    // answer.
+    //
+    // A LIST is the only shape this arm needs. `items` is `true` only via
+    // `renderer::filter_output_items_are_safe`, whose every path originates at
+    // `safeseq`/`escapeseq` — Django's `[… for o in value]`, a list
+    // comprehension, so a tuple INPUT has already become a list by the time the
+    // grant exists (`ITEM_SAFETY_PRESERVING_FILTERS`'s `slice` then preserves
+    // the list). A first draft carried a parallel `PyTuple` arm and the gate-off
+    // reported it SURVIVED: nothing could reach it, and an unreachable branch
+    // is decorative rather than defensive (#1859). It is deleted rather than
+    // tested around; should a future filter mint an item-grant on a tuple, this
+    // falls through to the unwrapped return — the escaping direction.
+    if let Ok(seq) = obj.cast::<PyList>() {
+        let out = PyList::empty(py);
+        for item in seq.iter() {
+            if item.is_instance_of::<PyString>() {
+                out.append(mark_safe.call1((item,))?)?;
+            } else {
+                out.append(item)?;
+            }
+        }
+        return Ok(out.into_any());
+    }
+    Ok(obj)
+}
+
 /// Apply a custom filter callable to a value with an optional argument.
 ///
 /// Called from [`crate::filters::apply_filter_with_context`] when the
@@ -213,6 +337,9 @@ pub fn is_custom_filter_safe(name: &str) -> bool {
 /// This split is the same convention `crate::filters::apply_filter_with_context`
 /// already uses for built-ins like ``date`` (literal format string) vs
 /// callers passing context-resolved values.
+///
+/// ``input_safety`` carries the renderer's reading of the INPUT's Django
+/// `SafeData`-ness through to Python — see [`mark_input_safety`] (#2290).
 pub fn apply_custom_filter(
     name: &str,
     value: &Value,
@@ -220,6 +347,7 @@ pub fn apply_custom_filter(
     context: Option<&Context>,
     arg_was_quoted: bool,
     autoescape: bool,
+    input_safety: InputSafety,
 ) -> Option<Result<(Value, bool), String>> {
     // Hot-path short-circuit: skip the lock when no filter has ever
     // been registered. Mirrors the guard in ``is_custom_filter_safe``.
@@ -241,6 +369,10 @@ pub fn apply_custom_filter(
             .clone()
             .into_pyobject(py)
             .map_err(|e| format!("Failed to convert filter input value: {e}"))?;
+        // #2290: `Value` is safety-blind, so restore the `SafeData` markers the
+        // renderer tracked before the filter ever sees the value.
+        let py_value = mark_input_safety(py, py_value, input_safety)
+            .map_err(|e| format!("Failed to mark filter input value safe: {e}"))?;
 
         // Resolve the arg into a Python object. Quoted literals → string;
         // bare identifiers → context resolve, fall back to the raw string

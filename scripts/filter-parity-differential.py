@@ -59,6 +59,13 @@ float, `None`, empty — with hostile payloads in each. Chains of length 2 and 3
 over a hot subset are NOT optional: a candidate fix can be clean on 1-chains
 and regress a thousand cells at length 2 (#2250 measured exactly that), and the
 `escape`/`safe` interaction #2281 is about is invisible without them.
+
+Since #2290 the corpus also carries a **custom-filter** axis: four
+`@register.filter` probes registered on both engines and composed with the hot
+built-ins. A custom filter dispatches through
+`filter_registry::apply_custom_filter` — a Python call across the PyO3 boundary
+— which no built-in cell reaches, so the whole of what a project's own filters
+see was previously unmeasured by this tool.
 """
 
 from __future__ import annotations
@@ -89,10 +96,77 @@ if not settings.configured:
     )
     django.setup()
 
-from django.template import Context, Template  # noqa: E402
+from django import template as _django_template  # noqa: E402
+from django.template import Context, Engine, Template  # noqa: E402
 from django.template.defaultfilters import register  # noqa: E402
+from django.utils.html import conditional_escape  # noqa: E402
+from django.utils.safestring import SafeData, mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# The CUSTOM-filter corpus (#2290)
+# ---------------------------------------------------------------------------
+#
+# A custom filter is a different mechanism from a built-in: it crosses the PyO3
+# boundary into a real Python callable, and until #2290 the value arrived there
+# as a bare `str` with every Django `SafeData` marker stripped. The built-in
+# sweep above cannot see that at all — it never dispatches through
+# `filter_registry::apply_custom_filter` — so a fix or a regression on that path
+# was invisible to this tool.
+#
+# These four are registered on BOTH sides: with the Rust registry via
+# `register_custom_filter`, and as a builtin `Library` on Django's default
+# `Engine`, so the same `{{ p|... }}` source runs through both engines with no
+# `{% load %}`.
+_CUSTOM_LIBRARY = _django_template.Library()
+
+
+@_CUSTOM_LIBRARY.filter(name="cf_ident")
+def _cf_ident(value):
+    """Returns its input untouched — the sharpest probe there is.
+
+    Django escapes the result iff the FINAL value lacks `__html__`, and the
+    final value here IS the one the filter was handed.
+    """
+    return value
+
+
+@_CUSTOM_LIBRARY.filter(name="cf_canon", needs_autoescape=True)
+def _cf_canon(value, autoescape=True):
+    """Django's canonical `needs_autoescape` body, verbatim."""
+    from django.utils.html import escape
+
+    autoescape = autoescape and not isinstance(value, SafeData)
+    return mark_safe("[" + (escape(value) if autoescape else str(value)) + "]")
+
+
+@_CUSTOM_LIBRARY.filter(name="cf_cond")
+def _cf_cond(value):
+    """`conditional_escape` — the widened-scope sink #2290 names first."""
+    return conditional_escape(value)
+
+
+@_CUSTOM_LIBRARY.filter(name="cf_join", needs_autoescape=True)
+def _cf_join(value, autoescape=True):
+    """Per-ITEM `conditional_escape`, which is the only way to observe the
+    `items` granularity (`safeseq`/`escapeseq` mark elements, never the list).
+    """
+    if not isinstance(value, (list, tuple)):
+        return conditional_escape(value)
+    return mark_safe("".join(conditional_escape(v) for v in value))
+
+
+CUSTOM = ["cf_ident", "cf_canon", "cf_cond", "cf_join"]
+
+Engine.get_default().template_builtins.append(_CUSTOM_LIBRARY)
+for _name, _fn in _CUSTOM_LIBRARY.filters.items():
+    _rust.register_custom_filter(
+        _name,
+        _fn,
+        bool(getattr(_fn, "is_safe", False)),
+        bool(getattr(_fn, "needs_autoescape", False)),
+    )
 
 #: One benign argument per filter that requires one. Chosen so the filter runs
 #: rather than raising — the point is to compare escaping, not argument parsing.
@@ -176,16 +250,54 @@ LIVE_FRAGMENTS = {
 #: test_every_safety_set_member_is_in_the_differential_hot_sets` enforces this
 #: mechanically, so the coupling cannot rot back.
 HOT2 = [
-    "safe", "escape", "force_escape", "safeseq", "escapeseq", "join",
-    "unordered_list", "upper", "lower", "striptags", "linebreaks", "linebreaksbr",
-    "urlize", "urlizetrunc", "json_script", "first", "last", "slice", "make_list",
-    "truncatechars_html", "title", "cut", "add", "default", "default_if_none",
-    "pprint", "length", "linenumbers", "dictsort", "dictsortreversed",
+    "safe",
+    "escape",
+    "force_escape",
+    "safeseq",
+    "escapeseq",
+    "join",
+    "unordered_list",
+    "upper",
+    "lower",
+    "striptags",
+    "linebreaks",
+    "linebreaksbr",
+    "urlize",
+    "urlizetrunc",
+    "json_script",
+    "first",
+    "last",
+    "slice",
+    "make_list",
+    "truncatechars_html",
+    "title",
+    "cut",
+    "add",
+    "default",
+    "default_if_none",
+    "pprint",
+    "length",
+    "linenumbers",
+    "dictsort",
+    "dictsortreversed",
 ]
 HOT3 = [
-    "safe", "escape", "force_escape", "safeseq", "escapeseq", "join",
-    "unordered_list", "upper", "striptags", "first", "slice", "make_list",
-    "pprint", "linebreaks", "dictsort", "dictsortreversed",
+    "safe",
+    "escape",
+    "force_escape",
+    "safeseq",
+    "escapeseq",
+    "join",
+    "unordered_list",
+    "upper",
+    "striptags",
+    "first",
+    "slice",
+    "make_list",
+    "pprint",
+    "linebreaks",
+    "dictsort",
+    "dictsortreversed",
 ]
 INPUTS_2 = ["s-img", "s-lt", "l-plain", "d-plain", "i-int", "n-none"]
 INPUTS_3 = ["s-img", "l-plain", "i-int"]
@@ -222,6 +334,19 @@ def cells():
     for a, b, c in itertools.product(HOT3, HOT3, HOT3):
         for key in INPUTS_3:
             yield (a, b, c), key
+    # The custom-filter axis (#2290). Each probe is swept alone, on BOTH sides
+    # of every hot built-in, and behind a `safe` so the container grant is in
+    # play — the built-in sweep above never dispatches through
+    # `filter_registry::apply_custom_filter` at all, so without these cells a
+    # change to what crosses the PyO3 boundary is unmeasured.
+    for c in CUSTOM:
+        for key in INPUTS:
+            yield (c,), key
+        for b in HOT2:
+            for key in INPUTS_2:
+                yield (b, c), key
+                yield (c, b), key
+                yield ("safe", b, c), key
 
 
 def measure(out_path: str) -> None:

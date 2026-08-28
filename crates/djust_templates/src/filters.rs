@@ -350,9 +350,22 @@ pub fn apply_filter_full_safe(
     // policy. When ``{% autoescape %}`` block tracking lands in a future PR,
     // the renderer will thread the surrounding policy through this call site
     // (#1162).
-    if let Some(result) =
-        filter_registry::apply_custom_filter(filter_name, value, arg, context, arg_was_quoted, true)
-    {
+    //
+    // ``input_safety`` is the OTHER half of Django's `needs_autoescape`
+    // contract and was the whole of #2290: the `autoescape` kwarg was already
+    // correct, but the value crossed into Python as a bare `str`, so
+    // `autoescape and not isinstance(value, SafeData)` could never take its
+    // second branch. `filter_registry::mark_input_safety` restores the marker
+    // on the way in — for the CONTAINER and, for a sequence, per ITEM.
+    if let Some(result) = filter_registry::apply_custom_filter(
+        filter_name,
+        value,
+        arg,
+        context,
+        arg_was_quoted,
+        true,
+        input_safety,
+    ) {
         return result.map_err(DjangoRustError::TemplateError);
     }
     Err(DjangoRustError::TemplateError(format!(
