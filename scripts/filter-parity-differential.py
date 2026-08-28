@@ -53,7 +53,7 @@ The corpus
 ----------
 Every filter in Django's LIVE `defaultfilters` registry (57 on Django 5.2),
 read from the registry rather than transcribed, so a Django release that adds
-or drops one is picked up instead of diverging silently. Sixteen input shapes
+or drops one is picked up instead of diverging silently. 22 input shapes
 cover the axes filters actually branch on — string, list, tuple, dict, int,
 float, `None`, empty — with hostile payloads in each. Chains of length 2 and 3
 over a hot subset are NOT optional: a candidate fix can be clean on 1-chains
@@ -226,6 +226,14 @@ INPUTS = {
     "l-plain": ["<b>", "x"],
     "l-nested": ["a", ["b", "c"]],
     "t-plain": ("<b>", "x"),
+    # A tuple at the NESTING position (#2317). `t-plain` puts a tuple at the
+    # top and `l-nested` puts a LIST in the sublist slot, so between them the
+    # corpus could not construct the one cell `unordered_list`'s sublist test
+    # reads — Django treats a tuple as a sublist and djust matched
+    # `Value::List` alone, so this rendered the escaped tuple repr in its own
+    # `<li>` where Django nests a `<ul>`. Every axis of a surface, not the one
+    # you happened to notice.
+    "t-nested": ["<b>", ("c", ("d",))],
     "d-plain": {"k": "<v>", "j": 2},
     "i-int": 42,
     "f-float": 1.5,
@@ -274,6 +282,7 @@ LIVE_FRAGMENTS = {
     "s-quote": ['" onmouseover="'],
     "l-plain": ["<b>"],
     "t-plain": ["<b>"],
+    "t-nested": ["<b>"],
     "d-plain": ["<v>"],
     # `l-marked` / `s-marked` carry markup Django ITSELF emits live, so a
     # fragment entry for them would report every correct cell as a leak. The
@@ -370,6 +379,15 @@ INPUTS_2 = [
     # (`slice` of a tuple is a tuple, `first` of one is its element).
     "t-marked",
 ]
+#: `t-nested` is on the 1-chain axis only, exactly as its list twin `l-nested`
+#: is. Chaining a NESTED input is a cell class this corpus does not measure for
+#: either container, and adding it for the tuple alone would be asymmetric —
+#: the first thing it reports is `safeseq|unordered_list`, where djust and
+#: Django disagree identically for `l-nested` and `t-nested` because `safeseq`
+#: does not stringify its items the way `mark_safe` does. That is a separate,
+#: pre-existing defect (#2324; pinned for both containers in
+#: `python/tests/test_sequence_shape_preservation_2317_2321.py::
+#: TestKnownAdjacentDivergences`), not something #2317 introduced.
 INPUTS_3 = ["s-img", "l-plain", "i-int", "l-marked"]
 
 #: Time- or randomness-dependent: recorded as a marker, never as a value.
