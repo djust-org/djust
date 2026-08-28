@@ -343,22 +343,61 @@ fn mark_input_safety<'py>(
     Ok(obj)
 }
 
-/// One ELEMENT of a sequence carrying an item grant, wrapped the way
-/// `mark_input_safety`'s doc-comment describes: `str` only.
+/// One ELEMENT of a sequence carrying an item grant.
 ///
 /// Extracted so the `PyList` and `PyTuple` arms cannot drift apart on the
-/// non-`str` policy — the failure mode that made the tuple arm's first life
+/// element policy — the failure mode that made the tuple arm's first life
 /// unprovable was precisely that the two were separate copies of one rule
 /// (#1646).
+///
+/// **An element under an item grant is always a `str`** (#2337). This carried
+/// an `is_instance_of::<PyString>()` guard with a non-`str` pass-through, and
+/// the pass-through had no producer: EVERY writer of `InputSafety.items = true`
+/// can only ever grant on a sequence whose elements are `Value::String`, which
+/// `IntoPyObject` (`djust_core/src/lib.rs`) turns into a `PyString`. The three
+/// of them, which
+/// `python/tests/test_mark_item_dead_branch_2337.py::TestTheProducerEnumerationIsComplete`
+/// pins mechanically rather than in this prose:
+///
+/// 1. `Context::items_are_safe` (#2287) — requires
+///    `matches!(item, Value::String(_))` for EVERY element, and refuses
+///    otherwise. That narrowing is load-bearing for a different reason
+///    (`join` stringifies a sublist and Django escapes the repr), so it is not
+///    going anywhere.
+/// 2. `safeseq` / `escapeseq` — `ITEM_SAFE_OUTPUT_FILTERS`. Both CONSTRUCT
+///    `Value::List(… Value::String(…) …)` unconditionally; `safeseq` has since
+///    #2324, `escapeseq` always did.
+/// 3. `slice` — `ITEM_SAFETY_PRESERVING_FILTERS`, and only when the grant was
+///    already held. It selects elements and rebuilds the same shape, so it
+///    cannot introduce a type its input did not have.
+///
+/// The renderer's three seed sites all read `context.items_are_safe(k)` for the
+/// same `k` they resolve the value from, and `Context::resolve` returns
+/// `Context::get`'s value verbatim on a hit — so the grant and the value can
+/// never describe different objects.
+///
+/// Deleting the guard rather than keeping it is #1859: an unreachable branch is
+/// decorative, not defensive, and while both mechanisms exist no test can tell
+/// them apart (v1.1.1-2 retro). What replaces it is a test of the REACHABLE
+/// paths — `TestANonConvertingProducerRefusesANonStrSequence` sweeps every
+/// producer that does NOT itself convert its elements (arm 1 above, and arm 3
+/// over it) × every non-`str` element shape, and asserts each element arrives
+/// as its own type and NOT `SafeData`. If a future producer starts granting on
+/// a sequence holding a non-`str`, `mark_safe` STRINGIFIES it (`mark_safe(42)`
+/// is `SafeString("42")`) and every one of those goes red — which is the
+/// property the guard was silently providing and the one worth keeping.
+///
+/// Arm 2 needs the other shape, because `safeseq`/`escapeseq` stringify FIRST
+/// and there is then nothing left for a probe to observe: that axis is covered
+/// by the structural pin on their constructors plus Django parity on the
+/// downstream sinks. `TestAConvertingProducerLeavesNoNonStrElement` carries it,
+/// and its own comment records the gate-off that proved the obvious assertion
+/// there could not go red.
 fn mark_item<'py>(
     mark_safe: &Bound<'py, PyAny>,
     item: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if item.is_instance_of::<PyString>() {
-        mark_safe.call1((item,))
-    } else {
-        Ok(item)
-    }
+    mark_safe.call1((item,))
 }
 
 /// Apply a custom filter callable to a value with an optional argument.
