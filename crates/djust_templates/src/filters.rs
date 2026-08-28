@@ -559,6 +559,24 @@ fn apply_builtin_filter(
                 // different, wronger one.
                 Value::String(s) => s.chars().count(),
                 Value::List(l) | Value::Tuple(l) => l.len(),
+                // A `dict` answers `len(dict)`; a serialized model answers 0,
+                // because `len(model)` raises `TypeError` and Django's filter
+                // catches it (#2294). Both are `Value::Object`, so the arm has
+                // to tell them apart, and the marker is the shared
+                // `object_str()` predicate — the same one `{{ obj }}` uses to
+                // decide whether a map renders as its `__str__` or as a dict
+                // repr. Reusing it is what keeps `{{ p }}` and `{{ p|length }}`
+                // from disagreeing about what `p` IS (#1646).
+                //
+                // `_ => 0` before this, which was right for the model and wrong
+                // for every dict.
+                Value::Object(o) => {
+                    if value.object_str().is_some() {
+                        0
+                    } else {
+                        o.len()
+                    }
+                }
                 _ => 0,
             };
             Ok(Value::Integer(len as i64))
@@ -1183,10 +1201,34 @@ fn apply_builtin_filter(
             Ok(Value::String(format!("{s:>width$}")))
         }
         "center" => {
-            // center filter: center string, pad to width with spaces
+            // center filter: `value.center(int(arg))`.
+            //
+            // NOT `format!("{s:^width$}")`, which was here: Rust's `^` puts the
+            // SMALLER half of an odd margin on the left, unconditionally.
+            // CPython's `str.center` is
+            //
+            //     marg = width - len(self)
+            //     left = marg / 2 + (marg & width & 1)
+            //
+            // — so an odd margin biases left only when the WIDTH is also odd
+            // (#2294). `'ab'.center(5)` is `'  ab '`, not `' ab  '`.
+            //
+            // The two agree whenever the margin is even, which is why a curated
+            // table sampling `'a'.center(4)` and `'abc'.center(6)` finds
+            // nothing. Both halves of the formula are load-bearing and are
+            // gate-off tested separately.
             let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
             let s = value.to_string();
-            Ok(Value::String(format!("{s:^width$}")))
+            // Code points, like `len()` — and like `{:^}`, which also counted
+            // chars, so this is not the byte-vs-char defect (#2279).
+            let len = s.chars().count();
+            Ok(Value::String(if width <= len {
+                s
+            } else {
+                let marg = width - len;
+                let left = marg / 2 + (marg & width & 1);
+                format!("{}{s}{}", " ".repeat(left), " ".repeat(marg - left))
+            }))
         }
         "make_list" => {
             // make_list filter: split string into list of characters
@@ -2711,6 +2753,104 @@ fn linebreaksbr(s: &str, autoescape: bool) -> String {
     body.replace('\n', "<br>")
 }
 
+/// What the text before a `%…s` conversion character turned out to be.
+enum SSpec {
+    /// A well-formed `[flags][width][.precision][length]`.
+    Format {
+        left: bool,
+        width: usize,
+        precision: Option<usize>,
+    },
+    /// Well-formed, but a width or precision CPython refuses: both are C `int`s,
+    /// so past `i32::MAX` it raises `ValueError` rather than allocating.
+    Invalid,
+    /// Not that grammar at all.
+    NotAWidthSpec,
+}
+
+/// CPython's `unicode_format_arg_parse`, restricted to the `s` conversion.
+///
+/// Read off the interpreter, not from memory, and then checked AGAINST it: an
+/// exhaustive sweep of every prefix over `-+ #0` / digits / `.` / `hlL` up to
+/// length 4 crossed with seven values — 21 147 cells — agrees with
+/// `("%" + prefix + "s") % value` on every one, and no prefix this accepts
+/// makes CPython raise. The surprises the sweep settles, none of which a
+/// hand-written table would have thought to include:
+///
+/// * the `0` flag is **ignored** for `s` — `"%010s" % "ab"` pads with SPACES,
+///   where the same flag on `%d` pads with zeros;
+/// * `+`, ` ` and `#` are accepted and do nothing;
+/// * a flag may repeat and may follow another flag (`%--10s` is left-aligned);
+/// * a bare `.` is precision **zero**, so `"%.s"` is `""` and `"%10.s"` is ten
+///   spaces — not "no precision";
+/// * `0` leads as a flag, so `"%0s"` is width 0 and `"%010s"` is width 10;
+/// * a trailing `h`/`l`/`L` length modifier is accepted and ignored.
+fn parse_s_spec(prefix: &str) -> SSpec {
+    let b = prefix.as_bytes();
+    let mut i = 0;
+    let mut left = false;
+    while i < b.len() && matches!(b[i], b'-' | b'+' | b' ' | b'#' | b'0') {
+        if b[i] == b'-' {
+            left = true;
+        }
+        i += 1;
+    }
+    let digits_start = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    // The two limits differ, and were BISECTED against the interpreter rather
+    // than assumed: width is a `Py_ssize_t` and precision an `int`, so
+    // `"%9223372036854775808s"` raises `width too big` while
+    // `"%.2147483648s"` raises `precision too big` five orders of magnitude
+    // lower.
+    let width = match parse_c_int(&prefix[digits_start..i], i64::MAX as u64) {
+        Some(w) => w,
+        None => return SSpec::Invalid,
+    };
+    let mut precision = None;
+    if i < b.len() && b[i] == b'.' {
+        i += 1;
+        let digits_start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        match parse_c_int(&prefix[digits_start..i], i32::MAX as u64) {
+            Some(p) => precision = Some(p),
+            None => return SSpec::Invalid,
+        }
+    }
+    if i < b.len() && matches!(b[i], b'h' | b'l' | b'L') {
+        i += 1;
+    }
+    if i != b.len() {
+        return SSpec::NotAWidthSpec;
+    }
+    SSpec::Format {
+        left,
+        width,
+        precision,
+    }
+}
+
+/// A width or precision field: empty is 0, and anything past `max` is the
+/// `ValueError` CPython raises rather than a saturating cast.
+fn parse_c_int(digits: &str, max: u64) -> Option<usize> {
+    // Leading zeros do not count toward the limit —
+    // `"%00000000000000000000010s"` is width 10, verified against CPython.
+    let trimmed = digits.trim_start_matches('0');
+    if trimmed.is_empty() {
+        return Some(0);
+    }
+    if trimmed.len() > 19 {
+        return None;
+    }
+    match trimmed.parse::<u64>() {
+        Ok(n) if n <= max => Some(n as usize),
+        _ => None,
+    }
+}
+
 fn apply_stringformat(value: &Value, spec: &str) -> String {
     // Implements Django's stringformat filter.
     // The spec is a Python printf-style format specifier WITHOUT the leading %.
@@ -2720,7 +2860,65 @@ fn apply_stringformat(value: &Value, spec: &str) -> String {
     let last_char = spec.chars().last().unwrap_or('s');
 
     match last_char {
-        's' => value.to_string(),
+        's' => {
+            // `("%" + arg) % value` for the `s` conversion — which is not
+            // `str(value)`: CPython honours `[flags][width][.precision]` there
+            // exactly as it does for the numeric conversions, and this arm
+            // ignored ALL of it (#2294). `{{ p|stringformat:"10s" }}` rendered
+            // `'ab'` where Django renders `'        ab'`.
+            match parse_s_spec(&spec[..spec.len() - 1]) {
+                SSpec::Format {
+                    left,
+                    width,
+                    precision,
+                } => {
+                    let s = value.to_string();
+                    // Code points on both axes: `"%6s" % "中"` pads to five
+                    // spaces plus the char, and `"%.3s"` keeps three code
+                    // points. Slicing bytes would do neither.
+                    let body: String = match precision {
+                        Some(p) => s.chars().take(p).collect(),
+                        None => s,
+                    };
+                    let len = body.chars().count();
+                    if width <= len {
+                        body
+                    } else {
+                        let pad_len = width - len;
+                        let mut out = String::new();
+                        if out.try_reserve(body.len() + pad_len).is_err() {
+                            // CPython's parse ACCEPTS a width up to
+                            // `PY_SSIZE_T_MAX` and then raises `MemoryError`
+                            // when it cannot allocate — which the filter's
+                            // `except (ValueError, TypeError)` does not catch,
+                            // so Django 500s. Rust's default OOM handler
+                            // ABORTS the process instead, which is worse than
+                            // either. Degrade to the unpadded value; no width
+                            // that can actually be rendered reaches here.
+                            return body;
+                        }
+                        if left {
+                            out.push_str(&body);
+                        }
+                        out.extend(std::iter::repeat_n(' ', pad_len));
+                        if !left {
+                            out.push_str(&body);
+                        }
+                        out
+                    }
+                }
+                // `ValueError: width too big` / `precision too big`, which
+                // Django catches and answers `""` to.
+                SSpec::Invalid => String::new(),
+                // Not a width spec at all — the prefix holds another conversion
+                // character (`%as` is `%a` followed by a literal `s`), a stray
+                // `%`, or a `*`. CPython's answer to those is neither `str()`
+                // nor `""`, so nothing here can be right; this keeps the
+                // pre-#2294 answer rather than inventing a second wrong one.
+                // Measured on the differential: no cell changes either way.
+                SSpec::NotAWidthSpec => value.to_string(),
+            }
+        }
         'd' | 'i' => {
             // Django is `("%" + arg) % value`, catching `(ValueError,
             // TypeError)` and returning `""`. CPython's `%d` takes an `int`, a
@@ -5242,6 +5440,140 @@ mod tests {
         let result = apply_filter("center", &value, Some("10")).unwrap();
         assert_eq!(result.to_string(), "    hi    ");
         assert_eq!(result.to_string().len(), 10);
+    }
+
+    /// `str.center`'s odd-margin tie-break (#2294).
+    ///
+    /// Rust's `{:^width$}` — what this arm used — always puts the SMALLER half
+    /// on the left. CPython adds `(marg & width & 1)`, which biases left only
+    /// when the width is odd too. Every row below has an ODD margin; the first
+    /// three are the cells the issue reports and the last two are the
+    /// even-width cases where the two rules coincide, kept so a "fix" that
+    /// merely flips the bias fails here.
+    #[test]
+    fn test_center_uses_pythons_odd_margin_tie_break() {
+        for (value, width, want) in [
+            ("ab", 5usize, "  ab "),
+            ("abcd", 5, " abcd"),
+            ("ab", 3, " ab"),
+            ("a", 4, " a  "),
+            ("abc", 6, " abc  "),
+            // Width <= len is the input unchanged, not a pad of zero.
+            ("abcdef", 3, "abcdef"),
+            ("abc", 3, "abc"),
+            // Code points, not bytes: three-byte CJK still pads to 5 chars.
+            ("\u{4e2d}", 5, "  \u{4e2d}  "),
+            ("\u{4e2d}", 4, " \u{4e2d}  "),
+        ] {
+            let got = apply_filter(
+                "center",
+                &Value::String(value.to_string()),
+                Some(&width.to_string()),
+            )
+            .unwrap()
+            .to_string();
+            assert_eq!(got, want, "{value:?}.center({width})");
+        }
+    }
+
+    /// The `%s` spec grammar (#2294). The Python-side sweep in
+    /// `python/tests/test_measuring_filter_parity_2294.py` is the exhaustive
+    /// check against CPython; these rows pin the parser's own branches.
+    #[test]
+    fn test_stringformat_s_honours_flags_width_and_precision() {
+        for (spec, want) in [
+            ("s", "abcdef"),
+            ("10s", "    abcdef"),
+            ("-10s", "abcdef    "),
+            // The `0` flag does NOT zero-pad `%s`, unlike `%d`.
+            ("010s", "    abcdef"),
+            // Accepted-and-ignored flags, repeated flags, flag after flag.
+            ("+10s", "    abcdef"),
+            (" 10s", "    abcdef"),
+            ("#10s", "    abcdef"),
+            ("--10s", "abcdef    "),
+            // A bare `.` is precision ZERO.
+            (".s", ""),
+            ("10.s", "          "),
+            (".3s", "abc"),
+            ("10.3s", "       abc"),
+            ("-10.3s", "abc       "),
+            // `0` leads as a FLAG, so these are width 0.
+            ("0s", "abcdef"),
+            ("00s", "abcdef"),
+            // Trailing length modifiers are accepted and ignored.
+            ("hs", "abcdef"),
+            ("10ls", "    abcdef"),
+            ("10Ls", "    abcdef"),
+            // Leading zeros do not count toward the digit-length limit.
+            ("00000000000000000000010s", "    abcdef"),
+            // One past each limit -> CPython `ValueError` -> Django's "".
+            ("9223372036854775808s", ""),
+            (".2147483648s", ""),
+            // One below the precision limit is still accepted.
+            (".2147483647s", "abcdef"),
+            // Not a width spec at all: the prefix holds another conversion
+            // character, so the pre-#2294 answer stands.
+            ("as", "abcdef"),
+            ("!s", "abcdef"),
+        ] {
+            let got = apply_stringformat(&Value::String("abcdef".to_string()), spec);
+            assert_eq!(got, want, "%{spec}");
+        }
+    }
+
+    /// Precision and width are CODE-POINT counts, not byte counts.
+    #[test]
+    fn test_stringformat_s_counts_code_points() {
+        let v = Value::String("\u{4e2d}\u{6587}\u{5b57}".to_string());
+        assert_eq!(apply_stringformat(&v, "6s"), "   \u{4e2d}\u{6587}\u{5b57}");
+        assert_eq!(apply_stringformat(&v, ".2s"), "\u{4e2d}\u{6587}");
+        assert_eq!(apply_stringformat(&v, "5.2s"), "   \u{4e2d}\u{6587}");
+    }
+
+    /// `length` of a `Value::Object` (#2294): a dict counts, a serialized
+    /// object does not.
+    #[test]
+    fn test_length_of_an_object_uses_the_str_marker() {
+        let mut dict = indexmap::IndexMap::new();
+        dict.insert("a".to_string(), Value::Integer(1));
+        dict.insert("b".to_string(), Value::Integer(2));
+        assert_eq!(
+            apply_filter("length", &Value::Object(dict.clone()), None)
+                .unwrap()
+                .to_string(),
+            "2"
+        );
+
+        // A serialized model: `len(model)` raises `TypeError`, which Django's
+        // `length` answers 0 to.
+        let mut model = dict.clone();
+        model.insert("__str__".to_string(), Value::String("bob".to_string()));
+        assert_eq!(
+            apply_filter("length", &Value::Object(model), None)
+                .unwrap()
+                .to_string(),
+            "0"
+        );
+
+        // A non-string `"__str__"` is not a marker — `Display` falls back to
+        // dict repr for it, so `length` must count it.
+        let mut broken = dict.clone();
+        broken.insert("__str__".to_string(), Value::None);
+        assert_eq!(
+            apply_filter("length", &Value::Object(broken), None)
+                .unwrap()
+                .to_string(),
+            "3"
+        );
+
+        // An empty dict was already right and stays right.
+        assert_eq!(
+            apply_filter("length", &Value::Object(indexmap::IndexMap::new()), None)
+                .unwrap()
+                .to_string(),
+            "0"
+        );
     }
 
     #[test]
