@@ -1043,16 +1043,39 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             nodes,
             empty_nodes,
         } => {
-            // Use context.resolve() so dotted iterables walk getattr
-            // across Python/Django model boundaries (e.g. `{% for x in
-            // user.orders %}` resolving through a DB relation). Issue
-            // #806 — previously only context.get() was consulted, which
-            // only hits the value-stack so getattr-backed iterables
-            // silently rendered as empty.
-            let iterable_value = context
-                .resolve(iterable)?
-                .or_else(|| context.get(iterable).cloned())
-                .unwrap_or(Value::Missing);
+            // Through `get_value` — the one filter-aware expression resolver
+            // — so `{% for x in p|slice:":2" %}` applies the filter chain
+            // instead of looking up a variable literally NAMED `p|slice:":2"`,
+            // missing, and rendering an empty loop (#2325). Django resolves
+            // this operand with a `FilterExpression`, the same object `{{ }}`
+            // uses, and the silent-empty-region failure that drift produced is
+            // the worst shape a template engine has.
+            //
+            // `get_value` keeps the `Context::resolve` getattr walk that this
+            // arm previously called directly (#806, `{% for x in user.orders %}`
+            // over a DB relation) — it is the last arm of `get_value_safe`.
+            //
+            // The runtime-safe flag `get_value_safe` also reports is
+            // deliberately DISCARDED: honouring it would emit loop items
+            // unescaped, which is the one direction this fix must not move
+            // (`{% for x in p|safe %}` over-escapes, as it did before).
+            let iterable_value = get_value(iterable, context)?;
+
+            // Python iterates a string by CHARACTER, and #2325's own repro
+            // table needs it: `{% for x in p|upper %}` over `"ab"` is `AB` in
+            // Django, and `upper`/`join`/`first`/`last` all hand this arm a
+            // string. Without it the filter now resolves correctly and the
+            // loop STILL renders nothing, which is the same silent-empty
+            // symptom one step further along. Normalised here rather than as a
+            // fourth match arm so the string shares the whole loop body —
+            // `{% empty %}`, `reversed`, `{% cycle %}`, nested loops — instead
+            // of growing a parallel copy of it (#1646).
+            let iterable_value = match iterable_value {
+                Value::String(s) => {
+                    Value::List(s.chars().map(|c| Value::String(c.to_string())).collect())
+                }
+                other => other,
+            };
 
             match iterable_value {
                 Value::List(items) | Value::Tuple(items) => {
@@ -1133,8 +1156,19 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                         if var_names.len() == 1 {
                             // Single variable: {% for item in items %}
                             ctx.set(var_names[0].clone(), item);
-                            // Track loop mapping for safe key resolution
-                            ctx.set_loop_mapping(var_names[0].clone(), iterable.clone(), index);
+                            // Track loop mapping for safe key resolution —
+                            // but ONLY for a bare variable path. The mapping
+                            // asserts `item` IS `<iterable>.<index>`, which
+                            // `Context::is_safe` then looks up in `safe_keys`;
+                            // once a filter is in play that correspondence is
+                            // false (`slice` shifts indices, `dictsort`
+                            // reorders), so establishing it could resolve a
+                            // safety mark belonging to a DIFFERENT element
+                            // (#2325). Registering nothing costs only
+                            // over-escaping, which is the direction to fail in.
+                            if !iterable.contains('|') {
+                                ctx.set_loop_mapping(var_names[0].clone(), iterable.clone(), index);
+                            }
                         } else {
                             // Multiple variables: {% for key, value in items %}
                             // Expect item to be a list/tuple
@@ -1324,19 +1358,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     context.clone()
                 };
 
-                // Apply with_vars assignments
+                // Apply with_vars assignments through the same filter-aware
+                // resolver as `{% with %}` and the `{% for %}` operand — this
+                // is the third spelling of one bare-variable lookup, and it
+                // carried the same raw-text fallback, so
+                // `{% include "x" with q=p|upper %}` passed the literal string
+                // `p|upper` into the included template (#2325). `get_value`
+                // handles the quoted-literal case this arm open-coded.
                 for (key, value_expr) in with_vars {
-                    // Resolve value from parent context or use as literal
-                    let value = context.get(value_expr).cloned().unwrap_or_else(|| {
-                        // Check if it's a string literal
-                        if (value_expr.starts_with('"') && value_expr.ends_with('"'))
-                            || (value_expr.starts_with('\'') && value_expr.ends_with('\''))
-                        {
-                            Value::String(value_expr[1..value_expr.len() - 1].to_string())
-                        } else {
-                            Value::String(value_expr.clone())
-                        }
-                    });
+                    let value = get_value(value_expr, context)?;
                     include_context.set(key.clone(), value);
                 }
 
@@ -1442,15 +1472,27 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Create new context with assigned variables
             let mut new_context = context.clone();
 
-            // Process assignments
+            // Process assignments through the same filter-aware resolver the
+            // `{% for %}` operand uses (#2325). Django's `{% with %}` resolves
+            // each assignment with a `FilterExpression`; the bare
+            // `context.get(expression)` here was wrong three ways at once, and
+            // its fallback made the failure LOUDER than an empty region:
+            //
+            //   {% with q=p|upper %}   rendered the literal text `p|upper`
+            //   {% with q="lit" %}     rendered `&quot;lit&quot;`, quotes and all
+            //   {% with q=nope %}      rendered the variable NAME `nope`
+            //
+            // — because a miss fell back to `Value::String(expression)`, i.e.
+            // it echoed the template's own source into the page. `get_value`
+            // returns `Value::Missing` for a genuine miss, which renders
+            // empty, as Django's `string_if_invalid` default does.
+            //
+            // The runtime-safe flag is discarded here for the same reason as
+            // in the `{% for %}` arm: `{% with q=p|safe %}{{ q }}{% endwith %}`
+            // keeps over-escaping rather than gaining a new way to emit live
+            // markup.
             for (var_name, expression) in assignments {
-                // Try to evaluate expression from context
-                // For now, we'll just look up the expression as a variable name
-                // In full Django, this would support complex expressions
-                let value = context
-                    .get(expression)
-                    .cloned()
-                    .unwrap_or_else(|| Value::String(expression.clone()));
+                let value = get_value(expression, context)?;
                 new_context.set(var_name.clone(), value);
             }
 
@@ -2396,8 +2438,35 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         }
     }
 
-    // Default to false for unknown conditions
-    Ok(false)
+    // A bare filter expression is a VALUE, not an operator form: nothing above
+    // matched because there is no operator to match, and defaulting to `false`
+    // made `{% if p|slice:":1" %}` take the `{% else %}` branch on a non-empty
+    // list (#2325). Django resolves the condition with a `FilterExpression`
+    // and tests its truthiness.
+    //
+    // Deliberately LAST, not next to the `context.get(condition)` arm above:
+    // an operator form can contain a pipe too (`{% if p|length == 3 %}`,
+    // `{% if not p|slice:":0" %}`), and both of those already work by reaching
+    // their own arm first. Resolving on the presence of a `|` any earlier
+    // would capture them and hand `get_value` a whole comparison to look up as
+    // one variable name.
+    // Nothing above matched, so this condition is not an operator form at all
+    // — it is a VALUE, and Django tests its truthiness after resolving it with
+    // a `FilterExpression`. Returning a bare `false` here instead is what made
+    // `{% if p|slice:":1" %}` take the `{% else %}` branch on a non-empty list
+    // (#2325); the `context.get(condition)` arm near the top of this function
+    // only ever handled a plain variable name.
+    //
+    // Deliberately LAST. Every operator form reaches its own arm first, which
+    // is what keeps `{% if p|length == 3 %}` and `{% if not p|slice:":0" %}`
+    // working — resolving any earlier would hand `get_value` a whole
+    // comparison to look up as one variable name. Position is the guard here,
+    // so this needs no "does it contain a pipe" test of its own: an unmatched
+    // condition with no pipe resolves through the same path and yields
+    // `Value::Missing` (falsy) exactly as the old `Ok(false)` did, while one
+    // backed by the raw-Python sidecar now answers like `{{ }}` does rather
+    // than being silently false.
+    Ok(get_value(condition, context)?.is_truthy())
 }
 
 fn get_value(expr: &str, context: &Context) -> Result<Value> {
@@ -2534,6 +2603,18 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         || (expr.starts_with('\'') && expr.ends_with('\''))
     {
         return Ok((Value::String(expr[1..expr.len() - 1].to_string()), false));
+    }
+
+    // Last resort: the getattr walk over raw Python objects that
+    // `Context::resolve` adds on top of `Context::get` (#806). The `{{ }}`
+    // arm has always used it, so without this arm `{% for x in user.orders %}`
+    // resolved a DB relation and `{% for x in user.orders|slice:":5" %}` — the
+    // same expression through this function, since #2325 routes the tag here —
+    // would not. Placed AFTER the literal arms so nothing that resolves today
+    // changes, and so the GIL round-trip it costs is paid only on a genuine
+    // miss rather than on every `{% if a == 5 %}` operand.
+    if let Some(value) = context.resolve(expr)? {
+        return Ok((value, context.is_safe(expr)));
     }
 
     Ok((Value::Missing, false))

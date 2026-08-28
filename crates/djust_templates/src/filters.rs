@@ -1503,61 +1503,208 @@ fn truncate_arg(arg: Option<&str>, default: i64) -> Option<i64> {
     }
 }
 
+/// Django's `slice`: `value[slice(*bits)]`, where `bits` is
+/// `[None if not x else int(x) for x in str(arg).split(":")]` and ANY of
+/// `ValueError` / `TypeError` / `KeyError` returns the input unchanged.
+///
+/// It is a passthrough to Python, so every Python slice rule applies and none
+/// of them can be approximated. The pre-#2326 code parsed at most two parts
+/// and CLAMPED instead of wrapping, which got seven of ten specs wrong in the
+/// two directions a template author notices: `{{ p|slice:":-1" }}` (drop the
+/// last) rendered NOTHING and `{{ p|slice:"-3:" }}` (last three) rendered
+/// EVERYTHING. Patching those two cases would have left the rest — a one-part
+/// spec is `slice(stop)` so `"2"` means `[:2]` and not `[2:]`, a `:step` was
+/// parsed and discarded, a negative step never reversed — so this reproduces
+/// the algorithm rather than the answers (v1.1.1-2 retro: value-by-value fixes
+/// on a semantics gap do not converge).
 fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
-    let parts: Vec<&str> = slice_str.split(':').collect();
+    let Some((start, stop, step)) = parse_slice_arg(slice_str) else {
+        // Django's `except (ValueError, TypeError, KeyError): return value`.
+        return Ok(value.clone());
+    };
 
     match value {
         Value::String(s) => {
             let chars: Vec<char> = s.chars().collect();
-            let len = chars.len() as isize;
-
-            let (start, end) = parse_slice_indices(&parts, len);
-            let start = start.max(0) as usize;
-            let end = end.min(len).max(0) as usize;
-
-            if start < end && start < chars.len() {
-                let sliced: String = chars[start..end.min(chars.len())].iter().collect();
-                Ok(Value::String(sliced))
-            } else {
-                Ok(Value::String(String::new()))
-            }
+            let picked: String = slice_positions(start, stop, step, chars.len())
+                .into_iter()
+                .map(|i| chars[i])
+                .collect();
+            Ok(Value::String(picked))
         }
         Value::List(items) | Value::Tuple(items) => {
-            let len = items.len() as isize;
-            let (start, end) = parse_slice_indices(&parts, len);
-            let start = start.max(0) as usize;
-            let end = end.min(len).max(0) as usize;
-
+            let picked: Vec<Value> = slice_positions(start, stop, step, items.len())
+                .into_iter()
+                .map(|i| items[i].clone())
+                .collect();
             // Through `rebuild_like` on BOTH branches: `()` and `[]` are
             // different reprs, so the empty result is as shape-sensitive as
             // the populated one (#2321).
-            if start < end && start < items.len() {
-                Ok(rebuild_like(
-                    value,
-                    items[start..end.min(items.len())].to_vec(),
-                ))
-            } else {
-                Ok(rebuild_like(value, Vec::new()))
-            }
+            Ok(rebuild_like(value, picked))
         }
+        // Django slices whatever it is handed; an int, a float, `None`, a dict
+        // and a bool all raise `TypeError` and come back unchanged.
         _ => Ok(value.clone()),
     }
 }
 
-fn parse_slice_indices(parts: &[&str], len: isize) -> (isize, isize) {
-    let start = if parts.is_empty() || parts[0].is_empty() {
-        0
-    } else {
-        parts[0].parse::<isize>().unwrap_or(0)
+/// `int(x)` as CPython spells it, for the subset a template literal can carry.
+///
+/// Rust's `str::parse::<isize>()` is NOT `int()`, and each difference below is
+/// a real divergence confirmed against Django 5.2 rather than a hypothetical:
+///
+/// * surrounding whitespace is accepted — `slice:" 1 : 2 "` is `['b']`;
+/// * a leading `+` is accepted — `slice:"+1:"` drops the first element;
+/// * single underscores BETWEEN digits are accepted — `slice:"1_0:"` is
+///   `int` 10, so on a 4-element list it is `[]`. Rejecting it would return
+///   the input UNCHANGED, i.e. render every element where Django renders none;
+/// * a value past `isize` is exact in Python, but every such value is also
+///   past any representable `len`, so saturating at the bound picks the same
+///   elements — `slice:"99999999999999999999999999:"` is `[]` either way.
+///
+/// Returns `None` for anything `int()` would raise on, which is the whole
+/// filter's fail-silently path. Note a lone-space part is NOT empty and NOT an
+/// int, so `slice:"1: "` returns the input unchanged.
+fn python_int(s: &str) -> Option<isize> {
+    let t = s.trim();
+    let (negative, digits) = match t.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    // `int()` allows `_` only between digits: `_1`, `1_` and `1__0` all raise.
+    let mut cleaned = String::with_capacity(digits.len());
+    let bytes = digits.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'_' {
+            let prev_digit = i > 0 && bytes[i - 1].is_ascii_digit();
+            let next_digit = bytes.get(i + 1).is_some_and(u8::is_ascii_digit);
+            if !prev_digit || !next_digit {
+                return None;
+            }
+        } else if b.is_ascii_digit() {
+            cleaned.push(b as char);
+        } else {
+            return None;
+        }
+    }
+    // Saturate rather than fail: see the doc comment — a magnitude past `isize`
+    // is past every `len`, so the bound selects the same elements.
+    Some(match cleaned.parse::<isize>() {
+        Ok(n) => {
+            if negative {
+                -n
+            } else {
+                n
+            }
+        }
+        Err(_) => {
+            if negative {
+                isize::MIN
+            } else {
+                isize::MAX
+            }
+        }
+    })
+}
+
+/// `str(arg).split(":")` into the three `slice()` arguments.
+///
+/// `None` means the whole filter fails silently, which covers every way
+/// `slice(*bits)` or the indexing that follows raises: a non-integer part,
+/// MORE than three parts (`slice()` takes at most three, a `TypeError`), and
+/// a zero step (`ValueError: slice step cannot be zero`, raised by the
+/// indexing rather than the constructor — which is why it belongs here and
+/// not in `slice_positions`).
+#[allow(clippy::type_complexity)]
+fn parse_slice_arg(arg: &str) -> Option<(Option<isize>, Option<isize>, Option<isize>)> {
+    let parts: Vec<&str> = arg.split(':').collect();
+    if parts.len() > 3 {
+        return None;
+    }
+    let mut bits: [Option<isize>; 3] = [None; 3];
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue; // Python's `if not x: bits.append(None)`.
+        }
+        bits[i] = Some(python_int(part)?);
+    }
+    // One part is `slice(stop)`, not `slice(start)`: `{{ p|slice:"2" }}` is
+    // `p[:2]`. The pre-#2326 code read it as the START and so returned the
+    // complement of what Django returns.
+    if parts.len() == 1 {
+        return Some((None, bits[0], None));
+    }
+    if bits[2] == Some(0) {
+        return None;
+    }
+    Some((bits[0], bits[1], bits[2]))
+}
+
+/// CPython's `PySlice_AdjustIndices` plus the walk `list[::step]` performs.
+///
+/// The one place the index math lives, shared by the `String` and the sequence
+/// branch of [`apply_slice`] — those two duplicated it before #2326 and are
+/// exactly the pair that would drift apart again (#1646).
+fn slice_positions(
+    start: Option<isize>,
+    stop: Option<isize>,
+    step: Option<isize>,
+    len: usize,
+) -> Vec<usize> {
+    let step = step.unwrap_or(1);
+    debug_assert!(step != 0, "a zero step is rejected by parse_slice_arg");
+    let len = len as isize;
+
+    // With a negative step the walk runs downwards, so the defaults and the
+    // clamp bounds invert: index -1 is "before the start" and len-1 is the
+    // first element visited.
+    let (lower, upper) = if step < 0 { (-1, len - 1) } else { (0, len) };
+
+    let adjust = |v: isize| {
+        if v < 0 {
+            (v.saturating_add(len)).max(lower)
+        } else {
+            v.min(upper)
+        }
+    };
+    let start = match start {
+        None => {
+            if step < 0 {
+                upper
+            } else {
+                lower
+            }
+        }
+        Some(v) => adjust(v),
+    };
+    let stop = match stop {
+        None => {
+            if step < 0 {
+                lower
+            } else {
+                upper
+            }
+        }
+        Some(v) => adjust(v),
     };
 
-    let end = if parts.len() < 2 || parts[1].is_empty() {
-        len
-    } else {
-        parts[1].parse::<isize>().unwrap_or(len)
-    };
-
-    (start, end)
+    let mut out = Vec::new();
+    let mut i = start;
+    while if step < 0 { i > stop } else { i < stop } {
+        // The adjust/default arms above keep `i` inside `0..len` for every
+        // position actually visited, so this cast never truncates a real index.
+        if i >= 0 && i < len {
+            out.push(i as usize);
+        }
+        match i.checked_add(step) {
+            Some(next) => i = next,
+            None => break,
+        }
+    }
+    out
 }
 
 /// The one place a serialized Python datetime is parsed (#2227).
@@ -4633,6 +4780,189 @@ mod tests {
             11,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
+    }
+
+    // ---- slice: Python's own semantics (#2326) ---------------------------
+
+    /// `slice_positions` IS `PySlice_AdjustIndices` plus the walk, so the
+    /// reference is `list(range(len))[a:b:c]` — asserted against literal
+    /// expected values here, and swept against LIVE Python in
+    /// `python/tests/test_filtered_operands_and_slice_2325_2326.py::
+    /// TestSliceRandomised::test_random_specs_match_pythons_own_slice`.
+    #[test]
+    fn slice_positions_matches_python() {
+        // (start, stop, step, len, expected) — named so clippy's
+        // type-complexity lint has something to point at.
+        type Case = (
+            Option<isize>,
+            Option<isize>,
+            Option<isize>,
+            usize,
+            &'static [usize],
+        );
+        let cases: &[Case] = &[
+            // Defaults.
+            (None, None, None, 4, &[0, 1, 2, 3]),
+            (None, None, None, 0, &[]),
+            // Non-negative, the only shape the pre-#2326 code got right.
+            (Some(1), Some(3), None, 4, &[1, 2]),
+            (Some(3), Some(1), None, 4, &[]),
+            // Negative indices WRAP; they do not clamp to 0.
+            (Some(-1), None, None, 4, &[3]),
+            (None, Some(-1), None, 4, &[0, 1, 2]),
+            (Some(-2), Some(-1), None, 4, &[2]),
+            // Out of range still clamps, in both directions.
+            (Some(-99), None, None, 4, &[0, 1, 2, 3]),
+            (None, Some(99), None, 4, &[0, 1, 2, 3]),
+            (Some(99), None, None, 4, &[]),
+            (None, Some(-99), None, 4, &[]),
+            // A step SELECTS rather than being discarded.
+            (None, None, Some(2), 4, &[0, 2]),
+            (Some(1), None, Some(2), 4, &[1, 3]),
+            (None, Some(3), Some(2), 4, &[0, 2]),
+            // A negative step reverses AND swaps the defaults.
+            (None, None, Some(-1), 4, &[3, 2, 1, 0]),
+            (None, None, Some(-2), 4, &[3, 1]),
+            (Some(3), Some(1), Some(-1), 4, &[3, 2]),
+            (Some(-1), None, Some(-1), 4, &[3, 2, 1, 0]),
+            // A negative step over an empty sequence must not underflow.
+            (None, None, Some(-1), 0, &[]),
+            // Saturating bounds: the magnitudes `python_int` produces for a
+            // bigint literal must not overflow the walk.
+            (Some(isize::MIN), Some(isize::MAX), Some(1), 3, &[0, 1, 2]),
+            (Some(isize::MAX), Some(isize::MIN), Some(-1), 3, &[2, 1, 0]),
+        ];
+        for &(start, stop, step, len, want) in cases {
+            assert_eq!(
+                slice_positions(start, stop, step, len),
+                want,
+                "slice({start:?}, {stop:?}, {step:?}) over len {len}"
+            );
+        }
+    }
+
+    /// A one-part spec is `slice(stop)` — the single most consequential rule,
+    /// because reading it as the START returns the exact complement.
+    #[test]
+    fn parse_slice_arg_reads_one_part_as_the_stop() {
+        assert_eq!(parse_slice_arg("2"), Some((None, Some(2), None)));
+        assert_eq!(parse_slice_arg("-1"), Some((None, Some(-1), None)));
+        // Two and three parts read positionally, as `slice()` does.
+        assert_eq!(parse_slice_arg("1:2"), Some((Some(1), Some(2), None)));
+        assert_eq!(parse_slice_arg("1:2:3"), Some((Some(1), Some(2), Some(3))));
+        // An empty part is Python's `if not x: bits.append(None)`.
+        assert_eq!(parse_slice_arg(""), Some((None, None, None)));
+        assert_eq!(parse_slice_arg(":"), Some((None, None, None)));
+        assert_eq!(parse_slice_arg("::"), Some((None, None, None)));
+        assert_eq!(parse_slice_arg(":2"), Some((None, Some(2), None)));
+    }
+
+    /// `None` is the whole filter's fail-silently path: Django returns the
+    /// input unchanged for anything `slice(*bits)` or the indexing raises on.
+    #[test]
+    fn parse_slice_arg_rejects_what_python_raises_on() {
+        // More than three parts: `slice()` takes at most three (TypeError).
+        assert_eq!(parse_slice_arg(":::"), None);
+        assert_eq!(parse_slice_arg("1:2:3:4"), None);
+        // A zero step: ValueError, raised by the indexing.
+        assert_eq!(parse_slice_arg("::0"), None);
+        assert_eq!(parse_slice_arg("1:2:0"), None);
+        // Not an int.
+        assert_eq!(parse_slice_arg("x"), None);
+        assert_eq!(parse_slice_arg("1:x"), None);
+        assert_eq!(parse_slice_arg("1.5:"), None);
+        // A lone-space part is NOT empty and NOT an int.
+        assert_eq!(parse_slice_arg("1: "), None);
+    }
+
+    /// `python_int` is CPython's `int()`, not Rust's `parse::<isize>()`.
+    ///
+    /// Each accepted form below is one Rust would reject and Django accepts;
+    /// the underscore row is the one that fails OPEN if unsupported —
+    /// rejecting `1_0` returns the input unchanged, rendering every element
+    /// where Django renders none.
+    #[test]
+    fn python_int_is_cpythons_int() {
+        assert_eq!(python_int("1"), Some(1));
+        assert_eq!(python_int("-1"), Some(-1));
+        assert_eq!(python_int("+1"), Some(1));
+        assert_eq!(python_int(" 1 "), Some(1));
+        assert_eq!(python_int(" -2 "), Some(-2));
+        assert_eq!(python_int("1_0"), Some(10));
+        assert_eq!(python_int("1_000_000"), Some(1_000_000));
+        assert_eq!(python_int("0"), Some(0));
+
+        // `int()` allows `_` only BETWEEN digits.
+        assert_eq!(python_int("_1"), None);
+        assert_eq!(python_int("1_"), None);
+        assert_eq!(python_int("1__0"), None);
+        assert_eq!(python_int("-_1"), None);
+        // Everything else `int()` raises on.
+        assert_eq!(python_int(""), None);
+        assert_eq!(python_int(" "), None);
+        assert_eq!(python_int("x"), None);
+        assert_eq!(python_int("1.5"), None);
+        assert_eq!(python_int("--1"), None);
+        assert_eq!(python_int("1x"), None);
+
+        // A magnitude past `isize` saturates rather than failing: Python's int
+        // is exact, but every such value is past any representable `len`, so
+        // the bound selects the same elements.
+        assert_eq!(python_int("99999999999999999999999999"), Some(isize::MAX));
+        assert_eq!(python_int("-99999999999999999999999999"), Some(isize::MIN));
+    }
+
+    /// The container rule (#2321) survives every spec #2326 unlocked, and a
+    /// non-sequence comes back untouched as Django's `TypeError` arm does.
+    #[test]
+    fn apply_slice_preserves_shape_across_the_new_specs() {
+        let items = || {
+            vec![
+                Value::String("a".into()),
+                Value::String("b".into()),
+                Value::String("c".into()),
+            ]
+        };
+        for spec in ["-1:", ":-1", "::2", "::-1", "2", "1:2:1"] {
+            assert!(
+                matches!(
+                    apply_slice(&Value::Tuple(items()), spec).unwrap(),
+                    Value::Tuple(_)
+                ),
+                "slice:{spec} of a tuple must stay a tuple"
+            );
+            assert!(
+                matches!(
+                    apply_slice(&Value::List(items()), spec).unwrap(),
+                    Value::List(_)
+                ),
+                "slice:{spec} of a list must stay a list"
+            );
+        }
+        // An unparseable spec returns the input, container and all.
+        assert_eq!(
+            apply_slice(&Value::Tuple(items()), "::0")
+                .unwrap()
+                .to_string(),
+            "('a', 'b', 'c')"
+        );
+        // A non-sequence is Django's `TypeError` arm: unchanged.
+        assert_eq!(
+            apply_slice(&Value::Integer(7), ":2").unwrap().to_string(),
+            "7"
+        );
+    }
+
+    /// A string slices by CHARACTER, through the same helper, so a multibyte
+    /// input can neither panic on a byte boundary nor answer differently from
+    /// the list of its own characters.
+    #[test]
+    fn apply_slice_of_a_string_walks_codepoints() {
+        let s = Value::String("héllo→".into());
+        assert_eq!(apply_slice(&s, "::-1").unwrap().to_string(), "→olléh");
+        assert_eq!(apply_slice(&s, ":2").unwrap().to_string(), "hé");
+        assert_eq!(apply_slice(&s, "-1:").unwrap().to_string(), "→");
+        assert_eq!(apply_slice(&s, "::2").unwrap().to_string(), "hlo");
     }
 
     /// `rebuild_like` is [`iter_values`]'s counterpart: iteration decides what

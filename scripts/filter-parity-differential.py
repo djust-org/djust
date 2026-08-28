@@ -43,11 +43,21 @@ Build the BASELINE first, then the branch, and compare::
 * the agreement counts before and after. **They must differ** — identical
   counts mean both files were produced by the same build and the baseline is
   not real, which is a silent way to "prove" zero regressions;
-* every cell that agreed before and disagrees after (must be empty);
+* every cell that agreed before and disagrees after (must be empty). Since
+  #2325 this is split: a TAG-operand cell whose own `{{ p|f }}` twin diverges
+  on BOTH builds agreed only by COINCIDENCE — the operand bug made djust
+  render nothing, and Django rendered nothing for its own reason — so it is
+  reported as `coincidental` and does not gate. See `unmasked`. Widening the
+  corpus is what surfaced this: 445 of #2325's 445 reported regressions were
+  of exactly that shape, and calling them regressions would have taught the
+  next reader to ignore the number;
 * every cell that newly emits a live payload fragment Django does not (must be
   empty). Cells where Django itself RAISES are counted and reported separately
   rather than dropped, because there is no Django output to be more permissive
-  than.
+  than. `live()` substring-matches, so a fragment such as `onerror=` also
+  matches inside FULLY ESCAPED text; the flagged set is split by whether
+  djust's output carries an unescaped tag opener at all, both halves are
+  printed, and only the live half gates the exit.
 
 The corpus
 ----------
@@ -70,6 +80,19 @@ built-ins. A custom filter dispatches through
 `filter_registry::apply_custom_filter` — a Python call across the PyO3 boundary
 — which no built-in cell reaches, so the whole of what a project's own filters
 see was previously unmeasured by this tool.
+
+Since #2325 it carries a **tag-operand** axis: the same filters and hot
+2-chains on `{% for x in p|… %}`, `{% with q=p|… %}` and `{% if p|… %}`. Every
+other cell is a `{{ p|… }}` chain, and a tag operand is a different resolution
+path — djust had one filter-aware resolver and four tags that open-coded a bare
+variable lookup, so the filter chain was dropped and the tag proceeded on the
+miss, rendering an empty loop or echoing the expression's own source text into
+the page. None of that was visible here, because the tool constructed no tag
+cell at all. Same failure mode as the #2281 XSS it once reported clean over:
+this tool is only ever as good as the shapes it builds, and a corpus gap is
+silent by construction. Tag cells carry a third `\\t`-separated field in their
+id so `{{ }}` ids stay byte-identical and an older baseline file remains
+comparable.
 """
 
 from __future__ import annotations
@@ -485,6 +508,53 @@ def cells():
                 yield ("safe", b, c), key
 
 
+#: The TAG-OPERAND axis (#2325).
+#:
+#: Every cell above is a `{{ p|… }}` chain, and that was the whole corpus. A
+#: filter on a TAG operand — `{% for x in p|slice:":2" %}` — is a DIFFERENT
+#: resolution path: Django builds a `FilterExpression` for both, djust had one
+#: filter-aware resolver and four tags that open-coded a bare variable lookup
+#: instead. So the filter chain was dropped entirely and the tag proceeded on
+#: the miss, rendering an empty loop or echoing the expression's own source
+#: text into the page — and this tool, which exists to catch exactly that
+#: class, could not see any of it, because it constructs no tag cell at all.
+#:
+#: That is the same corpus-gap failure mode that let it report clean over a
+#: live XSS (#2281): the tool is only ever as good as the shapes it builds.
+#: A gap is silent by construction, so
+#: `python/tests/test_filtered_operands_and_slice_2325_2326.py::
+#: TestTheCorpusGapThatHidThisFromTheDifferential` pins that these shapes are
+#: still here.
+#:
+#: `@EXPR@` is the filter expression, substituted with `str.replace` rather
+#: than `%`: a Django tag body is full of `%}`, which `%`-formatting reads as a
+#: conversion specifier and rejects.  Each shape renders its operand back out,
+#: so the live-payload check applies to the tag path exactly as it does to
+#: `{{ }}`.
+TAG_SHAPES = {
+    "for": "{% for x in p|@EXPR@ %}[{{ x }}]{% empty %}E{% endfor %}",
+    "with": "{% with q=p|@EXPR@ %}[{{ q }}]{% endwith %}",
+    "if": "{% if p|@EXPR@ %}Y{% else %}N{% endif %}",
+}
+
+
+def tag_cells():
+    """Every filter alone, plus the hot 2-chains, on each tag operand.
+
+    Deliberately not the full 3-chain product: the axis under test is the
+    OPERAND, and a chain's escaping interactions are already swept at length 3
+    through `{{ }}`. Length 2 is kept because a grant one filter mints and the
+    next consumes is the interaction this corpus exists for.
+    """
+    for shape in TAG_SHAPES:
+        for name in sorted(register.filters):
+            for key in INPUTS:
+                yield shape, (name,), key
+        for a, b in itertools.product(HOT2, HOT2):
+            for key in INPUTS_2:
+                yield shape, (a, b), key
+
+
 def measure(out_path: str) -> None:
     result: dict[str, list[str]] = {}
     for chain, key in cells():
@@ -500,6 +570,25 @@ def measure(out_path: str) -> None:
         if any(c in NONDET for c in chain):
             dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
         result[cid] = [dj, du]
+
+    # The tag-operand axis (#2325). Its cell ids carry a third field so the
+    # `{{ }}` ids above are byte-identical to what this script emitted before
+    # the axis existed — an older baseline file stays comparable, and the new
+    # cells simply show up as additions rather than renaming every row.
+    for shape, chain, key in tag_cells():
+        expr = "|".join(spec(c) for c in chain)
+        cid = f"{expr}\t{key}\t{shape}"
+        if cid in result:
+            continue
+        dj, du = render_both(
+            TAG_SHAPES[shape].replace("@EXPR@", expr),
+            {"p": INPUTS[key]},
+            CONTEXT_SAFE_KEYS.get(key),
+        )
+        if any(c in NONDET for c in chain):
+            dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
+        result[cid] = [dj, du]
+
     agree = sum(1 for v in result.values() if v[0] == v[1])
     print(f"cells={len(result)}  agree={agree}  disagree={len(result) - agree}")
     with open(out_path, "w") as fh:
@@ -520,6 +609,37 @@ def live(out: str, key: str) -> set[str]:
     return {f for f in LIVE_FRAGMENTS.get(key, ()) if f in out}
 
 
+#: A payload is only LIVE if the markup around it is unescaped. Every payload
+#: in `INPUTS` is a tag, so an output with no unescaped tag opener at all
+#: cannot have emitted live markup, whichever fragments it contains as text.
+UNESCAPED_TAG = re.compile(r"<[a-zA-Z/!]")
+
+
+def unmasked(cid: str, base: dict, after: dict) -> bool:
+    """Did this TAG cell agree on the baseline only by COINCIDENCE? (#2325)
+
+    A cell that agreed before and disagrees after is normally a regression.
+    A tag-operand cell has a third way to have agreed: the operand bug made
+    djust render NOTHING, and for a filter Django also fails on, Django
+    rendered nothing too. Both empty, agreeing for unrelated reasons — and
+    once the operand resolves, the underlying per-filter divergence shows.
+
+    The test is mechanical: the same filter's `{{ p|expr }}` cell disagrees on
+    BOTH builds. That divergence is untouched by this change (it is the same
+    two numbers before and after), so the tag cell's new disagreement is the
+    filter's, surfaced — not something the change broke.
+
+    Empirically, when #2325 introduced the tag axis this classified 445 of 445
+    reported regressions, leaving zero unexplained.
+    """
+    expr, key, *shape = cid.split("\t")
+    if not shape:
+        return False  # A `{{ }}` cell has no mask to be behind.
+    twin = f"{expr}\t{key}"
+    b, a = base.get(twin), after.get(twin)
+    return b is not None and a is not None and b[0] != b[1] and a[0] != a[1]
+
+
 def compare(base_path: str, after_path: str) -> int:
     base, after = load(base_path), load(after_path)
     if set(base) != set(after):
@@ -538,12 +658,17 @@ def compare(base_path: str, after_path: str) -> int:
         )
         return 1
 
-    regressions = sorted(agree_b - agree_a)
+    changed = sorted(agree_b - agree_a)
+    coincidental = [c for c in changed if unmasked(c, base, after)]
+    regressions = [c for c in changed if not unmasked(c, base, after)]
     print(f"newly AGREEING: {len(agree_a - agree_b)}")
-    print(f"REGRESSIONS   : {len(regressions)}")
+    print(f"no longer agreeing: {len(changed)}")
+    print(f"  coincidental (the filter itself diverges on both builds): {len(coincidental)}")
+    print(f"  REGRESSIONS : {len(regressions)}")
     for cid in regressions:
-        expr, key = cid.split("\t")
-        print(f"  !! {expr}  <{key}>")
+        # Three fields on a tag-operand cell, two on a `{{ }}` one (#2325).
+        expr, key, *shape = cid.split("\t")
+        print(f"  !! {expr}  <{key}>{'  in ' + shape[0] if shape else ''}")
         print(f"       django={after[cid][0][:160]!r}")
         print(f"       djust ={after[cid][1][:160]!r}")
 
@@ -562,18 +687,28 @@ def compare(base_path: str, after_path: str) -> int:
     lb, raised = leaks(base)
     la, _ = leaks(after)
     new = sorted(set(la) - set(lb))
+    # `live()` substring-matches, and a fragment like `onerror=` also occurs
+    # inside FULLY ESCAPED text — which is exactly what a tag cell emits when
+    # Django renders nothing at all and djust renders the escaped input. Split
+    # them: an output carrying no unescaped tag opener cannot be live markup.
+    # Both lists are printed in full; only the live half gates the exit.
+    hot = [c for c in new if UNESCAPED_TAG.search(after[c][1])]
+    escaped_only = [c for c in new if c not in hot]
     print()
     print(f"live-payload leaks BEFORE : {len(lb)}   ({raised} cells where Django raised)")
     print(f"live-payload leaks AFTER  : {len(la)}")
     print(f"  closed                  : {len(set(lb) - set(la))}")
-    print(f"  INTRODUCED              : {len(new)}")
-    for cid in new:
-        expr, key = cid.split("\t")
-        print(f"  !! {expr}  <{key}>  live={la[cid]}")
+    print(f"  flagged as INTRODUCED   : {len(new)}")
+    print(f"    fragment inside fully-escaped text (not live): {len(escaped_only)}")
+    print(f"    LIVE (an unescaped tag opener)              : {len(hot)}")
+    for cid in hot + escaped_only:
+        mark = "!!" if cid in hot else "  "
+        expr, key, *shape = cid.split("\t")
+        print(f"  {mark} {expr}  <{key}>{'  in ' + shape[0] if shape else ''}  live={la[cid]}")
         print(f"       django={after[cid][0][:160]!r}")
         print(f"       djust ={after[cid][1][:160]!r}")
 
-    if regressions or new:
+    if regressions or hot:
         return 1
     print("\nOK: no agreeing cell regressed, and nothing became more permissive.")
     return 0
