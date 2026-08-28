@@ -41,6 +41,7 @@ from __future__ import annotations
 import ast
 import inspect
 import re
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -512,8 +513,12 @@ def _differential_literal(name: str):
         if isinstance(node, ast.Assign)
         and any(getattr(t, "id", None) == name for t in node.targets)
     )
-    return eval(  # noqa: S307 — a literal from a repo file, with only mark_safe bound
-        compile(ast.Expression(literal), f"<{name}>", "eval"), {"mark_safe": mark_safe}
+    return eval(  # noqa: S307 — a literal from a repo file, two names bound
+        compile(ast.Expression(literal), f"<{name}>", "eval"),
+        # `Decimal` joined `mark_safe` when the corpus grew a list carrying one
+        # (#2324): the `str()`-vs-render split `safeseq` had to get right is a
+        # `Decimal`/`Float` rule, and a corpus with neither cannot measure it.
+        {"mark_safe": mark_safe, "Decimal": Decimal},
     )
 
 

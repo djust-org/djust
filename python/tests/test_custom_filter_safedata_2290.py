@@ -377,11 +377,25 @@ class TestItemSafety:
         assert "(&#x27;list&#x27;, False," in out, out
         assert "SafeString" in out, out
 
-    def test_a_non_string_element_is_left_alone(self) -> None:
-        """``mark_safe`` is applied only to a ``str``; an ``int`` element keeps
-        its type rather than becoming ``SafeString('2')``."""
-        out = djust_render("{{ p|safeseq|%s }}" % PROBE_SEQ, {"p": ["<b>", 2]})
-        assert "&#x27;int&#x27;, False" in out, out
+    def test_safeseq_leaves_no_non_string_element_for_the_str_only_policy(
+        self,
+    ) -> None:
+        """``mark_item`` wraps ``str`` only — and ``safeseq`` no longer hands it
+        anything else.
+
+        This asserted ``'int', False`` until #2324, which is Django's
+        ``SafeString('2')`` seen from the other side: ``mark_safe`` STRINGIFIES,
+        so Django's ``safeseq`` never produces a non-``str`` item either. The
+        ``str``-only policy in ``mark_input_safety`` is unchanged and still the
+        conservative half; what changed is that ``safeseq`` stopped being a way
+        to reach it. Measured against Django rather than asserted, since the
+        whole point is that the two now agree.
+        """
+        src = "{{ p|safeseq|%s }}" % PROBE_SEQ
+        assert_agrees(src, {"p": ["<b>", 2]})
+        out = djust_render(src, {"p": ["<b>", 2]})
+        assert "&#x27;int&#x27;" not in out, out
+        assert "SafeString" in out, out
 
 
 # ---------------------------------------------------------------------------

@@ -566,15 +566,15 @@ fn apply_builtin_filter(
     // rather than closing it. With `Display` correct, the coercion is the other
     // half.
     //
-    // Every remaining variant's `Display` already IS Python's `str()`.
+    // Every remaining variant's `Display` already IS Python's `str()`, which is
+    // why this asks `py_str` rather than spelling the two arms here. That
+    // helper (`djust_core`, beside `py_repr`) is the ONE place the split is
+    // written down: `safeseq` needs the same `str()` per ITEM (#2324), and two
+    // copies of a rule is the #1646 shape.
     let coerced: Value;
     let value: &Value = match value {
-        Value::Decimal(d) if is_string_filter(filter_name) => {
-            coerced = Value::String(d.clone());
-            &coerced
-        }
-        Value::Float(f) if is_string_filter(filter_name) => {
-            coerced = Value::String(djust_core::decimal::python_float_repr(*f));
+        Value::Decimal(_) | Value::Float(_) if is_string_filter(filter_name) => {
+            coerced = Value::String(value.py_str());
             &coerced
         }
         _ => value,
@@ -1360,9 +1360,28 @@ fn apply_builtin_filter(
             // every newline and every indent space above that width (#2277).
             Ok(Value::String(crate::pprint::pformat(value)))
         }
-        // `[mark_safe(obj) for obj in value]`. It marks the ITEMS, never the
-        // list — which is why `safeseq` is NOT in `SAFE_OUTPUT_FILTERS` and is
-        // in `renderer::ITEM_SAFE_OUTPUT_FILTERS` instead (#2283). Rendering
+        // `[mark_safe(obj) for obj in value]`. `mark_safe(obj)` is
+        // `SafeString(str(obj))`, so it does not merely MARK an item — it
+        // replaces it with its `str()`, for every input (#2324). A list of ints
+        // comes out a list of STRINGS, which shows up two ways: directly, since
+        // a list renders its elements through `repr` (`{{ p|safeseq }}` on
+        // `[1, 2]` is `['1', '2']`), and through a LATER filter, since the
+        // item's type is still readable — `{{ p|safeseq|unordered_list }}`
+        // nested a `<ul>` for a sublist where Django emits the string
+        // `mark_safe` made of it.
+        //
+        // `py_str`, NOT `to_string`: `Display` is Django's
+        // `numberformat.format()`, so `str(1e20)` is `1e+20` where `{{ f }}`
+        // renders `100000000000000000000`. Same helper the `@stringfilter`
+        // coercion at the top of this function uses — `|safe` is that coercion
+        // applied to the scalar case (#2303), and this is the same rule per
+        // item. One mechanism, not two (#1646).
+        //
+        // It marks the ITEMS, never the list — which is why `safeseq` is NOT in
+        // `SAFE_OUTPUT_FILTERS` and is in `renderer::ITEM_SAFE_OUTPUT_FILTERS`
+        // instead (#2283). The stringify does not move that grant: the items
+        // were emitted unescaped by `join`/`unordered_list` before and after,
+        // and Django emits the same bytes. Rendering
         // the sequence directly therefore escapes its `repr`, exactly as
         // Django does; the grant is only visible to `join` /
         // `unordered_list`, the two filters that `conditional_escape` per item.
@@ -1374,7 +1393,12 @@ fn apply_builtin_filter(
         // fails soft — so the value must be escaped rather than handed back.
         "safeseq" => match iter_values(value) {
             Some(items) => Ok(collapse_if_input_safe(
-                Value::List(items),
+                Value::List(
+                    items
+                        .iter()
+                        .map(|item| Value::String(item.py_str()))
+                        .collect(),
+                ),
                 input_safety.container,
             )),
             None => Ok(Value::String(html_escape(&value.to_string()))),
@@ -3745,6 +3769,22 @@ mod float_sink_set {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
     }
 
+    /// `djust_core/src`, scanned alongside this crate's own since #2324.
+    ///
+    /// The `@stringfilter` coercion used to spell `str(float)` inline here, and
+    /// #2324 moved it into `Value::py_str` — `djust_core`, beside `py_repr` —
+    /// because `safeseq` needs the same spelling per ITEM and two copies of one
+    /// rule is the #1646 shape. A sink that moves out of the scan is a sink
+    /// that stops being pinned, so the scan follows it: `py_str`, `py_repr` and
+    /// `Display` are now the three float→string sinks this test covers there.
+    fn core_src_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/djust_templates has a parent")
+            .join("djust_core")
+            .join("src")
+    }
+
     fn rust_files() -> Vec<PathBuf> {
         fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
             let entries = std::fs::read_dir(dir).unwrap_or_else(|e| {
@@ -3761,15 +3801,24 @@ mod float_sink_set {
         }
         let mut out = Vec::new();
         walk(&src_dir(), &mut out);
+        walk(&core_src_dir(), &mut out);
         out.sort();
         out
     }
 
+    /// The path relative to `crates/`, e.g. `djust_core/src/lib.rs`.
+    ///
+    /// Crate-qualified since the scan grew a second crate (#2324): both
+    /// `djust_templates` and `djust_core` have a `lib.rs`, and a bare file name
+    /// would report the two indistinguishably.
     fn file_name(p: &Path) -> String {
-        p.file_name()
-            .expect("a file")
+        let crates_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/djust_templates has a parent");
+        p.strip_prefix(crates_root)
+            .unwrap_or(p)
             .to_string_lossy()
-            .into_owned()
+            .replace('\\', "/")
     }
 
     fn count_ident(toks: &[TokenTree], name: &str) -> usize {
@@ -3912,10 +3961,12 @@ mod float_sink_set {
             src_dir().display()
         );
         for expect in [
-            "filters.rs",
-            "floatformat.rs",
-            "renderer.rs",
-            "loop_cache.rs",
+            "djust_templates/src/filters.rs",
+            "djust_templates/src/floatformat.rs",
+            "djust_templates/src/renderer.rs",
+            "djust_templates/src/loop_cache.rs",
+            // The second crate, scanned since #2324 moved a sink into it.
+            "djust_core/src/lib.rs",
         ] {
             assert!(
                 files.iter().any(|p| file_name(p) == expect),
@@ -3925,11 +3976,28 @@ mod float_sink_set {
 
         let found = stringifying_arms(&files);
         let expected: Vec<(String, String)> = [
-            ("filters.rs", "json_float_body"),
-            ("filters.rs", "python_float_repr"),
-            ("filters.rs", "python_float_trunc_digits"),
-            ("floatformat.rs", "python_float_repr"),
-            ("pprint.rs", "python_float_repr"),
+            // `Display`'s legacy_display arm: the frozen pre-#2203 rendering,
+            // reached only when `django_value_repr()` is OFF. Rust's `{}` is
+            // the WRONG spelling and is the point — the flag exists to restore
+            // the old bytes. The one RUST_DISPLAY entry this set allows; a
+            // second one is the #2258/#2270 defect.
+            ("djust_core/src/lib.rs", "RUST_DISPLAY"),
+            // `py_str` (#2324), `py_repr` (#2258) and `Display`'s live arm —
+            // the three places a `Value::Float` becomes text in djust_core.
+            ("djust_core/src/lib.rs", "python_float_repr"),
+            ("djust_core/src/lib.rs", "python_float_repr"),
+            ("djust_core/src/lib.rs", "python_float_repr"),
+            ("djust_templates/src/filters.rs", "json_float_body"),
+            // `filters.rs` lost its own `python_float_repr` entry in #2324: the
+            // `@stringfilter` coercion no longer binds the float, it asks
+            // `Value::py_str` — which is why the scan grew djust_core rather
+            // than shrinking.
+            (
+                "djust_templates/src/filters.rs",
+                "python_float_trunc_digits",
+            ),
+            ("djust_templates/src/floatformat.rs", "python_float_repr"),
+            ("djust_templates/src/pprint.rs", "python_float_repr"),
         ]
         .iter()
         .map(|(f, h)| ((*f).to_string(), (*h).to_string()))
