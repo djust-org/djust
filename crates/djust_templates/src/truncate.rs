@@ -37,19 +37,61 @@
 //! `markup5ever::data::NAMED_ENTITIES`, which is byte-identical to CPython's
 //! `html.entities.html5` (2231 entries, verified equal).
 //!
-//! # The one thing this does NOT port
+//! # Unicode normalization (#2319)
 //!
-//! `Truncator.chars` opens with `unicodedata.normalize("NFC", text)` and skips
-//! characters whose canonical combining class is non-zero. Both need Unicode
-//! normalization tables that are not in this workspace's dependency graph, so
-//! neither is implemented; the residual divergence is confined to inputs that
-//! carry combining marks and is pinned, with its measurement, in
-//! `TestKnownRemainingDivergences`.
+//! `Truncator.chars` opens with `unicodedata.normalize("NFC", text)` and
+//! `_text_chars` then skips characters whose canonical combining class is
+//! non-zero; `slugify` opens with an NFKD fold to ASCII. All three were absent
+//! until #2319, because they need normalization tables that were not in this
+//! workspace's dependency graph. They now come from `unicode-normalization`.
+//!
+//! **Where each applies, which is not uniform**:
+//!
+//! * `text_chars` — NFC *and* the combining skip.
+//! * [`html_chars`] — NFC **only**. `TruncateCharsHTMLParser.process` counts
+//!   with a plain `len(data)`, so a combining mark DOES cost a character
+//!   there. #2319 reported both `chars` filters as having the same defect;
+//!   they do not.
+//! * [`calculate_truncate_chars_length`] — the skip, applied to the truncation
+//!   text. Shared by both paths above.
+//! * `text_words` / `html_words` — **neither**. `Truncator.words` reads
+//!   `self._wrapped`, not the normalized text.
+//! * [`slugify`] — NFKD, then drop non-ASCII, then lowercase, in that order.
+//!
+//! Pinning a Unicode table here is safe in a way the `str.isprintable()` table
+//! (#2292) was not, and the difference is measured rather than asserted:
+//! canonical combining class and canonical decomposition are covered by the
+//! Unicode Character Encoding Stability Policies and are immutable once a code
+//! point is assigned. Across CPython 3.10–3.14 (Unicode 13.0 → 16.0) **zero**
+//! existing code points changed either — against 11130 that changed
+//! printability. `unicode-normalization` may carry a newer Unicode version
+//! than the running interpreter, so the bounded, documented residual is code
+//! points assigned after the interpreter's version; for anything already
+//! assigned the two agree by policy.
 
 use std::collections::VecDeque;
 
+use unicode_normalization::char::canonical_combining_class;
+use unicode_normalization::UnicodeNormalization;
+
 use crate::filters::html_escape;
 use crate::htmlparser::{char_at, Sink, SinkResult, Stop, Tokenizer};
+
+/// `unicodedata.combining(c) != 0` — a character that does not add to a
+/// string's length for `Truncator.chars` (#2319).
+///
+/// Canonical combining class, not "is this a mark": `Mn`/`Mc`/`Me` is a
+/// GENERAL CATEGORY question and a different set. Several `Mn` characters have
+/// combining class 0 and DO count, which is the distinction the reference
+/// draws by calling `unicodedata.combining` rather than checking the category.
+fn is_combining(c: char) -> bool {
+    canonical_combining_class(c) != 0
+}
+
+/// `unicodedata.normalize("NFC", text)`.
+fn nfc(text: &str) -> String {
+    text.nfc().collect()
+}
 
 /// Django's default truncation text: `pgettext(..., "%(truncated_text)s…")`.
 const DEFAULT_TRUNCATE: &str = "%(truncated_text)s…";
@@ -111,11 +153,17 @@ pub fn add_truncation_text(text: &str, truncate: Option<&str>) -> String {
 
 /// `django.utils.text.calculate_truncate_chars_length`.
 ///
-/// The combining-character skip of the reference is absent (see the module
-/// docstring); every character of the truncation text costs one.
+/// A combining mark inside the truncation text costs NOTHING, exactly as in
+/// the reference — so `truncate="e\u{301}.."` leaves room for two source
+/// characters, not one. Called by both the plain and the HTML `chars` paths,
+/// which is the only route by which the HTML path sees a combining-class
+/// question at all (#2319).
 pub fn calculate_truncate_chars_length(length: i64, replacement: Option<&str>) -> i64 {
     let mut truncate_len = length;
-    for _ in add_truncation_text("", replacement).chars() {
+    for c in add_truncation_text("", replacement).chars() {
+        if is_combining(c) {
+            continue;
+        }
         truncate_len -= 1;
         if truncate_len <= 0 {
             break;
@@ -128,15 +176,31 @@ pub fn calculate_truncate_chars_length(length: i64, replacement: Option<&str>) -
 // Plain-text truncation
 // ---------------------------------------------------------------------------
 
-/// `Truncator._text_chars`, minus the NFC normalization and combining skip.
+/// `Truncator.chars(num, truncate)` — the NFC normalization plus
+/// `_text_chars`'s combining skip (#2319).
+///
+/// The NFC is UNCONDITIONAL: it happens before any truncation decision, so a
+/// decomposed string that is short enough to survive whole still comes back
+/// COMPOSED. That is why the combining skip alone would not have been enough —
+/// it gets the character count right and the normalization form wrong.
+///
+/// `words` deliberately does NOT normalize: `Truncator.words` reads
+/// `self._wrapped` directly. Pinned in `TestWordsFiltersMustNotNormalize`.
 pub fn text_chars(text: &str, length: i64, truncate: Option<&str>) -> String {
     if length <= 0 {
         return String::new();
     }
+    // Django normalizes AFTER the `length <= 0` guard, so the empty-string
+    // return never depends on the tables.
+    let text = nfc(text);
     let truncate_len = calculate_truncate_chars_length(length, truncate);
     let mut s_len: i64 = 0;
     let mut end_index: Option<usize> = None;
-    for (i, _) in text.char_indices() {
+    for (i, c) in text.char_indices() {
+        if is_combining(c) {
+            // Don't consider combining characters as adding to the length.
+            continue;
+        }
         s_len += 1;
         if end_index.is_none() && s_len > truncate_len {
             end_index = Some(i);
@@ -145,7 +209,7 @@ pub fn text_chars(text: &str, length: i64, truncate: Option<&str>) -> String {
             return add_truncation_text(&text[..end_index.unwrap_or(0)], truncate);
         }
     }
-    text.to_string()
+    text
 }
 
 /// `Truncator._text_words`.
@@ -358,8 +422,20 @@ fn run_html(text: &str, length: i64, truncate: Option<&str>, words: bool) -> Str
 }
 
 /// `Truncator.chars(num, truncate, html=True)`.
+/// `Truncator.chars(num, truncate, html=True)`.
+///
+/// NFC and **nothing else** (#2319). `TruncateCharsHTMLParser.process` counts
+/// its budget with a plain `len(data)` and does NOT skip combining marks the
+/// way `_text_chars` does, so adding a skip here would create a fresh
+/// divergence rather than close one. The issue reported the two paths as
+/// having the same defect; they do not, and
+/// `TestHtmlPathNormalizesButDoesNotSkip` pins the difference against live
+/// Django.
+///
+/// The combining class still reaches this path indirectly, via
+/// [`calculate_truncate_chars_length`] applied to the truncation text.
 pub fn html_chars(text: &str, length: i64, truncate: Option<&str>) -> String {
-    run_html(text, length, truncate, false)
+    run_html(&nfc(text), length, truncate, false)
 }
 
 /// `Truncator.words(num, truncate, html=True)`.
@@ -371,18 +447,31 @@ pub fn html_words(text: &str, length: i64, truncate: Option<&str>) -> String {
 // slugify / title / urlencode
 // ---------------------------------------------------------------------------
 
-/// `django.utils.text.slugify(value, allow_unicode=False)` **minus** the
-/// leading `unicodedata.normalize("NFKD", …).encode("ascii", "ignore")`.
+/// `django.utils.text.slugify(value, allow_unicode=False)`.
 ///
-/// The ASCII fold is the one step that needs Unicode decomposition tables (it
-/// is what turns `café` into `cafe` rather than dropping the `é` outright), so
-/// it is deliberately absent and its residual divergence is measured in the
-/// parity suite. Everything after it — delete anything outside `[\w\s-]`,
-/// collapse runs of `[-\s]` to one `-`, strip `-_` from both ends — is exact,
-/// and that is the half the issue reports: a `.` is *deleted*, never mapped to
-/// a separator.
+/// Opens with `unicodedata.normalize("NFKD", …).encode("ascii", "ignore")`
+/// (#2319): decompose, then DROP every non-ASCII code point. That is what
+/// turns `café` into `cafe` — the accent becomes a separate combining mark
+/// which the ASCII filter then discards, leaving the bare `e`. Dropping the
+/// character outright without decomposing first (the faithful-minus-NFKD
+/// reading) would give `caf` and turn every non-English slug into rubble.
+///
+/// **NFKD, not NFD**: the COMPATIBILITY decomposition is what folds `ﬁ` to
+/// `fi` and `²` to `2`. A canonical-only implementation passes the accent
+/// cases and fails those.
+///
+/// Order matters and matches the reference: fold to ASCII FIRST, lowercase
+/// SECOND. Doing it the other way changes the answer for characters whose
+/// lowercase form is not ASCII even though their NFKD fold is.
+///
+/// Everything after the fold — delete anything outside `[\w\s-]`, collapse
+/// runs of `[-\s]` to one `-`, strip `-_` from both ends — was already exact:
+/// a `.` is *deleted*, never mapped to a separator.
 pub fn slugify(value: &str) -> String {
-    let lowered = value.to_lowercase();
+    // `.encode("ascii", "ignore")` — after NFKD, keep only what survives the
+    // ASCII round trip.
+    let folded: String = value.nfkd().filter(char::is_ascii).collect();
+    let lowered = folded.to_lowercase();
     let mut out = String::with_capacity(lowered.len());
     let mut prev_sep = false;
     for c in lowered.chars() {
@@ -1386,6 +1475,139 @@ mod tests {
         assert_eq!(slugify("-1.5e+300"), "15e300");
         assert_eq!(slugify("  hello   world  "), "hello-world");
         assert_eq!(slugify("_a_"), "a");
+    }
+
+    // -----------------------------------------------------------------------
+    // #2319 — NFC, the combining skip, and the NFKD fold
+    //
+    // Every decomposed value is spelled with `\u{...}` escapes rather than as
+    // a literal: a literal decomposed sequence is NFC-normalized on the way to
+    // disk by editors and agent file-writers, which is exactly the
+    // transformation under test.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn slugify_folds_nfkd_to_ascii() {
+        // Decomposed and precomposed spellings must give the same slug.
+        assert_eq!(slugify("cafe\u{301}"), "cafe");
+        assert_eq!(slugify("caf\u{e9}"), "cafe");
+        assert_eq!(slugify("u\u{308}ber"), "uber");
+        // NFKD is a COMPATIBILITY decomposition: a canonical-only (NFD)
+        // implementation passes the accent cases above and fails these.
+        assert_eq!(slugify("\u{fb01}n"), "fin");
+        assert_eq!(slugify("x\u{b2}"), "x2");
+        // No ASCII fold exists, so everything drops rather than surviving.
+        assert_eq!(slugify("\u{4e2d}\u{6587}"), "");
+        // The fold runs BEFORE lowercasing, matching the reference's order.
+        assert_eq!(slugify("\u{c9}"), "e");
+    }
+
+    #[test]
+    fn text_chars_normalizes_nfc_unconditionally() {
+        // Short enough that nothing is truncated — and STILL composed, which
+        // is why the combining skip alone would not have been parity.
+        assert_eq!(text_chars("e\u{301}", 50, None), "\u{e9}");
+        assert_eq!(text_chars("e\u{301}x", 50, None), "\u{e9}x");
+        // NFC also canonically ORDERS marks: cedilla (ccc 202) before acute
+        // (ccc 230), regardless of the order written.
+        assert_eq!(
+            text_chars("c\u{301}\u{327}", 50, None),
+            text_chars("c\u{327}\u{301}", 50, None)
+        );
+    }
+
+    #[test]
+    fn text_chars_does_not_count_combining_marks() {
+        // "q" has no precomposed form with an acute, so NFC is a no-op here
+        // and only the skip can explain the count. Without the separation the
+        // two mechanisms shadow each other.
+        assert_eq!(text_chars("q\u{301}bcdefg", 5, None), "q\u{301}bcd\u{2026}");
+        // Many marks on one base still cost one.
+        assert_eq!(
+            text_chars("q\u{301}\u{308}\u{30a}bcdefg", 3, None),
+            "q\u{301}\u{308}\u{30a}b\u{2026}"
+        );
+        // A leading mark with no base — the index-0 edge of the loop.
+        assert_eq!(text_chars("\u{301}abcdefgh", 4, None), "\u{301}abc\u{2026}");
+        // Nothing but marks: zero counted characters, so no truncation.
+        assert_eq!(
+            text_chars("\u{301}\u{301}\u{301}", 2, None),
+            "\u{301}\u{301}\u{301}"
+        );
+    }
+
+    #[test]
+    fn text_chars_composes_five_pairs_and_does_not_truncate() {
+        // 10 code points in, 5 after NFC, limit 5 — untouched.
+        let value = "e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}";
+        assert_eq!(text_chars(value, 5, None), "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}");
+    }
+
+    #[test]
+    fn truncation_text_combining_marks_are_free() {
+        // The only route by which a combining class reaches the HTML path, and
+        // one no template can exercise: the `truncatechars` filter always
+        // passes `truncate=None`.
+        //
+        // "e" + acute + ".." has three NON-combining characters, so a budget of
+        // 5 leaves 2 rather than 1.
+        assert_eq!(calculate_truncate_chars_length(5, Some("e\u{301}..")), 2);
+        // The same text without the mark spends one more.
+        assert_eq!(calculate_truncate_chars_length(5, Some("ex..")), 1);
+        // A truncation text of nothing but marks costs nothing at all.
+        assert_eq!(
+            calculate_truncate_chars_length(5, Some("\u{301}\u{301}\u{301}")),
+            5
+        );
+        // The default is a single ellipsis character.
+        assert_eq!(calculate_truncate_chars_length(5, None), 4);
+    }
+
+    #[test]
+    fn html_chars_normalizes_but_does_not_skip_combining_marks() {
+        // The correction to #2319's premise: `TruncateCharsHTMLParser.process`
+        // counts `len(data)` with no combining check, so a mark NFC cannot
+        // absorb DOES cost a character here — where it would be free in the
+        // plain path. Adding a skip here would create a divergence.
+        let plain = text_chars("q\u{301}bcdefg", 5, None);
+        let html = html_chars("<b>q\u{301}bcdefg</b>", 5, None);
+        assert_eq!(plain, "q\u{301}bcd\u{2026}");
+        assert!(
+            html.contains("q\u{301}bc\u{2026}"),
+            "the HTML path should have counted the mark, got {html:?}"
+        );
+        // But it DOES normalize: a decomposed pair composes before counting.
+        assert!(html_chars("<b>e\u{301}</b>", 50, None).contains('\u{e9}'));
+    }
+
+    #[test]
+    fn words_paths_do_not_normalize() {
+        // `Truncator.words` reads `self._wrapped`, not the normalized text.
+        // A negative control: if NFC were applied at too high a level these
+        // would compose.
+        assert_eq!(text_words("e\u{301} b c", 2, None), "e\u{301} b\u{2026}");
+        assert!(html_words("<b>e\u{301} b c</b>", 2, None).contains('\u{301}'));
+    }
+
+    #[test]
+    fn is_combining_is_the_combining_class_not_the_category() {
+        // The reference calls `unicodedata.combining`, which is the CANONICAL
+        // COMBINING CLASS — not "is this an Mn/Mc/Me", which is the general
+        // CATEGORY and a genuinely different set. On Unicode 16.0 there are
+        // 1113 `Mn` code points with combining class 0 and 907 with non-zero,
+        // so a category test would wrongly make more than half of all `Mn`
+        // characters free.
+        assert!(is_combining('\u{301}')); // Mn, ccc 230 — COMBINING ACUTE ACCENT
+        assert!(is_combining('\u{327}')); // Mn, ccc 202 — COMBINING CEDILLA
+        assert!(is_combining('\u{93c}')); // Mn, ccc   7 — DEVANAGARI SIGN NUKTA
+
+        // Both `Mn`, both combining class ZERO, so both COUNT toward the
+        // length. These are the cases a category test would get wrong.
+        assert!(!is_combining('\u{e31}')); // Mn, ccc 0 — THAI MAI HAN-AKAT
+        assert!(!is_combining('\u{f73}')); // Mn, ccc 0 — TIBETAN VOWEL SIGN II
+
+        assert!(!is_combining('a'));
+        assert!(!is_combining('\u{2026}')); // the default truncation ellipsis
     }
 
     #[test]

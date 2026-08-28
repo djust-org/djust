@@ -119,6 +119,7 @@ from __future__ import annotations
 import itertools
 import random
 import re
+import unicodedata
 from typing import Any
 
 import pytest
@@ -616,22 +617,33 @@ class TestLengthOfAnObject:
 
 
 class TestItem4IsStillOpen:
-    """``truncatechars`` counting combining marks is NOT fixed here.
+    """``truncatechars`` counting combining marks \u2014 CLOSED by #2319.
 
-    Re-measured on this branch. Pinned rather than dropped so the split is a
-    recorded decision: closing it needs a Unicode normalization crate, which is
-    a dependency decision that also closes ``slugify``'s NFKD fold, and the two
-    belong in one change. ``test_truncate_slugify_parity_2262.py::
-    TestKnownRemainingDivergences`` carries the full pin and the measurement.
+    The split was a recorded decision: closing it needed a Unicode
+    normalization crate, which is a dependency decision that also closes
+    ``slugify``'s NFKD fold, so the two were deferred into one change. That
+    change landed \u2014 ``unicode-normalization``, adopted on the measured grounds
+    that canonical combining class and canonical decomposition never move for
+    an assigned code point (unlike ``str.isprintable()``, the sibling question
+    in #2292, which is why those two issues got opposite answers).
+
+    The class name is kept so the cross-reference from
+    ``test_truncate_slugify_parity_2262.py`` and from #2294 still resolves; the
+    assertion is inverted. Full coverage is in
+    ``test_truncate_nfc_slugify_fold_2319.py``.
     """
 
-    def test_truncatechars_still_counts_combining_marks(self) -> None:
-        value = "\u00e1bcdefg"  # precomposed, so NFC is a no-op and only the
-        # combining skip is under test... except it is not there either.
+    def test_truncatechars_no_longer_counts_combining_marks_fixed_by_2319(self) -> None:
+        value = "\u00e1bcdefg"  # precomposed, so NFC is a no-op here and only
+        # the combining skip could ever have been under test
         decomposed = "a\u0301bcdefg"
+        assert unicodedata.normalize("NFC", decomposed) != decomposed, (
+            "the value is not decomposed -- it was normalized on the way to disk"
+        )
         django_out, djust_out = render_both("{{ p|truncatechars:5 }}", decomposed)
         assert django_out == "\u00e1bcd\u2026"
-        assert djust_out == "a\u0301bc\u2026", "now AGREES -- delete this row"
-        # The precomposed spelling of the same text ALREADY agrees, which is
-        # what makes this a combining-mark bug rather than a counting one.
+        # Was "a\u0301bc\u2026" -- one character short, and decomposed.
+        assert djust_out == django_out
+        # The precomposed spelling of the same text ALREADY agreed, which is
+        # what made this a combining-mark bug rather than a counting one.
         assert_agrees("{{ p|truncatechars:5 }}", value)
