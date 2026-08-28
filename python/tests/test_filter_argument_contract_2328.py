@@ -466,6 +466,33 @@ class TestErrorsSurfaceUsefully:
         out = _rust.render_template('{{ p|ljust:"1000000" }}', {"p": "ab"})
         assert len(out) == 1_000_000
 
+    def test_no_other_filter_allocates_from_a_saturating_width(self) -> None:
+        """`center`/`ljust`/`rjust` are capped — but are they the whole set?
+
+        `python_int` saturates past `isize`, so a 21-digit argument becomes
+        `isize::MAX` for EVERY numeric filter, not only the three that were
+        capped. Any other filter that turned that into an allocation would abort
+        the same way, and the argument-axis differential's corpus has no
+        huge-width case at all, so it never exercised this. Enumerating the
+        surface rather than trusting the three (v1.0.0rc4 finding #1).
+
+        Caveat worth stating: an allocator abort kills the interpreter, so a
+        regression here takes pytest down with it rather than failing a case.
+        That is a loud failure, just an ugly one — and far better than the
+        silence of not checking. The subprocess-per-filter version that proved
+        this the first time is too slow for the suite.
+        """
+        values: dict[str, Any] = dict(VALUES)
+        values.setdefault("urlizetrunc", "see http://example.com/aaaa now")
+        for name in django_argument_filters():
+            value = values.get(name, TEXT)
+            for width in ("9" * 21, "18446744073709551615", "999999999"):
+                source = '{{ p|%s:"%s" }}' % (name, width)
+                try:
+                    _rust.render_template(source, {"p": value})
+                except RuntimeError:
+                    pass  # A raise is fine; an abort is what this rules out.
+
     def test_urlizetrunc_is_not_capped(self) -> None:
         """Its limit is a comparison bound, never an allocation, so the pad cap
         would be a divergence for nothing. A huge limit means "do not
