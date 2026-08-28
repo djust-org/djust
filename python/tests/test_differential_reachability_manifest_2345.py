@@ -693,23 +693,31 @@ class TestTheArgumentAxisCorpus:
         )
         assert payload["@@cells_by_axis"]["argument"] == len(arg_cells)
 
-    def test_a_clock_dependent_argument_cell_cannot_be_compared(
+    def test_a_clock_dependent_argument_cell_records_its_AGREEMENT(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """The residue the manifest CANNOT report, measured and named.
+        """The blindness the manifest could not report, closed rather than filed.
 
-        `timesince`/`timeuntil` are in `NONDET`, so every cell of theirs is
-        rewritten to `<NONDET len=N>` on both sides and `load()` collapses that
-        to a bare `<NONDET>` — the two sides then always compare EQUAL. That is
-        right for `random`, whose draw is not comparable at all, and it means
-        the argument axis is structurally blind on the two filters whose whole
-        subject is their argument (#2344).
+        `timesince`/`timeuntil` are in `NONDET`, so every cell of theirs was
+        rewritten to `<NONDET len=N>` on both sides and `load()` collapsed that
+        to a bare `<NONDET>` — the two sides then always compared EQUAL. Right
+        for `random`, whose draw is not comparable at all; BLIND for the two
+        filters whose whole subject on this axis is their argument.
 
-        The manifest does not catch this, and it is not the `input-shape` class
-        either: it is a property of the ENCODING rather than of the corpus, and
-        no axis asks "is this cell's answer comparable at all". Stated here
-        rather than left to be rediscovered, because #2344's own differential
-        run is what surfaced it.
+        Measured, which is how it was found: #2344 makes them read the argument
+        as the comparison instant, 120 argument cells move, and the
+        length-collapsed corpus reported **zero**. The tool built to catch a
+        corpus that cannot see a change could not see that one.
+
+        The comparable property is the AGREEMENT BIT. It is stable — both
+        engines read the same clock microseconds apart — while a cell made
+        deterministic by its argument reports honestly.
+
+        Note this is NOT something the manifest itself can report: no axis asks
+        "is this cell's answer comparable at all", and the requirement sets are
+        about what the corpus BUILDS rather than what it can distinguish. It was
+        found by using the tool on #2344, which is the same way every entry in
+        this file's table was found.
         """
         out = tmp_path / "cells.json"
         subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
@@ -727,28 +735,66 @@ class TestTheArgumentAxisCorpus:
             if k.startswith("@arg timesince:") or k.startswith("@arg timeuntil:")
         }
         assert clock, "no clock-dependent argument cell in the corpus"
-        assert all(
-            v[0].startswith("<NONDET") and v[1].startswith("<NONDET") for v in clock.values()
+        assert all(v[0] == "<NONDET>" for v in clock.values())
+        assert {v[1] for v in clock.values()} <= {"<NONDET>", "<NONDET differs>"}
+
+        # Non-vacuity, and the half a marker-shaped-but-never-produced encoding
+        # would fail: the writer must ACTUALLY emit `<NONDET differs>`. An
+        # assertion that merely allowed the two spellings passes when every
+        # cell is `<NONDET>`, which is the collapse this replaced.
+        differs = [k for k, v in clock.items() if v[1] == "<NONDET differs>"]
+        assert differs, (
+            "no clock-dependent cell records a disagreement, so the marker is "
+            "shaped like a measurement and is not one. If `timesince` and "
+            "`timeuntil` now agree with Django on every spelling, replace this "
+            "with a synthetic disagreement — do not delete it."
         )
 
-        # The collapse itself, applied with the SCRIPT'S OWN regex rather than a
-        # transcription of it: after `load()`, every clock cell's two sides are
-        # byte-identical, so none of them can ever report a difference.
-        source = SCRIPT.read_text(encoding="utf-8")
-        found = re.search(r'NONDET_MARKER = re\.compile\(r"(.+?)"\)', source)
-        assert found, "NONDET_MARKER did not parse out of the script"
-        marker = re.compile(found.group(1))
-        collapsed = [
-            (marker.sub("<NONDET>", a), marker.sub("<NONDET>", b)) for a, b in clock.values()
-        ]
-        assert all(a == b for a, b in collapsed), (
-            "a clock-dependent argument cell now survives the collapse — the blind "
-            "spot is closed, so assert the catch instead of this"
+    def test_the_agreement_marker_survives_load(self, tmp_path: pathlib.Path) -> None:
+        """`load()` rewrites `<NONDET len=N>` to a bare `<NONDET>`, and a
+        rewrite that also swallowed `<NONDET differs>` would put the collapse
+        back with extra steps. Asserted through `--compare`, which is the only
+        consumer that matters."""
+
+        def cell(differs: bool) -> dict:
+            return {
+                '@arg timesince:"5"\ts-img\targ': [
+                    "<NONDET>",
+                    "<NONDET differs>" if differs else "<NONDET>",
+                ],
+                '@arg center:"5"\ts-img\targ': ["  ab ", "  ab "],
+                "@@build": "aaa" if differs else "bbb",
+            }
+
+        proc = run_compare(tmp_path, cell(True), cell(False))
+        assert proc.returncode == 0, proc.stdout
+        assert "newly AGREEING: 1" in proc.stdout, proc.stdout
+
+    def test_the_random_filter_is_still_collapsed_rather_than_compared(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The other side of the same rule, and the reason it is not applied to
+        the `{{ }}` corpus: `random` picks a different element each run, so its
+        agreement bit is NOT stable and recording it would produce a cell that
+        flaps. It stays `<NONDET len=N>`, which `load()` erases.
+
+        `random` takes no argument, so it never reaches `nondet_agreement` —
+        this asserts that rather than trusting it.
+        """
+        out = tmp_path / "cells.json"
+        subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+            [sys.executable, str(SCRIPT), str(out)],
+            capture_output=True,
+            text=True,
+            env=_env(),
+            cwd=str(REPO),
+            check=True,
         )
-        # Non-vacuity: the RAW pairs are NOT all identical, so the collapse is
-        # what erases the difference rather than there being none to erase.
-        assert any(a != b for a, b in clock.values()), (
-            "the raw pairs already agree, so this proves nothing about the collapse"
+        payload = json.loads(out.read_text())
+        randoms = {k: v for k, v in payload.items() if "random" in k.split("\t")[0]}
+        assert randoms, "no `random` cell in the corpus"
+        assert all(v[0].startswith("<NONDET len=") for v in randoms.values()), (
+            "a `random` cell now records an agreement bit, which flaps between runs"
         )
 
 

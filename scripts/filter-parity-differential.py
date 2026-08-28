@@ -653,6 +653,33 @@ NONDET = {"random", "timesince", "timeuntil"}
 NONDET_MARKER = re.compile(r"<NONDET len=\d+>")
 
 
+def nondet_agreement(dj: str, du: str) -> tuple[str, str]:
+    """A nondeterministic ARGUMENT cell, recorded by whether the two AGREED.
+
+    The `{{ }}` corpus rewrites a `NONDET` cell to `<NONDET len=N>` on both
+    sides, and `load()` collapses that to a bare `<NONDET>` — so the two sides
+    always compare EQUAL. That is correct for `random`, whose draw is not
+    comparable at all, and it is BLIND for `timesince`/`timeuntil` on the
+    ARGUMENT axis, which is the one axis where their argument is the subject.
+
+    Measured, and this is the reason the helper exists: #2344 makes those two
+    filters read their argument as the comparison instant — 120 argument cells
+    move — and a length-collapsed corpus reports **zero**. The tool built to
+    catch a corpus that cannot see a change could not see that one.
+
+    So the comparable property here is the AGREEMENT BIT, which is stable: both
+    engines read the same wall clock microseconds apart, so a clock-dependent
+    cell's agreement does not flap, while a cell made deterministic by its
+    argument reports honestly. The LENGTH is still not recorded — a clock moves
+    between the two renders and `<NONDET len=N>` was never comparable anyway.
+
+    Scoped to the argument cells on purpose: applying it to the `{{ }}` corpus
+    would rewrite the value of every existing `timesince` cell and make an older
+    baseline incomparable, for a question that axis does not ask.
+    """
+    return "<NONDET>", "<NONDET>" if dj == du else "<NONDET differs>"
+
+
 def spec(name: str) -> str:
     arg = FILTER_ARGS.get(name)
     return f"{name}:{arg}" if arg else name
@@ -1594,7 +1621,7 @@ def measure(out_path: str) -> None:
             CONTEXT_SAFE_KEYS.get(key),
         )
         if name in NONDET:
-            dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
+            dj, du = nondet_agreement(dj, du)
         result[cid] = [dj, du]
 
     # The BUILTIN-VALUE axis (#2347). `p` stays bound so the `firstof` / `==` /
