@@ -80,7 +80,7 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 from django.template.defaultfilters import register  # noqa: E402
-from django.utils.safestring import mark_safe  # noqa: E402
+from django.utils.safestring import SafeData, mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
 from djust.mixins.rust_bridge import _collect_safe_keys  # noqa: E402
@@ -570,3 +570,151 @@ class TestNothingIsMorePermissiveThanDjangoThroughTheContextChannel:
         leaks, compared = self._sweep(values)
         assert compared > 300, f"the sweep compared only {compared} cells"
         assert leaks == [], f"{len(leaks)} cells more permissive than Django: {leaks[:3]}"
+
+
+# ---------------------------------------------------------------------------
+# The #2290 interaction — a custom filter now sees context-sourced item safety
+# ---------------------------------------------------------------------------
+
+
+class TestACustomFilterSeesContextSourcedItemSafety:
+    """#2290 (PR #2302) wraps items as ``SafeString`` before a custom filter,
+    gated on ``input_safety.items``; this issue is what lets ``items`` be
+    seeded from the CONTEXT.
+
+    So a project ``@register.filter`` can now receive ``SafeString`` items that
+    came from ``mark_safe_keys`` rather than from ``safeseq`` — a path NEITHER
+    change exercised alone, because #2290 landed while the only producer of an
+    item grant was a ``safeseq``/``escapeseq`` earlier in the same chain.
+    """
+
+    @staticmethod
+    def _register_probe():
+        """A live filter on Django's engine and djust's registry at once.
+
+        Reports the container SHAPE and per-item ``SafeData`` so a divergence
+        says WHICH half moved — a probe returning only the rendered text cannot
+        distinguish "the items were not marked" from "the filter escaped them".
+        """
+        from django import template as dt
+        from django.template import Engine
+
+        lib = dt.Library()
+
+        @lib.filter(name="_ctx_item_probe")
+        def _probe(value):
+            if isinstance(value, (list, tuple)):
+                inner = ",".join(str(isinstance(v, SafeData)) for v in value)
+                return f"{type(value).__name__}[{inner}]"
+            return f"{type(value).__name__}:{isinstance(value, SafeData)}"
+
+        builtins = Engine.get_default().template_builtins
+        if lib not in builtins:
+            builtins.append(lib)
+        for name, fn in lib.filters.items():
+            _rust.register_custom_filter(name, fn, getattr(fn, "is_safe", False))
+
+    def test_marked_items_arrive_as_SafeData(self) -> None:
+        """The cell the two changes create together."""
+        self._register_probe()
+        source = "{{ p|_ctx_item_probe }}"
+        value = [mark_safe("<b>x</b>"), mark_safe("<i>y</i>")]
+        expected = django_render(source, value)
+        assert expected == "list[True,True]", (
+            f"Django stopped marking the items — the premise moved: {expected!r}"
+        )
+        assert djust_render(source, value) == expected
+
+    def test_unmarked_items_arrive_plain(self) -> None:
+        """The other direction, or the assertion above passes on a build that
+        marks everything unconditionally."""
+        self._register_probe()
+        assert_agrees("{{ p|_ctx_item_probe }}", ["<b>x</b>", "<i>y</i>"])
+
+    def test_a_partially_marked_list_arrives_wholly_plain(self) -> None:
+        """The narrowing, seen from the custom-filter side: djust withholds the
+        grant Django gives element 0. Over-escaping, and the residual this
+        issue's one-bool model implies."""
+        self._register_probe()
+        source = "{{ p|_ctx_item_probe }}"
+        value = [mark_safe("<b>x</b>"), "<i>y</i>"]
+        assert django_render(source, value) == "list[True,False]"
+        assert djust_render(source, value) == "list[False,False]"
+
+    def test_a_raw_tuple_reaches_a_custom_filter_unwrapped(self) -> None:
+        """A KNOWN residual, pinned so the comment describing it cannot go
+        stale (#2305).
+
+        #2290 deleted a ``PyTuple`` arm from ``mark_input_safety`` as
+        unreachable, correctly at the time: the only producer of an item grant
+        was ``safeseq``, a list comprehension. This issue added a second
+        producer that accepts ``Value::Tuple``, so the arm IS reachable now —
+        but only by calling ``render_template_with_dirs`` DIRECTLY with an
+        un-normalized tuple, because ``normalize_django_value`` collapses a
+        Python tuple to a list before it crosses into Rust and
+        ``SimpleLiveView`` passes no ``safe_keys`` at all.
+
+        djust hands the filter ``tuple[False,False]`` where Django hands it
+        ``tuple[True,True]`` — the ESCAPING direction, which is why it is
+        tracked rather than fixed inside this change.
+        """
+        self._register_probe()
+        source = "{{ p|_ctx_item_probe }}"
+        raw = ("<b>x</b>", "<i>y</i>")
+
+        expected = django_render(source, tuple(mark_safe(v) for v in raw))
+        assert expected == "tuple[True,True]"
+
+        got = _rust.render_template_with_dirs(source, {"p": raw}, [], ["p.0", "p.1"])
+        assert got == "tuple[False,False]", (
+            f"the tuple residual moved — if this is now 'tuple[True,True]', "
+            f"#2305 is fixed and this pin should assert parity instead: {got!r}"
+        )
+
+    def test_but_the_tuple_still_renders_live_through_join(self) -> None:
+        """The same raw tuple through the BUILT-IN path is already correct, so
+        the residual above is specific to the PyO3 hand-off and not to
+        ``items_are_safe`` refusing tuples."""
+        raw = ("<b>x</b>", "<i>y</i>")
+        marked = tuple(mark_safe(v) for v in raw)
+        for source in ('{{ p|join:", " }}', "{{ p|unordered_list }}"):
+            got = _rust.render_template_with_dirs(source, {"p": raw}, [], ["p.0", "p.1"])
+            assert got == django_render(source, marked), source
+
+
+# ---------------------------------------------------------------------------
+# Forward pin for #2300
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "#2300: mark_safe_keys EXTENDS and is never cleared, so a grant from an "
+        "earlier render survives into a later one. Fixing #2300 (replace, and "
+        "call unconditionally so the empty case clears) makes this pass — at "
+        "which point DELETE the xfail marker and keep the test."
+    ),
+)
+def test_a_context_item_grant_is_per_render() -> None:
+    """The property #2287 and #2300 only deliver together.
+
+    #2287 makes a context-sourced item grant *possible*; #2300 is what makes it
+    *per-render*. Until #2300 lands, render 2's unmarked list inherits render
+    1's ``p.0``/``p.1`` and comes through live — the same staleness the
+    container granularity already has, one level down.
+
+    Written as a strict xfail rather than an assertion of the buggy behaviour so
+    that closing #2300 produces a RED test naming itself, which is how #2284's
+    landmark for this issue worked and why it got closed.
+    """
+    view = _rust.RustLiveView('{{ p|join:", " }}')
+
+    view.update_state(normalize_django_value({"p": [mark_safe("<b>x</b>")]}))
+    view.mark_safe_keys(["p.0"])
+    assert view.render() == "<b>x</b>", "render 1 should honour the marked item"
+
+    # Render 2: nothing is marked, so `_collect_safe_keys` returns [] and the
+    # bridge (today) skips the call entirely — there is no way to clear `p.0`.
+    view.update_state(normalize_django_value({"p": ["<img src=x onerror=alert(1)>"]}))
+    assert payload_capabilities(view.render()) == set(), view.render()

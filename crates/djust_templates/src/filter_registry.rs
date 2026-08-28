@@ -293,16 +293,34 @@ fn mark_input_safety<'py>(
     // sequence stays a `list` and a filter branching on its type keeps its
     // answer.
     //
-    // A LIST is the only shape this arm needs. `items` is `true` only via
-    // `renderer::filter_output_items_are_safe`, whose every path originates at
-    // `safeseq`/`escapeseq` — Django's `[… for o in value]`, a list
-    // comprehension, so a tuple INPUT has already become a list by the time the
-    // grant exists (`ITEM_SAFETY_PRESERVING_FILTERS`'s `slice` then preserves
-    // the list). A first draft carried a parallel `PyTuple` arm and the gate-off
-    // reported it SURVIVED: nothing could reach it, and an unreachable branch
-    // is decorative rather than defensive (#1859). It is deleted rather than
-    // tested around; should a future filter mint an item-grant on a tuple, this
-    // falls through to the unwrapped return — the escaping direction.
+    // A LIST is the shape this arm handles. When #2290 shipped, `items` could
+    // only be `true` via `renderer::filter_output_items_are_safe`, whose every
+    // path then originated at `safeseq`/`escapeseq` — Django's
+    // `[… for o in value]`, a list comprehension — so a tuple INPUT had already
+    // become a list by the time the grant existed. A first draft carried a
+    // parallel `PyTuple` arm, the gate-off reported it SURVIVED, and it was
+    // deleted as decorative rather than defensive (#1859).
+    //
+    // **That reachability claim is no longer true, and this comment said so
+    // for exactly one release.** #2287 added `Context::items_are_safe`, a
+    // SECOND producer that reads the grant off `mark_safe_keys` and accepts
+    // `Value::Tuple`, so a tuple can now carry an item grant without any
+    // `safeseq` in the chain. What keeps the deleted arm harmless is a
+    // different fact than the one written here: `normalize_django_value`
+    // collapses a Python tuple to a list before it ever crosses into Rust, so
+    // every FRAMEWORK path (`LiveView` via `rust_bridge`, `SimpleLiveView`,
+    // the template backend) still cannot reach it — `SimpleLiveView` calls
+    // `render_template_with_dirs` with no `safe_keys` at all.
+    //
+    // A direct `render_template_with_dirs(tpl, {"p": ("a", "b")}, [], ["p.0"])`
+    // — un-normalized tuple, marked item paths — DOES reach it, and falls
+    // through to the unwrapped return below: Django hands the filter
+    // `tuple[True, True]` and djust hands it `tuple[False, False]`. That is the
+    // ESCAPING direction, which is what the original comment's last sentence
+    // correctly anticipated. Measured and tracked as a parity gap rather than
+    // fixed here, so restoring the arm gets its own review; pinned by
+    // `test_a_raw_tuple_reaches_a_custom_filter_unwrapped` so this comment
+    // cannot go stale a second time without a red test.
     if let Ok(seq) = obj.cast::<PyList>() {
         let out = PyList::empty(py);
         for item in seq.iter() {
