@@ -41,7 +41,7 @@ use crate::Value;
 use djust_core::Context;
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyString};
+use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
@@ -293,46 +293,72 @@ fn mark_input_safety<'py>(
     // sequence stays a `list` and a filter branching on its type keeps its
     // answer.
     //
-    // A LIST is the shape this arm handles. When #2290 shipped, `items` could
-    // only be `true` via `renderer::filter_output_items_are_safe`, whose every
-    // path then originated at `safeseq`/`escapeseq` — Django's
-    // `[… for o in value]`, a list comprehension — so a tuple INPUT had already
-    // become a list by the time the grant existed. A first draft carried a
-    // parallel `PyTuple` arm, the gate-off reported it SURVIVED, and it was
-    // deleted as decorative rather than defensive (#1859).
+    // BOTH sequence shapes, and the tuple arm's history is worth keeping
+    // because it is a worked example of a reachability claim expiring (#2305).
     //
-    // **That reachability claim is no longer true, and this comment said so
-    // for exactly one release.** #2287 added `Context::items_are_safe`, a
-    // SECOND producer that reads the grant off `mark_safe_keys` and accepts
-    // `Value::Tuple`, so a tuple can now carry an item grant without any
-    // `safeseq` in the chain. What keeps the deleted arm harmless is a
-    // different fact than the one written here: `normalize_django_value`
-    // collapses a Python tuple to a list before it ever crosses into Rust, so
-    // every FRAMEWORK path (`LiveView` via `rust_bridge`, `SimpleLiveView`,
-    // the template backend) still cannot reach it — `SimpleLiveView` calls
-    // `render_template_with_dirs` with no `safe_keys` at all.
+    // When #2290 shipped, `items` could only be `true` via
+    // `renderer::filter_output_items_are_safe`, whose every path then
+    // originated at `safeseq`/`escapeseq` — Django's `[… for o in value]`, a
+    // list comprehension — so a tuple INPUT had already become a list by the
+    // time the grant existed. A first draft carried a parallel `PyTuple` arm,
+    // the gate-off reported it SURVIVED, and it was deleted as decorative
+    // rather than defensive (#1859). Correct on the evidence available.
     //
-    // A direct `render_template_with_dirs(tpl, {"p": ("a", "b")}, [], ["p.0"])`
-    // — un-normalized tuple, marked item paths — DOES reach it, and falls
-    // through to the unwrapped return below: Django hands the filter
-    // `tuple[True, True]` and djust hands it `tuple[False, False]`. That is the
-    // ESCAPING direction, which is what the original comment's last sentence
-    // correctly anticipated. Measured and tracked as a parity gap rather than
-    // fixed here, so restoring the arm gets its own review; pinned by
-    // `test_a_raw_tuple_reaches_a_custom_filter_unwrapped` so this comment
-    // cannot go stale a second time without a red test.
+    // #2287 then added `Context::items_are_safe`, a SECOND producer that reads
+    // the grant off `mark_safe_keys` and accepts `Value::Tuple` — so the claim
+    // expired the moment the two changes met, and the arm came back with the
+    // empirical proof #2290 correctly demanded and could not get at the time.
+    // Two entry points reach it, both public in `_rust.pyi`:
+    //
+    //   render_template_with_dirs(tpl, {"p": ("<b>", "<i>")}, [], ["p.0","p.1"])
+    //   RustLiveView(tpl).update_state({"p": (...)}) + mark_safe_keys([...])
+    //
+    // Neither normalizes, so the tuple survives as `Value::Tuple` and
+    // `IntoPyObject` (`djust_core/src/lib.rs`) rebuilds a real `PyTuple` on the
+    // way out. What still keeps every FRAMEWORK path off this arm is
+    // `normalize_django_value`, which collapses a Python tuple to a list before
+    // it ever crosses into Rust — `LiveView` via `rust_bridge`,
+    // `TemplateMixin`'s page-shell render, `SimpleLiveView` and the template
+    // backend all normalize first, and the latter two pass no `safe_keys` at
+    // all. That is why this was a parity gap and never a regression.
+    //
+    // The output SHAPE is the input shape, because Django's own marking is
+    // `[mark_safe(o) for o in value]`-style per element and leaves the sequence
+    // object alone — a filter branching on `isinstance(value, tuple)` must keep
+    // Django's answer, which building a list here would silently change.
     if let Ok(seq) = obj.cast::<PyList>() {
         let out = PyList::empty(py);
         for item in seq.iter() {
-            if item.is_instance_of::<PyString>() {
-                out.append(mark_safe.call1((item,))?)?;
-            } else {
-                out.append(item)?;
-            }
+            out.append(mark_item(&mark_safe, item)?)?;
         }
         return Ok(out.into_any());
     }
+    if let Ok(seq) = obj.cast::<PyTuple>() {
+        let mut out: Vec<Bound<'py, PyAny>> = Vec::with_capacity(seq.len());
+        for item in seq.iter() {
+            out.push(mark_item(&mark_safe, item)?);
+        }
+        return Ok(PyTuple::new(py, out)?.into_any());
+    }
     Ok(obj)
+}
+
+/// One ELEMENT of a sequence carrying an item grant, wrapped the way
+/// `mark_input_safety`'s doc-comment describes: `str` only.
+///
+/// Extracted so the `PyList` and `PyTuple` arms cannot drift apart on the
+/// non-`str` policy — the failure mode that made the tuple arm's first life
+/// unprovable was precisely that the two were separate copies of one rule
+/// (#1646).
+fn mark_item<'py>(
+    mark_safe: &Bound<'py, PyAny>,
+    item: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if item.is_instance_of::<PyString>() {
+        mark_safe.call1((item,))
+    } else {
+        Ok(item)
+    }
 }
 
 /// Apply a custom filter callable to a value with an optional argument.

@@ -38,6 +38,7 @@ only the first passes on fully-escaped output and proves nothing.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
 from pathlib import Path
@@ -49,6 +50,7 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 from django.template.defaultfilters import register, stringfilter  # noqa: E402
+from django.utils.safestring import SafeData, mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
@@ -75,7 +77,9 @@ def render_both(source: str, value) -> tuple[str, str]:
 
 def assert_agrees(source: str, value) -> None:
     django_out, djust_out = render_both(source, value)
-    assert djust_out == django_out, f"{source} on {value!r}: django={django_out!r} djust={djust_out!r}"
+    assert djust_out == django_out, (
+        f"{source} on {value!r}: django={django_out!r} djust={djust_out!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -154,13 +158,30 @@ class TestEscapeIsEager:
         family, where djust was live and Django was not.
         """
         args = {
-            "add": ":'1'", "center": ":'20'", "cut": ":'b'", "date": ":'Y'",
-            "default": ":'D'", "default_if_none": ":'D'", "dictsort": ":'k'",
-            "dictsortreversed": ":'k'", "divisibleby": ":'2'", "floatformat": ":'2'",
-            "get_digit": ":'1'", "join": ":', '", "ljust": ":'20'", "pluralize": ":'s'",
-            "rjust": ":'20'", "slice": ":':3'", "stringformat": ":'s'", "time": ":'H'",
-            "truncatechars": ":'5'", "truncatechars_html": ":'5'", "truncatewords": ":'2'",
-            "truncatewords_html": ":'2'", "urlizetrunc": ":'15'", "wordwrap": ":'5'",
+            "add": ":'1'",
+            "center": ":'20'",
+            "cut": ":'b'",
+            "date": ":'Y'",
+            "default": ":'D'",
+            "default_if_none": ":'D'",
+            "dictsort": ":'k'",
+            "dictsortreversed": ":'k'",
+            "divisibleby": ":'2'",
+            "floatformat": ":'2'",
+            "get_digit": ":'1'",
+            "join": ":', '",
+            "ljust": ":'20'",
+            "pluralize": ":'s'",
+            "rjust": ":'20'",
+            "slice": ":':3'",
+            "stringformat": ":'s'",
+            "time": ":'H'",
+            "truncatechars": ":'5'",
+            "truncatechars_html": ":'5'",
+            "truncatewords": ":'2'",
+            "truncatewords_html": ":'2'",
+            "urlizetrunc": ":'15'",
+            "wordwrap": ":'5'",
             "yesno": ":'y,n,m'",
         }
         leaks, compared = [], 0
@@ -202,9 +223,7 @@ class TestSequenceFiltersIterateAString:
         assert_agrees("{{ p|%s }}" % spec, value)
 
     @pytest.mark.parametrize("spec", ITERATING_FIVE)
-    @pytest.mark.parametrize(
-        "value", [["<b>", "x"], ("<b>", "x"), {"k": "<v>", "j": 2}]
-    )
+    @pytest.mark.parametrize("value", [["<b>", "x"], ("<b>", "x"), {"k": "<v>", "j": 2}])
     def test_the_list_tuple_and_dict_paths_agree_too(self, spec, value) -> None:
         """A dict iterates its KEYS in Python, which is the same question asked
         of a different variant — the axis a string-only fix would have missed.
@@ -215,7 +234,9 @@ class TestSequenceFiltersIterateAString:
             # soft with a key. The pick itself is asserted below.
             if isinstance(value, dict):
                 pytest.skip("random.choice raises on a dict — no Django bar")
-            djust_out = _rust.render_template("{{ p|random }}", normalize_django_value({"p": value}))
+            djust_out = _rust.render_template(
+                "{{ p|random }}", normalize_django_value({"p": value})
+            )
             rendered = {
                 _rust.render_template("{{ p }}", normalize_django_value({"p": item}))
                 for item in value
@@ -453,11 +474,7 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
     stops using it.
     """
     source = (
-        Path(__file__).resolve().parents[2]
-        / "crates"
-        / "djust_templates"
-        / "src"
-        / "filters.rs"
+        Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / "filters.rs"
     ).read_text()
     body = source.split("fn apply_builtin_filter", 1)[1]
     arms = set(re.findall(r'"(\w+)" =>[^\n]*\n?[^\n]*iter_values\(value\)', body))
@@ -469,14 +486,20 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
     assert arms == {"join", "safeseq", "escapeseq", "unordered_list", "random"}, arms
 
 
+def _hot_sets() -> set[str]:
+    """The names ``scripts/filter-parity-differential.py`` actually composes."""
+    hot = (
+        Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
+    ).read_text()
+    swept = set(re.findall(r'"(\w+)"', hot.split("HOT2 = [", 1)[1].split("]", 1)[0]))
+    swept |= set(re.findall(r'"(\w+)"', hot.split("HOT3 = [", 1)[1].split("]", 1)[0]))
+    return swept
+
+
 def _rust_const(name: str) -> list[str]:
     """The string literals of a `const NAME: [&str; N] = [...]` in renderer.rs."""
     src = (
-        Path(__file__).resolve().parents[2]
-        / "crates"
-        / "djust_templates"
-        / "src"
-        / "renderer.rs"
+        Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / "renderer.rs"
     ).read_text()
     body = src.split(f"const {name}: [&str;", 1)[1].split("[", 1)[1].split("];", 1)[0]
     return re.findall(r'"(\w+)"', body)
@@ -502,11 +525,7 @@ def test_every_safety_set_member_is_in_the_differential_hot_sets() -> None:
     set (`upper`, `pprint`, …), because composing extra filters only widens the
     sweep. What must never happen is a safety-set member missing from it.
     """
-    hot = (
-        Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
-    ).read_text()
-    swept = set(re.findall(r'"(\w+)"', hot.split("HOT2 = [", 1)[1].split("]", 1)[0]))
-    swept |= set(re.findall(r'"(\w+)"', hot.split("HOT3 = [", 1)[1].split("]", 1)[0]))
+    swept = _hot_sets()
 
     granted: set[str] = set()
     for const in (
@@ -523,6 +542,124 @@ def test_every_safety_set_member_is_in_the_differential_hot_sets() -> None:
         f"by scripts/filter-parity-differential.py. Add them to HOT2 and HOT3 in "
         f"the SAME commit — this is the check the `dictsort` XSS defeated."
     )
+
+
+def test_the_per_call_safety_channel_is_swept_too() -> None:
+    """The same coupling, one level down — ``builtin_produced_safe`` (#2299).
+
+    ``renderer.rs``'s three constants are the NAME-based safety channel and the
+    test above couples them to the sweep. There is a SECOND channel:
+    ``filters::builtin_produced_safe`` answers per CALL, for the filters whose
+    safety depends on which branch of the body ran, and it grants exactly as
+    much safety as a constant does. #2299 added ``first``/``last``/``random``
+    to it; ``first`` and ``last`` were already on the hot sets by luck (they
+    were put there for SHAPE coverage, not safety), which is precisely the kind
+    of accident this makes into a rule.
+
+    ``random`` is the exemption, and it is principled rather than a carve-out:
+    the differential's ``load()`` rewrites every ``NONDET`` cell to a bare
+    ``<NONDET>`` marker on BOTH sides, so a ``random`` cell always compares
+    equal and can report neither a regression nor a leak. Putting it on the hot
+    sets would add ~480 cells that agree by construction — coverage-shaped, and
+    blind, which is worse than absent (#1859). Its real coverage is
+    ``python/tests/test_context_item_safety_2287.py::
+    TestRandomIsCoveredByCapabilityNotByBytes``, which asserts capabilities
+    across repeated draws instead of bytes.
+    """
+    source = (
+        Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / "filters.rs"
+    ).read_text()
+    body = source.split("fn builtin_produced_safe", 1)[1].split("\npub fn ", 1)[0]
+    granted = {
+        name
+        for arm in re.findall(r"^\s{8}((?:\"\w+\"\s*\|\s*)*\"\w+\") =>", body, re.M)
+        for name in re.findall(r'"(\w+)"', arm)
+    }
+    assert granted == {
+        "join",
+        "cut",
+        "default",
+        "default_if_none",
+        "add",
+        "first",
+        "last",
+        "random",
+    }, f"the arms did not parse, or a name was added without updating this pin: {granted}"
+
+    hot = (
+        Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
+    ).read_text()
+    nondet = set(re.findall(r'"(\w+)"', hot.split("NONDET = {", 1)[1].split("}", 1)[0]))
+    assert "random" in nondet, f"NONDET no longer holds `random`: {nondet}"
+
+    missing = granted - _hot_sets() - nondet
+    assert not missing, (
+        f"{sorted(missing)} are granted safety per-call by `builtin_produced_safe` "
+        f"but are neither composed by scripts/filter-parity-differential.py nor "
+        f"exempt as NONDET. Add them to HOT2 and HOT3 in the SAME commit."
+    )
+
+
+def test_the_differential_sweeps_every_shape_the_context_grant_accepts() -> None:
+    """The INPUT axis of the same coupling, which nothing pinned (#2305).
+
+    The two tests above couple the FILTER axis: a name granted safety must be
+    composed by the sweep. Neither says anything about the input shapes, and
+    #2305 is exactly a bug that lived in a shape the corpus did not carry —
+    ``Context::items_are_safe`` accepts ``Value::List`` *and* ``Value::Tuple``,
+    the corpus carried only a marked LIST, and ``mark_input_safety``'s missing
+    ``PyTuple`` arm was therefore invisible to a tool built to see it. Adding
+    ``t-marked`` moved 80 cells, so the axis is load-bearing rather than
+    shape-coverage tidiness.
+
+    Parsed from the Rust rather than transcribed, so widening the grant to a
+    third shape fails here until the corpus grows an input for it. The
+    differential's ``INPUTS`` dict is read as a literal — never imported, since
+    the script configures Django settings and mutates the global filter
+    registry at import time.
+    """
+    ctx_src = (
+        Path(__file__).resolve().parents[2] / "crates" / "djust_core" / "src" / "context.rs"
+    ).read_text()
+    body = ctx_src.split("pub fn items_are_safe", 1)[1].split("\n    pub fn ", 1)[0]
+    accepted = set(re.findall(r"Value::(\w+)\(items\)", body))
+    assert accepted, "the `items_are_safe` match did not parse"
+
+    rust_to_python = {"List": list, "Tuple": tuple}
+    unknown = accepted - set(rust_to_python)
+    assert not unknown, (
+        f"`items_are_safe` now accepts {sorted(unknown)}, a shape this test has no "
+        f"Python counterpart for. Map it here AND add a marked input of that shape "
+        f"to scripts/filter-parity-differential.py's INPUTS in the SAME commit."
+    )
+
+    diff_path = Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
+    tree = ast.parse(diff_path.read_text())
+    literal = next(
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "INPUTS" for t in node.targets)
+    )
+    inputs = eval(  # noqa: S307 — a literal from a repo file, with only mark_safe bound
+        compile(ast.Expression(literal), "<INPUTS>", "eval"), {"mark_safe": mark_safe}
+    )
+
+    for variant, py_type in rust_to_python.items():
+        if variant not in accepted:
+            continue
+        marked = [
+            key
+            for key, value in inputs.items()
+            if type(value) is py_type and value and all(isinstance(v, SafeData) for v in value)
+        ]
+        assert marked, (
+            f"`items_are_safe` accepts Value::{variant}, but "
+            f"scripts/filter-parity-differential.py carries no {py_type.__name__} "
+            f"whose every element is mark_safe'd — so the sweep cannot construct a "
+            f"single cell where the CONTEXT grants item safety on that shape. This "
+            f"is the blind spot #2305 lived in."
+        )
 
 
 class TestItemSafetyIsNeverMorePermissiveThanDjango:
@@ -593,9 +730,7 @@ class TestItemSafetyIsNeverMorePermissiveThanDjango:
                 # so its `unordered_list` gets an empty sequence). Diffing the
                 # raw capability sets flags that as a leak — the same
                 # false-positive shape the crude tag-count metric had.
-                extra = (
-                    capabilities(djust_out) - capabilities(django_out)
-                ) & self.PAYLOAD_CAPS
+                extra = (capabilities(djust_out) - capabilities(django_out)) & self.PAYLOAD_CAPS
                 if extra:
                     leaks.append((source, sorted(extra), djust_out[:90]))
         assert compared > 20, f"only {compared} cells compared — the sweep is not sweeping"

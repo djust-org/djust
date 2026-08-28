@@ -115,6 +115,7 @@ def _safe_keys_for(value) -> list[str]:
     """
     return _collect_safe_keys(value, "p")
 
+
 # ---------------------------------------------------------------------------
 # The CUSTOM-filter corpus (#2290)
 # ---------------------------------------------------------------------------
@@ -244,15 +245,23 @@ INPUTS = {
     "l-marked-img": [mark_safe("<img src=x onerror=alert(1)>")],
     "l-mixed": [mark_safe("<b>ok</b>"), "<img src=x onerror=alert(1)>"],
     "s-marked": mark_safe("<img src=x onerror=alert(1)>"),
+    # A marked TUPLE, which is a genuinely different cell from `l-marked` and
+    # not a shape-coverage nicety (#2305). `render_both` hands the context to
+    # `render_template_with_dirs` UN-normalized — the same thing a direct API
+    # caller does — so a Python tuple survives as `Value::Tuple` and comes back
+    # out of `IntoPyObject` as a real `PyTuple` at the custom-filter boundary.
+    # `filter_registry::mark_input_safety` handles `PyList` only, so every
+    # `cf_*` cell on this key measured djust handing the filter a tuple of
+    # plain `str` where Django hands it a tuple of `SafeString`. With only
+    # `l-marked` on the axis the tool could not construct that cell at all.
+    "t-marked": (mark_safe("<b>x</b>"), mark_safe("<i>y</i>")),
 }
 
 #: Inputs whose SAFETY the context declares. Rendered through
 #: `render_template_with_dirs`, the only Python entry point that takes
 #: `safe_keys`; everything else goes through `render_template` unchanged.
 CONTEXT_SAFE_KEYS = {
-    key: _safe_keys_for(value)
-    for key, value in INPUTS.items()
-    if _safe_keys_for(value)
+    key: _safe_keys_for(value) for key, value in INPUTS.items() if _safe_keys_for(value)
 }
 
 #: The fragments of each hostile input a browser executes if they survive raw.
@@ -342,7 +351,20 @@ HOT3 = [
 #: `l-marked` / `l-mixed` are on the CHAIN axes deliberately: #2287's risk is
 #: not the single filter but what a SECOND filter does with a grant the first
 #: preserved (`slice`) or minted (`join`), which is only visible at length 2+.
-INPUTS_2 = ["s-img", "s-lt", "l-plain", "d-plain", "i-int", "n-none", "l-marked", "l-mixed"]
+INPUTS_2 = [
+    "s-img",
+    "s-lt",
+    "l-plain",
+    "d-plain",
+    "i-int",
+    "n-none",
+    "l-marked",
+    "l-mixed",
+    # #2305 / #2299 both turn on what a SECOND filter does with a grant carried
+    # on a TUPLE, and the tuple-vs-list distinction survives the whole chain
+    # (`slice` of a tuple is a tuple, `first` of one is its element).
+    "t-marked",
+]
 INPUTS_3 = ["s-img", "l-plain", "i-int", "l-marked"]
 
 #: Time- or randomness-dependent: recorded as a marker, never as a value.
