@@ -401,14 +401,85 @@ class TestErrorsSurfaceUsefully:
         assert "width" in message
         assert "does not resolve" in message
 
-    def test_no_panic_for_a_width_rusts_formatter_cannot_hold(self) -> None:
-        """`format!("{s:<width$}")` panicked with "Formatting argument out of
-        range" past its width cap — a `PanicException`, not an error a caller
-        can handle. Both pad filters build the padding explicitly now.
+    #: Rust's format spec holds its width in a `u16`, so `format!("{s:<width$}")`
+    #: panics at exactly one past `u16::MAX`. Pinned as a BOUNDARY, not a single
+    #: point: a lone `70000` case says nothing about where the edge is, and it
+    #: is what made this hard for a reviewer to reproduce.
+    FORMATTER_WIDTH_CAP = 65535
+
+    @pytest.mark.parametrize("name", ["ljust", "rjust"])
+    @pytest.mark.parametrize("width", [1, 100, FORMATTER_WIDTH_CAP, FORMATTER_WIDTH_CAP + 1, 70000])
+    def test_no_panic_at_any_width(self, name: str, width: int) -> None:
+        """`format!("{s:<width$}")` panicked past the cap with a
+        `PanicException` — whose MRO is `BaseException` directly, so it does not
+        inherit from `Exception` and escapes the consumer's `except Exception`,
+        killing the session rather than the render. Both pad filters build the
+        padding explicitly now, as `center` always did.
         """
-        for name in ("ljust", "rjust"):
-            out = _rust.render_template('{{ p|%s:"70000" }}' % name, {"p": "ab"})
-            assert len(out) == 70000
+        out = _rust.render_template('{{ p|%s:"%d" }}' % (name, width), {"p": "ab"})
+        assert len(out) == max(width, 2)
+
+    def test_a_width_below_the_cap_still_just_pads(self) -> None:
+        """The boundary that made the pre-fix panic hard to reproduce.
+
+        On `main` the width had to PARSE for `format!` to see it, and every
+        argument a reviewer reaches for first landed on the silent side:
+        `"x"`, `"-5"`, `"0"`, `""` and a 21-digit number all failed
+        `parse::<usize>()` or clamped, giving width 0 and no panic. The panic
+        needed a width that parses AND exceeds `u16::MAX` — `"65536"` is the
+        smallest, and `usize::MAX` (20 digits, one shorter than the 21 that
+        looks bigger) also qualified.
+
+        Here, a negative or zero width is still just the string back; the
+        unparseable ones raise, which is this PR's subject.
+        """
+        assert len(str(2**64 - 1)) == 20, "usize::MAX is 20 digits"
+        for arg in ('"-5"', '"0"'):
+            out = _rust.render_template("{{ p|ljust:%s }}" % arg, {"p": "ab"})
+            assert out == "ab", f"{arg} clamps to 0 and pads nothing"
+        for arg in ('"x"', '""'):
+            with pytest.raises(RuntimeError, match="needs an integer argument"):
+                _rust.render_template("{{ p|ljust:%s }}" % arg, {"p": "ab"})
+
+    @pytest.mark.parametrize("width", ["1000001", "9" * 20, "9" * 21, "18446744073709551615"])
+    def test_an_unallocatable_width_raises_instead_of_aborting(self, width: str) -> None:
+        """#2328's own regression, found by the boundary test above.
+
+        `python_int` SATURATES past `isize` rather than failing — right for
+        `slice`, where a magnitude past `isize` selects the same elements, and
+        wrong here. Routing the pad filters through it turned a 21-digit width
+        from a harmless width-0 no-op (the old `parse::<usize>()` simply failed)
+        into a request for `isize::MAX` spaces, which is not a catchable Rust
+        error at all: the allocator ABORTS the process. That is strictly worse
+        than the panic this PR set out to remove.
+
+        Python's own answers here are `MemoryError` and, past `ssize_t`,
+        `OverflowError` — both fail the render, both catchable. So does this.
+        """
+        for name in ("ljust", "rjust", "center"):
+            with pytest.raises(RuntimeError, match="past djust's"):
+                _rust.render_template('{{ p|%s:"%s" }}' % (name, width), {"p": "ab"})
+
+    def test_the_cap_admits_every_width_a_page_could_want(self) -> None:
+        # Non-vacuity for the cap: a bound that refused ordinary widths would
+        # pass the test above for the wrong reason.
+        out = _rust.render_template('{{ p|ljust:"1000000" }}', {"p": "ab"})
+        assert len(out) == 1_000_000
+
+    def test_urlizetrunc_is_not_capped(self) -> None:
+        """Its limit is a comparison bound, never an allocation, so the pad cap
+        would be a divergence for nothing. A huge limit means "do not
+        truncate", which is Django's answer too."""
+        url = "see http://example.com/aaaa now"
+        source = '{{ p|urlizetrunc:"999999999999" }}'
+        assert "example.com/aaaa" in _rust.render_template(source, {"p": url})
+
+    def test_center_never_had_the_bug(self) -> None:
+        """The control: `center` built its padding explicitly all along, which
+        is why only the two `format!` filters panicked. Without this the
+        boundary test above could pass for the wrong reason."""
+        out = _rust.render_template('{{ p|center:"%d" }}' % 70000, {"p": "ab"})
+        assert len(out) == 70000
 
 
 class TestTheTwoRegressionsTheDifferentialCaught:
@@ -606,6 +677,22 @@ class TestChokepointIsTheOnlyParser:
         assert "fn parse_int_like" in floatformat_rs, (
             "kept as a named shim so `parse_arg` reads the same; it must DELEGATE"
         )
+
+    def test_every_allocating_width_goes_through_the_cap(self) -> None:
+        """`ljust`/`rjust`/`center` are the three filters that turn the argument
+        into an allocation, and all three must ask `pad_width` — which refuses
+        past `MAX_PAD_WIDTH`. A fourth pad filter that skipped it could abort
+        the process on a template-supplied width, so the count is pinned.
+
+        `urlizetrunc` is deliberately NOT here: its limit is a comparison bound,
+        never an allocation.
+        """
+        source = self.source()
+        assert len(re.findall(r"pad_width!\(", source)) == 3
+        assert "const MAX_PAD_WIDTH" in source
+        # The cap must be consulted in `pad_width` itself, not at a call site,
+        # or a fourth caller would silently miss it.
+        assert re.search(r"fn pad_width\([^)]*\)[^{]*\{[^}]*MAX_PAD_WIDTH", source, re.S)
 
     def test_the_call_site_set_is_pinned(self) -> None:
         found = sorted(

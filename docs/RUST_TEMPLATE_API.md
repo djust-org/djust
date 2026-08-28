@@ -845,6 +845,14 @@ own source.** These raise, because Django writes a bare `int(arg)`:
 A bare `None` raises for **all** of them: `int(None)` is a `TypeError`, and the
 second column's `except ValueError` does not catch it.
 
+**`center`, `ljust` and `rjust` cap the width at 1,000,000** and raise past it.
+Django keeps going well beyond that — `ljust:"9999999999"` really does build a
+ten-gigabyte string — but a Rust allocation failure is a process abort rather
+than a catchable error, so a width a template can name must not reach an
+allocator unbounded. Python's own answers at that size are `MemoryError` and
+`OverflowError`, which also fail the render. `urlizetrunc` is not capped: its
+limit is a comparison bound, never an allocation.
+
 **`{% if %}` is the one place a bad argument does not fail the render.** Django's
 `IfNode` treats an unresolvable condition as falsy, so
 `{% if p|center:missing %}` takes the `{% else %}` branch. That applies to the

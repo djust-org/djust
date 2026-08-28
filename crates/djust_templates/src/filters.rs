@@ -12,6 +12,18 @@ use crate::filter_registry;
 /// The arm's type is `Result<Value>` but the FUNCTION's is
 /// `Option<Result<Value>>`, so `?` does not compile here. This is the one
 /// place that hand-off is written down.
+/// [`pad_width`] from inside an `apply_builtin_filter` match arm, for the same
+/// reason [`int_arg!`] exists: `?` targets the function's `Option`, not the
+/// arm's `Result`.
+macro_rules! pad_width {
+    ($name:expr, $parsed:expr) => {
+        match pad_width($name, $parsed) {
+            Ok(width) => width,
+            Err(e) => return Some(Err(e)),
+        }
+    };
+}
+
 macro_rules! int_arg {
     ($name:expr, $arg:expr, $quoted:expr, $missing:expr, $bad:expr) => {
         match filter_int_arg($name, $arg, $quoted, $missing, $bad) {
@@ -1278,13 +1290,28 @@ fn apply_builtin_filter(
         "ljust" => {
             // `value.ljust(int(arg))` — `int()` raises, so the argument takes
             // the chokepoint's `Raise` arm (#2328).
-            let width = pad_width(int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise));
+            let width = pad_width!(
+                filter_name,
+                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+            );
             let s = value.to_string();
-            // NOT `format!("{s:<width$}")`, which was here: Rust's formatter
-            // caps its width field and PANICS with "Formatting argument out of
-            // range" past it, so `{{ p|ljust:"999999999" }}` aborted the render
-            // with a `PanicException` rather than any error a caller can
-            // handle. Padding explicitly is what `center` below already does.
+            // NOT `format!("{s:<width$}")`, which was here: Rust's format spec
+            // holds its width in a `u16`, so a width of **65536 or more** — one
+            // past `u16::MAX` — panics with "Formatting argument out of range".
+            // `{{ p|ljust:"65536" }}` therefore aborted the render with a
+            // `PanicException`, whose MRO is `BaseException` directly: it does
+            // not inherit from `Exception` at all, so it walks past the
+            // consumer's `except Exception` and kills the SESSION rather than
+            // producing an error frame. Confirmed in release as well as debug.
+            //
+            // The width must PARSE to reach the panic, which is what makes this
+            // easy to miss: `ljust:"999999999999999999999"` is 21 digits, past
+            // `usize::MAX`, so the old `parse::<usize>()` failed and fell back
+            // to width 0. `ljust:"18446744073709551615"` — one digit shorter,
+            // exactly `usize::MAX` — parses, and panicked.
+            //
+            // Padding explicitly is what `center` below already does, which is
+            // why `center` never had the bug.
             let len = s.chars().count();
             Ok(Value::String(if width <= len {
                 s
@@ -1295,7 +1322,10 @@ fn apply_builtin_filter(
         "rjust" => {
             // `value.rjust(int(arg))` — see `ljust` for both halves: the
             // chokepoint argument and why the padding is explicit (#2328).
-            let width = pad_width(int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise));
+            let width = pad_width!(
+                filter_name,
+                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+            );
             let s = value.to_string();
             let len = s.chars().count();
             Ok(Value::String(if width <= len {
@@ -1321,7 +1351,10 @@ fn apply_builtin_filter(
             // table sampling `'a'.center(4)` and `'abc'.center(6)` finds
             // nothing. Both halves of the formula are load-bearing and are
             // gate-off tested separately.
-            let width = pad_width(int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise));
+            let width = pad_width!(
+                filter_name,
+                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+            );
             let s = value.to_string();
             // Code points, like `len()` — and like `{:^}`, which also counted
             // chars, so this is not the byte-vs-char defect (#2279).
@@ -1502,14 +1535,21 @@ fn apply_builtin_filter(
             // Django is `urlize(value, trim_url_limit=int(limit))`, a bare
             // `int()`, so the argument takes the chokepoint's `Raise` arm
             // (#2328). A NEGATIVE limit reaches `Truncator.chars(-3)`, which
-            // keeps nothing — `pad_width`'s clamp is the same answer. Before
-            // this, `parse::<usize>` refused a negative and the URL was not
-            // truncated at all.
+            // keeps nothing — clamping to 0 is the same answer. Before this,
+            // `parse::<usize>` refused a negative and the URL was not truncated
+            // at all.
+            //
+            // Deliberately NOT `pad_width`: this limit is a COMPARISON bound,
+            // never an allocation, so the `MAX_PAD_WIDTH` cap that stops the
+            // pad filters from asking for an unbounded `repeat` would be a
+            // divergence here for nothing. A huge limit simply means "do not
+            // truncate", which is what Django does too.
+            //
             // NOT `arg.map(|_| int_arg!(..))`: the macro's `return` would leave
             // the CLOSURE, not the filter, so the error would be swallowed into
             // the `Option`. Same trap as the `?`-in-a-match-arm one above.
             let parsed = int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise);
-            let limit = arg.map(|_| pad_width(parsed));
+            let limit = arg.map(|_| parsed.unwrap_or(0).max(0) as usize);
             Ok(Value::String(urlize(
                 &value.to_string(),
                 limit,
@@ -1751,15 +1791,48 @@ pub(crate) fn none_argument_error(filter_name: &str) -> DjangoRustError {
     ))
 }
 
-/// A parsed width as a `usize`, clamped at zero.
+/// The widest padding a template argument may ask `center`/`ljust`/`rjust` to
+/// materialise.
+///
+/// Mirrors [`crate::floatformat::MAX_PLACES`] and exists for the same reason,
+/// with one difference that raises the stakes: **a Rust allocation failure is a
+/// process ABORT, not a catchable error.** Python's answers here are a
+/// `MemoryError` or, past `ssize_t`, an `OverflowError` — both fail the render
+/// and both are catchable. `String::repeat` has no such answer, so a width a
+/// template can name must never reach an allocator unbounded.
+///
+/// One megabyte of padding is past any real template. Django will keep going
+/// well beyond it (`ljust:"9999999999"` really does build a ten-gigabyte
+/// string), so this is a deliberate divergence at widths nothing renders.
+const MAX_PAD_WIDTH: i64 = 1_000_000;
+
+/// A parsed width as a `usize`: clamped at zero, refused past [`MAX_PAD_WIDTH`].
 ///
 /// `str.center(-5)`, `ljust(-5)` and `rjust(-5)` are all the string unchanged
 /// in CPython, and so is a width of 0, so a negative collapses to 0 with no
-/// loss. Takes the chokepoint's `Option` directly because the four width
-/// filters all pass a `missing` default, so `None` is unreachable for them —
-/// spelling that here keeps the four call sites to one line each.
-fn pad_width(parsed: Option<i64>) -> usize {
-    parsed.unwrap_or(0).max(0) as usize
+/// loss. Takes the chokepoint's `Option` directly because the three width
+/// filters all pass a `missing` default, so `None` is unreachable for them.
+///
+/// The upper guard is #2328's own regression, caught by a boundary test added
+/// after review could not reproduce the panic this replaced. [`python_int`]
+/// SATURATES past `isize` rather than failing — deliberately, because for
+/// `slice` a magnitude past `isize` selects the same elements — so routing the
+/// pad filters through it turned `{{ p|ljust:"99999999999999999999999" }}` from
+/// a harmless width-0 no-op (the old `parse::<usize>()` simply failed) into a
+/// request for `isize::MAX` spaces, which aborts the process. Saturation is
+/// right for the parser and wrong for this consumer; the cap is where those
+/// meet.
+fn pad_width(filter_name: &str, parsed: Option<i64>) -> Result<usize> {
+    let width = parsed.unwrap_or(0).max(0);
+    if width > MAX_PAD_WIDTH {
+        return Err(DjangoRustError::TemplateError(format!(
+            "filter '{filter_name}' asks for a width of {width}, past djust's \
+             {MAX_PAD_WIDTH} cap — Python answers a MemoryError or an OverflowError \
+             for a width this large, and an unbounded Rust allocation would abort \
+             the process rather than raise"
+        )));
+    }
+    Ok(width as usize)
 }
 
 /// `int(arg)` for a filter argument, honouring the quoting hint.

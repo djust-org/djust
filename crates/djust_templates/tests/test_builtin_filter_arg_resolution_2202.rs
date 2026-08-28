@@ -308,13 +308,56 @@ fn the_quoting_hint_separates_truncation_from_a_raise() {
         .is_err());
 }
 
-/// `format!("{s:<width$}")` PANICS past Rust's formatter width cap, which is a
-/// `PanicException` across the PyO3 boundary rather than an error any caller
-/// can handle. Both pad filters build their padding explicitly now.
+/// Rust's format spec holds its width in a `u16`, so `format!("{s:<width$}")`
+/// panics at exactly one past `u16::MAX` with "Formatting argument out of
+/// range" — a `PanicException` across the PyO3 boundary, which derives from
+/// `BaseException` and so escapes every `except Exception`. Pinned as a
+/// BOUNDARY: `65535` was always fine and `65536` was the smallest failure, so
+/// a single large sample says nothing about where the edge is.
 #[test]
-fn a_large_width_pads_instead_of_panicking() {
+fn the_formatter_width_cap_no_longer_panics() {
     let mut c = Context::new();
     c.set("p".to_string(), Value::String("ab".into()));
-    assert_eq!(render(r#"{{ p|ljust:"70000" }}"#, &c).len(), 70000);
-    assert_eq!(render(r#"{{ p|rjust:"70000" }}"#, &c).len(), 70000);
+    for width in [1usize, 65535, 65536, 70000] {
+        for name in ["ljust", "rjust", "center"] {
+            let source = format!("{{{{ p|{name}:\"{width}\" }}}}");
+            assert_eq!(
+                render(&source, &c).chars().count(),
+                width.max(2),
+                "{name} at width {width}"
+            );
+        }
+    }
+}
+
+/// The regression the boundary test above found in #2328's own first pass.
+///
+/// `python_int` SATURATES past `isize` rather than failing — correct for
+/// `slice`, where a magnitude past `isize` selects the same elements, and
+/// wrong for a filter that then ALLOCATES that many spaces. A Rust allocation
+/// failure is a process ABORT, not a catchable error, so the pad filters cap
+/// the width and raise instead. Python answers `MemoryError` / `OverflowError`
+/// here; both fail the render, and so does this.
+#[test]
+fn a_width_past_the_pad_cap_raises_rather_than_aborting() {
+    let mut c = Context::new();
+    c.set("p".to_string(), Value::String("ab".into()));
+    for width in ["1000001", "99999999999999999999", "999999999999999999999"] {
+        for name in ["ljust", "rjust", "center"] {
+            let source = format!("{{{{ p|{name}:\"{width}\" }}}}");
+            let err = Template::new(&source)
+                .expect("template should parse")
+                .render(&c)
+                .expect_err("an unallocatable width must raise");
+            assert!(
+                err.to_string().contains("past djust"),
+                "{name} at {width}: {err}"
+            );
+        }
+    }
+    // Non-vacuity: the cap admits every width a page could want.
+    assert_eq!(
+        render(r#"{{ p|ljust:"1000000" }}"#, &c).chars().count(),
+        1_000_000
+    );
 }
