@@ -501,3 +501,87 @@ class TestNotMorePermissive:
                 if "<img" in r and "<img" not in d:
                     leaks.append((src, d, r))
         assert not leaks, leaks[:5]
+
+
+# ===========================================================================
+# The #2360 interaction — which did not exist when this was written.
+# ===========================================================================
+
+
+class TestTheContextBuiltinsInteraction:
+    """``True`` / ``False`` / ``None`` became context BUILTINS in #2360, in the
+    same resolution path a typed dict key (#2339) and a view (#2340) live in.
+
+    A key spelled like a builtin is where those three could collide, and the
+    collision is silent in both directions: a needle that matches a key it
+    should not opens a gate, and one that misses a key it should match closes
+    a region. Every cell measured against live Django rather than reasoned
+    about, because the ordering rules are Django's and not obvious.
+    """
+
+    def test_a_builtin_needle_compares_by_TYPE_against_a_key(self) -> None:
+        """The cell #2339 changed, reached through #2360's builtin.
+
+        ``True in {"True": 1}`` is False in Python — the builtin resolves to a
+        BOOL and the key is a STRING. Before the typed key this answered Y,
+        because the needle was stringified; the two fixes have to agree here or
+        a `{% if True in d %}` gate opens on a dict that merely has a key
+        spelled ``"True"``.
+        """
+        src = "{% if NEEDLE in q %}Y{% else %}N{% endif %}"
+        cases = [
+            ("True", {"True": 1}, "N"),
+            ("True", {True: 1}, "Y"),
+            # Numeric conflation reaches the builtin too: `True == 1`.
+            ("True", {1: 1}, "Y"),
+            ("None", {"None": 1}, "N"),
+            ("None", {None: 1}, "Y"),
+            ("False", {False: 1}, "Y"),
+            ("False", {0: 1}, "Y"),
+            ("False", {"False": 1}, "N"),
+        ]
+        for needle, q, want in cases:
+            s = src.replace("NEEDLE", needle)
+            assert_agrees(s, {"q": q})
+            assert djust_render(s, {"q": q}) == want, (needle, q)
+
+    def test_a_dict_KEY_wins_over_the_builtin_on_a_dotted_path(self) -> None:
+        """Django's ``Variable._resolve_lookup`` resolves a dotted segment by
+        mapping-item access; the builtin applies to a BARE name only.
+
+        So ``{{ d.True }}`` is the value under the key ``"True"`` — a string
+        lookup, which is also why it MISSES a dict keyed by the bool.
+        """
+        assert_agrees("[{{ d.True }}]", {"d": {"True": 7}})
+        assert djust_render("[{{ d.True }}]", {"d": {"True": 7}}) == "[7]"
+        assert_agrees("[{{ d.None }}]", {"d": {"None": 7}})
+        # A dotted segment is a STRING, so the bool key is not reached.
+        assert_agrees("[{{ d.True }}]", {"d": {True: 7}})
+        assert djust_render("[{{ d.True }}]", {"d": {True: 7}}) == "[]"
+
+    def test_a_context_variable_named_like_a_builtin_wins(self) -> None:
+        assert_agrees("[{{ True }}]", {"True": 9})
+        assert djust_render("[{{ True }}]", {"True": 9}) == "[9]"
+        # …and with nothing shadowing it, the builtin renders.
+        assert_agrees("[{{ True }}]", {})
+        assert djust_render("[{{ True }}]", {}) == "[True]"
+
+    def test_the_builtins_carry_through_a_VIEW(self) -> None:
+        """All three mechanisms at once: a builtin needle, a typed key, and a
+        dict view as the haystack.
+        """
+        for d in ({"True": 1, "None": 2}, {True: 1, None: 2}):
+            for src in (
+                "{% for k in d.keys %}[{{ k }}]{% endfor %}",
+                "[{{ d.keys }}]",
+                "[{{ d.items }}]",
+                "{% if True in d.keys %}Y{% else %}N{% endif %}",
+                "{% if None in d.keys %}Y{% else %}N{% endif %}",
+            ):
+                assert_agrees(src, {"d": d})
+        # The discriminating pair: the SAME template answers differently for a
+        # string-keyed and a typed-keyed dict, which is what proves the view
+        # carries the key's type rather than its text.
+        q = "{% if True in d.keys %}Y{% else %}N{% endif %}"
+        assert djust_render(q, {"d": {"True": 1}}) == "N"
+        assert djust_render(q, {"d": {True: 1}}) == "Y"
