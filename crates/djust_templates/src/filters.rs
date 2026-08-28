@@ -68,6 +68,44 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
     }
 }
 
+/// Rebuild a sequence in the SHAPE it arrived in — the counterpart of
+/// [`iter_values`], and the one place "does this filter collapse a tuple?" is
+/// answered (#2321).
+///
+/// Python and Django both preserve the container. `("a", "b", "c")[:2]` is a
+/// TUPLE, and Django's `slice` filter is a bare `value[bits]` passthrough, so
+/// `{{ p|slice:":2" }}` renders `('a', 'b')` where djust rendered
+/// `['a', 'b']`. The difference is only ever visible when the sliced value is
+/// rendered DIRECTLY — every consumer that iterates (`join`, `unordered_list`,
+/// `{% for %}`) sees the same elements either way — which is exactly why the
+/// sequence-filter suites, which compose `slice` with `join`, agreed for as
+/// long as they did.
+///
+/// **Not every sequence filter should call this.** Four others build a
+/// `Value::List` unconditionally and are RIGHT to:
+///
+/// * `dictsort` / `dictsortreversed` — Django is `sorted(...)`, and
+///   `sorted(tuple)` is a list in Python.
+/// * `make_list` — Django is `@stringfilter` + `list(value)`, so the tuple is
+///   already `str(value)` by the time the list is built.
+/// * `safeseq` / `escapeseq` — Django's bodies are list COMPREHENSIONS.
+///
+/// The decision is per-filter and belongs to Django's implementation, not to a
+/// blanket rule; `TestEveryRebuildSiteIsAccountedFor` in
+/// `python/tests/test_sequence_shape_preservation_2317_2321.py` pins the split
+/// mechanically so a new sequence filter has to state which column it is in.
+///
+/// Non-sequence inputs fall back to a list. No caller can reach that arm today
+/// — `slice`'s `String` branch returns earlier and every other variant returns
+/// the input unchanged — so it is a total-function default rather than a
+/// behaviour: making it `value.clone()` would silently discard `items`.
+fn rebuild_like(input: &Value, items: Vec<Value>) -> Value {
+    match input {
+        Value::Tuple(_) => Value::Tuple(items),
+        _ => Value::List(items),
+    }
+}
+
 /// Django's `django.utils.html.conditional_escape`: escape unless already safe.
 fn conditional_escape(value: &Value, already_safe: bool) -> String {
     if already_safe {
@@ -1478,10 +1516,16 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
             let start = start.max(0) as usize;
             let end = end.min(len).max(0) as usize;
 
+            // Through `rebuild_like` on BOTH branches: `()` and `[]` are
+            // different reprs, so the empty result is as shape-sensitive as
+            // the populated one (#2321).
             if start < end && start < items.len() {
-                Ok(Value::List(items[start..end.min(items.len())].to_vec()))
+                Ok(rebuild_like(
+                    value,
+                    items[start..end.min(items.len())].to_vec(),
+                ))
             } else {
-                Ok(Value::List(vec![]))
+                Ok(rebuild_like(value, Vec::new()))
             }
         }
         _ => Ok(value.clone()),
@@ -4245,13 +4289,22 @@ fn unordered_list(items: &[Value], depth: usize, items_are_safe: bool) -> String
     while i < items.len() {
         let item = &items[i];
 
-        // Check if the next item is a sublist
+        // Is the next item this item's sublist? Django's `walk_items` asks
+        // `isinstance(next_item, (list, tuple, types.GeneratorType))` — BOTH
+        // sequence types, not just a list (#2317). Matching `Value::List`
+        // alone rendered a tuple as its own `<li>` holding the escaped tuple
+        // repr, where Django nests a `<ul>`.
+        //
+        // The generator arm has no djust equivalent: a generator does not
+        // survive the crossing into Rust as anything but its elements, so
+        // there is no third variant to match.
         let sublist = if i + 1 < items.len() {
-            if let Value::List(sub) = &items[i + 1] {
-                i += 1; // consume the sublist
-                Some(sub)
-            } else {
-                None
+            match &items[i + 1] {
+                Value::List(sub) | Value::Tuple(sub) => {
+                    i += 1; // consume the sublist
+                    Some(sub)
+                }
+                _ => None,
             }
         } else {
             None
@@ -4628,6 +4681,42 @@ mod tests {
             11,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
+    }
+
+    /// `rebuild_like` is [`iter_values`]'s counterpart: iteration decides what
+    /// a filter READS, this decides what it HANDS BACK (#2321).
+    #[test]
+    fn rebuild_like_returns_the_container_it_was_given() {
+        let items = || vec![Value::Integer(1)];
+        assert!(matches!(
+            rebuild_like(&Value::Tuple(vec![]), items()),
+            Value::Tuple(_)
+        ));
+        assert!(matches!(
+            rebuild_like(&Value::List(vec![]), items()),
+            Value::List(_)
+        ));
+        // Empty in, empty out — `()` and `[]` are different reprs, so the
+        // empty case is as shape-sensitive as the populated one.
+        assert_eq!(
+            rebuild_like(&Value::Tuple(vec![]), Vec::new()).to_string(),
+            "()"
+        );
+        assert_eq!(
+            rebuild_like(&Value::List(vec![]), Vec::new()).to_string(),
+            "[]"
+        );
+    }
+
+    /// The elements are carried through untouched. A "shape-preserving"
+    /// rebuild that dropped or reordered items would pass the matches above.
+    #[test]
+    fn rebuild_like_does_not_touch_the_items() {
+        let built = rebuild_like(
+            &Value::Tuple(vec![Value::String("ignored".to_string())]),
+            vec![Value::Integer(1), Value::String("<b>".to_string())],
+        );
+        assert_eq!(built.to_string(), "(1, '<b>')");
     }
 
     /// `escape` is EAGER — `conditional_escape`, exactly as Django registers it
