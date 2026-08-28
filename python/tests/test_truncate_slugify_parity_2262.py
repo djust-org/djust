@@ -664,13 +664,23 @@ class TestEscapeChainIsBlockedOn2257:
             f"rule — django={django_out!r} port={as_django_feeds_it!r}"
         )
 
-    def test_the_chain_is_still_divergent_until_2257_closes(self) -> None:
-        """Pin the open divergence so closing #2257 turns this red deliberately."""
+    def test_the_escape_chain_agrees_now_that_escape_is_eager(self) -> None:
+        """Closed — by #2281 rather than by #2257, which is the correction.
+
+        This class located the fault in `escape` and predicted the chain would
+        agree once `escape` stopped being a no-op. It does. The cause was
+        #2257 residue 1 (the no-op) and #2281 fixed exactly that: `escape` is
+        `conditional_escape` now, eager, so the truncator receives the escaped
+        text Django hands it rather than raw markup.
+
+        The proof rows above — feed the port Django's escaped string, get
+        Django's answer — are what made the diagnosis checkable, and they still
+        pass; this is the same claim asserted end-to-end.
+        """
         django_out, djust_out = render_both("{{ p|escape|truncatechars_html:8 }}", "<?pi?>")
         assert django_out == "&lt;?pi?&gt;"
-        assert djust_out == "", (
-            "#2257 closed? Then the `escape|` chain agrees and this pin, plus "
-            "the exclusion of `escape|` from _CHAINS, should both go."
+        assert djust_out == django_out, (
+            f"the `escape|` chain regressed: django={django_out!r} djust={djust_out!r}"
         )
 
 

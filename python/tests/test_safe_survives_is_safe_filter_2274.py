@@ -33,10 +33,12 @@ of which diverge in BOTH columns and are therefore not ``|safe``-related:
 
 * ``join`` / ``safeseq`` / ``escapeseq`` / ``unordered_list`` / ``random`` do
   not iterate a STRING as a character sequence the way Python does, so they
-  return a shape Django never produces.
+  return a shape Django never produces. **Closed by #2283.**
 * ``linebreaks`` / ``linebreaksbr`` / ``urlize`` / ``urlizetrunc`` escape their
   input unconditionally, where Django's ``needs_autoescape`` skips the escape
-  for input that is already ``SafeData``.
+  for input that is already ``SafeData``. **Closed alongside #2281**, which
+  made ``escape`` produce a ``SafeString`` and so turned that divergence from
+  a quiet over-escape into 104 measurable double-escapes.
 
 Two of those five sequence filters were also a LIVE XSS, and closing it was a
 prerequisite rather than scope creep — see ``TestUnearnedSafeGrant``.
@@ -330,27 +332,37 @@ class TestUnearnedSafeGrant:
     cells, closing it turned the fix from +1067 more-permissive-than-Django
     cells into -663.
 
-    Only the safety half is fixed. The output SHAPE still differs from Django's
-    (Django iterates a string as a character sequence; djust does not) — filed
-    separately, and asserted as a known divergence below so a future fix has a
-    landmark.
+    Only the safety half was fixed here. The output SHAPE was still wrong
+    (Django iterates a string as a character sequence; djust did not) and
+    #2283 closed that — so the assertions below became EQUALITY against
+    Django, which is strictly stronger than the inertness they started as.
     """
 
     @pytest.mark.parametrize("name", ["unordered_list", "safeseq"])
     @pytest.mark.parametrize("payload", HOSTILE)
     def test_a_string_input_is_not_handed_back_live(self, name, payload):
-        out = _rust.render_template("{{ p|%s }}" % name, normalize_django_value({"p": payload}))
-        assert capabilities(out) == set(), f"{name} on {payload!r} -> {out!r}"
+        """The payload stays inert, and the output is now Django's byte for byte.
+
+        The assertion moved from ``capabilities(out) == set()`` to a subset of
+        Django's when #2283 landed: ``unordered_list`` GENERATES ``<li>`` for a
+        string now, exactly as Django does, so "no markup at all" stopped being
+        the right bar. What must not appear is any capability traceable to the
+        PAYLOAD, which is what comparing against Django's own output says.
+        """
+        django_out, djust_out = render_both("{{ p|%s }}" % name, payload)
+        assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
+        assert capabilities(djust_out) <= capabilities(django_out), djust_out
+        assert capabilities(djust_out) <= {"tag:li"}, f"{name} on {payload!r} -> {djust_out!r}"
 
     @pytest.mark.parametrize("name", ["unordered_list", "safeseq"])
     def test_the_grant_no_longer_survives_a_later_is_safe_filter(self, name):
         """The amplification path specifically: the exact chain shape that made
         #2274 unsafe to ship on its own."""
-        out = _rust.render_template(
-            "{{ p|%s|lower }}" % name,
-            normalize_django_value({"p": "<IMG SRC=x ONERROR=alert(1)>"}),
+        django_out, djust_out = render_both(
+            "{{ p|%s|lower }}" % name, "<IMG SRC=x ONERROR=alert(1)>"
         )
-        assert capabilities(out) == set(), out
+        assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
+        assert capabilities(djust_out) <= {"tag:li"}, djust_out
 
     def test_the_list_path_is_untouched(self):
         """The shape the filters are actually FOR keeps working, and keeps
@@ -360,13 +372,17 @@ class TestUnearnedSafeGrant:
         assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
         assert "<li>" in djust_out and "&lt;i&gt;" in djust_out, djust_out
 
-    def test_the_string_output_shape_is_still_a_known_divergence(self):
-        """Landmark for the follow-up, so 'this got fixed' is not silent.
+    def test_the_string_output_shape_agrees_now(self):
+        """The landmark, turned over. #2283 landed; this is the equality
+        assertion its predecessor asked to become.
 
-        Django iterates the string; djust escapes it whole. Both are inert —
-        only the shape differs. If this ever starts agreeing, the follow-up
-        landed and this test should become an equality assertion.
+        Django iterates the string as characters; djust does too now. The
+        escape on the non-sequence branch that this class added is still
+        present and is now a NO-OP for every reachable value — see
+        ``TestNonIterableFallThrough`` in
+        ``test_escape_chain_and_sequence_filters_2281_2283.py`` and the
+        enum-side pin in ``crates/djust_templates/src/filters.rs``.
         """
         django_out, djust_out = render_both("{{ p|unordered_list }}", "ab")
-        assert djust_out != django_out
-        assert "<li>a</li>" in django_out and "<li>" not in djust_out
+        assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
+        assert "<li>a</li>" in djust_out and "<li>b</li>" in djust_out

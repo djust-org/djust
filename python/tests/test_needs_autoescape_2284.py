@@ -609,11 +609,20 @@ class TestTheFirstofArmThreadsItToo:
 
 class TestEveryRenderSiteThreadsTheInputSafety:
     """``filter_output_is_safe`` was extracted in #2259 because three render
-    arms had drifted. ``input_was_safe`` is fed from the SAME ``runtime_safe``
-    at the SAME three arms, and this pins the caller SET rather than a floor —
-    a fourth arm that forgets the argument will not compile, but a fourth arm
-    that passes a literal ``false`` would compile and silently reintroduce the
-    bug for ``{% firstof %}`` or whatever it renders.
+    arms had drifted. The input-safety argument is fed from the SAME
+    ``runtime_safe`` at the SAME three arms, and this pins the caller SET
+    rather than a floor — a fourth arm that forgets the argument will not
+    compile, but a fourth arm that passes a literal ``false`` would compile and
+    silently reintroduce the bug for ``{% firstof %}`` or whatever it renders.
+
+    #2283 widened the argument from ``input_was_safe: bool`` to
+    ``InputSafety { container, items }``, because Django asks the question at
+    two granularities: ``escape`` and the four ``needs_autoescape`` filters read
+    whether the VALUE was safe, while ``join`` and ``unordered_list``
+    ``conditional_escape`` per ELEMENT and read whether ``safeseq`` /
+    ``escapeseq`` marked the ITEMS. ``container`` is this test's original
+    subject under a new name; both fields are pinned below, since a fourth arm
+    could get either wrong.
     """
 
     RENDERER = (
@@ -636,22 +645,50 @@ class TestEveryRenderSiteThreadsTheInputSafety:
                 for line in site.splitlines()
                 if line.strip() and not line.strip().startswith("//")
             ]
-            assert args[-1] == "runtime_safe", (
+            # The struct literal spans lines; the fields are what matter.
+            fields = {a for a in args if ":" in a}
+            assert "container: runtime_safe" in fields, (
                 "a call site passes something other than `runtime_safe` as the "
-                f"input-safety argument: {args!r}"
+                f"container half of the input safety: {args!r}"
+            )
+            assert "items: items_safe" in fields, (
+                "a call site does not thread the ITEM granularity (#2283); "
+                f"got {args!r}"
             )
 
     def test_the_classic_entry_point_still_defaults_to_escaping(self):
         """``apply_filter_full`` has no view of the chain and must report the
         SAFE default. A ``true`` there would make every non-renderer caller
-        stop escaping."""
+        stop escaping.
+
+        Since #2283 the default is spelled ``InputSafety::default()`` rather
+        than a literal ``false``. That is the same claim with a stronger
+        guarantee: ``Default`` derives every field ``false``, so a THIRD
+        granularity added later is safe-by-construction at this call site
+        instead of needing another literal remembered here.
+        """
         src = (self.RENDERER.parent / "filters.rs").read_text()
         body = src.split("pub fn apply_filter_full(", 1)[1].split("\n}\n", 1)[0]
-        call = re.search(r"apply_filter_full_safe\(([^)]*)\)", body, re.S)
-        assert call, body
+        # Depth-counted rather than `[^)]*`: the last argument is itself a call
+        # (`InputSafety::default()`) since #2283, and a non-greedy scan stops
+        # inside it — which this test did, reporting `InputSafety::default(`.
+        start = body.index("apply_filter_full_safe(") + len("apply_filter_full_safe(")
+        depth, end = 1, start
+        while depth:
+            depth += {"(": 1, ")": -1}.get(body[end], 0)
+            end += 1
         # Whitespace-insensitive, so a `cargo fmt` that rewraps the call does
         # not false-fail this. The LAST argument is the one under test.
-        args = [a.strip() for a in call.group(1).split(",") if a.strip()]
-        assert args[-1] == "false", (
+        args = [a.strip() for a in body[start : end - 1].split(",") if a.strip()]
+        assert args[-1] == "InputSafety::default()", (
             f"apply_filter_full must pass the SAFE default; it passes {args[-1]!r}"
+        )
+        # …and the default must actually BE the closed one. A `Default` impl
+        # that set a field `true` would satisfy the line above and undo it.
+        struct = src.split("pub struct InputSafety", 1)[1].split("}", 1)[0]
+        assert "derive" not in struct, struct
+        decl = src.split("pub struct InputSafety", 1)[0].rsplit("#[derive(", 1)[1]
+        assert "Default" in decl.split(")", 1)[0], (
+            "InputSafety must derive Default so every field is false; "
+            f"derives are {decl.split(')', 1)[0]!r}"
         )

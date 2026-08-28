@@ -808,16 +808,24 @@ fn firstof_still_escapes_an_unsafe_value() {
 }
 
 #[test]
-fn a_non_sequence_never_gets_an_unearned_safe_grant() {
-    // `unordered_list` / `safeseq` are in `safe_output_filters` because they
-    // escape every item they emit. On a non-sequence they emitted nothing and
-    // handed the raw input back under that same grant — `|safe` by another
-    // name, live on an unmodified build.
+fn a_string_input_never_gets_an_unearned_safe_grant() {
+    // `unordered_list` / `safeseq` escape every item they emit, which is what
+    // earned `unordered_list` its place in `safe_output_filters`. On a STRING
+    // they used to emit nothing and hand the raw input back under that grant —
+    // `|safe` by another name, live on an unmodified build (#2274/#2285).
+    //
+    // #2283 changed the mechanism underneath this test without changing its
+    // claim: a string is ITERATED as its characters now, so `unordered_list`
+    // emits one escaped `<li>` per character rather than an escaped whole. The
+    // payload is inert either way, which is the whole point of asserting on
+    // what a browser would EXECUTE rather than on the bytes.
     for src in [
         "{{ html|unordered_list }}",
         "{{ html|safeseq }}",
         "{{ html|unordered_list|lower }}",
         "{{ html|safeseq|lower }}",
+        // #2281: `escape` was a no-op, so `|safe` uncovered the raw value.
+        "{{ html|escape|safe }}",
     ] {
         let ctx = ctx_with("html", "<img src=x onerror=alert(1)>");
         let out = render(src, &ctx);

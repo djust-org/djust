@@ -704,30 +704,32 @@ class TestKnownRemainingDivergences:
             DjangoTemplate("{{ p|striptags }}").render(DjangoContext({"p": fifty})) == "keepAkeepB"
         )
 
-    @pytest.mark.parametrize(
-        ("source", "value"),
-        [
-            # `|escape|striptags`: djust strips the UNESCAPED value, so the
-            # tags Django's `escape` had already neutralised are removed.
-            ("{{ p|escape|striptags }}", "a<b>c</b>d"),
-            # The `|striptags|length` row this class carried is GONE: #2279 is
-            # fixed, `length` counts code points, and the row fired its own
-            # "now AGREES -- delete this row" assertion. Its replacement is
-            # `test_length_pprint_parity_2279_2277.py`, which pins the chain
-            # cell as an AGREEMENT.
-        ],
-    )
-    def test_chain_divergence_is_not_striptags(self, source: str, value: str) -> None:
-        """A chain divergence whose cause is the OTHER filter.
+    # The parametrized `test_chain_divergence_is_not_striptags` that lived here
+    # is GONE, and both of its rows went for the same reason: each carried a
+    # "now AGREES -- delete this row" assertion and each fired.
+    #
+    # * `{{ p|striptags|length }}` — #2279 closed it; `length` counts code
+    #   points now. Its replacement is `test_length_pprint_parity_2279_2277.py`,
+    #   which pins the chain cell as an AGREEMENT.
+    # * `{{ p|escape|striptags }}` — #2281 closed it; `escape` is eager now, so
+    #   `striptags` receives the escaped text and finds no tags to strip. Its
+    #   replacement is the method below.
+    #
+    # The two landed within an hour of each other and emptied the list between
+    # them. An empty `parametrize` collects ZERO cases and reports green, which
+    # is the decorative-test shape (#1859) — so the class is the closing
+    # assertions rather than a husk waiting for a third row.
 
-        Pinned with a proof that `striptags` itself is exact on the value, so a
-        future reader does not re-diagnose it as a `striptags` bug. Tracked at
-        #2281.
+    def test_the_escape_chain_now_agrees(self) -> None:
+        """#2281, closed. Was a row above; kept as the opposite assertion.
+
+        djust's `escape` deferred to render time, so `striptags` received the
+        RAW value and stripped tags Django's `escape` had already turned into
+        inert text. `escape` is eager now, so nothing is left to strip — and
+        `striptags` itself was byte-exact on this value the whole time, which
+        is what the row asserted and this keeps asserting.
         """
-        django_out, djust_out = render_both(source, value)
-        assert django_out != djust_out, (
-            f"{source} on {value!r} now AGREES -- delete this row and the "
-            f"follow-up issue it documents"
-        )
-        # `striptags` alone is byte-exact on the same value.
-        assert_agrees("{{ p|striptags|safe }}", value)
+        assert_agrees("{{ p|escape|striptags }}", "a<b>c</b>d")
+        assert_agrees("{{ p|striptags|safe }}", "a<b>c</b>d")
+        django_out, _ = render_both("{{ p|escape|striptags }}", "a<b>c</b>d")
+        assert django_out == "a&lt;b&gt;c&lt;/b&gt;d", django_out
