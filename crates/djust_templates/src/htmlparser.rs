@@ -13,8 +13,40 @@
 //!
 //! # Fidelity
 //!
-//! This is a transcription of CPython 3.12's `html/parser.py`, including the
-//! parts that look like bugs:
+//! This is a transcription of the **CPython 3.12.10+ / 3.13** `html/parser.py`,
+//! including the parts that look like bugs.
+//!
+//! The precision matters, and "CPython 3.12" would not be precise enough to be
+//! true. The HTML5-spec rewrite landed in **3.12.10**, so 3.12.9 *is* a CPython
+//! 3.12 and djust differs from it on a quarter of the corpus — a reader on
+//! 3.12.9 taking a looser header at its word would expect a match and not get
+//! one. `requires-python` is `>=3.10`, so 3.10 and 3.11 are supported too and
+//! carry the same pre-rewrite parser.
+//!
+//! Measured over the 4000 values in the fixture named below, rendering
+//! `{{ p|striptags }}` and comparing against each interpreter's recorded answer
+//! run through Django's `escape` (the cells where CPython *raises* — the
+//! unrelated DoS guard — are excluded, which is why the middle row is 0 rather
+//! than 2):
+//!
+//! | interpreter | djust's `striptags` differs on | |
+//! |---|---|---|
+//! | 3.12.9 | 992 | 24.8% |
+//! | 3.12.13, 3.13.7 | 0 | — |
+//! | 3.14.6 | 231 | 5.8% |
+//!
+//! **This is djust's own pinned behaviour on every host, not a claim about the
+//! running interpreter.** djust deliberately does not branch on
+//! `sys.version_info` here: a template filter whose output changes when ops
+//! bumps the base image is a worse property than a documented fixed divergence,
+//! and Django's own `strip_tags` is disclaimed as "not guaranteed to produce
+//! safe output" regardless. That decision is #2286;
+//! `python/tests/fixtures/striptags_reference_2273.json` records every supported
+//! interpreter's answer per value (3.12.9, 3.12.13, 3.13.7, 3.14.6), splitting
+//! them into a `stable` set asserted on every runner and an `unstable` set that
+//! keeps the moving reference visible in the repo (#2273).
+//!
+//! The parts that look like bugs, and are faithfully reproduced:
 //!
 //! * `entityref` is `&([a-zA-Z][-.a-zA-Z0-9]*)[^a-zA-Z0-9]`, which requires a
 //!   trailing character, so `&one two` resolves as the entity `one` and
