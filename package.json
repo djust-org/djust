@@ -16,7 +16,7 @@
     "@vitest/ui": "^4.1.9",
     "eslint": "^10.9.1",
     "eslint-plugin-security": "^4.0.1",
-    "happy-dom": "^20.11.2",
+    "happy-dom": "^20.11.6",
     "jsdom": "^30.0.1",
     "terser": "^5.50.0",
     "vitest": "^4.1.10"
