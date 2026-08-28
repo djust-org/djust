@@ -364,6 +364,16 @@ INPUTS = {
     ),
     "s-unicode": "héllo→",
     "s-digits": "123",
+    # A DATE-SHAPED string (#2344). A Python `datetime` crosses into Rust as
+    # exactly this text and has no other spelling, so it is what `date`,
+    # `time`, `timesince` and `timeuntil` actually receive on a real page —
+    # and no other input is one, which meant every cell of those four took the
+    # unreadable-value branch and returned its input. The reachability manifest
+    # reported `timesince`'s "not a date or datetime" argument error as
+    # UNREACHABLE for exactly that reason: the fix parses the VALUE first
+    # (Django's order), so a corpus with no readable date can never reach the
+    # argument logic of the two filters whose argument is the subject.
+    "s-datetime": "2020-01-01 12:00:00",
     "l-plain": ["<b>", "x"],
     "l-nested": ["a", ["b", "c"]],
     "t-plain": ("<b>", "x"),
@@ -621,6 +631,11 @@ HOT3 = [
 #: preserved (`slice`) or minted (`join`), which is only visible at length 2+.
 INPUTS_2 = [
     "s-img",
+    # The date-shaped value (#2344), on the chain axis too: what a SECOND
+    # filter does with a rendered duration is a different question from what
+    # one filter does, and it is the only input for which `timesince` produces
+    # anything but its own input back.
+    "s-datetime",
     "s-lt",
     "l-plain",
     "d-plain",
@@ -1203,23 +1218,25 @@ def _swept_argument_errors() -> set[str]:
 
     Rendered rather than reasoned about: which spelling triggers which arm of
     the chokepoint is exactly the thing this axis exists to stop guessing at.
-    Swept over the same product `arg_cells` builds — every name in
-    `FILTER_ARGS` x every spelling — so this measures the corpus rather than a
-    convenient subset of it.
+
+    Iterates `arg_cells()` ITSELF rather than re-deriving the product. This
+    open-coded `sorted(FILTER_ARGS) x ARG_SPELLINGS x INPUTS_2` until #2344,
+    and when `arg_cells` moved to `django_argument_filters()` — 29 names, where
+    `FILTER_ARGS` has 25 — this copy stayed behind. The axis then measured a
+    NARROWER corpus than the one it ships and reported #2344's new error
+    unreachable, though the corpus reaches it on the first `timesince` cell it
+    builds. Two copies of one product is the drift this file exists to make
+    visible, and it had grown one inside the file itself.
     """
     required = _required_argument_errors()
     reached: set[str] = set()
-    for name in sorted(FILTER_ARGS):
-        for spelling in ARG_SPELLINGS:
-            for key in INPUTS_2:
-                _, du = render_both(
-                    "{{ p|%s:%s }}" % (name, spelling), {"p": INPUTS[key], **ARG_CONTEXT}
-                )
-                if not du.startswith("<<EXC "):
-                    continue
-                for signature in required:
-                    if _signature_matches(signature, du):
-                        reached.add(signature)
+    for name, spelling, key in arg_cells():
+        _, du = render_both("{{ p|%s:%s }}" % (name, spelling), {"p": INPUTS[key], **ARG_CONTEXT})
+        if not du.startswith("<<EXC "):
+            continue
+        for signature in required:
+            if _signature_matches(signature, du):
+                reached.add(signature)
     return reached
 
 

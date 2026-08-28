@@ -280,12 +280,14 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
                 "ARG_SPELLINGS: list[str] = []\n_PRE_2345_SPELLINGS = [\n",
             ),
         )
-        missing = rows(run_manifest(script))["argument"]["missing"]
-        assert len(missing) == 4, missing
-        assert any("does not resolve" in m for m in missing)
-        assert any("is a ValueError" in m for m in missing)
-        assert any("is a TypeError" in m for m in missing)
-        assert any("past djust's" in m for m in missing)
+        row = rows(run_manifest(script))["argument"]
+        # EVERY required error becomes unreachable, which is the claim — and it
+        # is a set comparison rather than a count, so it survives the engine
+        # growing a new argument error (as #2346 did, 4 -> 6).
+        assert sorted(row["missing"]) == sorted(row["required"]), row["missing"]
+        joined = "\n".join(row["missing"])
+        for kind in ("does not resolve", "is a ValueError", "is a TypeError", "past djust's"):
+            assert kind in joined, kind
 
     def test_the_nineteen_spellings_leave_the_pad_cap_unreachable(
         self, tmp_path: pathlib.Path
@@ -305,11 +307,14 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         has.
         """
         script = mutated_script(tmp_path, ("\n    '\"99999999999999999999\"',\n]", "\n]"))
-        missing = rows(run_manifest(script))["argument"]["missing"]
-        assert len(missing) == 1 and "past djust's" in missing[0], missing
-        # And the other three ARE reachable from the nineteen, so the report
-        # names the gap rather than blaming the whole axis.
-        assert len(rows(run_manifest(script))["argument"]["required"]) == 4
+        row = rows(run_manifest(script))["argument"]
+        assert len(row["missing"]) == 1 and "past djust's" in row["missing"][0], row["missing"]
+        # And every OTHER required error is still reachable from the nineteen,
+        # so the report names the one gap rather than blaming the whole axis.
+        # Stated as a set difference: the count moves when the engine grows an
+        # argument error, and the claim does not.
+        assert len(row["required"]) - len(row["missing"]) >= 3
+        assert set(row["missing"]) < set(row["required"])
 
 
 class TestTheLimitTheManifestDoesNotClose:
@@ -663,9 +668,16 @@ class TestTheArgumentAxisCorpus:
         `filters.rs`; the swept side is MEASURED by rendering. Both are
         recomputed, so this asserts the corpus reaches them rather than that a
         list has N entries."""
-        data = run_manifest()
-        assert rows(data)["argument"]["missing"] == []
-        assert len(rows(data)["argument"]["required"]) == 4
+        row = rows(run_manifest())["argument"]
+        assert row["missing"] == []
+        # The requirement set is recomputed from the Rust source, so its SIZE
+        # is not a fact about this test — it grew 4 -> 6 when #2346 added
+        # `divisibleby`'s ZeroDivisionError and `floatformat`'s IndexError.
+        # What is asserted is that each distinct failure the chokepoint can
+        # produce is present, by kind.
+        joined = "\n".join(row["required"])
+        for kind in ("does not resolve", "is a ValueError", "is a TypeError", "past djust's"):
+            assert kind in joined, kind
 
     def test_the_argument_cells_exist_and_disagree_somewhere(self, tmp_path: pathlib.Path) -> None:
         """Non-vacuity for the whole axis (#1468 in corpus form).

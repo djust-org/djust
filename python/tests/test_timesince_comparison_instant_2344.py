@@ -62,8 +62,12 @@ that ordering, asserted from both sides.
 from __future__ import annotations
 
 import datetime
+import json
+import os
 import pathlib
 import re
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -74,6 +78,18 @@ from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
 from djust import _rust  # noqa: E402
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+DIFFERENTIAL = REPO / "scripts" / "filter-parity-differential.py"
+
+
+def _env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO / "python"), *([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])]
+    )
+    return env
+
 
 FILTERS_RS = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -517,6 +533,90 @@ class TestTheFalsinessResidueIsNamed:
             source = "{{ p|timesince:%s }}" % arg
             assert raises_django(source, {"p": NOON}), arg
             assert raises_djust(source, {"p": NOON}), arg
+
+
+class TestTheManifestDemandsThisErrorBeReachable:
+    """The reachability manifest (#2345) on this PR's new argument error.
+
+    It picked the requirement up automatically — the set is recomputed from the
+    Rust source, so the `argument` axis went 4 required to 5 with no edit — and
+    then reported the error UNREACHABLE. Both halves of that were informative:
+
+    * the report was RIGHT the first time. No input in the corpus was
+      date-shaped, and this fix parses the VALUE before the argument (Django's
+      own order), so every ``timesince`` / ``timeuntil`` cell took the
+      unreadable-value branch and the argument logic was never reached. A
+      corpus with no readable date cannot measure the two filters whose
+      argument is the subject. ``s-datetime`` is what the manifest asked for.
+
+    * the report was still RED afterwards, and that one was the manifest's own
+      bug: ``_swept_argument_errors`` open-coded the corpus product as
+      ``sorted(FILTER_ARGS) x ...`` while ``arg_cells`` had moved to
+      ``django_argument_filters()``. ``timesince`` is one of the four names in
+      the second set and not the first, so the axis measured a narrower corpus
+      than it ships. It iterates ``arg_cells()`` itself now — two copies of one
+      product is the drift this whole mechanism exists to make visible, and it
+      had grown one inside itself.
+    """
+
+    @staticmethod
+    def argument_axis() -> dict:
+        proc = subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+            [sys.executable, str(DIFFERENTIAL), "--manifest", "--json"],
+            capture_output=True,
+            text=True,
+            env=_env(),
+            cwd=str(REPO),
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr[-3000:]
+        data = json.loads(proc.stdout)
+        return next(r for r in data["axes"] if r["axis"] == "argument")
+
+    def test_the_new_error_is_required_and_reachable(self) -> None:
+        row = self.argument_axis()
+        assert row["missing"] == [], row["missing"]
+        assert any("is not a date or datetime" in r for r in row["required"]), (
+            "this PR's argument error is not in the requirement set, so nothing "
+            "demands the corpus be able to reach it"
+        )
+
+    def test_the_corpus_carries_a_date_shaped_value(self) -> None:
+        """What the manifest asked for, pinned. Without it the value parse
+        fails first and no cell reaches the argument logic at all."""
+        source = DIFFERENTIAL.read_text(encoding="utf-8")
+        assert '"s-datetime"' in source, (
+            "the date-shaped corpus input is gone, so every timesince/timeuntil "
+            "cell takes the unreadable-value branch and this PR is unmeasured"
+        )
+        # And it must be on the chain axis too, which is where the argument
+        # cells draw their values from.
+        block = source.split("INPUTS_2 = [", 1)[1].split("]", 1)[0]
+        assert '"s-datetime"' in block, block
+
+    def test_the_axis_measures_the_corpus_it_ships(self) -> None:
+        """The manifest's own drift, pinned structurally.
+
+        The swept side must iterate the SAME generator that builds the cells.
+        Re-deriving the product is what let the two halves disagree about which
+        filters are swept — 25 against 29 — and the axis then reported an error
+        unreachable that its own corpus reaches.
+        """
+        source = DIFFERENTIAL.read_text(encoding="utf-8")
+        body = source.split("def _swept_argument_errors(", 1)[1].split("\ndef ", 1)[0]
+        # CODE only. The docstring explains this very drift and names
+        # `FILTER_ARGS` to do it, so a scan that included prose would fire on
+        # its own documentation — green exactly while nobody explains the bug.
+        body = body.split('"""', 2)[-1]
+        assert "arg_cells()" in body, (
+            "`_swept_argument_errors` re-derives the corpus product instead of "
+            "iterating `arg_cells()`, so the two halves of the axis can disagree "
+            "about what the corpus contains"
+        )
+        assert "FILTER_ARGS" not in body, (
+            "the swept side is back on FILTER_ARGS, which is the ESCAPING axis's "
+            "table and has 25 of the 29 argument-taking filters"
+        )
 
 
 class TestOneBodyForTwoFilters:
