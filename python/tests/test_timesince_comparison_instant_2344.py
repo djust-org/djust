@@ -62,6 +62,7 @@ that ordering, asserted from both sides.
 from __future__ import annotations
 
 import datetime
+import importlib.util
 import json
 import os
 import pathlib
@@ -616,6 +617,68 @@ class TestTheManifestDemandsThisErrorBeReachable:
         assert "FILTER_ARGS" not in body, (
             "the swept side is back on FILTER_ARGS, which is the ESCAPING axis's "
             "table and has 25 of the 29 argument-taking filters"
+        )
+
+
+class TestTheCorpusCanSeeThisFixAtAll:
+    """A clock cell is compared by its RAISE BIT, not its exception text.
+
+    `nondet_agreement` (#2345) compared the two engines' raw output. Where BOTH
+    raise, that compares Django's `AttributeError` message against djust's
+    wrapping `RuntimeError` message — two strings that can never match — so a
+    fix to the raise bit read as `<NONDET differs>` before AND after.
+
+    Measured, which is how it was found: this PR makes `timesince`/`timeuntil`
+    raise where Django raises, and the two-build differential reported **zero
+    moved cells on every axis**. The tool built to catch a corpus that cannot
+    see a change could not see this one, one layer below where #2345 had
+    already looked.
+
+    A PANIC stays distinct from a raise (#2343): a raise is contained by
+    `LiveViewConsumer.receive` and produces an error frame, a panic walks past
+    it and takes the session down. Folding them would let a cell that started
+    panicking read as unchanged.
+    """
+
+    @staticmethod
+    def outcome(text: str) -> str:
+        """`_outcome`, exercised through the module rather than reimplemented."""
+        spec = importlib.util.spec_from_file_location("fpd_outcome", DIFFERENTIAL)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["fpd_outcome"] = module
+        spec.loader.exec_module(module)
+        return module._outcome(text)
+
+    def test_two_different_exception_texts_are_the_same_outcome(self) -> None:
+        django_side = "<<EXC AttributeError: 'SafeString' object has no attribute 'year'>>"
+        djust_side = "<<EXC RuntimeError: Template error: filter 'timesince' compares against>>"
+        assert django_side != djust_side
+        assert self.outcome(django_side) == self.outcome(djust_side) == "<<RAISED>>"
+
+    def test_a_panic_is_not_the_same_outcome_as_a_raise(self) -> None:
+        """#2343's distinction, preserved. A cell that starts panicking must
+        never read as unchanged."""
+        assert self.outcome("<<PANIC PanicException: boom>>") == "<<PANICKED>>"
+        assert self.outcome("<<EXC RuntimeError: boom>>") == "<<RAISED>>"
+        assert self.outcome("<<PANIC PanicException: boom>>") != self.outcome(
+            "<<EXC RuntimeError: boom>>"
+        )
+
+    def test_an_ordinary_render_is_left_alone(self) -> None:
+        """Non-vacuity: a reduction that collapsed everything would make every
+        cell agree and the whole corpus useless."""
+        assert self.outcome("3\xa0hours, 30\xa0minutes") == "3\xa0hours, 30\xa0minutes"
+        assert self.outcome("") == ""
+
+    def test_the_marker_is_built_from_the_outcome_not_the_raw_text(self) -> None:
+        """The structural pin. CODE only — the docstring explains the defect
+        and quotes the old comparison to do it."""
+        source = DIFFERENTIAL.read_text(encoding="utf-8")
+        body = source.split("def nondet_agreement(", 1)[1].split("\ndef ", 1)[0]
+        body = body.split('"""', 2)[-1]
+        assert "_outcome(dj) == _outcome(du)" in body, (
+            "a clock cell is compared by raw text again, so a raise-bit fix on "
+            "timesince/timeuntil reports as no movement"
         )
 
 

@@ -709,7 +709,34 @@ def nondet_agreement(dj: str, du: str) -> tuple[str, str]:
     would rewrite the value of every existing `timesince` cell and make an older
     baseline incomparable, for a question that axis does not ask.
     """
-    return "<NONDET>", "<NONDET>" if dj == du else "<NONDET differs>"
+    return "<NONDET>", "<NONDET>" if _outcome(dj) == _outcome(du) else "<NONDET differs>"
+
+
+def _outcome(out: str) -> str:
+    """A cell's answer reduced to what is COMPARABLE across the two engines.
+
+    A raise is compared by the fact of it, never by its text. Django raises
+    `AttributeError` / `ValueError` / `ZeroDivisionError` from Python; djust
+    raises a `RuntimeError` wrapping a Rust error that names the filter and the
+    argument. Those strings cannot match, so comparing them marks every cell
+    where BOTH raise as disagreeing — and a fix to the raise bit then reads as
+    "differs" before and after.
+
+    Measured, and the reason this exists: #2344 makes `timesince`/`timeuntil`
+    raise where Django raises, moving 336 cells, and the raw-text comparison
+    reported ZERO on every axis. The tool built to catch a corpus that cannot
+    see a change could not see that one.
+
+    A PANIC stays distinct from a raise, per #2343: a raise is contained by
+    `LiveViewConsumer.receive` and produces an error frame, while a panic walks
+    past it and takes the session down. Folding them would let a cell that
+    started panicking read as unchanged.
+    """
+    if out.startswith("<<PANIC "):
+        return "<<PANICKED>>"
+    if out.startswith("<<EXC "):
+        return "<<RAISED>>"
+    return out
 
 
 def spec(name: str) -> str:
