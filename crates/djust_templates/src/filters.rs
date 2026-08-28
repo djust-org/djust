@@ -1208,12 +1208,23 @@ fn apply_builtin_filter(
         // `[conditional_escape(obj) for obj in value]` — same iteration, and
         // the escaped items are `SafeString`s, so `escapeseq` is item-safe too
         // and `{{ l|escapeseq|join:", " }}` must not escape a second time.
+        //
+        // `conditional_escape` and not `html_escape` (#2287): Django's is
+        // CONDITIONAL, so items that were ALREADY `SafeData` pass through
+        // untouched. That branch was unreachable until the context started
+        // reporting item safety — before it, `input_safety.items` could only
+        // be set by `safeseq`/`escapeseq` themselves, and
+        // `filter_output_items_are_safe` refuses the grant when the container
+        // was safe, so nothing could hand `escapeseq` pre-safe items. With the
+        // #2287 seed a view's `[mark_safe(x), …]` reaches it, and escaping
+        // those a second time made `{{ p|escapeseq|join:", " }}` emit
+        // `&amp;lt;b&amp;gt;` where Django emits `<b>`.
         "escapeseq" => match iter_values(value) {
             Some(items) => Ok(collapse_if_input_safe(
                 Value::List(
                     items
                         .iter()
-                        .map(|item| Value::String(html_escape(&item.to_string())))
+                        .map(|item| Value::String(conditional_escape(item, input_safety.items)))
                         .collect(),
                 ),
                 input_safety.container,

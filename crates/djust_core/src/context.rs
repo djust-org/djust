@@ -166,6 +166,87 @@ impl Context {
         false
     }
 
+    /// Is the value at `key` a SEQUENCE whose every ELEMENT was marked safe,
+    /// while the sequence itself was not? (#2287)
+    ///
+    /// Django's second safety granularity, arriving from the CONTEXT rather
+    /// than from a filter. A view that returns
+    /// `{"p": [mark_safe("<b>x</b>"), mark_safe("<i>y</i>")]}` has marked the
+    /// ITEMS — `mark_safe` is never called on the list, so the list is not
+    /// `SafeData` and [`Context::is_safe`] correctly answers `false` for `p`.
+    /// `join` and `unordered_list` `conditional_escape` per element, so in
+    /// Django those items come through LIVE; without this method djust
+    /// escaped them, which is the whole of #2287.
+    ///
+    /// `_collect_safe_keys` (`python/djust/mixins/rust_bridge.py`) already
+    /// walks containers and emits one dotted path per `SafeString` it finds,
+    /// so `p.0` / `p.1` are ALREADY in `safe_keys` — the channel existed and
+    /// nothing read it at this granularity.
+    ///
+    /// Four deliberate narrowings, each of which is the ESCAPING direction and
+    /// three of which would be an under-escape if dropped:
+    ///
+    /// * **`List` / `Tuple` only.** A `Value::Object` (a Python `dict`) records
+    ///   its safe paths by NAME (`p.<k>`) while `filters::iter_values` yields
+    ///   its KEYS — so a by-index check can never confuse the two, and a dict
+    ///   whose VALUES are safe never grants safety to its (unmarked) keys.
+    ///   A `String` is excluded for the same reason: `iter_values` yields its
+    ///   CHARACTERS, and no `mark_safe` can mark a character.
+    /// * **EVERY index present.** Django escapes per element, so a list whose
+    ///   items are only PARTIALLY marked has a per-item answer that one bool
+    ///   cannot express. Requiring all of them means a mixed list is escaped
+    ///   whole — over-escaping, never under.
+    /// * **Each element is a `String`.** `_collect_safe_keys` only ever emits a
+    ///   path for a `SafeString`, so this is implied for a FRESH sync — but
+    ///   `mark_safe_keys` only ever EXTENDS the set (there is no clear), so a
+    ///   later render that puts a different shape at the same index must not
+    ///   inherit the old grant. See the note on staleness below.
+    /// * **Non-empty.** A zero-element grant is unobservable (there is no item
+    ///   to escape) and asserting it would be a claim no test can falsify.
+    ///
+    /// Nested containers are refused by the `String` narrowing, and that is
+    /// load-bearing rather than incidental: `join` stringifies a sublist and
+    /// Django escapes that `repr`, so granting the whole sequence on
+    /// `[mark_safe("a"), [mark_safe("b")]]` would emit raw `<` where Django
+    /// emits `&lt;` — MORE permissive than Django, which this fix must never
+    /// be.
+    ///
+    /// Staleness: `RustLiveView::mark_safe_keys` accumulates and is never
+    /// cleared, so a key marked safe in one render stays marked in the next.
+    /// That is a PRE-EXISTING defect at the container granularity — today
+    /// `{{ p }}` already emits a later hostile value raw once `p` has been
+    /// `mark_safe`d once — and this method rides the same set rather than
+    /// creating a second one. Tracked at #2300; a fix there fixes both
+    /// granularities, because both read this one set.
+    pub fn items_are_safe(&self, key: &str) -> bool {
+        let items = match self.get(key) {
+            Some(Value::List(items)) | Some(Value::Tuple(items)) => items,
+            _ => return false,
+        };
+        if items.is_empty() {
+            return false;
+        }
+
+        // The prefixes this value's items could have been recorded under: the
+        // key itself, plus the loop-variable alias `is_safe` resolves — inside
+        // `{% for row in rows %}`, `row`'s items live at `rows.<i>.<j>`.
+        let mut prefixes: Vec<String> = vec![key.to_string()];
+        let parts: Vec<&str> = key.split('.').collect();
+        if let Some((iterable_name, index)) = self.loop_mappings.get(parts[0]) {
+            let index_str = index.to_string();
+            let mut resolved_parts = vec![iterable_name.as_str(), index_str.as_str()];
+            resolved_parts.extend_from_slice(&parts[1..]);
+            prefixes.push(resolved_parts.join("."));
+        }
+
+        prefixes.iter().any(|prefix| {
+            items.iter().enumerate().all(|(i, item)| {
+                matches!(item, Value::String(_))
+                    && self.safe_keys.contains(&format!("{prefix}.{i}"))
+            })
+        })
+    }
+
     pub fn get(&self, key: &str) -> Option<&Value> {
         // Handle nested lookups like "user.name"
         let parts: Vec<&str> = key.split('.').collect();
@@ -582,5 +663,159 @@ mod tests {
 
         ctx.pop();
         assert!(matches!(ctx.get("a"), Some(Value::Integer(1))));
+    }
+
+    // -- `items_are_safe` (#2287) ------------------------------------------
+    //
+    // Unit-level pins for each narrowing in the doc comment. The Django-parity
+    // half lives in `python/tests/test_context_item_safety_2287.py`; these
+    // exist because three of the narrowings are only OBSERVABLE as a bool here
+    // — from the Python side, "grant refused" and "grant given but the filter
+    // escaped anyway" produce the same bytes for some shapes.
+
+    fn strs(values: &[&str]) -> Vec<Value> {
+        values
+            .iter()
+            .map(|s| Value::String(s.to_string()))
+            .collect()
+    }
+
+    /// A list with `p.0`/`p.1` marked — the shape `_collect_safe_keys` emits
+    /// for `[mark_safe(a), mark_safe(b)]`.
+    fn ctx_with_marked_list() -> Context {
+        let mut ctx = Context::new();
+        ctx.set(
+            "p".to_string(),
+            Value::List(strs(&["<b>x</b>", "<i>y</i>"])),
+        );
+        ctx.mark_safe("p.0".to_string());
+        ctx.mark_safe("p.1".to_string());
+        ctx
+    }
+
+    #[test]
+    fn items_are_safe_when_every_index_is_marked() {
+        assert!(ctx_with_marked_list().items_are_safe("p"));
+        // …and the CONTAINER is not, which is the whole distinction: Django's
+        // `mark_safe` was never called on the list.
+        assert!(!ctx_with_marked_list().is_safe("p"));
+    }
+
+    #[test]
+    fn a_tuple_is_the_same_shape_as_a_list() {
+        let mut ctx = Context::new();
+        ctx.set("p".to_string(), Value::Tuple(strs(&["a", "b"])));
+        ctx.mark_safe("p.0".to_string());
+        ctx.mark_safe("p.1".to_string());
+        assert!(ctx.items_are_safe("p"));
+    }
+
+    #[test]
+    fn a_partially_marked_list_is_refused() {
+        let mut ctx = ctx_with_marked_list();
+        ctx.set("p".to_string(), Value::List(strs(&["a", "b", "c"])));
+        // `p.2` is unmarked — Django would escape only that element, and one
+        // bool cannot say so, so the whole grant is withheld.
+        assert!(!ctx.items_are_safe("p"));
+    }
+
+    #[test]
+    fn a_dict_is_refused_even_when_its_values_are_marked() {
+        // `_collect_safe_keys` writes a dict's paths by NAME while the filters
+        // iterate its KEYS. Marking `p.0` here is the adversarial case: a dict
+        // that happens to have a key spelled "0".
+        let mut ctx = Context::new();
+        let mut map = IndexMap::new();
+        map.insert("0".to_string(), Value::String("<b>v</b>".to_string()));
+        ctx.set("p".to_string(), Value::Object(map));
+        ctx.mark_safe("p.0".to_string());
+        assert!(!ctx.items_are_safe("p"));
+    }
+
+    #[test]
+    fn a_marked_string_grants_nothing_to_its_characters() {
+        let mut ctx = Context::new();
+        ctx.set("p".to_string(), Value::String("<b>x</b>".to_string()));
+        ctx.mark_safe("p".to_string());
+        ctx.mark_safe("p.0".to_string());
+        assert!(ctx.is_safe("p"));
+        assert!(!ctx.items_are_safe("p"));
+    }
+
+    #[test]
+    fn an_empty_list_is_refused() {
+        let mut ctx = Context::new();
+        ctx.set("p".to_string(), Value::List(vec![]));
+        assert!(!ctx.items_are_safe("p"));
+    }
+
+    #[test]
+    fn a_nested_container_is_refused_even_when_every_leaf_is_marked() {
+        // Granting this would out-permit Django: `join` stringifies the
+        // sublist and Django escapes that repr.
+        let mut ctx = Context::new();
+        ctx.set(
+            "p".to_string(),
+            Value::List(vec![
+                Value::String("<b>a</b>".to_string()),
+                Value::List(strs(&["<i>b</i>"])),
+            ]),
+        );
+        ctx.mark_safe("p.0".to_string());
+        ctx.mark_safe("p.1".to_string());
+        ctx.mark_safe("p.1.0".to_string());
+        assert!(!ctx.items_are_safe("p"));
+    }
+
+    #[test]
+    fn a_stale_mark_cannot_reach_a_non_string_item() {
+        // `mark_safe_keys` only extends, so a path marked for a previous
+        // render survives into this one. The element-is-a-String narrowing is
+        // what stops it granting safety to a shape never marked.
+        let mut ctx = Context::new();
+        ctx.set(
+            "p".to_string(),
+            Value::List(vec![Value::List(strs(&["<script>x</script>"]))]),
+        );
+        ctx.mark_safe("p.0".to_string());
+        assert!(!ctx.items_are_safe("p"));
+    }
+
+    #[test]
+    fn a_missing_key_is_refused() {
+        assert!(!Context::new().items_are_safe("nope"));
+    }
+
+    #[test]
+    fn a_loop_variable_resolves_through_its_iterables_path() {
+        // Inside `{% for row in rows %}` the variable is `row`, but
+        // `_collect_safe_keys` recorded the marks at `rows.0.<i>`.
+        let mut ctx = Context::new();
+        let row = Value::List(strs(&["<b>x</b>", "<i>y</i>"]));
+        ctx.set("rows".to_string(), Value::List(vec![row.clone()]));
+        ctx.mark_safe("rows.0.0".to_string());
+        ctx.mark_safe("rows.0.1".to_string());
+
+        ctx.push();
+        ctx.set("row".to_string(), row);
+        ctx.set_loop_mapping("row".to_string(), "rows".to_string(), 0);
+        assert!(ctx.items_are_safe("row"));
+    }
+
+    #[test]
+    fn a_loop_variable_pointing_at_an_unmarked_row_is_refused() {
+        let mut ctx = Context::new();
+        let marked = Value::List(strs(&["<b>x</b>"]));
+        let unmarked = Value::List(strs(&["<img src=x onerror=alert(1)>"]));
+        ctx.set(
+            "rows".to_string(),
+            Value::List(vec![marked, unmarked.clone()]),
+        );
+        ctx.mark_safe("rows.0.0".to_string());
+
+        ctx.push();
+        ctx.set("row".to_string(), unmarked);
+        ctx.set_loop_mapping("row".to_string(), "rows".to_string(), 1);
+        assert!(!ctx.items_are_safe("row"));
     }
 }

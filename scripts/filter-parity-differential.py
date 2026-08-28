@@ -103,6 +103,17 @@ from django.utils.html import conditional_escape  # noqa: E402
 from django.utils.safestring import SafeData, mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
+from djust.mixins.rust_bridge import _collect_safe_keys  # noqa: E402
+
+
+def _safe_keys_for(value) -> list[str]:
+    """The dotted paths ``_sync_state_to_rust`` would hand to Rust for *value*.
+
+    The production collector verbatim (``rust_bridge._collect_safe_keys``), not
+    a transcription: a sweep that computed its own answer would be measuring
+    itself rather than the channel a real render uses.
+    """
+    return _collect_safe_keys(value, "p")
 
 # ---------------------------------------------------------------------------
 # The CUSTOM-filter corpus (#2290)
@@ -219,6 +230,29 @@ INPUTS = {
     "f-float": 1.5,
     "n-none": None,
     "l-empty": [],
+    # Context ITEM safety (#2287). `mark_safe` on the ELEMENTS and never on the
+    # list, which is what `safeseq` produces and what a view returning a list of
+    # sanitized fragments produces. Django's `join` / `unordered_list`
+    # `conditional_escape` per element, so these come through LIVE in Django and
+    # the sweep's bar for them is Django's own output, not "nothing is live".
+    #
+    # Until this axis existed the tool could not construct a single cell in
+    # which the CONTEXT had marked anything safe — `render_template` takes no
+    # `safe_keys` — so every cell #2287 touches read as "unchanged". A sweep is
+    # only as good as its axes, the same lesson `HOT2` carries above.
+    "l-marked": [mark_safe("<b>x</b>"), mark_safe("<i>y</i>")],
+    "l-marked-img": [mark_safe("<img src=x onerror=alert(1)>")],
+    "l-mixed": [mark_safe("<b>ok</b>"), "<img src=x onerror=alert(1)>"],
+    "s-marked": mark_safe("<img src=x onerror=alert(1)>"),
+}
+
+#: Inputs whose SAFETY the context declares. Rendered through
+#: `render_template_with_dirs`, the only Python entry point that takes
+#: `safe_keys`; everything else goes through `render_template` unchanged.
+CONTEXT_SAFE_KEYS = {
+    key: _safe_keys_for(value)
+    for key, value in INPUTS.items()
+    if _safe_keys_for(value)
 }
 
 #: The fragments of each hostile input a browser executes if they survive raw.
@@ -232,6 +266,12 @@ LIVE_FRAGMENTS = {
     "l-plain": ["<b>"],
     "t-plain": ["<b>"],
     "d-plain": ["<v>"],
+    # `l-marked` / `s-marked` carry markup Django ITSELF emits live, so a
+    # fragment entry for them would report every correct cell as a leak. The
+    # permissiveness check is always djust-vs-DJANGO (`_leaks` subtracts
+    # Django's own live fragments), but leaving these out keeps the report
+    # readable. `l-mixed`'s UNMARKED element is the one that must never appear.
+    "l-mixed": ["<img", "onerror="],
 }
 
 #: Names worth composing: the safety- and shape-relevant ones. Keeps the chain
@@ -299,8 +339,11 @@ HOT3 = [
     "dictsort",
     "dictsortreversed",
 ]
-INPUTS_2 = ["s-img", "s-lt", "l-plain", "d-plain", "i-int", "n-none"]
-INPUTS_3 = ["s-img", "l-plain", "i-int"]
+#: `l-marked` / `l-mixed` are on the CHAIN axes deliberately: #2287's risk is
+#: not the single filter but what a SECOND filter does with a grant the first
+#: preserved (`slice`) or minted (`join`), which is only visible at length 2+.
+INPUTS_2 = ["s-img", "s-lt", "l-plain", "d-plain", "i-int", "n-none", "l-marked", "l-mixed"]
+INPUTS_3 = ["s-img", "l-plain", "i-int", "l-marked"]
 
 #: Time- or randomness-dependent: recorded as a marker, never as a value.
 NONDET = {"random", "timesince", "timeuntil"}
@@ -312,13 +355,20 @@ def spec(name: str) -> str:
     return f"{name}:{arg}" if arg else name
 
 
-def render_both(tpl: str, ctx: dict) -> tuple[str, str]:
+def render_both(tpl: str, ctx: dict, safe_keys: list[str] | None = None) -> tuple[str, str]:
     try:
         dj = Template(tpl).render(Context(ctx))
     except Exception as exc:  # noqa: BLE001 — a raise is a comparable outcome
         dj = f"<<EXC {type(exc).__name__}: {exc}>>"
     try:
-        du = _rust.render_template(tpl, ctx)
+        # `render_template` has no `safe_keys` parameter, so the CONTEXT-safety
+        # axis has to go through `render_template_with_dirs` — the only Python
+        # entry point that carries it (#2287). Same renderer either way; the
+        # empty `template_dirs` keeps `{% include %}` resolution identical.
+        if safe_keys:
+            du = _rust.render_template_with_dirs(tpl, ctx, [], safe_keys)
+        else:
+            du = _rust.render_template(tpl, ctx)
     except Exception as exc:  # noqa: BLE001
         du = f"<<EXC {type(exc).__name__}: {exc}>>"
     return dj, du
@@ -356,7 +406,11 @@ def measure(out_path: str) -> None:
         cid = f"{expr}\t{key}"
         if cid in result:
             continue
-        dj, du = render_both("{{ p|" + expr + " }}", {"p": INPUTS[key]})
+        dj, du = render_both(
+            "{{ p|" + expr + " }}",
+            {"p": INPUTS[key]},
+            CONTEXT_SAFE_KEYS.get(key),
+        )
         if any(c in NONDET for c in chain):
             dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
         result[cid] = [dj, du]
