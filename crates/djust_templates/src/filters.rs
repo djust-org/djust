@@ -415,7 +415,7 @@ pub fn apply_filter_full_safe(
 ///
 /// ``django.template.defaultfilters.stringfilter`` wraps a filter so it runs on
 /// ``str(value)`` rather than on the value. Django applies it to 29 built-ins;
-/// all 29 are implemented here and 27 of them are listed below. The list is not
+/// all 29 are implemented here and 28 of them are listed below. The list is not
 /// a judgement call about which filters "feel string-shaped" — it is a
 /// transcript of Django's decorators, and
 /// ``python/tests/test_string_filter_stringification_2250.py`` re-derives the
@@ -423,19 +423,25 @@ pub fn apply_filter_full_safe(
 /// Django adds to (or removes from) the decorator fails that test rather than
 /// drifting silently.
 ///
-/// **The two deliberate omissions — ``escape`` and ``safe``.** Django's
-/// versions return a string; djust's are no-ops returning the value unchanged,
-/// because auto-escaping is decided by filter NAME at the render site. So their
-/// `Decimal` divergence has a different mechanism from the other 27: nothing
-/// stringifies it, the value simply stays a `Decimal` and the renderer's
-/// ``localize_if_number`` fires where Django's had already become a ``str``.
-/// Coercing them here is not free — it changes the TYPE flowing down the rest
-/// of the chain, and ``floatformat`` cannot parse a numeric string, so
+/// **The one deliberate omission — ``escape``.** Django's returns a string;
+/// djust's is ``conditional_escape`` (#2281), so it necessarily stringifies —
+/// but through ``Display``, the RENDER form, and not through ``str(Decimal)``,
+/// which is what this coercion selects. Taking the coercion is not free: it
+/// changes the TYPE flowing down the rest of the chain, and
 /// ``{{ d|escape|floatformat }}`` regressed in 1,168 measured cells. Teaching
 /// ``floatformat`` to parse strings was tried and is worse (it cannot reproduce
 /// Django's >200-digit passthrough or its NaN/inf handling from an ``f64``, and
-/// broke 538 cells of ``{{ d|upper|floatformat }}``). Both residues are
-/// measured and tracked in #2257; neither belongs in this fix.
+/// broke 538 cells of ``{{ d|upper|floatformat }}``). That residue is measured
+/// and tracked in #2257.
+///
+/// **``safe`` joined the list in #2303.** It used to be the second omission, on
+/// the same reasoning — a no-op returning the value unchanged, so a ``Decimal``
+/// stayed a ``Decimal`` and localized at the render site. But Django's
+/// ``mark_safe(obj)`` is ``SafeString(str(obj))``: it stringifies, and it is
+/// this coercion's ``str()`` and not ``Display`` that it wants. Listing it here
+/// is what makes ``{{ d|safe }}`` Django's ``1E-9`` rather than the localized
+/// ``0,000000001`` — and it is ONE mechanism rather than a second stringify
+/// living in the ``"safe"`` arm, which would shadow this one.
 ///
 /// Also deliberately NOT here: ``default``/``default_if_none`` (Django returns
 /// the value itself, which then localizes at render), and every numeric filter
@@ -457,6 +463,7 @@ const STRING_FILTERS: &[&str] = &[
     "lower",
     "make_list",
     "rjust",
+    "safe",
     "slugify",
     "striptags",
     "title",
@@ -590,26 +597,45 @@ fn apply_builtin_filter(
             value,
             input_safety.container,
         ))),
-        // A no-op for a scalar — the renderer's `|safe` check is what skips the
-        // auto-escape, and leaving the value alone is what lets it localize
-        // (#2257).
+        // Django's `mark_safe(obj)` is `SafeString(str(obj))` — it does not
+        // merely MARK the value, it changes its TYPE before the rest of the
+        // chain sees it. So `|safe` is a stringify, for every variant, and the
+        // downstream filters read the string.
         //
-        // NOT a no-op for a CONTAINER. Django's `mark_safe(obj)` is
-        // `SafeString(obj)`, i.e. `str(obj)`, so `{{ l|safe }}` hands the rest
-        // of the chain a STRING of the list's repr — which is why
-        // `{{ l|safe|slice:":3" }}` is `['<` in Django, three characters of the
-        // repr, and not a three-element list. The rendered bytes of
-        // `{{ l|safe }}` alone are identical either way (`Display` for a list
-        // IS its repr), so this was invisible until #2283 made the sequence
-        // filters iterate: keeping the list let `{{ l|safe|safeseq|... }}`
-        // reach the ITEM-safety grant with the list's own elements, and emit
-        // them live where Django escapes characters of the repr.
-        "safe" => match value {
-            Value::List(_) | Value::Tuple(_) | Value::Object(_) => {
-                Ok(Value::String(value.to_string()))
-            }
-            _ => Ok(value.clone()),
-        },
+        // The container half landed first (#2283): `{{ l|safe|slice:":3" }}` is
+        // `['<` in Django, three characters of the list's repr, and not a
+        // three-element list. The rendered bytes of `{{ l|safe }}` alone are
+        // identical either way (`Display` for a list IS its repr), so it was
+        // invisible until the sequence filters started iterating — keeping the
+        // list let `{{ l|safe|safeseq|... }}` reach the ITEM-safety grant with
+        // the list's own elements and emit them live where Django escapes
+        // characters of the repr.
+        //
+        // The scalar half is #2303, the same edit one variant over (#1646). Two
+        // spellings it has to get right, and neither is a special case here:
+        //
+        //   * `str()`, not the RENDER form. `{{ p|safe }}` with `p = 1e20` is
+        //     `1e+20` in Django and `100000000000000000000` under `Display`,
+        //     because `Display` is `numberformat.format()`, which expands the
+        //     exponent — and likewise `Decimal("1E-9")`. That is exactly the
+        //     `@stringfilter` coercion at the top of this function, so `safe`
+        //     is listed in `STRING_FILTERS` and arrives here ALREADY a
+        //     `Value::String`. One mechanism, not two.
+        //   * `Value::Missing` is `""`, not `"None"`. Django substitutes
+        //     `string_if_invalid` for an absent variable BEFORE the chain runs,
+        //     so `mark_safe` there sees `""`; putting the literal text `None`
+        //     on the page would be worse than the pass-through this replaces.
+        //     `Display` for `Missing` is already `""` — that is the whole of
+        //     why the variant exists (#2203) — so this needs no special case
+        //     either, and `test_the_literal_text_None_never_reaches_the_page`
+        //     pins it.
+        //
+        // What this costs: the value no longer LOCALIZES at the render site,
+        // because it is a string by then. That matches Django — `localize()`
+        // leaves a `str` alone, and Django's `mark_safe` already stringified —
+        // and it is why `{{ d|safe }}` on a `Decimal` under a German locale
+        // stops emitting `0,000000001` (#2257 residue 1, for `safe`).
+        "safe" => Ok(Value::String(value.to_string())),
         "first" => match value {
             Value::List(l) | Value::Tuple(l) => Ok(l.first().cloned().unwrap_or(Value::Missing)),
             Value::String(s) => Ok(Value::String(
@@ -885,12 +911,30 @@ fn apply_builtin_filter(
             Ok(Value::String(value.to_string().replace(remove_str, "")))
         }
         "divisibleby" => {
-            // divisibleby filter: returns true if value is divisible by arg
+            // Django is `int(value) % int(arg) == 0`, so it reads the VALUE and
+            // not the type: `{{ "42"|divisibleby:"2" }}` is `True`. This arm
+            // matched `Value::Integer` alone, which made a numeric STRING
+            // `False` — and #2303's `|safe` stringify turns every integer into
+            // one, so `{{ n|safe|divisibleby:"2" }}` would have started
+            // answering `False` where it (and Django) said `True`. Found by the
+            // two-build differential, not by inspection.
+            //
+            // Django RAISES on anything `int()` rejects (a float string, `None`,
+            // a list). djust fails soft — a filter does not 500 a page — so the
+            // reach stops at what `int(str)` accepts unambiguously: surrounding
+            // whitespace, an optional sign, ASCII digits. `int`'s underscore and
+            // non-ASCII-digit spellings stay `False`, which is the same answer
+            // this arm already gave them.
             let divisor = arg.and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
-            match value {
-                Value::Integer(n) => Ok(Value::Bool(divisor != 0 && n % divisor == 0)),
-                _ => Ok(Value::Bool(false)),
-            }
+            let dividend = match value {
+                Value::Integer(n) => Some(*n),
+                Value::String(s) => s.trim().parse::<i64>().ok(),
+                _ => None,
+            };
+            Ok(Value::Bool(match dividend {
+                Some(n) => divisor != 0 && n % divisor == 0,
+                None => false,
+            }))
         }
         "floatformat" => {
             // Django's `floatformat` is decimal arithmetic, not float
@@ -4019,6 +4063,20 @@ fn unordered_list(items: &[Value], depth: usize, items_are_safe: bool) -> String
         match sublist {
             Some(sub) if !sub.is_empty() => {
                 let sub_content = unordered_list(sub, depth + 1, items_are_safe);
+                // Django's `list_formatter` (`defaultfilters.py`) builds the
+                // wrapper from the PARENT's `indent` and passes `tabs + 1` only
+                // to the recursive call, so the `<ul>`/`</ul>` sit at the
+                // parent's depth and only the `<li>`s inside step in:
+                //
+                //     sublist = "\n%s<ul>\n%s\n%s</ul>\n%s" % (
+                //         indent, list_formatter(children, tabs + 1), indent, indent)
+                //
+                // Every one of the four `%s` indents is the parent's, which is
+                // also why the closing `</li>` below already used `indent`.
+                //
+                // Fixed in #2306 (#2301) by @alexsmolya; the randomised sweep
+                // in `python/tests/test_unordered_list_indent_2301.py` is what
+                // pins it across nesting shapes.
                 result.push(format!(
                     "{indent}<li>{escaped_item}\n{indent}<ul>\n{sub_content}\n{indent}</ul>\n{indent}</li>"
                 ));
@@ -4188,42 +4246,91 @@ mod tests {
         assert!(matches!(got, Value::Decimal(_)), "{got:?}");
     }
 
-    /// `escape`/`safe` are Django `@stringfilter`s that djust EXCLUDES (#2257).
+    /// `escape` is the one Django `@stringfilter` djust EXCLUDES (#2257).
     ///
-    /// Pinned so the exclusion stays a decision. `safe` is still the pure no-op
-    /// that lets the renderer localize its value — the divergence #2257 tracks.
+    /// Pinned so the exclusion stays a decision. `escape` stopped being a no-op
+    /// in #2281 (it is now `conditional_escape`, eager, so the rest of the chain
+    /// sees the ESCAPED text), which means it necessarily stringifies. It
+    /// stringifies through `Display` — the RENDER form, `0.000000001` — and NOT
+    /// through `str(Decimal)`, `1E-9`, which is what `is_string_filter` would
+    /// have selected. That keeps the rendered bytes of `{{ d|escape }}` exactly
+    /// what they were before #2281 and leaves #2257's decision to #2257.
     ///
-    /// `escape` stopped being a no-op in #2281 (it is now `conditional_escape`,
-    /// eager, so the rest of the chain sees the ESCAPED text), which means it
-    /// necessarily stringifies. It stringifies through `Display` — the RENDER
-    /// form, `0.000000001` — and NOT through `str(Decimal)`, `1E-9`, which is
-    /// what `is_string_filter` would have selected. That keeps the rendered
-    /// bytes of `{{ d|escape }}` exactly what they were before #2281 and leaves
-    /// #2257's decision to #2257.
+    /// `safe` was the second name here until #2303. It now TAKES the coercion,
+    /// which is what makes `{{ d|safe }}` Django's `1E-9`; the `safe` row below
+    /// is the gate-off for the `escape` row, since the two used to be spelled
+    /// identically and a reader should be able to see that they no longer are.
     #[test]
-    fn escape_and_safe_are_excluded_from_the_coercion() {
+    fn escape_is_excluded_from_the_coercion_and_safe_is_not() {
         assert!(!is_string_filter("escape"));
-        assert!(!is_string_filter("safe"));
+        assert!(is_string_filter("safe"));
         let value = Value::Decimal("1E-9".to_string());
         let got = apply_filter("safe", &value, None).unwrap();
-        assert!(matches!(got, Value::Decimal(_)), "|safe gave {got:?}");
+        assert!(
+            matches!(&got, Value::String(s) if s == "1E-9"),
+            "|safe gave {got:?}"
+        );
         let got = apply_filter("escape", &value, None).unwrap();
         assert_eq!(got.to_string(), "0.000000001", "|escape gave {got:?}");
     }
 
-    /// The set is Django's, transcribed — 27 of its 29, minus `escape`/`safe`.
+    /// `|safe` is `SafeString(str(value))` for EVERY variant (#2303).
+    ///
+    /// One row per `Value` arm, because the bug was in whichever arm the table
+    /// did not enumerate — the container arm landed in #2283 and the scalar
+    /// arms stayed a no-op. `Missing` is the row that has to be `""` and not
+    /// `"None"`: Django substitutes `string_if_invalid` before the filter runs.
+    #[test]
+    fn safe_stringifies_every_variant_the_way_python_str_does() {
+        let rows: &[(Value, &str)] = &[
+            (Value::Missing, ""),
+            (Value::None, "None"),
+            (Value::Bool(true), "True"),
+            (Value::Bool(false), "False"),
+            (Value::Integer(42), "42"),
+            (Value::Float(1.5), "1.5"),
+            // `str(1e20)` is `1e+20`; `{{ p }}` renders the expansion.
+            (Value::Float(1e20), "1e+20"),
+            (Value::Decimal("1E-9".to_string()), "1E-9"),
+            (
+                Value::BigInt("12345678901234567890".to_string()),
+                "12345678901234567890",
+            ),
+            (Value::String("<b>x</b>".to_string()), "<b>x</b>"),
+            (
+                Value::List(vec![Value::String("a".to_string()), Value::Integer(1)]),
+                "['a', 1]",
+            ),
+        ];
+        for (value, expected) in rows {
+            let got = apply_filter("safe", value, None).unwrap();
+            assert!(
+                matches!(&got, Value::String(s) if s == expected),
+                "|safe on {value:?} gave {got:?}, wanted String({expected:?})"
+            );
+        }
+        // The RENDER form of the two exponent-carrying variants differs from
+        // `str()` — without this the two rows above prove nothing.
+        assert_eq!(Value::Float(1e20).to_string(), "100000000000000000000");
+        assert_eq!(
+            Value::Decimal("1E-9".to_string()).to_string(),
+            "0.000000001"
+        );
+    }
+
+    /// The set is Django's, transcribed — 28 of its 29, minus `escape`.
     ///
     /// A count pin rather than a floor (#1125): adding a name without deciding
     /// about it fails here, and the Python test re-derives the set from the live
     /// Django registry so a name that is not really a `@stringfilter` fails
     /// there.
     #[test]
-    fn the_string_filter_set_is_the_twenty_seven_it_claims() {
-        assert_eq!(STRING_FILTERS.len(), 27);
+    fn the_string_filter_set_is_the_twenty_eight_it_claims() {
+        assert_eq!(STRING_FILTERS.len(), 28);
         let mut sorted = STRING_FILTERS.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), 27, "duplicate entry in STRING_FILTERS");
+        assert_eq!(sorted.len(), 28, "duplicate entry in STRING_FILTERS");
         assert_eq!(sorted, STRING_FILTERS, "STRING_FILTERS is not sorted");
     }
 
