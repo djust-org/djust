@@ -520,7 +520,14 @@ class TestKnownResidualDivergences:
     STILL differs, so the row fails the day someone closes the gap and the
     obsolete pin gets deleted with the issue. Read no row here as a statement
     that djust's answer is right -- the filed issue number is on each one:
-    #2292 for the escaping gap, #2294 for `{{ dict|length }}`.
+    #2292 for the escaping gap.
+
+    `{{ dict|length }}` used to be pinned here for #2294 and is now FIXED; the
+    row survives, renamed and inverted, as
+    `test_length_of_a_dict_now_agrees_fixed_by_2294` plus the model-instance
+    half that explains why the pin existed. Converting a closed pin rather than
+    deleting it is deliberate: the reasoning for the original divergence is the
+    reasoning the fix had to answer, and it is the part a future reader needs.
 
     The failure mode this framing guards against is real and recent: three
     artifacts pinned a buggy arrangement as if correct and let a shipped XSS
@@ -590,24 +597,41 @@ class TestKnownResidualDivergences:
             assert _rust.render_template("{{ p|pprint|safe }}", {"p": value}) == want, value
 
     @pytest.mark.parametrize("value", [{"a": 1, "b": 2}, {"é": "中"}])
-    def test_length_of_a_dict_is_WRONGLY_still_zero_bug_2294(self, value: dict) -> None:
-        """**Pins a KNOWN-WRONG answer.** `{{ dict|length }}` renders 0; Django
-        renders `len(dict)`. Zero is the bug, filed as #2294 -- this test exists
-        so the divergence is recorded rather than rediscovered, and it FAILS the
-        day someone fixes it, which is the signal to delete the row.
+    def test_length_of_a_dict_now_agrees_fixed_by_2294(self, value: dict) -> None:
+        """**No longer a known-wrong pin.** Closed by #2294; kept as the
+        regression test, converted rather than deleted.
 
-        NOT the byte-vs-char bug #2279 is about -- `Value::Object` simply has no
-        arm in the `length` match. Left alone deliberately rather than because
-        zero is defensible: `Value::Object` carries both a Python dict and a
-        model instance (which holds a `__str__` key), and `len(model)` raises
-        `TypeError`, which Django's `length` catches and answers 0 to. So the
-        right answer is 0 for one of the two things this variant represents and
-        `len()` for the other, and telling them apart is a decision that belongs
-        with #2294, not with a code-point fix.
+        This row used to read ``..._is_WRONGLY_still_zero_bug_2294`` and assert
+        ``djust_out == "0"``, because `Value::Object` had no arm in the
+        `length` match and fell to `_ => 0`. #2279 left it alone deliberately:
+        `Value::Object` carries BOTH a Python dict and a serialized model, and
+        `len(model)` raises `TypeError`, which Django's `length` catches and
+        answers 0 to -- so 0 was the right answer for one of the two things the
+        variant represents and wrong for the other.
+
+        #2294 told them apart with `Value::object_str()`, the `"__str__"`
+        predicate `{{ obj }}` already uses. The model half is asserted directly
+        below, and the full case -- including why `"__model__"` is NOT the
+        marker, and the residual a dict carrying its own `"__str__"` key leaves
+        -- lives in
+        ``test_measuring_filter_parity_2294.py::TestLengthOfAnObject``.
         """
         django_out, djust_out = render_both("{{ p|length }}", value)
         assert django_out == str(len(value))
+        assert djust_out == django_out
+
+    def test_a_model_still_answers_zero_which_is_why_it_was_pinned(self) -> None:
+        """The half that keeps `0` -- and the reason the row above was a pin.
+
+        `len(model)` raises `TypeError`; Django's `length` catches it. A fix
+        that made every `Value::Object` answer `o.len()` would have traded one
+        wrong answer for another, spelling a model's FIELD COUNT.
+        """
+        from django.contrib.auth.models import User
+
+        model = User(username="bob")
+        with pytest.raises(TypeError):
+            len(model)
+        django_out, djust_out = render_both("{{ p|length }}", model)
+        assert django_out == "0"
         assert djust_out == "0"
-        assert django_out != djust_out, (
-            "now AGREES -- delete this row and the follow-up issue it documents"
-        )

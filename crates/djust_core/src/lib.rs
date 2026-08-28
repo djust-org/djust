@@ -660,6 +660,35 @@ pub fn py_repr_string(s: &str) -> String {
 }
 
 impl Value {
+    /// The `"__str__"` a serialized Python OBJECT carries, if this is one.
+    ///
+    /// `Value::Object` is two different Python things wearing one shape: a
+    /// genuine `dict`, and any non-dict object the Python serializer flattened
+    /// into a map. The marker that tells them apart is a `"__str__"` entry
+    /// holding a string, which every model-serialization site stamps —
+    /// `_serialize_model_safely`, the depth-limited FK and max-depth
+    /// shorthands, `jit.py`'s identity-only subset, and the two
+    /// `template/rendering.py` fallbacks. `"__model__"` looks like the more
+    /// specific marker and is NOT usable: FOUR of those SIX sites omit it —
+    /// only `_serialize_model_safely` and `jit.py`'s subset stamp it (#2322).
+    ///
+    /// The predicate was written out twice, in the two `Display` impls, before
+    /// `length` needed it as well (#2294) — the point at which two copies
+    /// becomes a drift class (#1646). One definition now; the callers are
+    /// pinned by `test_object_str_is_the_only_model_marker_predicate`.
+    pub fn object_str(&self) -> Option<&str> {
+        match self {
+            // A non-`String` `"__str__"` (an upstream bug producing
+            // `"__str__": null`) is NOT a marker: `Display` falls back to dict
+            // repr for it, so this must too or the two disagree.
+            Value::Object(o) => match o.get("__str__") {
+                Some(Value::String(s)) => Some(s.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Python `repr()`, used for values NESTED inside a container.
     ///
     /// `str(['a'])` is `"['a']"` while `str('a')` is `"a"` — a nested string is
@@ -700,9 +729,9 @@ impl Value {
             Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
             Value::List(_) | Value::Tuple(_) => write!(f, "[List]"),
-            Value::Object(o) => match o.get("__str__") {
-                Some(Value::String(s)) => write!(f, "{s}"),
-                _ => write!(f, "[Object]"),
+            Value::Object(_) => match self.object_str() {
+                Some(s) => write!(f, "{s}"),
+                None => write!(f, "[Object]"),
             },
         }
     }
@@ -778,11 +807,11 @@ impl fmt::Display for Value {
                     write!(f, "({})", inner.join(", "))
                 }
             }
-            Value::Object(o) => match o.get("__str__") {
+            Value::Object(o) => match self.object_str() {
                 // A model instance carries `__str__`; that keeps winning over
                 // dict repr, which is how `{{ obj }}` renders a model.
-                Some(Value::String(s)) => write!(f, "{s}"),
-                _ => {
+                Some(s) => write!(f, "{s}"),
+                None => {
                     let inner: Vec<String> = o
                         .iter()
                         // Keys go through `py_repr` too (#2203 review): a hand-rolled
@@ -1089,6 +1118,60 @@ mod tests {
         map.insert("__str__".to_string(), Value::String("".to_string()));
         let obj = Value::Object(map);
         assert_eq!(obj.to_string(), "");
+    }
+
+    /// `object_str()` answers the "is this map a serialized object?" question
+    /// for every caller (#2294).
+    #[test]
+    fn test_object_str_is_the_model_marker_predicate() {
+        let mut plain: IndexMap<String, Value> = IndexMap::new();
+        plain.insert("a".to_string(), Value::Integer(1));
+        assert_eq!(Value::Object(plain.clone()).object_str(), None);
+
+        let mut model = plain.clone();
+        model.insert("__str__".to_string(), Value::String("bob".to_string()));
+        assert_eq!(Value::Object(model).object_str(), Some("bob"));
+
+        // A non-`String` `"__str__"` is NOT a marker: `Display` falls back to
+        // dict repr for it, so the predicate must agree.
+        for bad in [Value::Missing, Value::None, Value::Integer(7)] {
+            let mut broken = plain.clone();
+            broken.insert("__str__".to_string(), bad);
+            assert_eq!(Value::Object(broken).object_str(), None);
+        }
+
+        // Every other variant is not an object.
+        for v in [
+            Value::Missing,
+            Value::None,
+            Value::Bool(true),
+            Value::Integer(1),
+            Value::Float(1.0),
+            Value::String("__str__".to_string()),
+            Value::List(vec![]),
+            Value::Tuple(vec![]),
+        ] {
+            assert_eq!(v.object_str(), None, "{v:?}");
+        }
+    }
+
+    /// `object_str()` is the ONLY place the marker is spelled (#1646/#1859).
+    ///
+    /// Load-bearing rather than decorative: the predicate was written out twice
+    /// (once per `Display` impl) before `length` needed a third copy, which is
+    /// the point at which duplication becomes a drift class. This fails the day
+    /// a fourth caller open-codes it instead of calling the helper.
+    #[test]
+    fn test_the_str_marker_is_spelled_in_exactly_one_place() {
+        let src = include_str!("lib.rs");
+        let hits = src.matches("get(\"__str__\")").count();
+        assert_eq!(
+            hits, 1,
+            "`get(\"__str__\")` appears {hits} times in djust_core/src/lib.rs; \
+             it must appear ONLY inside `Value::object_str`. A second spelling \
+             is a predicate that can drift from the one `length` and `Display` \
+             share."
+        );
     }
 
     /// Regression-lock: bare `[List]` fallback for lists unchanged.
