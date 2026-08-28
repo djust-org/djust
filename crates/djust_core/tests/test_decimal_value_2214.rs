@@ -45,7 +45,7 @@ fn a_nested_decimal_renders_the_constructor_form() {
         "[Decimal('19.99')]"
     );
     let mut m = IndexMap::new();
-    m.insert("p".to_string(), dec("19.99"));
+    m.insert("p".into(), dec("19.99"));
     assert_eq!(Value::Object(m).to_string(), "{'p': Decimal('19.99')}");
 }
 
@@ -124,15 +124,12 @@ fn the_decimal_tag_does_not_capture_an_ordinary_dict() {
     // near misses: a different key, the right key with a non-string payload,
     // and the right key alongside another.
     let mut plain = IndexMap::new();
-    plain.insert("price".to_string(), Value::String("19.99".into()));
+    plain.insert("price".into(), Value::String("19.99".into()));
     let mut wrong_type = IndexMap::new();
-    wrong_type.insert(djust_core::decimal_tag().to_string(), Value::Integer(5));
+    wrong_type.insert(djust_core::decimal_tag().into(), Value::Integer(5));
     let mut extra_key = IndexMap::new();
-    extra_key.insert(
-        djust_core::decimal_tag().to_string(),
-        Value::String("1".into()),
-    );
-    extra_key.insert("other".to_string(), Value::Integer(2));
+    extra_key.insert(djust_core::decimal_tag().into(), Value::String("1".into()));
+    extra_key.insert("other".into(), Value::Integer(2));
 
     for v in [
         Value::Object(plain),

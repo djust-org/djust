@@ -269,13 +269,13 @@ fn for_if_iteration_unique_id_1832() {
         "{% for i in items %}{% if i.show %}<div>{{ i.name }}</div>{% endif %}{% endfor %}";
     let mut c = Context::new();
     let mut item1 = IndexMap::new();
-    item1.insert("show".to_string(), Value::Bool(true));
-    item1.insert("name".to_string(), Value::String("a".to_string()));
+    item1.insert("show".into(), Value::Bool(true));
+    item1.insert("name".into(), Value::String("a".to_string()));
     let mut item2 = IndexMap::new();
-    item2.insert("show".to_string(), Value::Bool(true));
-    item2.insert("name".to_string(), Value::String("b".to_string()));
+    item2.insert("show".into(), Value::Bool(true));
+    item2.insert("name".into(), Value::String("b".to_string()));
     c.set(
-        "items".to_string(),
+        "items".into(),
         Value::List(vec![Value::Object(item1), Value::Object(item2)]),
     );
     let result = render(template, &c);

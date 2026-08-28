@@ -36,7 +36,7 @@ use tempfile::TempDir;
 fn obj(pairs: &[(&str, &str)]) -> Value {
     let mut m = IndexMap::new();
     for (k, v) in pairs {
-        m.insert((*k).to_string(), Value::String((*v).to_string()));
+        m.insert((*k).into(), Value::String((*v).to_string()));
     }
     Value::Object(m)
 }

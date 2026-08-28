@@ -88,7 +88,9 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
     match value {
         Value::String(s) => Some(s.chars().map(|c| Value::String(c.to_string())).collect()),
         Value::List(items) | Value::Tuple(items) => Some(items.clone()),
-        Value::Object(map) => Some(map.keys().map(|k| Value::String(k.clone())).collect()),
+        // A dict iterates its KEYS, each as the value it actually is — an
+        // `Integer` key must render `0`, not `"0"` (#2339).
+        Value::Object(map) => Some(djust_core::object_key::dict_iteration_values(map)),
         Value::Missing => Some(Vec::new()),
         _ => None,
     }
@@ -4038,7 +4040,11 @@ fn value_to_json(value: &Value) -> String {
                     // a key holding a newline emitted it raw and the whole
                     // script body stopped parsing — a dict key is as
                     // attacker-reachable as a dict value.
-                    let key_json = format!("\"{}\"", json_string_body(k));
+                    // A JSON key is a string whatever the Python key was —
+                    // `json.dumps({0: 1})` is `'{"0": 1}'` in CPython too, so
+                    // stringifying here is the FAITHFUL encoding, not a
+                    // shortcut around the typed key (#2339).
+                    let key_json = format!("\"{}\"", json_string_body(&k.to_display_string()));
                     format!("{}: {}", key_json, value_to_json(v))
                 })
                 .collect();
@@ -6244,16 +6250,16 @@ mod tests {
     fn test_dictsort_filter() {
         // Create list of dicts
         let mut dict1 = IndexMap::new();
-        dict1.insert("name".to_string(), Value::String("Charlie".to_string()));
-        dict1.insert("age".to_string(), Value::Integer(30));
+        dict1.insert("name".into(), Value::String("Charlie".to_string()));
+        dict1.insert("age".into(), Value::Integer(30));
 
         let mut dict2 = IndexMap::new();
-        dict2.insert("name".to_string(), Value::String("Alice".to_string()));
-        dict2.insert("age".to_string(), Value::Integer(25));
+        dict2.insert("name".into(), Value::String("Alice".to_string()));
+        dict2.insert("age".into(), Value::Integer(25));
 
         let mut dict3 = IndexMap::new();
-        dict3.insert("name".to_string(), Value::String("Bob".to_string()));
-        dict3.insert("age".to_string(), Value::Integer(35));
+        dict3.insert("name".into(), Value::String("Bob".to_string()));
+        dict3.insert("age".into(), Value::Integer(35));
 
         let value = Value::List(vec![
             Value::Object(dict1),
@@ -6277,10 +6283,10 @@ mod tests {
     #[test]
     fn test_dictsortreversed_filter() {
         let mut dict1 = IndexMap::new();
-        dict1.insert("name".to_string(), Value::String("Alice".to_string()));
+        dict1.insert("name".into(), Value::String("Alice".to_string()));
 
         let mut dict2 = IndexMap::new();
-        dict2.insert("name".to_string(), Value::String("Bob".to_string()));
+        dict2.insert("name".into(), Value::String("Bob".to_string()));
 
         let value = Value::List(vec![Value::Object(dict1), Value::Object(dict2)]);
 
@@ -6588,8 +6594,8 @@ mod tests {
     #[test]
     fn test_length_of_an_object_uses_the_str_marker() {
         let mut dict = indexmap::IndexMap::new();
-        dict.insert("a".to_string(), Value::Integer(1));
-        dict.insert("b".to_string(), Value::Integer(2));
+        dict.insert("a".into(), Value::Integer(1));
+        dict.insert("b".into(), Value::Integer(2));
         assert_eq!(
             apply_filter("length", &Value::Object(dict.clone()), None)
                 .unwrap()
@@ -6600,7 +6606,7 @@ mod tests {
         // A serialized model: `len(model)` raises `TypeError`, which Django's
         // `length` answers 0 to.
         let mut model = dict.clone();
-        model.insert("__str__".to_string(), Value::String("bob".to_string()));
+        model.insert("__str__".into(), Value::String("bob".to_string()));
         assert_eq!(
             apply_filter("length", &Value::Object(model), None)
                 .unwrap()
@@ -6611,7 +6617,7 @@ mod tests {
         // A non-string `"__str__"` is not a marker — `Display` falls back to
         // dict repr for it, so `length` must count it.
         let mut broken = dict.clone();
-        broken.insert("__str__".to_string(), Value::None);
+        broken.insert("__str__".into(), Value::None);
         assert_eq!(
             apply_filter("length", &Value::Object(broken), None)
                 .unwrap()
@@ -6679,10 +6685,7 @@ mod tests {
     #[test]
     fn test_json_script_escapes_control_characters_in_object_keys() {
         let mut map = IndexMap::new();
-        map.insert(
-            "a\nb\tc\rd\\e\"f".to_string(),
-            Value::String("v".to_string()),
-        );
+        map.insert("a\nb\tc\rd\\e\"f".into(), Value::String("v".to_string()));
         let result = apply_filter("json_script", &Value::Object(map), Some("data")).unwrap();
         let s = result.to_string();
         assert!(
@@ -6701,7 +6704,7 @@ mod tests {
         for code in 0x00u32..0x20 {
             let c = char::from_u32(code).unwrap();
             let mut map = IndexMap::new();
-            map.insert(format!("k{c}"), Value::String(format!("v{c}")));
+            map.insert(format!("k{c}").into(), Value::String(format!("v{c}")));
             let result = apply_filter("json_script", &Value::Object(map), Some("d")).unwrap();
             let s = result.to_string();
             assert!(
@@ -6768,7 +6771,7 @@ mod tests {
     #[test]
     fn a_nested_float_takes_the_same_spelling_2270() {
         let nested = Value::List(vec![Value::Object(
-            [("k".to_string(), Value::Float(1e20))]
+            [(djust_core::ObjectKey::from("k"), Value::Float(1e20))]
                 .into_iter()
                 .collect(),
         )]);
