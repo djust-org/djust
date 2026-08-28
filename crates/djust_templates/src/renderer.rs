@@ -765,13 +765,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // precisely because upper-casing `&lt;` yields `&LT;`, which every
             // browser still decodes to `<`.
             let mut runtime_safe = context.is_safe(var_name);
-            // Django's item granularity, seeded FALSE: djust does not track
-            // item safety arriving from the CONTEXT. A view passing
-            // `[mark_safe(x), …]` has genuinely marked the items, and Django
-            // honours that; djust's context flag is container-level only, so
-            // the seed is `false` and such a list is escaped. Fail-closed, and
-            // unchanged from before #2283 — the remaining gap is #2287.
-            let mut items_safe = false;
+            // Django's item granularity, seeded from the CONTEXT (#2287).
+            // A view passing `[mark_safe(x), …]` has marked the ITEMS and not
+            // the list, so `is_safe` above answers `false` for the container
+            // while `join` / `unordered_list` must still emit each item live.
+            // `Context::items_are_safe` is where every narrowing that keeps
+            // this from out-permitting Django lives — read its doc comment
+            // before widening it. Seeded `false` for anything that is not a
+            // fully-marked sequence, which is the escaping direction.
+            let mut items_safe = context.items_are_safe(var_name);
             for (filter_name, arg) in filter_specs {
                 // Strip quotes from literal filter args at render time —
                 // the parser preserves quotes so the dep-tracking
@@ -886,8 +888,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // (#1660); a later plain filter re-taints. Seeded with the context's
             // own safety so the chain carries Django's input term (#2274).
             let mut runtime_safe = context.is_safe(expr);
-            // See the Variable arm: item-level safety, seeded false (#2283).
-            let mut items_safe = false;
+            // See the Variable arm: item-level safety, seeded from the context
+            // (#2283, #2287) — the second of the three sites.
+            let mut items_safe = context.items_are_safe(expr);
             for (filter_name, arg) in filters {
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
@@ -2439,8 +2442,10 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         // input term too (#2274) — the third of the three sites, kept in step
         // with the other two by construction (#1646).
         let mut runtime_safe = context.is_safe(var_name);
-        // See the Variable arm: item-level safety, seeded false (#2283).
-        let mut items_safe = false;
+        // See the Variable arm: item-level safety, seeded from the context
+        // (#2283, #2287) — the third of the three sites, kept in step with the
+        // other two by construction (#1646).
+        let mut items_safe = context.items_are_safe(var_name);
 
         // Parse and apply filters (handles chained filters too)
         for filter_part in filter_expr.split('|') {

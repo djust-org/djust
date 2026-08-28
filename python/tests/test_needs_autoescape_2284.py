@@ -88,12 +88,16 @@ ALREADY_CORRECT = ["linenumbers"]
 #: ``join`` and ``unordered_list`` are ``needs_autoescape`` too, but their
 #: bodies use a DIFFERENT shape — ``conditional_escape`` applied PER ELEMENT
 #: of a sequence, not ``isinstance(value, SafeData)`` on the value as a whole.
-#: A list of ``mark_safe``d strings must come through live element by element,
-#: and djust escapes them. That is a distinct mechanism needing per-element
-#: safety inside a container, so it is deliberately out of scope here and
-#: filed as #2287; ``TestSequenceShapeIsOutOfScopeAndStillDiverges`` pins the
-#: divergence so the follow-up cannot be quietly forgotten.
-SEQUENCE_SHAPE = ["join", "unordered_list"]
+#: A list of ``mark_safe``d strings must come through live element by element.
+#:
+#: They were out of scope for #2284 and this bucket was named
+#: ``SEQUENCE_SHAPE``, carrying a ``TestSequenceShapeIsOutOfScopeAndStillDiverges``
+#: class that ASSERTED the divergence was still present and told whoever closed
+#: the follow-up to move the names here and delete it. #2287 did exactly that:
+#: the item granularity is now seeded from the context by
+#: ``Context::items_are_safe``, and the parity that class denied is pinned in
+#: ``python/tests/test_context_item_safety_2287.py``.
+PER_ELEMENT_FIXED_IN_2287 = ["join", "unordered_list"]
 
 #: ``urlize``/``urlizetrunc`` have a separate, pre-existing URL-DETECTION gap
 #: (see the module docstring). Byte-equality with Django is asserted only for
@@ -261,7 +265,7 @@ class TestTheRegistryHasSevenNotFour:
     ==================  =============================================  ========
     ``FOUR``            ``autoescape and not isinstance(v, SafeData)``  fixed here
     ``ALREADY_CORRECT`` same clause, but djust never escaped inside     already ok
-    ``SEQUENCE_SHAPE``  ``conditional_escape`` PER ELEMENT             out of scope
+    ``PER_ELEMENT…``    ``conditional_escape`` PER ELEMENT             fixed in #2287
     ==================  =============================================  ========
     """
 
@@ -270,7 +274,9 @@ class TestTheRegistryHasSevenNotFour:
         eighth ``needs_autoescape`` filter — or drops one — goes red here and
         forces a decision about which bucket it belongs in, rather than
         silently falling through the gap the issue's count of four left."""
-        partition = frozenset(FOUR) | frozenset(ALREADY_CORRECT) | frozenset(SEQUENCE_SHAPE)
+        partition = (
+            frozenset(FOUR) | frozenset(ALREADY_CORRECT) | frozenset(PER_ELEMENT_FIXED_IN_2287)
+        )
         assert DJANGO_NEEDS_AUTOESCAPE == partition, (
             f"unclassified in djust: {sorted(DJANGO_NEEDS_AUTOESCAPE - partition)}; "
             f"not needs_autoescape in Django: {sorted(partition - DJANGO_NEEDS_AUTOESCAPE)}"
@@ -279,7 +285,7 @@ class TestTheRegistryHasSevenNotFour:
     def test_the_buckets_do_not_overlap(self):
         """Otherwise the count above could be satisfied by a name appearing
         twice while a real one is missing."""
-        names = FOUR + ALREADY_CORRECT + SEQUENCE_SHAPE
+        names = FOUR + ALREADY_CORRECT + PER_ELEMENT_FIXED_IN_2287
         assert len(names) == len(set(names)) == 7, names
 
     def test_all_seven_are_also_is_safe(self):
@@ -326,50 +332,6 @@ class TestLinenumbersColumnsThatWereAlreadyCorrect:
         """The one #2291 fixed — here so this file cannot mislead again."""
         source = "{{ p|linenumbers|safe }}"
         assert djust_render(source, payload) == django_render(source, payload)
-
-
-class TestSequenceShapeIsOutOfScopeAndStillDiverges:
-    """``join`` / ``unordered_list`` apply ``conditional_escape`` PER ELEMENT.
-
-    A list whose ELEMENTS are ``mark_safe``d comes through live in Django and
-    escaped in djust. #2284's fix cannot reach it: ``input_was_safe`` is one
-    bool about the value as a whole, and this needs safety tracked inside the
-    container. Filed as #2287.
-
-    This test asserts the divergence is STILL THERE, so that (a) the scope
-    boundary is a measured fact rather than an assumption, and (b) whoever
-    fixes the follow-up gets a red test telling them to move the name out of
-    ``SEQUENCE_SHAPE`` and delete this class.
-    """
-
-    @pytest.mark.parametrize("name", SEQUENCE_SHAPE)
-    def test_per_element_mark_safe_still_diverges(self, name):
-        source = '{{ p|join:", " }}' if name == "join" else "{{ p|unordered_list }}"
-        payload = ["<b>x</b>", "<i>y</i>"]
-        view = _rust.RustLiveView(source)
-        normalized = normalize_django_value({"p": [mark_safe(v) for v in payload]})
-        safe_keys: list[str] = []
-        for key, value in normalized.items():
-            safe_keys.extend(_collect_safe_keys(value, key))
-        view.update_state(normalized)
-        if safe_keys:
-            view.mark_safe_keys(safe_keys)
-        got = view.render()
-        expected = django_render(source, [mark_safe(v) for v in payload])
-        assert "<b>x</b>" in expected, "Django stopped honouring per-element mark_safe"
-        assert got != expected, (
-            f"{name} now AGREES with Django on per-element mark_safe — #2287 "
-            f"is fixed: move it out of SEQUENCE_SHAPE and delete this class. "
-            f"got={got!r}"
-        )
-
-    @pytest.mark.parametrize("name", SEQUENCE_SHAPE)
-    def test_but_the_divergence_is_over_escaping_not_under(self, name):
-        """The direction matters: djust escapes where Django does not, so the
-        open follow-up is a correctness gap and never a security one."""
-        source = '{{ p|join:", " }}' if name == "join" else "{{ p|unordered_list }}"
-        got = djust_render(source, ["<img src=x onerror=alert(1)>"])
-        assert capabilities(got) & {"tag:img", "evt:onerror"} == set(), got
 
 
 # ---------------------------------------------------------------------------
@@ -652,8 +614,7 @@ class TestEveryRenderSiteThreadsTheInputSafety:
                 f"container half of the input safety: {args!r}"
             )
             assert "items: items_safe" in fields, (
-                "a call site does not thread the ITEM granularity (#2283); "
-                f"got {args!r}"
+                f"a call site does not thread the ITEM granularity (#2283); got {args!r}"
             )
 
     def test_the_classic_entry_point_still_defaults_to_escaping(self):
