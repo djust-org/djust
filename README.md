@@ -19,7 +19,7 @@ no JavaScript to write, no bundler, and no build step in your project.
 
 ## Features
 
-- **Fast** — Rust-powered template engine and virtual DOM diffing (10–100x faster than plain Django rendering; see [Performance](#performance))
+- **Fast** — Rust-powered template engine and virtual DOM diffing (roughly 7–11x faster than Django on variable- and filter-heavy templates, and no faster on static markup; see [Performance](#performance))
 - **Reactive components** — Phoenix LiveView-style server-side reactivity
 - **Django compatible** — works with existing Django templates and components
 - **No build step** — ~58 KB gzipped client JavaScript, no bundling required
@@ -263,21 +263,42 @@ written, no build step.
 
 ## Performance
 
-Benchmarked on an M1 MacBook Pro (2021):
+Full render throughput, same template on both engines, parsed once on each
+side. Measured with `benchmarks/benchmark.py` on an Apple silicon laptop,
+Django 5.2.16 / Python 3.12, `DEBUG=False`, release build:
 
-| Operation | Django | djust | Speedup |
-|-----------|---------|-------|---------|
-| Template rendering (100 items) | 2.5 ms | 0.15 ms | **16.7x** |
-| Large list (10k items) | 450 ms | 12 ms | **37.5x** |
-| Virtual DOM diff | N/A | 0.08 ms | **sub-ms** |
-| Round-trip update | 50 ms | 5 ms | **10x** |
+| Template shape | Rows | Django | djust | Speedup |
+|---|---|---|---|---|
+| Static markup (no variables) | 100 | 0.03 ms | 0.03 ms | **1.0x** |
+| Static markup (no variables) | 10,000 | 2.85 ms | 2.81 ms | **1.0x** |
+| Simple list (2 vars/row) | 100 | 0.62 ms | 0.09 ms | **6.8x** |
+| Simple list (2 vars/row) | 10,000 | 63.7 ms | 8.96 ms | **7.1x** |
+| Filtered list (typical page) | 100 | 2.32 ms | 0.21 ms | **10.8x** |
+| Filtered list (typical page) | 10,000 | 241 ms | 21.5 ms | **11.2x** |
 
-Run the benchmarks yourself:
+**The speedup depends entirely on what the template does.** Static markup is
+string concatenation and there is nothing to accelerate — djust is not faster,
+and says so. The advantage grows with variable and filter density, which is the
+direction real pages go.
+
+Two things this table does *not* measure, both of which matter:
+
+- **The VDOM patch.** On an update djust re-renders and sends a diff, where
+  Django can only re-render and ship the whole page. The wire-size difference is
+  not in these numbers at all.
+- **The round trip.** WebSocket transport, diffing and client apply are excluded.
+
+Run it yourself:
 
 ```bash
-cd benchmarks
-python benchmark.py
+make build          # release build — a debug build reverses the result
+python benchmarks/benchmark.py
 ```
+
+The script refuses to run against a debug extension. `make dev-build` produces
+an unoptimized one that is roughly 7.6x slower and measures Django as the
+faster engine; since that is what most test workflows build, it is an easy and
+badly misleading mistake to make.
 
 ## Installation
 

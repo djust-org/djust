@@ -1,6 +1,6 @@
 # JIT Serialization
 
-Rust-powered serialization (10-100x faster than Python). Requires the private/public variable pattern.
+Rust-powered serialization (unmeasured; the previously quoted multiple was carried over from template-rendering claims). Requires the private/public variable pattern.
 
 ```python
 # CORRECT: private -> public in get_context_data()

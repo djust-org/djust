@@ -148,7 +148,7 @@ def on_scroll(self, position: int = 0, **kwargs):
 
 ## JIT Serialization (Critical Pattern)
 
-QuerySets MUST be stored in private variables (`self._items`) and assigned to public variables (`self.items`) only inside `get_context_data()`. This enables Rust-based serialization (10-100x faster than Python).
+QuerySets MUST be stored in private variables (`self._items`) and assigned to public variables (`self.items`) only inside `get_context_data()`. This enables Rust-based serialization (faster than the Python path; unmeasured).
 
 ```python
 # CORRECT
