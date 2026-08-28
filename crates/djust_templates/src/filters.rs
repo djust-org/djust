@@ -3981,9 +3981,8 @@ fn unordered_list(items: &[Value], depth: usize, items_are_safe: bool) -> String
         match sublist {
             Some(sub) if !sub.is_empty() => {
                 let sub_content = unordered_list(sub, depth + 1, items_are_safe);
-                let sub_indent = "\t".repeat(depth + 1);
                 result.push(format!(
-                    "{indent}<li>{escaped_item}\n{sub_indent}<ul>\n{sub_content}\n{sub_indent}</ul>\n{indent}</li>"
+                    "{indent}<li>{escaped_item}\n{indent}<ul>\n{sub_content}\n{indent}</ul>\n{indent}</li>"
                 ));
             }
             _ => {
