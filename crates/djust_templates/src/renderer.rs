@@ -1133,7 +1133,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // Each key as the VALUE it is, not its text: an int key
                     // binds `Value::Integer` so `{{ k }}` renders `0` and
                     // `{% if k == 0 %}` is true (#2339).
-                    Value::List(map.keys().cloned().map(Value::from).collect()),
+                    Value::List(djust_core::object_key::dict_iteration_values(&map)),
                     true,
                 ),
                 other => (other, false),

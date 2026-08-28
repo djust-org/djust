@@ -769,3 +769,16 @@ class TestTheCorpusGapsThatHidTheseFromTheDifferential:
             "every dict input has tame keys, so no cell can show a dict-KEY "
             "escaping defect — and the key is what {% for k in d %} emits"
         )
+
+    def test_the_corpus_carries_a_dict_whose_keys_are_not_strings(self) -> None:
+        """#2339's axis. Every other dict input is string-keyed, so no cell
+        could show that a non-string-keyed dict was not a MAPPING at all — it
+        fell through to its own repr, which ``{% for %}`` then iterated one
+        character at a time.
+        """
+        src = self.SCRIPT.read_text()
+        for key in ("d-typed-key", "d-typed-hostile"):
+            assert key in src, (
+                f"the differential has no {key!r} input — a corpus of only "
+                "string-keyed dicts cannot measure the key type at all"
+            )

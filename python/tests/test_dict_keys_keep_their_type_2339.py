@@ -225,6 +225,54 @@ class TestANonStringKeyedDictIsAMapping:
         for d in ({0: 1}, {True: 1}, {None: 1}, {1.5: 1}, {"a": 1}, {(1, "b"): 2}):
             assert_agrees("{{ p }}", {"p": d})
 
+    def test_the_bound_key_is_the_TYPE_not_its_text(self) -> None:
+        """The observation that distinguishes the fix from a lookalike.
+
+        ``{{ k }}`` renders ``0`` whether the loop bound ``Integer(0)`` or the
+        text ``"0"``, so every cell above would pass against a version that
+        stringified the key on the way out. Only a COMPARISON tells them
+        apart — and the gate-off mutation for
+        ``djust_core::object_key::dict_iteration_values`` survived until this
+        test existed.
+        """
+        for src in (
+            "{% for k in p %}{% if k == 0 %}INT{% else %}STR{% endif %}{% endfor %}",
+            "{% for k in p.keys %}{% if k == 0 %}INT{% else %}STR{% endif %}{% endfor %}",
+            "{% for k, v in p.items %}{% if k == 0 %}INT{% else %}STR{% endif %}{% endfor %}",
+        ):
+            assert_agrees(src, {"p": {0: 1}})
+            assert djust_render(src, {"p": {0: 1}}) == "INT", src
+            # …and the STRING key is genuinely the other answer, so the
+            # assertion above is not simply "whatever djust does".
+            assert_agrees(src, {"p": {"0": 1}})
+            assert djust_render(src, {"p": {"0": 1}}) == "STR", src
+
+    def test_a_bool_key_stays_a_bool(self) -> None:
+        src = "{% for k in p %}{% if k is True %}T{% else %}F{% endif %}{% endfor %}"
+        assert_agrees(src, {"p": {True: 1}})
+        assert djust_render(src, {"p": {True: 1}}) == "T"
+
+    def test_an_unresolved_needle_misses_rather_than_matching_an_empty_key(self) -> None:
+        """``Value::Missing`` is an ABSENT variable, not the empty string.
+
+        Mapping it onto a key would make ``{% if nosuchvar in d %}`` open on a
+        dict that happens to carry a ``""`` key — a gate deciding on a
+        variable that does not exist. Verified reachable: with the arm mutated
+        to `ObjectKey::Str("")` this renders ``Y`` where Django renders ``N``.
+        """
+        src = "{% if nosuchvar in p %}Y{% else %}N{% endif %}"
+        assert_agrees(src, {"p": {"": 1}})
+        assert djust_render(src, {"p": {"": 1}}) == "N"
+
+    def test_an_unhashable_needle_misses_rather_than_matching_by_text(self) -> None:
+        """``[] in {}`` raises in Python; djust renders the else-branch rather
+        than matching a key whose text happens to read ``[]``.
+        """
+        src = "{% if p in q %}Y{% else %}N{% endif %}"
+        for ctx in ({"p": [], "q": {"[]": 1}}, {"p": {}, "q": {"{}": 1}}):
+            assert_agrees(src, ctx)
+            assert djust_render(src, ctx) == "N", ctx
+
     def test_a_mixed_key_dict_keeps_every_key(self) -> None:
         assert_agrees("{% for k in p %}[{{ k }}]{% endfor %}", {"p": {"a": 1, 2: 3, None: 4}})
         assert_agrees("{{ p }}", {"p": {"a": 1, 2: 3, None: 4}})

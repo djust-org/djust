@@ -90,7 +90,7 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
         Value::List(items) | Value::Tuple(items) => Some(items.clone()),
         // A dict iterates its KEYS, each as the value it actually is — an
         // `Integer` key must render `0`, not `"0"` (#2339).
-        Value::Object(map) => Some(map.keys().cloned().map(Value::from).collect()),
+        Value::Object(map) => Some(djust_core::object_key::dict_iteration_values(map)),
         Value::Missing => Some(Vec::new()),
         _ => None,
     }

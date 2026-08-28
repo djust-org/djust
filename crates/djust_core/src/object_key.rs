@@ -223,6 +223,26 @@ impl ObjectKey {
     }
 }
 
+/// What iterating a Python `dict` yields: its KEYS, each as the value it is.
+///
+/// **The one definition of that rule.** It had three copies within a day of
+/// the key type landing — `Node::For`'s normalisation, `iter_values` (which
+/// feeds `|length` / `|join` / `|unordered_list`) and `Context::dict_view`'s
+/// `keys` arm — which is the parallel-path-drift shape (CLAUDE.md #1646) at
+/// its very beginning. Converged before it could drift.
+///
+/// The distinction the `Value::from` makes is real but only observable
+/// through a COMPARISON: `{% for k in d %}{{ k }}{% endfor %}` renders `0`
+/// either way, and it is `{% if k == 0 %}` that tells an `Integer` key from
+/// the text `"0"`. Measured — every `iter_values` consumer merely counts or
+/// stringifies, so the gate-off mutation survived there until this
+/// convergence gave all three sites one mechanism and one test to kill it.
+pub fn dict_iteration_values(
+    map: &indexmap::IndexMap<ObjectKey, crate::Value>,
+) -> Vec<crate::Value> {
+    map.keys().cloned().map(crate::Value::from).collect()
+}
+
 impl From<&str> for ObjectKey {
     fn from(s: &str) -> Self {
         ObjectKey::Str(s.to_string())

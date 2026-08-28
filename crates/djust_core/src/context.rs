@@ -371,7 +371,7 @@ impl Context {
             return None;
         };
         Some(Value::List(match last {
-            "keys" => map.keys().cloned().map(Value::from).collect(),
+            "keys" => crate::object_key::dict_iteration_values(map),
             "values" => map.values().cloned().collect(),
             // `items` — each entry a 2-`Tuple`, which is what makes
             // `{% for k, v in d.items %}` unpack through the renderer's

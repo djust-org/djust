@@ -422,6 +422,20 @@ INPUTS = {
         "1": mark_safe("<b>ok</b>"),
         "<img src=x onerror=alert(1)>": "v",
     },
+    # A dict whose keys are NOT strings (#2339). Every other dict on this axis
+    # is string-keyed, so no cell could show that a non-string-keyed dict was
+    # not a mapping AT ALL — it fell through to its own `repr`, which
+    # `{% for k in d %}` then iterated one CHARACTER at a time and
+    # `{{ d|length }}` counted the characters of.
+    #
+    # Carries one key of each kind the key type models, because the extraction
+    # order is load-bearing: a Python `bool` IS an `int`, so an `i64`-first arm
+    # order silently turns `True` into `1`.
+    "d-typed-key": {0: "a", True: "b", None: "c", 1.5: "d", (1, "t"): "e"},
+    # The same, with the payload as a NON-string key's neighbour — so the
+    # key-escaping question is asked for a mapping whose iteration order is
+    # not the string-keyed one.
+    "d-typed-hostile": {0: "a", "<img src=x onerror=alert(1)>": "v"},
 }
 
 #: Inputs whose SAFETY the context declares. Rendered through
@@ -470,6 +484,9 @@ LIVE_FRAGMENTS = {
     # The KEY is the payload here, and it is never marked. `<b>ok</b>` IS
     # marked and Django emits it live, which is why it is not listed.
     "d-hostile-key": ["<img", "onerror="],
+    # Same, for the typed-key dict (#2339). `d-typed-key` carries no payload
+    # at all and so has no entry.
+    "d-typed-hostile": ["<img", "onerror="],
 }
 
 #: Names worth composing: the safety- and shape-relevant ones. Keeps the chain
