@@ -75,6 +75,13 @@ fn flat_repr(value: &Value) -> String {
         // which renders `Missing` as the empty string (Django's
         // `string_if_invalid`). Preserved from the filter this replaces.
         Value::Missing | Value::None => "None".to_string(),
+        // `pprint.pformat(d.keys())` is `dict_keys(['a'])` — measured. The
+        // elements go through this same `flat_repr`, so a nested view is
+        // spelled consistently.
+        Value::DictView { kind, items } => {
+            let parts: Vec<String> = items.iter().map(flat_repr).collect();
+            format!("{}([{}])", kind.container_name(), parts.join(", "))
+        }
         Value::Bool(true) => "True".to_string(),
         Value::Bool(false) => "False".to_string(),
         Value::Integer(n) => n.to_string(),

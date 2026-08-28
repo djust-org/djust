@@ -82,6 +82,29 @@ pub fn bigint_tag() -> &'static str {
     BIGINT_TAG
 }
 
+/// Which of Python's three dict views a [`Value::DictView`] is (#2340).
+///
+/// The kind decides only the CONTAINER's name in `str()` — `dict_items([…])`
+/// vs `dict_keys([…])` vs `dict_values([…])`. Every other behaviour is shared,
+/// which is why this is a field rather than three variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DictViewKind {
+    Items,
+    Keys,
+    Values,
+}
+
+impl DictViewKind {
+    /// The name Python's `repr` gives the container.
+    pub fn container_name(self) -> &'static str {
+        match self {
+            DictViewKind::Items => "dict_items",
+            DictViewKind::Keys => "dict_keys",
+            DictViewKind::Values => "dict_values",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
     /// An absent key or attribute. Renders as `""` — Django's
@@ -112,6 +135,42 @@ pub enum Value {
     /// so every `map.get("literal")` call site is unchanged — see that
     /// module's docs for why, and for what the wire format still loses.
     Object(IndexMap<ObjectKey, Value>),
+    /// A live `dict_items` / `dict_keys` / `dict_values` view (#2340).
+    ///
+    /// #2334 made `d.items` resolve, to a plain `Value::List`. Everything a
+    /// template usually does with one was then exact — iteration, unpacking,
+    /// `|length`, `|join`, truthiness, `{% with %}` — and two observable
+    /// properties of a real view were not: `str()` read `[…]` rather than
+    /// `dict_items([…])`, and it was subscriptable where Python's raises.
+    ///
+    /// **This is NOT merely a `List` that prints differently.** Django's
+    /// behaviour was measured across every one of its built-in filters,
+    /// against all three kinds, and it splits three ways rather than two:
+    ///
+    /// * **sequence-like** — `{% for %}`, `in`, truthiness, `|length`,
+    ///   `|join`, `|unordered_list`, `|safeseq`, `|escapeseq`;
+    /// * **raises** — `|first`, `|last`, `|random`, `|json_script` (a view is
+    ///   not subscriptable and not JSON-serializable). djust renders NOTHING
+    ///   there rather than raising, which is the shape #2325's differential
+    ///   already classifies and accepts, and is never more permissive;
+    /// * **its `str()`** — and this is the third of the registry the issue's
+    ///   list missed entirely. `|truncatewords`, `|wordcount`, `|linebreaks`,
+    ///   `|stringformat`, `|striptags`, `|pprint`, `|escape`, `|safe`,
+    ///   `|yesno` and `|make_list` all operate on the text
+    ///   `"dict_keys([…])"`, so the repr is not cosmetic — it is their input.
+    ///
+    /// `|slice` is the case the issue got backwards: Django's `slice` CATCHES
+    /// the `TypeError` and returns the value unchanged, so
+    /// `{{ d.keys|slice:':1' }}` renders the whole view and
+    /// `{{ d.keys|slice:':1'|join:'' }}` is still every key. Modelling it as
+    /// "returns nothing" would have been a new divergence.
+    ///
+    /// Only ever built by `Context::dict_view` during a render; it never
+    /// arrives from Python and never comes back off the wire.
+    DictView {
+        kind: DictViewKind,
+        items: Vec<Value>,
+    },
     /// A Python `Decimal`, carried as its EXACT digit string (#2214).
     ///
     /// Not a `Float`, because that is the bug: PyO3's `extract::<f64>()` goes
@@ -236,6 +295,13 @@ impl Serialize for Value {
             }
             Value::List(items) | Value::Tuple(items) => items.serialize(serializer),
             Value::Object(o) => o.serialize(serializer),
+            // A view is built by `Context::dict_view` during a render and is
+            // never handed to a serializer on any real path — but `Value` has
+            // to be total. Its ITEMS, because that is the shape a JSON or
+            // msgpack consumer could do anything with; Python's own
+            // `json.dumps` refuses a view outright, so there is no faithful
+            // encoding to mirror (#2340).
+            Value::DictView { items, .. } => items.serialize(serializer),
         }
     }
 }
@@ -558,6 +624,8 @@ impl Value {
             Value::List(l) => !l.is_empty(),
             Value::Tuple(t) => !t.is_empty(),
             Value::Object(o) => !o.is_empty(),
+            // `bool({}.keys())` is False; `bool({'a': 1}.keys())` is True.
+            Value::DictView { items, .. } => !items.is_empty(),
         }
     }
 }
@@ -895,7 +963,19 @@ impl Value {
             Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
             Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
-            Value::List(_) | Value::Tuple(_) => write!(f, "[List]"),
+            // A dict VIEW joins the `[List]` placeholder rather than naming
+            // itself (#2340), and that is deliberate: this arm is the
+            // pre-#2203 rendering, and before #2340 a view WAS a
+            // `Value::List`, so `[List]` is exactly what `{{ d.items }}`
+            // printed here. Spelling it `dict_items([…])` under the flag would
+            // make a legacy-rendering switch less legacy.
+            //
+            // The first version of this change did name it, on a comment
+            // asserting "the container spelling is Python's on BOTH display
+            // paths" — a prose invariant that had never been run. The gate-off
+            // surfaced it as a surviving mutation and the test written to close
+            // that gap failed on the first execution (CLAUDE.md #1867).
+            Value::List(_) | Value::Tuple(_) | Value::DictView { .. } => write!(f, "[List]"),
             Value::Object(_) => match self.object_str() {
                 Some(s) => write!(f, "{s}"),
                 None => write!(f, "[Object]"),
@@ -973,6 +1053,19 @@ impl fmt::Display for Value {
                 } else {
                     write!(f, "({})", inner.join(", "))
                 }
+            }
+            // `dict_items([('a', 1)])` — the container names itself, and its
+            // elements go through `py_repr` like a list's. Measured against
+            // Django rather than assumed, including that an EMPTY view still
+            // prints `dict_keys([])` (#2340).
+            //
+            // This is not a cosmetic detail: a third of the filter registry
+            // (`truncatewords`, `wordcount`, `linebreaks`, `stringformat`,
+            // `striptags`, `pprint`, `escape`, `safe`, `yesno`, `make_list`)
+            // operates on this exact text.
+            Value::DictView { kind, items } => {
+                let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
+                write!(f, "{}([{}])", kind.container_name(), inner.join(", "))
             }
             Value::Object(o) => match self.object_str() {
                 // A model instance carries `__str__`; that keeps winning over
@@ -1250,6 +1343,10 @@ impl<'py> IntoPyObject<'py> for Value {
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 Ok(pyo3::types::PyTuple::new(py, items)?.into_any())
             }
+            // Back to Python as a LIST. A real view cannot be rebuilt without
+            // the dict it belongs to, and every consumer of this conversion
+            // (custom filters, tag handlers) wants something it can iterate.
+            Value::DictView { items, .. } => Value::List(items).into_pyobject(py),
             Value::Object(o) => {
                 let py_dict = PyDict::new(py);
                 for (k, v) in o {

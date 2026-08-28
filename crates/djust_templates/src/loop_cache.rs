@@ -662,6 +662,19 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
                 hash_value(item, hasher);
             }
         }
+        // Its OWN tag, and the KIND in it: a view renders
+        // `dict_keys([…])` where a list of the same items renders `[…]`, and
+        // `dict_keys` differs from `dict_values`. Sharing the list tag would
+        // let a cached fragment rendered for one be served for the other
+        // (#2340) — the same argument the Missing/None split above makes.
+        Value::DictView { kind, items } => {
+            9u8.hash(hasher);
+            (*kind as u8).hash(hasher);
+            items.len().hash(hasher);
+            for item in items {
+                hash_value(item, hasher);
+            }
+        }
         Value::Object(map) => {
             6u8.hash(hasher);
             map.len().hash(hasher);

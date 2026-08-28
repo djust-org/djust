@@ -346,18 +346,12 @@ impl Context {
     /// `Context::get` (that returns a borrow into the value stack, and these
     /// sequences are constructed on demand).
     ///
-    /// **The container is a `Value::List`, not a live dict view.** Python's
-    /// `dict_items` differs from `list(d.items())` in exactly two observable
-    /// ways: `str()` reads `dict_items([…])` rather than `[…]`, and it is not
-    /// subscriptable or JSON-serializable (so Django RAISES on
-    /// `{{ d.items|first }}` / `|last` / `|json_script`). Both residues are
-    /// measured and pinned by
-    /// `python/tests/test_dict_iteration_and_sequence_equality_2334_2335.py`
-    /// and tracked at #2340; modelling them faithfully would mean a new
-    /// `Value` variant threaded
-    /// through every `Value::List | Value::Tuple` or-pattern in the workspace,
-    /// which buys a debug-only repr at the cost of a wide edit in escaping
-    /// machinery. Neither residue is more permissive than Django.
+    /// **The container is a [`Value::DictView`], a live view** (#2340). It was
+    /// a plain `Value::List` until then, which differed from Python's in two
+    /// observable ways: `str()` read `[…]` rather than `dict_items([…])`, and
+    /// it was subscriptable and JSON-serializable where Python's is not.
+    /// See that variant's docs for the three-way split Django's own filters
+    /// make, which was measured across all of them rather than reasoned about.
     ///
     /// Order is the `IndexMap`'s insertion order — Python's dict order. A
     /// `HashMap` here would make `{% for k in d %}` nondeterministic across
@@ -370,18 +364,26 @@ impl Context {
         let Value::Object(map) = self.get(prefix)? else {
             return None;
         };
-        Some(Value::List(match last {
-            "keys" => crate::object_key::dict_iteration_values(map),
-            "values" => map.values().cloned().collect(),
-            // `items` — each entry a 2-`Tuple`, which is what makes
-            // `{% for k, v in d.items %}` unpack through the renderer's
-            // existing tuple-unpacking branch, and what makes `{{ x }}` over
-            // one render `('a', 1)` as Python does.
-            _ => map
-                .iter()
-                .map(|(k, v)| Value::Tuple(vec![Value::from(k.clone()), v.clone()]))
-                .collect(),
-        }))
+        let kind = match last {
+            "keys" => crate::DictViewKind::Keys,
+            "values" => crate::DictViewKind::Values,
+            _ => crate::DictViewKind::Items,
+        };
+        Some(Value::DictView {
+            kind,
+            items: match kind {
+                crate::DictViewKind::Keys => crate::object_key::dict_iteration_values(map),
+                crate::DictViewKind::Values => map.values().cloned().collect(),
+                // `items` — each entry a 2-`Tuple`, which is what makes
+                // `{% for k, v in d.items %}` unpack through the renderer's
+                // existing tuple-unpacking branch, and what makes `{{ x }}`
+                // over one render `('a', 1)` as Python does.
+                crate::DictViewKind::Items => map
+                    .iter()
+                    .map(|(k, v)| Value::Tuple(vec![Value::from(k.clone()), v.clone()]))
+                    .collect(),
+            },
+        })
     }
 
     pub fn set(&mut self, key: String, value: Value) {
@@ -973,26 +975,34 @@ mod tests {
     #[test]
     fn dict_items_keys_and_values_resolve_in_insertion_order() {
         let ctx = dict_ctx();
+        // A `DictView` carrying its KIND, not a bare list (#2340): the kind is
+        // what names the container in `str()`, and asserting it here is what
+        // stops `d.keys` from silently resolving to a `dict_values(...)`.
         match ctx.resolve("d.keys").unwrap().unwrap() {
-            Value::List(items) => assert_eq!(
-                items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
-                vec!["a", "b"],
-                "Python's dict order, not a hash order — a HashMap here would \
-                 make `{{% for k in d %}}` nondeterministic across renders"
-            ),
-            other => panic!("expected a list, got {other:?}"),
+            Value::DictView { kind, items } => {
+                assert_eq!(kind, crate::DictViewKind::Keys);
+                assert_eq!(
+                    items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+                    vec!["a", "b"],
+                    "Python's dict order, not a hash order — a HashMap here would \
+                     make `{{% for k in d %}}` nondeterministic across renders"
+                );
+            }
+            other => panic!("expected a dict view, got {other:?}"),
         }
         match ctx.resolve("d.values").unwrap().unwrap() {
-            Value::List(items) => {
+            Value::DictView { kind, items } => {
+                assert_eq!(kind, crate::DictViewKind::Values);
                 assert_eq!(
                     items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
                     vec!["1", "2"]
                 )
             }
-            other => panic!("expected a list, got {other:?}"),
+            other => panic!("expected a dict view, got {other:?}"),
         }
         match ctx.resolve("d.items").unwrap().unwrap() {
-            Value::List(items) => {
+            Value::DictView { kind, items } => {
+                assert_eq!(kind, crate::DictViewKind::Items);
                 assert_eq!(items.len(), 2);
                 // Each entry is a 2-TUPLE, which is what makes
                 // `{% for k, v in d.items %}` unpack through the renderer's
@@ -1006,7 +1016,24 @@ mod tests {
                     other => panic!("expected a 2-tuple, got {other:?}"),
                 }
             }
-            other => panic!("expected a list, got {other:?}"),
+            other => panic!("expected a dict view, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn each_kind_names_its_own_container_in_str() {
+        // The whole of #2340's visible half, at the type level.
+        let ctx = dict_ctx();
+        for (path, want) in [
+            ("d.keys", "dict_keys(['a', 'b'])"),
+            ("d.values", "dict_values([1, 2])"),
+            ("d.items", "dict_items([('a', 1), ('b', 2)])"),
+        ] {
+            assert_eq!(
+                ctx.resolve(path).unwrap().unwrap().to_string(),
+                want,
+                "{path}"
+            );
         }
     }
 
@@ -1047,13 +1074,14 @@ mod tests {
         let mut ctx = Context::new();
         ctx.set("d".to_string(), Value::Object(outer));
         match ctx.resolve("d.inner.keys").unwrap().unwrap() {
-            Value::List(items) => {
+            Value::DictView { kind, items } => {
+                assert_eq!(kind, crate::DictViewKind::Keys);
                 assert_eq!(
                     items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
                     vec!["x"]
                 )
             }
-            other => panic!("expected a list, got {other:?}"),
+            other => panic!("expected a dict view, got {other:?}"),
         }
     }
 }

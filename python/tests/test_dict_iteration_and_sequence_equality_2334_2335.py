@@ -293,99 +293,33 @@ class TestDictIterationRandomised:
             f"{len(unexplained)}/{cells} disagree outside the documented residue "
             f"(residue so far: {residue}), first three: {unexplained[:3]!r}"
         )
-        assert set(residue) == {"django-raised", "dict-view-modelled-as-a-list"}, (
+        # `dict-view-modelled-as-a-list` is GONE: #2340 gave the view its own
+        # `Value::DictView`, so the substitution that classifier described no
+        # longer happens and it would be a dead allowance (#1859). Only the
+        # pre-existing django-raised shape remains.
+        assert set(residue) == {"django-raised"}, (
             "the documented residue shapes are no longer the ones that occur, so "
             f"one classifier is a dead exemption: {residue}"
         )
 
     @classmethod
     def _classify(cls, shape: str, d: dict, dj: str, du: str) -> str | None:
-        """Two documented shapes, both MECHANICAL predicates rather than name
-        lists — a name list would quietly absorb a real defect.
+        """One documented shape, a MECHANICAL predicate rather than a name
+        list — a name list would quietly absorb a real defect.
 
-        1. Django RAISED (a non-iterable value reached ``{% for %}``, or a
-           2-unpack over something that is not a 2-sequence) and djust
-           rendered the ``{% empty %}`` block. Pre-existing, unrelated to the
-           dict arm, and not a permissiveness question.
-        2. djust models a dict view as a plain LIST, so its answer IS Django's
-           answer for the same template over ``list(view)``.
+        Django RAISED (a non-iterable value reached ``{% for %}``, or a
+        2-unpack over something that is not a 2-sequence) and djust rendered
+        the ``{% empty %}`` block. Pre-existing, unrelated to the dict arm,
+        and not a permissiveness question.
+
+        A second shape lived here until #2340 — *djust models a dict view as a
+        plain LIST, so its answer IS Django's answer over ``list(view)``* —
+        and was deleted with the divergence it described.
         """
         if dj.startswith("<<EXC ") and not du.startswith("<<EXC "):
             return "django-raised"
-        if cls._is_the_view_model_residue(shape, d, du):
-            return "dict-view-modelled-as-a-list"
         return None
 
-    @staticmethod
-    def _is_the_view_model_residue(shape: str, d: dict, djust_out: str) -> bool:
-        """djust models a dict view as a plain LIST, so the only divergence
-        left is exactly that substitution.
-
-        Mechanical rather than a name list: it asserts djust's output IS
-        Django's output for the same template with ``p.items`` replaced by a
-        variable bound to ``list(d.items())``. A second, unrelated defect
-        would not satisfy it.
-        """
-        for name in ("items", "keys", "values"):
-            token = f"p.{name}"
-            if token not in shape:
-                continue
-            model = {"items": list(d.items()), "keys": list(d), "values": list(d.values())}[name]
-            try:
-                want = django_render(shape.replace(token, "pl"), {"pl": model})
-            except Exception:  # noqa: BLE001
-                return False
-            return djust_out == want
-        return False
-
-
-class TestTheDictViewModelIsAList:
-    """The one deliberate modelling divergence, measured and filed (#2340).
-
-    Python's ``dict_items`` differs from ``list(d.items())`` in exactly two
-    observable ways, and both are pinned here so the exemption cannot quietly
-    grow a third:
-
-    1. ``str()`` reads ``dict_items([...])`` rather than ``[...]``.
-    2. It is not subscriptable and not JSON-serializable, so Django RAISES on
-       ``|first`` / ``|last`` / ``|json_script`` and returns the value
-       UNCHANGED from ``|slice``.
-
-    Modelling them faithfully needs a new ``Value`` variant threaded through
-    every ``Value::List | Value::Tuple`` or-pattern in the workspace — a wide
-    edit in escaping machinery, bought for a debug-only repr. Neither residue
-    is more permissive than Django: djust escapes the same characters, and
-    rendering a container where Django raises is the shape #2325 already
-    classified and accepted.
-    """
-
-    D = {"a": 1, "b": 2}
-
-    def test_the_container_repr_is_a_list_not_a_dict_view(self) -> None:
-        for name in ("items", "keys", "values"):
-            dj, du = both("{{ p.%s }}" % name, {"p": self.D})
-            assert dj != du, (
-                f"{{{{ p.{name} }}}} now agrees with Django — djust models the view "
-                "faithfully, so delete this test and the residue predicate in "
-                "TestDictIterationRandomised"
-            )
-            assert f"dict_{name}(" in dj
-            assert du == django_render("{{ pl }}", {"pl": list(getattr(self.D, name)())})
-
-    def test_the_view_is_indexable_where_pythons_is_not(self) -> None:
-        """Django raises; djust answers. The ``django-raised`` residue shape."""
-        for spec in ("first", "last"):
-            dj, du = both("{{ p.items|%s }}" % spec, {"p": self.D})
-            assert dj.startswith("<<EXC "), dj
-            assert not du.startswith("<<EXC "), du
-
-    def test_neither_residue_emits_anything_django_does_not(self) -> None:
-        """The residue is a container repr, never an escaping difference."""
-        d = {XSS: XSS}
-        for name in ("items", "keys", "values"):
-            du = djust_render("{{ p.%s }}" % name, {"p": d})
-            assert "<img" not in du
-            assert "onerror=" not in du or "&lt;img" in du
 
 
 # ===========================================================================

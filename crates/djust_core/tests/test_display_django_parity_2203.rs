@@ -246,3 +246,68 @@ fn a_dunder_str_object_renders_the_same_either_way() {
     assert_eq!(Value::Object(m).to_string(), "Model object");
     // `_g`'s Drop restores the default.
 }
+
+/// A dict VIEW names its container on the Django-parity path, and is
+/// UNCHANGED on the legacy one (#2340).
+///
+/// The `Display` impl has two paths, and the first version of #2340 wrote the
+/// naming arm into both — on a comment asserting "the container spelling is
+/// Python's on BOTH display paths". That was a prose invariant nobody had run:
+/// the gate-off surfaced the legacy arm as a surviving mutation, and this
+/// test, written to close that gap, FAILED on its first execution with
+/// `dict_items([[List]])` (CLAUDE.md #1867).
+///
+/// `legacy_display` is the pre-#2203 rendering, where every container is a
+/// `[List]` / `[Object]` placeholder — and before #2340 a view WAS a
+/// `Value::List`, so `[List]` is exactly what `{{ d.items }}` printed under
+/// the flag. Naming it there would make a legacy-rendering switch less legacy,
+/// so the arm joins the placeholder and this pins that it stays joined.
+#[test]
+fn a_dict_view_names_its_container_only_on_the_django_parity_path() {
+    // ONE guard for the whole body — `FLAG_LOCK` is a plain `Mutex`, so taking
+    // it twice in a single test deadlocks.
+    let _g = FlagGuard::on();
+    let cases = [
+        (
+            djust_core::DictViewKind::Keys,
+            vec![Value::String("a".into())],
+            "dict_keys(['a'])",
+        ),
+        (
+            djust_core::DictViewKind::Values,
+            vec![Value::Integer(1)],
+            "dict_values([1])",
+        ),
+        (
+            djust_core::DictViewKind::Items,
+            vec![Value::Tuple(vec![
+                Value::String("a".into()),
+                Value::Integer(1),
+            ])],
+            "dict_items([('a', 1)])",
+        ),
+    ];
+    for (kind, items, want) in &cases {
+        let v = Value::DictView {
+            kind: *kind,
+            items: items.clone(),
+        };
+        assert_eq!(&v.to_string(), want, "django_value_repr ON, {kind:?}");
+    }
+
+    djust_core::set_django_value_repr(false);
+    for (kind, items, _) in &cases {
+        let v = Value::DictView {
+            kind: *kind,
+            items: items.clone(),
+        };
+        assert_eq!(
+            v.to_string(),
+            "[List]",
+            "the legacy path is the PRE-#2203 rendering and a view was a \
+             `Value::List` before #2340, so it must still print `[List]` \
+             there — {kind:?}"
+        );
+    }
+    // `_g`'s Drop restores the default.
+}

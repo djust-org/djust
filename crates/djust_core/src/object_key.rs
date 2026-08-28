@@ -218,7 +218,12 @@ impl ObjectKey {
             // `Missing` is an ABSENT key, not a value: an unresolved variable
             // must miss the lookup, never match a key that happens to hold
             // the empty string.
-            crate::Value::Missing | crate::Value::List(_) | crate::Value::Object(_) => return None,
+            // A view is unhashable in Python too, so `d.keys() in other` raises
+            // there and misses here (#2340).
+            crate::Value::Missing
+            | crate::Value::List(_)
+            | crate::Value::Object(_)
+            | crate::Value::DictView { .. } => return None,
         })
     }
 }
