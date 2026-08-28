@@ -15,10 +15,12 @@ pub mod context;
 pub mod decimal;
 pub mod errors;
 pub mod locale;
+pub mod object_key;
 pub mod serialization;
 
 pub use context::Context;
 pub use errors::{DjangoRustError, Result};
+pub use object_key::ObjectKey;
 
 /// A value that can be used in Django templates
 ///
@@ -103,7 +105,13 @@ pub enum Value {
     /// Insertion-ordered, NOT a `HashMap`: Rust randomises `HashMap` iteration
     /// per process, so dict repr would differ between renders of the same
     /// template. Python dicts are insertion-ordered (#2203).
-    Object(IndexMap<String, Value>),
+    ///
+    /// The key is an [`ObjectKey`], not a `String`, so a dict keyed by
+    /// anything else is still a MAPPING and `{% if 0 in d %}` cannot match a
+    /// `"0"` key (#2339). `ObjectKey::Str` hashes exactly as its `str` does,
+    /// so every `map.get("literal")` call site is unchanged — see that
+    /// module's docs for why, and for what the wire format still loses.
+    Object(IndexMap<ObjectKey, Value>),
     /// A Python `Decimal`, carried as its EXACT digit string (#2214).
     ///
     /// Not a `Float`, because that is the bug: PyO3's `extract::<f64>()` goes
@@ -977,14 +985,68 @@ impl fmt::Display for Value {
                         // escaper here missed the BACKSLASH, so a key like `a\`
                         // emitted `{'a\': 1}` where the closing quote reads as
                         // escaped. Two escapers, one wrong.
-                        .map(|(k, v)| {
-                            format!("{}: {}", Value::String(k.clone()).py_repr(), v.py_repr())
-                        })
+                        .map(|(k, v)| format!("{}: {}", k.py_repr(), v.py_repr()))
                         .collect();
                     write!(f, "{{{}}}", inner.join(", "))
                 }
             },
         }
+    }
+}
+
+/// A Python dict KEY, with its type kept (#2339).
+///
+/// Total by construction: every Python dict key is hashable, and a key whose
+/// type this does not model still becomes an [`ObjectKey::Other`] carrying
+/// both its `str()` and its `repr()`. That totality is the point — the
+/// previous code returned `None` for a non-string key and dropped the WHOLE
+/// dict to its own `repr`, so one exotic key made the entire mapping
+/// un-iterable.
+///
+/// Ordering mirrors [`Value`]'s own extraction, and for the same reasons:
+/// `bool` before `int` (a Python `bool` IS an `int`, so the `i64` arm would
+/// swallow it and `{{ {True: 1} }}` would print `{1: 1}`), and `Decimal`
+/// before `f64` (`extract::<f64>()` honours `Decimal.__float__`, #2214).
+pub fn py_object_key(ob: &Bound<'_, PyAny>) -> ObjectKey {
+    if ob.is_none() {
+        return ObjectKey::None;
+    }
+    if let Ok(s) = ob.extract::<String>() {
+        // BEFORE the numeric arms: a `str` never extracts as one, but keeping
+        // the common case first avoids three failed extractions per key.
+        return ObjectKey::Str(s);
+    }
+    if let Ok(b) = ob.extract::<bool>() {
+        return ObjectKey::Bool(b);
+    }
+    if let Ok(n) = ob.extract::<i64>() {
+        return ObjectKey::Int(n);
+    }
+    if ob.is_instance_of::<pyo3::types::PyInt>() {
+        if let Ok(digits) = ob.str().and_then(|s| s.extract::<String>()) {
+            return ObjectKey::BigInt(digits);
+        }
+    }
+    if is_decimal(&ob.to_owned()) {
+        if let Ok(d) = ob.str().and_then(|s| s.extract::<String>()) {
+            return ObjectKey::Decimal(d);
+        }
+    }
+    if let Ok(f) = ob.extract::<f64>() {
+        return ObjectKey::Float(f);
+    }
+    if let Ok(t) = ob.cast::<pyo3::types::PyTuple>() {
+        return ObjectKey::Tuple(t.iter().map(|item| py_object_key(&item)).collect());
+    }
+    ObjectKey::Other {
+        display: ob
+            .str()
+            .and_then(|s| s.extract::<String>())
+            .unwrap_or_default(),
+        repr: ob
+            .repr()
+            .and_then(|s| s.extract::<String>())
+            .unwrap_or_default(),
     }
 }
 
@@ -1035,15 +1097,15 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // lost — and no later re-sort can recover it (#2203). PyDict
             // iteration yields entries in insertion order.
             //
-            // Returns None (rather than propagating) when a key is not a
-            // string, so the arm simply does not match and the conversion falls
-            // through to the object handling below — precisely what the previous
-            // `extract::<HashMap<String, Value>>()` did. Propagating instead
-            // turned a context containing `{1: "a"}` from "renders something"
-            // into a hard TypeError, which is a regression (#2203 self-review).
-            let mut m = IndexMap::with_capacity(d.len());
+            // A NON-STRING key no longer rejects the whole dict (#2339). It
+            // used to: the arm returned `None`, the conversion fell through to
+            // the object handling below, and `{0: 1}` reached the renderer as
+            // its own `repr` — so `{% for k in d %}` iterated that string BY
+            // CHARACTER and `{{ d|length }}` counted 14. The key now carries
+            // its type, so such a dict is a real mapping.
+            let mut m: IndexMap<ObjectKey, Value> = IndexMap::with_capacity(d.len());
             for (k, v) in d.iter() {
-                m.insert(k.extract::<String>().ok()?, v.extract::<Value>().ok()?);
+                m.insert(py_object_key(&k), v.extract::<Value>().ok()?);
             }
             Some(m)
         }) {
@@ -1106,7 +1168,9 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                 // non-determinism the PyDict arm above exists to avoid, and a
                 // first pass reintroduced it sixty lines later.
                 if let Ok(items) = obj_dict.cast::<PyDict>() {
-                    let mut map: IndexMap<String, Value> = IndexMap::new();
+                    // Attribute names, so the keys stay `ObjectKey::Str` —
+                    // a `__dict__` cannot have a non-string key.
+                    let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
                     for (k, v) in items.iter() {
                         let Ok(k) = k.extract::<String>() else {
                             continue;
@@ -1116,7 +1180,7 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                             continue;
                         }
                         if let Ok(val) = v.extract::<Value>() {
-                            map.insert(k, val);
+                            map.insert(ObjectKey::Str(k), val);
                         }
                     }
                     if !map.is_empty() {
@@ -1189,7 +1253,12 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::Object(o) => {
                 let py_dict = PyDict::new(py);
                 for (k, v) in o {
-                    py_dict.set_item(k, v.into_pyobject(py)?)?;
+                    // The key goes back as the Python object it came from, so
+                    // a round trip through Rust does not silently restring an
+                    // int-keyed dict (#2339). `ObjectKey::Other` is the one
+                    // lossy case — the original object is gone, so its
+                    // `str()` goes back as text.
+                    py_dict.set_item(Value::from(k).into_pyobject(py)?, v.into_pyobject(py)?)?;
                 }
                 Ok(py_dict.into_any())
             }
@@ -1230,10 +1299,10 @@ mod tests {
     /// Rust Display impl previously dropped it and emitted `[Object]`.
     #[test]
     fn test_display_object_with_str_key() {
-        let mut map: IndexMap<String, Value> = IndexMap::new();
-        map.insert("id".to_string(), Value::Integer(1));
+        let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
+        map.insert("id".into(), Value::Integer(1));
         map.insert(
-            "__str__".to_string(),
+            "__str__".into(),
             Value::String("<Claim: 2026PD000075>".to_string()),
         );
         let obj = Value::Object(map);
@@ -1246,9 +1315,9 @@ mod tests {
     /// semantics.
     #[test]
     fn test_display_object_without_str_key() {
-        let mut map: IndexMap<String, Value> = IndexMap::new();
-        map.insert("a".to_string(), Value::Integer(1));
-        map.insert("b".to_string(), Value::Integer(2));
+        let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
+        map.insert("a".into(), Value::Integer(1));
+        map.insert("b".into(), Value::Integer(2));
         let obj = Value::Object(map);
         // Was `"[Object]"`. Django renders `str({'a': 1, 'b': 2})` (#2203),
         // in insertion order — which is why `Object` is an IndexMap.
@@ -1260,8 +1329,8 @@ mod tests {
     /// `"[Object]"` rather than emit `null` or crash.
     #[test]
     fn test_display_object_str_key_non_string_falls_back() {
-        let mut map: IndexMap<String, Value> = IndexMap::new();
-        map.insert("__str__".to_string(), Value::Missing);
+        let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
+        map.insert("__str__".into(), Value::Missing);
         let obj = Value::Object(map);
         // Falls back to dict repr rather than emitting the bad `__str__`.
         // The map has one entry, so this is the single-pair rendering.
@@ -1273,8 +1342,8 @@ mod tests {
     /// and the Rust engine must match.
     #[test]
     fn test_display_object_empty_str_key() {
-        let mut map: IndexMap<String, Value> = IndexMap::new();
-        map.insert("__str__".to_string(), Value::String("".to_string()));
+        let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
+        map.insert("__str__".into(), Value::String("".to_string()));
         let obj = Value::Object(map);
         assert_eq!(obj.to_string(), "");
     }
@@ -1283,19 +1352,19 @@ mod tests {
     /// for every caller (#2294).
     #[test]
     fn test_object_str_is_the_model_marker_predicate() {
-        let mut plain: IndexMap<String, Value> = IndexMap::new();
-        plain.insert("a".to_string(), Value::Integer(1));
+        let mut plain: IndexMap<ObjectKey, Value> = IndexMap::new();
+        plain.insert("a".into(), Value::Integer(1));
         assert_eq!(Value::Object(plain.clone()).object_str(), None);
 
         let mut model = plain.clone();
-        model.insert("__str__".to_string(), Value::String("bob".to_string()));
+        model.insert("__str__".into(), Value::String("bob".to_string()));
         assert_eq!(Value::Object(model).object_str(), Some("bob"));
 
         // A non-`String` `"__str__"` is NOT a marker: `Display` falls back to
         // dict repr for it, so the predicate must agree.
         for bad in [Value::Missing, Value::None, Value::Integer(7)] {
             let mut broken = plain.clone();
-            broken.insert("__str__".to_string(), bad);
+            broken.insert("__str__".into(), bad);
             assert_eq!(Value::Object(broken).object_str(), None);
         }
 
@@ -1370,8 +1439,8 @@ mod tests {
     /// fails here rather than silently taking the wrong branch.
     #[test]
     fn py_str_is_display_for_every_variant_but_float_and_decimal() {
-        let mut map: IndexMap<String, Value> = IndexMap::new();
-        map.insert("k".to_string(), Value::Integer(1));
+        let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
+        map.insert("k".into(), Value::Integer(1));
         for value in [
             Value::Missing,
             Value::None,

@@ -51,11 +51,15 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 from django.template.defaultfilters import register, stringfilter  # noqa: E402
-from django.utils.safestring import SafeData, mark_safe  # noqa: E402
+from django.utils.safestring import mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
 
+from test_differential_reachability_manifest_2345 import rows as reachability_rows  # noqa: E402
+from test_differential_reachability_manifest_2345 import (  # noqa: E402
+    run_manifest as run_reachability_manifest,
+)
 from test_safe_survives_is_safe_filter_2274 import capabilities  # noqa: E402
 
 HOSTILE = [
@@ -487,16 +491,25 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
     assert arms == {"join", "safeseq", "escapeseq", "unordered_list", "random"}, arms
 
 
+#: The corpus reachability manifest (#2345), read once per module.
+#:
+#: Each coupling below used to compute its own requirement set from the Rust
+#: source and its own swept set from this script's literals. That was five
+#: bespoke implementations of one question, added one blind spot at a time, and
+#: it is the shape #2345 replaced: the corpus declares its axes, each axis names
+#: the engine-derived set it must cover, and these tests are named entry points
+#: into that one computation rather than second copies of it.
+_MANIFEST: dict[str, dict] = {}
+
+
+def manifest_rows() -> dict[str, dict]:
+    if not _MANIFEST:
+        _MANIFEST.update(reachability_rows(run_reachability_manifest()))
+    return _MANIFEST
+
+
 #: The differential script, read as source by every coupling test below.
 _DIFFERENTIAL = Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
-
-
-def _hot_sets() -> set[str]:
-    """The names ``scripts/filter-parity-differential.py`` actually composes."""
-    hot = _DIFFERENTIAL.read_text()
-    swept = set(re.findall(r'"(\w+)"', hot.split("HOT2 = [", 1)[1].split("]", 1)[0]))
-    swept |= set(re.findall(r'"(\w+)"', hot.split("HOT3 = [", 1)[1].split("]", 1)[0]))
-    return swept
 
 
 def _differential_literal(name: str):
@@ -522,15 +535,6 @@ def _differential_literal(name: str):
     )
 
 
-def _rust_const(name: str) -> list[str]:
-    """The string literals of a `const NAME: [&str; N] = [...]` in renderer.rs."""
-    src = (
-        Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / "renderer.rs"
-    ).read_text()
-    body = src.split(f"const {name}: [&str;", 1)[1].split("[", 1)[1].split("];", 1)[0]
-    return re.findall(r'"(\w+)"', body)
-
-
 def test_every_safety_set_member_is_in_the_differential_hot_sets() -> None:
     """The coupling that would have caught the `dictsort` XSS.
 
@@ -542,59 +546,29 @@ def test_every_safety_set_member_is_in_the_differential_hot_sets() -> None:
     item-safety grant onto a list Django had destroyed, and
     ``{{ hostile|safeseq|dictsort:"x"|join:"" }}`` emitted raw markup.
 
-    The individual `dictsort` decision is not the durable fix — this is. A name
-    granted safety in `renderer.rs` and absent from the sweep is a blind spot
-    aimed exactly where the change was made, so the two lists are coupled here
-    rather than by memory.
+    The individual `dictsort` decision is not the durable fix — and neither, it
+    turned out, was this test. It was the FIRST of what became five bespoke
+    corpus couplings, one per blind spot, each written after the blind spot had
+    already cost something (#2296, #2293, #2299, #2305, then #2325/#2334/#2290/
+    #2345). #2345 replaced the pile with a declared axis registry: the corpus
+    names its axes and each names the set the ENGINE says it must cover.
+
+    So this is now the named entry point for the `chain` axis and not a second
+    implementation of it — the archaeology above is why the axis exists, and
+    ``scripts/filter-parity-differential.py::_required_chain_filters`` is the
+    one place the requirement is computed.
 
     Deliberately one-directional: the hot sets may contain names in no safety
     set (`upper`, `pprint`, …), because composing extra filters only widens the
     sweep. What must never happen is a safety-set member missing from it.
     """
-    swept = _hot_sets()
-
-    granted: set[str] = set()
-    for const in (
-        "SAFE_OUTPUT_FILTERS",
-        "ITEM_SAFE_OUTPUT_FILTERS",
-        "ITEM_SAFETY_PRESERVING_FILTERS",
-    ):
-        granted |= set(_rust_const(const))
-    assert len(granted) > 5, f"the constants did not parse: {granted}"
-
-    missing = granted - swept
-    assert not missing, (
-        f"{sorted(missing)} are granted safety in renderer.rs but are not composed "
+    row = manifest_rows()["chain"]
+    assert len(row["required"]) > 5, f"the constants did not parse: {row['required']}"
+    assert not row["missing"], (
+        f"{row['missing']} are granted safety in renderer.rs but are not composed "
         f"by scripts/filter-parity-differential.py. Add them to HOT2 and HOT3 in "
         f"the SAME commit — this is the check the `dictsort` XSS defeated."
     )
-
-
-def _rust_char_set(module: str, predicate: str) -> set[str]:
-    """The `char` literals of a `matches!(c, ...)` predicate in a Rust module.
-
-    Parsed rather than transcribed, for the same reason `_rust_const` is: a
-    transcription is a second copy that drifts, and the whole point of these
-    couplings is that the sweep cannot fall behind the code it measures.
-    """
-    path = (
-        Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / f"{module}.rs"
-    )
-    body = path.read_text().split(f"fn {predicate}(", 1)[1].split("\n}", 1)[0]
-    escapes = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\", "'": "'", "0": "\0"}
-    found: set[str] = set()
-    for uni, esc, plain in re.findall(
-        r"'(?:\\u\{([0-9a-fA-F]+)\}|\\(.)|([^'\\]))'",
-        body,
-    ):
-        if uni:
-            found.add(chr(int(uni, 16)))
-        elif esc:
-            found.add(escapes[esc])
-        else:
-            found.add(plain)
-    assert found, f"{module}.rs::{predicate} did not parse"
-    return found
 
 
 def test_every_whitespace_boundary_the_engine_branches_on_is_in_the_corpus() -> None:
@@ -606,17 +580,15 @@ def test_every_whitespace_boundary_the_engine_branches_on_is_in_the_corpus() -> 
     whole fix. Not "0 regressions": *no movement at all*, because every ``s-``
     corpus entry was a single line of ASCII-ish text with single spaces, so the
     tool could not construct one cell in which the two implementations differed.
-    It correctly refuses that as a non-baseline, but only because the counts
+    It correctly refused that as a non-baseline, but only because the counts
     happened to be identical; a corpus one cell luckier would have printed
-    ``REGRESSIONS: 0`` over an unmeasured change. That is the same failure shape
-    as the ``dictsort`` XSS the test above exists for, on the INPUT axis instead
-    of the filter-NAME axis.
+    ``REGRESSIONS: 0`` over an unmeasured change.
 
     The bar is every character the engine's own whitespace predicates branch on,
     parsed out of the Rust: ``pprint::py_is_line_break`` (what a line is) and
-    ``textwrap::is_textwrap_space`` (where a chunk boundary is). Those two sets
-    are different from each other and from ``truncate::py_is_space``, and #2293
-    is the record of what happens when the corpus samples none of them.
+    ``textwrap::is_textwrap_space`` (where a chunk boundary is), plus the two
+    members of ``truncate::py_is_space`` — a RANGE, so it cannot be parsed the
+    same way — that neither literal set contains.
 
     Deliberately corpus-GLOBAL rather than per-filter. A sound "which filters
     read this axis?" derivation is not available — a filter that merely passes a
@@ -625,61 +597,48 @@ def test_every_whitespace_boundary_the_engine_branches_on_is_in_the_corpus() -> 
     wrong question. The global form is strictly stronger anyway: it demands the
     character be reachable regardless of which filter turns out to need it.
 
-    ``truncate::py_is_space`` is a RANGE (`c.is_whitespace() || '\u{1c}'..='\u{1f}'`)
-    rather than a literal set, so it cannot be parsed the same way; its two
-    members that neither literal set contains — ``\xa0`` and ``\x1f`` — are
-    asserted by name below.
+    Computed by the manifest since #2345 (``_required_whitespace``), so this is
+    the named entry point rather than a second implementation.
     """
-    corpus = "".join(v for v in _differential_literal("INPUTS").values() if isinstance(v, str))
-
-    boundaries = _rust_char_set("pprint", "py_is_line_break") | _rust_char_set(
-        "textwrap", "is_textwrap_space"
+    row = manifest_rows()["whitespace"]
+    assert len(row["required"]) >= 12, f"the predicates parsed too small: {row['required']}"
+    assert not row["missing"], (
+        f"{row['missing']} are whitespace boundaries the engine branches on, and NO "
+        f"input in scripts/filter-parity-differential.py contains one. Every cell "
+        f"the sweep builds is then blind to any behaviour that turns on them — "
+        f"which is exactly how the #2293 wordwrap fix measured as no movement at "
+        f"all. Add a character to an INPUTS value in the SAME commit as the "
+        f"predicate change."
     )
-    assert len(boundaries) >= 12, f"the predicates parsed too small: {sorted(map(ord, boundaries))}"
-
-    missing = sorted(c for c in boundaries if c not in corpus)
-    assert not missing, (
-        f"{[f'U+{ord(c):04X}' for c in missing]} are whitespace boundaries the engine "
-        f"branches on, and NO input in scripts/filter-parity-differential.py contains "
-        f"one. Every cell the sweep builds is then blind to any behaviour that turns "
-        f"on them — which is exactly how the #2293 wordwrap fix measured as no "
-        f"movement at all. Add a character to an INPUTS value in the SAME commit as "
-        f"the predicate change."
-    )
-
-    # `py_is_space` is a range, not a literal set; these are its two members that
-    # neither parsed set contains, and both are load-bearing: `\xa0` is a WORD to
-    # textwrap's splitter that `drop_whitespace` nonetheless discards, and `\x1f`
-    # survives `splitlines` while stripping to empty.
-    for char in ("\xa0", "\x1f"):
-        assert char in corpus, (
-            f"U+{ord(char):04X} is whitespace to `truncate::py_is_space` and to nothing "
-            f"else the engine uses, and no corpus input carries it (#2293)."
-        )
 
     # Arrangements rather than characters, and the other half of what the
     # re-joiner destroyed: it collapsed runs of spaces and dropped indentation.
-    assert any("  " in v for v in _differential_literal("INPUTS").values() if isinstance(v, str)), (
+    # Not derivable from a predicate — an ARRANGEMENT has no `matches!` to parse
+    # — so these two stay here rather than becoming manifest members.
+    inputs = _differential_literal("INPUTS")
+    assert any("  " in v for v in inputs.values() if isinstance(v, str)), (
         "no corpus input carries a RUN of spaces, which #2293 collapsed"
     )
-    assert any(
-        v[:1].isspace()
-        for v in _differential_literal("INPUTS").values()
-        if isinstance(v, str) and v
-    ), "no corpus input carries leading indentation, which #2293 dropped"
+    assert any(v[:1].isspace() for v in inputs.values() if isinstance(v, str) and v), (
+        "no corpus input carries leading indentation, which #2293 dropped"
+    )
 
 
 def test_the_per_call_safety_channel_is_swept_too() -> None:
     """The same coupling, one level down — ``builtin_produced_safe`` (#2299).
 
-    ``renderer.rs``'s three constants are the NAME-based safety channel and the
-    test above couples them to the sweep. There is a SECOND channel:
-    ``filters::builtin_produced_safe`` answers per CALL, for the filters whose
-    safety depends on which branch of the body ran, and it grants exactly as
-    much safety as a constant does. #2299 added ``first``/``last``/``random``
-    to it; ``first`` and ``last`` were already on the hot sets by luck (they
-    were put there for SHAPE coverage, not safety), which is precisely the kind
-    of accident this makes into a rule.
+    ``renderer.rs``'s three constants are the NAME-based safety channel. There
+    is a SECOND: ``filters::builtin_produced_safe`` answers per CALL, for the
+    filters whose safety depends on which branch of the body ran, and it grants
+    exactly as much safety as a constant does. #2299 added
+    ``first``/``last``/``random`` to it; ``first`` and ``last`` were already on
+    the hot sets by luck (they were put there for SHAPE coverage, not safety),
+    which is precisely the kind of accident this makes into a rule.
+
+    Both channels feed ONE requirement set since #2345
+    (``_required_chain_filters``), which is the point: two channels granting the
+    same property should not be two tests that can disagree about what the
+    corpus owes.
 
     ``random`` is the exemption, and it is principled rather than a carve-out:
     the differential's ``load()`` rewrites every ``NONDET`` cell to a bare
@@ -689,7 +648,8 @@ def test_the_per_call_safety_channel_is_swept_too() -> None:
     blind, which is worse than absent (#1859). Its real coverage is
     ``python/tests/test_context_item_safety_2287.py::
     TestRandomIsCoveredByCapabilityNotByBytes``, which asserts capabilities
-    across repeated draws instead of bytes.
+    across repeated draws instead of bytes. The axis models that by counting
+    ``NONDET`` as swept.
     """
     source = (
         Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / "filters.rs"
@@ -711,24 +671,31 @@ def test_the_per_call_safety_channel_is_swept_too() -> None:
         "random",
     }, f"the arms did not parse, or a name was added without updating this pin: {granted}"
 
+    row = manifest_rows()["chain"]
+    # Non-vacuity: the manifest's requirement set must actually CONTAIN this
+    # channel's names, or "0 missing" would be measuring only the constants.
+    assert granted <= set(row["required"]), (
+        f"{sorted(granted - set(row['required']))} are granted safety per-call by "
+        f"`builtin_produced_safe` and the manifest's `chain` requirement does not "
+        f"carry them — so the coupling is measuring only half the grant."
+    )
+    assert not row["missing"], (
+        f"{row['missing']} are granted safety but are neither composed by "
+        f"scripts/filter-parity-differential.py nor exempt as NONDET. Add them to "
+        f"HOT2 and HOT3 in the SAME commit."
+    )
+
     hot = (
         Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
     ).read_text()
     nondet = set(re.findall(r'"(\w+)"', hot.split("NONDET = {", 1)[1].split("}", 1)[0]))
     assert "random" in nondet, f"NONDET no longer holds `random`: {nondet}"
 
-    missing = granted - _hot_sets() - nondet
-    assert not missing, (
-        f"{sorted(missing)} are granted safety per-call by `builtin_produced_safe` "
-        f"but are neither composed by scripts/filter-parity-differential.py nor "
-        f"exempt as NONDET. Add them to HOT2 and HOT3 in the SAME commit."
-    )
-
 
 def test_the_differential_sweeps_every_shape_the_context_grant_accepts() -> None:
     """The INPUT axis of the same coupling, which nothing pinned (#2305).
 
-    The two tests above couple the FILTER axis: a name granted safety must be
+    The tests above couple the FILTER axis: a name granted safety must be
     composed by the sweep. Neither says anything about the input shapes, and
     #2305 is exactly a bug that lived in a shape the corpus did not carry —
     ``Context::items_are_safe`` accepts ``Value::List`` *and* ``Value::Tuple``,
@@ -738,43 +705,21 @@ def test_the_differential_sweeps_every_shape_the_context_grant_accepts() -> None
     shape-coverage tidiness.
 
     Parsed from the Rust rather than transcribed, so widening the grant to a
-    third shape fails here until the corpus grows an input for it. The
-    differential's ``INPUTS`` dict is read as a literal — never imported, since
-    the script configures Django settings and mutates the global filter
-    registry at import time.
+    third shape fails until the corpus grows an input for it. This is the one
+    slice of the INPUT axis with a mechanical source, and it is why the
+    manifest's ``input-shape`` row says UNVERIFIED *outside* ``grant-shape``
+    rather than UNVERIFIED flat.
     """
-    ctx_src = (
-        Path(__file__).resolve().parents[2] / "crates" / "djust_core" / "src" / "context.rs"
-    ).read_text()
-    body = ctx_src.split("pub fn items_are_safe", 1)[1].split("\n    pub fn ", 1)[0]
-    accepted = set(re.findall(r"Value::(\w+)\(items\)", body))
-    assert accepted, "the `items_are_safe` match did not parse"
-
-    rust_to_python = {"List": list, "Tuple": tuple}
-    unknown = accepted - set(rust_to_python)
-    assert not unknown, (
-        f"`items_are_safe` now accepts {sorted(unknown)}, a shape this test has no "
-        f"Python counterpart for. Map it here AND add a marked input of that shape "
-        f"to scripts/filter-parity-differential.py's INPUTS in the SAME commit."
+    row = manifest_rows()["grant-shape"]
+    assert row["required"], "the `items_are_safe` match did not parse"
+    assert not row["missing"], (
+        f"`items_are_safe` accepts Value::{row['missing']}, and "
+        f"scripts/filter-parity-differential.py carries no value of that shape "
+        f"whose every element is mark_safe'd — so the sweep cannot construct a "
+        f"single cell where the CONTEXT grants item safety on it. This is the "
+        f"blind spot #2305 lived in. If the shape is new, map it in "
+        f"`_GRANT_SHAPE_TO_PYTHON` AND add a marked input in the SAME commit."
     )
-
-    inputs = _differential_literal("INPUTS")
-
-    for variant, py_type in rust_to_python.items():
-        if variant not in accepted:
-            continue
-        marked = [
-            key
-            for key, value in inputs.items()
-            if type(value) is py_type and value and all(isinstance(v, SafeData) for v in value)
-        ]
-        assert marked, (
-            f"`items_are_safe` accepts Value::{variant}, but "
-            f"scripts/filter-parity-differential.py carries no {py_type.__name__} "
-            f"whose every element is mark_safe'd — so the sweep cannot construct a "
-            f"single cell where the CONTEXT grants item safety on that shape. This "
-            f"is the blind spot #2305 lived in."
-        )
 
 
 class TestItemSafetyIsNeverMorePermissiveThanDjango:

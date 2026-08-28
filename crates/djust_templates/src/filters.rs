@@ -88,7 +88,9 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
     match value {
         Value::String(s) => Some(s.chars().map(|c| Value::String(c.to_string())).collect()),
         Value::List(items) | Value::Tuple(items) => Some(items.clone()),
-        Value::Object(map) => Some(map.keys().map(|k| Value::String(k.clone())).collect()),
+        // A dict iterates its KEYS, each as the value it actually is — an
+        // `Integer` key must render `0`, not `"0"` (#2339).
+        Value::Object(map) => Some(djust_core::object_key::dict_iteration_values(map)),
         Value::Missing => Some(Vec::new()),
         _ => None,
     }
@@ -902,9 +904,29 @@ fn apply_builtin_filter(
             // float coercion is always allowed. Only the ARGUMENT's quoting is
             // in question.
             let lhs = int_digits_of(value, true);
-            let rhs = arg_value
-                .as_ref()
-                .and_then(|a| int_digits_of(a, !arg_was_quoted));
+            // A bare `True`/`False` first, through the ONE helper that states
+            // that rule (#2347/#1646). `int_digits_of` is `int()` for a
+            // NUMERIC spelling and answers `None` for the text `"True"` — which
+            // is what a resolved builtin arrives as, since the argument channel
+            // is `Option<&str>`. Without this arm `{{ p|add:True }}` fell to
+            // the concatenation branch and rendered its input unchanged (5)
+            // where Django computes `int(5) + int(True)` = 6, while
+            // `{{ p|center:True }}` was already right because `center` reads
+            // its argument through #2328's `python_int_arg`, the helper's other
+            // caller. Two `int()`s, one of which knew the rule: #1646.
+            //
+            // `add` cannot simply use `python_int_arg`: that returns an `i64`
+            // and `add` carries exact DIGITS, because a sum past `i64`
+            // saturated and silently returned the input unchanged (#2253,
+            // #2260). The shared piece is the rule, not the parse.
+            let rhs = arg
+                .and_then(|a| bare_bool_arg_as_int(a, arg_was_quoted))
+                .map(|n| n.to_string())
+                .or_else(|| {
+                    arg_value
+                        .as_ref()
+                        .and_then(|a| int_digits_of(a, !arg_was_quoted))
+                });
             match lhs.zip(rhs) {
                 // A sum outside `i64` is carried as its exact digits rather than
                 // being thrown away: `Value::Integer` is an i64 and Python's is
@@ -1762,20 +1784,22 @@ pub(crate) fn filter_int_arg(
 ///    That exact branch is why `7`, `-3`, `+3`, `7.5`, `.5`, `1e3`, `1_0` and
 ///    `07` are literals while `7.`, `0x10`, `nan` and `inf` are lookups —
 ///    verified cell by cell against Django 5.2.
-/// 2. **`True` / `False` / `None`**, which are not literals at all: they are
-///    keys of `django.template.context.builtins`, so they RESOLVE. djust's
-///    `Context` does not carry them (`{{ p|add:True }}` is 6 in Django and 5
-///    here — a separate, pre-existing gap, #2347), so they are listed here to
-///    keep this fix from turning that wrong answer into a raise.
-/// 3. **`_("…")`**, the translation marker, which `Variable` unwraps to a
+/// 2. **`_("…")`**, the translation marker, which `Variable` unwraps to a
 ///    quoted literal.
+///
+/// `True` / `False` / `None` used to be listed here as a third mechanism, and
+/// are NOT any more (#2347). They are not literals — they are keys of
+/// `django.template.context.builtins` — and now that `Context::resolve`
+/// carries them, `ctx.resolve("True")` answers `Some(Value::Bool(true))` and
+/// the resolve-miss branch that consults this predicate is never reached for
+/// them. Keeping the arm would have been a second mechanism shadowing the
+/// first: unreachable, so no test could tell whether it or the resolution was
+/// doing the work (#2233). Gating the resolution off now makes a bare `True`
+/// argument RAISE, which is the correct signal that the two are coupled.
 ///
 /// A QUOTED argument never reaches this — `arg_was_quoted` short-circuits the
 /// whole resolution — so only the bare spellings are listed.
 fn is_literal_filter_arg(a: &str) -> bool {
-    if matches!(a, "True" | "False" | "None") {
-        return true;
-    }
     if a.starts_with("_(") && a.ends_with(')') {
         return true;
     }
@@ -1859,6 +1883,48 @@ fn pad_width(filter_name: &str, parsed: Option<i64>) -> Result<usize> {
 /// digits — and an UNQUOTED float literal additionally truncates, because
 /// Django's `Variable` has already turned it into a Python `float` by the time
 /// `int()` sees it.
+/// A bare `True` / `False` argument as the INTEGER Python reads it (#2347).
+///
+/// `bool` IS an `int` in Python, and #2347 made djust's `Context` carry
+/// Django's `True`/`False`/`None` builtins, so a bare `True` now RESOLVES —
+/// but it resolves to a `Value::Bool`, and the built-in filter argument
+/// channel is `Option<&str>`, so what arrives at a filter is `str(True)`, the
+/// text `"True"`. Django's filter receives the object and `int(True)` is 1.
+/// This is the rule that recovers the integer from the text.
+///
+/// **Why #2347 did not delete this.** The issue predicted that resolving the
+/// builtins would make this coercion redundant. Measured after doing exactly
+/// that, it does not: the resolved `Value::Bool(true)` is stringified back to
+/// `"True"` at `apply_filter_full_safe`'s resolution site, so every built-in
+/// still sees the text and nothing on the argument axis moved — 69 divergent
+/// cells before the resolve fix, 69 after. Only the CUSTOM-filter channel
+/// (`filter_registry`, which hands the resolved value to Python via
+/// `into_pyobject`) gets the real `bool`. The gate-off proves it: reverting
+/// this helper reddens argument cells with the builtins in place.
+///
+/// **One statement of the rule, two callers** (#1646). [`python_int_arg`] is
+/// #2328's chokepoint for every numeric filter argument, and `add` has its own
+/// `int()` — `int_digits_of`, which is arbitrary-precision because `add` must
+/// carry a sum past `i64` (#2253/#2260) and so cannot share the chokepoint's
+/// body. Before this helper existed only the chokepoint knew the bool rule,
+/// which is why `{{ p|add:True }}` was 5 where Django says 6 while
+/// `{{ p|center:True }}` was already right.
+///
+/// `None` is deliberately absent: `int(None)` is a `TypeError` in Python, so
+/// falling through to the caller's own policy is the right answer.
+fn bare_bool_arg_as_int(raw: &str, arg_was_quoted: bool) -> Option<i64> {
+    if arg_was_quoted {
+        // `int("True")` raises — a QUOTED argument is a `str` to Python, and
+        // the coercion is for the BOOL, not for its name.
+        return None;
+    }
+    match raw {
+        "True" => Some(1),
+        "False" => Some(0),
+        _ => None,
+    }
+}
+
 fn python_int_arg(raw: &str, arg_was_quoted: bool) -> Option<i64> {
     if let Some(n) = python_int(raw) {
         return Some(n as i64);
@@ -1868,20 +1934,8 @@ fn python_int_arg(raw: &str, arg_was_quoted: bool) -> Option<i64> {
         // `int("True")` — the coercion below is for the BOOL, not its name.
         return None;
     }
-    // `bool` IS an `int` in Python, and Django's `Context.builtins` resolve a
-    // bare `True`/`False` to the real objects, so `{{ p|center:True }}` is
-    // `"ab".center(1)`. djust's `Context` does not carry the builtins (a
-    // separate gap, #2347 — DELETE THIS once it lands), so the identifier
-    // arrives here as its own text and has to
-    // be coerced — without this, exempting it from the resolve-miss raise just
-    // moved the failure one step later, which the argument-axis differential
-    // caught as 240 regressed cells. `None` is deliberately absent: `int(None)`
-    // is a `TypeError` in Python, so falling through to the caller's policy is
-    // the right answer.
-    match raw {
-        "True" => return Some(1),
-        "False" => return Some(0),
-        _ => {}
+    if let Some(n) = bare_bool_arg_as_int(raw, arg_was_quoted) {
+        return Some(n);
     }
     // Django's `Variable.__init__` reads a bare `2.7` as a float only when it
     // contains a `.` or an `e`; `int()` then truncates toward zero.
@@ -3855,7 +3909,11 @@ fn value_to_json(value: &Value) -> String {
                     // a key holding a newline emitted it raw and the whole
                     // script body stopped parsing — a dict key is as
                     // attacker-reachable as a dict value.
-                    let key_json = format!("\"{}\"", json_string_body(k));
+                    // A JSON key is a string whatever the Python key was —
+                    // `json.dumps({0: 1})` is `'{"0": 1}'` in CPython too, so
+                    // stringifying here is the FAITHFUL encoding, not a
+                    // shortcut around the typed key (#2339).
+                    let key_json = format!("\"{}\"", json_string_body(&k.to_display_string()));
                     format!("{}: {}", key_json, value_to_json(v))
                 })
                 .collect();
@@ -6089,16 +6147,16 @@ mod tests {
     fn test_dictsort_filter() {
         // Create list of dicts
         let mut dict1 = IndexMap::new();
-        dict1.insert("name".to_string(), Value::String("Charlie".to_string()));
-        dict1.insert("age".to_string(), Value::Integer(30));
+        dict1.insert("name".into(), Value::String("Charlie".to_string()));
+        dict1.insert("age".into(), Value::Integer(30));
 
         let mut dict2 = IndexMap::new();
-        dict2.insert("name".to_string(), Value::String("Alice".to_string()));
-        dict2.insert("age".to_string(), Value::Integer(25));
+        dict2.insert("name".into(), Value::String("Alice".to_string()));
+        dict2.insert("age".into(), Value::Integer(25));
 
         let mut dict3 = IndexMap::new();
-        dict3.insert("name".to_string(), Value::String("Bob".to_string()));
-        dict3.insert("age".to_string(), Value::Integer(35));
+        dict3.insert("name".into(), Value::String("Bob".to_string()));
+        dict3.insert("age".into(), Value::Integer(35));
 
         let value = Value::List(vec![
             Value::Object(dict1),
@@ -6122,10 +6180,10 @@ mod tests {
     #[test]
     fn test_dictsortreversed_filter() {
         let mut dict1 = IndexMap::new();
-        dict1.insert("name".to_string(), Value::String("Alice".to_string()));
+        dict1.insert("name".into(), Value::String("Alice".to_string()));
 
         let mut dict2 = IndexMap::new();
-        dict2.insert("name".to_string(), Value::String("Bob".to_string()));
+        dict2.insert("name".into(), Value::String("Bob".to_string()));
 
         let value = Value::List(vec![Value::Object(dict1), Value::Object(dict2)]);
 
@@ -6433,8 +6491,8 @@ mod tests {
     #[test]
     fn test_length_of_an_object_uses_the_str_marker() {
         let mut dict = indexmap::IndexMap::new();
-        dict.insert("a".to_string(), Value::Integer(1));
-        dict.insert("b".to_string(), Value::Integer(2));
+        dict.insert("a".into(), Value::Integer(1));
+        dict.insert("b".into(), Value::Integer(2));
         assert_eq!(
             apply_filter("length", &Value::Object(dict.clone()), None)
                 .unwrap()
@@ -6445,7 +6503,7 @@ mod tests {
         // A serialized model: `len(model)` raises `TypeError`, which Django's
         // `length` answers 0 to.
         let mut model = dict.clone();
-        model.insert("__str__".to_string(), Value::String("bob".to_string()));
+        model.insert("__str__".into(), Value::String("bob".to_string()));
         assert_eq!(
             apply_filter("length", &Value::Object(model), None)
                 .unwrap()
@@ -6456,7 +6514,7 @@ mod tests {
         // A non-string `"__str__"` is not a marker — `Display` falls back to
         // dict repr for it, so `length` must count it.
         let mut broken = dict.clone();
-        broken.insert("__str__".to_string(), Value::None);
+        broken.insert("__str__".into(), Value::None);
         assert_eq!(
             apply_filter("length", &Value::Object(broken), None)
                 .unwrap()
@@ -6524,10 +6582,7 @@ mod tests {
     #[test]
     fn test_json_script_escapes_control_characters_in_object_keys() {
         let mut map = IndexMap::new();
-        map.insert(
-            "a\nb\tc\rd\\e\"f".to_string(),
-            Value::String("v".to_string()),
-        );
+        map.insert("a\nb\tc\rd\\e\"f".into(), Value::String("v".to_string()));
         let result = apply_filter("json_script", &Value::Object(map), Some("data")).unwrap();
         let s = result.to_string();
         assert!(
@@ -6546,7 +6601,7 @@ mod tests {
         for code in 0x00u32..0x20 {
             let c = char::from_u32(code).unwrap();
             let mut map = IndexMap::new();
-            map.insert(format!("k{c}"), Value::String(format!("v{c}")));
+            map.insert(format!("k{c}").into(), Value::String(format!("v{c}")));
             let result = apply_filter("json_script", &Value::Object(map), Some("d")).unwrap();
             let s = result.to_string();
             assert!(
@@ -6613,7 +6668,7 @@ mod tests {
     #[test]
     fn a_nested_float_takes_the_same_spelling_2270() {
         let nested = Value::List(vec![Value::Object(
-            [("k".to_string(), Value::Float(1e20))]
+            [(djust_core::ObjectKey::from("k"), Value::Float(1e20))]
                 .into_iter()
                 .collect(),
         )]);

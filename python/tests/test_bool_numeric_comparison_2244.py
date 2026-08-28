@@ -460,11 +460,21 @@ def test_bool_literals_against_numeric_context_values() -> None:
 
 
 def test_a_bool_inherits_the_integer_arms_nan_answer() -> None:
-    """`{% if x > nan %}` is true here and false in Django — for `1` as well.
+    """A bool answers whatever its integer answers against a NaN — now `False`.
 
-    Not introduced by #2244 and not its to fix (#1079): the `(Integer, Float)`
-    arm's epsilon comparison yields 1 for any NaN pair, so `>` and `>=` are
-    true. Pinned so that the day the integer arm is fixed, this test says so.
+    #2244 pinned this as an INHERITED divergence: the `(Integer, Float)` arm's
+    epsilon comparison yielded 1 for any NaN pair, so `>` and `>=` were true
+    where Django says false, for `1` exactly as for `True`. It said "pinned so
+    that the day the integer arm is fixed, this test says so".
+
+    #2349 fixed the integer arm — `order_floats` returns `None` for a NaN,
+    which makes all four ordering operators false — so the second half of this
+    test inverts and now asserts AGREEMENT.
+
+    The first half is unchanged and is the part worth keeping either way: the
+    bool substitution must land a bool on the SAME arm as its integer, whatever
+    that arm answers. That is #2244's actual claim, and it holds before and
+    after the NaN fix.
     """
     nan = float("nan")
     for flag, integer in ((True, 1), (False, 0)):
@@ -474,8 +484,11 @@ def test_a_bool_inherits_the_integer_arms_nan_answer() -> None:
                 source, {"x": integer, "y": nan}
             ), (op, flag)
     source = "{% if x > y %}T{% else %}F{% endif %}"
-    assert djust_says(source, {"x": True, "y": nan}) == "T"
     assert django_says(source, {"x": True, "y": nan}) == "F"
+    assert djust_says(source, {"x": True, "y": nan}) == "F", (
+        "the bool path has diverged from the integer path again — #2349 made "
+        "every NaN ordering false through `order_floats`"
+    )
 
 
 def test_a_bool_inherits_the_decimal_arms_epsilon() -> None:

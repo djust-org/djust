@@ -55,6 +55,11 @@ BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 # the failure the brace-balancing fix addresses.
 EXPECTED = {
     ("crates/djust_core/src/lib.rs", "extract"),
+    # The dict-KEY converter (#2339). Added here because this sweep flagged it
+    # the moment it landed — which is the net working: a Python `bool` IS an
+    # `int`, so an `i64`-first arm order would swallow `True` and
+    # `{{ {True: 1} }}` would print `{1: 1}`.
+    ("crates/djust_core/src/lib.rs", "py_object_key"),
     ("crates/djust_live/src/lib.rs", "python_to_json_value"),
     ("crates/djust_live/src/lib.rs", "python_to_value"),
     ("crates/djust_live/src/lib.rs", "serialize_python_value"),

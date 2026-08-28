@@ -54,7 +54,7 @@ fn render_twice(first: Value, second: Value) -> (String, String) {
 
 fn rows_with(v: Value) -> Context {
     let mut row = IndexMap::new();
-    row.insert("v".to_string(), v);
+    row.insert("v".into(), v);
     let mut c = Context::new();
     c.set("rows".to_string(), Value::List(vec![Value::Object(row)]));
     c
@@ -87,12 +87,12 @@ fn dicts_differing_only_in_key_order_do_not_share_a_cache_entry() {
     // is insertion-ordered, so an order-independent hash would serve the first
     // rendering for the second.
     let mut ab = IndexMap::new();
-    ab.insert("a".to_string(), Value::Integer(1));
-    ab.insert("b".to_string(), Value::Integer(2));
+    ab.insert("a".into(), Value::Integer(1));
+    ab.insert("b".into(), Value::Integer(2));
 
     let mut ba = IndexMap::new();
-    ba.insert("b".to_string(), Value::Integer(2));
-    ba.insert("a".to_string(), Value::Integer(1));
+    ba.insert("b".into(), Value::Integer(2));
+    ba.insert("a".into(), Value::Integer(1));
 
     let (first, second) = render_twice(Value::Object(ab), Value::Object(ba));
 

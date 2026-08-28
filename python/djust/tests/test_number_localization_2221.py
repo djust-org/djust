@@ -154,7 +154,17 @@ def test_localization_does_not_reach_dict_lookup_keys():
     request = RequestFactory().get("/")
     view.mount(request)
     view.n = 1234567
-    view.d = {"1234567": "x"}
+    # An INT-keyed dict, which is what a view keyed by pk actually holds.
+    #
+    # This case was written string-keyed (`{"1234567": "x"}`) and asserted HIT
+    # — which Django answers MISS for, since `1234567 == "1234567"` is False.
+    # It passed only because `in` stringified the needle, and #2339 cited THIS
+    # test as the reason that coercion could not be removed. Measuring it
+    # showed the reverse: an int-keyed dict was not a mapping at all, so the
+    # coercion never protected the pk idiom this test is about. With the key
+    # type kept (#2339) the idiom works for real, and the case now agrees with
+    # Django instead of pinning a divergence.
+    view.d = {1234567: "x"}
     view.request = request
     out = view.render()
     assert "HIT" in out, (
@@ -162,6 +172,31 @@ def test_localization_does_not_reach_dict_lookup_keys():
         "key '1,234,567' and silently miss"
     )
     assert "1,234,567" in out, "and the OUTPUT must still be localized"
+
+
+@override_settings(USE_I18N=True, USE_THOUSAND_SEPARATOR=True, LANGUAGE_CODE="en-us")
+def test_a_string_key_is_matched_by_a_string_needle_only():
+    """The other half, and the one that keeps the localization guard honest.
+
+    A STRING key is still found by a STRING needle whose text would localize
+    if `Display` were the lookup — so the guard this file exists for is still
+    exercised — while an INT needle correctly misses it, as Python does.
+    """
+    tpl = '<div dj-id="0">{% if n in d %}HIT{% else %}MISS{% endif %}</div>'
+    view = type("_V", (_NumView,), {"template": tpl})()
+    request = RequestFactory().get("/")
+    view.mount(request)
+    view.n = "1234567"
+    view.d = {"1234567": "x"}
+    view.request = request
+    assert "HIT" in view.render()
+
+    view2 = type("_V", (_NumView,), {"template": tpl})()
+    view2.mount(request)
+    view2.n = 1234567
+    view2.d = {"1234567": "x"}
+    view2.request = request
+    assert "MISS" in view2.render(), "an int needle must not match a string key"
 
 
 @override_settings(USE_I18N=True, USE_THOUSAND_SEPARATOR=True, LANGUAGE_CODE="en-us")
