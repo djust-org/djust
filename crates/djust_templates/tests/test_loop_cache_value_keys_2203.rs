@@ -144,7 +144,7 @@ fn a_dict_view_and_a_list_of_the_same_items_do_not_share_a_cache_entry() {
 }
 
 #[test]
-fn two_dict_view_KINDS_do_not_share_a_cache_entry() {
+fn two_dict_view_kinds_do_not_share_a_cache_entry() {
     // The kind is IN the hash, not merely in `Display`: `dict_keys([1])` and
     // `dict_values([1])` are different renderings of the same items, so the
     // kind has to reach the cache key or the first is served for the second.
