@@ -486,14 +486,35 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
     assert arms == {"join", "safeseq", "escapeseq", "unordered_list", "random"}, arms
 
 
+#: The differential script, read as source by every coupling test below.
+_DIFFERENTIAL = Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
+
+
 def _hot_sets() -> set[str]:
     """The names ``scripts/filter-parity-differential.py`` actually composes."""
-    hot = (
-        Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
-    ).read_text()
+    hot = _DIFFERENTIAL.read_text()
     swept = set(re.findall(r'"(\w+)"', hot.split("HOT2 = [", 1)[1].split("]", 1)[0]))
     swept |= set(re.findall(r'"(\w+)"', hot.split("HOT3 = [", 1)[1].split("]", 1)[0]))
     return swept
+
+
+def _differential_literal(name: str):
+    """A top-level literal assignment in the differential script, evaluated.
+
+    Read as SOURCE and never imported: the script configures Django settings and
+    mutates the global filter registry at import time. One reader rather than a
+    copy per test, so the tests cannot disagree about what the corpus is (#1646).
+    """
+    tree = ast.parse(_DIFFERENTIAL.read_text())
+    literal = next(
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == name for t in node.targets)
+    )
+    return eval(  # noqa: S307 — a literal from a repo file, with only mark_safe bound
+        compile(ast.Expression(literal), f"<{name}>", "eval"), {"mark_safe": mark_safe}
+    )
 
 
 def _rust_const(name: str) -> list[str]:
@@ -542,6 +563,105 @@ def test_every_safety_set_member_is_in_the_differential_hot_sets() -> None:
         f"by scripts/filter-parity-differential.py. Add them to HOT2 and HOT3 in "
         f"the SAME commit — this is the check the `dictsort` XSS defeated."
     )
+
+
+def _rust_char_set(module: str, predicate: str) -> set[str]:
+    """The `char` literals of a `matches!(c, ...)` predicate in a Rust module.
+
+    Parsed rather than transcribed, for the same reason `_rust_const` is: a
+    transcription is a second copy that drifts, and the whole point of these
+    couplings is that the sweep cannot fall behind the code it measures.
+    """
+    path = (
+        Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / f"{module}.rs"
+    )
+    body = path.read_text().split(f"fn {predicate}(", 1)[1].split("\n}", 1)[0]
+    escapes = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\", "'": "'", "0": "\0"}
+    found: set[str] = set()
+    for uni, esc, plain in re.findall(
+        r"'(?:\\u\{([0-9a-fA-F]+)\}|\\(.)|([^'\\]))'",
+        body,
+    ):
+        if uni:
+            found.add(chr(int(uni, 16)))
+        elif esc:
+            found.add(escapes[esc])
+        else:
+            found.add(plain)
+    assert found, f"{module}.rs::{predicate} did not parse"
+    return found
+
+
+def test_every_whitespace_boundary_the_engine_branches_on_is_in_the_corpus() -> None:
+    r"""The coupling that would have caught the ``wordwrap`` blind spot (#2293).
+
+    ``wordwrap`` was a greedy re-joiner where Django is ``textwrap.TextWrapper``
+    — four separate divergences, including a byte-vs-character width — and the
+    two-build differential reported ``agree BEFORE == agree AFTER`` across the
+    whole fix. Not "0 regressions": *no movement at all*, because every ``s-``
+    corpus entry was a single line of ASCII-ish text with single spaces, so the
+    tool could not construct one cell in which the two implementations differed.
+    It correctly refuses that as a non-baseline, but only because the counts
+    happened to be identical; a corpus one cell luckier would have printed
+    ``REGRESSIONS: 0`` over an unmeasured change. That is the same failure shape
+    as the ``dictsort`` XSS the test above exists for, on the INPUT axis instead
+    of the filter-NAME axis.
+
+    The bar is every character the engine's own whitespace predicates branch on,
+    parsed out of the Rust: ``pprint::py_is_line_break`` (what a line is) and
+    ``textwrap::is_textwrap_space`` (where a chunk boundary is). Those two sets
+    are different from each other and from ``truncate::py_is_space``, and #2293
+    is the record of what happens when the corpus samples none of them.
+
+    Deliberately corpus-GLOBAL rather than per-filter. A sound "which filters
+    read this axis?" derivation is not available — a filter that merely passes a
+    character through is indistinguishable, by output, from one that branches on
+    it — and inventing one would be a pin that looks mechanical and answers the
+    wrong question. The global form is strictly stronger anyway: it demands the
+    character be reachable regardless of which filter turns out to need it.
+
+    ``truncate::py_is_space`` is a RANGE (`c.is_whitespace() || '\u{1c}'..='\u{1f}'`)
+    rather than a literal set, so it cannot be parsed the same way; its two
+    members that neither literal set contains — ``\xa0`` and ``\x1f`` — are
+    asserted by name below.
+    """
+    corpus = "".join(v for v in _differential_literal("INPUTS").values() if isinstance(v, str))
+
+    boundaries = _rust_char_set("pprint", "py_is_line_break") | _rust_char_set(
+        "textwrap", "is_textwrap_space"
+    )
+    assert len(boundaries) >= 12, f"the predicates parsed too small: {sorted(map(ord, boundaries))}"
+
+    missing = sorted(c for c in boundaries if c not in corpus)
+    assert not missing, (
+        f"{[f'U+{ord(c):04X}' for c in missing]} are whitespace boundaries the engine "
+        f"branches on, and NO input in scripts/filter-parity-differential.py contains "
+        f"one. Every cell the sweep builds is then blind to any behaviour that turns "
+        f"on them — which is exactly how the #2293 wordwrap fix measured as no "
+        f"movement at all. Add a character to an INPUTS value in the SAME commit as "
+        f"the predicate change."
+    )
+
+    # `py_is_space` is a range, not a literal set; these are its two members that
+    # neither parsed set contains, and both are load-bearing: `\xa0` is a WORD to
+    # textwrap's splitter that `drop_whitespace` nonetheless discards, and `\x1f`
+    # survives `splitlines` while stripping to empty.
+    for char in ("\xa0", "\x1f"):
+        assert char in corpus, (
+            f"U+{ord(char):04X} is whitespace to `truncate::py_is_space` and to nothing "
+            f"else the engine uses, and no corpus input carries it (#2293)."
+        )
+
+    # Arrangements rather than characters, and the other half of what the
+    # re-joiner destroyed: it collapsed runs of spaces and dropped indentation.
+    assert any("  " in v for v in _differential_literal("INPUTS").values() if isinstance(v, str)), (
+        "no corpus input carries a RUN of spaces, which #2293 collapsed"
+    )
+    assert any(
+        v[:1].isspace()
+        for v in _differential_literal("INPUTS").values()
+        if isinstance(v, str) and v
+    ), "no corpus input carries leading indentation, which #2293 dropped"
 
 
 def test_the_per_call_safety_channel_is_swept_too() -> None:
@@ -633,17 +753,7 @@ def test_the_differential_sweeps_every_shape_the_context_grant_accepts() -> None
         f"to scripts/filter-parity-differential.py's INPUTS in the SAME commit."
     )
 
-    diff_path = Path(__file__).resolve().parents[2] / "scripts" / "filter-parity-differential.py"
-    tree = ast.parse(diff_path.read_text())
-    literal = next(
-        node.value
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(getattr(t, "id", None) == "INPUTS" for t in node.targets)
-    )
-    inputs = eval(  # noqa: S307 — a literal from a repo file, with only mark_safe bound
-        compile(ast.Expression(literal), "<INPUTS>", "eval"), {"mark_safe": mark_safe}
-    )
+    inputs = _differential_literal("INPUTS")
 
     for variant, py_type in rust_to_python.items():
         if variant not in accepted:
