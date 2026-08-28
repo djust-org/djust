@@ -2703,18 +2703,39 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         return Ok((value.clone(), context.is_safe(expr)));
     }
 
-    // Try to parse as literal
-    if expr == "True" || expr == "true" {
-        return Ok((Value::Bool(true), false));
-    }
-    if expr == "False" || expr == "false" {
-        return Ok((Value::Bool(false), false));
-    }
-    if expr == "None" || expr == "none" {
-        // `Value::None`, not `Missing` (#2203). The literal in
-        // `{% if x is None %}` denotes Python's None singleton; `Missing`
-        // denotes an ABSENT variable, which Django treats separately.
-        return Ok((Value::None, false));
+    // Django's `True` / `False` / `None` have NO arm here, deliberately (#2347).
+    //
+    // They used to: this function spelled them inline while `Context::resolve`
+    // — the resolver `{{ }}` output and the filter-argument channels use — had
+    // no arm at all, which is why `{% if True %}` was right and `{{ True }}`
+    // rendered the empty string. Same three names, two resolvers, one of them
+    // wrong: #1646.
+    //
+    // The fix put them in `Context::resolve`, and this function ALREADY ends
+    // with a `context.resolve(expr)` fallback — so an arm here would be a
+    // second mechanism shadowing the first. It was measured as exactly that:
+    // with the arm present, gating it off reddened only a source-grep pin,
+    // because every behavioural case still resolved through the fallback
+    // (#2129/#2135). Deleted rather than tested around (#2233), which leaves
+    // one statement of the rule and makes the `{% if %}` / `{% with %}` /
+    // `{% firstof %}` operands and `{{ }}` answer from the same place by
+    // construction rather than by agreement.
+    //
+    // Precedence is unchanged and is Django's: `context.get` above wins,
+    // because `builtins` is `Context.dicts[0]` and `__getitem__` walks
+    // `reversed(self.dicts)`, so a user variable named `True` shadows it.
+    //
+    // The LOWERCASE spellings below are a djust extension rather than Django
+    // parity — `{% if true %}` is an undefined variable to Django and answers
+    // False — so they stay HERE, in the tag-operand resolver where they have
+    // always been, and are deliberately absent from `template_builtin`, which
+    // is exactly the Django set. `Value::None` for `none`, not `Missing`: the
+    // two are distinct (#2203) and this spelling denotes the singleton.
+    match expr {
+        "true" => return Ok((Value::Bool(true), false)),
+        "false" => return Ok((Value::Bool(false), false)),
+        "none" => return Ok((Value::None, false)),
+        _ => {}
     }
 
     if let Ok(i) = expr.parse::<i64>() {
@@ -2863,7 +2884,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Missing | Value::None, Value::Missing | Value::None) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
-        (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
+        (Value::Float(a), Value::Float(b)) => floats_equal(*a, *b),
         // Mixed int/float, EXACTLY — `{% if x == 0 %}` on `0.0` (#2243).
         //
         // `try_compare` has carried `(Integer, Float)` and `(Float, Integer)`
@@ -2923,7 +2944,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // pair involving a Decimal" while the code did more, which is how it
         // survived review twice (#1079, #1867).
         _ if is_decimal_pair(a, b) => match numeric_pair(a, b) {
-            Some((a, b)) => (a - b).abs() < f64::EPSILON,
+            Some((a, b)) => floats_equal(a, b),
             None => false,
         },
         // Everything else keeps the pre-#2214 answer. A guarded arm is not
@@ -2954,6 +2975,93 @@ fn values_identity(a: &Value, b: &Value) -> bool {
         // Non-singletons: Python `is` is not identity-stable; treat as false.
         _ => false,
     }
+}
+
+/// Order two floats as Python does — the ONE place that decides it (#2349).
+///
+/// Four arms of [`try_compare`] used to spell
+/// `if (a - b).abs() < f64::EPSILON { 0 } else if a < b { -1 } else { 1 }`
+/// inline, and that idiom is **undefined for a non-finite operand**:
+/// `(inf - inf)` is NaN and every comparison against NaN is false, so the
+/// tolerance answered "not equal" and the chain fell through its `else` to
+/// "greater". Every NaN pair therefore answered TRUE for `>` and `>=`, where
+/// Python answers False for all four operators — 22 of #2349's 26 divergent
+/// cells.
+///
+/// # `is_nan`, NOT `!is_finite`
+///
+/// A NaN is not the same thing as a pair Python refuses to order. `"a" >= 1`
+/// RAISES `TypeError`, which Django catches and resolves False — that is
+/// #2338, and [`try_compare`] answers `None` for it. `float("nan") >= float("nan")`
+/// raises nothing: it evaluates, and returns False. Different mechanism, same
+/// vehicle — `None` means "all four operators are false", which is exactly
+/// Python's answer for a NaN.
+///
+/// `±inf` orders NORMALLY in Python (`-inf < 1 < inf` are all True), so the
+/// guard is `is_nan` and not `!is_finite`. Getting that wrong would trade 22
+/// divergent cells for a different set.
+///
+/// # Why exact `==` comes before the epsilon
+///
+/// `inf == inf` is True in Python and the epsilon cannot say so. The exact
+/// check is a no-op for a finite pair — `a == b` implies `|a - b| == 0`, which
+/// the epsilon already calls equal — so it changes nothing except the case the
+/// epsilon is undefined for.
+///
+/// Whether the epsilon should exist for FINITE floats at all is an older and
+/// separate question (#2243 documents it as deliberately out of scope), and it
+/// stays out of scope here: this function keeps that behaviour byte for byte
+/// for any pair of finite floats.
+fn order_floats(a: f64, b: f64) -> Option<i32> {
+    if a.is_nan() || b.is_nan() {
+        return None;
+    }
+    if a == b {
+        return Some(0);
+    }
+    // The tolerance, unguarded — and that is a decision, not an oversight.
+    //
+    // A first version wrote `a.is_finite() && b.is_finite() && …` here. The
+    // gate-off then found the guard SURVIVED its own mutation, which is a
+    // question rather than a pass (#2129/#2135 + the v1.1.1-2 rule): it turned
+    // out to be a provable semantic no-op, so it was deleted rather than
+    // tested around (#2233).
+    //
+    // The proof: control only reaches this line when neither operand is NaN
+    // AND `a != b`. If either is `±inf` then `a - b` cannot be NaN — that
+    // needs `inf - inf` with the SAME sign, which `a != b` excludes — so it is
+    // `±inf`, and `inf < f64::EPSILON` is false. The tolerance therefore
+    // cannot fire for a non-finite pair whatever it is written as, and the
+    // guard only implied a hazard that does not exist.
+    if (a - b).abs() < f64::EPSILON {
+        return Some(0);
+    }
+    Some(if a < b { -1 } else { 1 })
+}
+
+/// Are two floats equal as Python has it — the ONE place that decides it
+/// (#2349).
+///
+/// [`values_equal`]'s `(Float, Float)` arm and its `is_decimal_pair` wildcard
+/// both spelled the epsilon inline, and `inf == inf` came out **False** where
+/// Django and Python say True: `(inf - inf)` is NaN, so the tolerance test is
+/// false. `{% if x == y %}` on two infinities silently took the `{% else %}`
+/// branch, and `float("inf")` is an ordinary value a view can hold.
+///
+/// The NaN answer was right only BY ACCIDENT. `nan == nan` is False in Python,
+/// and the epsilon produced False for the same undefined-comparison reason that
+/// made `inf` wrong — so a future change to the tolerance would have flipped it
+/// silently with no test failing. The branch below makes the right answer
+/// intentional: for a non-finite operand, IEEE `==` IS Python's answer —
+/// `nan == nan` false, `inf == inf` true, `inf == 1.0` false, `inf == -inf`
+/// false.
+///
+/// The epsilon for finite floats is untouched and out of scope (#2243).
+fn floats_equal(a: f64, b: f64) -> bool {
+    if !a.is_finite() || !b.is_finite() {
+        return a == b;
+    }
+    (a - b).abs() < f64::EPSILON
 }
 
 /// Order two values as Python does: `Some(-1 | 0 | 1)`, or **`None` when
@@ -2996,36 +3104,10 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
     }
     match (a, b) {
         (Value::Integer(a), Value::Integer(b)) => Some(a.cmp(b) as i32),
-        (Value::Float(a), Value::Float(b)) => {
-            if (a - b).abs() < f64::EPSILON {
-                Some(0)
-            } else if a < b {
-                Some(-1)
-            } else {
-                Some(1)
-            }
-        }
+        (Value::Float(a), Value::Float(b)) => order_floats(*a, *b),
         // Allow comparing integers and floats
-        (Value::Integer(a), Value::Float(b)) => {
-            let a_f = *a as f64;
-            if (a_f - b).abs() < f64::EPSILON {
-                Some(0)
-            } else if a_f < *b {
-                Some(-1)
-            } else {
-                Some(1)
-            }
-        }
-        (Value::Float(a), Value::Integer(b)) => {
-            let b_f = *b as f64;
-            if (a - b_f).abs() < f64::EPSILON {
-                Some(0)
-            } else if *a < b_f {
-                Some(-1)
-            } else {
-                Some(1)
-            }
-        }
+        (Value::Integer(a), Value::Float(b)) => order_floats(*a as f64, *b),
+        (Value::Float(a), Value::Integer(b)) => order_floats(*a, *b as f64),
         (Value::String(a), Value::String(b)) => Some(a.cmp(b) as i32),
         // Lexicographic, as Python orders two sequences of the same kind
         // (#2335): the first differing element decides, and if one is a prefix
@@ -3083,15 +3165,7 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
         // template silently takes the wrong branch. It is the second of the two
         // regressions measured against serializing a Decimal as a plain string.
         _ => match numeric_pair(a, b) {
-            Some((a, b)) => {
-                if (a - b).abs() < f64::EPSILON {
-                    Some(0)
-                } else if a < b {
-                    Some(-1)
-                } else {
-                    Some(1)
-                }
-            }
+            Some((a, b)) => order_floats(a, b),
             // Python cannot order this pair: `None`, so every operator is false.
             None => None,
         },
