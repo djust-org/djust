@@ -687,15 +687,6 @@ class TestACustomFilterSeesContextSourcedItemSafety:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#2300: mark_safe_keys EXTENDS and is never cleared, so a grant from an "
-        "earlier render survives into a later one. Fixing #2300 (replace, and "
-        "call unconditionally so the empty case clears) makes this pass — at "
-        "which point DELETE the xfail marker and keep the test."
-    ),
-)
 def test_a_context_item_grant_is_per_render() -> None:
     """The property #2287 and #2300 only deliver together.
 
@@ -704,9 +695,18 @@ def test_a_context_item_grant_is_per_render() -> None:
     1's ``p.0``/``p.1`` and comes through live — the same staleness the
     container granularity already has, one level down.
 
-    Written as a strict xfail rather than an assertion of the buggy behaviour so
-    that closing #2300 produces a RED test naming itself, which is how #2284's
-    landmark for this issue worked and why it got closed.
+    Was a strict xfail so that closing #2300 would produce a RED test naming
+    itself — the landmark shape #2284 used, and why that one got closed rather
+    than forgotten. It fired: #2300's fix made it XPASS(strict), the marker is
+    gone, and the assertions below stand as an ordinary regression test.
+
+    Note which half of #2300 this needed. Making the bridge call
+    ``mark_safe_keys`` unconditionally was not enough — this test drives the
+    Rust API directly and never makes that second call, so the grant survived.
+    What closes it is ``update_state`` REVOKING the grant for any key whose
+    value it replaces, which holds no matter who is driving the API. That this
+    test still failed against the caller-discipline half is what surfaced the
+    difference.
     """
     view = _rust.RustLiveView('{{ p|join:", " }}')
 
