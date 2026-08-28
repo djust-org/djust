@@ -61,13 +61,13 @@ mod tests {
         use indexmap::IndexMap;
 
         let mut map = IndexMap::new();
-        map.insert("key1".to_string(), Value::String("value1".to_string()));
-        map.insert("key2".to_string(), Value::Integer(42));
+        map.insert("key1".into(), Value::String("value1".to_string()));
+        map.insert("key2".into(), Value::Integer(42));
         map.insert(
-            "nested".to_string(),
+            "nested".into(),
             Value::Object({
                 let mut inner = IndexMap::new();
-                inner.insert("a".to_string(), Value::Bool(true));
+                inner.insert("a".into(), Value::Bool(true));
                 inner
             }),
         );
@@ -122,8 +122,8 @@ mod tests {
     #[test]
     fn test_json_dict_roundtrip() {
         let mut map = IndexMap::new();
-        map.insert("name".to_string(), Value::String("test".to_string()));
-        map.insert("count".to_string(), Value::Integer(5));
+        map.insert("name".into(), Value::String("test".to_string()));
+        map.insert("count".into(), Value::Integer(5));
         let original = Value::Object(map);
 
         let json = to_json(&original).unwrap();

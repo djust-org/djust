@@ -185,8 +185,8 @@ fn a_dotted_path_arg_resolves() {
     // djust.org bug had: `{{ post.featured_image_alt|default:post.title }}`.
     let mut c = Context::new();
     let mut post = IndexMap::new();
-    post.insert("alt".to_string(), Value::String(String::new()));
-    post.insert("title".to_string(), Value::String("The Title".into()));
+    post.insert("alt".into(), Value::String(String::new()));
+    post.insert("title".into(), Value::String("The Title".into()));
     c.set("post".to_string(), Value::Object(post));
     assert_eq!(render("{{ post.alt|default:post.title }}", &c), "The Title");
 }

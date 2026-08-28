@@ -45,7 +45,7 @@ fn block_ctx() -> Context {
         ]),
     );
     let mut obj = IndexMap::new();
-    obj.insert("key".to_string(), Value::String("val".to_string()));
+    obj.insert("key".into(), Value::String("val".to_string()));
     ctx.set("obj".to_string(), Value::Object(obj));
     ctx.set("count".to_string(), Value::Integer(42));
     ctx.set("name".to_string(), Value::String("hello".to_string()));

@@ -2379,10 +2379,16 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(dict) = obj.cast::<PyDict>() {
         // IndexMap: PyDict iterates in Python's insertion order, and that
         // order is now observable in rendered output (#2203).
-        let mut map = indexmap::IndexMap::new();
+        // Through djust_core's ONE key extractor, not a second copy of it
+        // (#1646): this converter is the parallel path to
+        // `impl FromPyObject for Value`, and it used to `?` on a non-string
+        // key — so a dict like `{0: 1}` failed the WHOLE conversion here
+        // while the other path dropped it to a repr. Both now keep the key's
+        // type (#2339), and `test_both_python_to_value_paths_share_one_key_extractor`
+        // pins that they share the extractor rather than agreeing by luck.
+        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> = indexmap::IndexMap::new();
         for (key, value) in dict.iter() {
-            let key_str = key.extract::<String>()?;
-            map.insert(key_str, python_to_value(&value)?);
+            map.insert(djust_core::py_object_key(&key), python_to_value(&value)?);
         }
         return Ok(Value::Object(map));
     }

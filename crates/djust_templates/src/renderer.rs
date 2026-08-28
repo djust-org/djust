@@ -1130,7 +1130,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     true,
                 ),
                 Value::Object(map) => (
-                    Value::List(map.keys().map(|k| Value::String(k.clone())).collect()),
+                    // Each key as the VALUE it is, not its text: an int key
+                    // binds `Value::Integer` so `{{ k }}` renders `0` and
+                    // `{% if k == 0 %}` is true (#2339).
+                    Value::List(map.keys().cloned().map(Value::from).collect()),
                     true,
                 ),
                 other => (other, false),
@@ -2520,25 +2523,30 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     }
                 }
                 Value::Object(map) => {
-                    // Django: "x in dict" checks dict keys.
+                    // Django: "x in dict" checks dict keys — BY VALUE, as
+                    // Python does, not by `Display` (#2339).
                     //
-                    // The needle is STRINGIFIED, which is not what Python does
-                    // — `0 in {"0": 1}` is False there, because `0 == "0"` is
-                    // False. The #2335 randomised sweep found it and it is
-                    // NOT fixed here (#1079): djust's own wire format coerces
-                    // every dict key to a string, so a view holding
-                    // `{1234567: "x"}` reaches this arm as `{"1234567": …}`
-                    // and the coercion is the only thing that keeps
-                    // `{% if pk in d %}` working — a behaviour
-                    // `test_localization_does_not_reach_dict_lookup_keys`
-                    // (#2221) pins deliberately. Removing it moves djust
-                    // TOWARDS Django for a string-keyed dict and AWAY from it
-                    // for an int-keyed one, which is a design decision about
-                    // the wire format rather than a comparison fix. Tracked
-                    // at #2339; pinned in
-                    // `TestKnownAdjacentDivergencesNotFixedHere`.
-                    let key = needle.to_string();
-                    Ok(map.contains_key(&key))
+                    // This used to be `map.contains_key(&needle.to_string())`,
+                    // so `{% if 0 in d %}` opened on a `"0"` key: a gate
+                    // deciding on a coincidence of formatting. It was left
+                    // that way on the premise that djust's wire format
+                    // coerced every dict key to a string, making the
+                    // coercion the only thing keeping `{% if pk in d %}`
+                    // working against an int-keyed mapping.
+                    //
+                    // The premise was false. The render path has no JSON hop
+                    // — the live Python dict reaches PyO3 directly — so an
+                    // int-keyed dict was never string-keyed here; it was not
+                    // a `Value::Object` at ALL, and `{% if pk in d %}`
+                    // answered False on it already. Now that `ObjectKey`
+                    // carries the key's type, both answers are Python's at
+                    // once. See `crates/djust_core/src/object_key.rs`.
+                    //
+                    // A needle Python could not hash either (a list, a dict)
+                    // yields `None` and misses, rather than matching
+                    // something by its text.
+                    Ok(djust_core::ObjectKey::from_value(&needle)
+                        .is_some_and(|k| map.contains_key(&k)))
                 }
                 _ => Ok(false),
             };
@@ -3717,8 +3725,8 @@ mod tests {
         let mut context = Context::new();
 
         let mut map = IndexMap::new();
-        map.insert("2".to_string(), Value::Bool(true));
-        map.insert("5".to_string(), Value::String("hello".to_string()));
+        map.insert("2".into(), Value::Bool(true));
+        map.insert("5".into(), Value::String("hello".to_string()));
         context.set("mydict".to_string(), Value::Object(map));
 
         // Key exists → found
@@ -3730,16 +3738,27 @@ mod tests {
         // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
 
-        // Integer key converted to string for lookup.
+        // An INTEGER needle does NOT match a STRING key, as Python's
+        // `5 == "5"` is False (#2339).
         //
-        // Python answers False here (`5 == "5"` is False) and the #2335
-        // randomised sweep reports it; it is deliberately NOT changed. See the
-        // `Value::Object` arm of the `in` operator for why — djust's wire
-        // format coerces dict keys to strings, so this coercion is what keeps
-        // `{% if pk in d %}` working (#2221), and removing it trades one
-        // divergence for another. Tracked at #2339.
+        // This asserted "found" until #2339, on the premise that djust's wire
+        // format coerced dict keys to strings and the coercion was the only
+        // thing keeping `{% if pk in d %}` alive. Measuring it showed the
+        // render path has no such coercion — an int-keyed dict was not a
+        // mapping at all — so the coercion protected nothing and only made
+        // this cell wrong.
+        context.set("key".to_string(), Value::Integer(5));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
+
+        // …and an INT-keyed dict IS matched by an int needle, which is the
+        // case the coercion was said to protect and never did.
+        let mut int_keyed = IndexMap::new();
+        int_keyed.insert(djust_core::ObjectKey::Int(5), Value::Bool(true));
+        context.set("mydict".to_string(), Value::Object(int_keyed));
         context.set("key".to_string(), Value::Integer(5));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
+        context.set("key".to_string(), Value::String("5".to_string()));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
     #[test]
@@ -3752,7 +3771,7 @@ mod tests {
         let mut context = Context::new();
 
         let mut map = IndexMap::new();
-        map.insert("42".to_string(), Value::Bool(true));
+        map.insert("42".into(), Value::Bool(true));
         context.set("mydict".to_string(), Value::Object(map));
 
         // Integer value, filter converts to string "42", should match dict key
@@ -4068,7 +4087,7 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         let mut context = Context::new();
         let mut user = IndexMap::new();
-        user.insert("name".to_string(), Value::String("Alice".to_string()));
+        user.insert("name".into(), Value::String("Alice".to_string()));
         context.set("user".to_string(), Value::Object(user));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "Alice");
@@ -4315,7 +4334,7 @@ mod tests {
     fn test_value_object_serializes_as_json() {
         // value_to_arg_string should serialize Value::Object as JSON
         let mut map = IndexMap::new();
-        map.insert("key".to_string(), Value::String("val".to_string()));
+        map.insert("key".into(), Value::String("val".to_string()));
         let obj = Value::Object(map);
         let json = serde_json::to_string(&obj).unwrap();
         assert_eq!(json, r#"{"key":"val"}"#);
@@ -4349,7 +4368,7 @@ mod tests {
             ]),
         );
         let mut obj = IndexMap::new();
-        obj.insert("key".to_string(), Value::String("val".to_string()));
+        obj.insert("key".into(), Value::String("val".to_string()));
         ctx.set("obj".to_string(), Value::Object(obj));
         ctx.set("count".to_string(), Value::Integer(42));
         ctx.set("name".to_string(), Value::String("hello".to_string()));
@@ -4363,7 +4382,7 @@ mod tests {
         let list = Value::List(vec![Value::Integer(1), Value::Integer(2)]);
         assert_eq!(value_to_arg_string(&list), "[1,2]");
         let mut map = IndexMap::new();
-        map.insert("key".to_string(), Value::String("val".to_string()));
+        map.insert("key".into(), Value::String("val".to_string()));
         assert_eq!(value_to_arg_string(&Value::Object(map)), r#"{"key":"val"}"#);
         assert_eq!(value_to_arg_string(&Value::Integer(42)), "42");
         // Scalars go through Display, so this follows it to `True` (#2203).
@@ -5016,15 +5035,15 @@ mod tests {
     #[test]
     fn test_2335_dicts_compare_by_pairs_ignoring_order() {
         let mut a = indexmap::IndexMap::new();
-        a.insert("a".to_string(), Value::Integer(1));
-        a.insert("b".to_string(), Value::Integer(2));
+        a.insert("a".into(), Value::Integer(1));
+        a.insert("b".into(), Value::Integer(2));
         let mut b = indexmap::IndexMap::new();
-        b.insert("b".to_string(), Value::Integer(2));
-        b.insert("a".to_string(), Value::Integer(1));
+        b.insert("b".into(), Value::Integer(2));
+        b.insert("a".into(), Value::Integer(1));
         assert!(values_equal(&Value::Object(a.clone()), &Value::Object(b)));
 
         let mut c = indexmap::IndexMap::new();
-        c.insert("a".to_string(), Value::Integer(1));
+        c.insert("a".into(), Value::Integer(1));
         assert!(!values_equal(&Value::Object(a), &Value::Object(c)));
     }
 

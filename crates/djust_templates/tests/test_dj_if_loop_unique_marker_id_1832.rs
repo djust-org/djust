@@ -37,7 +37,7 @@ fn open_marker_ids(rendered: &str) -> Vec<String> {
 fn obj(pairs: &[(&str, Value)]) -> Value {
     let mut m = IndexMap::new();
     for (k, v) in pairs {
-        m.insert((*k).to_string(), v.clone());
+        m.insert((*k).into(), v.clone());
     }
     Value::Object(m)
 }

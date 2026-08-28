@@ -512,7 +512,7 @@ class TestSequenceComparisonRandomised:
 
     def test_random_comparisons_agree_with_django(self) -> None:
         rng = random.Random(2335)
-        cells, bad, exempt = 0, [], 0
+        cells, bad = 0, []
         for _ in range(1500):
             p, q = self._value(rng), self._value(rng)
             for op in self.OPS:
@@ -521,38 +521,13 @@ class TestSequenceComparisonRandomised:
                 dj, du = both(src, {"p": p, "q": q})
                 if dj == du:
                     continue
-                if self._is_the_stringified_dict_needle(op, p, q):
-                    exempt += 1
-                else:
-                    bad.append((op, p, q, dj, du))
+                bad.append((op, p, q, dj, du))
         assert cells == 1500 * len(self.OPS)
-        assert not bad, (
-            f"{len(bad)}/{cells} disagree outside the one documented exemption "
-            f"({exempt} exempt), first three: {bad[:3]!r}"
-        )
-        assert exempt, (
-            "the exemption never fired — it is a dead classifier carrying an "
-            "allowance nothing needs"
-        )
-
-    @staticmethod
-    def _is_the_stringified_dict_needle(op: str, p, q) -> bool:
-        """The ONE documented exemption, and a mechanical predicate for it.
-
-        ``in`` over a dict stringifies the needle before ``contains_key``, so
-        ``{% if 0 in d %}`` is True for a dict keyed ``"0"`` where Python says
-        False. It is not fixed here, and not because it is small: djust's wire
-        format coerces every dict key to a string, so the coercion is the only
-        thing keeping ``{% if pk in d %}`` working against a view's own
-        ``{pk: ...}`` mapping — a behaviour ``#2221`` pins deliberately.
-        Removing it moves djust towards Django for one shape and away for the
-        other, which is a wire-format decision rather than a comparison fix
-        (#2339).
-
-        Narrow by construction: it fires only for ``in``, only for a dict
-        right-hand side, and only where the needle's ``str()`` IS a key.
-        """
-        return op == "in" and isinstance(q, dict) and not isinstance(p, str) and str(p) in q
+        # No exemption any more. The sweep carried exactly one — `in` over a
+        # dict stringifying its needle — and #2339 removed the divergence it
+        # allowed, so the allowance is deleted rather than left as a dead
+        # classifier (CLAUDE.md #1859).
+        assert not bad, f"{len(bad)}/{cells} disagree, first three: {bad[:3]!r}"
 
     def test_equal_but_distinct_objects_compare_equal(self) -> None:
         """A deep copy on the right-hand side, so nothing can pass by identity
@@ -794,38 +769,3 @@ class TestTheCorpusGapsThatHidTheseFromTheDifferential:
             "every dict input has tame keys, so no cell can show a dict-KEY "
             "escaping defect — and the key is what {% for k in d %} emits"
         )
-
-
-class TestKnownAdjacentDivergencesNotFixedHere:
-    """Scope discipline (#1079): found, measured, filed — not fixed.
-
-    Pinned so the exclusion cannot quietly become a blind spot, and so whoever
-    fixes one is told to delete the pin.
-    """
-
-    def test_in_over_a_dict_still_stringifies_its_needle(self) -> None:
-        """The second arm of ``in``, and the one this PR did NOT change.
-
-        Python's ``0 in {"0": 1}`` is False. djust answers True because it
-        stringifies the needle before ``contains_key`` — and that coercion is
-        load-bearing for djust specifically: its wire format turns every dict
-        key into a string, so a view holding ``{1234567: "x"}`` arrives as
-        ``{"1234567": …}`` and the coercion is what keeps
-        ``{% if pk in d %}`` resolving. ``#2221``'s
-        ``test_localization_does_not_reach_dict_lookup_keys`` pins exactly
-        that.
-
-        So removing it moves djust TOWARDS Django for a string-keyed dict and
-        AWAY from it for an int-keyed one. That is a decision about the wire
-        format, not about comparison, and it is tracked at #2339 rather than
-        made in a sequence-equality PR (#1079).
-        """
-        for needle, d in ((0, {"0": 1}), (1.0, {"1.0": 1}), (None, {"None": 1})):
-            dj, du = both("{% if p in q %}Y{% else %}N{% endif %}", {"p": needle, "q": d})
-            assert (dj, du) == ("N", "Y"), (
-                f"in-over-a-dict on {needle!r} now agrees with Django — #2339 has "
-                "been decided, so delete this test and its sweep exemption"
-            )
-        # The sequence arm of the same operator DOES go through values_equal,
-        # which is what makes these two arms worth telling apart.
-        assert_agrees("{% if p in q %}Y{% else %}N{% endif %}", {"p": [1], "q": [[1]]})

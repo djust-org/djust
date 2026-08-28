@@ -371,7 +371,7 @@ impl Context {
             return None;
         };
         Some(Value::List(match last {
-            "keys" => map.keys().map(|k| Value::String(k.clone())).collect(),
+            "keys" => map.keys().cloned().map(Value::from).collect(),
             "values" => map.values().cloned().collect(),
             // `items` — each entry a 2-`Tuple`, which is what makes
             // `{% for k, v in d.items %}` unpack through the renderer's
@@ -379,7 +379,7 @@ impl Context {
             // one render `('a', 1)` as Python does.
             _ => map
                 .iter()
-                .map(|(k, v)| Value::Tuple(vec![Value::String(k.clone()), v.clone()]))
+                .map(|(k, v)| Value::Tuple(vec![Value::from(k.clone()), v.clone()]))
                 .collect(),
         }))
     }
@@ -782,8 +782,8 @@ mod tests {
     fn test_context_nested_get() {
         let mut ctx = Context::new();
         let mut user = IndexMap::new();
-        user.insert("name".to_string(), Value::String("John".to_string()));
-        user.insert("age".to_string(), Value::Integer(30));
+        user.insert("name".into(), Value::String("John".to_string()));
+        user.insert("age".into(), Value::Integer(30));
 
         ctx.set("user".to_string(), Value::Object(user));
 
@@ -866,7 +866,7 @@ mod tests {
         // that happens to have a key spelled "0".
         let mut ctx = Context::new();
         let mut map = IndexMap::new();
-        map.insert("0".to_string(), Value::String("<b>v</b>".to_string()));
+        map.insert("0".into(), Value::String("<b>v</b>".to_string()));
         ctx.set("p".to_string(), Value::Object(map));
         ctx.mark_safe("p.0".to_string());
         assert!(!ctx.items_are_safe("p"));
@@ -963,8 +963,8 @@ mod tests {
 
     fn dict_ctx() -> Context {
         let mut map = indexmap::IndexMap::new();
-        map.insert("a".to_string(), Value::Integer(1));
-        map.insert("b".to_string(), Value::Integer(2));
+        map.insert("a".into(), Value::Integer(1));
+        map.insert("b".into(), Value::Integer(2));
         let mut ctx = Context::new();
         ctx.set("d".to_string(), Value::Object(map));
         ctx
@@ -1016,7 +1016,7 @@ mod tests {
         // and attribute access second, which is why the view resolution is
         // placed AFTER `Context::get` rather than inside its walk.
         let mut map = indexmap::IndexMap::new();
-        map.insert("items".to_string(), Value::Integer(5));
+        map.insert("items".into(), Value::Integer(5));
         let mut ctx = Context::new();
         ctx.set("d".to_string(), Value::Object(map));
         assert_eq!(ctx.resolve("d.items").unwrap().unwrap().to_string(), "5");
@@ -1041,9 +1041,9 @@ mod tests {
     #[test]
     fn a_nested_dict_view_resolves_through_the_prefix_walk() {
         let mut inner = indexmap::IndexMap::new();
-        inner.insert("x".to_string(), Value::Integer(9));
+        inner.insert("x".into(), Value::Integer(9));
         let mut outer = indexmap::IndexMap::new();
-        outer.insert("inner".to_string(), Value::Object(inner));
+        outer.insert("inner".into(), Value::Object(inner));
         let mut ctx = Context::new();
         ctx.set("d".to_string(), Value::Object(outer));
         match ctx.resolve("d.inner.keys").unwrap().unwrap() {

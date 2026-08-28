@@ -683,9 +683,9 @@ fn safe_filter_works_for_nested_dict_in_list() {
     // Template: {% for item in items %}{{ item.body_html|safe }}{% endfor %}
     let mut ctx = Context::new();
     let mut obj = IndexMap::new();
-    obj.insert("id".to_string(), Value::Integer(1));
+    obj.insert("id".into(), Value::Integer(1));
     obj.insert(
-        "body_html".to_string(),
+        "body_html".into(),
         Value::String("<strong>bold</strong>".to_string()),
     );
     ctx.set("items".to_string(), Value::List(vec![Value::Object(obj)]));
@@ -707,7 +707,7 @@ fn safe_filter_nested_dict_without_safe_escapes() {
     let mut ctx = Context::new();
     let mut obj = IndexMap::new();
     obj.insert(
-        "body_html".to_string(),
+        "body_html".into(),
         Value::String("<strong>bold</strong>".to_string()),
     );
     ctx.set("items".to_string(), Value::List(vec![Value::Object(obj)]));

@@ -50,7 +50,7 @@
 //! for why a fixed table is right despite the matrix spanning five Unicode
 //! versions.
 
-use djust_core::{py_repr_string, Value};
+use djust_core::{py_repr_string, ObjectKey, Value};
 
 /// `PrettyPrinter`'s default `width`, which is what `pprint.pformat` uses.
 const WIDTH: isize = 80;
@@ -112,11 +112,17 @@ fn flat_repr(value: &Value) -> String {
             // `U+0009`. Found by the randomized differential in
             // `python/tests/test_length_pprint_parity_2279_2277.py`; a curated
             // table of well-behaved keys never reaches it.
-            let mut items: Vec<(&String, &Value)> = map.iter().collect();
+            // `ObjectKey`'s own `Ord` mirrors CPython's `pprint._safe_key`
+            // (#2339): numerics by value, then by type name. A string key
+            // still sorts exactly as it did, which is what keeps the reason
+            // above intact.
+            let mut items: Vec<(&ObjectKey, &Value)> = map.iter().collect();
             items.sort_by(|a, b| a.0.cmp(b.0));
             let parts: Vec<String> = items
                 .iter()
-                .map(|(k, v)| format!("{}: {}", py_repr_string(k), flat_repr(v)))
+                // `py_repr` per key, NOT `py_repr_string` — the latter always
+                // quotes, so an int key would print `'0': …`.
+                .map(|(k, v)| format!("{}: {}", k.py_repr(), flat_repr(v)))
                 .collect();
             format!("{{{}}}", parts.join(", "))
         }
@@ -157,7 +163,7 @@ fn format_value(value: &Value, out: &mut String, indent: isize, allowance: isize
             Value::Object(map) => {
                 out.push('{');
                 if !map.is_empty() {
-                    let mut items: Vec<(&String, &Value)> = map.iter().collect();
+                    let mut items: Vec<(&ObjectKey, &Value)> = map.iter().collect();
                     items.sort_by(|a, b| a.0.cmp(b.0));
                     format_dict_items(&items, out, indent, allowance + 1, level + 1);
                 }
@@ -194,7 +200,7 @@ fn format_items(items: &[Value], out: &mut String, indent: isize, allowance: isi
 
 /// `PrettyPrinter._format_dict_items`.
 fn format_dict_items(
-    items: &[(&String, &Value)],
+    items: &[(&ObjectKey, &Value)],
     out: &mut String,
     indent: isize,
     allowance: isize,
@@ -205,7 +211,9 @@ fn format_dict_items(
     let last_index = items.len() - 1;
     for (i, (key, ent)) in items.iter().enumerate() {
         let last = i == last_index;
-        let rep = py_repr_string(key);
+        // Per-key `py_repr`, so an int key prints `0:` and not `'0':`
+        // (#2339).
+        let rep = key.py_repr();
         out.push_str(&rep);
         out.push_str(": ");
         // `+ 2` is the `": "` just written: a wrapped value lines up under the
