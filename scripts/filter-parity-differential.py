@@ -659,6 +659,20 @@ INPUTS = {
     # key-escaping question is asked for a mapping whose iteration order is
     # not the string-keyed one.
     "d-typed-hostile": {0: "a", "<img src=x onerror=alert(1)>": "v"},
+    # A dict carrying the SAME segment spelled both ways (#2371). Django's
+    # `_resolve_lookup` tries a string item lookup before an integer index, so
+    # `{{ p.1 }}` on this resolves through step 1 to the marked value and never
+    # reaches the int key — and no other entry can construct that cell, because
+    # no other dict holds `"1"` and `1` at once. The int key `0` carries the
+    # payload so the same row measures the permissiveness half of a newly
+    # RESOLVING path: before #2371 every `{{ p.0 }}` on a dict rendered
+    # nothing, so the tool's live-fragment check had never seen this value
+    # reach the page at all.
+    "d-numeric-key": {
+        0: "<img src=x onerror=alert(1)>",
+        "1": mark_safe("<b>by-string</b>"),
+        1: "by-int",
+    },
 }
 
 #: Inputs whose SAFETY the context declares. Rendered through
@@ -1134,6 +1148,26 @@ PATH_SHAPES = {
     "var-keys-safe": "[{{ p.keys|safe }}]",
     "var-keys-pprint": "[{{ p.keys|pprint }}]",
     "var-keys-trunc": "[{{ p.keys|truncatewords:2 }}]",
+    # A NUMERIC path segment (#2371). Every shape above spells its segment
+    # with letters, so the corpus could not construct a single cell in which
+    # Django's step-3 integer index runs — and `{{ d.0 }}` resolved nothing on
+    # a dict of ANY key type, silently, for as long as the tool has existed.
+    # Both `0` and `1` because they answer through different steps on
+    # `d-numeric-key` (int key vs string key), and the filtered forms because
+    # `divisibleby` turns the silent empty into a definite **False** that an
+    # `{% if %}` gate reads as an answer.
+    "var-0": "[{{ p.0 }}]",
+    "var-1": "[{{ p.1 }}]",
+    "var-0-div": "[{{ p.0|divisibleby:'2' }}]",
+    "var-0-len": "[{{ p.0|length }}]",
+    "if-0": "{% if p.0 %}Y{% else %}N{% endif %}",
+    "with-0": "{% with q=p.0 %}[{{ q }}]{% endwith %}",
+    "for-0": "{% for x in p.0 %}[{{ x }}]{% empty %}E{% endfor %}",
+    # The bound dict VIEW, indexed. Python's `dict_keys` is not subscriptable,
+    # so this is empty on both engines — and it is the ONLY shape that hands a
+    # view to the index step at all (`{{ p.keys.0 }}` dies at the `keys`
+    # segment before any view exists).
+    "with-keys-0": "{% with q=p.keys %}[{{ q.0 }}]{% endwith %}",
     # NOT `random` / `timesince` / `timeuntil`: this axis has no `NONDET`
     # collapse, so a nondeterministic cell would differ between two runs of the
     # SAME build and read as a regression.
