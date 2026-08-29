@@ -196,43 +196,40 @@ class TestTheInvalidArgumentRuleIsDjangos:
         assert_agrees("{% for a-b in p %}[{{ a }}]{% endfor %}", {"p": ["x"]})
 
 
-class TestTheUnpackArityDivergenceIsNamedNotFixed:
-    """Django RAISES on an arity mismatch; djust fills the extras with empty.
+class TestTheUnpackArityDivergenceMoved:
+    """The arity divergence this file pinned is CLOSED, in #2387.
 
-    Scoped OUT of this fix deliberately (CLAUDE.md #1079) and pinned rather
-    than left silent. It is PRE-EXISTING and belongs to the SPACED spelling
-    too — `{% for a, b in "abc" %}` rendered `[=][=][=]` on the build before
-    this change, and still does — so it is a property of djust's unpack, not
-    something the comma split introduced. What the split does change is that
-    the UNSPACED spelling now reaches the same code, so the divergence became
-    visible on 55 more differential cells that previously rendered with empty
-    variables.
+    What used to stand here — `TestTheUnpackArityDivergenceIsNamedNotFixed` —
+    asserted that Django raises where djust renders, and said it "goes red the
+    day this is closed, and names itself as the thing to move". It moved to
+    `test_for_unpack_arity_2387.py`, whose first three parametrized rows ARE
+    its three cells, now asserting that both engines refuse.
 
-    Django: `ForNode.render` computes `len(item)` (`TypeError` ⇒ 1) and raises
-    ``ValueError("Need N values to unpack in for loop; got M. ")`` when it does
-    not equal the loop-variable count.
-
-    This goes red the day that is closed, and names itself as the thing to
-    move. Tracked at the follow-up filed with this PR.
+    What stays here is the part that belongs to #2377: both comma spellings
+    reach the same code, so both raise the same message. If the split ever
+    regresses, one spelling would stop raising while the other kept doing so.
     """
 
     @pytest.mark.parametrize(
-        ("tpl", "ctx"),
+        "tpl",
         [
-            ("{% for a,b in p %}[{{ a }}={{ b }}]{% endfor %}", {"p": "abc"}),
-            ("{% for a, b in p %}[{{ a }}={{ b }}]{% endfor %}", {"p": "abc"}),
-            ("{% for a,b,c in p %}[{{ a }}]{% endfor %}", {"p": [("x", "y")]}),
+            "{% for a,b in p %}[{{ a }}={{ b }}]{% endfor %}",
+            "{% for a, b in p %}[{{ a }}={{ b }}]{% endfor %}",
+            "{% for a ,b in p %}[{{ a }}={{ b }}]{% endfor %}",
         ],
-        ids=["unspaced", "spaced-too", "three-over-two"],
+        ids=["unspaced", "spaced", "space-before"],
     )
-    def test_django_raises_where_djust_renders(self, tpl, ctx):
-        with pytest.raises(ValueError, match="values to unpack in for loop"):
-            DjangoTemplate(tpl).render(DjangoContext(ctx))
-        # djust renders instead. Asserted as a NON-empty render rather than a
-        # transcribed string: the claim is "it does not refuse", and pinning
-        # the exact bytes would make this test about the padding rule.
-        out = _rust.render_template_with_dirs(tpl, ctx, [], None)
-        assert out.startswith("["), out
+    def test_every_comma_spelling_refuses_the_same_arity(self, tpl):
+        ctx = {"p": "abc"}
+        expected = "Need 2 values to unpack in for loop; got 1. "
+        with pytest.raises(ValueError) as django_exc:
+            DjangoTemplate(tpl).render(DjangoContext(dict(ctx)))
+        assert str(django_exc.value) == expected
+        # `RuntimeError`, not `ValueError`: every djust render error crosses
+        # the PyO3 boundary as one. The message is Django's, verbatim.
+        with pytest.raises(RuntimeError) as djust_exc:
+            _rust.render_template_with_dirs(tpl, dict(ctx), [], None)
+        assert str(djust_exc.value).endswith(expected), djust_exc.value
 
 
 class TestTheCorpusGapThatHidThisFromTheDifferential:
