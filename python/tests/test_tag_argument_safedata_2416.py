@@ -390,6 +390,55 @@ class TestTheGrantDoesNotWiden:
         _dj, du = both("{% a2416_probe nope %}")
         assert "html=False" in du, du
 
+    def test_a_DECLARED_LITERAL_position_arrives_unmarked(self) -> None:
+        """The #2416 x #2423 merge decision, made observable.
+
+        `RESOLVE_ARG_POSITIONS` (#2423) lets a handler take an operand as the
+        LITERAL token, before any resolution. That token is passed with NO
+        grant, and this row is what proves it — because nothing else can.
+
+        `render_slot` is the only shipped handler that declares a policy, and
+        it never reads its argument's marker: it resolves the path itself and
+        marks its own RETURN. So no behaviour of the shipped handler set can
+        tell a marked passthrough token from an unmarked one, and the gate-off
+        mutation that marks it survives every other Python test in the repo
+        (measured: `0 failed`, caught only by the source-level pin
+        `every_handler_arg_construction_site_is_accounted_for`). The probe
+        below is the handler that CAN tell — it declares a policy and ECHOES
+        the token, which is the shape a future handler could take.
+
+        Why unmarked is the right answer: a passthrough token is a NAME the
+        handler is about to resolve, not bytes bound for the page. A quoted
+        literal is the one spelling whose token TEXT can itself carry markup,
+        so marking it would put the template's own `<b>` — or a payload — on
+        the page raw, out of a channel whose whole purpose is that the value
+        has not been computed yet.
+        """
+
+        class _EchoLiteral:
+            #: Resolve nothing — every position arrives as the raw token.
+            RESOLVE_ARG_POSITIONS = frozenset()
+
+            def render(self, args, context):  # noqa: ARG002
+                # Echoing is what makes the marker observable: a `SafeString`
+                # walks past `escape_handler_return` untouched.
+                return args[0]
+
+        _rust.register_tag_handler("a2416_echo_literal", _EchoLiteral())
+        try:
+            markup = _rust.render_template('{% a2416_echo_literal "<b>" %}', {})
+            payload = _rust.render_template(f'{{% a2416_echo_literal "{XSS}" %}}', {})
+            path = _rust.render_template("{% a2416_echo_literal d.content %}", {"d": {}})
+        finally:
+            _rust.unregister_tag_handler("a2416_echo_literal")
+
+        # The token reaches the page as TEXT — quotes included, since the
+        # passthrough is verbatim — and never as markup.
+        assert not UNESCAPED_TAG.search(payload), f"a literal token went out LIVE: {payload!r}"
+        assert markup == "&quot;&lt;b&gt;&quot;", markup
+        # A bare path token has no markup to leak, and is unmarked all the same.
+        assert path == "d.content", path
+
     def test_no_shape_emits_a_live_payload_django_does_not(self) -> None:
         """The permissiveness question on its own, over the whole probe grid
         crossed with every grant shape — the assertion #2379 made for the

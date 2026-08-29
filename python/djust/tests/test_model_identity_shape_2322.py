@@ -357,7 +357,12 @@ class TestAddingTheMarkerIsNotMorePermissive:
 
         without = {"id": 7, "pk": 7, "__str__": "bob"}
         with_marker = {**without, "__model__": "Doc"}
-        for src in ("{{ p }}", "{{ p|length }}", "{{ p.id }}", "{{ p.__str__ }}"):
+        # `{{ p.__str__ }}` was a fourth probe here until #2418. Django has
+        # never compiled it — `Variable.__init__` refuses a name carrying `._`
+        # — and djust now refuses it too, so it can no longer be rendered on
+        # either side. `{{ p }}` already routes through the same `object_str()`
+        # predicate, which is the property this test is about.
+        for src in ("{{ p }}", "{{ p|length }}", "{{ p.id }}", "{{ p.pk }}"):
             assert _rust.render_template(src, {"p": without}) == _rust.render_template(
                 src, {"p": with_marker}
             ), src

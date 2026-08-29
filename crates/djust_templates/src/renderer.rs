@@ -674,6 +674,76 @@ fn value_to_arg_string(v: &Value) -> String {
     }
 }
 
+/// Resolve a [`Node::CustomTag`]'s args, honoring the handler's declared
+/// `RESOLVE_ARG_POSITIONS` policy (#2423) and then #2416's `SafeData` rule.
+///
+/// The inline-tag twin of [`resolve_assign_tag_args`], and the ONE place the
+/// two rules compose. They arrived from opposite directions — #2416 replaced
+/// this arm's hand-rolled resolution with [`resolve_custom_tag_arg`], #2423
+/// wrapped that same resolution in a policy check — so stating the order once,
+/// here, is what keeps them from being re-derived differently at a second site.
+///
+/// # The order, and why the policy comes first
+///
+/// A declared-literal position short-circuits BEFORE any resolution. That is
+/// the point of the policy: the handler asked for the token because resolution
+/// is lossy for it. `{% render_slot slots.col.0.content %}` and a hostile
+/// `{% render_slot p %}` are the same opaque string once flattened, and only
+/// the un-resolved path can tell a slot's already-escaped content from a bare
+/// context value.
+///
+/// # `safe` on the literal-passthrough path is FALSE, and that is a decision
+///
+/// The passthrough returns [`TagArg::plain`] — never `marked` — even though
+/// the bytes are the template author's own, which is the exact argument #2416
+/// uses to mint a `SafeString` for a RESOLVED quoted literal. The two cases
+/// are not the same, and conflating them is the permissive direction:
+///
+/// * A resolved quoted literal is a **value**. `django_literal` hands back the
+///   unescaped text and those exact bytes reach the page, which is why Django
+///   marks them (`Variable.__init__` ends its quoted branch with
+///   `mark_safe(unescape_string_literal(var))`). The grant describes bytes
+///   that are already what the reader will see.
+/// * A passthrough token is a **name**. `slots.col.0.content`, `p`,
+///   `"slots.col.0"` — quotes included — are references the handler is about
+///   to resolve into something else entirely. `SafeData` asserts "these bytes
+///   are ready for the page"; that assertion is not true of a name, and it says
+///   nothing whatever about the value the name resolves to. Mint it and a
+///   handler that carries the marker forward onto its resolved value would let
+///   a hostile `p` ride a grant issued for the one character `p` — which is
+///   the class #2379 and #2421 closed, on the one handler (`render_slot`) that
+///   made it framework-reachable with no `|safe` and no `mark_safe`.
+///
+/// Django has no rule to match here, because Django never hands a
+/// `simple_tag` an un-resolved token at all — the policy is a djust extension
+/// for handlers that must do their own resolution. With no reference
+/// behaviour to copy, the escaping direction is the one to fail in.
+///
+/// It costs nothing: `render_slot`, the only handler that declares a policy,
+/// does not read its argument's marker. It resolves the path itself and marks
+/// its own RETURN, at the one exit where the path terminates in a slot
+/// entry's `content` — a structural discriminator in Python, not a bit
+/// carried across the boundary.
+fn resolve_custom_tag_args(name: &str, args: &[String], context: &Context) -> Vec<TagArg> {
+    let resolve_positions = crate::registry::tag_handler_resolve_positions(name);
+    args.iter()
+        .enumerate()
+        .map(|(position, arg)| {
+            if resolve_positions
+                .as_ref()
+                .is_some_and(|declared| !declared.contains(&position))
+            {
+                // A position the handler wants LITERAL. Passed exactly as the
+                // template wrote it — quotes, dots and all — and with NO
+                // grant. See the doc comment above for why the grant is
+                // withheld from a token even though it is author-written.
+                return TagArg::plain(arg.clone());
+            }
+            resolve_custom_tag_arg(arg, context)
+        })
+        .collect()
+}
+
 /// Resolve ONE [`Node::CustomTag`] operand into the `(text, SafeData)` pair
 /// the Python handler receives (#2416).
 ///
@@ -2639,10 +2709,11 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // path keeps its own filter-aware `get_value` resolver (e.g.
             // `x|upper`), unlike the plain-context-lookup `resolve_tag_arg`
             // shared by AssignTag / BlockCustomTag.
-            let resolved_args: Vec<TagArg> = args
-                .iter()
-                .map(|arg| resolve_custom_tag_arg(arg, context))
-                .collect();
+            //
+            // A handler may DECLARE `RESOLVE_ARG_POSITIONS` and take some
+            // positions as literal TOKENS instead (#2423). Both rules apply,
+            // in that order, through `resolve_custom_tag_args`.
+            let resolved_args = resolve_custom_tag_args(name, args, context);
 
             // Convert context to HashMap for the handler
             let context_map = context.to_hashmap();
@@ -5776,9 +5847,33 @@ mod tests {
             "the split landed in the wrong place"
         );
         assert_eq!(
+            src.matches("resolve_custom_tag_args(name, args, context)")
+                .count(),
+            1,
+            "the CustomTag arm builds its args at exactly one site"
+        );
+        assert_eq!(
             src.matches("resolve_custom_tag_arg(arg, context)").count(),
             1,
-            "the CustomTag arm is the ONE marker-carrying construction site"
+            "`resolve_custom_tag_args` is the ONE caller of the marker-carrying \
+             per-operand resolver"
+        );
+        // The #2423 policy short-circuit is INSIDE that site, and it hands back
+        // a `plain` arg. Pinned mechanically because it is the security
+        // decision of the #2416/#2423 merge: a passthrough token is a NAME the
+        // handler will resolve, not bytes bound for the page, so it must never
+        // carry a grant. An edit that switched it to `marked` — or dropped the
+        // branch entirely, taking the policy with it — passes every behavioural
+        // test `render_slot` has, because `render_slot` does not read its
+        // argument's marker.
+        assert_eq!(
+            src.matches("return TagArg::plain(arg.clone());").count(),
+            1,
+            "the literal-passthrough position must hand back an UNMARKED arg"
+        );
+        assert!(
+            src.contains("tag_handler_resolve_positions(name)"),
+            "the CustomTag arm stopped consulting the RESOLVE_ARG_POSITIONS policy"
         );
         assert_eq!(
             src.matches("TagArg::plain(resolve_tag_arg(arg, context))")

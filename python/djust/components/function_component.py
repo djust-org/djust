@@ -24,7 +24,7 @@ import html
 import json
 import logging
 import re
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, ClassVar, Optional, Union
 
 from .._html import safe_html
 from .assigns import (
@@ -427,70 +427,74 @@ class RenderSlotTagHandler:
     be a single slot entry; if a list, the first entry is emitted. The
     content is returned verbatim (already-escaped HTML from the parent).
 
-    **Dual-caller contract (#861)**: this handler is called from two paths
-    with different arg shapes:
+    **This handler resolves its OWN operand (#2423).** It declares
+    :attr:`RESOLVE_ARG_POSITIONS` as the empty set, so the Rust engine passes
+    ``args[0]`` as the LITERAL token the template wrote — the inline-tag twin
+    of the policy ``{% regroup %}`` uses to keep its keyword operands literal
+    (#2041).
 
-    1. **Rust template engine** — the engine pre-resolves variable args
-       before calling handlers. For `{% render_slot slots.col.0 %}`,
-       ``args[0]`` arrives already as the resolved slot dict, JSON-encoded
-       (because ``value_to_arg_string`` JSON-serializes ``List``/``Object``
-       values for transport across the FFI boundary). The handler's
-       ``_resolve_context_path`` call on a JSON string would then fail,
-       producing silent empty output — the exact #861 symptom.
+    That is what makes the trust question answerable. Once the engine has
+    resolved the operand, ``{% render_slot slots.col.0.content %}`` (a slot
+    body the PARENT already rendered and escaped) and ``{% render_slot p %}``
+    over a hostile context string are the SAME opaque string, and the exit had
+    to escape both — over-escaping the first, which is #2423. With the path in
+    hand the two are structurally distinct: one terminates at the ``content``
+    key of a ``{"name", "attrs", "content"}`` slot entry, the other at a bare
+    context value.
 
-    2. **Direct Python call** — ``RenderSlotTagHandler().render(["slots.col.0"], ctx)``
-       passes the literal dotted-path string; the handler resolves against
-       ``context`` itself.
-
-    Resolution: try a JSON parse first (shape 1 — Rust-engine output).
-    If that yields a structured value, extract from it. Otherwise fall
-    back to the path-resolution semantics (shape 2 — direct callers).
-    This keeps end-to-end Rust rendering of named slots working and
-    preserves the existing direct-caller contract.
+    It also retires the #861 dual-caller split rather than patching it: the
+    engine now hands this handler exactly what a direct Python caller does —
+    ``RenderSlotTagHandler().render(["slots.col.0"], ctx)`` — so there is ONE
+    arg shape instead of two. The JSON-decode arm stays only for a caller that
+    passes a pre-resolved structure of its own.
     """
+
+    #: Resolve NOTHING — see the class docstring. `frozenset()` and not
+    #: `None`: `None` means "no policy, resolve everything", which is the
+    #: default this handler is opting OUT of.
+    RESOLVE_ARG_POSITIONS: ClassVar[frozenset[int]] = frozenset()
 
     def render(self, args: list[str], context: dict[str, Any]) -> str:
         if not args:
             return ""
-        raw = str(args[0])
+        raw = str(args[0]).strip()
+        literal = _strip_quotes(raw)
+        if literal is not None:
+            raw = literal
 
-        # Shape 1: Rust-engine pre-resolved structured value (JSON string).
-        # Only treat as JSON if it parses AS a list or dict — bare strings,
-        # numbers, and bools pass through below.
+        # A caller that passed a pre-resolved structure of its own. NOT the
+        # engine any more (#2423) — it hands over the literal token — so this
+        # arm is reachable only from Python, and only for a caller that chose
+        # to encode. Kept because dropping it would break that caller for no
+        # gain; every template spelling takes the path arm below.
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, (list, dict)):
                 return self._render_value(parsed)
         except (ValueError, TypeError):
-            # Not valid JSON; fall through to other resolution shapes below.
             pass
 
-        # Shape 2: the arg still LOOKS like a dotted path (no dots → simple
-        # identifier; with dots → multi-segment identifier). Under the Rust
-        # engine, an arg that still looks like an unresolved path means
-        # resolution failed upstream — preserve the old direct-caller
-        # contract and return empty on miss. This also handles the direct-
-        # Python-caller case where args[0] is a literal path.
-        if _LOOKS_LIKE_PATH.match(raw):
-            value = _resolve_context_path(raw, context)
-            if value is None:
-                return ""
-            return self._render_value(value)
-
-        # Shape 3: a pre-resolved scalar (Rust engine stringified a number,
-        # bool, or string). Emit as-is — this is the value the user asked
-        # for. Covers `{% render_slot slot.content %}` where the content is
-        # a string that doesn't itself look like a dotted identifier.
-        #
-        # Returned as a plain `str`, so the #2379 bridge escapes it. This
-        # exit CANNOT tell a slot's already-escaped `.content` apart from a
-        # hostile bare context string (`{% render_slot p %}`, p = "<img …>"):
-        # the engine resolved both to an opaque string before the call. It
-        # therefore takes the escaping, which is over-escaping for the
-        # `.content` spelling and never a leak. See #2423; the slot-entry
-        # spellings the docs use (`{% render_slot col %}`,
-        # `{% render_slot slots.col.0 %}`) all reach `_render_value` instead.
-        return raw
+        # The operand as a dotted path, resolved HERE. A miss is the empty
+        # string, which is the contract this handler has always had.
+        if not _LOOKS_LIKE_PATH.match(raw):
+            # Not a path and not a structure — nothing to resolve. Emitted as
+            # a plain `str` so the #2379 bridge escapes it: this is a value
+            # some caller handed over directly, and nothing has vouched for it.
+            return raw
+        value = _resolve_context_path(raw, context)
+        if value is None:
+            return ""
+        if isinstance(value, str) and _terminates_in_slot_content(raw, context):
+            # `{% render_slot slots.col.0.content %}` — the ONE scalar spelling
+            # that is a slot body rather than a context value (#2423). Marked
+            # for exactly the reason `_render_value`'s dict exit is: the parent
+            # engine rendered and escaped it, so the bridge must not escape it
+            # again. The discriminator is STRUCTURAL and comes from before
+            # resolution — the path terminates at the `content` key of a slot
+            # entry — which is the information the pre-resolved string had
+            # already lost.
+            return safe_html(value)
+        return self._render_value(value)
 
     @staticmethod
     def _render_value(value: Any) -> str:
@@ -525,9 +529,10 @@ class RenderSlotTagHandler:
         ``|safe``, no ``mark_safe`` and no app-written handler. Marking the
         whole return would restore it.
 
-        ``render()``'s Shape-3 ``return raw`` is deliberately left unmarked
-        for the same reason: a pre-resolved scalar is indistinguishable there
-        from a hostile bare string, so it takes the escaping (see #2423).
+        ``render()``'s `.content`-path exit is marked for the SAME reason this
+        one is, and its discriminator is the un-resolved path (#2423); its
+        remaining ``return raw`` — a caller-supplied non-path, non-structure
+        string — stays unmarked, because nothing has vouched for that.
         """
         if isinstance(value, list):
             if not value:
@@ -536,6 +541,45 @@ class RenderSlotTagHandler:
         if isinstance(value, dict):
             return safe_html(str(value.get("content", "")))
         return str(value)
+
+
+#: The exact key set ``_extract_slots`` builds a slot entry with. Membership is
+#: what licenses the mark in :meth:`RenderSlotTagHandler.render`, so it is
+#: derived from that builder rather than guessed — see
+#: ``test_the_slot_entry_shape_is_the_builders_own``.
+_SLOT_ENTRY_KEYS = frozenset({"name", "attrs", "content"})
+
+
+def _strip_quotes(token: str) -> Optional[str]:
+    """The text inside a matching pair of quotes, or ``None``."""
+
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        return token[1:-1]
+    return None
+
+
+def _terminates_in_slot_content(path: str, context: dict[str, Any]) -> bool:
+    """Does ``path`` end at the ``content`` key of a SLOT ENTRY? (#2423)
+
+    The discriminator the pre-resolved string could not carry. ``True`` only
+    when the last segment is literally ``content`` and the segment before it
+    resolves to a dict with exactly the key set ``_extract_slots`` builds —
+    ``{"name", "attrs", "content"}``.
+
+    That set is the whole security argument, so it is deliberately EXACT
+    rather than a superset test: a hostile context dict would have to be
+    shaped as a slot entry AND be reached through a template the author wrote
+    as ``{% render_slot d.content %}``, which is the same trust
+    ``{% render_slot d %}`` already extends to ``d``'s ``content`` at
+    ``_render_value``'s dict exit (#2421). So this widens nothing that exit
+    does not already grant; it only lets the ``.content`` SPELLING reach it.
+    """
+
+    parent_path, _, last = path.rpartition(".")
+    if last != "content" or not parent_path:
+        return False
+    parent = _resolve_context_path(parent_path, context)
+    return isinstance(parent, dict) and frozenset(parent) == _SLOT_ENTRY_KEYS
 
 
 def _resolve_context_path(path: str, context: dict[str, Any]) -> Any:

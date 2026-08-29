@@ -285,18 +285,23 @@ class TestABareContextStringStaysEscaped:
         )
         assert out == "&lt;img src=x onerror=alert(1)&gt;"
 
-    def test_the_scalar_spelling_is_over_escaped_which_is_a_LIMIT_not_a_leak(self) -> None:
-        """``{% render_slot slots.col.0.content %}`` resolves to a bare string
-        before the handler is called, so it is indistinguishable there from a
-        hostile context value and takes the escape.
+    def test_the_scalar_spelling_is_now_LIVE_and_the_bare_string_is_not(self) -> None:
+        """The limit this class pinned, CLOSED in #2423 — and the row it had to
+        be argued with, which is why it is rewritten here rather than deleted.
 
-        Pinned as a NAMED limit rather than a silent one: it is over-escaping,
-        never a leak, it is not a spelling the docs use, and it is tracked at
-        #2423. If a future change makes it live, this row is the one that has
-        to be argued with.
+        ``{% render_slot slots.col.0.content %}`` used to resolve to a bare
+        string before the handler ran, so it was indistinguishable there from a
+        hostile context value and took the escape. #2423 gives the handler the
+        LITERAL path (``RESOLVE_ARG_POSITIONS = frozenset()``), and the two are
+        structurally distinct again: one terminates at the ``content`` key of a
+        slot entry, the other at a bare context value.
+
+        Both directions are asserted together, because the whole argument for
+        the change is that it moves ONLY the first.
         """
         ctx = {"slots": {"col": [_entry("<em>cell</em>")]}}
-        assert render("{% render_slot slots.col.0.content %}", ctx) == "&lt;em&gt;cell&lt;/em&gt;"
+        assert render("{% render_slot slots.col.0.content %}", ctx) == "<em>cell</em>"
+        assert render("{% render_slot p %}", {"p": XSS}) == "&lt;img src=x onerror=alert(1)&gt;"
 
 
 # ---------------------------------------------------------------------------
