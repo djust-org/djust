@@ -742,6 +742,18 @@ fn resolve_tag_arg(arg: &str, context: &Context) -> String {
 /// literal token into a value. Routing only pipe-bearing expressions through
 /// `get_value` changes exactly the cells that resolve to the raw source today.
 fn resolve_tag_operand(expr: &str, context: &Context) -> Option<String> {
+    resolve_tag_operand_value(expr, context).map(|value| value_to_arg_string(&value))
+}
+
+/// The resolution half of [`resolve_tag_operand`], before any encoding.
+///
+/// Split out (#2385) so the two arg channels — the historical
+/// [`value_to_arg_string`] one and the value channel
+/// [`value_channel_arg_string`] — resolve through ONE function and can only
+/// ever differ in how they SERIALIZE the answer, never in what they resolve
+/// (#1646). `None` still means "did not resolve", and every caller keeps the
+/// raw token for it.
+fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
     if expr.contains('|') {
         // The runtime-safe flag `get_value_safe` also reports is discarded, as
         // at the renderer's four sites: this value is JSON-encoded and handed
@@ -753,7 +765,7 @@ fn resolve_tag_operand(expr: &str, context: &Context) -> Option<String> {
             // channel's "did not resolve" — the caller keeps the raw token,
             // exactly as an unknown bare name does today.
             Ok(Value::Missing) | Err(_) => None,
-            Ok(value) => Some(value_to_arg_string(&value)),
+            Ok(value) => Some(value),
         };
     }
     // `Context::resolve`, NOT `Context::get` (#2368). `d.items` / `.keys` /
@@ -792,9 +804,79 @@ fn resolve_tag_operand(expr: &str, context: &Context) -> Option<String> {
     // the render, which is what this channel's contract has always done for a
     // name it cannot answer.
     match context.resolve(expr) {
-        Ok(Some(value)) => Some(value_to_arg_string(&value)),
+        Ok(Some(value)) => Some(value),
         Ok(None) | Err(_) => None,
     }
+}
+
+/// Serialize a resolved arg for a **value-channel** position — one the
+/// handler declared in `RESOLVE_ARG_POSITIONS` (#2385).
+///
+/// Identical to [`value_to_arg_string`] except for [`Value::String`], which is
+/// JSON-encoded (so it arrives QUOTED) rather than inlined bare.
+///
+/// The quoting is not cosmetic; it is what makes the channel decodable at all.
+/// This channel's contract is "unresolved ⇒ the caller keeps the raw token",
+/// so a resolved string and an unresolved bare name arrived at the handler as
+/// the SAME bytes: `{% regroup s by k as g %}` with `s = "ab"` and
+/// `{% regroup nope by k as g %}` both handed it `ab` / `nope`. The handler
+/// could only guess, and guessed by looking the text up as a context key —
+/// which made `s = "q"` group over the UNRELATED variable `q` when one
+/// existed, and rejected every real string source otherwise. Quoting the
+/// string is the type tag that ambiguity needed.
+///
+/// Only `String` is treated this way, and the boundary is deliberate:
+///
+/// * `Decimal` / `BigInt` also serialize as JSON strings (their exact digits
+///   would not survive a JSON number), so routing them through here would tell
+///   the handler a `Decimal` is a sequence of characters — where Python raises
+///   `TypeError: 'decimal.Decimal' object is not iterable`. Their `Display`
+///   form is already unambiguous, so they keep it.
+/// * `List` / `Tuple` / `Object` / `DictView` were ALREADY JSON — that is what
+///   [`value_to_arg_string`] exists for — so nothing changes for them.
+/// * Every other scalar's `Display` form (`42`, `True`, `None`, `1.5`) is
+///   unambiguous against a bare name, so nothing changes for them either.
+///
+/// Reached only for a handler that DECLARES `RESOLVE_ARG_POSITIONS`, and only
+/// at a position inside that set — the positions it declares are, by
+/// construction, the ones it wants as VALUES rather than as tokens. A handler
+/// that declares no policy is untouched.
+fn value_channel_arg_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| s.clone()),
+        _ => value_to_arg_string(v),
+    }
+}
+
+/// [`resolve_tag_arg`] for a value-channel position (#2385).
+///
+/// Same resolution, [`value_channel_arg_string`] encoding. A quoted literal is
+/// re-encoded rather than passed through verbatim, so that BOTH quote
+/// spellings reach the handler as the same JSON — Django resolves
+/// `{% regroup 'abc' … %}` and `{% regroup "abc" … %}` to the identical
+/// `str`, and before this the single-quoted spelling was not valid JSON and
+/// decoded as nothing.
+fn resolve_tag_value_arg(arg: &str, context: &Context) -> String {
+    let arg_trimmed = arg.trim();
+    if let Some(literal) = strip_quotes(arg_trimmed) {
+        return serde_json::to_string(literal).unwrap_or_else(|_| arg.to_string());
+    }
+    match resolve_tag_operand_value(arg_trimmed, context) {
+        Some(value) => value_channel_arg_string(&value),
+        None => arg.to_string(),
+    }
+}
+
+/// The text inside a matching pair of single or double quotes, or `None`.
+fn strip_quotes(token: &str) -> Option<&str> {
+    let bytes = token.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+    {
+        return Some(&token[1..token.len() - 1]);
+    }
+    None
 }
 
 /// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared
@@ -861,8 +943,13 @@ fn resolve_assign_tag_args(name: &str, args: &[String], context: &Context) -> Ve
             // one it wants resolved: pass the raw token (Django parity —
             // no context shadowing possible).
             Some(positions) if !positions.contains(&i) => arg.clone(),
-            // Declared-to-resolve position, or no policy (resolve all).
-            _ => resolve_tag_arg(arg, context),
+            // A position the handler DECLARED: a value channel, so a resolved
+            // `String` arrives JSON-quoted and is distinguishable from the raw
+            // token an unresolved operand leaves behind (#2385).
+            Some(_) => resolve_tag_value_arg(arg, context),
+            // No policy at all — resolve every arg the historical way. The
+            // encoding is unchanged for these handlers.
+            None => resolve_tag_arg(arg, context),
         })
         .collect()
 }
@@ -5298,6 +5385,74 @@ mod tests {
         assert_eq!(resolve_tag_arg("rows=items", &ctx), "rows=[1,2,3]");
         // Scalar key=value stays Display-formatted.
         assert_eq!(resolve_tag_arg("n=count", &ctx), "n=42");
+    }
+
+    #[test]
+    fn value_channel_quotes_only_strings() {
+        // A `String` is JSON-encoded so the handler can tell it from the raw
+        // token an unresolved operand leaves behind (#2385).
+        assert_eq!(
+            value_channel_arg_string(&Value::String("ab".to_string())),
+            r#""ab""#
+        );
+        // Embedded quotes/backslashes survive as JSON escapes, so the decode
+        // gives back the original text.
+        assert_eq!(
+            value_channel_arg_string(&Value::String("a\"b\\c".to_string())),
+            r#""a\"b\\c""#
+        );
+        // A `Decimal` also serializes as a JSON *string*, and must NOT take
+        // that arm — a `Decimal` is not iterable in Python.
+        assert_eq!(
+            value_channel_arg_string(&Value::Decimal("1.5".to_string())),
+            "1.5"
+        );
+        assert_eq!(
+            value_channel_arg_string(&Value::BigInt("123456789012345678901".to_string())),
+            "123456789012345678901"
+        );
+        // Everything else is byte-identical to the historical encoding.
+        for v in [
+            Value::Integer(42),
+            Value::Bool(true),
+            Value::None,
+            Value::Float(1.5),
+            Value::List(vec![Value::Integer(1)]),
+        ] {
+            assert_eq!(value_channel_arg_string(&v), value_to_arg_string(&v));
+        }
+    }
+
+    #[test]
+    fn resolve_tag_value_arg_distinguishes_a_string_from_a_raw_token() {
+        let ctx = obj_ctx();
+        // `name` holds "hello": quoted, so the handler reads a string.
+        assert_eq!(resolve_tag_value_arg("name", &ctx), r#""hello""#);
+        // An unresolved bare name keeps this channel's raw-token contract —
+        // the two were indistinguishable before #2385.
+        assert_eq!(resolve_tag_value_arg("nope", &ctx), "nope");
+        // Structured values are unchanged (they were already JSON).
+        assert_eq!(resolve_tag_value_arg("items", &ctx), "[1,2,3]");
+        assert_eq!(resolve_tag_value_arg("count", &ctx), "42");
+        // BOTH quote spellings of a literal normalize to the same JSON, which
+        // is what Django's `Variable` does with them.
+        assert_eq!(resolve_tag_value_arg("\"abc\"", &ctx), r#""abc""#);
+        assert_eq!(resolve_tag_value_arg("'abc'", &ctx), r#""abc""#);
+    }
+
+    #[test]
+    fn strip_quotes_needs_a_matching_pair() {
+        assert_eq!(strip_quotes("\"ab\""), Some("ab"));
+        assert_eq!(strip_quotes("'ab'"), Some("ab"));
+        assert_eq!(strip_quotes("\"\""), Some(""));
+        assert_eq!(strip_quotes("ab"), None);
+        assert_eq!(strip_quotes("\"ab"), None);
+        assert_eq!(strip_quotes("ab\""), None);
+        // Not a pair: a lone quote must not be read as an empty literal.
+        assert_eq!(strip_quotes("\""), None);
+        assert_eq!(strip_quotes("'"), None);
+        // Mismatched styles are not a pair either.
+        assert_eq!(strip_quotes("\"ab'"), None);
     }
 
     #[test]

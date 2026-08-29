@@ -182,17 +182,31 @@ class AssignTagHandler(TagHandler):
     Arg resolution happens **in the Rust engine before ``render`` is
     called**: the assign-tag dispatch (``renderer.rs`` —
     ``resolve_assign_tag_args``, the single entry point shared by all four
-    dispatch sites) resolves selected args via ``resolve_tag_arg``,
-    JSON-encoding structured (list/object) values so a source list arrives
-    as a JSON string.
+    dispatch sites) resolves selected args, JSON-encoding structured
+    (list/object) values so a source list arrives as a JSON string.
 
     Which positions get resolved is governed by the class attribute
     :attr:`RESOLVE_ARG_POSITIONS`:
 
     * ``None`` (the default) — resolve **every** arg against the context,
       the historical behavior, kept for any handler that doesn't opt in.
+      These go through ``resolve_tag_arg``, whose scalars arrive as their
+      ``str()`` text.
     * a ``set[int]`` of 0-based positions — resolve **only** those
       positions; every other arg is passed through as a **literal token**.
+      A declared position is a **value channel** and goes through
+      ``resolve_tag_value_arg``: identical, except that a resolved
+      **string** arrives JSON-encoded (i.e. QUOTED), and a quoted literal
+      is normalized into the same JSON regardless of quote style.
+
+      That quoting is what makes the channel decodable (#2385). Because an
+      unresolved operand keeps its raw token, a resolved string and a
+      missing variable name were otherwise the same bytes — so
+      ``{% regroup s by k as g %}`` with ``s = "ab"`` and
+      ``{% regroup nope by k as g %}`` were indistinguishable, and the
+      ``regroup`` handler guessed by looking the text up as a context key.
+      ``Decimal`` / ``BigInt`` deliberately do NOT take the string arm:
+      their JSON form is also a string, and Python cannot iterate either.
 
     Passing keyword/name operands unresolved matches Django, which never
     resolves an assign tag's ``by`` / ``<attr>`` / ``as`` / ``<var>``
