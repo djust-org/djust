@@ -243,6 +243,35 @@ class TestTheEnumerationIsMechanical:
         assert assert_agrees('[{{ p|yesno:"<b>,<i>" }}]', {"p": True}) == "[&lt;b&gt;]"
         assert assert_agrees('[{{ p|pluralize:"<b>,<i>" }}]', {"p": 2}) == "[&lt;i&gt;]"
 
+    def test_the_grant_collapses_a_downstream_sequence_exactly_as_django_does(self) -> None:
+        """The four cells the two-build differential moved, and why.
+
+        `mark_safe` on a NON-string is `SafeString(str(obj))`, so
+        `FilterExpression.resolve`'s `if is_safe and isinstance(obj, SafeData):
+        obj = mark_safe(new_obj)` turns `safeseq`'s LIST into its repr STRING
+        once its input is `SafeData`. `{{ None|default:"D"|safeseq }}` is
+        therefore the five-character `['D']` in Django — and now here.
+
+        Measured because it is the mechanism behind the only four corpus cells
+        this change moved out of agreement on its own branch: the collapsed
+        operand made `{% regroup %}` see a STRING, and regroup-over-a-string
+        built zero groups (#2385). Two wrongs had been cancelling, the #2272
+        shape — djust reached the same `{{ }}` bytes as Django by a different
+        route (an uncollapsed `Value::List`), which the tag channel then
+        exposed. #2385 is fixed in the same batch, and with it the four cells
+        agree; the pairs below are the `{{ }}` and `{% regroup %}` halves of
+        that, so a future regression in EITHER shows up here.
+        """
+        assert assert_agrees('[{{ p|default:"D"|safeseq }}]', {"p": None}) == "[['D']]"
+        for seq in ("safeseq", "escapeseq"):
+            src = '{%% regroup p|default:"D"|%s by k as g %%}[{{ g|length }}]' % seq
+            assert assert_agrees(src, {"p": None}) == "[1]"
+        # The variable-argument twin, which gets NO grant and so does NOT
+        # collapse — the same escaped repr on both engines, by the other route.
+        assert assert_agrees("[{{ p|default:q|safeseq }}]", {"p": None, "q": "D"}) == (
+            "[[&#x27;D&#x27;]]"
+        )
+
     def test_join_already_agreed_and_still_does(self) -> None:
         """`conditional_escape(arg)` leaves a `SafeString` separator alone, so
         this cell was correct before #2389 and must stay correct."""
