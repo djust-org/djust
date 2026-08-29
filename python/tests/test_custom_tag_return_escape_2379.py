@@ -371,6 +371,22 @@ def _registered_handlers() -> dict[str, tuple[str, object]]:
     Not a list: enumerating "the places I know call X" is reliably one short
     (v1.1.1-2 retro), and this repo registers through a decorator, two
     ``register_with_rust_engine`` functions and a component registry.
+
+    **This leaks, irreversibly, and that is not fixable here (#2427).** The
+    ``importlib.reload`` below is what re-triggers registration, and a reload
+    rebinds every class in the module AND registers a NEW instance of it. It
+    cannot be undone — the ``finally`` restores the intercepted ``_rust``
+    functions, not the module state — so from here on, a module-level
+    ``from djust.template_tags.X import SomeHandler`` elsewhere in the suite is
+    a STALE class object that the engine will never call.
+
+    That reddened
+    ``test_regroup_string_source_2385_2394.py::…::test_the_renderer_hands_a_``
+    ``string_source_over_quoted`` intermittently on CI, whenever xdist put this
+    audit on the same worker ahead of it. The cure is on the reading side: a
+    test that patches a handler must resolve the class from
+    ``djust.template_tags._registered_handlers`` rather than from its own
+    import. See ``live_regroup_class()`` in that file.
     """
     import djust
     import djust.template_tags
