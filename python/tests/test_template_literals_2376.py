@@ -308,16 +308,23 @@ class TestKnownNarrowerThanDjango:
         assert django_out == "[1000]"
         assert djust_out == "[]"
 
-    def test_a_literal_in_a_FILTER_ARGUMENT_is_not_granted(self):
-        # Django resolves a filter argument through `Variable` too, so
-        # `"<b>"` arrives at `default` as a `SafeString` and comes back out
-        # live. djust's filter-argument channel carries a `&str` with no
-        # safety beside it — a THIRD resolver, and a signature change across
-        # every filter arm rather than an arm in this one. Over-escaping, so
-        # the safe direction. Filed separately per #1079.
-        django_out, djust_out = render_both('[{{ p|default:"<b>" }}]', {"p": ""})
-        assert django_out == "[<b>]"
-        assert djust_out == "[&lt;b&gt;]"
+    def test_a_literal_in_a_FILTER_ARGUMENT_is_granted_since_2389(self):
+        # This pinned the ARGUMENT channel as still-narrower, and said it
+        # would go red the day that was closed. #2389 closed it: a quoted
+        # filter argument is `SafeData`, exactly as Django's
+        # `FilterExpression.resolve` says (`if not lookup:
+        # arg_vals.append(mark_safe(arg))`).
+        #
+        # The full statement — which THREE filters the grant reaches, that a
+        # VARIABLE argument still escapes, and the mechanical derivation of
+        # that set from the live registry — moved to
+        # `test_filter_argument_literal_safety_2389.py`. One cell stays here
+        # because it is the pair this file is about: the SAME literal in the
+        # value position (#2376) and in the argument position (#2389) are one
+        # rule, and a fix to either that forgot the other would show up as
+        # these two disagreeing.
+        assert assert_agrees('[{{ p|default:"<b>" }}]', {"p": ""}) == "[<b>]"
+        assert assert_agrees('[{{ "<b>" }}]') == "[<b>]"
 
 
 class TestTheCorpusGapThatHidThisFromTheDifferential:

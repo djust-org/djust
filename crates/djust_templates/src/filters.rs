@@ -267,13 +267,50 @@ fn builtin_produced_safe(
         // line that already says the right thing.
         "join" => iter_values(value).is_some(),
         "cut" => input_safety.container && arg != Some(";"),
-        // Truthy input => Django returned the input object itself. A falsy one
-        // returned the ARGUMENT, and djust deliberately keeps that unsafe: in
-        // Django `{{ ""|default:"<b>" }}` emits LIVE `<b>` because the literal
-        // is `mark_safe`d, and reproducing that would make djust more
-        // permissive than it is today for a value it never inspected.
-        "default" => input_safety.container && value.is_truthy(),
-        "default_if_none" => input_safety.container && !matches!(value, Value::None),
+        // Two branches with two different provenances (#2389).
+        //
+        // Truthy input => Django returned the INPUT OBJECT itself, so the
+        // grant is the input's.
+        //
+        // Falsy input => Django returned the ARGUMENT, and a QUOTED argument
+        // is `SafeData`. `FilterExpression.resolve` is explicit:
+        //
+        //     for lookup, arg in args:
+        //         if not lookup:
+        //             arg_vals.append(mark_safe(arg))
+        //         else:
+        //             arg_vals.append(arg.resolve(context))
+        //
+        // — a CONSTANT argument is `mark_safe`d, a resolved one is a plain
+        // `str`. So `{{ ""|default:"<b>" }}` emits LIVE `<b>` and
+        // `{{ ""|default:q }}` with `q = "<b>"` escapes it. djust escaped
+        // both, which is the OVER-escaping direction: a lost capability,
+        // never a leak, which is why #2389 was filed separately from #2376
+        // rather than folded into it.
+        //
+        // `arg_was_quoted` is exactly Django's `not lookup`: the renderer
+        // computes it with `is_quoted_arg` on the ORIGINAL token, and the
+        // variable-argument channel is measured clean on both engines (no
+        // built-in emits a resolved argument live, on either side).
+        //
+        // The third arm of `is_safe` — `{{ ""|default:"<b>"|upper }}` — comes
+        // along for free: this grant becomes the next filter's
+        // `input_safety.container`, which is the same channel a `mark_safe`d
+        // context value rides.
+        "default" => {
+            if value.is_truthy() {
+                input_safety.container
+            } else {
+                arg_was_quoted
+            }
+        }
+        "default_if_none" => {
+            if matches!(value, Value::None) {
+                arg_was_quoted
+            } else {
+                input_safety.container
+            }
+        }
         "add" => input_safety.container && arg_was_quoted && matches!(result, Value::String(_)),
         // The three EXTRACTORS, and the THIRD consumer of the item grant
         // (#2299). Django's bodies are `value[0]`, `value[-1]` and
@@ -1546,7 +1583,29 @@ fn apply_builtin_filter(
             let element_id = arg.unwrap_or("data");
             let json_str = value_to_json(value);
             let safe_json = json_escape_for_script(&json_str);
-            let safe_id = html_escape(element_id);
+            // Django builds the tag with `format_html`, whose interpolation is
+            // `conditional_escape(element_id)` — so a QUOTED-literal id goes in
+            // RAW (a constant filter argument is `mark_safe`d by
+            // `FilterExpression.resolve`) and a resolved one is escaped.
+            //
+            // The third filter that lets a constant argument's safety reach the
+            // page, and the one #2389's own list of candidates does not name —
+            // found by running all 57 built-ins against a hostile literal
+            // argument rather than by reading the bodies. `yesno` and
+            // `pluralize`, which that list DOES name, split their argument with
+            // `str.split`, and a `SafeString` split yields plain `str`s; `join`
+            // already agreed, because `conditional_escape(arg)` leaves the
+            // separator alone on both engines.
+            //
+            // No new attacker surface: `arg_was_quoted` is true only for a
+            // literal written in the TEMPLATE SOURCE, which the author already
+            // controls as completely as any raw HTML they type. The variable
+            // channel still escapes, which is the half that can carry data.
+            let safe_id = if arg_was_quoted {
+                element_id.to_string()
+            } else {
+                html_escape(element_id)
+            };
             Ok(Value::String(format!(
                 "<script id=\"{safe_id}\" type=\"application/json\">{safe_json}</script>"
             )))
