@@ -2,13 +2,13 @@ name: CodeQL
 
 on:
   push:
-    branches: [main]
+    branches: [main, '1.*']
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - 'CHANGELOG.md'
   pull_request:
-    branches: [main]
+    branches: [main, '1.*']
     paths-ignore:
       - '**.md'
       - 'docs/**'
