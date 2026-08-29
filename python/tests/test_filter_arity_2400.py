@@ -466,8 +466,19 @@ class TestTheCorpusGapThatHidThisFromTheDifferential:
         return module
 
     def test_the_corpus_now_builds_a_wrong_arity_cell_for_every_refused_pair(self) -> None:
+        """Scoped to the counts THIS issue is about — 0 and 1.
+
+        #2409 widened `ARITY_COUNTS` to include 2, which Django's LEXER refuses
+        for every filter whatever its signature says. That is a different
+        mechanism one layer up, so the assertion is on the (0, 1) SLICE of what
+        the corpus sweeps rather than on the whole of it — otherwise this
+        issue's headline number would have to be restated every time a
+        neighbouring bound is added.
+        """
         mod = self._differential()
-        swept = {(name, provided) for name, provided, _key in mod.arity_cells()}
+        swept = {
+            (name, provided) for name, provided, _key in mod.arity_cells() if provided in (0, 1)
+        }
         required = {
             (name, provided)
             for name in register.filters
@@ -481,6 +492,18 @@ class TestTheCorpusGapThatHidThisFromTheDifferential:
         # coincide, which is why the issue's headline number is 48.
         assert len(required) == 48
         assert len({name for name, _ in required}) == 48
+
+    def test_the_two_argument_count_is_swept_for_EVERY_filter(self) -> None:
+        """The #2409 half, asserted here because this is where the table lives.
+
+        The lexer bound applies to every filter, so a corpus that swept 2 for
+        only the ones whose SIGNATURE also refuses it would be reading the
+        wrong rule — and would stop requiring the cell the day Django shipped
+        a two-argument filter.
+        """
+        mod = self._differential()
+        swept_at_two = {name for name, provided, _key in mod.arity_cells() if provided == 2}
+        assert swept_at_two == set(register.filters)
 
     def test_the_axis_is_declared_and_reports_no_missing_member(self) -> None:
         mod = self._differential()

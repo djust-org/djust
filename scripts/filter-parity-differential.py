@@ -1431,6 +1431,16 @@ def cmp_cells():
 #: test is the ARGUMENT, the value axis is already swept exhaustively above at
 #: one argument each, and the full product would roughly double the corpus for
 #: no new question.
+
+#: The two characters Django's variable lexer splits an expression on, read
+#: from Django rather than written out — `filter_raw_string` interpolates
+#: exactly these (`re.escape(FILTER_SEPARATOR)` and
+#: `re.escape(FILTER_ARGUMENT_SEPARATOR)`) — so the `separator-in-constant`
+#: axis below and the spellings it checks for cannot drift apart from the
+#: grammar, or from each other.
+_FILTER_SEPARATOR = _django_template.base.FILTER_SEPARATOR
+_FILTER_ARGUMENT_SEPARATOR = _django_template.base.FILTER_ARGUMENT_SEPARATOR
+
 ARG_SPELLINGS = [
     '"5"',
     "5",
@@ -1483,6 +1493,20 @@ ARG_SPELLINGS = [
     "known_tuple",
     "known_dict",
     "known_dt",
+    # Arguments carrying a SEPARATOR inside the quotes (#2409). Django's
+    # `constant_string` grammar admits any character between the quotes,
+    # including the two characters the expression is split on — so
+    # `{{ p|cut:"a|b" }}` and `{{ p|date:"H:i" }}` are one filter with one
+    # argument. Every spelling above is separator-free, so the corpus could
+    # not construct a cell where the SPLIT is what is under test: djust cut
+    # `"a|b"` in half, saw a second filter named `b"`, and raised
+    # `Unknown filter` where Django renders; and it took the FIRST colon, so a
+    # second `:arg` was folded into the first and rendered rather than being
+    # refused. Spelled from `FILTER_SEPARATOR` / `FILTER_ARGUMENT_SEPARATOR`
+    # rather than written out, so the `separator-in-constant` axis below reads
+    # the same two characters Django's own lexer is built from.
+    f'"a{_FILTER_SEPARATOR}b"',
+    f'"a{_FILTER_ARGUMENT_SEPARATOR}b"',
 ]
 
 #: Bound so the `known*` spellings above have something to resolve TO.
@@ -1582,17 +1606,62 @@ def django_arity_bounds(name: str) -> tuple[int, int, int]:
     return n_template - d_template, len(args) - 1, n_template
 
 
+def django_lexer_max_arguments() -> int:
+    """How many filter arguments Django's variable LEXER can EXPRESS.
+
+    A different bound from `django_arity_bounds` and one layer above it:
+    `filter_raw_string`'s argument group is optional and NON-repeating, so a
+    second `:arg` is a `TemplateSyntaxError` for every filter — including ones
+    whose signature would happily take it — before any filter is looked up.
+
+    PROBED against Django's own compiler rather than transcribed from the
+    regex, because a transcription of a regex is exactly the second copy this
+    file exists to avoid. `default` is the probe: it takes one REQUIRED
+    argument, so one argument compiles and the first count that does not fails
+    on the lexer rather than on `args_check`. The wording is asserted, so a
+    Django release that moved this boundary for some other reason fails here
+    instead of silently lowering the bound the corpus builds cells up to.
+    """
+    for n in range(1, 8):
+        try:
+            Template("{{ p|default" + ':"x"' * n + " }}")
+        except _django_template.TemplateSyntaxError as exc:
+            if "Could not parse the remainder" not in str(exc):
+                raise AssertionError(
+                    f"the lexer probe stopped at {n} arguments for a reason that is "
+                    f"not the lexer: {exc}"
+                ) from exc
+            return n - 1
+    raise AssertionError("Django's lexer accepted 7 filter arguments — probe is wrong")
+
+
 def django_refuses_arity(name: str, provided: int) -> bool:
-    """Does Django refuse this count AT ALL — at compile time or at the call?"""
+    """Does Django refuse this count AT ALL — lexer, compile time, or the call?
+
+    The lexer bound is checked FIRST and applies to every filter regardless of
+    signature (#2409). Reading only the argspec would stop requiring a
+    two-argument cell the day Django shipped a two-argument filter, while the
+    lexer would still refuse it — which is the shape of requirement that is
+    satisfiable by the omission it exists to detect.
+    """
+    if provided > django_lexer_max_arguments():
+        return True
     lo, _parse_max, call_max = django_arity_bounds(name)
     return provided < lo or provided > call_max
 
 
-#: The counts djust can SPELL. `parse_filter_specs` splits on the first colon
-#: and keeps the rest as one argument, so a template cannot express two — which
-#: is also why Django's own `filter_raw_string` regex allows at most one, and
-#: why a two-argument cell would be measuring the lexer rather than the arity.
-ARITY_COUNTS = (0, 1)
+#: The counts the corpus builds cells for — one past what Django's LEXER can
+#: express, so the two-argument shape is constructed rather than declared out
+#: of scope (#2409).
+#:
+#: It read `(0, 1)` until then, on the premise that "djust cannot SPELL two
+#: arguments, so a two-argument cell would be measuring the lexer rather than
+#: the arity". Both halves were true and the conclusion was wrong: djust
+#: could not spell two arguments because it silently FOLDED them into one, so
+#: `{{ p|cut:"a":"b" }}` handed `cut` the argument `"a":"b"`, found no such
+#: substring and rendered the page unchanged — a template Django refuses to
+#: compile. Measuring the lexer is the point, not a reason to skip the cell.
+ARITY_COUNTS = tuple(range(django_lexer_max_arguments() + 2))
 
 
 def arity_cells():
@@ -2115,6 +2184,39 @@ def _swept_for_outcomes() -> set[str]:
     return reached
 
 
+def _required_separators_in_constants() -> dict[str, str]:
+    """The characters a QUOTED filter argument must be swept carrying (#2409).
+
+    Django's `constant_string` is `"[^"\\\\]*(?:\\\\.[^"\\\\]*)*"` — every
+    character except the closing quote, the two SEPARATORS included. So a
+    quoted argument carrying `|` or `:` is one argument, and an expression
+    splitter that scans for those characters without respecting quoting gets
+    both wrong. Read from `django.template.base`, so the requirement is the
+    grammar's own alphabet rather than a transcription of it.
+    """
+    return {
+        _FILTER_SEPARATOR: "django.template.base.FILTER_SEPARATOR",
+        _FILTER_ARGUMENT_SEPARATOR: "django.template.base.FILTER_ARGUMENT_SEPARATOR",
+    }
+
+
+def _swept_separators_in_constants() -> set[str]:
+    """Derived from the SPELLINGS the corpus builds, never from the requirement.
+
+    A separator counts as swept only when it appears INSIDE a quoted spelling:
+    `"a|b"` exercises the split, `missingvar` does not, and an unquoted `|`
+    would be a second filter rather than an argument.
+    """
+    reached: set[str] = set()
+    for spelling in ARG_SPELLINGS:
+        if len(spelling) < 2 or spelling[0] not in "\"'" or spelling[-1] != spelling[0]:
+            continue
+        for char in spelling[1:-1]:
+            if char in (_FILTER_SEPARATOR, _FILTER_ARGUMENT_SEPARATOR):
+                reached.add(char)
+    return reached
+
+
 def _required_forloop_members() -> dict[str, str]:
     source = inspect.getsource(_django_template.defaulttags.ForNode.render)
     out: dict[str, str] = {}
@@ -2413,9 +2515,15 @@ AXES = [
     ),
     Axis(
         name="arity",
-        what="the argument COUNTS each built-in's own signature refuses",
+        what="the argument COUNTS Django refuses — the lexer's bound and each built-in's own",
         swept=_swept_arities,
         required=_required_arities,
+    ),
+    Axis(
+        name="separator-in-constant",
+        what="the expression separators a QUOTED argument must be swept carrying",
+        swept=_swept_separators_in_constants,
+        required=_required_separators_in_constants,
     ),
     Axis(
         name="input-shape",
@@ -2634,7 +2742,7 @@ def measure(out_path: str) -> None:
     # is no rendered output for a grant to change — and the payload inputs are
     # carried by `INPUTS_3` so a refusal that leaked the value would show.
     for name, provided, key in arity_cells():
-        spelling = ':"x"' if provided else ""
+        spelling = ':"x"' * provided
         cid = f"@arity {name}{spelling}\t{key}\tarity"
         if cid in result:
             continue

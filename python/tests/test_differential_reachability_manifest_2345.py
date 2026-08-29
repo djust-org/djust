@@ -178,6 +178,12 @@ class TestTheManifestIsCleanOnMain:
             "for-operand-outcome",
             "loop-variable",
             "arity",
+            # The characters Django's LEXER splits an expression on, which a
+            # QUOTED argument may carry (#2409). Distinct from `argument`,
+            # which is about what an argument RESOLVES to: this one is about
+            # whether the expression was cut in the right place before any
+            # argument existed.
+            "separator-in-constant",
             # A COMPOSITION row (#2372): a pair of axes each individually swept
             # is not thereby swept together. Not the full N-squared — a pair
             # earns a row when both axes touch the same resolution step.
@@ -362,7 +368,9 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         biggest class of divergence in the corpus went unseen.
 
         A set comparison rather than a count, so it survives Django adding or
-        dropping a built-in.
+        dropping a built-in — and the counted assertions below are per-COUNT
+        rather than a total, so #2409 widening `ARITY_COUNTS` to include the
+        two-argument shape does not have to restate this issue's number.
         """
         script = mutated_script(
             tmp_path,
@@ -374,11 +382,19 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         )
         row = rows(run_manifest(script))["arity"]
         assert sorted(row["missing"]) == sorted(row["required"]), row["missing"]
-        assert len(row["missing"]) == 48
+        # #2400's 48 is the count over the counts #2400 was about — 0 and 1.
+        # #2409 added 2, which Django's LEXER refuses for every filter whatever
+        # its signature says, so the row for it is one per built-in and is a
+        # different axis of the same table.
+        by_count: dict[str, int] = {}
+        for member in row["missing"]:
+            by_count[member.rsplit(":", 1)[1]] = by_count.get(member.rsplit(":", 1)[1], 0) + 1
+        assert by_count["0"] + by_count["1"] == 48, by_count
         # The two shapes the axis is about, both named in the report.
         joined = " ".join(row["missing"])
         assert "upper:1" in joined, "the EXTRA-argument half is not reported"
         assert "default:0" in joined, "the MISSING-argument half is not reported"
+        assert "upper:2" in joined, "the LEXER half (#2409) is not reported"
 
     def test_removing_the_pad_cap_spelling_makes_the_cap_unreachable(
         self, tmp_path: pathlib.Path
@@ -786,6 +802,20 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
             "#2366 — the COUNTER-example: a `datetime` is already a string by "
             "the time any filter sees it, so it measures the extraction "
             "boundary rather than the dispatch table and must keep diverging"
+        ),
+        # Spelled as f-strings over Django's own two separator constants, so
+        # the SOURCE text is what this AST reader sees rather than the value.
+        # That is deliberate: reading the value would hide which grammar
+        # constant each carries, and the point of the pair is that they are
+        # Django's own.
+        "f'\"a{_FILTER_SEPARATOR}b\"'": (
+            "#2409 — a quoted argument carrying the FILTER separator, so the "
+            "expression split is under test rather than the argument's value"
+        ),
+        "f'\"a{_FILTER_ARGUMENT_SEPARATOR}b\"'": (
+            '#2409 — the same at the ARGUMENT separator: `{{ p|date:"H:i" }}` '
+            "is one filter with one argument, and a `find(':')` split made it "
+            "two"
         ),
     }
 
