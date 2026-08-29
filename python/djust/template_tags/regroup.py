@@ -44,6 +44,16 @@ own source text, so ``{{ g|length }}`` rendered ``0`` and every ``{% for %}``
 over the groups rendered nothing — silently. Django's own ``regroup`` docs
 open by noting the input usually needs sorting first, so that idiom is close
 to canonical.
+
+Filter expressions on the ``by`` operand (``by k|upper``) are supported as of
+#2355 — see :meth:`RegroupTagHandler._grouper`. Django compiles that operand
+as ``<var>.<attr>`` with ``parser.compile_filter``, so the chain is a per-ITEM
+filter expression, not part of the attribute NAME. Before that this handler
+looked up an attribute literally called ``k|upper``, missed, and grouped every
+row under ``None`` — one group where Django builds several, and every
+``{{ x.grouper }}`` empty. That is the #2333 class on the tag's second
+operand, and it was invisible because the parity differential built no
+``regroup`` cell at all until #2355.
 """
 
 from __future__ import annotations
