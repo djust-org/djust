@@ -41,10 +41,10 @@ rules (#1646). ``TestTheCallerSetIsPinned`` pins the caller SET, not a floor
 
 What is deliberately NOT closed
 -------------------------------
-``Invalid filter`` and ``Variables and attributes may not begin with
-underscores`` stay masked, and ``TestTheTwoRulesThisDoesNotClose`` pins them as
-known-open with the evidence for why each is a SEPARATE defect rather than part
-of this one. Measured over a 13,202-template sweep, this change moves 775 cells
+``Invalid filter`` (#2419) and ``Variables and attributes may not begin with
+underscores`` (#2418) stay masked, and ``TestTheTwoRulesThisDoesNotClose`` pins
+them as known-open with the evidence for why each is a SEPARATE defect rather
+than part of this one. Measured over a 13,202-template sweep, this change moves 775 cells
 from "djust renders what Django refuses" to agreement and moves none the other
 way; the ``arity``, ``remainder`` and ``some-characters`` buckets go to zero.
 

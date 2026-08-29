@@ -1996,12 +1996,12 @@ fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Opti
 ///   `{{ }}` as much as for a tag — `{% if 0 %}{{ p|nosuchfilter }}{% endif %}`
 ///   renders on this engine and refuses on Django. Checking it HERE and not
 ///   there would be a new parallel path, and would refuse a custom filter
-///   registered after the template was parsed. Tracked separately.
+///   registered after the template was parsed. Tracked at #2419.
 /// * **`Variables and attributes may not begin with underscores`.** That is
 ///   `Variable.__init__`'s rule, and djust has no equivalent anywhere: with
 ///   `_x` bound in the context, `{{ p|date:_x }}`, `{% for i in p|date:_x %}`
 ///   and `{% with v=p|date:_x %}` all render on this engine too. A missing
-///   rule, not a masked one. Tracked separately.
+///   rule, not a masked one. Tracked at #2418.
 pub(crate) fn validate_tag_operand(expr: &str) -> Result<()> {
     let parts: Vec<String> = crate::filter_lexer::split_pipes(expr)
         .into_iter()
