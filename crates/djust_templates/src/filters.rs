@@ -52,6 +52,49 @@ macro_rules! int_arg {
 /// the renderer, which is the only layer that knows a value's provenance. A
 /// caller that cannot know passes [`InputSafety::default()`] (all `false`),
 /// which is the escaping, conservative direction.
+/// What the filter ARGUMENT's resolved Python TYPE says.
+///
+/// The dispatch table takes `Option<&str>`, so every argument arrives as text
+/// and two Python objects that spell the same are indistinguishable there. Each
+/// field is one bit that a filter's Django source branches on and that the text
+/// cannot answer, computed ONCE at the resolution site in
+/// [`apply_filter_full_safe`] — which is the last place the `Value` exists —
+/// rather than pushed through 57 arms as a whole `Value`.
+///
+/// It is a struct rather than N parameters because that is what it already was
+/// becoming: #2366 added the first bit and #2401 the second, and a third would
+/// have taken `apply_builtin_filter` past clippy's argument limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ArgType {
+    /// `int(arg)` would be a **TypeError** rather than a ValueError (#2366).
+    /// See [`int_arg_is_type_error`] for how the line is drawn and for the half
+    /// the PyO3 extraction boundary has already erased.
+    pub int_is_type_error: bool,
+    /// The argument is Python `None` (#2401).
+    ///
+    /// `yesno`'s first statement is `if arg is None: arg = gettext(…)`, an
+    /// IDENTITY test — and `str(None)` is `"None"`, so by the time the dispatch
+    /// table sees the argument a bare `None` literal, a context variable bound
+    /// to `None`, and the string `"None"` are the same three characters while
+    /// Django answers differently for the third. Measured:
+    /// `{{ None|yesno:None }}` is `maybe` (the default triple) and
+    /// `{{ None|yesno:"None" }}` is `None` (one part, so the value comes back).
+    ///
+    /// A SPELLING fallback cannot express that, which is the same conclusion
+    /// [`int_arg_is_type_error`]'s own "why there is no spelling fallback"
+    /// section reaches from the other side.
+    pub is_none: bool,
+}
+
+/// Is the resolved filter argument Python `None`? (#2401)
+///
+/// `None` at the resolution site means the argument was a QUOTED literal, which
+/// is a `str` and never Python `None` — the same reading
+/// [`int_arg_is_type_error`]'s `None` arm takes.
+pub(crate) fn arg_is_python_none(resolved: Option<&Value>) -> bool {
+    matches!(resolved, Some(Value::None))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InputSafety {
     /// The value itself is `SafeData`.
@@ -248,6 +291,7 @@ fn builtin_produced_safe(
     value: &Value,
     arg: Option<&str>,
     arg_was_quoted: bool,
+    arg_type: ArgType,
     result: &Value,
     input_safety: InputSafety,
 ) -> bool {
@@ -336,7 +380,7 @@ fn builtin_produced_safe(
         // arg", and it is the ONLY exit that does not build a string from the
         // argument's parts, which are plain `str`s even when the argument was a
         // `SafeString` (`SafeString.split(",")` does not propagate the marker).
-        "yesno" => input_safety.container && yesno_returns_input(arg),
+        "yesno" => input_safety.container && yesno_returns_input(arg, arg_type),
         _ => false,
     }
 }
@@ -377,8 +421,25 @@ fn get_digit_returns_input(value: &Value, arg: Option<&str>, arg_was_quoted: boo
 ///
 /// `bits = arg.split(",")` with fewer than two parts. A missing argument
 /// defaults to the three-part `"yes,no,maybe"` and so never reaches it.
-fn yesno_returns_input(arg: Option<&str>) -> bool {
-    arg.is_some_and(|a| a.split(',').count() < 2)
+fn yesno_returns_input(arg: Option<&str>, arg_type: ArgType) -> bool {
+    yesno_bits(arg, arg_type).is_some_and(|bits| bits.len() < 2)
+}
+
+/// Django's `bits` for `yesno` — `arg.split(",")` after its `arg is None`
+/// default, or `None` where Django's own `arg` is `None` (#2401).
+///
+/// One statement of the rule, read by the dispatch arm and by
+/// [`builtin_produced_safe`], which must agree about which branch ran.
+fn yesno_bits(arg: Option<&str>, arg_type: ArgType) -> Option<Vec<&str>> {
+    match arg {
+        // `if arg is None: arg = gettext("yes,no,maybe")` — for an ABSENT
+        // argument and for one that resolved to Python `None` alike. The
+        // string `"None"` is NOT this branch, which is the whole of why the
+        // bit is threaded rather than sniffed off the text.
+        None => None,
+        Some(_) if arg_type.is_none => None,
+        Some(a) => Some(a.split(',').collect()),
+    }
 }
 
 pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Result<Value> {
@@ -572,7 +633,10 @@ pub fn apply_filter_full_safe(
         _ => None,
     };
     let builtin_arg = resolved_arg.as_deref().or(arg);
-    let arg_int_is_type_error = int_arg_is_type_error(resolved_type.as_ref());
+    let arg_type = ArgType {
+        int_is_type_error: int_arg_is_type_error(resolved_type.as_ref()),
+        is_none: arg_is_python_none(resolved_type.as_ref()),
+    };
 
     // Built-ins take precedence over custom filters (mirrors the original
     // dispatch order). A built-in hit reports safety through
@@ -586,7 +650,7 @@ pub fn apply_filter_full_safe(
         builtin_arg,
         context,
         arg_was_quoted,
-        arg_int_is_type_error,
+        arg_type,
         input_safety,
     ) {
         return builtin.map(|v| {
@@ -595,6 +659,7 @@ pub fn apply_filter_full_safe(
                 value,
                 builtin_arg,
                 arg_was_quoted,
+                arg_type,
                 &v,
                 input_safety,
             );
@@ -718,12 +783,18 @@ fn apply_builtin_filter(
     arg: Option<&str>,
     context: Option<&Context>,
     arg_was_quoted: bool,
-    // Whether `int(arg)` would be a TypeError rather than a ValueError —
-    // decided from the argument's resolved TYPE by `int_arg_is_type_error`,
-    // because the `&str` above no longer carries it (#2366).
-    arg_int_is_type_error: bool,
+    // What the argument's resolved Python TYPE says, which the `&str` above no
+    // longer carries. See [`ArgType`].
+    arg_type: ArgType,
     input_safety: InputSafety,
 ) -> Option<Result<Value>> {
+    // Rebound rather than read through the struct at each site: `int_arg!`'s
+    // call shape is pinned mechanically by
+    // `python/tests/test_filter_argument_contract_2328.py::
+    // TestChokepointIsTheOnlyParser`, and the pin is about the SET of call
+    // sites and their policies rather than the spelling — so the eleven macro
+    // calls keep the identifier they had.
+    let arg_int_is_type_error = arg_type.int_is_type_error;
     // #2250: Django's `@stringfilter` consumes `str(value)`. For a `Decimal`
     // that is NOT the rendered form — `str(Decimal('1E-9'))` is `1E-9`, while
     // `{{ d }}` renders `0.000000001` because `numberformat.format` uses
@@ -1146,7 +1217,8 @@ fn apply_builtin_filter(
         // `{{ absent|yesno:"a,b,c" }}` is `b`, the FALSE arm — so only a real
         // `None` takes `maybe`. `default_if_none` makes the same split.
         "yesno" => {
-            let bits: Vec<&str> = arg.unwrap_or("yes,no,maybe").split(',').collect();
+            let bits =
+                yesno_bits(arg, arg_type).unwrap_or_else(|| "yes,no,maybe".split(',').collect());
             if bits.len() < 2 {
                 // Invalid arg: the result IS the input, so its safety grant is
                 // the result's — see `builtin_produced_safe`'s `yesno` arm.

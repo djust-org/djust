@@ -262,6 +262,63 @@ class TestYesnoIsDjangosBody:
         assert got == expected
 
 
+class TestAnArgumentThatIsPythonNone:
+    """``if arg is None`` is an IDENTITY test, and ``str(None)`` is ``"None"``.
+
+    Found by the two-build differential, as a REGRESSION the first pass of the
+    ``len(bits) < 2`` early return introduced: ``{{ p|yesno:None }}`` used to
+    agree with Django by coincidence — the old three-way branch read
+    ``bits[1]``/``bits[2]`` off the defaults when the argument had one part —
+    and the early return made it hand back the value instead.
+
+    A spelling test cannot separate the three shapes below, which is why the
+    argument's resolved TYPE is threaded (``ArgType::is_none``) rather than
+    sniffed off the text. The third row is the one that makes the distinction
+    load-bearing: a context variable holding the STRING ``"None"`` really does
+    take the return-the-value branch.
+    """
+
+    @pytest.mark.parametrize("key", sorted(VALUES))
+    def test_a_bare_None_literal_argument_means_the_DEFAULT_triple(self, key) -> None:
+        expected, got = _both("{{ p|yesno:None }}", {"p": VALUES[key]})
+        assert got == expected, f"over {key}: django={expected!r} djust={got!r}"
+
+    @pytest.mark.parametrize("key", sorted(VALUES))
+    def test_a_bound_None_argument_means_the_DEFAULT_triple_too(self, key) -> None:
+        expected, got = _both("{{ p|yesno:q }}", {"p": VALUES[key], "q": None})
+        assert got == expected, f"over {key}: django={expected!r} djust={got!r}"
+
+    @pytest.mark.parametrize("key", sorted(set(VALUES) - {BOUNDARY_RESIDUE}))
+    def test_the_STRING_None_is_a_one_part_argument_and_returns_the_value(self, key) -> None:
+        """The row a spelling fallback gets wrong, in both directions.
+
+        ``datetime`` is excluded for the reason ``BOUNDARY_RESIDUE`` names: this
+        is a return-the-input branch, and ``{{ p }}`` alone already diverges
+        there.
+        """
+        expected, got = _both("{{ p|yesno:q }}", {"p": VALUES[key], "q": "None"})
+        assert got == expected, f"over {key}: django={expected!r} djust={got!r}"
+
+    def test_the_three_spellings_do_not_all_agree_with_each_other(self) -> None:
+        """Non-vacuity: if they did, the type bit would be unobservable."""
+        as_literal = _django("{{ p|yesno:None }}", {"p": None})
+        as_string = _django("{{ p|yesno:q }}", {"p": None, "q": "None"})
+        assert as_literal == "maybe"
+        assert as_string == "None"
+        assert as_literal != as_string
+
+    def test_a_None_argument_carries_no_return_the_input_grant(self) -> None:
+        """It took the DEFAULT triple, so the result is built from parts."""
+        expected, got = _both("{{ p|yesno:None }}", {"p": MARKED})
+        assert expected == "yes"
+        assert got == expected
+
+    def test_a_quoted_None_is_a_literal_string_not_python_None(self) -> None:
+        expected, got = _both('{{ p|yesno:"None" }}', {"p": "abc"})
+        assert expected == "abc"
+        assert got == expected
+
+
 # ---------------------------------------------------------------------------
 # #2399 — timesince / timeuntil
 # ---------------------------------------------------------------------------
