@@ -177,6 +177,96 @@ impl Context {
         self.safe_keys.insert(key);
     }
 
+    /// Bind `name` to `value`, **REPLACING** whatever safety grant `name`
+    /// carried (#2361, #2363).
+    ///
+    /// This is the one door for every template construct that binds a
+    /// resolved value to a NEW NAME — `{% with %}`, `{% include … with %}`,
+    /// the `{% for %}` loop variable and its tuple unpacking, and the
+    /// `{% … as x %}` assign-tag merge. [`Context::set`] moves the VALUE;
+    /// this moves the value AND the grant, which is the whole of the defect
+    /// those two issues describe from opposite sides.
+    ///
+    /// # Why a REPLACEMENT and not an addition
+    ///
+    /// djust's safety channel is keyed BY NAME: `safe_keys` holds dotted
+    /// paths written by `rust_bridge._collect_safe_keys`, and
+    /// [`Context::is_safe`] answers by looking a name up in it. A binding
+    /// therefore has to move the grant in BOTH directions, and only one of
+    /// them was reported:
+    ///
+    /// * **grant absent, value safe** — `{% with q=p|linebreaks %}` bound the
+    ///   `Value` and dropped the `bool` beside it, so `{{ q }}` escaped what
+    ///   `{{ p|linebreaks }}` emits live. Over-escaping (#2363).
+    /// * **grant present, value NOT safe** — a bind that SHADOWS a marked
+    ///   name inherited the stale grant, so with `p` marked
+    ///   `{% with p=hostile %}{{ p }}{% endwith %}` emitted the hostile value
+    ///   RAW where Django escapes it. That is an UNDER-escape, the one
+    ///   direction this machinery must never move in, and it was found only
+    ///   by measuring the over-escape above. Writing `bind` as
+    ///   "also carry a grant" would have left it open; writing it as
+    ///   "a bind replaces the grant" retires both at once — the #2129 lesson
+    ///   that a rule about the OPERATION beats a rule about the values.
+    ///
+    /// # The paths BENEATH the name go too
+    ///
+    /// `safe_keys` holds `p.a` as readily as `p`, and those descendants
+    /// described the value being SHADOWED, not the new one. Leaving them
+    /// makes `{% with p=hostile_dict %}{{ p.a }}{% endwith %}` emit raw.
+    /// So a bind revokes `name` and every `name.…` beneath it.
+    ///
+    /// The scan is skipped entirely when the set is empty — the common case
+    /// for a render with no context marks at all — so a loop over a
+    /// grant-free context pays one `is_empty` check per iteration.
+    ///
+    /// The revoke is not the whole story for a loop variable: `is_safe` also
+    /// resolves through [`Context::set_loop_mapping`], which is registered
+    /// only where the positional correspondence is genuine. That alias is
+    /// left alone deliberately — it is how a real list's per-item marks
+    /// (#2287) still resolve.
+    pub fn bind(&mut self, name: String, value: Value, safe: bool) {
+        self.revoke_safe_subtree(&name);
+        self.set_safety(&name, safe);
+        self.set(name, value);
+    }
+
+    /// The EXACT-NAME half of a [`Context::bind`]. `O(1)`.
+    ///
+    /// A `{% for %}` binds the same names once per iteration, so it hoists the
+    /// `O(len(safe_keys))` [`Context::revoke_safe_subtree`] half OUT of the
+    /// iteration — the shadowed outer grants it clears are the same ones every
+    /// iteration would clear — and calls this per item. Splitting the door is
+    /// a cost decision, not a semantic one: `revoke_safe_subtree` once, then
+    /// `set` + `set_safety` per iteration, is `bind` per iteration, and
+    /// `context::tests::the_loop_decomposition_of_bind_agrees_with_bind`
+    /// pins that the two spellings agree so the split cannot drift.
+    ///
+    /// Without the hoist, a loop over an N-element list whose items are all
+    /// marked pays `O(N²)` prefix comparisons — `_collect_safe_keys` emits one
+    /// path per marked item, so both factors are the list's own length.
+    pub fn set_safety(&mut self, name: &str, safe: bool) {
+        if safe {
+            self.safe_keys.insert(name.to_string());
+        } else {
+            self.safe_keys.remove(name);
+        }
+    }
+
+    /// The SUBTREE half of a [`Context::bind`]: drop the grant on `key` and on
+    /// every dotted path beneath it. `O(len(safe_keys))`.
+    ///
+    /// The descendants go because they described the value being SHADOWED.
+    /// With `p.a` marked, leaving them makes
+    /// `{% with p=hostile_dict %}{{ p.a }}{% endwith %}` emit raw.
+    pub fn revoke_safe_subtree(&mut self, key: &str) {
+        if self.safe_keys.is_empty() {
+            return;
+        }
+        self.safe_keys.remove(key);
+        let prefix = format!("{key}.");
+        self.safe_keys.retain(|k| !k.starts_with(&prefix));
+    }
+
     /// Check if a variable name is marked safe.
     pub fn is_safe(&self, key: &str) -> bool {
         // First check directly
@@ -1083,5 +1173,104 @@ mod tests {
             }
             other => panic!("expected a dict view, got {other:?}"),
         }
+    }
+    // ---- `Context::bind` — a binding REPLACES the grant (#2361, #2363) ----
+
+    /// The three-key fixture every bind test below shadows one name of.
+    fn ctx_with_a_marked_name() -> Context {
+        let mut ctx = Context::new();
+        ctx.set("p".to_string(), Value::String("<b>x</b>".into()));
+        ctx.mark_safe("p".to_string());
+        ctx.mark_safe("p.a".to_string());
+        ctx.mark_safe("q".to_string());
+        ctx
+    }
+
+    #[test]
+    fn bind_grants_when_the_value_is_safe() {
+        let mut ctx = Context::new();
+        ctx.bind("x".to_string(), Value::String("<b>".into()), true);
+        assert!(ctx.is_safe("x"));
+    }
+
+    #[test]
+    fn bind_revokes_a_stale_grant_on_the_shadowed_name() {
+        let mut ctx = ctx_with_a_marked_name();
+        ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+        assert!(!ctx.is_safe("p"), "the shadowed name kept its grant");
+    }
+
+    #[test]
+    fn bind_revokes_the_grants_beneath_the_shadowed_name() {
+        let mut ctx = ctx_with_a_marked_name();
+        ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+        assert!(
+            !ctx.is_safe("p.a"),
+            "a descendant of the shadowed name survived"
+        );
+    }
+
+    #[test]
+    fn bind_leaves_every_other_name_alone() {
+        let mut ctx = ctx_with_a_marked_name();
+        ctx.bind("p".to_string(), Value::String("<img>".into()), false);
+        assert!(ctx.is_safe("q"), "bind revoked an unrelated name");
+    }
+
+    #[test]
+    fn a_safe_bind_still_clears_the_shadowed_descendants() {
+        // The new value is safe AS A WHOLE; nothing is known about its
+        // sub-paths, and the old ones described a different value.
+        let mut ctx = ctx_with_a_marked_name();
+        ctx.bind("p".to_string(), Value::String("<b>ok</b>".into()), true);
+        assert!(ctx.is_safe("p"));
+        assert!(!ctx.is_safe("p.a"));
+    }
+
+    /// The `{% for %}` arm hoists `revoke_safe_subtree` out of its iteration
+    /// and calls `set_safety` per item — see [`Context::set_safety`]. That
+    /// decomposition is a COST decision, so it must be observationally
+    /// identical to calling `bind` each time, or the split has drifted.
+    #[test]
+    fn the_loop_decomposition_of_bind_agrees_with_bind() {
+        let items = [
+            (Value::String("<b>0</b>".into()), true),
+            (Value::String("<i>1</i>".into()), false),
+            (Value::String("<u>2</u>".into()), true),
+        ];
+
+        // Spelling A — `bind` per iteration.
+        let mut a = ctx_with_a_marked_name();
+        // Spelling B — one subtree revoke, then `set` + `set_safety` per item.
+        let mut b = ctx_with_a_marked_name();
+        b.revoke_safe_subtree("p");
+
+        for (value, safe) in items.iter() {
+            a.bind("p".to_string(), value.clone(), *safe);
+
+            b.set("p".to_string(), value.clone());
+            b.set_safety("p", *safe);
+
+            assert_eq!(
+                a.is_safe("p"),
+                b.is_safe("p"),
+                "bind and its loop decomposition disagree on `p` at {value:?}"
+            );
+            assert_eq!(a.is_safe("p.a"), b.is_safe("p.a"), "…and on `p.a`");
+            assert_eq!(a.is_safe("q"), b.is_safe("q"), "…and on the untouched `q`");
+        }
+    }
+
+    #[test]
+    fn revoke_safe_subtree_does_not_touch_a_sibling_sharing_a_prefix() {
+        // `pp` starts with `p` but is not beneath it — only `p.` is.
+        let mut ctx = Context::new();
+        ctx.mark_safe("p".to_string());
+        ctx.mark_safe("pp".to_string());
+        ctx.mark_safe("p.a".to_string());
+        ctx.revoke_safe_subtree("p");
+        assert!(!ctx.is_safe("p"));
+        assert!(!ctx.is_safe("p.a"));
+        assert!(ctx.is_safe("pp"), "a prefix-sharing SIBLING was revoked");
     }
 }

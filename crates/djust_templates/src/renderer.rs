@@ -305,6 +305,123 @@ fn is_quoted_arg(arg: &str) -> bool {
 /// Misclassifying an exotic text-only path as element-bearing only
 /// emits redundant comments (which browsers ignore) — the safe
 /// direction.
+/// The safety grant one `{% for %}` item carries, at the two granularities a
+/// loop can bind (#2361).
+///
+/// `second` exists because `{% for k, v in d.items %}` binds the two halves of
+/// a `(key, value)` pair to separate names, and only the VALUE half can carry
+/// a mark — a dict key is never `mark_safe`d, and `{{ k }}` must stay escaped.
+/// Nothing wider is modelled: a normalised sequence's items are dict values or
+/// 2-tuples, and there is no third shape for a provenance lookup to describe.
+#[derive(Clone, Copy, Default)]
+struct ItemGrant {
+    /// The item bound to a single loop variable.
+    whole: bool,
+    /// The SECOND component, when the item is a `(key, value)` pair.
+    second: bool,
+}
+
+/// Per-ITEM safety for a `{% for %}` over a dict VIEW, looked up BY KEY (#2361).
+///
+/// # The two spellings this reconciles
+///
+/// `rust_bridge._collect_safe_keys` walks the context and writes one dotted
+/// path per `SafeString` it finds, spelling a dict's paths **by key name** —
+/// `{"a": mark_safe(…)}` under `p` becomes `p.a`. The loop's positional
+/// mapping ([`Context::set_loop_mapping`]) instead asserts the loop variable
+/// IS `<iterable>.<index>`, so for `{% for v in p.values %}` it would look for
+/// `p.values.0`. Neither spelling is wrong; they simply never produce the same
+/// string, so the mark was missed and the value escaped.
+///
+/// This resolves the grant the way the collector wrote it: item `i` came from
+/// key `k`, so its grant lives at `<prefix>.<k>`. That is why the positional
+/// mapping is still correctly refused for a normalised operand — and why this
+/// does NOT reintroduce the #2334 collision it is refused for. That collision
+/// is a POSITIONAL lookup landing on a NAMED path: give a dict a key spelled
+/// `"1"` whose value is marked, and a by-index mapping resolves the SECOND
+/// key's mark. Here the lookup is by name on both sides, so a key can only
+/// ever resolve its own value's grant.
+///
+/// # Four narrowings, each the escaping direction
+///
+/// * **The operand carries no filter.** `iterable.contains('|')` means the
+///   `Value` is a filter's output and its provenance is unknown.
+/// * **The expression really is `<prefix>.values` / `<prefix>.items`, and
+///   `<prefix>` really resolves to the `Value::Object` the view is of.** A
+///   `DictView` reaching this arm any other way has no known prefix, so it
+///   gets nothing.
+/// * **A key containing a `.` is refused.** `_collect_safe_keys` writes
+///   `f"{prefix}.{key}"`, so `p.a.b` is BOTH `{"a.b": …}` and
+///   `{"a": {"b": …}}` and no lookup can tell them apart. Refusing escapes.
+/// * **The granted item is a `Value::String`.** `mark_safe_keys` accumulates
+///   and is never cleared (#2300), so a path marked in one render survives
+///   into the next; a later render putting a container at that key must not
+///   inherit the grant. The same narrowing, for the same reason, guards
+///   [`Context::items_are_safe`].
+fn dict_view_item_grants(
+    iterable: &str,
+    kind: djust_core::DictViewKind,
+    items: &[Value],
+    context: &Context,
+) -> Vec<ItemGrant> {
+    use djust_core::DictViewKind;
+
+    // `Keys` grants nothing: a key is not a thing `mark_safe` can mark.
+    let suffix = match kind {
+        DictViewKind::Values => "values",
+        DictViewKind::Items => "items",
+        DictViewKind::Keys => return Vec::new(),
+    };
+
+    let expr = iterable.trim();
+    if expr.contains('|') {
+        return Vec::new();
+    }
+    let Some((prefix, last)) = expr.rsplit_once('.') else {
+        return Vec::new();
+    };
+    if last != suffix {
+        return Vec::new();
+    }
+    let Some(Value::Object(map)) = context.get(prefix) else {
+        return Vec::new();
+    };
+
+    map.keys()
+        .take(items.len())
+        .enumerate()
+        .map(|(i, key)| {
+            let key_text = key.to_display_string();
+            if key_text.contains('.') {
+                return ItemGrant::default();
+            }
+            // `is_safe` rather than a raw `safe_keys` probe so a dict reached
+            // through a loop alias resolves too: inside
+            // `{% for row in rows %}`, `row.a` resolves to `rows.<i>.a`.
+            if !context.is_safe(&format!("{prefix}.{key_text}")) {
+                return ItemGrant::default();
+            }
+            match kind {
+                DictViewKind::Values => ItemGrant {
+                    whole: matches!(items.get(i), Some(Value::String(_))),
+                    second: false,
+                },
+                // Each item is a 2-`Tuple` `(key, value)`. The PAIR is not
+                // safe — `{{ x }}` over it renders a tuple repr Django
+                // escapes — only its second element is.
+                DictViewKind::Items => ItemGrant {
+                    whole: false,
+                    second: matches!(
+                        items.get(i),
+                        Some(Value::Tuple(parts)) if matches!(parts.get(1), Some(Value::String(_)))
+                    ),
+                },
+                DictViewKind::Keys => ItemGrant::default(),
+            }
+        })
+        .collect()
+}
+
 fn nodes_contain_elements(nodes: &[Node]) -> bool {
     nodes.iter().any(node_is_element_bearing)
 }
@@ -435,7 +552,13 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
                 }
                 if let Some(ctx) = mutated.as_mut() {
                     for (k, v) in updates {
-                        ctx.set(k, v);
+                        // `bind`, not `set`: an assign tag's handler returns
+                        // plain `Value`s across the PyO3 boundary with no
+                        // safety channel at all, so the honest grant is
+                        // `false` — and a `{% … as x %}` that lands on a name
+                        // the context had marked must not inherit that stale
+                        // grant and emit the handler's output RAW (#2361).
+                        ctx.bind(k, v, false);
                     }
                 }
                 // Assign tags emit no HTML.
@@ -682,7 +805,13 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
                 }
                 if let Some(ctx) = mutated.as_mut() {
                     for (k, v) in updates {
-                        ctx.set(k, v);
+                        // `bind`, not `set`: an assign tag's handler returns
+                        // plain `Value`s across the PyO3 boundary with no
+                        // safety channel at all, so the honest grant is
+                        // `false` — and a `{% … as x %}` that lands on a name
+                        // the context had marked must not inherit that stale
+                        // grant and emit the handler's output RAW (#2361).
+                        ctx.bind(k, v, false);
                     }
                 }
                 String::new()
@@ -752,7 +881,13 @@ pub fn render_nodes_partial<L: TemplateLoader>(
                     }
                     if let Some(ctx) = mutated.as_mut() {
                         for (k, v) in updates {
-                            ctx.set(k, v);
+                            // `bind`, not `set`: an assign tag's handler returns
+                            // plain `Value`s across the PyO3 boundary with no
+                            // safety channel at all, so the honest grant is
+                            // `false` — and a `{% … as x %}` that lands on a name
+                            // the context had marked must not inherit that stale
+                            // grant and emit the handler's output RAW (#2361).
+                            ctx.bind(k, v, false);
                         }
                     }
                     String::new()
@@ -1131,10 +1266,21 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // `normalised` records that the sequence being iterated is NOT the
             // resolved value's own indexable elements. See the safe-key
             // mapping below, which must not be registered in that case.
-            let (iterable_value, normalised) = match iterable_value {
+            //
+            // `derived_grants` is the per-ITEM safety a normalised sequence
+            // carries (#2361). The positional loop mapping below is refused
+            // for exactly these shapes, so without it a `mark_safe` value
+            // reached through `d.values` / `d.items` had no channel at all and
+            // came out escaped. It is derived from the operand's own
+            // PROVENANCE — the dict key each item came from — never from its
+            // position, which is what keeps the #2334 hostile-key collision
+            // closed. Empty for a non-normalised operand, where the loop
+            // mapping is the (legitimate) channel.
+            let (iterable_value, normalised, derived_grants) = match iterable_value {
                 Value::String(s) => (
                     Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
                     true,
+                    Vec::new(),
                 ),
                 Value::Object(map) => (
                     // Each key as the VALUE it is, not its text: an int key
@@ -1142,14 +1288,23 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // `{% if k == 0 %}` is true (#2339).
                     Value::List(djust_core::object_key::dict_iteration_values(&map)),
                     true,
+                    // A KEY carries no mark — only the value beside it can —
+                    // so a bare dict loop grants nothing. Left empty rather
+                    // than filled with `false`s: absent and all-false are the
+                    // same answer, and `item_grant` reads a short vec as
+                    // "no grant".
+                    Vec::new(),
                 ),
                 // A dict VIEW iterates its own items (#2340). `normalised`
                 // stays true for the same reason a dict's does: the loop is
                 // iterating something built from the resolved value, not that
                 // value's own indexable elements — which is exactly what the
                 // safe-key mapping below must not assume.
-                Value::DictView { items, .. } => (Value::List(items), true),
-                other => (other, false),
+                Value::DictView { kind, items } => {
+                    let grants = dict_view_item_grants(iterable, kind, &items, context);
+                    (Value::List(items), true, grants)
+                }
+                other => (other, false, Vec::new()),
             };
 
             match iterable_value {
@@ -1161,6 +1316,21 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
                     let mut output = String::new();
                     let mut ctx = context.clone();
+
+                    // The SUBTREE half of `Context::bind`, hoisted out of the
+                    // iteration (#2361/#2363). Every iteration binds the same
+                    // names, so the shadowed OUTER grants each would clear are
+                    // the same ones — clearing them once is identical in
+                    // effect and turns an O(N·len(safe_keys)) scan into one.
+                    // The per-item `set_safety` below is the O(1) half.
+                    //
+                    // Without this, `{% for p in hostile %}{{ p }}{% endfor %}`
+                    // with `p` marked in the context emitted the hostile items
+                    // RAW: the loop bound the value and inherited the stale
+                    // by-name grant.
+                    for var_name in var_names {
+                        ctx.revoke_safe_subtree(var_name);
+                    }
 
                     // Create an iterator with indices, reversing if needed
                     let items_vec = items;
@@ -1227,10 +1397,27 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             Value::String(format!("{parent_if_loop_path}-{index}")),
                         );
 
+                        // The grant this item carries (#2361). Non-empty only
+                        // for a NORMALISED operand, where the positional
+                        // mapping below is refused and this by-key lookup is
+                        // the only channel. The two are mutually exclusive by
+                        // construction — `derived_grants` is populated only
+                        // when `normalised`, the mapping registered only when
+                        // `!normalised` — so they can never disagree about one
+                        // item, which is what keeps this from being two
+                        // mechanisms shadowing each other.
+                        let grant = derived_grants.get(index).copied().unwrap_or_default();
+
                         // Handle tuple unpacking: {% for a, b in items %}
                         if var_names.len() == 1 {
                             // Single variable: {% for item in items %}
                             ctx.set(var_names[0].clone(), item);
+                            // The O(1) half of `Context::bind` (the subtree
+                            // half is hoisted above the loop). `false` REVOKES,
+                            // so an unmarked item after a marked one is
+                            // escaped rather than inheriting its neighbour's
+                            // grant.
+                            ctx.set_safety(&var_names[0], grant.whole);
                             // Track loop mapping for safe key resolution —
                             // but ONLY for a bare variable path. The mapping
                             // asserts `item` IS `<iterable>.<index>`, which
@@ -1267,18 +1454,58 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                     // Unpack tuple items into separate variables
                                     for (i, var_name) in var_names.iter().enumerate() {
                                         if i < tuple_items.len() {
+                                            // The grant for THIS component
+                                            // (#2361). Two provenances, and the
+                                            // same mutual exclusion as the
+                                            // single-variable branch:
+                                            //
+                                            // * NORMALISED — a `d.items` pair,
+                                            //   whose second half is the dict
+                                            //   VALUE. `derived_grants` looked
+                                            //   it up by key name.
+                                            // * NOT normalised — a genuine
+                                            //   sequence of tuples, where
+                                            //   `_collect_safe_keys` wrote the
+                                            //   component's own positional path
+                                            //   `<expr>.<index>.<i>`. The
+                                            //   correspondence is real here
+                                            //   (both sides positional), which
+                                            //   is exactly what it is not for a
+                                            //   dict, so no #2334 collision:
+                                            //   this is the tuple-unpacking
+                                            //   twin of the loop mapping the
+                                            //   single-variable branch
+                                            //   registers.
+                                            //
+                                            // A filtered operand gets nothing,
+                                            // for the reason the loop mapping
+                                            // is refused one (`slice` shifts
+                                            // indices, `dictsort` reorders).
+                                            let part_safe = if normalised {
+                                                i == 1 && grant.second
+                                            } else if iterable.contains('|') {
+                                                false
+                                            } else {
+                                                matches!(tuple_items.get(i), Some(Value::String(_)))
+                                                    && context
+                                                        .is_safe(&format!("{iterable}.{index}.{i}"))
+                                            };
                                             ctx.set(var_name.clone(), tuple_items[i].clone());
+                                            ctx.set_safety(var_name, part_safe);
                                         } else {
                                             // If tuple has fewer items than var names, set to Null
                                             ctx.set(var_name.clone(), Value::Missing);
+                                            ctx.set_safety(var_name, false);
                                         }
                                     }
                                 }
                                 _ => {
                                     // If item is not a list, set all vars to Null except first
                                     ctx.set(var_names[0].clone(), item.clone());
+                                    ctx.set_safety(&var_names[0], grant.whole);
                                     for var_name in &var_names[1..] {
                                         ctx.set(var_name.clone(), Value::Missing);
+                                        ctx.set_safety(var_name, false);
                                     }
                                 }
                             }
@@ -1455,9 +1682,17 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // `{% include "x" with q=p|upper %}` passed the literal string
                 // `p|upper` into the included template (#2325). `get_value`
                 // handles the quoted-literal case this arm open-coded.
+                //
+                // The grant travels with the value here too (#2363): this is
+                // the third spelling of one binding, and a fix that reached
+                // only `{% with %}` would be the parallel-path drift the
+                // resolution fix already had to repair once (CLAUDE.md #1646).
+                // With `only`, `include_context` is fresh and carries no
+                // grants, so `bind`'s revoke half is a no-op there and its
+                // grant half is the whole of the work.
                 for (key, value_expr) in with_vars {
-                    let value = get_value(value_expr, context)?;
-                    include_context.set(key.clone(), value);
+                    let (value, runtime_safe) = get_value_safe(value_expr, context)?;
+                    include_context.bind(key.clone(), value, runtime_safe);
                 }
 
                 render_nodes_with_loader(&nodes, &include_context, Some(loader))
@@ -1577,13 +1812,23 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // returns `Value::Missing` for a genuine miss, which renders
             // empty, as Django's `string_if_invalid` default does.
             //
-            // The runtime-safe flag is discarded here for the same reason as
-            // in the `{% for %}` arm: `{% with q=p|safe %}{{ q }}{% endwith %}`
-            // keeps over-escaping rather than gaining a new way to emit live
-            // markup.
+            // The runtime-safe flag TRAVELS with the value (#2363). It used to
+            // be discarded here, which meant `{% with q=p|linebreaks %}` bound
+            // the `Value` and dropped the `bool` beside it — so `{{ q }}`
+            // escaped exactly what `{{ p|linebreaks }}` emits live, for every
+            // safe-output filter including `|safe` itself. The grant is the
+            // one `filter_output_is_safe` already computes for the EMIT path,
+            // so binding it is parity rather than a new capability: this arm
+            // now grants precisely what `{{ p|f }}` one line over already did.
+            //
+            // `Context::bind` REPLACES the grant rather than adding to it,
+            // which is what closes the opposite-direction defect measuring
+            // this one turned up: with `p` marked in the context,
+            // `{% with p=hostile %}{{ p }}{% endwith %}` inherited the stale
+            // by-name grant and emitted the hostile value RAW.
             for (var_name, expression) in assignments {
-                let value = get_value(expression, context)?;
-                new_context.set(var_name.clone(), value);
+                let (value, runtime_safe) = get_value_safe(expression, context)?;
+                new_context.bind(var_name.clone(), value, runtime_safe);
             }
 
             // Render children with new context
