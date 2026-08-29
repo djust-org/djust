@@ -71,8 +71,18 @@ fn block_custom_tag_arg_resolution_json_encodes_structured_values() {
     Python::attach(|py| {
         let module = PyModule::from_code(
             py,
+            // The echo returns a `str` subclass carrying `__html__` (#2379):
+            // a handler return without it is now ESCAPED, which is Django's
+            // `simple_block_tag` rule, and this test's subject is the ARG
+            // ENCODING rather than escaping — `{"key":"val"}` would arrive as
+            // `{&quot;key&quot;:&quot;val&quot;}` and say nothing new.
+            //
+            // A hand-rolled subclass rather than `django.utils.safestring`:
+            // this test embeds CPython directly and must not require Django to
+            // be importable there. It is also the exact predicate the bridge
+            // applies — `isinstance(_, str)` AND `hasattr(_, "__html__")`.
             c_str!(
-                "class EchoArg:\n    def render(self, args, content, context):\n        return args[0] if args else ''\n"
+                "class _Safe(str):\n    def __html__(self):\n        return self\n\nclass EchoArg:\n    def render(self, args, content, context):\n        return _Safe(args[0]) if args else ''\n"
             ),
             c_str!("echo_block.py"),
             c_str!("echo_block"),

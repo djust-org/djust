@@ -36,6 +36,7 @@ import logging
 from typing import Any, Iterable
 
 from ..async_result import AsyncResult
+from .._html import safe_html
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,22 @@ class SuspenseTagHandler:
     """
 
     def render(self, args: list[str], content: str, context: dict[str, Any]) -> str:
+        """Mark the boundary's HTML safe, at the ONE exit (#2379).
+
+        Since #2379 the Rust bridge escapes a tag handler's return unless it
+        carries ``__html__`` — Django's ``SimpleNode.render`` rule. Every
+        branch below returns markup, so without this the boundary would render
+        as escaped text.
+
+        Marked here rather than at the four returns of ``_render_state``:
+        N sites need N tests (#1104), and one boundary needs one. Each branch
+        is already safe to mark — ``content`` is the rendered block body,
+        ``_render_error`` runs ``html.escape`` over the message, and
+        ``_render_fallback`` goes through Django's own template rendering.
+        """
+        return safe_html(self._render_state(args, content, context))
+
+    def _render_state(self, args: list[str], content: str, context: dict[str, Any]) -> str:
         kwargs = _parse_suspense_args(args)
         await_raw = kwargs.get("await", "")
         fallback = kwargs.get("fallback", "")

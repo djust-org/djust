@@ -17,6 +17,7 @@ unchanged.
 from __future__ import annotations
 
 import pytest
+from django.utils.safestring import mark_safe
 
 from djust._rust import (
     RustLiveView,
@@ -80,7 +81,14 @@ class TestBlockTagSidecar:
         class _CaptureBlock:
             def render(self, args, content, context):  # noqa: ARG002 — fixture stub
                 seen["request"] = context.get("request")
-                return f"<wrap>{content}</wrap>"
+                # `mark_safe` since #2379: a handler return without `__html__`
+                # is now escaped, which is Django's `simple_block_tag` rule.
+                # This fixture's subject is the SIDECAR — does the handler see
+                # the raw `request`? — so it is written as a well-behaved
+                # handler rather than asserting the escaped bytes, and it
+                # doubles as the migration a third-party `register_block_tag_handler`
+                # user makes: return `mark_safe(...)` if you mean markup.
+                return mark_safe(f"<wrap>{content}</wrap>")  # noqa: S308
 
         register_block_tag_handler("capture_blk", "endcapture_blk", _CaptureBlock())
 

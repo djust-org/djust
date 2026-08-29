@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List
 
+from .._html import safe_html
 from . import TagHandler, register
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,14 @@ class MarkdownTagHandler(TagHandler):
                 )
 
         # Rust output is already HTML-escaped where appropriate; it is safe
-        # to insert into the rendered page without further escaping. The Rust
-        # template engine's CustomTag path trusts the returned string.
-        return _rust_render_markdown(src, **kwargs)
+        # to insert into the rendered page without further escaping.
+        #
+        # `mark_safe` since #2379, and the sentence this REPLACES is why:
+        # "the Rust template engine's CustomTag path trusts the returned
+        # string". It did — unconditionally, for every handler — which is the
+        # defect #2379 closes. The path now escapes a return without
+        # `__html__` (Django's `SimpleNode.render` rule), so the trust has to
+        # be stated rather than assumed, and `render_markdown` is the arm
+        # entitled to state it: it sanitises its own output (`markdown.rs`,
+        # the `nh3` pass) rather than passing user Markdown through raw.
+        return safe_html(_rust_render_markdown(src, **kwargs))
