@@ -673,6 +673,17 @@ INPUTS = {
         "1": mark_safe("<b>by-string</b>"),
         1: "by-int",
     },
+    # A dict with a marked value AND an unmarked hostile one, both under
+    # ORDINARY identifier keys (#2375). `d-hostile-key` and `d-numeric-key`
+    # carry a marked value too, but under the key `"1"` — which is also a
+    # numeric path segment, so a cell reading `q.1` cannot separate "the grant
+    # followed the bind" from "the index step resolved". These keys are `a` and
+    # `z`, so `{{ q.a }}` and `{{ q.z }}` ask exactly one question each: does
+    # the grant follow, and does it stay where it belongs.
+    "d-marked-value": {
+        "a": mark_safe("<b>ok</b>"),
+        "z": "<img src=x onerror=alert(1)>",
+    },
 }
 
 #: Inputs whose SAFETY the context declares. Rendered through
@@ -721,6 +732,9 @@ LIVE_FRAGMENTS = {
     # The KEY is the payload here, and it is never marked. `<b>ok</b>` IS
     # marked and Django emits it live, which is why it is not listed.
     "d-hostile-key": ["<img", "onerror="],
+    # The `z` value is the payload and is NEVER marked; `a` IS marked and
+    # Django emits it live, which is why `<b>ok</b>` is not listed (#2375).
+    "d-marked-value": ["<img", "onerror="],
     # Same, for the typed-key dict (#2339). `d-typed-key` carries no payload
     # at all and so has no entry.
     "d-typed-hostile": ["<img", "onerror="],
@@ -1163,6 +1177,45 @@ PATH_SHAPES = {
     # view to the index step at all (`{{ p.keys.0 }}` dies at the `keys`
     # segment before any view exists).
     "with-keys-0": "{% with q=p.keys %}[{{ q.0 }}]{% endwith %}",
+    # A grant on a SUB-PATH, across a binding (#2375). `Context::bind` moves
+    # the grant at the NAME granularity, and `_collect_safe_keys` writes a
+    # dict's marks at `p.<key>` — so `{% with q=p %}{{ q.a }}{% endwith %}`
+    # asked `is_safe("q.a")`, which nothing ever wrote. Every `with` cell above
+    # emits the bound name WHOLE, so none could see it.
+    #
+    # Seven cells, not one, because the fix is asymmetric and two of its halves
+    # are the UNDER-escaping direction:
+    #
+    # * the marked sub-path must come through LIVE;
+    # * the UNMARKED sibling must stay escaped — a grant that leaks sideways is
+    #   a live XSS;
+    # * a FILTERED binding must grant nothing at all (`dictsort` reorders,
+    #   `slice` shifts — the #2334 correspondence);
+    # * a REBIND of the NAME must retire the alias (#2378's "a bind REPLACES
+    #   the grant", one path segment down);
+    # * a REBIND of the TARGET must retire it too — `{% with q=p %}{% with
+    #   p=…|safe %}{{ q }}` emitted `q`'s ORIGINAL value raw in this fix's
+    #   first version, because `set_safety` marks the NAME `p` and the
+    #   surviving `q -> p` alias read it;
+    # * a MULTI-ASSIGNMENT tag resolves every value against the OUTER context,
+    #   so `{% with a=p q=a %}` binds the outer `a` — and an alias `q -> a`
+    #   would read the brand-new mark on `a`. Second live XSS, same mechanism.
+    "with-subpath-marked": "{% with q=p %}[{{ q.a }}]{% endwith %}",
+    "with-subpath-unmarked": "{% with q=p %}[{{ q.z }}]{% endwith %}",
+    "with-subpath-filtered": "{% with q=p|dictsort:'a' %}[{{ q.a }}]{% endwith %}",
+    "with-subpath-rebound": (
+        "{% with q=p %}{% with q=p.z %}[{{ q.a }}]{% endwith %}{% endwith %}"
+    ),
+    "with-target-rebound": (
+        "{% with q=p %}{% with p=p.z|safe %}[{{ q }}]{% endwith %}{% endwith %}"
+    ),
+    # Spelled with `p` on BOTH sides deliberately: the corpus binds exactly one
+    # name, so `{% with a=p q=a %}` — the natural spelling — resolves the outer
+    # `a` to nothing and the cell can see no defect at all. Measured, not
+    # assumed: with the exclusion gated off, that spelling reports ZERO leaks
+    # and this one reports the dict repr going out RAW.
+    "with-multi-assign": "{% with p=p.a q=p %}[{{ q }}]{% endwith %}",
+    "for-unpack-subpath": "{% for a, b in p %}[{{ b.z }}]{% empty %}E{% endfor %}",
     # A dict VIEW as the BARE dotted operand of an assign tag (#2368). Every
     # `regroup` cell the tag axis builds writes `p|<filter>`, and the shapes
     # above that write a dotted path put it in `{% for %}` / `{{ }}` / `{% if %}`
