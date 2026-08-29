@@ -472,6 +472,12 @@ class TestTheFalsinessResidueIsNamed:
             "List": "[]",
             "Tuple": "()",
             "Object": None,  # a serialized model map; never falsy in Python
+            # An EMPTY dict view (#2340). `bool({}.items())` is False, and
+            # `Display` spells each view by name. Only `items` is listed
+            # because the map below checks ONE text per variant; the predicate
+            # accepts all three and `test_an_empty_dict_view_is_falsy` covers
+            # them.
+            "DictView": "dict_items([])",
             "Dict": "{}",
         }
         unmapped = variants - set(FALSY_TEXT)
@@ -494,6 +500,25 @@ class TestTheFalsinessResidueIsNamed:
                 f"Value::{variant} displays a falsy object as {text!r} and "
                 "`timesince_arg_is_falsy` does not accept it"
             )
+
+    @pytest.mark.parametrize("view", ["items", "keys", "values"])
+    def test_an_empty_dict_view_is_falsy(self, view: str) -> None:
+        """#2370 added `Value::DictView`, and the mechanical pin above is what
+        surfaced it: an EMPTY view is falsy in Python, so Django measures from
+        now, and its `Display` text is `dict_items([])` rather than anything
+        the rule already accepted.
+
+        A NON-empty view is truthy and is not a date, so it raises — which is
+        the non-vacuity half: a rule that accepted the container name outright
+        would pass the first assertion and be wrong here.
+        """
+        source = "{{ p|timesince:q.%s }}" % view
+        assert not raises_django(source, {"p": NOON, "q": {}}), "Django changed"
+        assert djust_render(source, {"p": NOON, "q": {}}) == djust_render(
+            "{{ p|timesince }}", {"p": NOON}
+        )
+        assert raises_django(source, {"p": NOON, "q": {"a": 1}}), "Django changed"
+        assert raises_djust(source, {"p": NOON, "q": {"a": 1}})
 
     @pytest.mark.parametrize("text", ["0", "None", "False", "2020-01-01 15:30:00"])
     def test_the_residue_is_a_RESOLVED_STRING_that_reads_as_something_else(self, text: str) -> None:

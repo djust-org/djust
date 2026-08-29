@@ -2529,8 +2529,22 @@ fn timesince_arg_is_falsy(arg: &str, arg_was_quoted: bool) -> bool {
     if arg_was_quoted {
         return false; // Every other `str` is truthy to Python.
     }
-    matches!(arg, "None" | "False" | "false" | "[]" | "{}" | "()")
-        || python_float(arg).is_some_and(|f| f == 0.0)
+    matches!(
+        arg,
+        "None"
+            | "False"
+            | "false"
+            | "[]"
+            | "{}"
+            | "()"
+            // An EMPTY dict VIEW (#2340). `bool({}.items())` is False, and
+            // `Display` spells the three views by name. Reached by
+            // `{{ then|timesince:d.items }}` on an empty dict, which is an
+            // ordinary template line.
+            | "dict_items([])"
+            | "dict_keys([])"
+            | "dict_values([])"
+    ) || python_float(arg).is_some_and(|f| f == 0.0)
 }
 
 /// The error a truthy non-date argument implies, worded once (#2344).
