@@ -327,3 +327,104 @@ class TestABindReplacesTheGrantRatherThanAddingToIt:
             {"k": MARKED, "v": MARKED, "p": {"<b>x</b>": HOSTILE}},
         )
         assert "<img" not in out
+
+
+class TestTheBindPathGrantsNothingTheEmitPathDoesNot:
+    """The permissiveness ceiling, swept rather than sampled.
+
+    A bind now carries the grant the EMIT path already computed
+    (``renderer::filter_output_is_safe``), so the invariant is a containment:
+    **for every expression, if ``{% with q=<expr> %}{{ q }}{% endwith %}``
+    emits a live tag opener, so does ``{{ <expr> }}``.** The bind path is at
+    most as permissive as the emit path, never more.
+
+    This is the check the two-build differential asked for. It flagged four
+    cells as newly-live — all ``p|add:"1"|safe``, over four container inputs —
+    and the emit twin of each was ALREADY live on the baseline build. The
+    payload comes from ``add``'s deliberate third-branch divergence (djust
+    returns the value where Django returns ``""``; the reasoning is in
+    ``filters.rs``), not from the grant: ``|safe`` does on both spellings what
+    the author asked it to do, and before this fix only one spelling obeyed.
+
+    Swept instead of listing those four deliberately: a sampled table blinds
+    you on the next axis, and the containment is what actually bounds the
+    change.
+    """
+
+    #: Value shapes a filter chain branches on, with a payload in each.
+    SHAPES = {
+        "s-plain": "<b>x</b>",
+        "s-lines": "a\nb <b>x</b>",
+        "s-url": "see http://example.com/x <b>y</b>",
+        "d-plain": {"k": "<v>", "j": 2},
+        "l-plain": ["<b>", "x"],
+        "l-dict": [{"k": "<v>"}, "x"],
+        "t-nested": ("<b>", ("c", ("d",))),
+        "i-int": 5,
+        "n-none": None,
+        "l-empty": [],
+        "s-marked": MARKED,
+        "l-marked": [MARKED, mark_safe("<i>y</i>")],
+        "d-marked": {"a": MARKED, "b": HOSTILE},
+    }
+
+    #: Every filter that can MINT a grant.
+    SAFE_MINTING = [
+        "safe",
+        "urlize",
+        "urlizetrunc:9",
+        "linebreaks",
+        "linebreaksbr",
+        "unordered_list",
+        "linenumbers",
+        "escape",
+        "force_escape",
+        "safeseq",
+        "escapeseq",
+    ]
+
+    @staticmethod
+    def _live(out: str) -> bool:
+        """Does this output carry an UNESCAPED tag opener?"""
+        return "<" in out.replace("&lt;", "")
+
+    def _render(self, tpl: str, value) -> str:
+        keys = _collect_safe_keys(value, "p")
+        return _rust.render_template_with_dirs(tpl, {"p": value}, [], keys or None)
+
+    def test_no_bind_emits_live_markup_its_emit_twin_does_not(self):
+        exprs = [f"p|{f}" for f in self.SAFE_MINTING]
+        exprs += [f'p|add:"1"|{f}' for f in self.SAFE_MINTING]
+        exprs += [f"p|{f}|upper" for f in self.SAFE_MINTING]
+        assert exprs, "the expression sweep is EMPTY"
+
+        checked = 0
+        offenders = []
+        for expr in exprs:
+            for name, value in self.SHAPES.items():
+                emit = self._render("[{{ %s }}]" % expr, value)
+                bind = self._render("{%% with q=%s %%}[{{ q }}]{%% endwith %%}" % expr, value)
+                checked += 1
+                if self._live(bind) and not self._live(emit):
+                    offenders.append((expr, name, emit, bind))
+
+        # Non-vacuity: a zero-cell run reads as success.
+        assert checked == len(exprs) * len(self.SHAPES) > 0
+        assert not offenders, (
+            "the BIND path emitted live markup its EMIT twin did not — the bind "
+            f"is MORE permissive than {{{{ }}}}: {offenders[:5]}"
+        )
+
+    def test_the_sweep_can_actually_see_a_live_bind(self):
+        """Non-vacuity: some cell in the sweep IS live, on both paths.
+
+        Without this the containment above would hold trivially over a corpus
+        in which nothing is ever live — the shape of a sweep that reports clean
+        because it can construct nothing.
+        """
+        live = [
+            name
+            for name, value in self.SHAPES.items()
+            if self._live(self._render("{% with q=p|safe %}[{{ q }}]{% endwith %}", value))
+        ]
+        assert live, "no cell in the sweep produces a live bind — the sweep is vacuous"
