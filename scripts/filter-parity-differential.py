@@ -153,6 +153,13 @@ either engine's source says a dict's keys must be hostile (#2334) or that a
 tuple must sit at the nesting position (#2317). That is the class this design
 does NOT close, and it is printed rather than left as a silence.
 
+`--manifest` prints the current list; more have been added since, and #2411's
+`masked-refusal` is the seventh blind spot the design did not close on its own.
+An axis was declared for the tag OPERAND and one for the argument SPELLING, and
+neither could construct a cell that had both at once — so 1,227 `{% if %}`
+templates Django refuses to compile rendered here, with every axis reporting
+`0 MISSING`. A cross of two covered axes is its own axis.
+
 Two more things follow from it:
 
 * **The same-build guard is answered rather than inferred.** Identical
@@ -1665,6 +1672,76 @@ def django_refuses_arity(name: str, provided: int) -> bool:
 ARITY_COUNTS = tuple(range(django_lexer_max_arguments() + 2))
 
 
+#: The MASKED-REFUSAL axis (#2411) — the twelfth, and the seventh blind spot.
+#:
+#: The `arity` axis writes `{{ p|name:"x"… }}` and the `tag` axis writes
+#: `{% if p|name %}` with one VALID argument out of `FILTER_ARGS`. Neither can
+#: write the cell #2411 is about, which needs all three at once: a TAG operand,
+#: an argument that does not RESOLVE, and a refusal AFTER it. So the corpus
+#: reported clean while 1,227 `{% if %}` templates Django refuses to compile
+#: rendered here as a silently falsy branch.
+#:
+#: The mechanism is resolution ORDER, not the filters. djust reached a tag
+#: operand's chain only at render time, left to right, and `{% if %}` absorbs a
+#: `VariableDoesNotExist` — which is Django's own `IfNode.render`, so narrowing
+#: the catch is NOT the fix. Django simply never got that far: it had refused
+#: the template at COMPILE time.
+#:
+#: `MASK_POSITIONS` is the axis proper. Each writes the SAME refusing operand
+#: somewhere djust's render-time walk could fail to reach it — behind an
+#: unresolvable argument, behind a short-circuit, inside a branch that never
+#: renders, or in `{% elif %}`, which is a second parse site for `Node::If`.
+#: `direct` is the control: it was never masked, so a cell that starts failing
+#: there is a plain regression rather than this class.
+MASK_POSITIONS = {
+    "direct": "{% if p|@SPEC@ %}Y{% else %}N{% endif %}",
+    "after-unresolvable-arg": "{% if p|date:.|@SPEC@ %}Y{% else %}N{% endif %}",
+    "after-missing-name-arg": "{% if p|date:missingvar|@SPEC@ %}Y{% else %}N{% endif %}",
+    "short-circuit-and": "{% if 0 and p|@SPEC@ %}Y{% else %}N{% endif %}",
+    "short-circuit-or": "{% if 1 or p|@SPEC@ %}Y{% else %}N{% endif %}",
+    "elif": "{% if 0 %}A{% elif p|@SPEC@ %}B{% else %}C{% endif %}",
+    "dead-branch-if": "{% if 0 %}{% if p|@SPEC@ %}Y{% endif %}{% endif %}",
+    "dead-branch-for": "{% if 0 %}{% for x in p|@SPEC@ %}Y{% endfor %}{% endif %}",
+    "dead-branch-with": "{% if 0 %}{% with v=p|@SPEC@ %}Y{% endwith %}{% endif %}",
+}
+
+#: One spec per COMPILE-time refusal class, so a fix that closes one and not
+#: the others is visible per-cell rather than as a single number. The last two
+#: are the classes #2411 deliberately did NOT close — `Invalid filter` is a
+#: render-time lookup on every shape, and the underscore rule is
+#: `Variable.__init__`'s, which djust has nowhere — and they are on the axis so
+#: that stays measured rather than remembered.
+MASK_SPECS = [
+    "cut",  # args_check: too FEW
+    "join",  # args_check: too few, second filter
+    'upper:"x"',  # args_check: too MANY
+    'cut:"a":"b"',  # the lexer bound (#2409), not the signature
+    "nosuchfilter",  # Invalid filter — still open, and this is where it shows
+    "date:_y",  # Variable.__init__'s underscore rule — also still open
+]
+
+
+def mask_cells():
+    """Every refusal class × every position djust's walk could fail to reach.
+
+    Both halves are needed. A position with one spec cannot tell "this position
+    is reached" from "this refusal is implemented"; a spec at one position
+    cannot tell a parse-time check from a render-time one.
+    """
+    for spec in MASK_SPECS:
+        # The premise, PROBED rather than declared: Django must refuse the bare
+        # shape at COMPILE time, or the cell is measuring something else.
+        try:
+            Template("{{ p|" + spec + " }}")
+        except _django_template.TemplateSyntaxError:
+            pass
+        else:
+            raise AssertionError(f"django compiles {spec!r} — it is not a refusal cell")
+        for position in MASK_POSITIONS:
+            for key in INPUTS_3:
+                yield spec, position, key
+
+
 def arity_cells():
     """Every built-in × every argument COUNT its own signature refuses.
 
@@ -2323,6 +2400,37 @@ def _swept_tags() -> set[str]:
     return {tag for tag in swept if tag in _required_tags()}
 
 
+def _required_mask_positions() -> dict[str, str]:
+    """Every TAG-OPERAND parse site, read out of `parser.rs`.
+
+    Read from the RUST source rather than from `MASK_POSITIONS`'s keys, for the
+    reason `_swept_tags` gives one axis up: a key-derived requirement agrees
+    with the corpus by construction and could never report it short (#1859).
+    The set is the tag arms that call `validate_tag_operand` /
+    `validate_if_operands` (#2411) — so the day a fifth operand-bearing tag
+    grows the call, the manifest reports this axis MISSING a position until a
+    cell is built for it.
+    """
+    src = _crate_source("djust_templates", "parser")
+    out: dict[str, str] = {}
+    for name, body in re.findall(r'"(\w+)" =>(.*?)(?=\n                "|\Z)', src, re.S):
+        if "validate_tag_operand(" in body or "validate_if_operands(" in body:
+            out[name] = "parser.rs tag arm calling the operand validator"
+    if "validate_if_operands(args)?" in src.split('name == "elif"', 1)[-1][:900]:
+        out["elif"] = "parser.rs parse_if_block's {% elif %} arm"
+    return out
+
+
+def _swept_mask_positions() -> set[str]:
+    """The TAGS the masked-refusal positions actually open, read out of their
+    own source — the same mechanism `_swept_tags` uses, so a position renamed
+    without its template changing cannot pass for coverage."""
+    swept: set[str] = set()
+    for source in MASK_POSITIONS.values():
+        swept |= set(re.findall(r"\{%\s*(\w+)", source))
+    return {tag for tag in swept if tag in _required_mask_positions()}
+
+
 #: Every `_rust` function that RENDERS a template or CHANGES how one renders.
 #:
 #: #2290 is the reason this axis exists: `register_custom_filter` had been on
@@ -2459,6 +2567,14 @@ AXES = [
         swept=_swept_tags,
         required=_required_tags,
         exempt=TAGS_NOT_SWEPT,
+    ),
+    Axis(
+        name="masked-refusal",
+        what="the TAG-OPERAND parse sites a compile-time refusal must survive",
+        # Derived from the cells the corpus BUILDS, so a sweep that narrowed to
+        # a convenient subset of positions fails here (#1859).
+        swept=_swept_mask_positions,
+        required=_required_mask_positions,
     ),
     Axis(
         name="entrypoint",
@@ -2606,6 +2722,8 @@ def axis_of(cid: str) -> str:
         return "builtin x mapping"
     if cid.startswith("@cmp "):
         return "cmp"
+    if cid.startswith("@mask "):
+        return "masked-refusal"
     if cid.startswith("@ctag "):
         return "ctag"
     if cid.startswith("@path"):
@@ -2748,6 +2866,26 @@ def measure(out_path: str) -> None:
         if cid in result:
             continue
         dj, du = render_both("{{ p|" + name + spelling + " }}", {"p": INPUTS[key]})
+        result[cid] = [dj, du]
+
+    # The MASKED-REFUSAL axis (#2411). Four fields, `@mask` first, so no id
+    # above is renamed. No `safe_keys`: every cell is one Django REFUSES, so
+    # there is no rendered output for a grant to change — and `INPUTS_3` carries
+    # the payload inputs, so a refusal that leaked the value would show.
+    #
+    # `missingvar` is deliberately NOT bound: the `after-missing-name-arg`
+    # position needs it to fail to resolve, which is the whole mechanism.
+    # `refusal`, not `spec`: `measure` already binds a module-level `spec()`
+    # helper that the chain axes call, and shadowing it here is a NameError
+    # thousands of cells later rather than at this line.
+    for refusal, position, key in mask_cells():
+        cid = f"@mask {refusal}\t{key}\tmask\t{position}"
+        if cid in result:
+            continue
+        dj, du = render_both(
+            MASK_POSITIONS[position].replace("@SPEC@", refusal),
+            {"p": INPUTS[key]},
+        )
         result[cid] = [dj, du]
 
     # The CUSTOM-TAG axis (#2356). Three fields, `@ctag` first, so no id above

@@ -168,6 +168,14 @@ class TestTheManifestIsCleanOnMain:
             "argument",
             "argument-filter",
             "tag",
+            # The TAG-OPERAND parse sites a COMPILE-time refusal must survive
+            # (#2411). A cross of `tag` and `argument`, and neither could build
+            # its cells: `arity` writes `{{ }}` only and `tag` gives each
+            # filter one VALID argument, so a cell needing a tag operand AND an
+            # unresolvable argument AND a refusal after it did not exist — and
+            # 1,227 `{% if %}` templates Django refuses to compile rendered
+            # here while every axis reported `0 MISSING`.
+            "masked-refusal",
             "entrypoint",
             "grant-shape",
             # The ANSWERS Django's own `ForNode.render` can give an operand
