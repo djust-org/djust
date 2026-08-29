@@ -44,6 +44,15 @@ That ambiguity had a live second symptom, pinned below: the handler's
 "is it a bare name?" fallback looked the text up as a context key, so
 ``s = "q"`` grouped over the UNRELATED variable ``q`` whenever one existed.
 
+Provenance
+----------
+``test_bool_and_none_values_2359.py::TestTheRegroupUnmaskingIsNamed`` pinned
+this and said *"if #2385 is fixed, delete this class and let the corpus cover
+these cells"*. It is not deleted — it is flipped to
+``TestTheRegroupUnmaskingIsCLOSED``, because its three-link evidence chain is
+what makes "#2359 only unmasked it" checkable, and that stays worth checking
+in the other direction.
+
 Every expectation here is LIVE Django, never a transcription.
 """
 
