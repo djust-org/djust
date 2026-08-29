@@ -26,6 +26,7 @@ pub mod parser;
 pub mod pprint;
 pub mod registry;
 pub mod renderer;
+pub mod stringformat;
 pub mod tags;
 pub mod textwrap;
 pub mod timezone;

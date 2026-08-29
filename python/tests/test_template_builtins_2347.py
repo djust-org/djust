@@ -459,7 +459,13 @@ class TestOnlyAddWasBrokenByTheBareLiteral:
         ("pluralize", "True", "1", 5),
         ("date", "True", '"1"', 5),
         ("time", "True", '"1"', 5),
-        ("stringformat", "True", '"1"', 5),
+        # `stringformat` was here until #2358. Its numeric control diverged
+        # because the catch-all arm echoed the value for `"1"` — a spec
+        # CPython answers `incomplete format` to — so the cell belonged to
+        # that bug and not to #2347. With the grammar in place both
+        # spellings render `""` on both engines and the row has nothing left
+        # to assert, which is what this class's own failure message told the
+        # #2358 author to do: "Re-measure and either fix it or move this row."
     ]
 
     @pytest.mark.parametrize("name,boolarg,numarg,value", _ROWS)
