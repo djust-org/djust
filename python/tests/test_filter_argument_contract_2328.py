@@ -57,10 +57,11 @@ What is deliberately NOT closed here
   fallback chain, an invalid printf spec and an arity check respectively. They
   DO agree on the raise bit, so they stay in the sweep. ``stringformat`` with an
   EMPTY argument additionally PANICS, on main and here alike: #2343.
-* Three more argument-axis divergences with non-``int()`` causes are #2346
+* Three more argument-axis divergences with non-``int()`` causes were #2346
   (``urlizetrunc``'s ellipsis, ``divisibleby``'s zero divisor, ``floatformat``'s
-  empty argument), and the missing ``True``/``False``/``None`` context builtins
-  are #2347.
+  empty argument) — **closed**, see
+  ``python/tests/test_argument_axis_divergences_2346.py``. The missing
+  ``True``/``False``/``None`` context builtins are #2347.
 * A MISSING argument is a ``TemplateSyntaxError`` at Django's PARSE time
   (arity, before any filter runs). Different mechanism, different issue.
 
@@ -363,20 +364,27 @@ class TestIntSpellingsTheScatteredParsesRefused:
     def test_urlizetrunc_truncates_for_a_negative_limit(self) -> None:
         """`parse::<usize>` refused a negative and produced `None`, which meant
         NO truncation — the URL rendered in full where Django's
-        `Truncator.chars(-3)` keeps nothing.
+        `trim_url` keeps nothing.
 
-        Not a parity assertion: djust still spells the ellipsis `...` where
-        Django uses `…`, which is a separate pre-existing bug. What is asserted
-        is that the limit is now honoured at all. Found by the gate-off, which
-        showed this branch had no covering test.
+        This was NOT a parity assertion when it was written, because djust
+        still spelled the ellipsis `...` where Django uses `…` — a separate
+        pre-existing bug, closed by #2346. Now that both are fixed it asserts
+        parity outright, which is the stronger claim the caveat was standing
+        in for. Found by the gate-off, which showed this branch had no covering
+        test.
         """
         url = "http://example.com/aaaaaaaaaaaaaaaa"
         full = _rust.render_template('{{ p|urlizetrunc:"999" }}', {"p": url})
         assert url in full, "a large limit should leave the URL text intact"
         for limit in ('"-3"', '"0"', "-3"):
-            out = _rust.render_template("{{ p|urlizetrunc:%s }}" % limit, {"p": url})
+            source = "{{ p|urlizetrunc:%s }}" % limit
+            out = _rust.render_template(source, {"p": url})
             assert url not in out.split("</a>")[0].split(">")[-1], (
                 f"limit {limit} must truncate the displayed text, got {out!r}"
+            )
+            assert out == DjangoTemplate(source).render(DjangoContext({"p": url})), (
+                f"limit {limit}: the ellipsis divergence is closed (#2346), so this "
+                "agrees with Django outright now"
             )
 
     def test_a_quoted_float_raises_where_a_bare_one_truncates(self) -> None:

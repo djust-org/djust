@@ -1215,21 +1215,52 @@ def _swept_whitespace() -> set[str]:
 #: complete set of failures the argument chokepoint can produce. Parsed rather
 #: than listed, so a new one is a missing manifest member until a corpus
 #: spelling reaches it.
-_ARG_ERROR_MARK = "filter '{filter_name}'"
+#: What an argument-error message looks like. TWO spellings, because the
+#: engine has two: an error raised by shared code interpolates the filter name
+#: (`filter '{filter_name}'`), while one raised inside a module that knows
+#: which filter it is names it literally (`filter 'floatformat'`).
+#:
+#: The placeholder-only form was the original, and it UNDER-REPORTED: #2346
+#: added `floatformat`'s empty-argument `IndexError`, which has neither
+#: property — it lives in `floatformat.rs` and names its filter literally — so
+#: no requirement row demanded it be reachable. A requirement source that can
+#: miss a requirement is the failure this manifest exists to prevent, one level
+#: in, which is why it is widened here rather than worked around.
+_ARG_ERROR_MARK = re.compile(r"filter '(?:\{filter_name\}|\w+)'")
+
+#: Every module that can raise an argument error. `filters.rs` holds the shared
+#: chokepoint; `floatformat.rs` has its own `parse_arg` and raises directly.
+_ARG_ERROR_MODULES = ("filters", "floatformat")
 
 
 def _required_argument_errors() -> dict[str, str]:
-    src = _crate_source("djust_templates", "filters")
     out = {}
-    # Rust string literals continue across a trailing `\`; rejoin them, then
-    # keep the ones that name a filter (every argument error does, and nothing
-    # else in the file does).
-    joined = re.sub(r"\\\n\s*", "", src)
-    for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', joined):
-        if _ARG_ERROR_MARK not in literal:
-            continue
-        out[_error_signature(literal)] = "filters.rs"
+    for module in _ARG_ERROR_MODULES:
+        # Rust string literals continue across a trailing `\`; rejoin them,
+        # then keep the ones that name a filter — every argument error does,
+        # and nothing else in these modules does.
+        joined = re.sub(r"\\\n\s*", "", _crate_source("djust_templates", module))
+        for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', joined):
+            if not _ARG_ERROR_MARK.search(literal):
+                continue
+            out.setdefault(_error_signature(literal), f"{module}.rs")
     return out
+
+
+def _rust_unescape(literal: str) -> str:
+    """A Rust string literal's SOURCE text, decoded to the string it denotes.
+
+    Load-bearing, not tidiness. The requirement set is read out of Rust source,
+    where a quote inside a string is written `\\"`; the message the engine
+    actually raises has a real quote. A signature built from the raw source can
+    therefore never match the runtime message, and the manifest reports an
+    error it can in fact reach as UNREACHABLE.
+
+    Invisible until #2346, because the first five argument errors contain no
+    escape at all. Its `floatformat` message is the first that does — it quotes
+    the empty argument — and the manifest reported it missing.
+    """
+    return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t", "r": "\r"}.get(m[1], m[1]), literal)
 
 
 def _error_signature(fmt: str) -> str:
@@ -1240,7 +1271,8 @@ def _error_signature(fmt: str) -> str:
     the interpolated filter name; comparing a hand-picked fragment would be a
     transcription that drifts.
     """
-    pieces = [p for p in re.split(r"\{[^{}]*\}", fmt) if len(p.strip()) >= 4]
+    decoded = _rust_unescape(fmt)
+    pieces = [p for p in re.split(r"\{[^{}]*\}", decoded) if len(p.strip()) >= 4]
     return _SIGNATURE_GAP.join(p.strip() for p in pieces)
 
 

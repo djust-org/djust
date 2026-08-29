@@ -1070,13 +1070,31 @@ fn apply_builtin_filter(
             // (The VALUE below keeps its fail-soft `False`; that is the other
             // half of Django's `int(value) % int(arg)` and a separate question.)
             let divisor = int_arg!(filter_name, arg, arg_was_quoted, 1, BadArg::Raise).unwrap_or(1);
+            // A divisor of ZERO is Python's `ZeroDivisionError` (#2346). This
+            // arm answered `False`, which is a guard Django's
+            // `int(value) % int(arg)` does not have — and the divergence was
+            // reachable two ways: `divisibleby:"0"` always, and
+            // `divisibleby:False` only since #2328 made `int(False)` be `0`, as
+            // Python has it.
+            //
+            // Asked BEFORE the value, matching `%`'s own order: Python
+            // evaluates `int(value)` first but raises on the operator, so a
+            // value djust cannot read still reaches the division. Keeping the
+            // value's fail-soft `False` for a divisor of zero would answer a
+            // question Django never gets to.
+            if divisor == 0 {
+                return Some(Err(DjangoRustError::TemplateError(format!(
+                    "filter '{filter_name}' is int(value) % int(arg), and a divisor of \
+                     zero is a ZeroDivisionError — Django raises here too"
+                ))));
+            }
             let dividend = match value {
                 Value::Integer(n) => Some(*n),
                 Value::String(s) => s.trim().parse::<i64>().ok(),
                 _ => None,
             };
             Ok(Value::Bool(match dividend {
-                Some(n) => divisor != 0 && n % divisor == 0,
+                Some(n) => n % divisor == 0,
                 None => false,
             }))
         }
@@ -5122,15 +5140,43 @@ fn strip_url_trailing<'a>(href: &'a str, display: &'a str) -> (String, String, S
     (href_s, display_s, trailing)
 }
 
+/// `Urlizer.trim_url`, which is NOT `Truncator` (#2346).
+///
+/// ```python
+/// def trim_url(self, x, *, limit):
+///     if limit is None or len(x) <= limit:
+///         return x
+///     return "%s…" % x[: max(0, limit - 1)]
+/// ```
+///
+/// Two things this got wrong, and they compound: it appended three ASCII dots
+/// where Django appends one `…`, and it reserved THREE characters for them
+/// where Django reserves one. So `urlizetrunc:"5"` on `http://example.com/aaaa`
+/// gave `ht...` where Django gives `http…` — every `urlizetrunc` cell in the
+/// differential's sweep differed, for this reason alone.
+///
+/// Same ellipsis fix that landed for `truncatechars` in #2203; it never reached
+/// `urlize`, which is parallel-path drift on a CONSTANT (#1646). The two are
+/// deliberately not sharing a code path even so: `Truncator.chars` normalizes
+/// to NFC, skips combining characters and subtracts the truncation text's own
+/// visible length (`calculate_truncate_chars_length`), while `trim_url` is a
+/// plain code-point slice. Routing this through `truncate::text_chars` would be
+/// tidier and would not be Django.
 fn truncate_url_display(s: &str, limit: Option<usize>) -> String {
     match limit {
         Some(n) if s.chars().count() > n => {
-            let truncated: String = s.chars().take(n.saturating_sub(3)).collect();
-            format!("{truncated}...")
+            let truncated: String = s.chars().take(n.saturating_sub(1)).collect();
+            format!("{truncated}{URL_TRUNCATE}")
         }
         _ => s.to_string(),
     }
 }
+
+/// The single character `Urlizer.trim_url` appends, spelled as an escape.
+///
+/// A literal `…` and a literal `...` are hard to tell apart in a diff, which is
+/// how the three-dot spelling survived #2203's fix to the neighbouring filter.
+const URL_TRUNCATE: &str = "\u{2026}";
 
 fn unordered_list(items: &[Value], depth: usize, items_are_safe: bool) -> String {
     let indent = "\t".repeat(depth);
@@ -7078,7 +7124,13 @@ mod tests {
         let value = Value::String("Visit https://example.com/very/long/path for info".to_string());
         let result = apply_filter("urlizetrunc", &value, Some("15")).unwrap();
         let s = result.to_string();
-        assert!(s.contains("..."));
+        // ONE `…`, and it costs ONE of the fifteen characters (#2346). This
+        // read `s.contains("...")` and was the only test the three-dot
+        // spelling had; `Urlizer.trim_url` appends `"%s…" % x[:max(0, limit-1)]`,
+        // so the displayed text is `https://example` truncated to 14 plus the
+        // ellipsis.
+        assert!(s.contains(">https://exampl\u{2026}</a>"), "{s}");
+        assert!(!s.contains("..."), "{s}");
         assert!(s.contains("href=\"https://example.com/very/long/path\""));
     }
 
