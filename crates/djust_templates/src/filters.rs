@@ -91,6 +91,13 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
         // A dict iterates its KEYS, each as the value it actually is — an
         // `Integer` key must render `0`, not `"0"` (#2339).
         Value::Object(map) => Some(djust_core::object_key::dict_iteration_values(map)),
+        // A view is iterable in Python, so every filter that iterates gets it
+        // here: `|join`, `|unordered_list`, `|safeseq`, `|escapeseq`, and the
+        // truthiness probe `join` uses. The filters where Python RAISES
+        // instead (`|random`, `|json_script`) guard at their own arm rather
+        // than being carved out of this sink — a view IS a sequence, and it is
+        // subscripting that it refuses (#2340).
+        Value::DictView { items, .. } => Some(items.clone()),
         Value::Missing => Some(Vec::new()),
         _ => None,
     }
@@ -646,6 +653,8 @@ fn apply_builtin_filter(
                 // different, wronger one.
                 Value::String(s) => s.chars().count(),
                 Value::List(l) | Value::Tuple(l) => l.len(),
+                // `len(d.keys())` is the entry count, not the repr's length.
+                Value::DictView { items, .. } => items.len(),
                 // A `dict` answers `len(dict)`; a serialized model answers 0,
                 // because `len(model)` raises `TypeError` and Django's filter
                 // catches it (#2294). Both are `Value::Object`, so the arm has
@@ -969,7 +978,15 @@ fn apply_builtin_filter(
                         Ok(Value::String(suffix.to_string()))
                     }
                 }
-                Value::List(l) | Value::Tuple(l) => {
+                // A dict VIEW answers `len()` in Python, so `pluralize` counts
+                // its entries like any other sized value (#2340). Reached
+                // through the `_` arm before, which returns the SUFFIX
+                // unconditionally — right for a 2-entry view by luck, wrong for
+                // a 1-entry one. Found by auditing the 19 `List | Tuple`
+                // or-patterns, NOT by the filter sweep: that used a fixed
+                // 2-entry dict, so the one length where the two answers differ
+                // was the one length it never tried.
+                Value::List(l) | Value::Tuple(l) | Value::DictView { items: l, .. } => {
                     if l.len() == 1 {
                         Ok(Value::String(String::new()))
                     } else {
@@ -1093,6 +1110,13 @@ fn apply_builtin_filter(
         // the whole string was not "a random pick of one element", it was the
         // sequence itself.
         "random" => {
+            // `random.choice(d.keys())` raises `TypeError` — a view is not
+            // subscriptable — and Django does not catch it. Measured against
+            // all three kinds; djust renders nothing rather than raising,
+            // which is never more permissive (#2340).
+            if matches!(value, Value::DictView { .. }) {
+                return Some(Ok(Value::Missing));
+            }
             match iter_values(value) {
                 Some(items) if !items.is_empty() => {
                     // Use simple pseudo-random selection based on list length
@@ -1224,10 +1248,26 @@ fn apply_builtin_filter(
                 sort_key.parse::<usize>().ok()
             };
             let sorted = match value {
-                Value::List(items) | Value::Tuple(items) => match index {
-                    Some(n) => dictsort_by_index(items, n),
-                    None => dictsort_by_key(items, sort_key),
-                },
+                // A dict VIEW sorts (#2340). Django's `dictsort` is
+                // `sorted(value, key=…)` and `sorted()` takes ANY iterable, so
+                // `{{ d.values|dictsort:"k" }}` is a real, working idiom — and
+                // it returns a LIST, which the `Ok(Value::List(items))` below
+                // already produces.
+                //
+                // The or-pattern audit first classified this arm's `_ => None`
+                // as CORRECT, on the measurement `{{ p.items|dictsort:'0' }}`
+                // -> `''`. That is a case where DJANGO ALSO FAILS — a quoted
+                // `'0'` is a key lookup and a tuple has no key `'0'` — so one
+                // arg value said "agree" about a filter that diverges for
+                // every arg that resolves. The exhaustive filter sweep missed
+                // it for the same reason: `FILTER_ARGS` carries ONE arg per
+                // filter, which is a curated sample wearing a sweep's clothes.
+                Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
+                    match index {
+                        Some(n) => dictsort_by_index(items, n),
+                        None => dictsort_by_key(items, sort_key),
+                    }
+                }
                 // Not a sequence at all: `sorted()` raises `TypeError`.
                 _ => None,
             };
@@ -1392,6 +1432,11 @@ fn apply_builtin_filter(
             Ok(Value::List(chars))
         }
         "json_script" => {
+            // `json.dumps(d.keys())` raises `TypeError`. Same treatment as
+            // `random` above (#2340).
+            if matches!(value, Value::DictView { .. }) {
+                return Some(Ok(Value::Missing));
+            }
             // json_script filter: wrap value as JSON inside <script id="..."> tag
             let element_id = arg.unwrap_or("data");
             let json_str = value_to_json(value);
@@ -3985,6 +4030,12 @@ fn value_to_json(value: &Value) -> String {
     match value {
         // Both are JSON `null`: JSON cannot distinguish absent from None.
         Value::Missing | Value::None => "null".to_string(),
+        // A dict view is NOT JSON-serializable: `json.dumps(d.keys())` raises
+        // `TypeError`, and so does Django's `{{ d.keys|json_script:"i" }}`.
+        // `null` is the closest honest answer — the `json_script` arm refuses
+        // the whole filter before reaching here, so this is only the nested
+        // case (#2340).
+        Value::DictView { .. } => "null".to_string(),
         Value::Bool(b) => {
             if *b {
                 "true".to_string()
@@ -5413,6 +5464,7 @@ mod tests {
             Value::List(_) => "List",
             Value::Tuple(_) => "Tuple",
             Value::Object(_) => "Object",
+            Value::DictView { .. } => "DictView",
             Value::Decimal(_) => "Decimal",
             Value::BigInt(_) => "BigInt",
         }
@@ -5433,6 +5485,13 @@ mod tests {
             Value::List(vec![Value::String("<b>".to_string())]),
             Value::Tuple(vec![Value::String("<b>".to_string())]),
             Value::Object(Default::default()),
+            // On the ITERATING side (#2340): a view is iterable in Python, so
+            // `|join` / `|safeseq` / `|unordered_list` see its elements — which
+            // is also why its markup never reaches #2285's fall-through escape.
+            Value::DictView {
+                kind: djust_core::DictViewKind::Keys,
+                items: vec![Value::String("<b>".to_string())],
+            },
             Value::Decimal("1E-9".to_string()),
             Value::BigInt("9".repeat(40)),
         ];
@@ -5453,9 +5512,9 @@ mod tests {
             }
         }
         assert_eq!(
-            iterating, 5,
+            iterating, 6,
             "the iterating set is exactly String / List / Tuple / Object / \
-             Missing — a change here is a change to what #2283 fixed",
+             Missing / DictView — a change here is a change to what #2283 fixed",
         );
         // The half that makes "exhaustive" true rather than aspirational: every
         // arm `variant_name` can return is exercised by a sample. Deleting a
@@ -5464,7 +5523,7 @@ mod tests {
         let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
         assert_eq!(
             seen.len(),
-            11,
+            12,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }
