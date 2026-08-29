@@ -187,6 +187,7 @@ import hashlib
 import inspect
 import itertools
 import json
+import ast
 import pathlib
 import re
 import sys
@@ -1653,12 +1654,38 @@ BUILTIN_SHAPES = {
 }
 
 
+#: Mapping-shaped corpus inputs, derived rather than listed — a hand-written
+#: list is the transcription this whole design exists to avoid, and it would
+#: silently stop covering a mapping added to INPUTS later.
+def mapping_inputs():
+    return {key for key, value in INPUTS.items() if isinstance(value, dict)}
+
+
+#: The COMPOSITION shape (#2372). Deliberately not a `BUILTIN_SHAPES` entry:
+#: those bind only `p`, so a builtin literal there can never meet a mapping.
+#: This one crosses the two axes, which is the whole point.
+BUILTIN_X_MAPPING = "{% if @NAME@ in @KEY@ %}Y{% else %}N{% endif %}"
+
+
+
 def builtin_cells():
     for lit in BUILTIN_NAMES:
         for name in sorted(register.filters):
             yield lit, name, "var-filtered"
         for shape in BUILTIN_SHAPES:
             yield lit, None, shape
+
+
+def builtin_x_mapping_cells():
+    """A context builtin as the needle of a membership test over a mapping.
+
+    The cell #2360 x #2339 would have been wrong in, and which neither axis
+    could construct alone: `builtin` binds only `p`, and `cmp` sweeps `in` over
+    corpus values on both sides, so a literal never meets a mapping.
+    """
+    for lit in BUILTIN_NAMES:
+        for key in sorted(mapping_inputs()):
+            yield lit, key
 
 
 # ---------------------------------------------------------------------------
@@ -2014,6 +2041,40 @@ def _swept_forloop_members() -> set[str]:
     return swept
 
 
+def _swept_builtin_x_mapping() -> set[str]:
+    """The builtin-x-mapping cells the corpus is WIRED to emit.
+
+    Read out of this module's own source, the way `_swept_tags` reads tags out
+    of the shape tables — not by re-running the generator the requirement is
+    built from, which would be a self-comparison that could never go red
+    (#1859), and not from a set the measurement pass populates at runtime,
+    which would make `--manifest` report missing forever.
+
+    So the check is: does the measurement pass actually iterate
+    `builtin_x_mapping_cells()` and emit an `@bxm` cell for each? Delete either
+    and this collapses to empty, and all 77 members go MISSING.
+    """
+    # Walk the AST rather than grep the text. A string check CANNOT work here:
+    # the needle would appear inside this very function, so the check would
+    # match its own source and never go red. That is the same
+    # instrument-measures-itself failure this manifest exists to catch, and the
+    # first version of this function had it.
+    tree = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    here = _swept_builtin_x_mapping.__name__
+    wired = any(
+        isinstance(node, ast.For)
+        and isinstance(node.iter, ast.Call)
+        and getattr(node.iter.func, "id", None) == "builtin_x_mapping_cells"
+        and getattr(fn, "name", None) != here
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef)
+        for node in ast.walk(fn)
+    )
+    if not wired:
+        return set()
+    return {f"{lit} in {key}" for lit, key in builtin_x_mapping_cells()}
+
+
 def _corpus_templates() -> list[str]:
     """Every template string the corpus renders, from every shape table."""
     return (
@@ -2210,6 +2271,35 @@ AXES = [
         swept=_swept_forloop_members,
         required=_required_forloop_members,
     ),
+    # ---- COMPOSITION rows (#2372) -------------------------------------
+    #
+    # Two axes that are each individually covered are NOT thereby covered
+    # together. #2360 (a builtin resolves to a real bool) and #2339 (a dict key
+    # keeps its Python type) are each correct alone; #2360 landing on the OLD
+    # string coercion would have made `{% if True in d %}` match any dict merely
+    # HAVING a key spelled "True". It was caught because a person checked the
+    # interaction, not because anything asked them to.
+    #
+    # Deliberately NOT the full N-squared. Most pairs are genuinely orthogonal
+    # and a row each would be noise — which is the failure mode of
+    # over-declaring, and noise is how a manifest stops being read. A pair earns
+    # a row when both axes touch the SAME RESOLUTION STEP, because that is where
+    # two correct changes compose into a wrong one.
+    Axis(
+        name="builtin x mapping",
+        what="a context builtin as the needle of a membership test over a mapping",
+        # Read back out of the cell ids the corpus EMITS, not out of the
+        # generator the requirement is built from. My first version used the
+        # generator for both sides — a self-comparison that could never go red,
+        # which is the exact #1859 shape this file's own Axis docstring warns
+        # about. Deleting the emission below now fails this axis.
+        swept=_swept_builtin_x_mapping,
+        required=lambda: {
+            f"{lit} in {key}": "BUILTIN_NAMES x the mapping-shaped INPUTS"
+            for lit in BUILTIN_NAMES
+            for key in sorted(mapping_inputs())
+        },
+    ),
     Axis(
         name="arity",
         what="the argument COUNTS each built-in's own signature refuses",
@@ -2292,6 +2382,8 @@ def axis_of(cid: str) -> str:
         return "argument"
     if cid.startswith("@builtin "):
         return "builtin"
+    if cid.startswith("@bxm "):
+        return "builtin x mapping"
     if cid.startswith("@cmp "):
         return "cmp"
     if cid.startswith("@ctag "):
@@ -2468,6 +2560,18 @@ def measure(out_path: str) -> None:
         dj, du = render_both(source, {"p": INPUTS["s-plain"]})
         if name in NONDET:
             dj, du = f"<NONDET len={len(dj)}>", f"<NONDET len={len(du)}>"
+        result[cid] = [dj, du]
+
+    # The COMPOSITION axis (#2372): a builtin literal as the needle of a
+    # membership test over a mapping. Neither parent axis can build this —
+    # `builtin` binds only `p`, and `cmp` sweeps `in` over corpus values on both
+    # sides, so a literal never meets a mapping.
+    for lit, key in builtin_x_mapping_cells():
+        source = BUILTIN_X_MAPPING.replace("@NAME@", lit).replace("@KEY@", "p")
+        cid = f"@bxm {lit} in {key}\t{key}\tbuiltin-x-mapping"
+        if cid in result:
+            continue
+        dj, du = render_both(source, {"p": INPUTS[key]}, CONTEXT_SAFE_KEYS.get(key))
         result[cid] = [dj, du]
 
     agree = sum(1 for v in result.values() if v[0] == v[1])
