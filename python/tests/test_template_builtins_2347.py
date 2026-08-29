@@ -437,8 +437,16 @@ class TestOnlyAddWasBrokenByTheBareLiteral:
     _ROWS = [
         ("divisibleby", "True", "1", 1.5),
         ("dictsort", "False", "0", "ab"),
-        ("get_digit", "False", "0", 1.5),
         ("pluralize", "True", "1", 5),
+        # `get_digit` was here until #2403, and it left the same way
+        # `stringformat`, `date` and `time` did: the numeric control
+        # `{{ 1.5|get_digit:0 }}` diverged because djust's `arg < 1` exit
+        # returned the value UNCONVERTED, where Django's `value = int(value)`
+        # has already run — Django says `1`, djust said `1.5`. So the cell
+        # belonged to that bug, not to the bare-literal one this class tests.
+        # With it closed, BOTH spellings agree (measured: `get_digit:False`
+        # and `get_digit:0` are `1` on both engines over `1.5`), so the row
+        # has nothing left to assert.
         # `stringformat` was here until #2358. Its numeric control diverged
         # because the catch-all arm echoed the value for `"1"` — a spec
         # CPython answers `incomplete format` to — so the cell belonged to

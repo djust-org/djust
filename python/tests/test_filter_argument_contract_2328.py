@@ -52,10 +52,12 @@ What is deliberately NOT closed here
   and the whole argument was left to #2344. **#2344 closed it**, the pin below
   went red exactly as intended, and the sweep now covers all **29**. Their rows
   are gone rather than relaxed, which is the point of having had them.
-* ``add``, ``stringformat`` and ``yesno`` produce a different STRING for an
+* ``add``, ``stringformat`` and ``yesno`` produced a different STRING for an
   unparseable argument, for reasons that are not ``int()`` — a three-branch
-  fallback chain, an invalid printf spec and an arity check respectively. They
-  DO agree on the raise bit, so they stay in the sweep. ``stringformat`` with an
+  fallback chain, an invalid printf spec and an arity check on the
+  comma-separated argument respectively. They DO agree on the raise bit, so they
+  stayed in the sweep, and all three are now CLOSED (#2359, #2358, #2401):
+  :data:`OUTPUT_DIVERGES_FOR_ANOTHER_REASON` is empty. ``stringformat`` with an
   EMPTY argument additionally PANICS, on main and here alike: #2343.
 * Three more argument-axis divergences with non-``int()`` causes were #2346
   (``urlizetrunc``'s ellipsis, ``divisibleby``'s zero divisor, ``floatformat``'s
@@ -179,7 +181,15 @@ OUTPUT_DIVERGES_FOR_ANOTHER_REASON = {
     # row was true too and is now closed. Two independent branches each
     # removed one row and each left this note; the merge keeps both, because
     # the value of the note is the record that the row was TRUE when written.
-    "yesno": "an arity check on a comma-separated argument, not int(arg)",
+    # `yesno` was the last row, and #2401 closed it: `"notanumber"` splits into
+    # ONE part, and Django's `if len(bits) < 2: return value` hands the value
+    # back where djust ran its own three-way branch. Removed rather than
+    # relaxed, for the third time, exactly as
+    # `test_the_output_divergences_are_not_raise_divergences` demands.
+    #
+    # The dict is now empty, and — as with `RAISE_BIT_NOT_CLOSED` above — it
+    # stays as the named place a future exemption goes, rather than being
+    # deleted and reinvented.
 }
 
 

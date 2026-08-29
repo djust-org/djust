@@ -52,6 +52,49 @@ macro_rules! int_arg {
 /// the renderer, which is the only layer that knows a value's provenance. A
 /// caller that cannot know passes [`InputSafety::default()`] (all `false`),
 /// which is the escaping, conservative direction.
+/// What the filter ARGUMENT's resolved Python TYPE says.
+///
+/// The dispatch table takes `Option<&str>`, so every argument arrives as text
+/// and two Python objects that spell the same are indistinguishable there. Each
+/// field is one bit that a filter's Django source branches on and that the text
+/// cannot answer, computed ONCE at the resolution site in
+/// [`apply_filter_full_safe`] — which is the last place the `Value` exists —
+/// rather than pushed through 57 arms as a whole `Value`.
+///
+/// It is a struct rather than N parameters because that is what it already was
+/// becoming: #2366 added the first bit and #2401 the second, and a third would
+/// have taken `apply_builtin_filter` past clippy's argument limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ArgType {
+    /// `int(arg)` would be a **TypeError** rather than a ValueError (#2366).
+    /// See [`int_arg_is_type_error`] for how the line is drawn and for the half
+    /// the PyO3 extraction boundary has already erased.
+    pub int_is_type_error: bool,
+    /// The argument is Python `None` (#2401).
+    ///
+    /// `yesno`'s first statement is `if arg is None: arg = gettext(…)`, an
+    /// IDENTITY test — and `str(None)` is `"None"`, so by the time the dispatch
+    /// table sees the argument a bare `None` literal, a context variable bound
+    /// to `None`, and the string `"None"` are the same three characters while
+    /// Django answers differently for the third. Measured:
+    /// `{{ None|yesno:None }}` is `maybe` (the default triple) and
+    /// `{{ None|yesno:"None" }}` is `None` (one part, so the value comes back).
+    ///
+    /// A SPELLING fallback cannot express that, which is the same conclusion
+    /// [`int_arg_is_type_error`]'s own "why there is no spelling fallback"
+    /// section reaches from the other side.
+    pub is_none: bool,
+}
+
+/// Is the resolved filter argument Python `None`? (#2401)
+///
+/// `None` at the resolution site means the argument was a QUOTED literal, which
+/// is a `str` and never Python `None` — the same reading
+/// [`int_arg_is_type_error`]'s `None` arm takes.
+pub(crate) fn arg_is_python_none(resolved: Option<&Value>) -> bool {
+    matches!(resolved, Some(Value::None))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InputSafety {
     /// The value itself is `SafeData`.
@@ -248,6 +291,7 @@ fn builtin_produced_safe(
     value: &Value,
     arg: Option<&str>,
     arg_was_quoted: bool,
+    arg_type: ArgType,
     result: &Value,
     input_safety: InputSafety,
 ) -> bool {
@@ -350,7 +394,88 @@ fn builtin_produced_safe(
         // all: `items_are_safe` refuses it, and both sequence filters have
         // already turned it into a `List` of its keys.
         "first" | "last" | "random" => input_safety.items,
+        // `get_digit`'s `except ValueError: return value` (#2403) — the input
+        // object, `SafeData` and all, exactly as `default`'s truthy branch is.
+        // Django registers it `is_safe=False`, so `renderer::IS_SAFE_FILTERS`
+        // is not what makes `{{ p|get_digit:1 }}` live over a `mark_safe`d
+        // value; this arm is.
+        //
+        // The condition is the SAME split the dispatch arm takes, and the two
+        // exits it does NOT cover are deliberate:
+        //
+        //   * `if arg < 1` returns `int(value)` — a Python `int`, never
+        //     `SafeData`, so no grant;
+        //   * landing on the `-` of a negative returns the input here while
+        //     Django RAISES (`int('-')`), so there is no Django answer to match
+        //     and withholding is the escaping direction. That divergence is
+        //     already documented in the dispatch arm.
+        "get_digit" => {
+            input_safety.container && get_digit_returns_input(value, arg, arg_was_quoted)
+        }
+        // `yesno`'s `if len(bits) < 2: return value` (#2401) — the same
+        // return-the-input shape. Django's own docstring calls it "Invalid
+        // arg", and it is the ONLY exit that does not build a string from the
+        // argument's parts, which are plain `str`s even when the argument was a
+        // `SafeString` (`SafeString.split(",")` does not propagate the marker).
+        "yesno" => input_safety.container && yesno_returns_input(arg, arg_type),
         _ => false,
+    }
+}
+
+/// Does Django's `get_digit` hand back its INPUT OBJECT? (#2403)
+///
+/// Mirrors the `"get_digit"` dispatch arm's first two exits. It is a second
+/// reading of the same rule rather than a shared helper because the arm needs
+/// the parsed values it computes on the way and this needs only the verdict —
+/// the same shape `default`'s `value.is_truthy()` arm above already has. The
+/// coupling is pinned behaviourally: `TestGetDigitsPassThroughBranch` sweeps
+/// every argument spelling over a `mark_safe`d input, so a change to one and
+/// not the other goes red.
+///
+/// `arg_int_is_type_error` is passed as `false` and that is not an
+/// approximation: when it is TRUE the dispatch arm returns `Err`, and
+/// `Result::map` never calls [`builtin_produced_safe`] on an `Err`, so this
+/// function is only ever reached on the `ValueError` side where the flag
+/// cannot change the answer.
+fn get_digit_returns_input(value: &Value, arg: Option<&str>, arg_was_quoted: bool) -> bool {
+    match filter_int_arg(
+        "get_digit",
+        arg,
+        arg_was_quoted,
+        false,
+        0,
+        BadArg::ReturnInput,
+    ) {
+        // `int(arg)` parsed; the input comes back only if `int(value)` raised.
+        Ok(Some(_)) => int_digits_of(value, false).is_none(),
+        // `int(arg)` raised before `value` was rebound.
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
+
+/// Does Django's `yesno` hand back its INPUT OBJECT? (#2401)
+///
+/// `bits = arg.split(",")` with fewer than two parts. A missing argument
+/// defaults to the three-part `"yes,no,maybe"` and so never reaches it.
+fn yesno_returns_input(arg: Option<&str>, arg_type: ArgType) -> bool {
+    yesno_bits(arg, arg_type).is_some_and(|bits| bits.len() < 2)
+}
+
+/// Django's `bits` for `yesno` — `arg.split(",")` after its `arg is None`
+/// default, or `None` where Django's own `arg` is `None` (#2401).
+///
+/// One statement of the rule, read by the dispatch arm and by
+/// [`builtin_produced_safe`], which must agree about which branch ran.
+fn yesno_bits(arg: Option<&str>, arg_type: ArgType) -> Option<Vec<&str>> {
+    match arg {
+        // `if arg is None: arg = gettext("yes,no,maybe")` — for an ABSENT
+        // argument and for one that resolved to Python `None` alike. The
+        // string `"None"` is NOT this branch, which is the whole of why the
+        // bit is threaded rather than sniffed off the text.
+        None => None,
+        Some(_) if arg_type.is_none => None,
+        Some(a) => Some(a.split(',').collect()),
     }
 }
 
@@ -545,7 +670,10 @@ pub fn apply_filter_full_safe(
         _ => None,
     };
     let builtin_arg = resolved_arg.as_deref().or(arg);
-    let arg_int_is_type_error = int_arg_is_type_error(resolved_type.as_ref());
+    let arg_type = ArgType {
+        int_is_type_error: int_arg_is_type_error(resolved_type.as_ref()),
+        is_none: arg_is_python_none(resolved_type.as_ref()),
+    };
 
     // Built-ins take precedence over custom filters (mirrors the original
     // dispatch order). A built-in hit reports safety through
@@ -559,7 +687,7 @@ pub fn apply_filter_full_safe(
         builtin_arg,
         context,
         arg_was_quoted,
-        arg_int_is_type_error,
+        arg_type,
         input_safety,
     ) {
         return builtin.map(|v| {
@@ -568,6 +696,7 @@ pub fn apply_filter_full_safe(
                 value,
                 builtin_arg,
                 arg_was_quoted,
+                arg_type,
                 &v,
                 input_safety,
             );
@@ -691,12 +820,18 @@ fn apply_builtin_filter(
     arg: Option<&str>,
     context: Option<&Context>,
     arg_was_quoted: bool,
-    // Whether `int(arg)` would be a TypeError rather than a ValueError —
-    // decided from the argument's resolved TYPE by `int_arg_is_type_error`,
-    // because the `&str` above no longer carries it (#2366).
-    arg_int_is_type_error: bool,
+    // What the argument's resolved Python TYPE says, which the `&str` above no
+    // longer carries. See [`ArgType`].
+    arg_type: ArgType,
     input_safety: InputSafety,
 ) -> Option<Result<Value>> {
+    // Rebound rather than read through the struct at each site: `int_arg!`'s
+    // call shape is pinned mechanically by
+    // `python/tests/test_filter_argument_contract_2328.py::
+    // TestChokepointIsTheOnlyParser`, and the pin is about the SET of call
+    // sites and their policies rather than the spelling — so the eleven macro
+    // calls keep the identifier they had.
+    let arg_int_is_type_error = arg_type.int_is_type_error;
     // #2250: Django's `@stringfilter` consumes `str(value)`. For a `Decimal`
     // that is NOT the rendered form — `str(Decimal('1E-9'))` is `1E-9`, while
     // `{{ d }}` renders `0.000000001` because `numberformat.format` uses
@@ -1083,28 +1218,62 @@ fn apply_builtin_filter(
                 )),
             }
         }
+        // Django's body, statement for statement (#2401):
+        //
+        //     if arg is None:      arg = gettext("yes,no,maybe")
+        //     bits = arg.split(",")
+        //     if len(bits) < 2:    return value            # Invalid arg.
+        //     try:                 yes, no, maybe = bits
+        //     except ValueError:   yes, no, maybe = bits[0], bits[1], bits[1]
+        //     if value is None:    return maybe
+        //     if value:            return yes
+        //     return no
+        //
+        // The previous version ran a three-way branch of its own over a MIX of
+        // the argument's parts and the built-in defaults, and diverged on four
+        // independent axes at once — which is why this is a transcription of
+        // the body rather than four repairs:
+        //
+        //   * a one-part argument fell through to `yes`/`no`/`maybe` defaults
+        //     where Django returns the VALUE (`{{ True|yesno:"only" }}` was
+        //     `only`, Django says `True`);
+        //   * a FALSY-but-not-`None` value took the `maybe` arm, where Django
+        //     reserves that for `None` alone (`{{ ""|yesno }}` was `maybe`,
+        //     Django says `no`) — including an ABSENT variable, which Django
+        //     has already replaced with `string_if_invalid` (`""`) before the
+        //     filter runs, so it is falsy rather than `None`;
+        //   * a FOUR-part argument read `bits[2]` for `None`, where Django's
+        //     unpack raises for any length that is not exactly three and falls
+        //     back to `bits[1]` for both 2 and 4+;
+        //   * `Value::Bool(false)` had its own arm answering `no` while every
+        //     other falsy shape answered `maybe`, so the arm looked correct
+        //     from the one input a curated test reaches for.
+        //
+        // `Value::None` and `Value::Missing` are NOT the same row here.
+        // `Missing` is Django's `string_if_invalid` substitution — measured
+        // `{{ absent|yesno:"a,b,c" }}` is `b`, the FALSE arm — so only a real
+        // `None` takes `maybe`. `default_if_none` makes the same split.
         "yesno" => {
-            // yesno filter: maps true/false/none to custom strings
-            // Argument format: "yes,no,maybe" (maybe is optional)
-            let parts: Vec<&str> = arg.unwrap_or("yes,no,maybe").split(',').collect();
-            let yes_str = parts.first().unwrap_or(&"yes");
-            let no_str = parts.get(1).unwrap_or(&"no");
-            let maybe_str = parts.get(2).unwrap_or(&"maybe");
-
-            let result = match value {
-                Value::Bool(true) => yes_str,
-                Value::Bool(false) => no_str,
-                Value::Missing => maybe_str,
-                Value::String(s) if s.is_empty() => maybe_str,
-                _ => {
-                    if value.is_truthy() {
-                        yes_str
-                    } else {
-                        maybe_str
-                    }
-                }
+            let bits =
+                yesno_bits(arg, arg_type).unwrap_or_else(|| "yes,no,maybe".split(',').collect());
+            if bits.len() < 2 {
+                // Invalid arg: the result IS the input, so its safety grant is
+                // the result's — see `builtin_produced_safe`'s `yesno` arm.
+                return Some(Ok(value.clone()));
+            }
+            let (yes, no, maybe) = if bits.len() == 3 {
+                (bits[0], bits[1], bits[2])
+            } else {
+                (bits[0], bits[1], bits[1])
             };
-            Ok(Value::String(result.to_string()))
+            let chosen = if matches!(value, Value::None) {
+                maybe
+            } else if value.is_truthy() {
+                yes
+            } else {
+                no
+            };
+            Ok(Value::String(chosen.to_string()))
         }
         "linebreaks" => {
             // linebreaks filter: converts newlines to <p> and <br> tags.
@@ -1643,32 +1812,50 @@ fn apply_builtin_filter(
             // caught it as a regression against `main`.
             //
             // `except ValueError: return value` and `if arg < 1: return value`
-            // are the same answer, so both reach the guard below (#2328).
-            let n = match int_arg!(
+            // are NOT the same answer, and an earlier version of this comment
+            // said they were (#2403). `value = int(value)` runs INSIDE the
+            // `try`, BEFORE the `arg < 1` test, so:
+            //
+            //   * `int(arg)` raised   -> `value` was never rebound; the INPUT
+            //                            OBJECT comes back, `SafeData` and all;
+            //   * `int(value)` raised -> same, the input object;
+            //   * `arg < 1`           -> the CONVERTED int comes back, so
+            //                            `{{ False|get_digit:0 }}` is `0` and
+            //                            not `False`, and `{{ 1.5|get_digit:0 }}`
+            //                            is `1` and not `1.5`. Measured.
+            //
+            // The distinction decides the safety grant as well as the text —
+            // an `int` is never `SafeData` — so the two exits are spelled
+            // separately here and `builtin_produced_safe`'s `yesno`-shaped
+            // two-branch arm answers off the same split.
+            let Some(n) = int_arg!(
                 filter_name,
                 arg,
                 arg_was_quoted,
                 arg_int_is_type_error,
                 0,
                 BadArg::ReturnInput
-            ) {
-                Some(n) if n >= 1 => n as usize,
-                _ => return Some(Ok(value.clone())),
+            ) else {
+                return Some(Ok(value.clone()));
             };
-            match int_digits_of(value, false) {
-                // `str(value)` INCLUDES the sign, and Django indexes into that,
-                // so `-123` has four characters. Out of range is `0`; landing on
-                // the `-` raises in Django (`int('-')`) and returns the value
-                // unchanged here, the same fail-soft posture the rest of this
-                // module takes rather than 500ing (documented divergence).
-                Some(d) => Ok(match d.as_bytes().get(d.len().wrapping_sub(n)) {
-                    Some(b) if b.is_ascii_digit() => Value::String((*b as char).to_string()),
-                    Some(_) => value.clone(),
-                    None => Value::String("0".to_string()),
-                }),
-                // `int()` raised: Django returns the value unchanged.
-                None => Ok(value.clone()),
+            // `int(value)` raised: Django returns the value unchanged.
+            let Some(d) = int_digits_of(value, false) else {
+                return Some(Ok(value.clone()));
+            };
+            if n < 1 {
+                return Some(Ok(int_value_of(&d)));
             }
+            let n = n as usize;
+            // `str(value)` INCLUDES the sign, and Django indexes into that,
+            // so `-123` has four characters. Out of range is `0`; landing on
+            // the `-` raises in Django (`int('-')`) and returns the value
+            // unchanged here, the same fail-soft posture the rest of this
+            // module takes rather than 500ing (documented divergence).
+            Ok(match d.as_bytes().get(d.len().wrapping_sub(n)) {
+                Some(b) if b.is_ascii_digit() => Value::String((*b as char).to_string()),
+                Some(_) => value.clone(),
+                None => Value::String("0".to_string()),
+            })
         }
         "iriencode" => {
             // iriencode filter: like urlencode but preserves non-ASCII chars
@@ -2895,11 +3082,51 @@ fn timesince_or_until(
     arg_was_quoted: bool,
     reversed: bool,
 ) -> Result<Value> {
+    // Django's first statement, and the only half of this function that is not
+    // a decision about an unreadable value (#2399):
+    //
+    //     if not value:
+    //         return ""
+    //
+    // Python truthiness, so `""`, `None`, `0`, `0.0`, `Decimal("0")`, `False`,
+    // `[]` and `{}` all land here — as does an ABSENT variable, which Django
+    // has already replaced with `string_if_invalid` (`""`).
+    if !value.is_truthy() {
+        return Ok(Value::String(String::new()));
+    }
     let datetime_str = value.to_string();
     // `allow_time_only = false`: a bare time has no instant to measure from
-    // (#2227). Django raises there; this returns the input unchanged.
+    // (#2227).
+    //
+    // This used to `return Ok(value.clone())` — it ECHOED the input onto the
+    // page where Django emits nothing at all (#2399). Django's body is
+    //
+    //     try:                          return timesince(value)
+    //     except (ValueError, TypeError): return ""
+    //
+    // and `timesince()` reaches `value.year` on its first line, so a truthy
+    // non-datetime raises **AttributeError**, which NEITHER `except` catches.
+    // Django refuses the render.
+    //
+    // Returning `""` here — mirroring what `date` and `time` do (#2383) —
+    // would have been a THIRD answer, neither the echo's nor Django's, for
+    // every truthy row. So this refuses, the way `{% for %}`'s unpack-arity
+    // check does (#2387): the error crosses PyO3 as `RuntimeError` rather than
+    // Django's `AttributeError`, as every djust render error does, and the
+    // property both engines then share is that neither puts a page up.
+    //
+    // The falsy half is above and is unambiguous either way.
+    //
+    // The message names the FILTER and not the value. Every other raise in
+    // this module quotes the template-authored ARGUMENT, which the page author
+    // wrote; the value here is application data, and an error string travels
+    // to logs and to `LiveViewConsumer`'s error frame.
     let Some((dt, aware, _time_only)) = parse_serialized_datetime(&datetime_str, false) else {
-        return Ok(value.clone());
+        return Err(DjangoRustError::TemplateError(format!(
+            "filter '{filter_name}' needs a date, and its input is not one — Django \
+             raises AttributeError here (timesince() reads value.year, which neither \
+             of its excepts catches)"
+        )));
     };
     let (then, now) =
         match timesince_comparison_instant(filter_name, arg, arg_was_quoted, dt, aware)? {
@@ -5112,6 +5339,23 @@ fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
     }
 }
 
+/// The `Value` a `str(int(x))` digit string denotes — Python's `int` object.
+///
+/// [`int_digits_of`] answers `str(int(value))` because that is what every
+/// digit-INDEXING caller needs. A caller that must hand back the CONVERTED
+/// NUMBER instead (`get_digit`'s `if arg < 1: return value`, #2403) needs the
+/// int itself, so the rest of the chain sees a number rather than its spelling:
+/// `{{ p|get_digit:0|add:1 }}` is arithmetic in Django, not concatenation.
+///
+/// `BigInt` for anything past `i64`, which is the variant that already carries
+/// an out-of-range Python int as its digits.
+fn int_value_of(digits: &str) -> Value {
+    match digits.parse::<i64>() {
+        Ok(n) => Value::Integer(n),
+        Err(_) => Value::BigInt(digits.to_string()),
+    }
+}
+
 fn iriencode(s: &str) -> String {
     // Like urlencode but preserves non-ASCII characters (for IRIs).
     // Matches Django's iri_to_uri: preserves RFC 3986 unreserved + reserved chars.
@@ -6206,9 +6450,92 @@ mod tests {
         let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
         assert_eq!(result.to_string(), "nope");
 
+        // `Missing` is an ABSENT variable, which Django has already replaced
+        // with `string_if_invalid` (`""`) before the filter runs — falsy, and
+        // not `None`. Corrected in #2401: this row pinned djust's own pre-fix
+        // answer, and a live Django render disagrees
+        // (`{{ absent|yesno:"a,b,c" }}` is `b`).
         let value = Value::Missing;
         let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
+        assert_eq!(result.to_string(), "nope");
+
+        // Python `None` is the row that takes the third part.
+        let value = Value::None;
+        let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
         assert_eq!(result.to_string(), "dunno");
+
+        // Fewer than two parts: Django returns the VALUE (#2401).
+        let value = Value::String("abc".to_string());
+        let result = apply_filter("yesno", &value, Some("only")).unwrap();
+        assert_eq!(result.to_string(), "abc");
+
+        // Not exactly three parts: the unpack raises and `maybe` falls back to
+        // `bits[1]` — for FOUR parts as well as for two.
+        let value = Value::None;
+        let result = apply_filter("yesno", &value, Some("a,b,c,d")).unwrap();
+        assert_eq!(result.to_string(), "b");
+        let result = apply_filter("yesno", &value, Some("a,b")).unwrap();
+        assert_eq!(result.to_string(), "b");
+    }
+
+    #[test]
+    fn test_get_digit_below_one_returns_the_converted_int() {
+        // `value = int(value)` runs BEFORE `if arg < 1`, so this exit hands
+        // back the CONVERTED number and not the input (#2403).
+        let result = apply_filter("get_digit", &Value::Bool(false), Some("0")).unwrap();
+        assert_eq!(result.to_string(), "0");
+        let result = apply_filter("get_digit", &Value::Float(1.5), Some("0")).unwrap();
+        assert_eq!(result.to_string(), "1");
+        let result = apply_filter("get_digit", &Value::Float(1.5), Some("-1")).unwrap();
+        assert_eq!(result.to_string(), "1");
+        // …and it is a NUMBER, so the rest of a chain does arithmetic.
+        let result = apply_filter("get_digit", &Value::Float(1.5), Some("0")).unwrap();
+        assert!(matches!(result, Value::Integer(1)));
+        // `int(value)` raising is the OTHER exit: the input, unchanged.
+        let value = Value::String("abc".to_string());
+        let result = apply_filter("get_digit", &value, Some("0")).unwrap();
+        assert_eq!(result.to_string(), "abc");
+    }
+
+    #[test]
+    fn test_timesince_refuses_an_unreadable_value_and_empties_a_falsy_one() {
+        // Django's `if not value: return ""` (#2399).
+        for falsy in [
+            Value::String(String::new()),
+            Value::None,
+            Value::Missing,
+            Value::Bool(false),
+            Value::Integer(0),
+            Value::List(vec![]),
+        ] {
+            let result = apply_filter("timesince", &falsy, None).unwrap();
+            assert_eq!(
+                result.to_string(),
+                "",
+                "falsy {falsy:?} must be the empty string"
+            );
+            let result = apply_filter("timeuntil", &falsy, None).unwrap();
+            assert_eq!(result.to_string(), "");
+        }
+        // A truthy non-date reaches `value.year` in Django, which raises
+        // `AttributeError` past both of its `except`s. It used to be ECHOED.
+        for truthy in [
+            Value::String("abc".to_string()),
+            Value::Integer(5),
+            Value::Bool(true),
+            Value::List(vec![Value::String("a".to_string())]),
+        ] {
+            assert!(
+                apply_filter("timesince", &truthy, None).is_err(),
+                "timesince must refuse {truthy:?}"
+            );
+            assert!(apply_filter("timeuntil", &truthy, None).is_err());
+        }
+        // The message must not carry the value — it reaches logs and the
+        // client's error frame.
+        let payload = Value::String("<script>alert(1)</script>".to_string());
+        let err = apply_filter("timesince", &payload, None).unwrap_err();
+        assert!(!format!("{err:?}").contains("<script>"), "{err:?}");
     }
 
     #[test]

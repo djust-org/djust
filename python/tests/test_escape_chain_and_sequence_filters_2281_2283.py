@@ -675,6 +675,11 @@ def test_the_per_call_safety_channel_is_swept_too() -> None:
         "first",
         "last",
         "random",
+        # The two return-the-INPUT branches #2403 / #2401 gave a per-call grant:
+        # `get_digit`'s `except ValueError: return value` and `yesno`'s
+        # `if len(bits) < 2: return value`.
+        "get_digit",
+        "yesno",
     }, f"the arms did not parse, or a name was added without updating this pin: {granted}"
 
     row = manifest_rows()["chain"]
