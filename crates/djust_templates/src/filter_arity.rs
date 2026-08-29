@@ -122,11 +122,21 @@ const ARITY: &[(&str, u8, u8, u8)] = &[
 /// The bounds for one built-in, or `None` for a name this engine does not
 /// implement as a built-in — a project's own `@register.filter`, which Django
 /// arity-checks too but which djust cannot see from Rust (out of scope, #1079).
+///
+/// BINARY search, not a scan. `call_time_arity_error` runs on EVERY filter
+/// application — the hottest path in the engine — and a linear `find` over 57
+/// entries costs the same on the overwhelmingly common case where the count is
+/// legal as on the rare one where it is not. The table is generated in sorted
+/// order and `the_table_is_sorted_so_the_binary_search_is_valid` asserts it, so
+/// the precondition cannot be broken by a hand-added row.
 pub fn builtin_arity(name: &str) -> Option<(u8, u8, u8)> {
     ARITY
-        .iter()
-        .find(|(n, ..)| *n == name)
-        .map(|&(_, lo, parse_max, call_max)| (lo, parse_max, call_max))
+        .binary_search_by(|(n, ..)| (*n).cmp(name))
+        .ok()
+        .map(|i| {
+            let (_, lo, parse_max, call_max) = ARITY[i];
+            (lo, parse_max, call_max)
+        })
 }
 
 /// Django's own message, verbatim — including the ungrammatical
@@ -166,6 +176,28 @@ pub fn call_time_arity_error(name: &str, provided: u8) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_table_is_sorted_so_the_binary_search_is_valid() {
+        // `builtin_arity` binary-searches. An unsorted table would not fail
+        // loudly — it would silently MISS names, and a missed name is "no
+        // arity check for this filter", which is the bug this module exists
+        // to close. So it is asserted rather than trusted to the generator.
+        let names: Vec<&str> = ARITY.iter().map(|(n, ..)| *n).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted, "the ARITY table is not in sorted order");
+        // …and every row is findable THROUGH the search, which is the property
+        // the sortedness is for — a sorted-but-mis-indexed search would pass
+        // the assertion above.
+        for &(name, lo, parse_max, call_max) in ARITY {
+            assert_eq!(
+                builtin_arity(name),
+                Some((lo, parse_max, call_max)),
+                "{name} is not findable through the binary search"
+            );
+        }
+    }
 
     #[test]
     fn every_name_appears_once_and_the_bounds_are_ordered() {
