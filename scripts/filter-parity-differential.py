@@ -1158,6 +1158,12 @@ PATH_SHAPES = {
     "if-0": "{% if p.0 %}Y{% else %}N{% endif %}",
     "with-0": "{% with q=p.0 %}[{{ q }}]{% endwith %}",
     "for-0": "{% for x in p.0 %}[{{ x }}]{% empty %}E{% endfor %}",
+    # Step 3 applied TWICE (#2373). A character sliced out of a string is
+    # itself a `str`, so Django runs the index step again and `{{ s.0.0 }}` on
+    # `"abc"` is `'a'`. Every shape above stops after one segment past the
+    # root, so none can show a recursion that stops at depth 1 — and the arm
+    # that recurses is the only thing standing between agreement and empty.
+    "var-0-0": "[{{ p.0.0 }}]",
     # The bound dict VIEW, indexed. Python's `dict_keys` is not subscriptable,
     # so this is empty on both engines — and it is the ONLY shape that hands a
     # view to the index step at all (`{{ p.keys.0 }}` dies at the `keys`
