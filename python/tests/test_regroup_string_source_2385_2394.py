@@ -66,6 +66,7 @@ from django.template import Template as DjangoTemplate
 
 from djust import _rust
 from djust.mixins.rust_bridge import _collect_safe_keys
+from djust.template_tags import _registered_handlers as _LIVE_HANDLERS
 from djust.template_tags.regroup import RegroupTagHandler
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -97,6 +98,51 @@ def render_both(tpl: str, ctx: dict) -> tuple[str, str]:
     djust_ctx = dict(ctx)
     djust_out = _rust.render_template_with_dirs(tpl, djust_ctx, [], _safe_keys(djust_ctx) or None)
     return django_out, djust_out
+
+
+def live_regroup_class() -> type:
+    """The `regroup` handler class the ENGINE will call.
+
+    NOT necessarily the `RegroupTagHandler` imported above, and that difference
+    was CI flake #2427.
+
+    `python/tests/test_custom_tag_return_escape_2379.py`'s handler audit
+    enumerates every registration by `importlib.reload`-ing each
+    `djust.template_tags.*` submodule. Reloading `…regroup` re-executes
+    `@register_assign("regroup")` on a NEW class object and registers a NEW
+    instance — permanently. Nothing restores it and nothing can: a reload is
+    not reversible.
+
+    So a module-level `from … import RegroupTagHandler` goes STALE the moment
+    that audit runs, and the spy below was patching a class the engine would
+    never call. It captured `[]` where it wanted `['"ab"', 'nope']` — an
+    assertion about a class object rather than about the engine's behaviour,
+    which is the shape #2420 had (`assert len(w) == 1` counting every warning
+    in the process).
+
+    Whether it reddens depends on xdist putting the audit on the same worker,
+    ahead of this test. Measured over the full three-root suite: at `-n 4`,
+    what CI's four-core runner gives, **3 of 3 runs failed** and the audit was
+    on the target's worker at line ~7,100 against the target's ~16,500 every
+    time. #2427 records two local `-n auto` runs (12 workers here) that did not
+    reproduce it, and a CI re-run of an unchanged commit that went green — the
+    same scheduler, a different draw.
+
+    `djust.template_tags._registered_handlers` is the Python-side mirror of the
+    Rust registry — `register_assign`'s decorator writes it on the line after
+    `register_assign_tag_handler`, with the SAME instance — and
+    `djust/template_tags/__init__.py` is not itself reloaded, so the dict
+    survives holding whatever was registered last. Reading the class off it is
+    what makes the assertion measure its own subject. (`_rust` exposes
+    `has_assign_tag_handler` but no getter, so this mirror is the closest
+    reachable answer to "what will the engine call".)
+
+    Only the SPY test needs this. `test_the_handler_iterates_with_pythons_own`
+    `_semantics` calls `_decode_source` directly, and a reloaded class runs the
+    same source — its subject is the code, not the wiring, so it is unaffected
+    either way and stays on the import.
+    """
+    return type(_LIVE_HANDLERS["regroup"])
 
 
 def assert_agrees(operand: str, ctx: dict) -> str:
@@ -265,16 +311,21 @@ class TestBothMechanismsAreReachable:
         string there. Asserted through a real render by giving the handler's
         `by` operand no match: what reaches `_decode_source` is what the
         grouping is built from.
+
+        The spy goes on `live_regroup_class()`, not on the `RegroupTagHandler`
+        this module imported — see that helper for the CI flake it closes
+        (#2427).
         """
+        handler_cls = live_regroup_class()
         captured: list[str] = []
-        original = RegroupTagHandler._decode_source
+        original = handler_cls._decode_source
 
         @classmethod  # type: ignore[misc]
         def spy(cls, expr, context):  # type: ignore[no-untyped-def]
             captured.append(expr)
             return original.__func__(cls, expr, context)  # type: ignore[attr-defined]
 
-        RegroupTagHandler._decode_source = spy  # type: ignore[assignment]
+        handler_cls._decode_source = spy  # type: ignore[assignment]
         try:
             _rust.render_template_with_dirs(
                 "{% regroup s by k as g %}[{{ g|length }}]", {"s": "ab"}, [], None
@@ -283,12 +334,55 @@ class TestBothMechanismsAreReachable:
                 "{% regroup nope by k as g %}[{{ g|length }}]", {"s": "ab"}, [], None
             )
         finally:
-            RegroupTagHandler._decode_source = original  # type: ignore[assignment]
+            handler_cls._decode_source = original  # type: ignore[assignment]
 
         assert captured == ['"ab"', "nope"], (
             "the resolved string must arrive JSON-quoted and the unresolved "
             f"token bare — that difference IS the fix's renderer half: {captured!r}"
         )
+
+    def test_the_spy_reaches_a_RE_REGISTERED_handler(self) -> None:
+        """#2427 as a test rather than as a comment.
+
+        The polluter is a real `importlib.reload`, which cannot be undone — a
+        test that performed one would become the next polluter for everything
+        scheduled after it on the same worker. So the shape is simulated by
+        registering an INDEPENDENT class object under `regroup`: same code, own
+        `_decode_source`, and deliberately NOT a subclass, because a subclass
+        would inherit a patch of `RegroupTagHandler` and hide the entire effect
+        — the simulation would then pass while measuring nothing.
+
+        This is the only test that can tell the fix from the bug: in a clean
+        process the imported class and the registered one are the same object,
+        so the method above passes either way. Gating `live_regroup_class` back
+        to `return RegroupTagHandler` reddens THIS one alone.
+        """
+        saved = _LIVE_HANDLERS["regroup"]
+        namespace = {
+            k: v for k, v in vars(RegroupTagHandler).items() if k not in ("__dict__", "__weakref__")
+        }
+        reloaded_cls = type("RegroupTagHandler", RegroupTagHandler.__bases__, namespace)
+        assert reloaded_cls is not RegroupTagHandler
+        assert not issubclass(reloaded_cls, RegroupTagHandler), (
+            "a subclass inherits a patch of the original and would make this "
+            "simulation vacuous — a reload produces a SIBLING"
+        )
+        assert "_decode_source" in vars(reloaded_cls), (
+            "the copy must own `_decode_source`, or patching the original still reaches it"
+        )
+
+        handler = reloaded_cls()
+        _rust.register_assign_tag_handler("regroup", handler)
+        _LIVE_HANDLERS["regroup"] = handler
+        try:
+            assert live_regroup_class() is reloaded_cls
+            # Every assertion of the method above, against the class the
+            # registry now holds.
+            self.test_the_renderer_hands_a_string_source_over_quoted()
+        finally:
+            _rust.register_assign_tag_handler("regroup", saved)
+            _LIVE_HANDLERS["regroup"] = saved
+        assert live_regroup_class() is type(saved), "the registry was not restored"
 
     @pytest.mark.parametrize(
         "expr,expected",
