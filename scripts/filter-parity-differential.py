@@ -1343,7 +1343,48 @@ def arg_cells():
 #: non-regression half: the fix converges both resolvers onto one helper, and
 #: these cells are what would go red if that convergence changed the answer on
 #: the side that was already correct.
-BUILTIN_NAMES = ["True", "False", "None"]
+#: The same axis carries the QUOTED and NUMERIC literals (#2376), for the same
+#: reason and one step further along: every cell outside this axis writes `p`
+#: as the expression, so the corpus could not construct a bare `{{ "x" }}` at
+#: all — and that is precisely where djust diverged. `Node::Variable` had NO
+#: literal arm of any kind, so `{{ "hello" }}`, `{{ 5 }}` and `{{ 5.5 }}` all
+#: resolved through the context, missed, and rendered the EMPTY STRING. The
+#: `{% if %}` / `{% with %}` / `{% firstof %}` shapes reached them only because
+#: `renderer::get_value_safe` carries its own literal arms — the same
+#: two-resolvers-one-blind split (#1646) that #2347 found for `True`.
+#:
+#: They also carry the SAFETY question the builtin names cannot: Django's
+#: `Variable.__init__` does `mark_safe(unescape_string_literal(var))`, so a
+#: quoted literal is `SafeData` and `{{ "<b>" }}` renders LIVE. A fix that
+#: resolves the literal without granting it renders `&lt;b&gt;` — a THIRD
+#: answer, neither the bug's nor Django's — so both cells must be on the axis
+#: at once. Composed through every filter for the re-taint half:
+#: `{{ "<b>"|upper }}` is ESCAPED in Django, because `upper` is registered
+#: `is_safe=False`.
+#:
+#: The hostile spelling is the template AUTHOR's own text, which is why it is
+#: not in `LIVE_FRAGMENTS` (these cells render over `s-plain`): Django emits it
+#: live too, so djust doing the same is parity, not permissiveness.
+BUILTIN_NAMES = [
+    "True",
+    "False",
+    "None",
+    '"<b>ok</b>"',
+    # Single-quoted, and deliberately free of SPACES: a quoted token carrying
+    # a space is a `smart_split` question rather than a literal one, and
+    # conflating the two would make this axis measure two things at once.
+    "'<script>alert(1)</script>'",
+    '"abc"',
+    # A quoted DIGIT string, which is a different cell from the bare number:
+    # `{{ "5"|add:1 }}` is 6 in Django because `add` coerces, and a
+    # recognizer that returned `Integer(5)` for the quoted form would agree
+    # there while being wrong about `{{ "5"|length }}`.
+    '"5"',
+    "5",
+    "5.5",
+    "-5",
+    "1e3",
+]
 BUILTIN_SHAPES = {
     "var": "{{ @NAME@ }}",
     "if": "{% if @NAME@ %}Y{% else %}N{% endif %}",

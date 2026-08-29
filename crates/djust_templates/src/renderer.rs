@@ -963,12 +963,32 @@ pub fn render_node_with_loader<L: TemplateLoader>(
         Node::Text(text) => Ok(text.clone()),
 
         Node::Variable(var_name, filter_specs, in_attr) => {
-            // `resolve` tries the normal value-stack path first, then
-            // falls back to `getattr` on any Py<PyAny> sidecar attached
+            // A LITERAL is decided before any lookup, exactly as Django does
+            // it (#2376). `Variable.__init__` runs at COMPILE time and a
+            // quoted or numeric token never becomes a `lookups` tuple at all,
+            // so a context key spelled `5` does NOT shadow `{{ 5 }}` — Django
+            // renders `5` there, and measured against 5.2.16 djust rendered
+            // the key's value. This arm had NO literal handling of any kind,
+            // which is why `{{ "hello" }}`, `{{ 5 }}` and `{{ 5.5 }}` all
+            // resolved through the context, missed, and rendered EMPTY.
+            //
+            // The bool is the grant: `Variable.__init__` `mark_safe`s the
+            // quoted branch, so `{{ "<b>" }}` is live markup in Django. It
+            // SEEDS the filter chain below rather than being OR-ed in at the
+            // end, so `{{ "<b>"|upper }}` re-taints and comes out escaped —
+            // which is what Django does, `upper` being `is_safe=False`.
+            //
+            // `resolve` (the miss path) tries the normal value-stack first,
+            // then falls back to `getattr` on any Py<PyAny> sidecar attached
             // to the context (e.g. Django model instances). The `?`
             // propagates exceptions raised inside an auto-called method
             // (ADR-024 Django parity); lookup misses stay `Ok(None)`.
-            let mut value = context.resolve(var_name)?.unwrap_or(Value::Missing);
+            let literal = django_literal(var_name);
+            let literal_safe = literal.as_ref().is_some_and(|(_, safe)| *safe);
+            let mut value = match literal {
+                Some((value, _)) => value,
+                None => context.resolve(var_name)?.unwrap_or(Value::Missing),
+            };
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             //
@@ -985,7 +1005,18 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // ESCAPED: `upper` is registered `is_safe=False` in Django
             // precisely because upper-casing `&lt;` yields `&LT;`, which every
             // browser still decodes to `<`.
-            let mut runtime_safe = context.is_safe(var_name);
+            //
+            // A quoted literal seeds it TRUE, and does so INSTEAD of the
+            // context lookup rather than in addition to it (#2376): the token
+            // is not a name, so `is_safe(name)` has nothing to answer about
+            // and OR-ing the two would be a second mechanism shadowing the
+            // first. `literal_safe` is false for a NUMBER — Django marks only
+            // the quoted branch.
+            let mut runtime_safe = if literal_safe {
+                true
+            } else {
+                context.is_safe(var_name)
+            };
             // Django's item granularity, seeded from the CONTEXT (#2287).
             // A view passing `[mark_safe(x), …]` has marked the ITEMS and not
             // the list, so `is_safe` above answers `false` for the container
@@ -1102,13 +1133,20 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 false_expr.as_str()
             };
 
-            let mut value = get_value(expr, context)?;
+            // `get_value_safe`, not `get_value`: the bool beside the value is
+            // what carries a quoted literal's grant (#2376). For every
+            // NON-literal expression this arm can see — it never contains a
+            // pipe, since the parser puts the filters in `filters` — the bool
+            // it returns IS `context.is_safe(expr)`, which is what this line
+            // read before, so nothing that resolved through the context
+            // changes answer.
+            let (mut value, seeded_safe) = get_value_safe(expr, context)?;
 
             // See the Variable arm: track the LAST filter's runtime safeness so
             // a custom filter that ``mark_safe()``s at runtime bypasses escaping
             // (#1660); a later plain filter re-taints. Seeded with the context's
             // own safety so the chain carries Django's input term (#2274).
-            let mut runtime_safe = context.is_safe(expr);
+            let mut runtime_safe = seeded_safe;
             // See the Variable arm: item-level safety, seeded from the context
             // (#2283, #2287) — the second of the three sites.
             let mut items_safe = context.items_are_safe(expr);
@@ -2901,6 +2939,138 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     Ok(get_value(condition, context)?.is_truthy())
 }
 
+/// Django's `Variable.__init__` LITERAL branch — the ONE place a bare token is
+/// recognized as a literal, and the ONE place the safety grant one carries is
+/// minted (#2376).
+///
+/// Returns `(value, is_safe)`, or `None` when the token is a variable LOOKUP.
+///
+/// # Why one function
+///
+/// djust had two resolvers that could see a bare token — `get_value_safe`
+/// (the `{% if %}` / `{% with %}` / `{% firstof %}` / `{% cycle %}` operand
+/// channel) and the `Node::Variable` / `Node::InlineIf` emit arms — and only
+/// the first had literal arms at all. So `{% if "<b>" %}` was right,
+/// `{% with q="<b>" %}` resolved, and `{{ "<b>" }}` rendered the EMPTY STRING:
+/// the text vanished rather than appearing escaped. `{{ 5 }}` and `{{ 5.5 }}`
+/// were empty for the same reason — the defect is the whole literal surface,
+/// not the quoted spelling the issue happened to name. Same
+/// two-resolvers-one-blind split #2347 found for `True` / `False` / `None`,
+/// and the cure is the same: state the rule once and call it from both.
+///
+/// # The grant
+///
+/// `Variable.__init__` ends its quoted branch with
+/// `self.literal = mark_safe(unescape_string_literal(var))`, so a quoted
+/// literal IS `SafeData` and `{{ "<b>" }}` renders LIVE markup in Django. That
+/// is why this returns a bool rather than a bare `Value`: resolving the
+/// literal WITHOUT the grant renders `&lt;b&gt;`, a third answer that is
+/// neither the bug's nor Django's. The two belong in one change and therefore
+/// in one function.
+///
+/// It is not a new attack surface. The string being marked is the TEMPLATE
+/// AUTHOR's own source text, never context data — a template built from user
+/// input is already an RCE, in Django exactly as here.
+///
+/// A NUMBER is not marked. Django only calls `mark_safe` on the quoted branch,
+/// and a number has no markup to protect anyway.
+///
+/// # Django's order, and why the `.` and `e` test comes first
+///
+/// ```text
+/// if "." in var or "e" in var.lower():
+///     self.literal = float(var)
+///     if var[-1] == ".":      # "2." is invalid
+///         raise ValueError
+/// else:
+///     self.literal = int(var)
+/// ```
+///
+/// The `e`/`.` gate is what keeps `inf` and `nan` — which BOTH `float()` and
+/// Rust's `f64` parser accept — from becoming literals: neither carries a `.`
+/// or an `e`, so both take the `int` arm, fail, and resolve as variables.
+/// Measured against Django 5.2.16: `{{ inf }}` renders empty in both engines.
+/// Dropping the gate and parsing `f64` first would silently turn a variable
+/// named `inf` into a float, which is why the gate is reproduced rather than
+/// simplified.
+///
+/// # Known narrower than Django, deliberately
+///
+/// Python's `int()` / `float()` accept digit separators (`1_000`) and
+/// non-ASCII digits; Rust's parsers do not. Those tokens stay variable
+/// lookups and render empty, which is what they did before this function
+/// existed — narrower is the direction a literal recognizer may fail in,
+/// because the alternative is inventing a value Django would not.
+fn django_literal(expr: &str) -> Option<(Value, bool)> {
+    if expr.contains('.') || expr.contains(['e', 'E']) {
+        // `"2."` is invalid — Django re-raises after the successful `float()`.
+        if !expr.ends_with('.') {
+            if let Ok(f) = expr.parse::<f64>() {
+                return Some((Value::Float(f), false));
+            }
+        }
+    } else if let Ok(i) = expr.parse::<i64>() {
+        return Some((Value::Integer(i), false));
+    } else if let Some(digits) = big_int_literal(expr) {
+        // Python's `int()` has no width, so `{{ 99999999999999999999999 }}`
+        // renders every digit in Django. Past `i64` that is a `Value::BigInt`,
+        // whose invariant is "`str(int)` — an optional `-` then ASCII digits",
+        // which `big_int_literal` establishes rather than assumes.
+        return Some((Value::BigInt(digits), false));
+    }
+
+    // The quoted literal. Django's `unescape_string_literal` requires a
+    // matching quote at BOTH ends; a lone `"` never arrives, because Django's
+    // own `FilterExpression` refuses to parse it (`Could not parse the
+    // remainder`) — measured, not assumed — so a two-character minimum is the
+    // real contract and the slice below cannot underflow.
+    let quote = expr.chars().next()?;
+    if (quote != '"' && quote != '\'') || expr.len() < 2 || !expr.ends_with(quote) {
+        return None;
+    }
+    let inner = &expr[quote.len_utf8()..expr.len() - quote.len_utf8()];
+    // `s[1:-1].replace(r"\<quote>", quote).replace(r"\\", "\\")`, in Django's
+    // order.
+    //
+    // The order is NOT observable, and that is measured rather than assumed:
+    // over every string on `{a, \, "}` up to length 6 the two orders differ
+    // for 113 of them, and Django's own `FilterExpression` parses ZERO — every
+    // distinguishing shape contains `\\"`, at which `strdq` terminates the
+    // constant and the remainder fails to parse. So there is deliberately no
+    // test that pins the order, and `test_the_unescape_order_is_unobservable`
+    // is the proof of why rather than the absence of one: gating this order
+    // off is a provable semantic no-op, not missing coverage.
+    //
+    // Django's order is kept anyway. A future lexer change that admitted the
+    // `\\"` shape would make it observable, and matching the reference
+    // implementation costs nothing.
+    let unescaped = inner
+        .replace(&format!("\\{quote}"), &quote.to_string())
+        .replace("\\\\", "\\");
+    Some((Value::String(unescaped), true))
+}
+
+/// `[-]digits` too large for `i64`, as [`Value::BigInt`] requires (#2260).
+///
+/// Only reached after the `i64` parse has failed, so a `Some` here really is
+/// "past `i64`". A leading `+` is STRIPPED rather than kept: `BigInt`'s
+/// `Display` writes its string back verbatim, and Django renders `int("+1…")`
+/// without the sign.
+fn big_int_literal(expr: &str) -> Option<String> {
+    let (sign, body) = match expr.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", expr.strip_prefix('+').unwrap_or(expr)),
+    };
+    if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // `int("007")` is `7`; keeping the zeros would render a number Django
+    // does not. Strip them, and keep one digit so `"000"` stays `"0"`.
+    let trimmed = body.trim_start_matches('0');
+    let body = if trimmed.is_empty() { "0" } else { trimmed };
+    Some(format!("{sign}{body}"))
+}
+
 fn get_value(expr: &str, context: &Context) -> Result<Value> {
     // Thin wrapper that discards the runtime-safe flag. Most callers
     // (condition operators, progress-bar math, etc.) only need the `Value`
@@ -3043,19 +3213,14 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         _ => {}
     }
 
-    if let Ok(i) = expr.parse::<i64>() {
-        return Ok((Value::Integer(i), false));
-    }
-
-    if let Ok(f) = expr.parse::<f64>() {
-        return Ok((Value::Float(f), false));
-    }
-
-    // String literal (remove quotes)
-    if (expr.starts_with('"') && expr.ends_with('"'))
-        || (expr.starts_with('\'') && expr.ends_with('\''))
-    {
-        return Ok((Value::String(expr[1..expr.len() - 1].to_string()), false));
+    // The numeric and quoted literals, through the ONE helper that recognizes
+    // them (#2376). This arm used to spell them inline — an `i64` parse, an
+    // `f64` parse, and a quote-strip that reported `false` for safety — while
+    // `Node::Variable` had no literal arm AT ALL. Two resolvers, one of them
+    // blind: `{% if "<b>" %}` was right and `{{ "<b>" }}` rendered the EMPTY
+    // STRING. Exactly #2347's shape, three literal kinds over.
+    if let Some(literal) = django_literal(expr) {
+        return Ok(literal);
     }
 
     // Last resort: the getattr walk over raw Python objects that
