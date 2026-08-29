@@ -854,12 +854,11 @@ fn apply_builtin_filter(
             apply_slice(value, slice_str)
         }
         "timesince" => {
-            // timesince filter: converts ISO datetime to "X minutes/hours/days ago" format
-            let datetime_str = value.to_string();
-            match format_timesince(&datetime_str) {
-                Ok(formatted) => Ok(Value::String(formatted)),
-                Err(_) => Ok(value.clone()), // If parsing fails, return original value
-            }
+            // The time between the value and the ARGUMENT, which defaults to
+            // now (#2344). The argument was discarded here until then, so
+            // `{{ then|timesince:other }}` silently answered "since now"
+            // whatever `other` was.
+            timesince_or_until(filter_name, value, arg, arg_was_quoted, false)
         }
         "add" => {
             // Django's `add` is a three-branch chain (#2203):
@@ -1163,12 +1162,9 @@ fn apply_builtin_filter(
             }
         }
         "timeuntil" => {
-            // timeuntil filter: converts ISO datetime to "in X minutes/hours/days" format
-            let datetime_str = value.to_string();
-            match format_timeuntil(&datetime_str) {
-                Ok(formatted) => Ok(Value::String(formatted)),
-                Err(_) => Ok(value.clone()), // If parsing fails, return original value
-            }
+            // The same computation as `timesince` with the operands swapped,
+            // and the same ARGUMENT rule (#2344).
+            timesince_or_until(filter_name, value, arg, arg_was_quoted, true)
         }
         "date" => {
             // date filter: formats datetime with format string
@@ -2484,31 +2480,198 @@ fn now_and_then(
     }
 }
 
-fn format_timesince(datetime_str: &str) -> Result<String> {
-    // `allow_time_only = false`: a bare time has no instant to measure from
-    // (#2227). Django raises there; this returns the input unchanged, which is
-    // djust's fail-soft convention for an unparseable value.
-    let (dt, aware, _time_only) =
-        parse_serialized_datetime(datetime_str, false).ok_or_else(|| {
-            DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
-        })?;
-    let (then, now) = now_and_then(dt, aware);
-    Ok(django_timesince(then, now))
+/// What the ARGUMENT of `timesince`/`timeuntil` says to measure against (#2344).
+///
+/// Django's argument is the comparison INSTANT, not a format or a width:
+///
+/// ```python
+/// def timesince_filter(value, arg=None):
+///     if not value: return ""
+///     try:
+///         if arg: return timesince(value, arg)
+///         return timesince(value)
+///     except (ValueError, TypeError):
+///         return ""
+/// ```
+///
+/// and `timesince` itself does
+/// `if now and not isinstance(now, datetime): now = datetime(now.year, ...)`,
+/// which is an **AttributeError** — NOT in the caught pair — for anything that
+/// is not a date. So the three outcomes below are Django's three, and nothing
+/// else.
+enum ComparisonInstant {
+    /// The argument was absent or FALSY. Django's `if arg:` / `if not now:`
+    /// both fall through to the wall clock.
+    Now,
+    /// A parsed instant, already in the value's own frame.
+    At(chrono::NaiveDateTime),
+    /// One side aware and the other naive. `now - d` is a **TypeError**, which
+    /// the filter DOES catch, so Django renders the empty string.
+    Incomparable,
 }
 
-fn format_timeuntil(datetime_str: &str) -> Result<String> {
-    // See the note in `format_timesince` on `allow_time_only = false` (#2227).
-    let (dt, aware, _time_only) =
-        parse_serialized_datetime(datetime_str, false).ok_or_else(|| {
-            DjangoRustError::TemplateError(format!("Invalid datetime format: {datetime_str}"))
-        })?;
-    let (then, now) = now_and_then(dt, aware);
-    // Django's `timeuntil` is `timesince(d, now, reversed=True)` — the same
-    // computation with the arguments swapped. A past value yields `0 minutes`.
-    if then <= now {
-        return Ok(zero_minutes());
+/// Is this argument FALSY in the sense Django's `if arg:` means (#2344)?
+///
+/// The argument reaches the dispatch table as a STRING — a quoted literal
+/// verbatim, or a resolved context value through `Value`'s `Display` — so
+/// Python's truthiness has to be recovered from the text plus the quoting hint.
+/// A QUOTED argument is a `str`, and every non-empty `str` is truthy: that is
+/// why `{{ p|timesince:"0" }}` raises in Django while `{{ p|timesince:0 }}`
+/// measures from now, one character of template syntax apart. `arg_was_quoted`
+/// is the whole of that distinction, the same term `add` and `floatformat`
+/// carry.
+///
+/// Unquoted, every falsy spelling `Display` can produce is here — and `Display`
+/// has TWO modes, which is easy to miss because only one of them is the
+/// default. `django_value_repr` (on by default, #2203) spells a bool
+/// `True`/`False`; `legacy_display` spells it Rust's `true`/`false` and renders
+/// `None` as the empty string. Both spellings are accepted, because a rule that
+/// only knew the default would answer differently under a flag whose whole
+/// point is rendering parity.
+///
+/// So: the empty string (`Value::String("")`, `Value::Missing`, and legacy
+/// `None`), `None`, `False`/`false`, a numeric zero in any spelling, and the
+/// empty containers.
+///
+/// What is NOT recoverable, in either mode, is a value whose `Display` text is
+/// shared by a truthy and a falsy object. `legacy_display` renders EVERY
+/// sequence as `[List]`, so an empty list is indistinguishable from a full one
+/// there — and both are non-dates, so Django raises for one and measures from
+/// now for the other. `TestTheFalsinessResidueIsNamed` states that rather than
+/// hoping it away, and pins the `Display` arm enumeration so a new variant has
+/// to be considered here.
+fn timesince_arg_is_falsy(arg: &str, arg_was_quoted: bool) -> bool {
+    if arg.is_empty() {
+        return true; // `""` is falsy whether it was quoted or not.
     }
-    Ok(django_timesince(now, then))
+    if arg_was_quoted {
+        return false; // Every other `str` is truthy to Python.
+    }
+    matches!(
+        arg,
+        "None"
+            | "False"
+            | "false"
+            | "[]"
+            | "{}"
+            | "()"
+            // An EMPTY dict VIEW (#2340). `bool({}.items())` is False, and
+            // `Display` spells the three views by name. Reached by
+            // `{{ then|timesince:d.items }}` on an empty dict, which is an
+            // ordinary template line.
+            | "dict_items([])"
+            | "dict_keys([])"
+            | "dict_values([])"
+    ) || python_float(arg).is_some_and(|f| f == 0.0)
+}
+
+/// The error a truthy non-date argument implies, worded once (#2344).
+///
+/// Two call sites — the quoted short-circuit and the parse failure — and one
+/// definition, because two copies of a rule is the shape this filter pair was
+/// already an instance of.
+fn non_date_argument_error(filter_name: &str, arg: &str) -> DjangoRustError {
+    DjangoRustError::TemplateError(format!(
+        "filter '{filter_name}' compares against its argument, and {arg:?} is not a \
+         date or datetime — Django raises AttributeError here, past its \
+         except-(ValueError, TypeError)"
+    ))
+}
+
+fn timesince_comparison_instant(
+    filter_name: &str,
+    arg: Option<&str>,
+    arg_was_quoted: bool,
+    value_dt: DateTime<chrono::FixedOffset>,
+    value_aware: bool,
+) -> Result<ComparisonInstant> {
+    let Some(raw) = arg else {
+        return Ok(ComparisonInstant::Now);
+    };
+    if timesince_arg_is_falsy(raw, arg_was_quoted) {
+        return Ok(ComparisonInstant::Now);
+    }
+    // A QUOTED argument is a `str`, and Django accepts NO string here — not
+    // even a date-shaped one, measured: `{{ p|timesince:"2020-01-01 15:30:00" }}`
+    // is `AttributeError: 'SafeString' object has no attribute 'year'`.
+    //
+    // The rest of this function reads a date-SHAPED string as a datetime, and
+    // that is not an inconsistency: it exists because a Python `datetime`
+    // crosses into Rust as a string and has no other spelling — the same
+    // convention the VALUE side has carried since #2203. A quoted literal is
+    // authored template text that never came from Python, so the convention has
+    // nothing to justify for it and Django's exact answer applies.
+    if arg_was_quoted {
+        return Err(non_date_argument_error(filter_name, raw));
+    }
+    // Truthy and not a date: Django's `now.year` raises AttributeError, which
+    // `except (ValueError, TypeError)` does not catch. A raise here rather than
+    // a plausible-looking duration is the whole point of #2344 — the previous
+    // arms discarded the argument entirely, so `{{ then|timesince:"whenever" }}`
+    // silently answered "since now".
+    let Some((arg_dt, arg_aware, _time_only)) = parse_serialized_datetime(raw, false) else {
+        return Err(non_date_argument_error(filter_name, raw));
+    };
+    if arg_aware != value_aware {
+        // Django reconciles two AWARE operands with `now.astimezone(d.tzinfo)`
+        // and does nothing at all for a mixed pair, so the subtraction raises
+        // TypeError — caught, and the filter renders "".
+        return Ok(ComparisonInstant::Incomparable);
+    }
+    Ok(ComparisonInstant::At(if value_aware {
+        arg_dt.with_timezone(value_dt.offset()).naive_local()
+    } else {
+        arg_dt.naive_utc()
+    }))
+}
+
+/// `timesince` and `timeuntil`, which differ only in the direction (#2344).
+///
+/// One body, because they are one computation in Django too — `timeuntil(d,
+/// now)` is `timesince(d, now, reversed=True)` — and because the argument rule
+/// they share is exactly the kind of thing that drifts when it is written twice
+/// (#1646). Ordering matters and is Django's:
+///
+/// 1. the VALUE is read first. Django's `timesince` normalizes `d` before it
+///    touches `now`, and an unreadable value here falls soft to the value
+///    unchanged (djust's convention, #2227) WITHOUT the argument getting to
+///    decide anything. Same ordering rule `floatformat` carries (#2328).
+/// 2. then the argument, whose three outcomes are [`ComparisonInstant`]'s.
+fn timesince_or_until(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    arg_was_quoted: bool,
+    reversed: bool,
+) -> Result<Value> {
+    let datetime_str = value.to_string();
+    // `allow_time_only = false`: a bare time has no instant to measure from
+    // (#2227). Django raises there; this returns the input unchanged.
+    let Some((dt, aware, _time_only)) = parse_serialized_datetime(&datetime_str, false) else {
+        return Ok(value.clone());
+    };
+    let (then, now) =
+        match timesince_comparison_instant(filter_name, arg, arg_was_quoted, dt, aware)? {
+            ComparisonInstant::Now => now_and_then(dt, aware),
+            ComparisonInstant::At(instant) => (
+                if aware {
+                    dt.naive_local()
+                } else {
+                    dt.naive_utc()
+                },
+                instant,
+            ),
+            // Django's caught TypeError: the filter renders "".
+            ComparisonInstant::Incomparable => return Ok(Value::String(String::new())),
+        };
+    if !reversed {
+        return Ok(Value::String(django_timesince(then, now)));
+    }
+    // A value that is not in the future yields `0 minutes`.
+    if then <= now {
+        return Ok(Value::String(zero_minutes()));
+    }
+    Ok(Value::String(django_timesince(now, then)))
 }
 
 /// The NON-BREAKING SPACE Django joins a file size to its unit with.

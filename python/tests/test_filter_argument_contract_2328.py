@@ -46,10 +46,12 @@ not (#1859).
 
 What is deliberately NOT closed here
 ------------------------------------
-* ``timesince`` / ``timeuntil`` ignore their argument ENTIRELY — Django uses it
-  as the comparison instant. Making an unparseable one raise while a VALID one
-  is still discarded would be a half-fix, so the whole argument is left to
-  #2344.
+* ``timesince`` / ``timeuntil`` ignored their argument ENTIRELY when this was
+  written — Django uses it as the comparison instant — so making an unparseable
+  one raise while a VALID one was still discarded would have been a half-fix,
+  and the whole argument was left to #2344. **#2344 closed it**, the pin below
+  went red exactly as intended, and the sweep now covers all **29**. Their rows
+  are gone rather than relaxed, which is the point of having had them.
 * ``add``, ``stringformat`` and ``yesno`` produce a different STRING for an
   unparseable argument, for reasons that are not ``int()`` — a three-branch
   fallback chain, an invalid printf spec and an arity check respectively. They
@@ -140,13 +142,18 @@ VALUES: dict[str, Any] = {
     "default_if_none": None,
 }
 
-#: The only two of the 29 that still disagree with Django on whether an
-#: unparseable argument RAISES. Both for the same reason, and it is not a
-#: parsing reason: the argument is not read at all.
-RAISE_BIT_NOT_CLOSED = {
-    "timesince": "the argument (a comparison instant) is never read (#2344)",
-    "timeuntil": "the argument (a comparison instant) is never read (#2344)",
-}
+#: EMPTY since #2344, and kept as a named place rather than deleted: an
+#: exemption is how a filter leaves this sweep, and a reviewer adding one should
+#: find the mechanism (and :meth:`TestTheMeasurementThatScopedTheIssue.
+#: test_every_exemption_is_still_divergent`, which fails the moment a row here
+#: becomes true) rather than inventing a second one.
+#:
+#: It held ``timesince`` and ``timeuntil`` until #2344, for a reason that was not
+#: a parsing reason: the argument was not read at all, so making an UNPARSEABLE
+#: one raise while a VALID one was still discarded would have been a half-fix —
+#: strictly worse than the honest "the argument does nothing", because it would
+#: have looked handled.
+RAISE_BIT_NOT_CLOSED: dict[str, str] = {}
 
 #: Three filters agree with Django on the raise bit and still produce a
 #: different STRING, because their unparseable-argument behaviour is governed
@@ -183,7 +190,9 @@ class TestTheMeasurementThatScopedTheIssue:
         assert len(django_argument_filters()) == 29
 
     def test_an_unparseable_quoted_literal_agrees_on_the_raise_bit(self) -> None:
-        """27 of the 29, including the 8 that used to be Django-raises-only."""
+        """All 29 since #2344, including the 8 that used to be
+        Django-raises-only and the 2 that were exempt until the argument was
+        read at all."""
         disagreed = []
         for name in django_argument_filters():
             if name in RAISE_BIT_NOT_CLOSED:
@@ -195,12 +204,29 @@ class TestTheMeasurementThatScopedTheIssue:
                 disagreed.append(f"{name}: django_raises={dj} djust_raises={du}")
         assert not disagreed, "\n".join(disagreed)
 
-    def test_the_sweep_covers_all_but_two(self) -> None:
-        assert len(django_argument_filters()) - len(RAISE_BIT_NOT_CLOSED) == 27
+    def test_the_sweep_covers_every_argument_taking_builtin(self) -> None:
+        """29 of 29 since #2344. Derived, so a Django release that adds an
+        argument-taking filter moves this rather than leaving it stale."""
+        assert len(django_argument_filters()) == 29
+        assert not RAISE_BIT_NOT_CLOSED, (
+            f"{sorted(RAISE_BIT_NOT_CLOSED)} are exempt from the raise sweep. That is "
+            "allowed, but the count above has to move with it and the exemption needs "
+            "a reason that is not 'it disagrees'."
+        )
+        assert len(django_argument_filters()) - len(RAISE_BIT_NOT_CLOSED) == 29
 
-    def test_the_two_exemptions_really_are_still_divergent(self) -> None:
+    def test_every_exemption_is_still_divergent(self) -> None:
         """Non-vacuity: a stale exemption is a hole in the sweep above, so if
-        one of these is fixed elsewhere the row must go rather than linger."""
+        one is fixed elsewhere the row must go rather than linger.
+
+        This is the test #2344 was written to fail, and it did: the moment
+        ``timesince``/``timeuntil`` started reading their argument, the two rows
+        stopped being true and had to be deleted rather than relaxed. It is
+        vacuous today because the dict is empty, and that is the correct
+        resting state — it is the guard for the next row, not a pin on the two
+        that are gone. The property it enforces is covered from the other side
+        by the sweep above, which now includes both names.
+        """
         still_divergent = [
             name
             for name in RAISE_BIT_NOT_CLOSED
