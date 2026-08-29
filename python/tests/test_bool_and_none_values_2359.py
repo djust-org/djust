@@ -57,12 +57,13 @@ the obvious mistake, and it is measured here rather than inferred.
 
 What this deliberately does NOT change
 ---------------------------------------
-* **``{% for %}`` over a non-iterable** — Django raises ``TypeError`` (a 500);
-  djust renders the ``{% empty %}`` branch. Making djust 500 is a real
-  product decision with a blast radius far past the bools (an ``int``, a
-  ``float`` and a ``Decimal`` all raise in Django too), and it is not the
-  less-permissive direction in the sense the rest of this change is. Filed
-  separately; pinned in ``TestIteratingANonIterableIsNamedNotFixed``.
+* **``{% for %}`` over a non-iterable** — CLOSED by #2382, and the class this
+  file named is now a parity assertion rather than a limit. It was left out of
+  #2359 because making djust 500 is a product decision with a blast radius far
+  past the bools (an ``int``, a ``float`` and a ``Decimal`` all raise in Django
+  too); it was decided the way #2328, #2387 and #2400 were decided, which is
+  Django's answer in development and in production alike. See
+  ``TestIteratingANonIterableIsRefusedByBoth``.
 * **The date wire residue** — ``Value`` has no date variant, so a Python
   ``date`` reaches this renderer as its ISO string. That is why djust parses
   date strings at all, and it is why ``{{ "2020-01-01"|date }}`` cannot be
@@ -393,23 +394,58 @@ class TestPluralizeIsDjangosFourAnswers:
 # ===========================================================================
 
 
-class TestIteratingANonIterableIsNamedNotFixed:
-    """``{% for x in True %}``: Django 500s, djust renders ``{% empty %}``.
+class TestIteratingANonIterableIsRefusedByBoth:
+    """``{% for x in True %}``: BOTH engines refuse (#2382, closed).
 
-    Mechanism 4 of #2359, deliberately out of scope. Making djust raise is a
-    product decision with a blast radius far past the bools — an ``int``, a
-    ``float`` and a ``Decimal`` all raise in Django too — and it is the one
-    row of this issue where djust rendering LESS is not the answer, because
-    what Django renders is an error page. Filed separately; pinned here so it
-    is a named limit rather than a silent one.
+    Mechanism 4 of #2359, deliberately out of scope THERE and closed on its
+    own. This class was ``TestIteratingANonIterableIsNamedNotFixed`` and its
+    own docstring said it would go red the day the divergence closed; it is
+    inverted in place rather than deleted, because the six value shapes are
+    the evidence that the class is about non-iterables and not about
+    falsiness, and that is still worth asserting from the other side.
+
+    The exception CLASS still differs — every djust template error crosses
+    PyO3 as a ``RuntimeError`` — so the assertion is on the MESSAGE, which
+    djust now carries verbatim under a ``Template error: `` prefix.
     """
 
     @pytest.mark.parametrize("value", [True, False, 42, 0, 1.5, Decimal("2.5")])
-    def test_django_raises_and_djust_renders_the_empty_branch(self, value) -> None:
+    def test_both_engines_refuse(self, value) -> None:
         src = "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}"
         d, r = both(src, {"p": value})
         assert d == "<<EXC TypeError>>", f"Django moved for {value!r}: {d!r}"
-        assert r == "E", f"{value!r}: djust now renders {r!r}"
+        assert r == "<<EXC RuntimeError>>", f"{value!r}: djust now renders {r!r}"
+
+    @pytest.mark.parametrize(
+        ("value", "type_name"),
+        [
+            (True, "bool"),
+            (False, "bool"),
+            (42, "int"),
+            (0, "int"),
+            (12345678901234567890, "int"),
+            (1.5, "float"),
+            (Decimal("2.5"), "decimal.Decimal"),
+        ],
+    )
+    def test_the_message_is_djangos_own(self, value, type_name) -> None:
+        """CPython's wording, and the TYPE NAME is Python's rather than the
+        Rust variant's — a `Value::BigInt` is a Python `int`, and a `Decimal`
+        is spelled with its module because `decimal` is not a builtin."""
+        src = "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}"
+        expected = f"'{type_name}' object is not iterable"
+        with pytest.raises(Exception) as django_exc:
+            DjangoTemplate(src).render(DjangoContext({"p": value}))
+        assert str(django_exc.value) == expected, str(django_exc.value)
+        with pytest.raises(Exception) as djust_exc:
+            _rust.render_template(src, {"p": value})
+        assert str(djust_exc.value).endswith(expected), str(djust_exc.value)
+
+    def test_the_refusal_never_puts_the_operand_on_the_page(self) -> None:
+        src = "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}"
+        with pytest.raises(Exception) as exc:
+            _rust.render_template(src, {"p": 42})
+        assert "42" not in str(exc.value), str(exc.value)
 
     def test_none_is_NOT_in_this_class(self) -> None:
         """Django resolves a `None` operand to the empty branch rather than
