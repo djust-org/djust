@@ -316,34 +316,103 @@ class TestTheMissesThatMustStayMisses:
         assert r == "", f"{src} on {ctx!r}: djust now renders {r!r} where Django renders ''"
 
 
-class TestTheStringIndexStepIsNamedNotFixed:
-    """Django's step 3 subscripts a ``str``; djust's does not (#2373).
+class TestTheStringIndexStepIsCLOSED:
+    """Django's step 3 subscripts a ``str``, and so does djust now (#2373).
 
-    ``{{ s.0 }}`` on ``"abc"`` is ``'a'`` in Django and empty here. Closing it
-    needs an OWNED return — the character is constructed, not borrowed — which
-    is a return-type change across every ``Context::get`` caller rather than an
-    arm in ``lookup_segment``'s ``match``. Scoped out of #2371 deliberately and
-    filed separately; pinned here so it is a named limit rather than a silent
-    one, and so it goes red the day someone closes it.
+    This class asserted the OPPOSITE — ``django == 'a'`` and ``djust == ''`` —
+    and said "if this is the #2373 fix, delete this class and add the cell to
+    ``TestTheThreeStepsAndTheirOrder``". The cells are kept HERE instead,
+    turned around, because the reason they were excluded is worth keeping next
+    to them: the exclusion's stated premise, that closing this meant widening
+    ``Context::get``'s return type across all of its callers, was **wrong**.
+    ``Context::resolve`` already returns an owned ``Value``, and it is the door
+    every operand site reaches — so the step is one small helper beside
+    ``Context::dict_view``, which exists for exactly the same reason in exactly
+    the same place, and ``Context::get``'s signature is untouched.
     """
 
     @pytest.mark.parametrize(
-        ("src", "ctx", "django_says"),
+        ("src", "ctx", "expected"),
         [
             ("{{ s.0 }}", {"s": "abc"}, "a"),
+            # BY CODE POINT, not by byte: a byte index would split `é` in half.
             ("{{ s.1 }}", {"s": "héllo"}, "é"),
+            ("{{ s.2 }}", {"s": "héllo"}, "l"),
             ("{{ d.a.0 }}", {"d": {"a": "abc"}}, "a"),
+            # A character is itself a `str`, so step 3 runs again.
+            ("{{ s.0.0 }}", {"s": "abc"}, "a"),
+            # Out of range, and a non-numeric segment: both empty, both engines.
+            ("{{ s.9 }}", {"s": "abc"}, ""),
+            ("{{ s.x }}", {"s": "abc"}, ""),
         ],
     )
-    def test_django_indexes_the_string_and_djust_renders_empty(
-        self, src: str, ctx: dict, django_says: str
+    def test_djust_indexes_the_string_exactly_as_django_does(
+        self, src: str, ctx: dict, expected: str
     ) -> None:
         d, r = both(src, ctx)
-        assert d == django_says, f"Django moved: {src} on {ctx!r} is now {d!r}"
-        assert r == "", (
-            f"{src} now renders {r!r} — if this is the #2373 fix, delete this "
-            "class and add the cell to TestTheThreeStepsAndTheirOrder"
-        )
+        assert d == expected, f"Django moved: {src} on {ctx!r} is now {d!r}"
+        assert r == d, f"{src} on {ctx!r}: django {d!r}, djust {r!r}"
+
+    @pytest.mark.parametrize("src", ["{{ d.items.0 }}", "{{ d.keys.0 }}", "{{ d.values.0 }}"])
+    def test_a_dict_view_is_still_not_subscriptable(self, src: str) -> None:
+        # Python's `dict_items` raises on `[0]`, so both engines render empty —
+        # and the new step must not accidentally reach it. The prefix
+        # `d.items` is not a `String`, and `items` does not parse as an index.
+        d, r = both(src, {"d": {"a": 1, "b": 2}})
+        assert (d, r) == ("", ""), (d, r)
+
+    def test_a_character_of_a_MARKED_string_is_escaped_by_both(self) -> None:
+        """The safety direction, measured rather than reasoned about.
+
+        ``SafeString`` overrides ``__add__``, not ``__getitem__``, so
+        ``mark_safe("<b>")[0]`` is a plain ``str`` and DJANGO escapes it. And
+        ``_collect_safe_keys`` never descends into a ``str``, so ``safe_keys``
+        holds no per-character path and djust escapes it too. This step adds no
+        grant, and here is the cell that would show it if it did.
+        """
+        from django.utils.safestring import mark_safe
+
+        from djust.mixins.rust_bridge import _collect_safe_keys
+
+        ctx = {"s": mark_safe("<b>")}
+        keys = _collect_safe_keys(ctx["s"], "s")
+        # `render_template` carries no `safe_keys` channel at all, so this
+        # cell has to go through `render_template_with_dirs` — the only entry
+        # point that does. Using `both()` here would measure djust with the
+        # mark DROPPED and prove nothing about the grant.
+        django_out = DjangoTemplate("{{ s.0 }}").render(DjangoContext(dict(ctx)))
+        djust_out = _rust.render_template_with_dirs("{{ s.0 }}", ctx, [], keys)
+        assert django_out == "&lt;", django_out
+        assert djust_out == django_out, (django_out, djust_out)
+
+        # The control, and it is what makes the assertion above non-vacuous:
+        # the WHOLE marked string IS live in both, so the escape above is the
+        # SLICE losing the mark rather than the mark never arriving.
+        django_out = DjangoTemplate("{{ s }}").render(DjangoContext(dict(ctx)))
+        djust_out = _rust.render_template_with_dirs("{{ s }}", ctx, [], keys)
+        assert (django_out, djust_out) == ("<b>", "<b>"), (django_out, djust_out)
+
+    @pytest.mark.parametrize(
+        ("src", "expected"),
+        [
+            ("{% if s.0 %}Y{% else %}N{% endif %}", "Y"),
+            ("{% with q=s.0 %}{{ q }}{% endwith %}", "a"),
+            ("{% for x in s.0 %}{{ x }}{% empty %}E{% endfor %}", "a"),
+            ("{% firstof s.0 %}", "a"),
+            ("{{ s.0|upper }}", "A"),
+        ],
+    )
+    def test_every_operand_channel_reaches_it(self, src: str, expected: str) -> None:
+        """One helper, called from `Context::resolve` — so every channel gets it.
+
+        `{{ }}` calls `resolve` directly; `{% if %}` / `{% with %}` /
+        `{% for %}` / `{% firstof %}` reach it as `get_value_safe`'s last arm.
+        If the step had been put anywhere narrower these would disagree, which
+        is the #1646 shape this fix is avoiding rather than creating.
+        """
+        d, r = both(src, {"s": "abc"})
+        assert d == expected, f"Django moved: {src} is now {d!r}"
+        assert r == d, (d, r)
 
 
 class TestTheLexerLevelDivergenceIsNamedNotFixed:
@@ -436,10 +505,12 @@ def _random_path(rng: random.Random) -> str:
 def _walks_through_a_string_index(root, path: str) -> bool:
     """Whether resolving *path* would use Django's step 3 on a ``str``.
 
-    That is the whole of the #2373 gap, computed by running Django's own three
-    steps rather than by guessing from the outputs — so the sweep below can
-    separate "the known, named limit" from "a real divergence" mechanically
-    instead of by a heuristic on the rendered text.
+    That was the whole of the #2373 gap, computed by running Django's own three
+    steps rather than by guessing from the outputs. #2373 is CLOSED, so this no
+    longer EXCUSES a divergence — the sweep now requires those cells to agree
+    like every other, and uses this only to assert it builds the shape at all.
+    A fix whose sweep never constructs the input it fixes is unmeasured, which
+    is the same reading the count had when it bounded an exclusion.
     """
     current = root
     for bit in path.split(".")[1:]:
@@ -476,7 +547,7 @@ class TestARandomisedDifferentialOverTheSegmentSurface:
         rng = random.Random(20371)
         checked = 0
         resolved = 0
-        known_gap = 0
+        string_index_cells = 0
         mismatches: list[str] = []
         for _ in range(3000):
             value = _random_container(rng, rng.randint(1, 3))
@@ -487,10 +558,9 @@ class TestARandomisedDifferentialOverTheSegmentSurface:
             checked += 1
             if d != "[]":
                 resolved += 1
-            if d == r:
-                continue
             if _walks_through_a_string_index(value, path):
-                known_gap += 1
+                string_index_cells += 1
+            if d == r:
                 continue
             mismatches.append(f"{path} on {value!r}: django={d!r} djust={r!r}")
         assert checked == 3000
@@ -500,10 +570,13 @@ class TestARandomisedDifferentialOverTheSegmentSurface:
             f"only {resolved} of {checked} cells resolved to anything — the "
             "sweep is not reaching the surface it claims to measure"
         )
-        assert known_gap >= 10, (
-            f"the #2373 string-index classifier fired {known_gap} times — if "
-            "it is 0 the sweep never builds the shape it excuses, and the "
-            "exclusion is unfalsifiable rather than bounded"
+        # This bounded an EXCLUSION until #2373 closed; it now bounds
+        # COVERAGE. Same number, opposite meaning: those cells are required to
+        # agree along with every other, and if the sweep stopped constructing
+        # them the fix would be unmeasured here rather than excused here.
+        assert string_index_cells >= 10, (
+            f"the string-index shape was built {string_index_cells} times — if "
+            "it is 0 the sweep never exercises what #2373 closed"
         )
         assert not mismatches, (
             f"{len(mismatches)} of {checked} cells diverge; first 10:\n"

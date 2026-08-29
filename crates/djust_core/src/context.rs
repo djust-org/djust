@@ -75,15 +75,15 @@ pub fn template_builtin(name: &str) -> Option<Value> {
 /// `dict_items` is not subscriptable, Django's `current[int(bit)]` raises on
 /// it, and `{{ d.items.0 }}` must stay empty on both engines.
 ///
-/// **Not covered, and named rather than silent (#2373).** Django's step 3
-/// subscripts a `str` too — `{{ s.0 }}` on `"abc"` is `'a'` there and empty
-/// here. Closing it needs an OWNED return (the character is constructed, not
-/// borrowed), which is a return-type change across every
-/// [`Context::get`] caller rather than an arm in this `match`. Scoped out of
-/// #2371 deliberately; pinned in
-/// `python/tests/test_numeric_path_segment_2371.py::
-/// TestTheStringIndexStepIsNamedNotFixed` so it cannot be mistaken for
-/// something this change was supposed to have covered.
+/// **Django's step 3 over a `str` is NOT here, and that is deliberate**
+/// (#2373). `{{ s.0 }}` on `"abc"` is `'a'` in Django, and a character sliced
+/// out of a string is CONSTRUCTED — it has nowhere to be borrowed from, so it
+/// cannot be an arm of this `match` without widening this function's return
+/// type and every [`Context::get`] caller's with it. It lives in
+/// [`Context::string_index`] instead, which [`Context::resolve`] calls beside
+/// [`Context::dict_view`] — both are value-stack shapes that must return an
+/// owned `Value`, and `resolve` already does. `Context::get`'s signature is
+/// untouched.
 fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
     // (1) mapping item access, with the segment as a STRING. `ObjectKey`
     //     hashes its `Str` variant exactly as the `str` does, so this is the
@@ -554,6 +554,92 @@ impl Context {
     /// Order is the `IndexMap`'s insertion order — Python's dict order. A
     /// `HashMap` here would make `{% for k in d %}` nondeterministic across
     /// renders and thrash the VDOM.
+    /// Django's third lookup step, applied to a `str` (#2373).
+    ///
+    /// `Variable._resolve_lookup`'s step 3 is `current[int(bit)]`, and Python
+    /// subscripts a `str` — so `{{ s.0 }}` on `"abc"` is `'a'` in Django and
+    /// was the empty string here.
+    ///
+    /// # Why this is not an arm in `lookup_segment`
+    ///
+    /// It cannot be. Every other arm of that helper returns a BORROW into the
+    /// value stack (`&'a Value`), and a character sliced out of a string is
+    /// CONSTRUCTED — it has nowhere to be borrowed from. #2373 was scoped out
+    /// of #2371 on the reading that closing it meant widening
+    /// [`Context::get`]'s return type across all of its callers.
+    ///
+    /// **That reading was wrong, and checking it is what made this small.**
+    /// [`Context::resolve`] ALREADY returns an owned `Value`, and it is the
+    /// door every operand site reaches: `{{ }}` calls it directly, and
+    /// `{% if %}` / `{% with %}` / `{% for %}` / `{% firstof %}` / `{% cycle %}`
+    /// reach it as `renderer::get_value_safe`'s last arm. So the step belongs
+    /// here, beside [`Context::dict_view`] — which exists for exactly the same
+    /// reason, in exactly the same place, and whose doc comment says so:
+    /// *"returns an owned `Value`, which is why this cannot live inside
+    /// `Context::get`"*. `Context::get`'s signature is untouched.
+    ///
+    /// # By CODE POINT
+    ///
+    /// `"héllo"[1]` is `'é'` in Python. `chars().nth()` is Unicode scalar
+    /// values, which is Python's `str` indexing; a byte index would split a
+    /// two-byte character in half and `str::len()` would measure the wrong
+    /// bound.
+    ///
+    /// # The recursion
+    ///
+    /// `{{ s.0.0 }}` is `'a'` in Django — a character is itself a `str`, and
+    /// step 3 runs again. The prefix is therefore resolved through `get` OR
+    /// through this function, not `get` alone.
+    ///
+    /// # What it deliberately does not reach
+    ///
+    /// * a **negative** index. `{{ l.-1 }}` is a Django PARSE error, pinned in
+    ///   `test_numeric_path_segment_2371.py::
+    ///   TestTheLexerLevelDivergenceIsNamedNotFixed`, so `parse::<usize>` is
+    ///   the right width and not an oversight.
+    /// * a **`Value::DictView`**. `dict_items` is not subscriptable in Python,
+    ///   `{{ d.items.0 }}` is empty on both engines, and the `rsplit_once`
+    ///   below leaves `d.items` as the prefix — which `get` misses and this
+    ///   function refuses, because `items` does not parse as an index.
+    /// * the **raw-Python sidecar**, which needs nothing: its walk already
+    ///   ends in `current.get_item(idx)` and Python's `str.__getitem__` has
+    ///   answered there since #1997. That asymmetry — one walk with Django's
+    ///   step 3 for strings and its twin without — IS this bug (#1646).
+    ///
+    /// # Safety
+    ///
+    /// A character sliced out of a `mark_safe`d string is a plain `str` in
+    /// Django (`SafeString` overrides `__add__`, not `__getitem__`), so Django
+    /// ESCAPES it — and `_collect_safe_keys` never descends into a `str`, so
+    /// `safe_keys` holds no per-character path and djust escapes it too. The
+    /// two agree, and this adds no grant.
+    fn string_index(&self, key: &str) -> Option<Value> {
+        let (prefix, last) = key.rsplit_once('.')?;
+        let index = last.parse::<usize>().ok()?;
+        let base = match self.get(prefix) {
+            Some(Value::String(s)) => s.clone(),
+            // A non-string prefix is not this step's business — `get` has
+            // already tried every arm that applies to it.
+            //
+            // Gating THIS arm off (letting it fall into the recursion below)
+            // survives the suite, and that is a provable no-op rather than
+            // missing coverage: the two branches are mutually exclusive.
+            // `string_index(prefix)` can only answer when `prefix`'s own
+            // prefix is a `String` — and `lookup_segment`'s index arm admits
+            // `List` / `Tuple` / `Object` and NOT `String`, so `get(prefix)`
+            // is `None` whenever that holds. The arm is kept because it states
+            // the intent without depending on that invariant being noticed.
+            Some(_) => return None,
+            None => match self.string_index(prefix)? {
+                Value::String(s) => s,
+                _ => return None,
+            },
+        };
+        base.chars()
+            .nth(index)
+            .map(|c| Value::String(c.to_string()))
+    }
+
     fn dict_view(&self, key: &str) -> Option<Value> {
         let (prefix, last) = key.rsplit_once('.')?;
         if !matches!(last, "items" | "keys" | "values") {
@@ -783,6 +869,15 @@ impl Context {
         // `get_value_safe`'s last arm (#1646).
         if let Some(view) = self.dict_view(key) {
             return Ok(Some(view));
+        }
+        // Django's step-3 index over a `str` (#2373). Placed with `dict_view`
+        // for the same reason: both are value-stack shapes `Context::get`
+        // cannot answer, and both must be tried before the raw-Python sidecar
+        // guard below returns early for a context that has none. Their
+        // conditions are disjoint — one needs a `String` at the prefix, the
+        // other an `Object` — so the order between them is not observable.
+        if let Some(ch) = self.string_index(key) {
+            return Ok(Some(ch));
         }
         let Some(raw) = self.raw_py_objects.as_deref() else {
             return Ok(None);
