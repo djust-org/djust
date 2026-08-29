@@ -109,7 +109,7 @@ fn mark_safe_str<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAny>
 /// read-only and happens on every render, so concurrent renders share the
 /// read lock. Handlers must implement a `render(args, context)` method
 /// that returns a string.
-static TAG_HANDLERS: Lazy<RwLock<HashMap<String, Py<PyAny>>>> =
+static TAG_HANDLERS: Lazy<RwLock<HashMap<String, TagHandlerEntry>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Block handler entry: (end_tag_name, Python handler object).
@@ -124,6 +124,41 @@ type BlockHandlerEntry = (String, Py<PyAny>);
 /// - `context`: dict of template context variables
 static BLOCK_TAG_HANDLERS: Lazy<RwLock<HashMap<String, BlockHandlerEntry>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// The handler's opt-in arg-resolution policy, read at registration time.
+///
+/// A missing attribute OR an explicit `None` means "resolve every arg" — the
+/// historical default. A `set[int]` restricts resolution to those 0-based
+/// positions and the renderer passes the rest as literal TOKENS (#2041).
+///
+/// ONE reader for both registries (#1646). It was spelled inline in
+/// `register_assign_tag_handler`; extending the policy to the inline-tag
+/// registry (#2423) would otherwise have made that two hand-copies of a rule
+/// whose two halves — "absent" and "explicitly `None`" — are exactly the pair
+/// a copy gets wrong.
+fn read_resolve_positions(handler: &Bound<'_, PyAny>) -> PyResult<Option<HashSet<usize>>> {
+    if !handler.hasattr("RESOLVE_ARG_POSITIONS")? {
+        return Ok(None);
+    }
+    let attr = handler.getattr("RESOLVE_ARG_POSITIONS")?;
+    if attr.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(attr.extract::<HashSet<usize>>()?))
+}
+
+/// A registered inline-tag handler plus its arg-resolution policy (#2423).
+///
+/// Same shape as [`AssignHandlerEntry`], and for the same reason one registry
+/// over: a handler that must resolve its own operand needs the LITERAL token,
+/// not the engine's pre-resolved flattening. `render_slot` is the first
+/// inline tag to want it — `{% render_slot slots.col.0.content %}` and a
+/// hostile `{% render_slot p %}` are the same opaque string once the engine
+/// has resolved them, and only the un-resolved path can tell them apart.
+struct TagHandlerEntry {
+    handler: Py<PyAny>,
+    resolve_positions: Option<HashSet<usize>>,
+}
 
 /// A registered assign-tag handler plus its arg-resolution policy.
 ///
@@ -184,11 +219,21 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         ));
     }
 
+    // The opt-in arg-resolution policy, same reader as the assign registry
+    // (#2041, extended to inline tags in #2423).
+    let resolve_positions = read_resolve_positions(handler_ref)?;
+
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
-    registry.insert(name, handler);
+    registry.insert(
+        name,
+        TagHandlerEntry {
+            handler,
+            resolve_positions,
+        },
+    );
     Ok(())
 }
 
@@ -518,11 +563,11 @@ pub fn call_handler_with_py_sidecar(
             .map_err(|e| format!("Registry lock error: {e}"))?;
 
         // Clone the Py<PyAny> using Python::attach
-        let handler_ref = registry
+        let entry = registry
             .get(name)
             .ok_or_else(|| format!("No handler registered for tag: {name}"))?;
 
-        Python::attach(|py| handler_ref.clone_ref(py))
+        Python::attach(|py| entry.handler.clone_ref(py))
     };
 
     // Acquire GIL and call Python handler
@@ -618,21 +663,9 @@ pub fn register_assign_tag_handler(
         ));
     }
 
-    // Read the handler's opt-in arg-resolution policy (#2041). A missing
-    // attribute OR an explicit `None` means "resolve every arg" (the
-    // historical default); a `set[int]` restricts resolution to those
-    // positions so keyword/name operands stay literal.
-    let resolve_positions: Option<HashSet<usize>> =
-        if handler_ref.hasattr("RESOLVE_ARG_POSITIONS")? {
-            let attr = handler_ref.getattr("RESOLVE_ARG_POSITIONS")?;
-            if attr.is_none() {
-                None
-            } else {
-                Some(attr.extract::<HashSet<usize>>()?)
-            }
-        } else {
-            None
-        };
+    // The opt-in arg-resolution policy (#2041), through the ONE reader both
+    // registries share (#2423).
+    let resolve_positions = read_resolve_positions(handler_ref)?;
 
     let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -682,6 +715,22 @@ pub fn assign_handler_exists(name: &str) -> bool {
         .read()
         .map(|registry| registry.contains_key(name))
         .unwrap_or(false)
+}
+
+/// Internal Rust API — the arg positions the renderer should resolve for this
+/// INLINE tag (#2423).
+///
+/// The inline-tag twin of [`assign_handler_resolve_positions`], with the same
+/// contract: `Some(set)` only when the handler declared a policy, `None`
+/// otherwise (and for an unregistered name), in which case the renderer
+/// resolves every arg — the historical default that every handler but
+/// `render_slot` still takes.
+pub fn tag_handler_resolve_positions(name: &str) -> Option<HashSet<usize>> {
+    TAG_HANDLERS.read().ok().and_then(|registry| {
+        registry
+            .get(name)
+            .and_then(|entry| entry.resolve_positions.clone())
+    })
 }
 
 /// Internal Rust API — the arg positions the renderer should resolve for
