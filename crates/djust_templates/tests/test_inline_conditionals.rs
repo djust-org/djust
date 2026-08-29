@@ -203,13 +203,40 @@ fn inline_if_escapes_variable_output() {
 }
 
 #[test]
-fn inline_if_escapes_literal_output() {
-    // Literal strings in branches are treated as plain text, not safe HTML
+fn inline_if_emits_a_quoted_literal_live_like_django() {
+    // #2376.
+    // This test asserted the OPPOSITE until #2376, and the belief it encoded
+    // — "literal strings in branches are plain text, not safe HTML" — was
+    // wrong about Django and inconsistent with djust's own other emit arm.
+    //
+    // `django.template.base.Variable.__init__` ends its quoted branch with
+    // `self.literal = mark_safe(unescape_string_literal(var))`, so a quoted
+    // literal IS `SafeData` and `{{ "<b>bold</b>" }}` renders LIVE markup in
+    // Django — measured against 5.2.16, not inferred. The inline-if is a djust
+    // extension with no Django spelling to compare against, so the rule it
+    // must follow is the one `Node::Variable` follows, or the two emit arms
+    // disagree about what a literal IS (#1646).
+    //
+    // The escaping direction is not lost, only moved to where Django puts it:
+    // the grant SEEDS the filter chain, so a re-tainting filter takes it away
+    // — see `inline_if_literal_is_re_tainted_by_a_filter` below, and
+    // `python/tests/test_template_literals_2376.py`.
     let c = ctx_bool("show", true);
-    // Angle brackets in literals should be escaped
     assert_eq!(
         render(r#"{{ "<b>bold</b>" if show else "" }}"#, &c),
-        "&lt;b&gt;bold&lt;/b&gt;"
+        "<b>bold</b>"
+    );
+}
+
+#[test]
+fn inline_if_literal_is_re_tainted_by_a_filter() {
+    // The other half of the rule, and the reason the grant is a SEED rather
+    // than a final `||`: `upper` is registered `is_safe=False` in Django, so
+    // the literal's grant does not survive it.
+    let c = ctx_bool("show", true);
+    assert_eq!(
+        render(r#"{{ "<b>bold</b>" if show|upper }}"#, &c),
+        "&lt;B&gt;BOLD&lt;/B&gt;"
     );
 }
 
