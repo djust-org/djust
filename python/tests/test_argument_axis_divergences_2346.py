@@ -441,7 +441,11 @@ class TestTheEmptyArgumentIsAskedFirst:
         )
         empty_at = source.index('arg == Some("")')
         value_at = source.index("let input_val: String = match value")
-        none_at = source.index("arg_is_none_literal(arg, arg_was_quoted)")
+        # #2366 renamed this guard and widened it from the bare `None`
+        # SPELLING to the argument's TYPE. Its POSITION — the thing this
+        # test is about — is unchanged, and repointing the search rather
+        # than deleting the assertion is what keeps that true.
+        none_at = source.index("if arg_int_is_type_error {")
         assert empty_at < value_at < none_at, (
             "the empty-argument guard must be ABOVE the value parse and the "
             "None-argument guard BELOW it — see #2346 and #2328 respectively"

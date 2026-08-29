@@ -62,6 +62,7 @@ pub fn floatformat(
     value: &Value,
     arg: Option<&str>,
     arg_was_quoted: bool,
+    arg_int_is_type_error: bool,
 ) -> djust_core::Result<Value> {
     // An EMPTY argument is an `IndexError`, and it happens BEFORE the value is
     // read (#2346):
@@ -140,14 +141,16 @@ pub fn floatformat(
     // `p` keeps its SIGN: `abs(p)` is the precision and `p <= 0` selects
     // Django's drop-the-fraction branch, so both come off ONE parse rather than
     // two that could disagree (#1646).
-    // `int(None)` is a TypeError, and Django's `except ValueError` does not
-    // catch it — so a bare `None` argument raises. It has to be asked HERE and
+    // `int()` of anything that is neither a string nor a number is a
+    // TypeError, and Django's `except ValueError` does not catch it — so a
+    // `None`, a list, a tuple or a dict argument raises (#2328, generalized in
+    // #2366). It has to be asked HERE and
     // not in the dispatch arm: the order above is load-bearing, and a value
     // that never parsed returns `""` in Django without `int(arg)` ever running.
     // #2328's argument-axis differential caught 36 cells of exactly that, where
     // an arm-level guard raised for a dict or a datetime value.
-    if crate::filters::arg_is_none_literal(arg, arg_was_quoted) {
-        return Err(crate::filters::none_argument_error("floatformat"));
+    if arg_int_is_type_error {
+        return Err(crate::filters::int_type_error("floatformat"));
     }
     let (p, force_grouping, use_l10n) = match parse_arg(arg, arg_was_quoted) {
         Some(spec) => spec,
@@ -251,6 +254,13 @@ fn parse_int_like(body: &str, arg_was_quoted: bool) -> Option<i64> {
         "floatformat",
         Some(body),
         arg_was_quoted,
+        // FALSE, always, and that is not a shortcut: the caller has already
+        // answered this question and returned `Err` for it, above `parse_arg`.
+        // A `true` here would be a SECOND mechanism on the same half, which is
+        // the shape CLAUDE.md's v1.1.1-2 rule says to delete rather than test
+        // around — and it would fire on a body that is by construction a
+        // string slice of the argument's text, never a container.
+        false,
         // Unreachable: `parse_arg` returns early for a `None` argument.
         -1,
         crate::filters::BadArg::ReturnInput,
@@ -342,7 +352,7 @@ mod tests {
     use super::*;
 
     fn ff(v: Value, arg: Option<&str>) -> String {
-        match floatformat(&v, arg, true).expect("no None-argument case in this table") {
+        match floatformat(&v, arg, true, false).expect("no None-argument case in this table") {
             Value::String(s) => s,
             other => other.to_string(),
         }
@@ -410,7 +420,7 @@ mod tests {
         // A quoted float-looking argument is a string to `int()`.
         assert_eq!(ff(Value::Decimal("1.5555".into()), Some("2.5")), "1.5555");
         // ...but an UNQUOTED float literal truncates.
-        match floatformat(&Value::Decimal("1.5555".into()), Some("2.5"), false) {
+        match floatformat(&Value::Decimal("1.5555".into()), Some("2.5"), false, false) {
             Ok(Value::String(s)) => assert_eq!(s, "1.56"),
             other => panic!("expected a string, got {other:?}"),
         }
@@ -427,21 +437,28 @@ mod tests {
 
     /// The same ordering, for the argument that RAISES (#2328).
     ///
-    /// `int(None)` is a TypeError past Django's `except ValueError`, so a bare
-    /// `None` argument fails — but only once the VALUE has parsed. A first pass
-    /// put this guard in the dispatch arm, ahead of the value parse, and the
-    /// argument-axis differential reported 36 cells where djust raised for a
-    /// dict or a datetime value that Django renders as `""`.
+    /// `int()` of anything that is neither a string nor a number is a
+    /// TypeError past Django's `except ValueError`, so such an argument fails
+    /// — but only once the VALUE has parsed. A first pass put this guard in
+    /// the dispatch arm, ahead of the value parse, and the argument-axis
+    /// differential reported 36 cells where djust raised for a dict or a
+    /// datetime value that Django renders as `""`.
+    ///
+    /// The last parameter is the bit #2366 threads: the caller has already
+    /// asked the ARGUMENT's resolved type, because the `&str` here cannot
+    /// answer it. `true` is a bare `None` or a list/tuple/dict; `false` is
+    /// everything `int()` accepts, and also the QUOTED `"None"` — which is
+    /// the string, whose `int()` is an ordinary ValueError.
     #[test]
     fn a_none_argument_raises_but_only_after_the_value_parses() {
-        assert!(floatformat(&Value::Float(1.5), Some("None"), false).is_err());
+        assert!(floatformat(&Value::Float(1.5), Some("None"), false, true).is_err());
         // Value first: these never reach `int(arg)` in Django either.
         for unusable in [
             Value::String("abc".into()),
             Value::None,
             Value::List(vec![Value::Integer(1)]),
         ] {
-            let got = floatformat(&unusable, Some("None"), false)
+            let got = floatformat(&unusable, Some("None"), false, true)
                 .expect("the value parse decides first, so this must not raise");
             assert!(
                 matches!(&got, Value::String(s) if s.is_empty()),
