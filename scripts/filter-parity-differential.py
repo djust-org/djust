@@ -182,6 +182,7 @@ Usage
 from __future__ import annotations
 
 import copy
+import datetime
 import hashlib
 import inspect
 import itertools
@@ -1210,12 +1211,38 @@ ARG_SPELLINGS = [
     # of it, and `test_the_nineteen_spellings_leave_the_pad_cap_unreachable`
     # removes this row again to prove the report was real.
     '"99999999999999999999"',
+    # Arguments whose resolved PYTHON TYPE is the subject (#2366). Every
+    # spelling above resolves to a string or to a literal, so the corpus could
+    # not construct a single cell where `int(arg)` is a **TypeError** rather
+    # than a ValueError — the distinction four filters' Django source turns on,
+    # because they catch `ValueError` only. The tool reported `0 newly
+    # agreeing` over the whole of that fix on its first run, for the same
+    # reason it has reported clean over every other gap: it built no cell that
+    # could reach it.
+    #
+    # The `dt` row is the counter-example that makes the axis honest: a
+    # `datetime` is `Value::String` by the time any filter sees it, so it
+    # measures the EXTRACTION-boundary residue rather than the dispatch table,
+    # and it must keep diverging where the other three now agree.
+    "known_list",
+    "known_tuple",
+    "known_dict",
+    "known_dt",
 ]
 
-#: Bound so the `known` spelling above has something to resolve TO. A plain
-#: string, because the question it asks is "did the lookup happen", not "what
-#: does this filter do with a list".
-ARG_CONTEXT = {"known": "3"}
+#: Bound so the `known*` spellings above have something to resolve TO.
+#:
+#: `known` is a plain string, because the question IT asks is "did the lookup
+#: happen". The other four are typed, because #2366's question is "what is
+#: this argument's Python TYPE" — `int()` raises TypeError for a list, a tuple
+#: and a dict, and Django's `except ValueError` does not catch it.
+ARG_CONTEXT = {
+    "known": "3",
+    "known_list": [1, 2],
+    "known_tuple": (1, 2),
+    "known_dict": {"a": 1},
+    "known_dt": datetime.datetime(2020, 1, 1, 15, 30),
+}
 
 
 def django_argument_filters() -> list[str]:

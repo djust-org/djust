@@ -339,24 +339,29 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         for kind in ("does not resolve", "is a ValueError", "is a TypeError", "past djust's"):
             assert kind in joined, kind
 
-    def test_the_nineteen_spellings_leave_the_pad_cap_unreachable(
+    def test_removing_the_pad_cap_spelling_makes_the_cap_unreachable(
         self, tmp_path: pathlib.Path
     ) -> None:
         """The manifest earning its keep against the corpus it ships beside.
 
-        #2354's ``ARG_SPELLINGS`` has nineteen entries and they reach three of
-        the engine's four argument errors. The fourth — ``pad_width``'s cap,
+        #2354's ``ARG_SPELLINGS`` had nineteen entries and they reached three
+        of the engine's four argument errors. The fourth — ``pad_width``'s cap,
         the guard standing between a template-supplied width and an allocator
         ABORT (#2328) — needs a width that PARSES and saturates past ``isize``,
         and every one of the nineteen either parses to a small number, fails to
-        parse, or fails to resolve. So there is a twentieth, and this removes
-        it again to prove the report was real rather than decorative.
+        parse, or fails to resolve. So #2345 added a twentieth, and this
+        removes it again to prove the report was real rather than decorative.
 
         This is the manifest reporting a gap in live, already-merged code, not
         in a synthetic reconstruction — which is the strongest form the claim
         has.
+
+        The list has grown past twenty since (#2366's four typed bindings), so
+        the mutation removes the ONE spelling by name rather than truncating
+        the list at it — which is what the first version did, and what made
+        this test fail with "edit matched 0x" the moment anything was appended.
         """
-        script = mutated_script(tmp_path, ("\n    '\"99999999999999999999\"',\n]", "\n]"))
+        script = mutated_script(tmp_path, ("\n    '\"99999999999999999999\"',", ""))
         row = rows(run_manifest(script))["argument"]
         assert len(row["missing"]) == 1 and "past djust's" in row["missing"][0], row["missing"]
         # And every OTHER required error is still reachable from the nineteen,
@@ -667,6 +672,23 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
             for t in n.targets
             if isinstance(t, ast.Name) and t.id == name
         )
+
+        # `literal_eval` per ELEMENT rather than over the whole node: since
+        # #2366 `ARG_CONTEXT` binds a `datetime.datetime(...)`, which is a
+        # `Call` and not a literal, and `literal_eval` refuses the whole dict
+        # for it. The elements this file asks about are all literals; a
+        # non-literal is kept as its unparsed source text, which is enough for
+        # "is this key present" and for "what did this branch add".
+        def one(sub_node):
+            try:
+                return ast.literal_eval(sub_node)
+            except (ValueError, TypeError):
+                return ast.unparse(sub_node)
+
+        if isinstance(node, ast.List):
+            return [one(e) for e in node.elts]
+        if isinstance(node, ast.Dict):
+            return {one(k): one(v) for k, v in zip(node.keys, node.values)}
         return ast.literal_eval(node)
 
     def test_every_spelling_upstream_landed_is_still_swept(self) -> None:
@@ -678,15 +700,43 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
             "corpus, not replace it."
         )
 
-    def test_the_only_addition_is_the_one_the_manifest_asked_for(self) -> None:
-        """Non-vacuity for the test above, and scope discipline for this PR:
-        the corpus grew by exactly the spelling the manifest reported missing,
-        and by nothing else."""
+    #: What each later branch added, and why. Scope discipline, not a floor:
+    #: an unexplained addition fails, and so does a deletion.
+    ADDED_SINCE = {
+        '"99999999999999999999"': (
+            "#2345 — the manifest reported `pad_width`'s cap unreachable from "
+            "the nineteen spellings"
+        ),
+        "known_list": "#2366 — a resolved argument whose `int()` is a TypeError",
+        "known_tuple": "#2366 — the same, at the tuple shape",
+        "known_dict": "#2366 — the same, at the mapping shape",
+        "known_dt": (
+            "#2366 — the COUNTER-example: a `datetime` is already a string by "
+            "the time any filter sees it, so it measures the extraction "
+            "boundary rather than the dispatch table and must keep diverging"
+        ),
+    }
+
+    def test_every_addition_is_accounted_for(self) -> None:
+        """Non-vacuity for the test above, and scope discipline: every spelling
+        past the upstream set is one a branch added ON PURPOSE, with the reason
+        written down."""
         added = [s for s in self.literal("ARG_SPELLINGS") if s not in self.LANDED_UPSTREAM]
-        assert added == ['"99999999999999999999"'], added
+        assert sorted(added) == sorted(self.ADDED_SINCE), (
+            f"unaccounted spellings: {sorted(set(added) - set(self.ADDED_SINCE))}; "
+            f"vanished: {sorted(set(self.ADDED_SINCE) - set(added))}"
+        )
 
     def test_the_resolvable_lookup_binding_survives(self) -> None:
-        assert "known" in self.literal("ARG_CONTEXT")
+        bound = self.literal("ARG_CONTEXT")
+        assert "known" in bound
+        # ...and every `known*` spelling has something to resolve TO. A
+        # spelling with no binding is a lookup MISS, which raises on both
+        # engines for a reason that has nothing to do with the type it was
+        # added to measure — a cell that agrees for the wrong reason.
+        for spelling in self.literal("ARG_SPELLINGS"):
+            if spelling.startswith("known"):
+                assert spelling in bound, f"{spelling} is swept but never bound"
 
     def test_render_both_still_records_a_panic_as_a_cell(self) -> None:
         """#2354's other half. Asserted on the `render_both` BODY rather than

@@ -25,8 +25,8 @@ macro_rules! pad_width {
 }
 
 macro_rules! int_arg {
-    ($name:expr, $arg:expr, $quoted:expr, $missing:expr, $bad:expr) => {
-        match filter_int_arg($name, $arg, $quoted, $missing, $bad) {
+    ($name:expr, $arg:expr, $quoted:expr, $type_error:expr, $missing:expr, $bad:expr) => {
+        match filter_int_arg($name, $arg, $quoted, $type_error, $missing, $bad) {
             Ok(parsed) => parsed,
             Err(e) => return Some(Err(e)),
         }
@@ -432,9 +432,21 @@ pub fn apply_filter_full_safe(
     //     exact silent-wrong-output failure this fix exists to remove,
     //     reintroduced on the error branch. Converging the resolver but not its
     //     error policy would still be #1646 drift, just subtler.
+    //
+    // The resolved `Value` is the LAST place the argument's Python type is
+    // visible: one line below, `to_string()` turns it into the `&str` the
+    // dispatch table takes, and `int(a_list)` and `int("[1, 2]")` raise
+    // different exceptions (#2366). So the one bit that depends on the type —
+    // "is `int(arg)` a TypeError?" — is computed here and threaded, rather
+    // than the whole `Value` being pushed through 57 filter arms.
+    let mut resolved_type: Option<Value> = None;
     let resolved_arg: Option<String> = match (arg, arg_was_quoted, context) {
         (Some(a), false, Some(ctx)) => match ctx.resolve(a)? {
-            Some(v) => Some(v.to_string()),
+            Some(v) => {
+                let text = v.to_string();
+                resolved_type = Some(v);
+                Some(text)
+            }
             None if !is_literal_filter_arg(a) => {
                 return Err(DjangoRustError::VariableDoesNotExist(format!(
                     "filter '{filter_name}' argument {a:?} does not resolve — Django \
@@ -446,6 +458,7 @@ pub fn apply_filter_full_safe(
         _ => None,
     };
     let builtin_arg = resolved_arg.as_deref().or(arg);
+    let arg_int_is_type_error = int_arg_is_type_error(resolved_type.as_ref());
 
     // Built-ins take precedence over custom filters (mirrors the original
     // dispatch order). A built-in hit reports safety through
@@ -459,6 +472,7 @@ pub fn apply_filter_full_safe(
         builtin_arg,
         context,
         arg_was_quoted,
+        arg_int_is_type_error,
         input_safety,
     ) {
         return builtin.map(|v| {
@@ -590,6 +604,10 @@ fn apply_builtin_filter(
     arg: Option<&str>,
     context: Option<&Context>,
     arg_was_quoted: bool,
+    // Whether `int(arg)` would be a TypeError rather than a ValueError —
+    // decided from the argument's resolved TYPE by `int_arg_is_type_error`,
+    // because the `&str` above no longer carries it (#2366).
+    arg_int_is_type_error: bool,
     input_safety: InputSafety,
 ) -> Option<Result<Value>> {
     // #2250: Django's `@stringfilter` consumes `str(value)`. For a `Decimal`
@@ -826,7 +844,14 @@ fn apply_builtin_filter(
             }
         }
         "truncatewords" => {
-            match int_arg!(filter_name, arg, arg_was_quoted, 10, BadArg::ReturnInput) {
+            match int_arg!(
+                filter_name,
+                arg,
+                arg_was_quoted,
+                arg_int_is_type_error,
+                10,
+                BadArg::ReturnInput
+            ) {
                 Some(n) => Ok(Value::String(crate::truncate::text_words(
                     &value.to_string(),
                     n,
@@ -836,7 +861,14 @@ fn apply_builtin_filter(
             }
         }
         "truncatechars" => {
-            match int_arg!(filter_name, arg, arg_was_quoted, 20, BadArg::ReturnInput) {
+            match int_arg!(
+                filter_name,
+                arg,
+                arg_was_quoted,
+                arg_int_is_type_error,
+                20,
+                BadArg::ReturnInput
+            ) {
                 Some(n) => Ok(Value::String(crate::truncate::text_chars(
                     &value.to_string(),
                     n,
@@ -1069,7 +1101,15 @@ fn apply_builtin_filter(
             // also brings `int()`'s whitespace, sign and `_` spellings with it.
             // (The VALUE below keeps its fail-soft `False`; that is the other
             // half of Django's `int(value) % int(arg)` and a separate question.)
-            let divisor = int_arg!(filter_name, arg, arg_was_quoted, 1, BadArg::Raise).unwrap_or(1);
+            let divisor = int_arg!(
+                filter_name,
+                arg,
+                arg_was_quoted,
+                arg_int_is_type_error,
+                1,
+                BadArg::Raise
+            )
+            .unwrap_or(1);
             // A divisor of ZERO is Python's `ZeroDivisionError` (#2346). This
             // arm answered `False`, which is a guard Django's
             // `int(value) % int(arg)` does not have — and the divergence was
@@ -1113,7 +1153,7 @@ fn apply_builtin_filter(
             // its `except ValueError`, and that raise has to happen at the
             // argument-parse point INSIDE the module, because Django parses the
             // value first and a value that fails never reaches `int(arg)`.
-            crate::floatformat::floatformat(value, arg, arg_was_quoted)
+            crate::floatformat::floatformat(value, arg, arg_was_quoted, arg_int_is_type_error)
         }
         "filesizeformat" => {
             // Django coerces with `int(bytes_)` and formats EVERY input,
@@ -1345,7 +1385,15 @@ fn apply_builtin_filter(
             // argument goes through the one chokepoint and raises, as Django
             // does. A PARSED width of <= 0 is a different case again: that is
             // Django's own `_wrap_chunks` guard, inside `textwrap::wrap`.
-            let width = int_arg!(filter_name, arg, arg_was_quoted, 75, BadArg::Raise).unwrap_or(75);
+            let width = int_arg!(
+                filter_name,
+                arg,
+                arg_was_quoted,
+                arg_int_is_type_error,
+                75,
+                BadArg::Raise
+            )
+            .unwrap_or(75);
             crate::textwrap::wrap(&value.to_string(), width)
                 .map(Value::String)
                 .map_err(|e| DjangoRustError::TemplateError(e.to_string()))
@@ -1368,7 +1416,14 @@ fn apply_builtin_filter(
             // the chokepoint's `Raise` arm (#2328).
             let width = pad_width!(
                 filter_name,
-                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+                int_arg!(
+                    filter_name,
+                    arg,
+                    arg_was_quoted,
+                    arg_int_is_type_error,
+                    0,
+                    BadArg::Raise
+                )
             );
             let s = value.to_string();
             // NOT `format!("{s:<width$}")`, which was here: Rust's format spec
@@ -1400,7 +1455,14 @@ fn apply_builtin_filter(
             // chokepoint argument and why the padding is explicit (#2328).
             let width = pad_width!(
                 filter_name,
-                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+                int_arg!(
+                    filter_name,
+                    arg,
+                    arg_was_quoted,
+                    arg_int_is_type_error,
+                    0,
+                    BadArg::Raise
+                )
             );
             let s = value.to_string();
             let len = s.chars().count();
@@ -1429,7 +1491,14 @@ fn apply_builtin_filter(
             // gate-off tested separately.
             let width = pad_width!(
                 filter_name,
-                int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise)
+                int_arg!(
+                    filter_name,
+                    arg,
+                    arg_was_quoted,
+                    arg_int_is_type_error,
+                    0,
+                    BadArg::Raise
+                )
             );
             let s = value.to_string();
             // Code points, like `len()` — and like `{:^}`, which also counted
@@ -1498,7 +1567,14 @@ fn apply_builtin_filter(
             //
             // `except ValueError: return value` and `if arg < 1: return value`
             // are the same answer, so both reach the guard below (#2328).
-            let n = match int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::ReturnInput) {
+            let n = match int_arg!(
+                filter_name,
+                arg,
+                arg_was_quoted,
+                arg_int_is_type_error,
+                0,
+                BadArg::ReturnInput
+            ) {
                 Some(n) if n >= 1 => n as usize,
                 _ => return Some(Ok(value.clone())),
             };
@@ -1629,7 +1705,14 @@ fn apply_builtin_filter(
             // NOT `arg.map(|_| int_arg!(..))`: the macro's `return` would leave
             // the CLOSURE, not the filter, so the error would be swallowed into
             // the `Option`. Same trap as the `?`-in-a-match-arm one above.
-            let parsed = int_arg!(filter_name, arg, arg_was_quoted, 0, BadArg::Raise);
+            let parsed = int_arg!(
+                filter_name,
+                arg,
+                arg_was_quoted,
+                arg_int_is_type_error,
+                0,
+                BadArg::Raise
+            );
             let limit = arg.map(|_| parsed.unwrap_or(0).max(0) as usize);
             Ok(Value::String(urlize(
                 &value.to_string(),
@@ -1650,7 +1733,14 @@ fn apply_builtin_filter(
             None => Ok(Value::String(html_escape(&value.to_string()))),
         },
         "truncatechars_html" => {
-            match int_arg!(filter_name, arg, arg_was_quoted, 20, BadArg::ReturnInput) {
+            match int_arg!(
+                filter_name,
+                arg,
+                arg_was_quoted,
+                arg_int_is_type_error,
+                20,
+                BadArg::ReturnInput
+            ) {
                 Some(n) => Ok(Value::String(crate::truncate::html_chars(
                     &value.to_string(),
                     n,
@@ -1660,7 +1750,14 @@ fn apply_builtin_filter(
             }
         }
         "truncatewords_html" => {
-            match int_arg!(filter_name, arg, arg_was_quoted, 10, BadArg::ReturnInput) {
+            match int_arg!(
+                filter_name,
+                arg,
+                arg_was_quoted,
+                arg_int_is_type_error,
+                10,
+                BadArg::ReturnInput
+            ) {
                 Some(n) => Ok(Value::String(crate::truncate::html_words(
                     &value.to_string(),
                     n,
@@ -1787,14 +1884,23 @@ pub(crate) fn filter_int_arg(
     filter_name: &str,
     arg: Option<&str>,
     arg_was_quoted: bool,
+    arg_int_is_type_error: bool,
     missing: i64,
     on_bad: BadArg,
 ) -> Result<Option<i64>> {
     let Some(raw) = arg else {
         return Ok(Some(missing));
     };
-    if arg_is_none_literal(arg, arg_was_quoted) {
-        return Err(none_argument_error(filter_name));
+    // #2366 generalizes what #2328 special-cased for one spelling. Every
+    // `ReturnInput` filter's Django source catches `ValueError` ONLY, and
+    // `int()` raises **TypeError** — which nothing catches — for anything that
+    // is neither a string nor a number. `None` was the first such argument to
+    // be noticed; a list, a tuple and a dict are the rest of the same rule,
+    // and asking the argument's TYPE answers all of them at once. See
+    // `int_arg_is_type_error` for what the string-valued dispatch boundary can
+    // and cannot still see.
+    if arg_int_is_type_error {
+        return Err(int_type_error(filter_name));
     }
     match python_int_arg(raw, arg_was_quoted) {
         Some(n) => Ok(Some(n)),
@@ -1850,27 +1956,95 @@ fn is_literal_filter_arg(a: &str) -> bool {
     python_int(a).is_some()
 }
 
-/// Is this argument a bare `None`, the one spelling `int()` rejects with a
-/// **TypeError** rather than a ValueError?
+/// Does `int(this argument)` raise **TypeError** rather than ValueError?
 ///
-/// The distinction is observable, and it is why this is a predicate rather
-/// than another arm of [`BadArg`]: every `ReturnInput` filter's Django source
-/// catches `ValueError` ONLY, so `{{ p|truncatechars:None }}` raises while
-/// `{{ p|truncatechars:"nope" }}` returns its input. A QUOTED `"None"` is the
-/// string, and `int("None")` IS a ValueError, so it takes the normal policy.
+/// The distinction is observable, and it is the whole of #2366: every
+/// `ReturnInput` filter's Django source catches `ValueError` ONLY —
 ///
-/// Two call sites — [`filter_int_arg`] and the `floatformat` arm, whose own
-/// `parse_arg` returns an `Option` with no room for an error. One definition,
-/// because two copies of a rule is the shape this whole issue is about.
-pub(crate) fn arg_is_none_literal(arg: Option<&str>, arg_was_quoted: bool) -> bool {
-    arg == Some("None") && !arg_was_quoted
+/// ```python
+/// def truncatechars(value, arg):
+///     try:    length = int(arg)
+///     except ValueError:  return value      # a TypeError escapes
+/// ```
+///
+/// — so `{{ p|truncatechars:some_list }}` **raises** while
+/// `{{ p|truncatechars:"nope" }}` returns its input. `int()` raises TypeError
+/// for anything that is neither a string nor a number: `None`, a list, a
+/// tuple, a dict, a model instance.
+///
+/// #2328 asked this question for the one spelling it had noticed, a bare
+/// `None`, with a predicate named after that spelling. This is the same
+/// question asked of the TYPE, which subsumes it: `None` resolves to
+/// [`Value::None`] since #2347, so the resolved-value arm answers the `None`
+/// case too and there is one mechanism rather than two on the same half.
+///
+/// # What the string boundary can still see, and what was lost before it
+///
+/// #2366 framed the choice as "either the dispatch table learns the argument's
+/// original type, or this is a bounded wire residue". Measuring it shows the
+/// dichotomy is false, and where the line actually falls is a finding:
+///
+/// * A list, a tuple and a dict reach [`Context::resolve`] as
+///   [`Value::List`] / [`Value::Tuple`] / [`Value::Object`]. Their type is
+///   intact at the resolution site — one line above where it used to be
+///   stringified — so this predicate answers for them.
+/// * A `datetime`, a `date`, a `time`, a `set` and an arbitrary object are
+///   already [`Value::String`] by then. Their type was lost at the **PyO3
+///   extraction boundary**, not at the dispatch table — `{{ q }}` on a
+///   `datetime` renders 19 characters and `{{ q|length }}` answers 19. No
+///   amount of threading below that boundary can recover it, which is why the
+///   `datetime` the issue's own headline uses is the half that stays.
+///
+/// # Why there is no spelling fallback
+///
+/// A first pass carried one — `arg == Some("None") && !arg_was_quoted` — for
+/// "the call sites that resolve nothing". Gating it off changed **nothing**:
+/// every renderer call site passes `Some(context)` (pinned mechanically in
+/// `python/tests/test_int_argument_type_2366.py::
+/// TestEveryRendererCallSiteResolvesItsArgument`), so `resolved` is `None`
+/// only when `arg_was_quoted` is true — and the fallback answered `false`
+/// there by construction. A branch whose only correct output is `false` is a
+/// second mechanism that can never fire, which CLAUDE.md's v1.1.1-2 rule says
+/// to delete rather than test around. The structural pin is what keeps the
+/// deletion safe, and unlike the dead branch it can actually go red.
+pub(crate) fn int_arg_is_type_error(resolved: Option<&Value>) -> bool {
+    match resolved {
+        // Stated as what `int()` ACCEPTS, which is how CPython states it —
+        // "a string, a bytes-like object or a real number" — rather than as
+        // the list of things it refuses. Two reasons, and the second is the
+        // load-bearing one:
+        //
+        // * it is the same sentence as the `TypeError` message, so a reader
+        //   can check it against the interpreter without translating;
+        // * a NEW `Value` variant then defaults to "`int()` refuses it", which
+        //   is the conservative direction. The refusal list would default a
+        //   new container to "`int()` accepts it" and silently return the
+        //   input where Django raises — this bug, one variant later.
+        Some(value) => !matches!(
+            value,
+            Value::String(_)
+                | Value::Integer(_)
+                | Value::Float(_)
+                | Value::Bool(_)
+                | Value::Decimal(_)
+                | Value::BigInt(_)
+        ),
+        // Nothing was resolved, so the argument is a QUOTED literal — and
+        // `int("None")` is an ordinary ValueError, which every caller's own
+        // policy already handles.
+        None => false,
+    }
 }
 
-/// The error [`arg_is_none_literal`] implies, worded once.
-pub(crate) fn none_argument_error(filter_name: &str) -> DjangoRustError {
+/// The error [`int_arg_is_type_error`] implies, worded once.
+///
+/// Two call sites — [`filter_int_arg`] and the `floatformat` arm, whose own
+/// `parse_arg` returns an `Option` with no room for an error.
+pub(crate) fn int_type_error(filter_name: &str) -> DjangoRustError {
     DjangoRustError::TemplateError(format!(
-        "filter '{filter_name}' needs an integer argument, and int(None) is a \
-         TypeError — Django raises here too, past its except-ValueError"
+        "filter '{filter_name}' needs an integer argument, and int() of that \
+         argument is a TypeError — Django raises here too, past its \
+         except-ValueError"
     ))
 }
 

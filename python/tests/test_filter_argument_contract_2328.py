@@ -694,6 +694,20 @@ class TestChokepointIsTheOnlyParser:
         ),
     }
 
+    #: Every `int_arg!` call site, capturing its `(missing, policy)`.
+    #:
+    #: WHITESPACE-TOLERANT on purpose. #2366 added a sixth macro argument and
+    #: `cargo fmt` then split every one of these calls across six lines, so a
+    #: single-line regex found ZERO sites and both pins below went red — while
+    #: reporting "0 dispatch arms reach the chokepoint", which reads like the
+    #: chokepoint was deleted rather than like the formatter moved a newline.
+    #: The property these pins are about is the SET of call sites and their
+    #: policies, not the line layout, so the pattern says so.
+    CALL_SITE_RE = (
+        r"int_arg!\(\s*filter_name,\s*arg,\s*arg_was_quoted,"
+        r"\s*arg_int_is_type_error,\s*(\d+),\s*(BadArg::\w+),?\s*\)"
+    )
+
     @staticmethod
     def source() -> str:
         return FILTERS_RS.read_text(encoding="utf-8")
@@ -721,10 +735,7 @@ class TestChokepointIsTheOnlyParser:
         shipped a wrong prose count more than once, so the number is derived
         rather than written down.
         """
-        arms = re.findall(
-            r"int_arg!\(filter_name, arg, arg_was_quoted, \d+, BadArg::\w+\)",
-            self.source(),
-        )
+        arms = re.findall(self.CALL_SITE_RE, self.source())
         assert len(arms) == 11, f"{len(arms)} dispatch arms reach the chokepoint"
         # Plus `floatformat`, which reaches `filter_int_arg` directly from its
         # own module rather than through the macro.
@@ -756,12 +767,7 @@ class TestChokepointIsTheOnlyParser:
         assert re.search(r"fn pad_width\([^)]*\)[^{]*\{[^}]*MAX_PAD_WIDTH", source, re.S)
 
     def test_the_call_site_set_is_pinned(self) -> None:
-        found = sorted(
-            re.findall(
-                r"int_arg!\(filter_name, arg, arg_was_quoted, (\d+), (BadArg::\w+)\)",
-                self.source(),
-            )
-        )
+        found = sorted(re.findall(self.CALL_SITE_RE, self.source()))
         assert found == self.EXPECTED_SITES
 
     def test_both_policies_are_actually_used(self) -> None:
