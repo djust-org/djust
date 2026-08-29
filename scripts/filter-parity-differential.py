@@ -1263,6 +1263,76 @@ PATH_SHAPES = {
     "regroup-values-groupers": (
         "{% regroup p.values by k as g %}{% for x in g %}({{ x.grouper }}){% endfor %}"
     ),
+    # The LOOP VARIABLE (#2402). Every shape above reads the loop's ITEM;
+    # none reads `forloop`, so the corpus could construct no cell in which
+    # Django's own `loop_dict` appears — and all seven of its members rendered
+    # EMPTY, on every engine path, for as long as the tool has existed. A
+    # numbered list with no numbers, `{% if forloop.first %}` never true, and
+    # `{% if not forloop.last %},{% endif %}` a comma after the last element.
+    # Same silent-empty class as #2325 / #2334 / #2377, and the sixth corpus
+    # gap of that shape.
+    #
+    # One cell per member, not one composite, because they fail
+    # independently: `counter` and `counter0` differ by one, `revcounter`
+    # needs the sequence LENGTH (which a streaming implementation would not
+    # have), `first`/`last` are the two boundaries, and `parentloop` is the
+    # only one whose value is a dict — at the outermost level Django's own
+    # empty dict, which renders `{}` and is NOT the same answer as missing.
+    "forloop-counter": "{% for x in p %}[{{ forloop.counter }}]{% empty %}E{% endfor %}",
+    "forloop-counter0": "{% for x in p %}[{{ forloop.counter0 }}]{% empty %}E{% endfor %}",
+    "forloop-revcounter": "{% for x in p %}[{{ forloop.revcounter }}]{% empty %}E{% endfor %}",
+    "forloop-revcounter0": "{% for x in p %}[{{ forloop.revcounter0 }}]{% empty %}E{% endfor %}",
+    "forloop-first": "{% for x in p %}[{{ forloop.first }}]{% empty %}E{% endfor %}",
+    "forloop-last": "{% for x in p %}[{{ forloop.last }}]{% empty %}E{% endfor %}",
+    "forloop-parentloop": "{% for x in p %}[{{ forloop.parentloop }}]{% empty %}E{% endfor %}",
+    # The dict ITSELF, which is the one cell that can see a member being
+    # added, removed, renamed or REORDERED: `{{ forloop }}` renders the whole
+    # repr in insertion order.
+    "forloop-whole": "{% for x in p %}[{{ forloop }}]{% empty %}E{% endfor %}",
+    # NESTED, where `parentloop` is a real loop rather than the empty dict —
+    # and where the inner `{% empty %}` must see the OUTER `forloop`, because
+    # Django writes its own `loop_dict` only AFTER the `len < 1` early return.
+    "forloop-nested": (
+        "{% for x in p %}{% for y in p %}[{{ forloop.parentloop.counter }}.{{ forloop.counter }}]"
+        "{% endfor %}{% endfor %}"
+    ),
+    "forloop-nested-empty": (
+        "{% for x in p %}{% for y in empty %}Z{% empty %}[{{ forloop.counter }}]"
+        "{% endfor %}{% endfor %}"
+    ),
+    # REVERSED, the one shape where the iteration ordinal and the item's own
+    # index disagree: Django reverses the sequence and THEN enumerates, so
+    # `counter` counts 1,2,3 in RENDER order. An implementation reading the
+    # item's original index instead agrees on every forward loop and silently
+    # reverses the numbering here.
+    "forloop-rev": (
+        "{% for x in p reversed %}[{{ x }}:{{ forloop.counter }}:{{ forloop.revcounter }}]"
+        "{% empty %}E{% endfor %}"
+    ),
+    # Through the OTHER resolution shapes, which reach the name by different
+    # code than `{{ }}` does — a `{% if %}` operand, a filter chain, a `with`
+    # binding, and a tag argument.
+    "forloop-if": (
+        "{% for x in p %}{% if forloop.first %}F{% endif %}{% if not forloop.last %},{% endif %}"
+        "{% endfor %}"
+    ),
+    "forloop-filtered": "{% for x in p %}[{{ forloop.counter|add:'10' }}]{% empty %}E{% endfor %}",
+    "forloop-with": (
+        "{% for x in p %}{% with c=forloop.counter %}[{{ c }}]{% endwith %}{% empty %}E{% endfor %}"
+    ),
+    "forloop-firstof": "{% for x in p %}{% firstof forloop.counter 'F' %}{% empty %}E{% endfor %}",
+    # SHADOWING, in both directions. The corpus binds `p` and nothing else, so
+    # these are the only cells in which the name `forloop` is BOTH a context
+    # variable and the engine's own dict: the loop must shadow the outer value
+    # for its body and leave it intact outside, and a loop VARIABLE spelled
+    # `forloop` must win over the dict (Django writes `loop_dict` at the top of
+    # the iteration and the loop variable at the bottom). The safety half
+    # matters too — a grant on the outer `forloop` must not survive into the
+    # body and emit the engine's dict raw.
+    "forloop-shadowed": (
+        "[{{ forloop }}]{% for x in p %}[{{ forloop.counter }}]{% endfor %}[{{ forloop }}]"
+    ),
+    "forloop-is-loopvar": "{% for forloop in p %}[{{ forloop }}]{% empty %}E{% endfor %}",
     # NOT `random` / `timesince` / `timeuntil`: this axis has no `NONDET`
     # collapse, so a nondeterministic cell would differ between two runs of the
     # SAME build and read as a regression.
@@ -1790,6 +1860,63 @@ TAGS_NOT_SWEPT = {
 }
 
 
+#: The member names Django's own `ForNode.render` writes into `forloop`.
+#:
+#: Parsed out of the REFERENCE implementation's source, not transcribed and not
+#: read out of djust's — a transcription is a second copy that drifts, and
+#: reading djust's own source would make the requirement satisfiable by the
+#: very omission it exists to detect. The day Django adds a member, this axis
+#: reports it MISSING until the corpus builds a cell for it.
+#:
+#: Two spellings because `ForNode.render` has two: six members are assigned
+#: `loop_dict["<name>"] = …` per iteration, while `parentloop` is written once,
+#: in the dict literal `context["forloop"] = {"parentloop": parentloop}`.
+_FORLOOP_MEMBER = re.compile(
+    r"""loop_dict\[\s*["'](\w+)["']\s*\]|\{\s*["'](\w+)["']\s*:\s*parentloop\s*\}"""
+)
+
+
+def _required_forloop_members() -> dict[str, str]:
+    source = inspect.getsource(_django_template.defaulttags.ForNode.render)
+    out: dict[str, str] = {}
+    for assigned, in_literal in _FORLOOP_MEMBER.findall(source):
+        out.setdefault(assigned or in_literal, "django defaulttags.ForNode.render")
+    # A source the parse can silently stop matching is the failure this axis
+    # exists to prevent, one level in (the `_ARG_ERROR_MARK` lesson). Django
+    # has had exactly these seven since 1.0; fewer means the regex stopped
+    # reading `ForNode.render`, not that Django removed a member.
+    if len(out) < 7:
+        raise AssertionError(
+            f"_FORLOOP_MEMBER matched {len(out)} members in ForNode.render "
+            f"({sorted(out)}) — expected at least 7. The parse has drifted "
+            f"from Django's source; fix the regex rather than the assertion."
+        )
+    return out
+
+
+def _swept_forloop_members() -> set[str]:
+    """The members the corpus's cells actually REFERENCE.
+
+    Derived from the cells the corpus BUILDS, not from the requirement it is
+    checked against — a self-comparison could never go red (#1859). A corpus
+    that dropped `revcounter0` back out fails here.
+    """
+    swept: set[str] = set()
+    for source in _corpus_templates():
+        swept |= set(re.findall(r"\bforloop\.(\w+)", source))
+    return swept
+
+
+def _corpus_templates() -> list[str]:
+    """Every template string the corpus renders, from every shape table."""
+    return (
+        list(TAG_SHAPES.values())
+        + list(PATH_SHAPES.values())
+        + list(CUSTOM_TAG_SHAPES.values())
+        + list(BUILTIN_SHAPES.values())
+    )
+
+
 def _required_tags() -> dict[str, str]:
     out = {}
     for library in Engine.get_default().template_builtins:
@@ -1969,6 +2096,12 @@ AXES = [
         what="the container shapes the CONTEXT can grant item safety on",
         swept=_swept_grant_shapes,
         required=_required_grant_shapes,
+    ),
+    Axis(
+        name="loop-variable",
+        what="the `forloop` members Django's own `ForNode.render` writes",
+        swept=_swept_forloop_members,
+        required=_required_forloop_members,
     ),
     Axis(
         name="input-shape",
