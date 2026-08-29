@@ -2515,9 +2515,29 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // path keeps its own filter-aware `get_value` resolver (e.g.
             // `x|upper`), unlike the plain-context-lookup `resolve_tag_arg`
             // shared by AssignTag / BlockCustomTag.
+            //
+            // A handler may DECLARE `RESOLVE_ARG_POSITIONS` and take some
+            // positions as literal TOKENS instead (#2423, the inline-tag twin
+            // of #2041's assign-tag policy). The resolution above is lossy by
+            // construction — `{% render_slot slots.col.0.content %}` and a
+            // hostile `{% render_slot p %}` are the SAME opaque string once
+            // the engine has flattened them, and only the un-resolved path can
+            // tell a slot's already-escaped content from a bare context value.
+            // A handler that declares nothing is untouched: the policy is
+            // `None` and every position resolves, exactly as before.
+            let resolve_positions = crate::registry::tag_handler_resolve_positions(name);
             let resolved_args: Vec<String> = args
                 .iter()
-                .map(|arg| {
+                .enumerate()
+                .map(|(position, arg)| {
+                    if resolve_positions
+                        .as_ref()
+                        .is_some_and(|declared| !declared.contains(&position))
+                    {
+                        // A position the handler wants LITERAL. Passed exactly
+                        // as the template wrote it — quotes, dots and all.
+                        return arg.clone();
+                    }
                     // Check if arg is a variable reference (not a string literal)
                     let arg_trimmed = arg.trim();
                     if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))

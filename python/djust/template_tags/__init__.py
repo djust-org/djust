@@ -76,7 +76,36 @@ class TagHandler:
         def render(self, args: list, context: dict) -> str:
             return f"Hello, {args[0]}!"
     ```
+
+    Operand-resolution contract (``RESOLVE_ARG_POSITIONS``)
+    ------------------------------------------------------
+    The Rust engine resolves every argument against the context BEFORE
+    ``render`` is called, so ``args`` normally holds values rather than the
+    tokens the template wrote. A handler that needs the token itself declares
+    :attr:`RESOLVE_ARG_POSITIONS` — a ``set[int]`` of the 0-based positions to
+    resolve; every other position arrives as a literal token, quotes and dots
+    intact. ``None`` (the default) means "resolve everything" and is what every
+    handler that does not opt in gets.
+
+    The same attribute has governed :class:`AssignTagHandler` since #2041,
+    where it keeps ``{% regroup … by … as … %}``'s keyword operands from being
+    shadowed by a context key. It reached this class in #2423, for the other
+    reason a handler wants the token: **resolution is lossy, and some
+    decisions need what was lost.**
+    ``{% render_slot slots.col.0.content %}`` — a slot body the parent already
+    rendered and escaped — and ``{% render_slot p %}`` over a hostile context
+    string are the SAME opaque string once resolved, so the handler could not
+    tell which to emit live. The un-resolved PATH separates them. See
+    :class:`~djust.components.function_component.RenderSlotTagHandler`, which
+    declares ``frozenset()`` — resolve nothing.
     """
+
+    #: 0-based arg positions the Rust engine should resolve against the render
+    #: context before calling ``render``; the rest arrive as literal tokens.
+    #: ``None`` = resolve every arg (default). Read once at registration time
+    #: by ``register_tag_handler`` (#2423), through the same
+    #: ``read_resolve_positions`` the assign registry uses (#2041).
+    RESOLVE_ARG_POSITIONS: ClassVar[Optional[Set[int]]] = None
 
     def render(self, args: List[str], context: Dict[str, Any]) -> str:
         """
