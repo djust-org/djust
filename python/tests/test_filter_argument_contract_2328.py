@@ -155,17 +155,30 @@ VALUES: dict[str, Any] = {
 #: have looked handled.
 RAISE_BIT_NOT_CLOSED: dict[str, str] = {}
 
-#: Three filters agree with Django on the raise bit and still produce a
+#: The filters that agree with Django on the raise bit and still produce a
 #: different STRING, because their unparseable-argument behaviour is governed
 #: by something other than `int(arg)`. Listed separately because conflating
 #: them with the row above would have exempted them from the raise sweep they
 #: actually pass — which is how a stale exemption hides a regression.
+#:
+#: It read "Three filters" until #2358 and #2359 closed two of them. The count
+#: is deliberately not restated here now: a number in prose beside a literal
+#: it describes is one edit away from being wrong, and this file has a test
+#: that recomputes every count it cares about.
 OUTPUT_DIVERGES_FOR_ANOTHER_REASON = {
-    # `add` was here until #2359 gave its third branch Django's `""`.
-    # `"notanumber"` reaches that branch for the `TEXT` value, so the row was
-    # true and is now closed — removed rather than relaxed, as this file's own
-    # message demands ("now agrees - remove its row").
-    "stringformat": "an invalid printf spec, not int(arg) (#2343)",
+    # `stringformat` was here until #2358 gave it CPython's whole `%`-format
+    # grammar. `"notanumber"` is `unsupported format character 'n'`, which
+    # Django answers `""` to and djust used to echo the value for — so the
+    # row was true, and it is now closed. Removed rather than relaxed,
+    # exactly as `test_the_output_divergences_are_not_raise_divergences`
+    # demands ("now agrees - remove its row"), and as #2344 did for the two
+    # `RAISE_BIT_NOT_CLOSED` rows before it.
+    #
+    # `add` went the same way in #2359, which gave its third branch Django's
+    # `""`. `"notanumber"` reaches that branch for the `TEXT` value, so that
+    # row was true too and is now closed. Two independent branches each
+    # removed one row and each left this note; the merge keeps both, because
+    # the value of the note is the record that the row was TRUE when written.
     "yesno": "an arity check on a comma-separated argument, not int(arg)",
 }
 
@@ -241,7 +254,7 @@ class TestTheMeasurementThatScopedTheIssue:
         )
 
     def test_the_output_divergences_are_not_raise_divergences(self) -> None:
-        """These three pass the raise sweep and still render differently. The
+        """These pass the raise sweep and still render differently. The
         distinction is the point: exempting them from the sweep — which an
         earlier draft of this file did — would have hidden a real regression in
         three filters that this issue genuinely fixed the raise bit for.

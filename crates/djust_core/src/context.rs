@@ -75,15 +75,15 @@ pub fn template_builtin(name: &str) -> Option<Value> {
 /// `dict_items` is not subscriptable, Django's `current[int(bit)]` raises on
 /// it, and `{{ d.items.0 }}` must stay empty on both engines.
 ///
-/// **Not covered, and named rather than silent (#2373).** Django's step 3
-/// subscripts a `str` too — `{{ s.0 }}` on `"abc"` is `'a'` there and empty
-/// here. Closing it needs an OWNED return (the character is constructed, not
-/// borrowed), which is a return-type change across every
-/// [`Context::get`] caller rather than an arm in this `match`. Scoped out of
-/// #2371 deliberately; pinned in
-/// `python/tests/test_numeric_path_segment_2371.py::
-/// TestTheStringIndexStepIsNamedNotFixed` so it cannot be mistaken for
-/// something this change was supposed to have covered.
+/// **Django's step 3 over a `str` is NOT here, and that is deliberate**
+/// (#2373). `{{ s.0 }}` on `"abc"` is `'a'` in Django, and a character sliced
+/// out of a string is CONSTRUCTED — it has nowhere to be borrowed from, so it
+/// cannot be an arm of this `match` without widening this function's return
+/// type and every [`Context::get`] caller's with it. It lives in
+/// [`Context::string_index`] instead, which [`Context::resolve`] calls beside
+/// [`Context::dict_view`] — both are value-stack shapes that must return an
+/// owned `Value`, and `resolve` already does. `Context::get`'s signature is
+/// untouched.
 fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
     // (1) mapping item access, with the segment as a STRING. `ObjectKey`
     //     hashes its `Str` variant exactly as the `str` does, so this is the
@@ -122,9 +122,41 @@ pub struct Context {
     stack: Vec<AHashMap<String, Value>>,
     /// Keys marked as safe (skip auto-escaping), like Django's SafeData
     safe_keys: AHashSet<String>,
-    /// Track loop variable mappings: loop_var -> (iterable_name, index)
-    /// e.g., "item" -> ("items", 0) means `item` refers to `items[0]`
-    loop_mappings: AHashMap<String, (String, usize)>,
+    /// Name ALIASES: `name -> <dotted path prefix>` (#2375).
+    ///
+    /// djust's safety channel is keyed BY NAME — `safe_keys` holds dotted
+    /// paths written by `rust_bridge._collect_safe_keys` — so a construct that
+    /// binds a value to a NEW name has two ways to keep its grants:
+    ///
+    /// * **copy** them, which is what [`Context::bind`] does at the NAME
+    ///   granularity, and which cannot reach the paths BENEATH the name
+    ///   without an `O(len(safe_keys))` scan per bind;
+    /// * **alias** the name, which rewrites the whole dotted path on the way
+    ///   IN to [`Context::is_safe`] and costs `O(1)`.
+    ///
+    /// This was `loop_var -> (iterable_name, index)`, an alias in everything
+    /// but generality: it could express `item -> items.<i>` and nothing else,
+    /// so `{% for x in rows %}{{ x.a }}` resolved its grant and
+    /// `{% with q=p %}{{ q.a }}` did not. Widening it to a plain path prefix
+    /// retires that split rather than adding a second copy — the #1646 cure
+    /// of stating one mechanism rather than two.
+    ///
+    /// The invariant an alias asserts is that `name` **IS** the value at
+    /// `<prefix>`, so it may only be registered where that correspondence is
+    /// REAL. A filtered expression breaks it (`slice` shifts indices,
+    /// `dictsort` reorders), and for a dict the loop's positional form is a
+    /// live XSS rather than a theoretical one (#2334) — see the guards at
+    /// each registration site. Registering nothing costs only over-escaping,
+    /// which is the direction to fail in.
+    ///
+    /// A [`Context::bind`] REMOVES the alias for the name it binds, through
+    /// [`Context::revoke_safe_subtree`]. That is not an optimisation: without
+    /// it, `{% with q=p %}{% with q=hostile %}{{ q.a }}` would resolve `q.a`
+    /// through the STALE alias to `p.a` and emit the hostile value raw —
+    /// exactly the under-escape #2361/#2363 closed for the name itself,
+    /// reopened one path segment down. "A bind REPLACES the grant" has to
+    /// mean the alias too, or it means nothing.
+    aliases: AHashMap<String, String>,
     /// Optional sidecar of raw Python objects keyed by top-level
     /// context name. Used only as a fallback when `get()` misses —
     /// the value-stack path remains the fast path for JSON-friendly
@@ -155,7 +187,7 @@ impl Clone for Context {
         Self {
             stack: self.stack.clone(),
             safe_keys: self.safe_keys.clone(),
-            loop_mappings: self.loop_mappings.clone(),
+            aliases: self.aliases.clone(),
             // Arc::clone is cheap and does not require the GIL —
             // the contained `Py<PyAny>` refcount is not touched.
             raw_py_objects: self.raw_py_objects.clone(),
@@ -182,7 +214,7 @@ impl Context {
         Self {
             stack: vec![AHashMap::new()],
             safe_keys: AHashSet::new(),
-            loop_mappings: AHashMap::new(),
+            aliases: AHashMap::new(),
             raw_py_objects: None,
             auto_call: true,
         }
@@ -200,7 +232,7 @@ impl Context {
         Self {
             stack: vec![map],
             safe_keys: AHashSet::new(),
-            loop_mappings: AHashMap::new(),
+            aliases: AHashMap::new(),
             raw_py_objects: None,
             auto_call: true,
         }
@@ -329,6 +361,37 @@ impl Context {
     /// With `p.a` marked, leaving them makes
     /// `{% with p=hostile_dict %}{{ p.a }}{% endwith %}` emit raw.
     pub fn revoke_safe_subtree(&mut self, key: &str) {
+        // The ALIASES go first, and deliberately BEFORE the `safe_keys`
+        // early-return below (#2375). An alias is a claim that one name IS the
+        // value at some path; a bind makes two such claims false, and BOTH are
+        // UNDER-escapes rather than over-escapes.
+        //
+        // 1. The alias ON this name. `{% with q=p %}{% with q=hostile %}`
+        //    would otherwise resolve `q.a` through the stale `p.a` and emit
+        //    raw. That is #2378's "a bind REPLACES the grant", one path
+        //    segment down.
+        //
+        // 2. Every alias whose TARGET is this name, or lives beneath it. This
+        //    one was found by probing rather than by reading, and it was a
+        //    LIVE XSS in the first version of this change:
+        //
+        //        {% with q=p %}{% with p=r|safe %}{{ q }}{% endwith %}{% endwith %}
+        //
+        //    binds `q` to the ORIGINAL `p` and then re-binds `p` to something
+        //    SAFE. `set_safety("p", true)` marks the NAME `p`; the surviving
+        //    alias `q -> p` then answered `is_safe("q")` from it, and `q`'s
+        //    value — the original, hostile one — went to the page UNESCAPED.
+        //    An alias asserts an identity, so rebinding either END of it has
+        //    to retire it.
+        //
+        // Both sit above the `safe_keys.is_empty()` guard, and that placement
+        // is load-bearing rather than defensive: in the leak above `safe_keys`
+        // IS empty at this point — `set_safety` fills it one line later — so
+        // an alias removal under the guard would not run at all.
+        self.aliases.remove(key);
+        let beneath = format!("{key}.");
+        self.aliases
+            .retain(|_, target| target != key && !target.starts_with(&beneath));
         if self.safe_keys.is_empty() {
             return;
         }
@@ -344,15 +407,11 @@ impl Context {
             return true;
         }
 
-        // If not found, try resolving loop variables
-        // e.g., "item.content" might map to "items.0.content" via loop_mappings
-        let parts: Vec<&str> = key.split('.').collect();
-        if let Some((iterable_name, index)) = self.loop_mappings.get(parts[0]) {
-            // Build the resolved path: "items.0.content" from "item.content"
-            let index_str = index.to_string();
-            let mut resolved_parts = vec![iterable_name.as_str(), index_str.as_str()];
-            resolved_parts.extend_from_slice(&parts[1..]);
-            let resolved_key = resolved_parts.join(".");
+        // If not found, rewrite the path through the name ALIASES (#2375).
+        // `item.content` becomes `items.0.content` inside a loop, and `q.a`
+        // becomes `p.a` inside `{% with q=p %}` — one mechanism for what used
+        // to be a loop-only one.
+        if let Some(resolved_key) = self.resolve_alias(key) {
             if self.safe_keys.contains(&resolved_key) {
                 return true;
             }
@@ -426,12 +485,8 @@ impl Context {
         // key itself, plus the loop-variable alias `is_safe` resolves — inside
         // `{% for row in rows %}`, `row`'s items live at `rows.<i>.<j>`.
         let mut prefixes: Vec<String> = vec![key.to_string()];
-        let parts: Vec<&str> = key.split('.').collect();
-        if let Some((iterable_name, index)) = self.loop_mappings.get(parts[0]) {
-            let index_str = index.to_string();
-            let mut resolved_parts = vec![iterable_name.as_str(), index_str.as_str()];
-            resolved_parts.extend_from_slice(&parts[1..]);
-            prefixes.push(resolved_parts.join("."));
+        if let Some(resolved) = self.resolve_alias(key) {
+            prefixes.push(resolved);
         }
 
         prefixes.iter().any(|prefix| {
@@ -499,6 +554,92 @@ impl Context {
     /// Order is the `IndexMap`'s insertion order — Python's dict order. A
     /// `HashMap` here would make `{% for k in d %}` nondeterministic across
     /// renders and thrash the VDOM.
+    /// Django's third lookup step, applied to a `str` (#2373).
+    ///
+    /// `Variable._resolve_lookup`'s step 3 is `current[int(bit)]`, and Python
+    /// subscripts a `str` — so `{{ s.0 }}` on `"abc"` is `'a'` in Django and
+    /// was the empty string here.
+    ///
+    /// # Why this is not an arm in `lookup_segment`
+    ///
+    /// It cannot be. Every other arm of that helper returns a BORROW into the
+    /// value stack (`&'a Value`), and a character sliced out of a string is
+    /// CONSTRUCTED — it has nowhere to be borrowed from. #2373 was scoped out
+    /// of #2371 on the reading that closing it meant widening
+    /// [`Context::get`]'s return type across all of its callers.
+    ///
+    /// **That reading was wrong, and checking it is what made this small.**
+    /// [`Context::resolve`] ALREADY returns an owned `Value`, and it is the
+    /// door every operand site reaches: `{{ }}` calls it directly, and
+    /// `{% if %}` / `{% with %}` / `{% for %}` / `{% firstof %}` / `{% cycle %}`
+    /// reach it as `renderer::get_value_safe`'s last arm. So the step belongs
+    /// here, beside [`Context::dict_view`] — which exists for exactly the same
+    /// reason, in exactly the same place, and whose doc comment says so:
+    /// *"returns an owned `Value`, which is why this cannot live inside
+    /// `Context::get`"*. `Context::get`'s signature is untouched.
+    ///
+    /// # By CODE POINT
+    ///
+    /// `"héllo"[1]` is `'é'` in Python. `chars().nth()` is Unicode scalar
+    /// values, which is Python's `str` indexing; a byte index would split a
+    /// two-byte character in half and `str::len()` would measure the wrong
+    /// bound.
+    ///
+    /// # The recursion
+    ///
+    /// `{{ s.0.0 }}` is `'a'` in Django — a character is itself a `str`, and
+    /// step 3 runs again. The prefix is therefore resolved through `get` OR
+    /// through this function, not `get` alone.
+    ///
+    /// # What it deliberately does not reach
+    ///
+    /// * a **negative** index. `{{ l.-1 }}` is a Django PARSE error, pinned in
+    ///   `test_numeric_path_segment_2371.py::
+    ///   TestTheLexerLevelDivergenceIsNamedNotFixed`, so `parse::<usize>` is
+    ///   the right width and not an oversight.
+    /// * a **`Value::DictView`**. `dict_items` is not subscriptable in Python,
+    ///   `{{ d.items.0 }}` is empty on both engines, and the `rsplit_once`
+    ///   below leaves `d.items` as the prefix — which `get` misses and this
+    ///   function refuses, because `items` does not parse as an index.
+    /// * the **raw-Python sidecar**, which needs nothing: its walk already
+    ///   ends in `current.get_item(idx)` and Python's `str.__getitem__` has
+    ///   answered there since #1997. That asymmetry — one walk with Django's
+    ///   step 3 for strings and its twin without — IS this bug (#1646).
+    ///
+    /// # Safety
+    ///
+    /// A character sliced out of a `mark_safe`d string is a plain `str` in
+    /// Django (`SafeString` overrides `__add__`, not `__getitem__`), so Django
+    /// ESCAPES it — and `_collect_safe_keys` never descends into a `str`, so
+    /// `safe_keys` holds no per-character path and djust escapes it too. The
+    /// two agree, and this adds no grant.
+    fn string_index(&self, key: &str) -> Option<Value> {
+        let (prefix, last) = key.rsplit_once('.')?;
+        let index = last.parse::<usize>().ok()?;
+        let base = match self.get(prefix) {
+            Some(Value::String(s)) => s.clone(),
+            // A non-string prefix is not this step's business — `get` has
+            // already tried every arm that applies to it.
+            //
+            // Gating THIS arm off (letting it fall into the recursion below)
+            // survives the suite, and that is a provable no-op rather than
+            // missing coverage: the two branches are mutually exclusive.
+            // `string_index(prefix)` can only answer when `prefix`'s own
+            // prefix is a `String` — and `lookup_segment`'s index arm admits
+            // `List` / `Tuple` / `Object` and NOT `String`, so `get(prefix)`
+            // is `None` whenever that holds. The arm is kept because it states
+            // the intent without depending on that invariant being noticed.
+            Some(_) => return None,
+            None => match self.string_index(prefix)? {
+                Value::String(s) => s,
+                _ => return None,
+            },
+        };
+        base.chars()
+            .nth(index)
+            .map(|c| Value::String(c.to_string()))
+    }
+
     fn dict_view(&self, key: &str) -> Option<Value> {
         let (prefix, last) = key.rsplit_once('.')?;
         if !matches!(last, "items" | "keys" | "values") {
@@ -545,15 +686,88 @@ impl Context {
         }
     }
 
-    /// Register a loop variable mapping.
-    /// e.g., set_loop_mapping("item", "items", 0) means `item` refers to `items[0]`
+    /// Register a loop variable's alias: `loop_var` IS `<iterable>.<index>`.
+    ///
+    /// A thin spelling of [`Context::set_alias`] kept because the loop's
+    /// index is a `usize` and every caller would otherwise format it.
     pub fn set_loop_mapping(&mut self, loop_var: String, iterable_name: String, index: usize) {
-        self.loop_mappings.insert(loop_var, (iterable_name, index));
+        // Expanded against SELF, and that is the right context here: the loop
+        // renders its body against this very `ctx`, so an outer alias on the
+        // iterable's own name (a nested loop's `row`) is exactly the one that
+        // applies.
+        let base = self.alias_path(&iterable_name);
+        self.set_alias(loop_var, format!("{base}.{index}"));
     }
 
-    /// Clear a loop variable mapping (when exiting the loop scope)
+    /// Register `name` as an alias for the value at the dotted path `target`.
+    ///
+    /// The caller is responsible for two things, and both are security
+    /// boundaries rather than hygiene:
+    ///
+    /// 1. **The correspondence is REAL** — see the `aliases` field docs and
+    ///    the `bare_dotted_path` guard the renderer applies at every call site.
+    /// 2. **`target` is already expanded**, through
+    ///    [`Context::alias_path`] on the context the EXPRESSION was resolved
+    ///    against.
+    ///
+    /// (2) is not a convention, it is the fix for a second live XSS this
+    /// mechanism had. Django's `{% with %}` resolves EVERY assignment against
+    /// the OUTER context (`WithNode.render` builds the whole `values` dict
+    /// before `context.update`), so in `{% with a=p b=a %}` the name `b` binds
+    /// the OUTER `a`. Expanding `b`'s path inside the NEW context would walk
+    /// the `a -> p` alias registered one line earlier and point `b` at `p`
+    /// instead — and with `p` marked and the outer `a` hostile, `{{ b }}`
+    /// emitted the hostile value RAW. Making the expansion the caller's
+    /// explicit step is what forces each site to name which context it means.
+    ///
+    /// A self-alias is refused: `{% with p=p %}` would otherwise make
+    /// `is_safe` consult a name that no longer describes the bound value, and
+    /// the `bind` that precedes it has already said what `p`'s grant is.
+    pub fn set_alias(&mut self, name: String, target: String) {
+        if target == name || target.starts_with(&format!("{name}.")) {
+            return;
+        }
+        self.aliases.insert(name, target);
+    }
+
+    /// `path` with its first segment expanded through THIS context's aliases.
+    ///
+    /// The registration-time half of the alias mechanism: collapsing the chain
+    /// once, here, is what keeps [`Context::is_safe`] to a single hop on the
+    /// hot path. Inside `{% for row in rows %}`, `{% with q=row.sub %}`
+    /// expands to `rows.<i>.sub` — `row.sub` would resolve against a
+    /// `safe_keys` set that never spells `row` at all.
+    pub fn alias_path(&self, path: &str) -> String {
+        self.expand_alias(path)
+    }
+
+    /// Clear a loop variable's alias (when exiting the loop scope).
     pub fn clear_loop_mapping(&mut self, loop_var: &str) {
-        self.loop_mappings.remove(loop_var);
+        self.aliases.remove(loop_var);
+    }
+
+    /// `key` rewritten through the alias on its FIRST segment, or `None` when
+    /// that segment is not aliased.
+    ///
+    /// Returns `None` rather than `key` so a caller can tell "no alias" from
+    /// "an alias that resolves to itself" — `is_safe` has already checked the
+    /// un-rewritten spelling by the time it calls this.
+    fn resolve_alias(&self, key: &str) -> Option<String> {
+        let (first, rest) = match key.split_once('.') {
+            Some((first, rest)) => (first, Some(rest)),
+            None => (key, None),
+        };
+        let prefix = self.aliases.get(first)?;
+        Some(match rest {
+            Some(rest) => format!("{prefix}.{rest}"),
+            None => prefix.clone(),
+        })
+    }
+
+    /// `path` with its first segment expanded through the aliases, or `path`
+    /// unchanged. The registration-time half of [`Context::resolve_alias`].
+    fn expand_alias(&self, path: &str) -> String {
+        self.resolve_alias(path).unwrap_or_else(|| path.to_string())
     }
 
     pub fn update(&mut self, dict: HashMap<String, Value>) {
@@ -655,6 +869,15 @@ impl Context {
         // `get_value_safe`'s last arm (#1646).
         if let Some(view) = self.dict_view(key) {
             return Ok(Some(view));
+        }
+        // Django's step-3 index over a `str` (#2373). Placed with `dict_view`
+        // for the same reason: both are value-stack shapes `Context::get`
+        // cannot answer, and both must be tried before the raw-Python sidecar
+        // guard below returns early for a context that has none. Their
+        // conditions are disjoint — one needs a `String` at the prefix, the
+        // other an `Object` — so the order between them is not observable.
+        if let Some(ch) = self.string_index(key) {
+            return Ok(Some(ch));
         }
         let Some(raw) = self.raw_py_objects.as_deref() else {
             return Ok(None);

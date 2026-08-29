@@ -756,7 +756,45 @@ fn resolve_tag_operand(expr: &str, context: &Context) -> Option<String> {
             Ok(value) => Some(value_to_arg_string(&value)),
         };
     }
-    context.get(expr).map(value_to_arg_string)
+    // `Context::resolve`, NOT `Context::get` (#2368). `d.items` / `.keys` /
+    // `.values` live in `resolve` — `dict_view` is only reachable from there,
+    // which is where #2334 put it — so the pipe branch above saw a view and
+    // this one did not. `{% regroup p.values by k as g %}` therefore fell to
+    // the "unresolved ⇒ keep the raw token" contract, the handler decoded
+    // nothing, and `{{ g|length }}` rendered `0`: silently, with no exception
+    // and no warning. Same shape as #2333, one operand form over — that fix
+    // made this channel FILTER-aware and left it dict-view-blind.
+    //
+    // `resolve` is strictly wider than `get`, and each thing it adds was
+    // decided rather than inherited:
+    //
+    // * **the dict views** — the point of the change;
+    // * **the raw-Python sidecar walk plus ADR-024's auto-call** — the same
+    //   widening the pipe branch already has, since `get_value_safe` ends with
+    //   a `context.resolve` fallback. A tag operand naming a model attribute
+    //   resolved through `p|<filter>` and not through `p` alone, which is the
+    //   #1646 split this closes;
+    // * **`template_builtin`** — textually inert here. `Value::None` /
+    //   `Bool(true)` / `Bool(false)` serialize back to `None` / `True` /
+    //   `False`, byte-identical to the raw tokens the miss path would have
+    //   passed.
+    //
+    // The keyword-operand hazard #2041's `RESOLVE_ARG_POSITIONS` exists to
+    // prevent is unaffected: a handler that declares one (regroup declares
+    // `{0}`) never routes its `by` / `<attr>` / `as` / `<var>` tokens through
+    // this function at all — `resolve_assign_tag_args` passes them through raw
+    // before this is reached. For a handler that declares none, every arg was
+    // already being resolved through `get`; the only newly-shadowable spelling
+    // is a name present ONLY in the raw-Python sidecar.
+    //
+    // `Err` is a miss, exactly as in the pipe branch: an exception raised
+    // inside an auto-called method leaves the raw token rather than aborting
+    // the render, which is what this channel's contract has always done for a
+    // name it cannot answer.
+    match context.resolve(expr) {
+        Ok(Some(value)) => Some(value_to_arg_string(&value)),
+        Ok(None) | Err(_) => None,
+    }
 }
 
 /// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared
@@ -963,12 +1001,32 @@ pub fn render_node_with_loader<L: TemplateLoader>(
         Node::Text(text) => Ok(text.clone()),
 
         Node::Variable(var_name, filter_specs, in_attr) => {
-            // `resolve` tries the normal value-stack path first, then
-            // falls back to `getattr` on any Py<PyAny> sidecar attached
+            // A LITERAL is decided before any lookup, exactly as Django does
+            // it (#2376). `Variable.__init__` runs at COMPILE time and a
+            // quoted or numeric token never becomes a `lookups` tuple at all,
+            // so a context key spelled `5` does NOT shadow `{{ 5 }}` — Django
+            // renders `5` there, and measured against 5.2.16 djust rendered
+            // the key's value. This arm had NO literal handling of any kind,
+            // which is why `{{ "hello" }}`, `{{ 5 }}` and `{{ 5.5 }}` all
+            // resolved through the context, missed, and rendered EMPTY.
+            //
+            // The bool is the grant: `Variable.__init__` `mark_safe`s the
+            // quoted branch, so `{{ "<b>" }}` is live markup in Django. It
+            // SEEDS the filter chain below rather than being OR-ed in at the
+            // end, so `{{ "<b>"|upper }}` re-taints and comes out escaped —
+            // which is what Django does, `upper` being `is_safe=False`.
+            //
+            // `resolve` (the miss path) tries the normal value-stack first,
+            // then falls back to `getattr` on any Py<PyAny> sidecar attached
             // to the context (e.g. Django model instances). The `?`
             // propagates exceptions raised inside an auto-called method
             // (ADR-024 Django parity); lookup misses stay `Ok(None)`.
-            let mut value = context.resolve(var_name)?.unwrap_or(Value::Missing);
+            let literal = django_literal(var_name);
+            let literal_safe = literal.as_ref().is_some_and(|(_, safe)| *safe);
+            let mut value = match literal {
+                Some((value, _)) => value,
+                None => context.resolve(var_name)?.unwrap_or(Value::Missing),
+            };
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             //
@@ -985,7 +1043,18 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // ESCAPED: `upper` is registered `is_safe=False` in Django
             // precisely because upper-casing `&lt;` yields `&LT;`, which every
             // browser still decodes to `<`.
-            let mut runtime_safe = context.is_safe(var_name);
+            //
+            // A quoted literal seeds it TRUE, and does so INSTEAD of the
+            // context lookup rather than in addition to it (#2376): the token
+            // is not a name, so `is_safe(name)` has nothing to answer about
+            // and OR-ing the two would be a second mechanism shadowing the
+            // first. `literal_safe` is false for a NUMBER — Django marks only
+            // the quoted branch.
+            let mut runtime_safe = if literal_safe {
+                true
+            } else {
+                context.is_safe(var_name)
+            };
             // Django's item granularity, seeded from the CONTEXT (#2287).
             // A view passing `[mark_safe(x), …]` has marked the ITEMS and not
             // the list, so `is_safe` above answers `false` for the container
@@ -1102,13 +1171,20 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 false_expr.as_str()
             };
 
-            let mut value = get_value(expr, context)?;
+            // `get_value_safe`, not `get_value`: the bool beside the value is
+            // what carries a quoted literal's grant (#2376). For every
+            // NON-literal expression this arm can see — it never contains a
+            // pipe, since the parser puts the filters in `filters` — the bool
+            // it returns IS `context.is_safe(expr)`, which is what this line
+            // read before, so nothing that resolved through the context
+            // changes answer.
+            let (mut value, seeded_safe) = get_value_safe(expr, context)?;
 
             // See the Variable arm: track the LAST filter's runtime safeness so
             // a custom filter that ``mark_safe()``s at runtime bypasses escaping
             // (#1660); a later plain filter re-taints. Seeded with the context's
             // own safety so the chain carries Django's input term (#2274).
-            let mut runtime_safe = context.is_safe(expr);
+            let mut runtime_safe = seeded_safe;
             // See the Variable arm: item-level safety, seeded from the context
             // (#2283, #2287) — the second of the three sites.
             let mut items_safe = context.items_are_safe(expr);
@@ -1529,6 +1605,43 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                             };
                                             ctx.set(var_name.clone(), tuple_items[i].clone());
                                             ctx.set_safety(var_name, part_safe);
+                                            // The alias for the paths BENEATH
+                                            // this component (#2375).
+                                            // `set_safety` above grants the
+                                            // component ITSELF; `{{ b.z }}`
+                                            // needs `b.z -> <expr>.<index>.<i>.z`,
+                                            // which only an alias can express.
+                                            //
+                                            // Registered under EXACTLY the
+                                            // condition `part_safe`'s own
+                                            // positional lookup uses, and for
+                                            // exactly the same reason: the
+                                            // correspondence is real only when
+                                            // both sides are positional. A
+                                            // NORMALISED source (a dict view)
+                                            // is refused because
+                                            // `_collect_safe_keys` spells a
+                                            // dict BY KEY NAME and this
+                                            // asserts an INDEX — the #2334
+                                            // collision, which is a live XSS
+                                            // for attacker-controlled keys —
+                                            // and a FILTERED one because
+                                            // `slice` shifts and `dictsort`
+                                            // reorders.
+                                            if !normalised && !iterable.contains('|') {
+                                                // Against `ctx`: the loop body
+                                                // renders there, so an outer
+                                                // loop's alias on the iterable
+                                                // name is the one that applies
+                                                // — the same context
+                                                // `set_loop_mapping` uses one
+                                                // branch over.
+                                                let base = ctx.alias_path(iterable);
+                                                ctx.set_alias(
+                                                    var_name.clone(),
+                                                    format!("{base}.{index}.{i}"),
+                                                );
+                                            }
                                         } else {
                                             // If tuple has fewer items than var names, set to Null
                                             ctx.set(var_name.clone(), Value::Missing);
@@ -1727,10 +1840,22 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // With `only`, `include_context` is fresh and carries no
                 // grants, so `bind`'s revoke half is a no-op there and its
                 // grant half is the whole of the work.
+                // The sub-path alias, by the same rule and through the same
+                // door as `{% with %}` (#2375). Deciding this site EXPLICITLY
+                // rather than by omission is the #1646 discipline: it is the
+                // same operation under a third spelling. Under `only` the
+                // fresh context carries no grants, so every alias resolves
+                // against an empty set and costs nothing.
+                let mut pending: Vec<(String, String)> = Vec::new();
                 for (key, value_expr) in with_vars {
                     let (value, runtime_safe) = get_value_safe(value_expr, context)?;
                     include_context.bind(key.clone(), value, runtime_safe);
+                    if let Some(path) = bare_dotted_path(value_expr) {
+                        pending.push((key.clone(), context.alias_path(path)));
+                    }
                 }
+                let bound: Vec<&str> = with_vars.iter().map(|(k, _)| k.as_str()).collect();
+                register_binding_aliases(&mut include_context, pending, &bound);
 
                 render_nodes_with_loader(&nodes, &include_context, Some(loader))
             } else {
@@ -1863,10 +1988,39 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // this one turned up: with `p` marked in the context,
             // `{% with p=hostile %}{{ p }}{% endwith %}` inherited the stale
             // by-name grant and emitted the hostile value RAW.
+            // The grant on the paths BENEATH each bound name (#2375).
+            // `bind` moves it at the NAME granularity, and
+            // `_collect_safe_keys` writes a dict's marks at `p.<key>` — so
+            // `{{ q.a }}` asked `is_safe("q.a")`, which nothing had ever
+            // written, and the marked value came out escaped.
+            //
+            // An ALIAS rather than a copy: `q -> p` makes `is_safe` rewrite the
+            // whole dotted path in `O(1)`, where copying every `p.…` entry to
+            // `q.…` is `O(len(safe_keys))` per bind and still would not survive
+            // a third level.
+            //
+            // Collected here and registered AFTER every bind, by
+            // `register_binding_aliases` — read its docs before touching the
+            // order. Two things depend on it: `bind` REVOKES the alias on the
+            // name it binds, so registering inside the loop would be undone by
+            // a later assignment to the same name; and an alias may not target
+            // a name this same tag rebinds.
+            //
+            // The path is expanded against `context`, the OUTER one. Django
+            // resolves every assignment in a `{% with %}` against the outer
+            // context (`WithNode.render` builds the whole `values` dict before
+            // `context.update`), so `b` in `{% with a=p b=a %}` binds the OUTER
+            // `a`.
+            let mut pending: Vec<(String, String)> = Vec::new();
             for (var_name, expression) in assignments {
                 let (value, runtime_safe) = get_value_safe(expression, context)?;
                 new_context.bind(var_name.clone(), value, runtime_safe);
+                if let Some(path) = bare_dotted_path(expression) {
+                    pending.push((var_name.clone(), context.alias_path(path)));
+                }
             }
+            let bound: Vec<&str> = assignments.iter().map(|(n, _)| n.as_str()).collect();
+            register_binding_aliases(&mut new_context, pending, &bound);
 
             // Render children with new context
             render_nodes_with_loader(nodes, &new_context, loader)
@@ -2901,6 +3055,213 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     Ok(get_value(condition, context)?.is_truthy())
 }
 
+/// Register the sub-path aliases for ONE multi-assignment binding tag
+/// (`{% with %}`, `{% include … with %}`), after every bind in it has run.
+///
+/// `pending` is `(bound name, already-expanded target path)`; `bound` is every
+/// name this tag assigns.
+///
+/// # The exclusion, and why it is not a nicety
+///
+/// An alias is looked up in the NEW context's `safe_keys`, while its target
+/// path describes the OUTER context. Every later rebinding retires it —
+/// `Context::revoke_safe_subtree` sweeps the alias TARGETS — but a rebinding
+/// that happened EARLIER IN THE SAME TAG cannot be swept, because the alias
+/// did not exist yet. So:
+///
+/// ```text
+/// {% with a=p b=a %}{{ b }}{% endwith %}     p marked, outer a hostile
+/// ```
+///
+/// binds `a` to `p`'s marked value (`set_safety("a", true)` — the NAME `a` is
+/// now marked in the new context) and binds `b` to the OUTER `a`, which is
+/// hostile. An alias `b -> a` then reads `a`'s BRAND-NEW mark and `{{ b }}`
+/// went to the page RAW. Measured; Django escapes.
+///
+/// The rule that closes it is about the OPERATION rather than the values
+/// (#2129): **an alias may not target a name this same binding tag rebinds.**
+/// Skipping costs only over-escaping, which is the direction to fail in.
+fn register_binding_aliases(ctx: &mut Context, pending: Vec<(String, String)>, bound: &[&str]) {
+    for (name, target) in pending {
+        let head = target.split('.').next().unwrap_or(target.as_str());
+        if bound.contains(&head) {
+            continue;
+        }
+        ctx.set_alias(name, target);
+    }
+}
+
+/// The expression, when it is a BARE DOTTED PATH into the context — and
+/// therefore NAMES the very value a binding is about to bind (#2375).
+///
+/// This is the guard on every [`Context::set_alias`] call, and it is a
+/// security boundary rather than a tidiness check. An alias asserts
+/// "`name` IS the value at `<path>`", and [`Context::is_safe`] then resolves
+/// `name.<rest>` against `safe_keys` as `<path>.<rest>`. That is true for
+/// `{% with q=p %}` and FALSE the moment anything transforms the value:
+///
+/// * a FILTER — `{% with q=p|dictsort:"a" %}` reorders, `|slice` shifts, so
+///   `q.0` is not `p.0`. `_collect_safe_keys` wrote the marks against the
+///   ORIGINAL order, and resolving through them would grant a mark belonging
+///   to a DIFFERENT element. For a dict whose keys are user data that is a
+///   live XSS, not a theoretical one — the same shape #2334 refused the loop
+///   mapping for;
+/// * a LITERAL or an operator — there is no context path to alias at all.
+///
+/// So: every segment is `[A-Za-z0-9_]`, non-empty, and the FIRST segment
+/// starts with a letter or `_`. A leading digit is refused because `5` and
+/// `5.5` are literals, not paths; a numeric segment LATER is fine and
+/// necessary, since `_collect_safe_keys` spells a list's marks positionally
+/// (`p.0.a`).
+///
+/// Refusing too much costs only over-escaping, which is the direction to fail
+/// in; refusing too little emits raw HTML.
+fn bare_dotted_path(expr: &str) -> Option<&str> {
+    let expr = expr.trim();
+    let mut segments = expr.split('.');
+    let first = segments.next()?;
+    let head_ok = first
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    let all_ok = expr
+        .split('.')
+        .all(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+    (head_ok && all_ok).then_some(expr)
+}
+
+/// Django's `Variable.__init__` LITERAL branch — the ONE place a bare token is
+/// recognized as a literal, and the ONE place the safety grant one carries is
+/// minted (#2376).
+///
+/// Returns `(value, is_safe)`, or `None` when the token is a variable LOOKUP.
+///
+/// # Why one function
+///
+/// djust had two resolvers that could see a bare token — `get_value_safe`
+/// (the `{% if %}` / `{% with %}` / `{% firstof %}` / `{% cycle %}` operand
+/// channel) and the `Node::Variable` / `Node::InlineIf` emit arms — and only
+/// the first had literal arms at all. So `{% if "<b>" %}` was right,
+/// `{% with q="<b>" %}` resolved, and `{{ "<b>" }}` rendered the EMPTY STRING:
+/// the text vanished rather than appearing escaped. `{{ 5 }}` and `{{ 5.5 }}`
+/// were empty for the same reason — the defect is the whole literal surface,
+/// not the quoted spelling the issue happened to name. Same
+/// two-resolvers-one-blind split #2347 found for `True` / `False` / `None`,
+/// and the cure is the same: state the rule once and call it from both.
+///
+/// # The grant
+///
+/// `Variable.__init__` ends its quoted branch with
+/// `self.literal = mark_safe(unescape_string_literal(var))`, so a quoted
+/// literal IS `SafeData` and `{{ "<b>" }}` renders LIVE markup in Django. That
+/// is why this returns a bool rather than a bare `Value`: resolving the
+/// literal WITHOUT the grant renders `&lt;b&gt;`, a third answer that is
+/// neither the bug's nor Django's. The two belong in one change and therefore
+/// in one function.
+///
+/// It is not a new attack surface. The string being marked is the TEMPLATE
+/// AUTHOR's own source text, never context data — a template built from user
+/// input is already an RCE, in Django exactly as here.
+///
+/// A NUMBER is not marked. Django only calls `mark_safe` on the quoted branch,
+/// and a number has no markup to protect anyway.
+///
+/// # Django's order, and why the `.` and `e` test comes first
+///
+/// ```text
+/// if "." in var or "e" in var.lower():
+///     self.literal = float(var)
+///     if var[-1] == ".":      # "2." is invalid
+///         raise ValueError
+/// else:
+///     self.literal = int(var)
+/// ```
+///
+/// The `e`/`.` gate is what keeps `inf` and `nan` — which BOTH `float()` and
+/// Rust's `f64` parser accept — from becoming literals: neither carries a `.`
+/// or an `e`, so both take the `int` arm, fail, and resolve as variables.
+/// Measured against Django 5.2.16: `{{ inf }}` renders empty in both engines.
+/// Dropping the gate and parsing `f64` first would silently turn a variable
+/// named `inf` into a float, which is why the gate is reproduced rather than
+/// simplified.
+///
+/// # Known narrower than Django, deliberately
+///
+/// Python's `int()` / `float()` accept digit separators (`1_000`) and
+/// non-ASCII digits; Rust's parsers do not. Those tokens stay variable
+/// lookups and render empty, which is what they did before this function
+/// existed — narrower is the direction a literal recognizer may fail in,
+/// because the alternative is inventing a value Django would not.
+fn django_literal(expr: &str) -> Option<(Value, bool)> {
+    if expr.contains('.') || expr.contains(['e', 'E']) {
+        // `"2."` is invalid — Django re-raises after the successful `float()`.
+        if !expr.ends_with('.') {
+            if let Ok(f) = expr.parse::<f64>() {
+                return Some((Value::Float(f), false));
+            }
+        }
+    } else if let Ok(i) = expr.parse::<i64>() {
+        return Some((Value::Integer(i), false));
+    } else if let Some(digits) = big_int_literal(expr) {
+        // Python's `int()` has no width, so `{{ 99999999999999999999999 }}`
+        // renders every digit in Django. Past `i64` that is a `Value::BigInt`,
+        // whose invariant is "`str(int)` — an optional `-` then ASCII digits",
+        // which `big_int_literal` establishes rather than assumes.
+        return Some((Value::BigInt(digits), false));
+    }
+
+    // The quoted literal. Django's `unescape_string_literal` requires a
+    // matching quote at BOTH ends; a lone `"` never arrives, because Django's
+    // own `FilterExpression` refuses to parse it (`Could not parse the
+    // remainder`) — measured, not assumed — so a two-character minimum is the
+    // real contract and the slice below cannot underflow.
+    let quote = expr.chars().next()?;
+    if (quote != '"' && quote != '\'') || expr.len() < 2 || !expr.ends_with(quote) {
+        return None;
+    }
+    let inner = &expr[quote.len_utf8()..expr.len() - quote.len_utf8()];
+    // `s[1:-1].replace(r"\<quote>", quote).replace(r"\\", "\\")`, in Django's
+    // order.
+    //
+    // The order is NOT observable, and that is measured rather than assumed:
+    // over every string on `{a, \, "}` up to length 6 the two orders differ
+    // for 113 of them, and Django's own `FilterExpression` parses ZERO — every
+    // distinguishing shape contains `\\"`, at which `strdq` terminates the
+    // constant and the remainder fails to parse. So there is deliberately no
+    // test that pins the order, and `test_the_unescape_order_is_unobservable`
+    // is the proof of why rather than the absence of one: gating this order
+    // off is a provable semantic no-op, not missing coverage.
+    //
+    // Django's order is kept anyway. A future lexer change that admitted the
+    // `\\"` shape would make it observable, and matching the reference
+    // implementation costs nothing.
+    let unescaped = inner
+        .replace(&format!("\\{quote}"), &quote.to_string())
+        .replace("\\\\", "\\");
+    Some((Value::String(unescaped), true))
+}
+
+/// `[-]digits` too large for `i64`, as [`Value::BigInt`] requires (#2260).
+///
+/// Only reached after the `i64` parse has failed, so a `Some` here really is
+/// "past `i64`". A leading `+` is STRIPPED rather than kept: `BigInt`'s
+/// `Display` writes its string back verbatim, and Django renders `int("+1…")`
+/// without the sign.
+fn big_int_literal(expr: &str) -> Option<String> {
+    let (sign, body) = match expr.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", expr.strip_prefix('+').unwrap_or(expr)),
+    };
+    if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // `int("007")` is `7`; keeping the zeros would render a number Django
+    // does not. Strip them, and keep one digit so `"000"` stays `"0"`.
+    let trimmed = body.trim_start_matches('0');
+    let body = if trimmed.is_empty() { "0" } else { trimmed };
+    Some(format!("{sign}{body}"))
+}
+
 fn get_value(expr: &str, context: &Context) -> Result<Value> {
     // Thin wrapper that discards the runtime-safe flag. Most callers
     // (condition operators, progress-bar math, etc.) only need the `Value`
@@ -3043,19 +3404,14 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         _ => {}
     }
 
-    if let Ok(i) = expr.parse::<i64>() {
-        return Ok((Value::Integer(i), false));
-    }
-
-    if let Ok(f) = expr.parse::<f64>() {
-        return Ok((Value::Float(f), false));
-    }
-
-    // String literal (remove quotes)
-    if (expr.starts_with('"') && expr.ends_with('"'))
-        || (expr.starts_with('\'') && expr.ends_with('\''))
-    {
-        return Ok((Value::String(expr[1..expr.len() - 1].to_string()), false));
+    // The numeric and quoted literals, through the ONE helper that recognizes
+    // them (#2376). This arm used to spell them inline — an `i64` parse, an
+    // `f64` parse, and a quote-strip that reported `false` for safety — while
+    // `Node::Variable` had no literal arm AT ALL. Two resolvers, one of them
+    // blind: `{% if "<b>" %}` was right and `{{ "<b>" }}` rendered the EMPTY
+    // STRING. Exactly #2347's shape, three literal kinds over.
+    if let Some(literal) = django_literal(expr) {
+        return Ok(literal);
     }
 
     // Last resort: the getattr walk over raw Python objects that

@@ -1349,7 +1349,7 @@ fn apply_builtin_filter(
             // Usage: {{ value|stringformat:"s" }} → "%s" % value
             // The argument is the format spec WITHOUT the leading %
             let spec = arg.unwrap_or("s");
-            Ok(Value::String(apply_stringformat(value, spec)))
+            Ok(Value::String(crate::stringformat::apply(value, spec)))
         }
         "default_if_none" => {
             // Fallback only when the value is None or absent — never for an
@@ -3878,291 +3878,6 @@ fn linebreaksbr(s: &str, autoescape: bool) -> String {
     body.replace('\n', "<br>")
 }
 
-/// What the text before a `%…s` conversion character turned out to be.
-enum SSpec {
-    /// A well-formed `[flags][width][.precision][length]`.
-    Format {
-        left: bool,
-        width: usize,
-        precision: Option<usize>,
-    },
-    /// Well-formed, but a width or precision CPython refuses: both are C `int`s,
-    /// so past `i32::MAX` it raises `ValueError` rather than allocating.
-    Invalid,
-    /// Not that grammar at all.
-    NotAWidthSpec,
-}
-
-/// CPython's `unicode_format_arg_parse`, restricted to the `s` conversion.
-///
-/// Read off the interpreter, not from memory, and then checked AGAINST it: an
-/// exhaustive sweep of every prefix over `-+ #0` / digits / `.` / `hlL` up to
-/// length 4 crossed with seven values — 21 147 cells — agrees with
-/// `("%" + prefix + "s") % value` on every one, and no prefix this accepts
-/// makes CPython raise. The surprises the sweep settles, none of which a
-/// hand-written table would have thought to include:
-///
-/// * the `0` flag is **ignored** for `s` — `"%010s" % "ab"` pads with SPACES,
-///   where the same flag on `%d` pads with zeros;
-/// * `+`, ` ` and `#` are accepted and do nothing;
-/// * a flag may repeat and may follow another flag (`%--10s` is left-aligned);
-/// * a bare `.` is precision **zero**, so `"%.s"` is `""` and `"%10.s"` is ten
-///   spaces — not "no precision";
-/// * `0` leads as a flag, so `"%0s"` is width 0 and `"%010s"` is width 10;
-/// * a trailing `h`/`l`/`L` length modifier is accepted and ignored.
-fn parse_s_spec(prefix: &str) -> SSpec {
-    let b = prefix.as_bytes();
-    let mut i = 0;
-    let mut left = false;
-    while i < b.len() && matches!(b[i], b'-' | b'+' | b' ' | b'#' | b'0') {
-        if b[i] == b'-' {
-            left = true;
-        }
-        i += 1;
-    }
-    let digits_start = i;
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
-    }
-    // The two limits differ, and were BISECTED against the interpreter rather
-    // than assumed: width is a `Py_ssize_t` and precision an `int`, so
-    // `"%9223372036854775808s"` raises `width too big` while
-    // `"%.2147483648s"` raises `precision too big` five orders of magnitude
-    // lower.
-    let width = match parse_c_int(&prefix[digits_start..i], i64::MAX as u64) {
-        Some(w) => w,
-        None => return SSpec::Invalid,
-    };
-    let mut precision = None;
-    if i < b.len() && b[i] == b'.' {
-        i += 1;
-        let digits_start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        match parse_c_int(&prefix[digits_start..i], i32::MAX as u64) {
-            Some(p) => precision = Some(p),
-            None => return SSpec::Invalid,
-        }
-    }
-    if i < b.len() && matches!(b[i], b'h' | b'l' | b'L') {
-        i += 1;
-    }
-    if i != b.len() {
-        return SSpec::NotAWidthSpec;
-    }
-    SSpec::Format {
-        left,
-        width,
-        precision,
-    }
-}
-
-/// A width or precision field: empty is 0, and anything past `max` is the
-/// `ValueError` CPython raises rather than a saturating cast.
-fn parse_c_int(digits: &str, max: u64) -> Option<usize> {
-    // Leading zeros do not count toward the limit —
-    // `"%00000000000000000000010s"` is width 10, verified against CPython.
-    let trimmed = digits.trim_start_matches('0');
-    if trimmed.is_empty() {
-        return Some(0);
-    }
-    if trimmed.len() > 19 {
-        return None;
-    }
-    match trimmed.parse::<u64>() {
-        Ok(n) if n <= max => Some(n as usize),
-        _ => None,
-    }
-}
-
-fn apply_stringformat(value: &Value, spec: &str) -> String {
-    // Implements Django's stringformat filter.
-    // The spec is a Python printf-style format specifier WITHOUT the leading %.
-    // Common specifiers: "s" (string), "d" (integer), "f" (float),
-    // "05d" (zero-padded int), ".2f" (2 decimal places).
-
-    // An EMPTY spec is not a conversion at all. Django's filter body is
-    // `("%" + arg) % value`, so an empty arg makes the format string `"%"` —
-    // a `%` with nothing after it, which CPython answers with
-    // `ValueError: incomplete format`. That is one of the two exceptions
-    // Django's `except (ValueError, TypeError)` catches, so `{{ p|stringformat:"" }}`
-    // renders `""` (measured on Django 5.2.16, for an int, a str and None).
-    //
-    // This was `spec.chars().last().unwrap_or('s')` before #2343, and the
-    // default was not a harmless fallback: an empty spec entered the `'s'` arm
-    // and hit `&spec[..spec.len() - 1]`, where `0usize - 1` underflows. Debug
-    // catches it as `attempt to subtract with overflow`; release wraps to
-    // `usize::MAX` and the slice panics one line later with
-    // `end byte index 18446744073709551615 is out of bounds`. Every other arm
-    // (`d`/`i`, `f`/`F`, `e`/`E`) carries the same `spec.len() - 1`, so the
-    // guard belongs here, above the dispatch, rather than in the arm that
-    // happened to be reachable.
-    //
-    // A PANIC is categorically worse than a filter raising, which is why this
-    // one bug forced a boundary change as well: PyO3 converts an unwind into
-    // `pyo3_runtime.PanicException`, whose MRO is
-    // `[PanicException, BaseException, object]` — it is NOT an `Exception`, so
-    // it walks straight past `LiveViewConsumer.receive`'s `except Exception`
-    // and takes the WebSocket session down instead of producing an error
-    // frame. See `guard_panic` in `crates/djust_live/src/lib.rs` for the
-    // backstop; this guard is the fix, that is the net.
-    let Some(last_char) = spec.chars().last() else {
-        return String::new();
-    };
-
-    match last_char {
-        's' => {
-            // `("%" + arg) % value` for the `s` conversion — which is not
-            // `str(value)`: CPython honours `[flags][width][.precision]` there
-            // exactly as it does for the numeric conversions, and this arm
-            // ignored ALL of it (#2294). `{{ p|stringformat:"10s" }}` rendered
-            // `'ab'` where Django renders `'        ab'`.
-            match parse_s_spec(&spec[..spec.len() - 1]) {
-                SSpec::Format {
-                    left,
-                    width,
-                    precision,
-                } => {
-                    let s = value.to_string();
-                    // Code points on both axes: `"%6s" % "中"` pads to five
-                    // spaces plus the char, and `"%.3s"` keeps three code
-                    // points. Slicing bytes would do neither.
-                    let body: String = match precision {
-                        Some(p) => s.chars().take(p).collect(),
-                        None => s,
-                    };
-                    let len = body.chars().count();
-                    if width <= len {
-                        body
-                    } else {
-                        let pad_len = width - len;
-                        let mut out = String::new();
-                        if out.try_reserve(body.len() + pad_len).is_err() {
-                            // CPython's parse ACCEPTS a width up to
-                            // `PY_SSIZE_T_MAX` and then raises `MemoryError`
-                            // when it cannot allocate — which the filter's
-                            // `except (ValueError, TypeError)` does not catch,
-                            // so Django 500s. Rust's default OOM handler
-                            // ABORTS the process instead, which is worse than
-                            // either. Degrade to the unpadded value; no width
-                            // that can actually be rendered reaches here.
-                            return body;
-                        }
-                        if left {
-                            out.push_str(&body);
-                        }
-                        out.extend(std::iter::repeat_n(' ', pad_len));
-                        if !left {
-                            out.push_str(&body);
-                        }
-                        out
-                    }
-                }
-                // `ValueError: width too big` / `precision too big`, which
-                // Django catches and answers `""` to.
-                SSpec::Invalid => String::new(),
-                // Not a width spec at all — the prefix holds another conversion
-                // character (`%as` is `%a` followed by a literal `s`), a stray
-                // `%`, or a `*`. CPython's answer to those is neither `str()`
-                // nor `""`, so nothing here can be right; this keeps the
-                // pre-#2294 answer rather than inventing a second wrong one.
-                // Measured on the differential: no cell changes either way.
-                SSpec::NotAWidthSpec => value.to_string(),
-            }
-        }
-        'd' | 'i' => {
-            // Django is `("%" + arg) % value`, catching `(ValueError,
-            // TypeError)` and returning `""`. CPython's `%d` takes an `int`, a
-            // `bool`, a FINITE `float` or a FINITE `Decimal` and truncates
-            // toward zero; it raises `TypeError` for a `str`, `None`, a list, a
-            // dict or a tuple (Django stringifies a tuple first, which then
-            // fails the same way) and `ValueError` for a NaN. Read off CPython
-            // 3.12, not inferred.
-            //
-            // What was here computed an `i64` through `as_f64()`, so it carried
-            // BOTH of the losses #2253 had already fixed one filter over: a
-            // double holds ~15 digits, so it was off by one from 2^53 up, and
-            // `as i64` SATURATES, so every value past 2^63 rendered
-            // `9223372036854775807` — a fabricated constant, silently, where an
-            // id or a money column was meant (#2265). The digits are exact
-            // now, and a value with no answer renders `""` as Django's does
-            // rather than the `0` a failed `parse` used to produce (#2265
-            // group 3).
-            //
-            // `int_digits_of` is the shared `int()` — the same one `add` and
-            // `get_digit` use (#1646) — with one difference `%d` needs: it
-            // accepts a NUMERIC STRING, and `"%d" % "42"` raises. So a string
-            // is refused here before it reaches the shared helper, which is
-            // also what makes `{{ "abc"|stringformat:"d" }}` empty rather than
-            // the `0` a failed `parse` used to produce (#2265 group 3).
-            let digits: Option<String> = match value {
-                Value::String(_) | Value::List(_) | Value::Tuple(_) | Value::Object(_) => None,
-                _ => int_digits_of(value, false),
-            };
-            let Some(digits) = digits else {
-                return String::new();
-            };
-
-            let prefix = &spec[..spec.len() - 1];
-            if prefix.is_empty() {
-                return digits;
-            }
-            let zero_pad = prefix.starts_with('0');
-            let width = prefix.parse::<usize>().unwrap_or(0);
-            if digits.len() >= width {
-                return digits;
-            }
-            if zero_pad {
-                // SIGN-AWARE: `"%05d" % -1` is `-0001`, not `000-1`. A plain
-                // `{:0>width$}` on the formatted string pads in front of the
-                // minus, which is what the previous code did.
-                let (sign, body) = match digits.strip_prefix('-') {
-                    Some(b) => ("-", b),
-                    None => ("", digits.as_str()),
-                };
-                format!("{sign}{}{body}", "0".repeat(width - digits.len()))
-            } else {
-                format!("{}{digits}", " ".repeat(width - digits.len()))
-            }
-        }
-        'f' | 'F' => {
-            let float_val = match value {
-                Value::Float(f) => *f,
-                Value::Integer(n) => *n as f64,
-                _ => value.to_string().parse::<f64>().unwrap_or(0.0),
-            };
-
-            let prefix = &spec[..spec.len() - 1];
-            if let Some(dot_pos) = prefix.find('.') {
-                let precision = prefix[dot_pos + 1..].parse::<usize>().unwrap_or(6);
-                format!("{float_val:.precision$}")
-            } else {
-                format!("{float_val:.6}")
-            }
-        }
-        'e' | 'E' => {
-            let float_val = match value {
-                Value::Float(f) => *f,
-                Value::Integer(n) => *n as f64,
-                _ => value.to_string().parse::<f64>().unwrap_or(0.0),
-            };
-            let prefix = &spec[..spec.len() - 1];
-            let precision = if let Some(dot_pos) = prefix.find('.') {
-                prefix[dot_pos + 1..].parse::<usize>().unwrap_or(6)
-            } else {
-                6
-            };
-            if last_char == 'E' {
-                format!("{float_val:.precision$E}")
-            } else {
-                format!("{float_val:.precision$e}")
-            }
-        }
-        _ => value.to_string(),
-    }
-}
-
 /// `django.utils.html.strip_tags`, ported in `crate::htmlparser` (#2273).
 ///
 /// The scan this replaced treated EVERY `<` as opening a tag, so `a < b`
@@ -4900,6 +4615,7 @@ mod float_sink_set {
             "djust_templates/src/floatformat.rs",
             "djust_templates/src/renderer.rs",
             "djust_templates/src/loop_cache.rs",
+            "djust_templates/src/stringformat.rs",
             // The second crate, scanned since #2324 moved a sink into it.
             "djust_core/src/lib.rs",
         ] {
@@ -4933,6 +4649,16 @@ mod float_sink_set {
             ),
             ("djust_templates/src/floatformat.rs", "python_float_repr"),
             ("djust_templates/src/pprint.rs", "python_float_repr"),
+            // `%d` / `%i` / `%u`'s argument rule (#2358): CPython truncates a
+            // finite float toward zero and raises for a non-finite, which is
+            // exactly `python_float_trunc_digits`. The `%e`/`%f`/`%g` arm in
+            // the same file does NOT appear here, because it binds the `f64`
+            // for arithmetic rather than spelling it — Rust's `{:.*}` and
+            // `{:.*e}` are C's, which is what those conversions are.
+            (
+                "djust_templates/src/stringformat.rs",
+                "python_float_trunc_digits",
+            ),
         ]
         .iter()
         .map(|(f, h)| ((*f).to_string(), (*h).to_string()))
@@ -6837,14 +6563,20 @@ mod tests {
         assert_eq!(result.to_string(), "42.0");
     }
 
+    /// The exponent carries a SIGN and at least two digits (#2358 group 3).
+    ///
+    /// This test asserted `1.23e3` — Rust's `{:e}`, which writes neither —
+    /// and was green for as long as the bug existed, because it pinned
+    /// djust's answer rather than CPython's. `"%.2e" % 1234.5` is
+    /// `'1.23e+03'`.
     #[test]
     fn test_stringformat_filter_scientific() {
         let value = Value::Float(1234.5);
         let result = apply_filter("stringformat", &value, Some(".2e")).unwrap();
-        assert_eq!(result.to_string(), "1.23e3");
+        assert_eq!(result.to_string(), "1.23e+03");
 
         let result = apply_filter("stringformat", &value, Some(".2E")).unwrap();
-        assert_eq!(result.to_string(), "1.23E3");
+        assert_eq!(result.to_string(), "1.23E+03");
     }
 
     #[test]
@@ -7031,12 +6763,18 @@ mod tests {
             (".2147483648s", ""),
             // One below the precision limit is still accepted.
             (".2147483647s", "abcdef"),
-            // Not a width spec at all: the prefix holds another conversion
-            // character, so the pre-#2294 answer stands.
-            ("as", "abcdef"),
-            ("!s", "abcdef"),
+            // The prefix holds another CONVERSION, so `%as` is `%a`
+            // followed by the literal `s` and the answer is the ascii-repr
+            // plus that letter. #2294 left these at `value.to_string()`
+            // because it had no grammar to hand; #2358 gave it one, and both
+            // rows moved to CPython's answer.
+            ("as", "'abcdef's"),
+            // `!` is not a flag, a digit, a `.`, a length modifier or a
+            // conversion, so the parse stops on it: `unsupported format
+            // character`.
+            ("!s", ""),
         ] {
-            let got = apply_stringformat(&Value::String("abcdef".to_string()), spec);
+            let got = crate::stringformat::apply(&Value::String("abcdef".to_string()), spec);
             assert_eq!(got, want, "%{spec}");
         }
     }
@@ -7045,9 +6783,15 @@ mod tests {
     #[test]
     fn test_stringformat_s_counts_code_points() {
         let v = Value::String("\u{4e2d}\u{6587}\u{5b57}".to_string());
-        assert_eq!(apply_stringformat(&v, "6s"), "   \u{4e2d}\u{6587}\u{5b57}");
-        assert_eq!(apply_stringformat(&v, ".2s"), "\u{4e2d}\u{6587}");
-        assert_eq!(apply_stringformat(&v, "5.2s"), "   \u{4e2d}\u{6587}");
+        assert_eq!(
+            crate::stringformat::apply(&v, "6s"),
+            "   \u{4e2d}\u{6587}\u{5b57}"
+        );
+        assert_eq!(crate::stringformat::apply(&v, ".2s"), "\u{4e2d}\u{6587}");
+        assert_eq!(
+            crate::stringformat::apply(&v, "5.2s"),
+            "   \u{4e2d}\u{6587}"
+        );
     }
 
     /// `length` of a `Value::Object` (#2294): a dict counts, a serialized

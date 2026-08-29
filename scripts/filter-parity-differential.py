@@ -673,6 +673,17 @@ INPUTS = {
         "1": mark_safe("<b>by-string</b>"),
         1: "by-int",
     },
+    # A dict with a marked value AND an unmarked hostile one, both under
+    # ORDINARY identifier keys (#2375). `d-hostile-key` and `d-numeric-key`
+    # carry a marked value too, but under the key `"1"` — which is also a
+    # numeric path segment, so a cell reading `q.1` cannot separate "the grant
+    # followed the bind" from "the index step resolved". These keys are `a` and
+    # `z`, so `{{ q.a }}` and `{{ q.z }}` ask exactly one question each: does
+    # the grant follow, and does it stay where it belongs.
+    "d-marked-value": {
+        "a": mark_safe("<b>ok</b>"),
+        "z": "<img src=x onerror=alert(1)>",
+    },
 }
 
 #: Inputs whose SAFETY the context declares. Rendered through
@@ -721,6 +732,9 @@ LIVE_FRAGMENTS = {
     # The KEY is the payload here, and it is never marked. `<b>ok</b>` IS
     # marked and Django emits it live, which is why it is not listed.
     "d-hostile-key": ["<img", "onerror="],
+    # The `z` value is the payload and is NEVER marked; `a` IS marked and
+    # Django emits it live, which is why `<b>ok</b>` is not listed (#2375).
+    "d-marked-value": ["<img", "onerror="],
     # Same, for the typed-key dict (#2339). `d-typed-key` carries no payload
     # at all and so has no entry.
     "d-typed-hostile": ["<img", "onerror="],
@@ -1121,6 +1135,21 @@ def tag_cells():
 PATH_SHAPES = {
     "for-bare": "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}",
     "for-items": "{% for k, v in p.items %}[{{ k }}={{ v }}]{% empty %}E{% endfor %}",
+    # The SPELLING of the unpack list (#2377). Django joins the tokens before
+    # `in` and splits the result on `","`, so `a,b`, `a, b` and `a ,b` are one
+    # three-name loop; djust split on WHITESPACE and read `a,b` as a single
+    # variable literally spelled `a,b`, which never resolves — so the whole
+    # loop body rendered NOTHING, silently. Every shape above and every tag
+    # cell writes the SPACED spelling, so the corpus could not construct a
+    # single cell that shows it. Same corpus-gap class as #2325 and #2334, on
+    # the one axis nothing else varies: whitespace inside a tag's own argument
+    # list. All three spellings, because a fix that splits on `","` without
+    # trimming answers a name spelled ` b`.
+    "for-unspaced": "{% for a,b in p %}[{{ a }}={{ b }}]{% empty %}E{% endfor %}",
+    "for-spaced": "{% for a, b in p %}[{{ a }}={{ b }}]{% empty %}E{% endfor %}",
+    "for-space-before": "{% for a ,b in p %}[{{ a }}={{ b }}]{% empty %}E{% endfor %}",
+    "for-three-unspaced": "{% for a,b,c in p %}[{{ a }}{{ b }}{{ c }}]{% empty %}E{% endfor %}",
+    "for-items-unspaced": "{% for k,v in p.items %}[{{ k }}={{ v }}]{% empty %}E{% endfor %}",
     "for-keys": "{% for x in p.keys %}[{{ x }}]{% empty %}E{% endfor %}",
     "for-values": "{% for x in p.values %}[{{ x }}]{% empty %}E{% endfor %}",
     "for-rev": "{% for x in p reversed %}[{{ x }}]{% empty %}E{% endfor %}",
@@ -1163,11 +1192,77 @@ PATH_SHAPES = {
     "if-0": "{% if p.0 %}Y{% else %}N{% endif %}",
     "with-0": "{% with q=p.0 %}[{{ q }}]{% endwith %}",
     "for-0": "{% for x in p.0 %}[{{ x }}]{% empty %}E{% endfor %}",
+    # Step 3 applied TWICE (#2373). A character sliced out of a string is
+    # itself a `str`, so Django runs the index step again and `{{ s.0.0 }}` on
+    # `"abc"` is `'a'`. Every shape above stops after one segment past the
+    # root, so none can show a recursion that stops at depth 1 — and the arm
+    # that recurses is the only thing standing between agreement and empty.
+    "var-0-0": "[{{ p.0.0 }}]",
     # The bound dict VIEW, indexed. Python's `dict_keys` is not subscriptable,
     # so this is empty on both engines — and it is the ONLY shape that hands a
     # view to the index step at all (`{{ p.keys.0 }}` dies at the `keys`
     # segment before any view exists).
     "with-keys-0": "{% with q=p.keys %}[{{ q.0 }}]{% endwith %}",
+    # A grant on a SUB-PATH, across a binding (#2375). `Context::bind` moves
+    # the grant at the NAME granularity, and `_collect_safe_keys` writes a
+    # dict's marks at `p.<key>` — so `{% with q=p %}{{ q.a }}{% endwith %}`
+    # asked `is_safe("q.a")`, which nothing ever wrote. Every `with` cell above
+    # emits the bound name WHOLE, so none could see it.
+    #
+    # Seven cells, not one, because the fix is asymmetric and two of its halves
+    # are the UNDER-escaping direction:
+    #
+    # * the marked sub-path must come through LIVE;
+    # * the UNMARKED sibling must stay escaped — a grant that leaks sideways is
+    #   a live XSS;
+    # * a FILTERED binding must grant nothing at all (`dictsort` reorders,
+    #   `slice` shifts — the #2334 correspondence);
+    # * a REBIND of the NAME must retire the alias (#2378's "a bind REPLACES
+    #   the grant", one path segment down);
+    # * a REBIND of the TARGET must retire it too — `{% with q=p %}{% with
+    #   p=…|safe %}{{ q }}` emitted `q`'s ORIGINAL value raw in this fix's
+    #   first version, because `set_safety` marks the NAME `p` and the
+    #   surviving `q -> p` alias read it;
+    # * a MULTI-ASSIGNMENT tag resolves every value against the OUTER context,
+    #   so `{% with a=p q=a %}` binds the outer `a` — and an alias `q -> a`
+    #   would read the brand-new mark on `a`. Second live XSS, same mechanism.
+    "with-subpath-marked": "{% with q=p %}[{{ q.a }}]{% endwith %}",
+    "with-subpath-unmarked": "{% with q=p %}[{{ q.z }}]{% endwith %}",
+    "with-subpath-filtered": "{% with q=p|dictsort:'a' %}[{{ q.a }}]{% endwith %}",
+    "with-subpath-rebound": (
+        "{% with q=p %}{% with q=p.z %}[{{ q.a }}]{% endwith %}{% endwith %}"
+    ),
+    "with-target-rebound": (
+        "{% with q=p %}{% with p=p.z|safe %}[{{ q }}]{% endwith %}{% endwith %}"
+    ),
+    # Spelled with `p` on BOTH sides deliberately: the corpus binds exactly one
+    # name, so `{% with a=p q=a %}` — the natural spelling — resolves the outer
+    # `a` to nothing and the cell can see no defect at all. Measured, not
+    # assumed: with the exclusion gated off, that spelling reports ZERO leaks
+    # and this one reports the dict repr going out RAW.
+    "with-multi-assign": "{% with p=p.a q=p %}[{{ q }}]{% endwith %}",
+    "for-unpack-subpath": "{% for a, b in p %}[{{ b.z }}]{% empty %}E{% endfor %}",
+    # A dict VIEW as the BARE dotted operand of an assign tag (#2368). Every
+    # `regroup` cell the tag axis builds writes `p|<filter>`, and the shapes
+    # above that write a dotted path put it in `{% for %}` / `{{ }}` / `{% if %}`
+    # — so nothing reached `resolve_tag_operand`'s NON-pipe branch with a path
+    # only `Context::resolve` can answer. That branch used `Context::get`,
+    # which has no dict-view arm, so the tag fell back to its "unresolved ⇒
+    # keep the raw token" contract and `{{ g|length }}` rendered `0`.
+    #
+    # The `|slice` twin is the CONTROL: it goes through the pipe branch, which
+    # #2333 already routed through `get_value`, and agreed on both builds.
+    # Without it the two halves of the channel cannot be told apart.
+    "regroup-values-bare": "{% regroup p.values by k as g %}[{{ g|length }}]",
+    "regroup-keys-bare": "{% regroup p.keys by k as g %}[{{ g|length }}]",
+    "regroup-items-bare": "{% regroup p.items by k as g %}[{{ g|length }}]",
+    "regroup-values-piped": "{% regroup p.values|slice:':2' by k as g %}[{{ g|length }}]",
+    # The GROUPERS, not just the count: two empty groups have the same length
+    # as two real ones, and a cell that cannot tell them apart would agree
+    # while the rows never arrived.
+    "regroup-values-groupers": (
+        "{% regroup p.values by k as g %}{% for x in g %}({{ x.grouper }}){% endfor %}"
+    ),
     # NOT `random` / `timesince` / `timeuntil`: this axis has no `NONDET`
     # collapse, so a nondeterministic cell would differ between two runs of the
     # SAME build and read as a regression.
@@ -1348,7 +1443,48 @@ def arg_cells():
 #: non-regression half: the fix converges both resolvers onto one helper, and
 #: these cells are what would go red if that convergence changed the answer on
 #: the side that was already correct.
-BUILTIN_NAMES = ["True", "False", "None"]
+#: The same axis carries the QUOTED and NUMERIC literals (#2376), for the same
+#: reason and one step further along: every cell outside this axis writes `p`
+#: as the expression, so the corpus could not construct a bare `{{ "x" }}` at
+#: all — and that is precisely where djust diverged. `Node::Variable` had NO
+#: literal arm of any kind, so `{{ "hello" }}`, `{{ 5 }}` and `{{ 5.5 }}` all
+#: resolved through the context, missed, and rendered the EMPTY STRING. The
+#: `{% if %}` / `{% with %}` / `{% firstof %}` shapes reached them only because
+#: `renderer::get_value_safe` carries its own literal arms — the same
+#: two-resolvers-one-blind split (#1646) that #2347 found for `True`.
+#:
+#: They also carry the SAFETY question the builtin names cannot: Django's
+#: `Variable.__init__` does `mark_safe(unescape_string_literal(var))`, so a
+#: quoted literal is `SafeData` and `{{ "<b>" }}` renders LIVE. A fix that
+#: resolves the literal without granting it renders `&lt;b&gt;` — a THIRD
+#: answer, neither the bug's nor Django's — so both cells must be on the axis
+#: at once. Composed through every filter for the re-taint half:
+#: `{{ "<b>"|upper }}` is ESCAPED in Django, because `upper` is registered
+#: `is_safe=False`.
+#:
+#: The hostile spelling is the template AUTHOR's own text, which is why it is
+#: not in `LIVE_FRAGMENTS` (these cells render over `s-plain`): Django emits it
+#: live too, so djust doing the same is parity, not permissiveness.
+BUILTIN_NAMES = [
+    "True",
+    "False",
+    "None",
+    '"<b>ok</b>"',
+    # Single-quoted, and deliberately free of SPACES: a quoted token carrying
+    # a space is a `smart_split` question rather than a literal one, and
+    # conflating the two would make this axis measure two things at once.
+    "'<script>alert(1)</script>'",
+    '"abc"',
+    # A quoted DIGIT string, which is a different cell from the bare number:
+    # `{{ "5"|add:1 }}` is 6 in Django because `add` coerces, and a
+    # recognizer that returned `Integer(5)` for the quoted form would agree
+    # there while being wrong about `{{ "5"|length }}`.
+    '"5"',
+    "5",
+    "5.5",
+    "-5",
+    "1e3",
+]
 BUILTIN_SHAPES = {
     "var": "{{ @NAME@ }}",
     "if": "{% if @NAME@ %}Y{% else %}N{% endif %}",

@@ -439,18 +439,26 @@ class TestOnlyAddWasBrokenByTheBareLiteral:
         ("dictsort", "False", "0", "ab"),
         ("get_digit", "False", "0", 1.5),
         ("pluralize", "True", "1", 5),
-        # `date` and `time` were here until #2359. Their numeric controls
-        # `date:"1"` and `time:"1"` diverged because a format string carrying
-        # no specifier renders its literal text in Django and djust echoed the
-        # VALUE instead; with that closed, both controls agree and the rows
-        # have nothing left to assert. `time:True` agrees outright now;
-        # `{{ p|date:True }}` still diverges (Django raises `TypeError` from
-        # `get_format(True)`, djust renders `""`) but for the ARGUMENT-TYPE
-        # reason #2366 is about, not for the bare-literal reason this class
-        # tests — the argument reaches the dispatch table as the STRING
-        # `"True"`, whose characters are all `date` specifiers. Pinned in
-        # `test_bool_and_none_values_2359.py::TestTheArgumentTypeResidueIsNamed`.
-        ("stringformat", "True", '"1"', 5),
+        # `stringformat` was here until #2358. Its numeric control diverged
+        # because the catch-all arm echoed the value for `"1"` — a spec
+        # CPython answers `incomplete format` to — so the cell belonged to
+        # that bug and not to #2347. With the grammar in place both
+        # spellings render `""` on both engines and the row has nothing left
+        # to assert, which is what this class's own failure message told the
+        # #2358 author to do: "Re-measure and either fix it or move this row."
+        #
+        # `date` and `time` went the same way in #2359, and for the same
+        # reason one level over: their numeric controls `date:"1"` and
+        # `time:"1"` diverged because a format string carrying no specifier
+        # renders its LITERAL text in Django, and djust echoed the value
+        # instead. With that closed both controls agree. `time:True` agrees
+        # outright now; `{{ p|date:True }}` still diverges (Django raises
+        # `TypeError` from `get_format(True)`, djust renders `""`) but for the
+        # ARGUMENT-TYPE reason #2366 is about, not the bare-literal reason
+        # this class tests — the argument reaches the dispatch table as the
+        # STRING `"True"`, whose characters are all `date` specifiers. Pinned
+        # in `test_bool_and_none_values_2359.py::
+        # TestTheArgumentTypeResidueIsNamed`.
     ]
 
     @pytest.mark.parametrize("name,boolarg,numarg,value", _ROWS)
