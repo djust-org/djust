@@ -137,11 +137,20 @@ fn a_timezone_aware_datetime_keeps_its_offset() {
 }
 
 #[test]
-fn an_unparseable_value_is_still_returned_unchanged() {
-    // Guard: the fail-soft contract. A parse failure must keep returning the
-    // input rather than raising or emitting an empty string.
+fn an_unparseable_value_renders_djangos_own_answer() {
+    // This asserted the input came back — "the fail-soft contract" — until
+    // #2359 measured what Django does. Django's `date` ends
+    // `except AttributeError: return ""`, so returning the input was the more
+    // permissive direction: it put unparsed upstream data on the page for
+    // every `{{ p|date }}` over a non-date.
     let ctx = ctx_with("v", Value::String("not a date at all".into()));
-    assert_eq!(render(r#"{{ v|date:"Y-m-d" }}"#, &ctx), "not a date at all");
+    assert_eq!(render(r#"{{ v|date:"Y-m-d" }}"#, &ctx), "");
+
+    // Still fail-SOFT, which is the half of the old contract that was right:
+    // a parse failure renders, it does not raise. And what it renders is not
+    // unconditionally empty — a format with no specifier never touches the
+    // value, so its literal text comes back (`django_literal_only_format`).
+    assert_eq!(render(r#"{{ v|date:"1-1" }}"#, &ctx), "1-1");
 }
 
 // ---------------------------------------------------------------------------
@@ -245,10 +254,16 @@ fn add_does_not_overflow() {
 
     // The remaining fail-soft is an operand `int()` itself refuses. Django
     // RAISES here (`str(int)` past `sys.get_int_max_str_digits()` is a
-    // `ValueError` its `except` does not catch); djust renders the input rather
-    // than 500ing, and the digits are never fabricated.
+    // `ValueError` its `except` does not catch); djust renders rather than
+    // 500ing, and the digits are never fabricated.
+    //
+    // WHAT it renders moved in #2359, from the input to `""` — the answer
+    // Django's own third branch gives for every value that reaches it without
+    // raising. This width is past even that, so there is no Django output to
+    // agree with; `""` is the less permissive of the two things djust could
+    // put on the page.
     let too_wide = ctx_with("v", Value::Decimal("1E+5000".to_string()));
-    assert_eq!(render("{{ v|add:1 }}", &too_wide), "1e+5000");
+    assert_eq!(render("{{ v|add:1 }}", &too_wide), "");
 
     // Same via the widened float path.
     let mut c2 = Context::new();

@@ -319,13 +319,14 @@ class TestTheBuiltInChainIsNotWorseOff:
     #: * ``add`` — Django's fallback is ``value + arg``, i.e. STRING
     #:   concatenation, so ``{{ 1.5|safe|add:"1" }}`` is ``1.51``; djust's is
     #:   numeric and gives ``2``. Pre-existing on ``{{ 1.5|add:"1" }}`` too.
-    #: * ``date`` / ``time`` — Django returns ``""`` for a value that is not a
-    #:   date; djust echoes the input.
-    #: * ``pluralize`` — Django returns ``""`` when the value is neither a
-    #:   number nor sized; djust returns the suffix.
     #: * ``divisibleby`` — only for a value past ``i64``; the widened parse
     #:   below stops there and answers ``False``, as it did before.
-    KNOWN_RESIDUE = frozenset({"add", "date", "divisibleby", "pluralize", "time"})
+    #:
+    #: ``date``, ``time`` and ``pluralize`` were here until #2359 gave all
+    #: three Django's failure answer; this pin is what reported them closed
+    #: ("new residue [], closed ['date', 'pluralize', 'time']"), which is the
+    #: half of a characterization pin that usually goes unexercised.
+    KNOWN_RESIDUE = frozenset({"add", "divisibleby"})
 
     def test_the_tail_set_covers_the_whole_live_registry(self) -> None:
         """Guards the sweep below against silently shrinking (#1859)."""
@@ -334,7 +335,7 @@ class TestTheBuiltInChainIsNotWorseOff:
         assert "|divisibleby:'2'" in tails
         assert "|floatformat:'2'" in tails
 
-    def test_the_residue_is_exactly_these_five_filters_and_no_others(self) -> None:
+    def test_the_residue_is_exactly_these_two_filters_and_no_others(self) -> None:
         """A characterization pin, not an aspiration.
 
         Every OTHER filter in the registry must agree on every scalar behind

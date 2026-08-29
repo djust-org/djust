@@ -161,7 +161,10 @@ RAISE_BIT_NOT_CLOSED: dict[str, str] = {}
 #: them with the row above would have exempted them from the raise sweep they
 #: actually pass — which is how a stale exemption hides a regression.
 OUTPUT_DIVERGES_FOR_ANOTHER_REASON = {
-    "add": "Django's three-branch int/concat/'' chain, not int(arg) (#2347)",
+    # `add` was here until #2359 gave its third branch Django's `""`.
+    # `"notanumber"` reaches that branch for the `TEXT` value, so the row was
+    # true and is now closed — removed rather than relaxed, as this file's own
+    # message demands ("now agrees - remove its row").
     "stringformat": "an invalid printf spec, not int(arg) (#2343)",
     "yesno": "an arity check on a comma-separated argument, not int(arg)",
 }

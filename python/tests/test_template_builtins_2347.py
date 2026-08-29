@@ -352,38 +352,20 @@ class TestKnownPreExistingDivergencesNotFixedHere:
     #: because `pluralize` diverges on `True` and `None` and AGREES on `False`
     #: — a name-level list would be wrong in one direction or the other.
     _KNOWN = [
-        # Django's `date`/`time` fall through `AttributeError` to `""` for a
-        # value that is not a date; djust returns the value UNCHANGED on a parse
-        # failure, a deliberate choice (see the `tracing::debug!` in the `date`
-        # arm) whose blast radius is every `{{ p|date }}` on a non-date.
+        # The SIX `date`/`time` rows and the two `pluralize` rows lived here
+        # until #2359 closed all three mechanisms; `add:"1"` on `None` went
+        # with them. They were the cells this PR unmasked — they had agreed
+        # only because both engines rendered "" for unrelated reasons, Django
+        # because the value is not a date and djust because the NAME did not
+        # resolve — and this class's own message is what told #2359's author
+        # to shrink the list rather than leave a stale exclusion:
+        # "now AGREES - drop this row from _KNOWN and let the sweeps cover it".
         #
-        # These SIX are the only cells this PR unmasks: they agreed before only
-        # because both engines rendered "" for unrelated reasons — Django
-        # because the value is not a date, djust because the NAME did not
-        # resolve. Now that it resolves, djust's own answer shows through.
-        ("date", "True"),
-        ("date", "False"),
-        ("date", "None"),
-        ("time", "True"),
-        ("time", "False"),
-        ("time", "None"),
-        # No `Bool`/`None` arm, so it falls to `_ => suffix` where Django's
-        # `value != 1` answers "". Divergent on BOTH spellings before and after.
-        ("pluralize", "True"),
-        ("pluralize", "None"),
         # djust stamps a default `id="data"`; Django emits no id without an
         # argument. Nothing to do with the literal at all.
         ("json_script", "True"),
         ("json_script", "False"),
         ("json_script", "None"),
-        # `add`'s THIRD branch. Django returns "" when neither the int nor the
-        # concatenation branch works; djust deliberately returns the value
-        # UNCHANGED instead — "turning a rendered value into silent emptiness on
-        # upgrade is the silent-wrong-output class this engine keeps having to
-        # fix", per the comment in the `add` arm. `None` is the one builtin that
-        # reaches that branch, so `{{ None|add:"1" }}` is a seventh unmasked
-        # cell alongside the six date/time ones. Same shape, different filter.
-        ('add:"1"', "None"),
     ]
 
     @pytest.mark.parametrize("filter_name,name", _KNOWN)
@@ -457,8 +439,17 @@ class TestOnlyAddWasBrokenByTheBareLiteral:
         ("dictsort", "False", "0", "ab"),
         ("get_digit", "False", "0", 1.5),
         ("pluralize", "True", "1", 5),
-        ("date", "True", '"1"', 5),
-        ("time", "True", '"1"', 5),
+        # `date` and `time` were here until #2359. Their numeric controls
+        # `date:"1"` and `time:"1"` diverged because a format string carrying
+        # no specifier renders its literal text in Django and djust echoed the
+        # VALUE instead; with that closed, both controls agree and the rows
+        # have nothing left to assert. `time:True` agrees outright now;
+        # `{{ p|date:True }}` still diverges (Django raises `TypeError` from
+        # `get_format(True)`, djust renders `""`) but for the ARGUMENT-TYPE
+        # reason #2366 is about, not for the bare-literal reason this class
+        # tests — the argument reaches the dispatch table as the STRING
+        # `"True"`, whose characters are all `date` specifiers. Pinned in
+        # `test_bool_and_none_values_2359.py::TestTheArgumentTypeResidueIsNamed`.
         ("stringformat", "True", '"1"', 5),
     ]
 
