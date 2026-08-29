@@ -94,10 +94,14 @@ pub(crate) struct ArgType {
     /// `id` on Django for every one of `None`, `""`, `0`, `0.0`, `False`,
     /// `[]` and `{}`.
     ///
-    /// Answers only about an argument that IS present. "No argument at all"
-    /// is a shape the call site already sees in its own `Option`, and having
-    /// this bit answer it too would be the second mechanism that shadows the
-    /// first.
+    /// **Answers only about an argument that IS present**, and reads `false`
+    /// for an absent one. That is not a claim that a missing argument is
+    /// truthy — it is a refusal to answer, because the answer is per-filter:
+    /// an absent argument means the parameter takes its own DEFAULT, and
+    /// `json_script`'s is `None` (falsy) while `floatformat`'s is `-1`
+    /// (truthy). No single bit can be right for both. The call site reads
+    /// `arg: Option<&str>` for that half, which is where the distinction
+    /// already lives.
     pub is_falsy: bool,
 }
 
@@ -119,9 +123,10 @@ pub(crate) fn arg_is_python_none(resolved: Option<&Value>) -> bool {
 /// object. Splitting the answer across the arm and here would be two
 /// mechanisms for one question.
 ///
-/// See [`ArgType::is_falsy`] for what the caller does with it. This answers
-/// only about an argument that is present; `arg == None` is the call site's
-/// own `Option` to read.
+/// See [`ArgType::is_falsy`] for what the caller does with it, and for why
+/// the absent-argument case is deliberately NOT this function's to answer:
+/// it means "the parameter takes its default", and the default is
+/// per-filter.
 pub(crate) fn arg_is_falsy(
     resolved: Option<&Value>,
     arg: Option<&str>,
@@ -132,6 +137,8 @@ pub(crate) fn arg_is_falsy(
         // `is_truthy` — which already encodes Python's rules for every
         // variant, `Decimal('0.00')` included — is the whole answer.
         (Some(v), _) => !v.is_truthy(),
+        // No argument. See the field doc: `false` here is "not applicable",
+        // not "truthy" — the caller's own `Option` carries that half.
         (None, None) => false,
         // A QUOTED literal is a `str` (Django `mark_safe`s it), and the only
         // falsy `str` is the empty one. The token arrives already stripped of
