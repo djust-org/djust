@@ -585,8 +585,18 @@ class TestEveryFilteredOperandSiteIsAccountedFor:
     #: through ``get_value`` / ``get_value_safe``.
     OPERAND_SITES = {
         "let iterable_value = get_value(iterable, context)?;": "{% for %} iterable (#2325)",
-        "let value = get_value(expression, context)?;": "{% with %} assignment (#2325)",
-        "let value = get_value(value_expr, context)?;": "{% include ... with %} (#2325)",
+        # These two moved from `get_value` to `get_value_safe` in #2363: the
+        # binding sites now KEEP the safety half of the return instead of
+        # discarding it, so the grant travels with the value. `get_value` is a
+        # thin wrapper over `get_value_safe` that drops that `bool`, so the
+        # #2325 invariant this row pins — the operand goes through the ONE
+        # filter-aware resolver rather than a bare `context.get` — is unchanged.
+        (
+            "let (value, runtime_safe) = get_value_safe(expression, context)?;"
+        ): "{% with %} assignment (#2325, #2363)",
+        (
+            "let (value, runtime_safe) = get_value_safe(value_expr, context)?;"
+        ): "{% include ... with %} (#2325, #2363)",
         "Ok(get_value(condition, context)?.is_truthy())\n}": "{% if %} truthiness (#2325)",
         # What makes routing them through `get_value` safe: the shared
         # resolver's last arm keeps the #806 getattr walk the `{% for %}` arm
