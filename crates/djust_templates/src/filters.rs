@@ -84,6 +84,56 @@ pub struct InputSafety {
 /// **Every `Value` variant that can carry markup is on the `Some` side**, which
 /// is what makes #2285's escape on the `None` side a no-op today — see
 /// `every_non_iterable_variant_is_markup_free` for the pin.
+/// `len(value)` with Python's semantics, or `None` where Python RAISES
+/// `TypeError` — the length half of [`iter_values`] (#2387).
+///
+/// Two call sites need this and they disagree about the FALLBACK, which is why
+/// it returns an `Option` rather than a `usize`:
+///
+/// * `{{ p|length }}` — Django's `defaultfilters.length` is `len(value)` under
+///   `except TypeError: return 0`;
+/// * `{% for a, b in p %}` — `ForNode.render` is `len(item)` under
+///   `except TypeError: len_item = 1`, and then RAISES if that does not equal
+///   the loop-variable count.
+///
+/// Collapsing the two into one "length rule with a fallback baked in" would
+/// have made one of them wrong; splitting the fallback out keeps the part they
+/// genuinely share in one place (#1646).
+///
+/// `len()` of a Python `str` counts CODE POINTS; `str::len()` counts BYTES
+/// (#2279). `é` is 2 bytes and `中` is 3, so every non-ASCII string measured
+/// long — `{{ "中<b"|length }}` gave 5 where Django gives 3. Code points, NOT
+/// graphemes: Python's `len("👍🏽")` is 2 (the emoji plus its skin-tone
+/// modifier) and `len("👨\u{200d}👩\u{200d}👧")` is 5. `char` IS a Unicode
+/// scalar value, so `chars().count()` is Python's answer and a
+/// grapheme-cluster count would be a different, wronger one.
+pub fn python_len(value: &Value) -> Option<usize> {
+    match value {
+        Value::String(s) => Some(s.chars().count()),
+        Value::List(l) | Value::Tuple(l) => Some(l.len()),
+        // `len(d.keys())` is the entry count, not the repr's length.
+        Value::DictView { items, .. } => Some(items.len()),
+        // A `dict` answers `len(dict)`; a serialized model RAISES, because
+        // `len(model)` is a `TypeError` (#2294). Both are `Value::Object`, so
+        // the arm has to tell them apart, and the marker is the shared
+        // `object_str()` predicate — the same one `{{ obj }}` uses to decide
+        // whether a map renders as its `__str__` or as a dict repr. Reusing it
+        // is what keeps `{{ p }}` and `{{ p|length }}` from disagreeing about
+        // what `p` IS (#1646).
+        Value::Object(o) => {
+            if value.object_str().is_some() {
+                None
+            } else {
+                Some(o.len())
+            }
+        }
+        // `Missing` included: it is an ABSENT key, and `len()` of the thing
+        // that was not there is not a number. `|length` still answers 0 via its
+        // own fallback, as it did when this arm was `_ => 0`.
+        _ => None,
+    }
+}
+
 pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
     match value {
         Value::String(s) => Some(s.chars().map(|c| Value::String(c.to_string())).collect()),
@@ -658,42 +708,14 @@ fn apply_builtin_filter(
         "lower" => Ok(Value::String(value.to_string().to_lowercase())),
         "title" => Ok(Value::String(crate::truncate::title(&value.to_string()))),
         "length" => {
-            let len = match value {
-                // `len()` of a Python `str` counts CODE POINTS; `str::len()`
-                // counts BYTES (#2279). `é` is 2 bytes and `中` is 3, so every
-                // non-ASCII string measured long — `{{ "中<b"|length }}` gave 5
-                // where Django gives 3.
-                //
-                // Code points, NOT graphemes: Python's `len("👍🏽")` is 2 (the
-                // emoji plus its skin-tone modifier) and `len("👨\u{200d}👩\u{200d}👧")`
-                // is 5. `char` IS a Unicode scalar value, so `chars().count()`
-                // is Python's answer and a grapheme-cluster count would be a
-                // different, wronger one.
-                Value::String(s) => s.chars().count(),
-                Value::List(l) | Value::Tuple(l) => l.len(),
-                // `len(d.keys())` is the entry count, not the repr's length.
-                Value::DictView { items, .. } => items.len(),
-                // A `dict` answers `len(dict)`; a serialized model answers 0,
-                // because `len(model)` raises `TypeError` and Django's filter
-                // catches it (#2294). Both are `Value::Object`, so the arm has
-                // to tell them apart, and the marker is the shared
-                // `object_str()` predicate — the same one `{{ obj }}` uses to
-                // decide whether a map renders as its `__str__` or as a dict
-                // repr. Reusing it is what keeps `{{ p }}` and `{{ p|length }}`
-                // from disagreeing about what `p` IS (#1646).
-                //
-                // `_ => 0` before this, which was right for the model and wrong
-                // for every dict.
-                Value::Object(o) => {
-                    if value.object_str().is_some() {
-                        0
-                    } else {
-                        o.len()
-                    }
-                }
-                _ => 0,
-            };
-            Ok(Value::Integer(len as i64))
+            // Django's filter is `len(value)` inside `except TypeError: return 0`,
+            // so the fallback is 0 HERE and 1 in `{% for %}`'s unpacking arm
+            // (`ForNode.render` writes `except TypeError: len_item = 1`). The
+            // shared half — what `len()` answers when it does not raise — is
+            // stated once in [`python_len`] and the two call sites pick their
+            // own fallback, so a future `len()` refinement cannot land on one
+            // and miss the other (#1646, #2387).
+            Ok(Value::Integer(python_len(value).unwrap_or(0) as i64))
         }
         "default" => {
             // default filter with argument
@@ -5392,6 +5414,111 @@ mod parse_shape_tests_2227 {
 mod tests {
     use super::*;
     use indexmap::IndexMap;
+
+    /// Every `Value` variant, so a new one cannot be added without a decision.
+    fn every_variant() -> Vec<Value> {
+        let mut map = IndexMap::new();
+        map.insert(
+            djust_core::ObjectKey::Str("a".to_string()),
+            Value::Integer(1),
+        );
+        map.insert(
+            djust_core::ObjectKey::Str("b".to_string()),
+            Value::Integer(2),
+        );
+        let mut model = IndexMap::new();
+        model.insert(
+            djust_core::ObjectKey::Str("__str__".to_string()),
+            Value::String("Model #1".to_string()),
+        );
+        vec![
+            Value::Missing,
+            Value::None,
+            Value::Bool(true),
+            Value::Integer(7),
+            Value::Float(1.5),
+            Value::Decimal("1.50".to_string()),
+            Value::BigInt("123456789012345678901".to_string()),
+            Value::String("中é".to_string()),
+            Value::String(String::new()),
+            Value::List(vec![Value::Integer(1), Value::Integer(2)]),
+            Value::Tuple(vec![Value::Integer(1)]),
+            Value::Object(map),
+            Value::Object(model),
+            Value::DictView {
+                kind: djust_core::DictViewKind::Keys,
+                items: vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
+            },
+        ]
+    }
+
+    /// The `{% for a, b in … %}` unpack arm relies on this and says so (#2387).
+    ///
+    /// It checks arity with [`python_len`] and then unpacks with
+    /// [`iter_values`], so if a variant ever answered a length without being
+    /// iterable — or answered a DIFFERENT count — the arm's non-sequence
+    /// branch would silently bind `Missing` to the tail names instead of
+    /// raising. This is the pin that makes "total by construction" mechanical
+    /// rather than a comment.
+    #[test]
+    fn python_len_agrees_with_iter_values() {
+        for value in every_variant() {
+            if let Some(len) = python_len(&value) {
+                let items = iter_values(&value).unwrap_or_else(|| {
+                    panic!("python_len answered {len} for {value:?} but iter_values refused it")
+                });
+                assert_eq!(
+                    items.len(),
+                    len,
+                    "python_len and iter_values disagree about {value:?}"
+                );
+            }
+        }
+    }
+
+    /// `len(model)` raises in Python, and both maps are `Value::Object`.
+    #[test]
+    fn python_len_refuses_a_serialized_model_but_not_a_dict() {
+        let mut dict = IndexMap::new();
+        dict.insert(
+            djust_core::ObjectKey::Str("a".to_string()),
+            Value::Integer(1),
+        );
+        assert_eq!(python_len(&Value::Object(dict)), Some(1));
+
+        let mut model = IndexMap::new();
+        model.insert(
+            djust_core::ObjectKey::Str("__str__".to_string()),
+            Value::String("Model #1".to_string()),
+        );
+        let model = Value::Object(model);
+        assert!(model.object_str().is_some(), "fixture is not a model");
+        assert_eq!(python_len(&model), None);
+    }
+
+    /// The two fallbacks are the call sites' own — `|length` says 0, the
+    /// unpack arm says 1, and `python_len` says neither.
+    #[test]
+    fn python_len_answers_none_where_python_raises() {
+        for value in [
+            Value::Missing,
+            Value::None,
+            Value::Bool(true),
+            Value::Integer(7),
+            Value::Float(1.5),
+            Value::Decimal("1.50".to_string()),
+            Value::BigInt("1".to_string()),
+        ] {
+            assert_eq!(python_len(&value), None, "{value:?}");
+            // …and `|length` still prints its own 0 for every one of them.
+            assert_eq!(
+                apply_filter("length", &value, None).unwrap().to_string(),
+                "0"
+            );
+        }
+        // Code points, not bytes (#2279): "中é" is 5 bytes.
+        assert_eq!(python_len(&Value::String("中é".to_string())), Some(2));
+    }
 
     #[test]
     fn test_upper_filter() {
