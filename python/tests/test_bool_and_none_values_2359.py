@@ -456,6 +456,61 @@ class TestTheArgumentTypeResidueIsNamed:
         assert both("{{ p|time:True }}", {"p": 5}) == ("", "")
 
 
+class TestTheRegroupUnmaskingIsNamed:
+    """14 corpus cells stopped agreeing because they had agreed by COINCIDENCE.
+
+    Correcting ``add``'s third branch changed a ``{% regroup %}`` operand from
+    a **list** to the string Django also computes, and a pre-existing bug —
+    ``{% regroup %}`` over a non-empty string builds ZERO groups where Django
+    builds one containing every character — then shows through. Two wrongs had
+    been cancelling, the #2272 shape.
+
+    Filed as **#2385**, where it is measured at **8,505 cells** on the corpus.
+    The evidence that it is not this change's doing is asserted below rather
+    than argued, because "my fix only unmasked it" is exactly the claim a
+    reader should not have to take on trust.
+    """
+
+    def test_the_add_chain_itself_is_correct_at_every_step(self) -> None:
+        """Link 1: the filter this change touched agrees, alone and chained."""
+        value = ["<b>", "x"]
+        assert both('{{ p|add:"1" }}', {"p": value}) == ("", "")
+        assert both('{{ p|add:"1"|add:"1" }}', {"p": value}) == ("1", "1")
+
+    def test_regroup_over_a_string_diverges_with_no_add_involved(self) -> None:
+        """Link 2: the divergence reproduces with no ``add`` in the template."""
+        src = "{% regroup p by k as g %}[{{ g|length }}]"
+        d, r = both(src, {"p": "1"})
+        assert d == "[1]", f"Django moved: {d!r}"
+        assert r == "[0]", (
+            f"djust now renders {r!r} — if #2385 is fixed, delete this class "
+            "and let the corpus cover these cells"
+        )
+        # ...and it is about a STRING operand specifically: a list agrees, an
+        # empty string agrees, and `{% for %}` over the same string is fine.
+        assert both(src, {"p": ["a", "b"]}) == ("[1]", "[1]")
+        assert both(src, {"p": ""}) == ("[0]", "[0]")
+        assert both("{% for c in p %}[{{ c }}]{% endfor %}", {"p": "abc"}) == (
+            "[a][b][c]",
+            "[a][b][c]",
+        )
+
+    @pytest.mark.parametrize("value", [["<b>", "x"], ["a", ["b", "c"]], ["<b>", ("c", ("d",))]])
+    @pytest.mark.parametrize("tail", ['add:"1"', 'default:"D"'])
+    def test_the_unmasked_cells_are_exactly_this_composition(self, value, tail: str) -> None:
+        """Link 3: the corpus cells that moved, reproduced by hand.
+
+        They are `{% regroup %}` over a LIST that `add` turns into a string.
+        Django's answer is unchanged by #2359 — it always computed the string —
+        so the cell was djust-wrong before and djust-wrong after, for two
+        different reasons.
+        """
+        src = '{%% regroup p|add:"1"|%s by k as g %%}[{{ g|length }}]' % tail
+        d, r = both(src, {"p": value})
+        assert d == "[1]", f"Django moved: {d!r}"
+        assert r == "[0]", f"djust now renders {r!r} — see #2385"
+
+
 class TestTheDateWireResidueIsNamed:
     """A Python `date` reaches this renderer as its ISO STRING.
 
