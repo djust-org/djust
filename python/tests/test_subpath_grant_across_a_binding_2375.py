@@ -233,6 +233,40 @@ class TestRebindingTheALIAS_TARGET_RetiresItToo:
         )
         assert "<img" not in out, out
 
+    @pytest.mark.parametrize(
+        ("tpl", "ctx"),
+        [
+            (
+                '{% with q=p %}{% with p="<i>lit</i>" %}[{{ q }}]{% endwith %}{% endwith %}',
+                {"p": HOSTILE},
+            ),
+            (
+                '{% with q=p %}{% with p="<i>lit</i>" %}[{{ q.z }}]{% endwith %}{% endwith %}',
+                {"p": {"z": HOSTILE}},
+            ),
+            ('{% with a="<i>lit</i>" b=a %}[{{ b }}]{% endwith %}', {"a": HOSTILE}),
+        ],
+        ids=["target-whole", "target-subpath", "multi-assign"],
+    )
+    def test_a_quoted_LITERAL_is_a_second_way_into_the_same_hazard(self, tpl, ctx):
+        """#2376 opened a new spelling of the trigger; the guard already covers it.
+
+        The two leaks this class exists for were triggered by
+        ``set_safety("<name>", True)`` marking a NAME that a surviving alias
+        then read. When they were found, the only way to reach that was a
+        ``|safe``-filtered rebind. #2376 landed afterwards and made a quoted
+        literal ``SafeData``, so ``{% with p="<i>lit</i>" %}`` now marks the
+        name too — the same trigger through a spelling that did not exist when
+        the guard was written.
+
+        Probed on the merged build and pinned here rather than left as a
+        one-off check: a merge combining two escaping changes is exactly where
+        a new path into an old hazard appears, and the next such merge should
+        find this test already standing.
+        """
+        out = assert_agrees(tpl, ctx)
+        assert "<img" not in out, out
+
 
 class TestABindReplacesTheAliasToo:
     """#2378's rule, one path segment down — the UNDER-escape direction.
