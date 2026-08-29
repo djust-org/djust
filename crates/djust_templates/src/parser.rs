@@ -468,6 +468,12 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
         Token::Tag(tag_name, args) => {
             match tag_name.as_str() {
                 "if" => {
+                    // Django compiles every `{% if %}` operand with
+                    // `compile_filter` at COMPILE time; djust reached the
+                    // chain only at render, where an earlier unresolvable
+                    // step, a short-circuit or an untaken branch could all
+                    // stop it short (#2411). See `validate_if_operands`.
+                    validate_if_operands(args)?;
                     let condition = args.join(" ");
                     // Capture attribute context BEFORE advancing i.
                     // Scan backwards through ALL preceding tokens (not just the
@@ -595,6 +601,12 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     };
 
                     let iterable = iterable_parts.join(" ");
+                    // The iterable is a TAG OPERAND, and Django compiles it
+                    // with `compile_filter` at COMPILE time (#2411). Without
+                    // this, `{% if 0 %}{% for x in p|cut %}{% endfor %}{% endif %}`
+                    // — a branch that never renders — refused on Django and
+                    // rendered here.
+                    validate_tag_operand(&iterable)?;
                     let (nodes, empty_nodes, end_pos) = parse_for_block(tokens, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::For {
@@ -769,6 +781,10 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         if let Some(eq_pos) = arg.find('=') {
                             let var_name = arg[..eq_pos].trim().to_string();
                             let expression = arg[eq_pos + 1..].trim().to_string();
+                            // Each RHS is a TAG OPERAND — Django's `do_with`
+                            // runs it through `token_kwargs`, which calls
+                            // `compile_filter` at COMPILE time (#2411).
+                            validate_tag_operand(&expression)?;
                             assignments.push((var_name, expression));
                         }
                     }
@@ -969,6 +985,12 @@ fn parse_if_block(
                 }
                 // elif is equivalent to: else + nested if
                 // {% elif condition %} becomes {% else %}{% if condition %}...{% endif %}
+                //
+                // The operands are validated here for the same reason and by
+                // the same rule as `{% if %}`'s (#2411) — `{% elif %}` builds
+                // a `Node::If` and is parsed at this site rather than through
+                // `parse_token`'s `"if"` arm, so it needs its own call.
+                validate_if_operands(args)?;
                 let elif_condition = args.join(" ");
                 let (elif_true, elif_false, end_pos) =
                     parse_if_block(tokens, i + 1, in_tag_context)?;
@@ -1919,6 +1941,100 @@ fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Opti
         }
     }
     Ok(specs)
+}
+
+/// Run the PARSE-time half of Django's `compile_filter` over one TAG operand
+/// (#2411).
+///
+/// # The defect this closes
+///
+/// Django compiles every tag operand's filter chain while the template is
+/// being COMPILED, so a wrong argument count (#2400), a lexer remainder
+/// (#2409) or an unparseable spec refuses the template before any value is
+/// resolved. djust resolved a tag operand at RENDER time, left to right, in
+/// `renderer::get_value_safe` — and `{% if %}` legitimately absorbs a
+/// `VariableDoesNotExist` (`evaluate_condition_for_if`, which is Django's
+/// `IfNode.render` catching the same thing). So an EARLIER step that failed
+/// to resolve made the condition falsy before the LATER filter's refusal was
+/// ever reached:
+///
+/// ```text
+/// {% if p|cut %}          django  TemplateSyntaxError: cut requires 2 arguments, 1 provided
+///                         djust   RuntimeError:        cut requires 2 arguments, 1 provided   agrees
+///
+/// {% if p|date:.|cut %}   django  TemplateSyntaxError: cut requires 2 arguments, 1 provided
+///                         djust   ''                                                          masked
+/// ```
+///
+/// Narrowing the swallow does NOT fix it, and the measurement says why: Django
+/// swallows the very same thing. `{% if p|date:missingvar %}` renders the
+/// false branch on BOTH engines, because `IfNode.render` wraps the whole
+/// `condition.eval(context)` — filter arguments included — in
+/// `except VariableDoesNotExist`. The only reason Django refuses the
+/// three-filter spelling is that it never got as far as rendering it. So the
+/// refusal has to move to Django's TIME, not to a narrower catch.
+///
+/// Two more shapes have nothing to do with the swallow and are closed by the
+/// same move, which is the argument for doing it here rather than at the
+/// `{% if %}` render arm:
+///
+/// ```text
+/// {% if 0 and p|cut %}                     short-circuit: the operand is never evaluated
+/// {% if 0 %}{% for x in p|cut %}{% endif %}   a branch that never renders
+/// ```
+///
+/// # One validator, two times it runs
+///
+/// This calls `parse_filter_specs` — the SAME function `{{ … }}` has always
+/// run at parse time — rather than restating its rules (#1646). A tag operand
+/// is a raw string at parse time, which is the whole of why it was skipped;
+/// splitting it on its unquoted pipes is all that was missing.
+///
+/// # What it deliberately does NOT check
+///
+/// * **`Invalid filter`.** djust looks a filter name up at RENDER time, for
+///   `{{ }}` as much as for a tag — `{% if 0 %}{{ p|nosuchfilter }}{% endif %}`
+///   renders on this engine and refuses on Django. Checking it HERE and not
+///   there would be a new parallel path, and would refuse a custom filter
+///   registered after the template was parsed. Tracked separately.
+/// * **`Variables and attributes may not begin with underscores`.** That is
+///   `Variable.__init__`'s rule, and djust has no equivalent anywhere: with
+///   `_x` bound in the context, `{{ p|date:_x }}`, `{% for i in p|date:_x %}`
+///   and `{% with v=p|date:_x %}` all render on this engine too. A missing
+///   rule, not a masked one. Tracked separately.
+pub(crate) fn validate_tag_operand(expr: &str) -> Result<()> {
+    let parts: Vec<String> = crate::filter_lexer::split_pipes(expr)
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .collect();
+    parse_filter_specs(&parts[1..], expr).map(|_| ())
+}
+
+/// [`validate_tag_operand`] over a `{% if %}` / `{% elif %}` token stream.
+///
+/// `args` is what the lexer's quote-aware `split_tag_args` produced, which is
+/// Django's `token.split_contents()[1:]`. `IfParser.translate_token` splits
+/// that stream into OPERATORS (`smartif.OPERATORS` — `or`, `and`, `not`, `in`,
+/// `is`, `==`, `!=`, `<`, `>`, `<=`, `>=`, plus the merged `not in` / `is not`)
+/// and OPERANDS, and compiles only the operands.
+///
+/// This does NOT skip the operator words, and does not need to: an operator
+/// token carries no unquoted `|`, so `split_pipes` yields ONE part,
+/// [`validate_tag_operand`] hands `parse_filter_specs` an EMPTY slice, and the
+/// call is a no-op. An operator-set constant here would be a second mechanism
+/// with nothing to do — a mutation replacing it with "skip nothing" changes no
+/// behaviour, which is the definition of decorative (#2233), so it is one
+/// comment rather than one constant.
+///
+/// A future check that reads the operand as a NAME rather than as a filter
+/// chain — `Variable.__init__`'s underscore rule is the open one — would need
+/// the operator set reinstated before it could run here, because `==` is not a
+/// variable.
+pub(crate) fn validate_if_operands(args: &[String]) -> Result<()> {
+    for arg in args {
+        validate_tag_operand(arg)?;
+    }
+    Ok(())
 }
 
 /// Strip surrounding single/double quotes from a filter argument when it
