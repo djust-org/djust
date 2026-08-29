@@ -432,19 +432,35 @@ def register_tag_handler(tag_name: str, handler: Any) -> None:
     """
     Register a custom template tag handler.
 
-    Allows registering Python callbacks for custom template tags
+    Allows registering Python handlers for custom inline template tags
     like {% url %}, {% static %}, etc.
 
     Args:
         tag_name: Name of the tag (e.g., "url", "static")
-        handler: Python callable to handle the tag
+        handler: Python object with a ``render(args, context)`` method.
+            A bare function is rejected with
+            ``TypeError: Handler must have a 'render' method``.
+            ``args`` holds the tag's arguments ALREADY RESOLVED against the
+            context -- ``{% custom p %}`` with ``p="<b>hi</b>"`` arrives as
+            ``args == ['<b>hi</b>']``, not as ``['p']``.
+
+    The return value is ESCAPED unless it is already HTML (#2379), mirroring
+    Django's ``SimpleNode.render``, which runs ``conditional_escape`` over a
+    ``simple_tag``'s return unless it carries ``__html__``. Return a plain
+    ``str`` for text; wrap markup you have made safe yourself in
+    ``mark_safe`` (or return any object exposing ``__html__``).
 
     Example::
 
-        def handle_custom_tag(args, kwargs):
-            return f"<custom>{args}</custom>"
+        from django.utils.html import escape
+        from django.utils.safestring import mark_safe
 
-        register_tag_handler("custom", handle_custom_tag)
+        class CustomTagHandler:
+            def render(self, args, context):
+                name = args[0] if args else ""
+                return mark_safe(f"<custom>{escape(name)}</custom>")
+
+        register_tag_handler("custom", CustomTagHandler())
     """
     ...
 
