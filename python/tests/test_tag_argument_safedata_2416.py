@@ -455,3 +455,70 @@ class TestTheArgumentTYPEIsStillAString:
         dj, du = both(source, ctx)
         assert f"[{django_type}|" in dj, dj
         assert "[str|" in du, du
+
+
+# ---------------------------------------------------------------------------
+# 5. The fallout of unquoting, and the guard it needs
+# ---------------------------------------------------------------------------
+
+
+class TestTheHandlerBaseClassDoesNotReResolveALiteral:
+    """Unquoting makes a literal look like a bare NAME — so the base class
+    must stop re-resolving it.
+
+    ``TagHandler._resolve_arg`` — which ``url``, ``static``, ``djust_markdown``,
+    ``live_render``, ``dj_flash`` and the PWA family all call — resolves a bare
+    dotted-identifier token against the context. That was harmless while the
+    engine handed a quoted literal over WITH its quotes, because the quoted
+    branch returned before the lookup. Once #2416 strips them,
+    ``{% url "home" %}`` arrives as ``home``, matches the variable-token regex,
+    and a context variable named ``home`` SHADOWS the URL name — the #2041
+    footgun, one channel over, introduced by this very change.
+
+    The guard is the marker this PR adds: ``SafeData`` means the engine already
+    resolved the operand — it is either the template author's own literal
+    (Django's ``Variable.__init__`` marks exactly that) or a value the view
+    vouched for. Neither is a context KEY, so neither is looked up.
+
+    It NARROWS the shadowing rather than widening anything: a plain resolved
+    string still gets re-resolved, exactly as before, which is the pre-existing
+    hazard #2037 named and which this PR does not touch.
+    """
+
+    @staticmethod
+    def _probe_output(source: str, ctx: dict) -> str:
+        from djust.template_tags import TagHandler
+
+        class _Probe(TagHandler):
+            def render(self, args, context):
+                return repr(self._resolve_arg(args[0], context))
+
+        _rust.register_tag_handler("a2416_resolve", _Probe())
+        try:
+            return _rust.render_template(source, dict(ctx))
+        finally:
+            _rust.unregister_tag_handler("a2416_resolve")
+
+    def test_a_quoted_literal_is_not_looked_up_as_a_context_key(self) -> None:
+        out = self._probe_output('{% a2416_resolve "home" %}', {"home": "/SHADOWED/"})
+        assert "home" in out and "SHADOWED" not in out, out
+
+    def test_a_quoted_DOTTED_literal_is_not_walked_either(self) -> None:
+        out = self._probe_output(
+            '{% a2416_resolve "post.slug" %}', {"post": {"slug": "/SHADOWED/"}}
+        )
+        assert "post.slug" in out and "SHADOWED" not in out, out
+
+    def test_the_literal_still_resolves_to_ITSELF_with_no_collision(self) -> None:
+        """Non-vacuity: the guard must not have turned every literal into
+        something else."""
+        out = self._probe_output('{% a2416_resolve "home" %}', {})
+        assert "home" in out, out
+
+    def test_a_PLAIN_resolved_string_is_still_re_resolved(self) -> None:
+        """The pre-existing hazard, unchanged: `{% t u %}` with `u = "home"`
+        hands the handler `home`, which `_resolve_arg` has always looked up.
+        This PR narrows the class; it does not close it, and pinning that keeps
+        the guard honest about what it does."""
+        out = self._probe_output("{% a2416_resolve u %}", {"u": "home", "home": "/SHADOWED/"})
+        assert "SHADOWED" in out, out

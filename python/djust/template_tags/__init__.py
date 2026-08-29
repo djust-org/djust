@@ -85,9 +85,18 @@ class TagHandler:
         Parameters
         ----------
         args : list
-            Arguments from the template tag. String literals include their quotes.
-            For {% url 'post' post.slug %}, args would be ["'post'", "my-slug"]
-            (second arg already resolved by Rust if it was a variable).
+            Arguments from the template tag, resolved by the Rust engine
+            before this is called. Since #2416 a quoted literal arrives
+            WITHOUT its quotes and as a ``SafeString``, which is what
+            Django's ``Variable.__init__`` produces — so
+            ``{% url 'post' post.slug %}`` gives ``["post", "my-slug"]``,
+            not ``["'post'", "my-slug"]``. A ``mark_safe``d context value
+            keeps its marker too, so a defensive ``conditional_escape`` in a
+            handler is the no-op it is in Django.
+
+            Every argument is still a ``str``: the safety BIT crosses the
+            boundary, the resolved OBJECT does not. An ``int`` arrives as
+            ``"5"`` and a list as JSON.
 
         context : dict
             The full template context as a dictionary. Can be used for additional
@@ -123,9 +132,26 @@ class TagHandler:
         Any
             The resolved value
         """
+        # `SafeData` means the engine ALREADY resolved this operand (#2416).
+        # It is either a quoted LITERAL — which `Variable.__init__` unquotes
+        # and `mark_safe`s, so the text is the template author's own bytes —
+        # or a context value the view marked. In neither case is the text a
+        # context KEY, and looking it up is the #2037 double-resolution bug:
+        # before this guard, `{% url "home" %}` in a template whose context
+        # also has a variable named `home` resolved to that VARIABLE, because
+        # unquoting had made the literal indistinguishable from a bare name.
+        #
+        # Tested BEFORE `.strip()`, which returns a plain `str` and would
+        # discard the marker this reads.
+        if hasattr(arg, "__html__"):
+            return arg
+
         arg = arg.strip()
 
-        # String literals
+        # String literals. Still reached: the block and assign channels pass a
+        # quoted literal VERBATIM (their contract is "unresolved ⇒ keep the raw
+        # token", and the quotes are its type tag), and a direct Python caller
+        # passes whatever it likes.
         if (arg.startswith("'") and arg.endswith("'")) or (
             arg.startswith('"') and arg.endswith('"')
         ):
