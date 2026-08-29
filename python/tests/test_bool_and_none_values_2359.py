@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import datetime
 import random
+import re
 from decimal import Decimal
 
 import pytest
@@ -454,6 +455,89 @@ class TestTheArgumentTypeResidueIsNamed:
         assert both('{{ p|date:"1" }}', {"p": 5}) == ("1", "1")
         assert both('{{ p|time:"1" }}', {"p": 5}) == ("1", "1")
         assert both("{{ p|time:True }}", {"p": 5}) == ("", "")
+
+
+#: An UNESCAPED tag opener — the tool's own liveness rule, so this file and
+#: the differential cut the two halves of "leak" the same way.
+_UNESCAPED_TAG = re.compile(r"<[a-zA-Z/!]")
+
+#: The filters this change stops echoing, each with a value it cannot handle.
+#: `pluralize` is absent: it never echoed its INPUT, it returned a suffix.
+ECHOING = ['date:"Y-m-d"', 'time:"H:i"', 'add:"1"']
+
+#: Filters that mark their output safe, or emit it into markup they build.
+#: Every one puts the echoed value on the page unescaped.
+GRANTS = [
+    "safe",
+    "linebreaks",
+    "linebreaksbr",
+    'join:"<br>"',
+    "unordered_list",
+    'json_script:"i"',
+]
+
+
+class TestAnEchoingFilterComposedWithASafetyGrantIsNotLive:
+    """The security half of #2359, and the shape a sample of one axis missed.
+
+    An echoing filter returns its INPUT when it cannot do its job. Compose it
+    with anything that marks the result safe and attacker-controlled markup
+    reaches the page where Django renders nothing.
+
+    **Why this needs both a container and a string case.** The corpus reported
+    70 such cells and every one had a CONTAINER input, which made the class
+    look like "containers only". It is not — that was an artefact of ``add``
+    being the only echoing filter on the chain axis:
+
+    * ``add`` reaches its echo path only for a container, because
+      ``"<img …>" + "1"`` SUCCEEDS. For a plain string Django emits the
+      concatenation live too, so there is no djust-only leak on that shape.
+    * ``date`` / ``time`` echo for EVERY non-date, so a plain STRING is live
+      there and Django renders nothing.
+
+    Adding ``date``/``time`` to the corpus's ``HOT2`` took the count from 70
+    to **280**, of which **70 have string inputs**. Sampling one echoing
+    filter and generalising to the axis is the same error the fix is about,
+    one level up.
+    """
+
+    @pytest.mark.parametrize("grant", GRANTS)
+    @pytest.mark.parametrize("filt", ECHOING)
+    @pytest.mark.parametrize(
+        "value",
+        [XSS, [XSS], (XSS,), {"k": XSS}, [[XSS]], [1, XSS]],
+        ids=["string", "list", "tuple", "dict", "nested", "mixed"],
+    )
+    def test_no_live_markup_django_does_not_also_emit(self, filt, grant, value) -> None:
+        src = "{{ p|%s|%s }}" % (filt, grant)
+        d, r = both(src, {"p": value})
+        # Django's own output is the bar, not "nothing is live": for a string
+        # `add` really does concatenate, and really does emit it live.
+        if _UNESCAPED_TAG.search(d):
+            return
+        assert not _UNESCAPED_TAG.search(r), (
+            f"{src} on {value!r} emits LIVE markup where Django renders {d!r}"
+        )
+
+    def test_the_string_case_is_live_for_date_and_NOT_for_add(self) -> None:
+        """The asymmetry that made the corpus's 70 look container-only.
+
+        Without this row, "both a container and a string case" reads as
+        belt-and-braces. It is not: the two filters differ here, and that
+        difference is the whole reason the class was mis-scoped.
+        """
+        # `add` on a STRING: Django concatenates and emits it live too, so
+        # there was never a djust-only leak to find on this shape.
+        d, _ = both('{{ p|add:"1"|safe }}', {"p": XSS})
+        assert _UNESCAPED_TAG.search(d), (
+            "Django no longer emits the concatenation live — the asymmetry "
+            "this class is scoped by has moved"
+        )
+        # `date` on the same STRING: Django renders nothing, so djust echoing
+        # it through `|safe` WAS a djust-only live emission.
+        d2, r2 = both('{{ p|date:"Y-m-d"|safe }}', {"p": XSS})
+        assert d2 == "", f"Django moved: {d2!r}"
+        assert r2 == "", f"djust emits {r2!r} where Django renders nothing"
 
 
 class TestTheRegroupUnmaskingIsNamed:

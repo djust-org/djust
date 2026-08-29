@@ -771,6 +771,26 @@ HOT2 = [
     # sweep can only ask whether the output matches; at length 2 it can ask what
     # the NEXT filter does with it.
     "wordwrap",
+    # The two ECHOING filters (#2359). Neither is in a safety set, so the
+    # enforcing test does not require them; they are here because
+    # **echo-on-failure composed with a safety grant is a live-markup class**,
+    # and this axis could not construct a single cell of it for these two.
+    #
+    # The class, measured on `main` before #2359: a filter that returns its
+    # INPUT when it cannot do its job, followed by anything that marks the
+    # result safe, puts attacker-controlled markup on the page where Django
+    # puts nothing. `add` was already on this list and reported 70 such cells
+    # — every one of them a CONTAINER input, because `"<img …>" + "1"`
+    # SUCCEEDS and Django emits it live too, so a string never reaches `add`'s
+    # echo path.
+    #
+    # That made the class look like "containers only". It is not: `date` and
+    # `time` echo for EVERY non-date, so `{{ p|date:"Y-m-d"|safe }}` over a
+    # plain STRING is live on `main` and empty in Django. With `date`/`time`
+    # absent from this list, no cell could say so — the corpus sampled one
+    # echoing filter and the conclusion generalised to the axis.
+    "date",
+    "time",
 ]
 HOT3 = [
     "safe",
