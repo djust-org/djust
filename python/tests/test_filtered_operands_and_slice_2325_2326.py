@@ -281,22 +281,52 @@ class TestFilteredOperandsRandomised:
     #: every time a filter's safety changed, and would quietly absorb a real
     #: regression along the way.
     #:
-    #: 1. Django RAISED and djust rendered the ``{% empty %}`` block: djust's
-    #:    ``{% for %}`` renders empty for a non-iterable where Python raises
-    #:    ``TypeError`` (``{% for x in p|length %}``). Pre-existing, unrelated
-    #:    to the operand channel, and not a permissiveness question.
+    #: 1. BOTH refuse, and only the exception TYPE differs — every djust
+    #:    render error crosses PyO3 as a ``RuntimeError`` where Django raises
+    #:    its own class, so the two outcome strings can never compare equal
+    #:    however faithful the message is. Reached by a non-iterable operand
+    #:    (``{% for x in p|length %}``), which djust rendered the
+    #:    ``{% empty %}`` block for until #2382 and now refuses with Django's
+    #:    own wording. The type alone would be a name list, so the predicate
+    #:    compares the MESSAGES: djust's must END WITH Django's, byte for
+    #:    byte, so a djust failure that merely coincided with a Django one is
+    #:    ``None`` and gates. Lifted verbatim from
+    #:    ``test_dict_iteration_and_sequence_equality_2334_2335.py``'s
+    #:    ``_same_reason`` (#2387), which is the same predicate for the same
+    #:    reason — each file carries its own ``both``/``render`` pair, which is
+    #:    this directory's convention.
     #: 2. djust's output IS Django's output escaped once more — the exact
     #:    signature of a discarded runtime-safe flag. That is the direction
     #:    this fix deliberately fails in, and the predicate proves it rather
     #:    than asserting it: nothing can reach the page through djust that did
     #:    not reach it through Django.
-    @staticmethod
-    def _classify(d: str, r: str) -> str | None:
-        if d.startswith("<<EXC") and not r.startswith("<<EXC"):
-            return "django-raised"
+    @classmethod
+    def _classify(cls, d: str, r: str, src: str, ctx: dict) -> str | None:
+        if d.startswith("<<EXC") and r.startswith("<<EXC"):
+            return "both-raised" if cls._same_reason(src, ctx) else None
         if r == django_escape(d):
             return "djust-escaped-once-more"
         return None
+
+    @staticmethod
+    def _same_reason(src: str, ctx: dict) -> bool:
+        """Did the two engines refuse for the same STATED reason?
+
+        ``both()`` records only the exception CLASS, and djust's is always
+        ``RuntimeError``, so the class cannot answer this. Re-raise and
+        compare the text: djust's is Django's message under a
+        ``Template error: `` prefix.
+        """
+        try:
+            django_render(src, ctx)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            django_message = str(exc)
+        try:
+            djust_render(src, ctx)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            return bool(django_message) and str(exc).endswith(django_message)
 
     def _cells(self):
         """Every (filter, input) whose ``{{ p|f }}`` cell ALREADY agrees.
@@ -326,7 +356,7 @@ class TestFilteredOperandsRandomised:
             d, r = both(src, {"p": value})
             if d == r:
                 continue
-            kind = self._classify(d, r)
+            kind = self._classify(d, r, src, {"p": value})
             if kind is None:
                 unexplained.append((spec, key, d, r))
             else:
@@ -368,10 +398,11 @@ class TestFilteredOperandsRandomised:
             "{%% with q=p|%s %%}[{{ q }}]{%% endwith %%}",
         ):
             for spec, _key, value in self._cells():
-                d, r = both(shape % spec, {"p": value})
+                src = shape % spec
+                d, r = both(src, {"p": value})
                 if d != r:
-                    seen.add(self._classify(d, r))
-        assert seen == {"django-raised", "djust-escaped-once-more"}, (
+                    seen.add(self._classify(d, r, src, {"p": value}))
+        assert seen == {"both-raised", "djust-escaped-once-more"}, (
             f"the documented residue shapes are no longer the ones that occur: {seen}"
         )
 

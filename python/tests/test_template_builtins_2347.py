@@ -387,29 +387,35 @@ class TestKnownPreExistingDivergencesNotFixedHere:
             "literal after all and needs fixing here rather than listing"
         )
 
-    def test_iterating_a_bool_is_a_pre_existing_divergence(self) -> None:
-        """`{% for x in True %}`: Django 500s, djust renders `{% empty %}`.
+    def test_iterating_a_bool_is_refused_by_both(self) -> None:
+        """`{% for x in True %}`: BOTH engines refuse (#2382, closed).
 
-        Excluded from :class:`TestTheHalfThatWasAlreadyRight`'s shapes; pinned
-        here with the bound control that shows it is not about the literal.
-
-        djust being MORE permissive than Django (a render where Django raises)
-        is the direction that matters, so this is deliberately loud rather than
-        skipped — but it is unchanged by this PR in both spellings.
+        This was `test_iterating_a_bool_is_a_pre_existing_divergence` and
+        asserted that djust rendered `E` where Django raised — the one
+        more-permissive row this file carried. It is inverted in place rather
+        than deleted, because the BOUND control below is still what shows the
+        answer is not about the literal spelling: the bare `True` and a
+        variable bound to `True` must refuse identically, and a fix that
+        reached only the literal resolver would fail here.
         """
         # `.replace`, not `%`: the body holds `{{ x }}` and `%`-formatting reads
         # a Django tag body as conversion specifiers.
         loop = "{% for x in @OP@ %}[{{ x }}]{% empty %}E{% endfor %}"
+        expected = "'bool' object is not iterable"
         bare = loop.replace("@OP@", "True")
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match=expected):
             DjangoTemplate(bare).render(DjangoContext({}))
-        assert _rust.render_template(bare, {}) == "E"
-        # The bound control: same object, same divergence, so the literal is
-        # not what is wrong.
+        with pytest.raises(Exception) as exc:
+            _rust.render_template(bare, {})
+        assert str(exc.value).endswith(expected), str(exc.value)
+        # The bound control: same object, same answer, so the literal is not
+        # what decides it.
         bound = loop.replace("@OP@", "q")
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match=expected):
             DjangoTemplate(bound).render(DjangoContext({"q": True}))
-        assert _rust.render_template(bound, {"q": True}) == "E"
+        with pytest.raises(Exception) as exc:
+            _rust.render_template(bound, {"q": True})
+        assert str(exc.value).endswith(expected), str(exc.value)
 
     def test_iterating_none_is_the_one_that_agrees(self) -> None:
         """`None` is NOT in the same boat, which is why the pin names bools.
