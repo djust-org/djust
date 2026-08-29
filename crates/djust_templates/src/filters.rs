@@ -4393,7 +4393,7 @@ fn value_to_json(value: &Value) -> String {
             format!("[{}]", parts.join(", "))
         }
         Value::Object(map) => {
-            let mut parts: Vec<String> = map
+            let parts: Vec<String> = map
                 .iter()
                 .map(|(k, v)| {
                     // Through the SAME helper as the value arms (#2241). The
@@ -4409,13 +4409,24 @@ fn value_to_json(value: &Value) -> String {
                     format!("{}: {}", key_json, value_to_json(v))
                 })
                 .collect();
-            // Kept sorted. The stated reason ("deterministic output") no longer
-            // applies — `Object` is an IndexMap since #2203, so iteration order
-            // is already deterministic — but changing it would alter every
-            // existing `json_script` payload's key order. Python's
-            // `json.dumps` preserves insertion order, so this is a remaining
-            // divergence, deliberately left alone here (#1079).
-            parts.sort();
+            // INSERTION order, which is `json.dumps`'s (#2405).
+            //
+            // This used to `parts.sort()`. The original reason was
+            // "deterministic output", and it stopped applying when `Object`
+            // became an `IndexMap` (#2203) — iteration order has been
+            // deterministic ever since, and sorting on top of it was the only
+            // thing standing between this encoder and `json.dumps`, which
+            // preserves insertion order and has since Python 3.7.
+            //
+            // The divergence was reported against `forloop`
+            // (`{{ forloop|json_script:"d" }}` put `counter` first where
+            // Django puts `parentloop`), and the report located it in
+            // `Node::For`'s dict construction. That construction is CORRECT
+            // and always was: `{{ forloop }}`'s own repr already agrees with
+            // Django's, key for key, in order. Every dict `json_script`
+            // touches was affected — top level, nested, and inside a list —
+            // so a `forloop`-shaped fix would have been a special case for
+            // one instance of a general defect.
             format!("{{{}}}", parts.join(", "))
         }
     }
