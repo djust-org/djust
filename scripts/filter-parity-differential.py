@@ -1101,6 +1101,21 @@ def tag_cells():
 PATH_SHAPES = {
     "for-bare": "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}",
     "for-items": "{% for k, v in p.items %}[{{ k }}={{ v }}]{% empty %}E{% endfor %}",
+    # The SPELLING of the unpack list (#2377). Django joins the tokens before
+    # `in` and splits the result on `","`, so `a,b`, `a, b` and `a ,b` are one
+    # three-name loop; djust split on WHITESPACE and read `a,b` as a single
+    # variable literally spelled `a,b`, which never resolves — so the whole
+    # loop body rendered NOTHING, silently. Every shape above and every tag
+    # cell writes the SPACED spelling, so the corpus could not construct a
+    # single cell that shows it. Same corpus-gap class as #2325 and #2334, on
+    # the one axis nothing else varies: whitespace inside a tag's own argument
+    # list. All three spellings, because a fix that splits on `","` without
+    # trimming answers a name spelled ` b`.
+    "for-unspaced": "{% for a,b in p %}[{{ a }}={{ b }}]{% empty %}E{% endfor %}",
+    "for-spaced": "{% for a, b in p %}[{{ a }}={{ b }}]{% empty %}E{% endfor %}",
+    "for-space-before": "{% for a ,b in p %}[{{ a }}={{ b }}]{% empty %}E{% endfor %}",
+    "for-three-unspaced": "{% for a,b,c in p %}[{{ a }}{{ b }}{{ c }}]{% empty %}E{% endfor %}",
+    "for-items-unspaced": "{% for k,v in p.items %}[{{ k }}={{ v }}]{% empty %}E{% endfor %}",
     "for-keys": "{% for x in p.keys %}[{{ x }}]{% empty %}E{% endfor %}",
     "for-values": "{% for x in p.values %}[{{ x }}]{% empty %}E{% endfor %}",
     "for-rev": "{% for x in p reversed %}[{{ x }}]{% empty %}E{% endfor %}",

@@ -519,19 +519,62 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         ));
                     }
 
-                    // Extract variable names before "in"
-                    // Remove commas and collect variable names
-                    // Note: Lexer splits on whitespace, so "{% for val, label %}" becomes ["val,", "label"]
-                    let var_names: Vec<String> = args[0..in_pos]
-                        .iter()
-                        .filter(|&arg| arg != ",") // Filter standalone commas
-                        .map(|s| s.trim_end_matches(',').to_string()) // Strip trailing commas
+                    // Extract variable names before "in".
+                    //
+                    // The separator is the COMMA, not whitespace (#2377).
+                    // Django's `do_for` re-joins the tokens it split on
+                    // whitespace and then splits THAT on `re.split(r" *, *")`,
+                    // so `a,b`, `a, b` and `a ,b` are one three-name loop and
+                    // all three are legal Django.
+                    //
+                    // This used to split on whitespace and merely trim a
+                    // TRAILING comma off each token, which is the spaced
+                    // spelling and only the spaced spelling. `{% for a,b in p %}`
+                    // produced ONE variable literally spelled `a,b`, which can
+                    // never resolve — so the loop bound nothing, every
+                    // `{{ a }}` / `{{ b }}` in the body rendered empty, and the
+                    // whole region silently disappeared. No error, no warning:
+                    // the same shape as #2325 (`{% for x in p|slice %}`) and
+                    // #2334 (`{% for k in d %}`), which is why the corpus gap
+                    // that hid it is closed in the same change.
+                    //
+                    // Re-joining first is what makes the three spellings one
+                    // case rather than three: the lexer has already split
+                    // `a , b` into three tokens and `a, b` into two, and the
+                    // join erases that difference exactly as Django's does.
+                    let joined = args[0..in_pos].join(" ");
+                    let var_names: Vec<String> = joined
+                        .split(',')
+                        // ` *, *` in Django's regex — spaces around the comma
+                        // belong to the separator, not to the name. Only
+                        // spaces: the tokens were whitespace-split already, so
+                        // nothing else can be adjacent to a comma here, and
+                        // trimming more would accept a name Django rejects.
+                        .map(|part| part.trim_matches(' ').to_string())
                         .collect();
 
-                    if var_names.is_empty() {
-                        return Err(DjangoRustError::TemplateError(
-                            "For tag requires at least one variable name".to_string(),
-                        ));
+                    // Django's own validity test, verbatim: a loop variable may
+                    // not be EMPTY and may not contain a space, either quote, or
+                    // the filter separator (`defaulttags.do_for`'s
+                    // `invalid_chars` frozenset). Not `isidentifier()` — Django
+                    // accepts `{% for a-b in p %}`, and refusing it here would
+                    // be STRICTER than Django rather than equal to it.
+                    //
+                    // This arm exists because the split above CREATES the empty
+                    // case: `{% for a, in p %}` is `["a", ""]` where the old
+                    // whitespace split produced `["a"]` and looped happily.
+                    // Django raises `TemplateSyntaxError` for it, so raising is
+                    // both parity and the less-permissive direction — the one
+                    // this engine is allowed to move in.
+                    const FOR_VAR_INVALID: [char; 4] = [' ', '"', '\'', '|'];
+                    if let Some(bad) = var_names
+                        .iter()
+                        .find(|v| v.is_empty() || v.contains(FOR_VAR_INVALID))
+                    {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "'for' tag received an invalid argument: for {} ({bad:?})",
+                            args.join(" ")
+                        )));
                     }
 
                     // Check if the last argument is "reversed"
