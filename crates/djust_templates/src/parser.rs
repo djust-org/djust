@@ -425,9 +425,16 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
 
         Token::Variable(var) => {
             // Parse variable and filters: {{ var|filter1:arg1|filter2 }}
-            let parts: Vec<String> = var.split('|').map(|s| s.trim().to_string()).collect();
+            // Quote-aware (#2409): `str::split('|')` cut `{{ p|cut:"a|b" }}`
+            // into two filters and raised `Unknown filter` where Django
+            // renders. `filter_lexer::split_pipes` splits only on the pipes
+            // OUTSIDE a quoted string, which is Django's own grammar.
+            let parts: Vec<String> = crate::filter_lexer::split_pipes(var)
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .collect();
             let expr_part = &parts[0];
-            let filters = parse_filter_specs(&parts[1..])?;
+            let filters = parse_filter_specs(&parts[1..], var)?;
 
             // Check for Jinja2-style inline conditional:
             //   {{ true_expr if condition else false_expr }}
@@ -1881,25 +1888,25 @@ fn find_if_keyword(expr: &str) -> Option<usize> {
 /// than two copies of the rule. `TestBothSitesRefuse` in
 /// `python/tests/test_filter_arity_2400.py` names the test that goes red when
 /// only one of them is removed.
-fn parse_filter_specs(parts: &[String]) -> Result<Vec<(String, Option<String>)>> {
-    let specs: Vec<(String, Option<String>)> = parts
-        .iter()
-        .map(|filter_spec| {
-            if let Some(colon_pos) = filter_spec.find(':') {
-                let filter_name = filter_spec[..colon_pos].trim().to_string();
-                let arg = filter_spec[colon_pos + 1..].trim().to_string();
-                // NOTE: surrounding quotes on literal args (e.g. `"none"`
-                // in `default:"none"`) are preserved here so the
-                // dep-tracking extractor (issue #787) can tell a literal
-                // apart from a bare-identifier variable reference. The
-                // quote-strip now happens at render time inside
-                // `strip_filter_arg_quotes`.
-                (filter_name, Some(arg))
-            } else {
-                (filter_spec.clone(), None)
-            }
-        })
-        .collect();
+fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Option<String>)>> {
+    // Django's LEXER rule, one layer above the arity check (#2409):
+    // `filter_raw_string` allows at most ONE argument and requires the matches
+    // to tile the token, so a second `:arg` is `Could not parse the
+    // remainder`. `str::find(':')` took the first colon and kept the rest as
+    // one argument, so `{{ p|cut:"a":"b" }}` rendered rather than being
+    // refused. See [`crate::filter_lexer`], which both this site and
+    // `renderer::get_value_safe` call rather than carrying a copy each.
+    //
+    // NOTE: surrounding quotes on literal args (e.g. `"none"` in
+    // `default:"none"`) are preserved here so the dep-tracking extractor
+    // (issue #787) can tell a literal apart from a bare-identifier variable
+    // reference. The quote-strip happens at render time inside
+    // `strip_filter_arg_quotes`.
+    let mut specs: Vec<(String, Option<String>)> = Vec::with_capacity(parts.len());
+    for filter_spec in parts {
+        let (name, arg) = crate::filter_lexer::split_filter_spec(filter_spec, token)?;
+        specs.push((name.to_string(), arg.map(str::to_string)));
+    }
     for (name, arg) in &specs {
         if let Some(message) =
             crate::filter_arity::parse_time_arity_error(name, u8::from(arg.is_some()))
