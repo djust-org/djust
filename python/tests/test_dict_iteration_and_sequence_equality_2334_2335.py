@@ -355,7 +355,6 @@ class TestDictIterationRandomised:
         except Exception as exc:  # noqa: BLE001
             return str(exc).endswith(django_message) and bool(django_message)
 
-
 # ===========================================================================
 # #2335 — sequence comparison
 # ===========================================================================
@@ -695,9 +694,33 @@ class TestEveryOperandChannelIsAccountedFor:
 
     def test_the_operand_resolver_is_filter_aware(self) -> None:
         src = self.RENDERER.read_text()
-        start = src.index("fn resolve_tag_operand(")
+        # #2385 split the resolver in two: `resolve_tag_operand` is now the
+        # `value_to_arg_string`-encoding wrapper, and `resolve_tag_operand_value`
+        # is the resolution itself. The filter-awareness this pins lives in the
+        # latter; the former must delegate rather than grow a second lookup.
+        start = src.index("fn resolve_tag_operand_value(")
         body = src[start : src.index("\n}", start)]
         assert "get_value(" in body, body
+
+    def test_both_arg_encodings_share_one_resolver(self) -> None:
+        """Neither encoding may resolve for itself (#2385, #1646).
+
+        `resolve_tag_operand` (the historical channel) and
+        `resolve_tag_value_arg` (the value channel a handler opts into with
+        `RESOLVE_ARG_POSITIONS`) differ ONLY in how they serialize the answer.
+        A second `context.get`/`get_value` in either is the drift this pins.
+        """
+        src = self.RENDERER.read_text()
+        for fn in ("fn resolve_tag_operand(", "fn resolve_tag_value_arg("):
+            start = src.index(fn)
+            body = src[start : src.index("\n}", start)]
+            assert "resolve_tag_operand_value(" in body, (
+                f"{fn} must delegate resolution to resolve_tag_operand_value; body was:\n{body}"
+            )
+            assert "context.get(" not in body and "get_value(" not in body, (
+                f"{fn} resolves the context itself — the two arg encodings "
+                f"have forked. body was:\n{body}"
+            )
 
 
 class TestTheCorpusGapsThatHidTheseFromTheDifferential:

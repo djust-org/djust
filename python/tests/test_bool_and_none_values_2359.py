@@ -540,19 +540,23 @@ class TestAnEchoingFilterComposedWithASafetyGrantIsNotLive:
         assert r2 == "", f"djust emits {r2!r} where Django renders nothing"
 
 
-class TestTheRegroupUnmaskingIsNamed:
-    """14 corpus cells stopped agreeing because they had agreed by COINCIDENCE.
+class TestTheRegroupUnmaskingIsCLOSED:
+    """The 14 corpus cells this change unmasked now AGREE (#2385, #2394).
 
     Correcting ``add``'s third branch changed a ``{% regroup %}`` operand from
     a **list** to the string Django also computes, and a pre-existing bug —
-    ``{% regroup %}`` over a non-empty string builds ZERO groups where Django
-    builds one containing every character — then shows through. Two wrongs had
-    been cancelling, the #2272 shape.
+    ``{% regroup %}`` over a non-empty string built ZERO groups where Django
+    builds one containing every character — then showed through. Two wrongs
+    had been cancelling, the #2272 shape.
 
-    Filed as **#2385**, where it is measured at **8,505 cells** on the corpus.
-    The evidence that it is not this change's doing is asserted below rather
-    than argued, because "my fix only unmasked it" is exactly the claim a
-    reader should not have to take on trust.
+    ``TestTheRegroupUnmaskingIsNamed`` stood here asserting that djust rendered
+    ``[0]``, and said *"if #2385 is fixed, delete this class and let the corpus
+    cover these cells"*. #2385 is fixed, so this is that class with every
+    expectation flipped to agreement — kept rather than deleted, because the
+    EVIDENCE CHAIN is what makes "#2359 only unmasked it" checkable, and it
+    stays checkable in the other direction: link 1 says the ``add`` chain was
+    never the problem, link 3 says the composition that moved is now correct
+    for a reason that has nothing to do with ``add``.
     """
 
     def test_the_add_chain_itself_is_correct_at_every_step(self) -> None:
@@ -561,17 +565,14 @@ class TestTheRegroupUnmaskingIsNamed:
         assert both('{{ p|add:"1" }}', {"p": value}) == ("", "")
         assert both('{{ p|add:"1"|add:"1" }}', {"p": value}) == ("1", "1")
 
-    def test_regroup_over_a_string_diverges_with_no_add_involved(self) -> None:
-        """Link 2: the divergence reproduces with no ``add`` in the template."""
+    def test_regroup_over_a_string_now_agrees_with_no_add_involved(self) -> None:
+        """Link 2: the cell #2385 and #2394 both cite, now on both engines."""
         src = "{% regroup p by k as g %}[{{ g|length }}]"
         d, r = both(src, {"p": "1"})
         assert d == "[1]", f"Django moved: {d!r}"
-        assert r == "[0]", (
-            f"djust now renders {r!r} — if #2385 is fixed, delete this class "
-            "and let the corpus cover these cells"
-        )
-        # ...and it is about a STRING operand specifically: a list agrees, an
-        # empty string agrees, and `{% for %}` over the same string is fine.
+        assert r == "[1]", f"djust regressed to {r!r} — #2385 is supposed to be closed"
+        # ...and the neighbours that already agreed still do: a list, an empty
+        # string, and `{% for %}` over the same string.
         assert both(src, {"p": ["a", "b"]}) == ("[1]", "[1]")
         assert both(src, {"p": ""}) == ("[0]", "[0]")
         assert both("{% for c in p %}[{{ c }}]{% endfor %}", {"p": "abc"}) == (
@@ -585,14 +586,14 @@ class TestTheRegroupUnmaskingIsNamed:
         """Link 3: the corpus cells that moved, reproduced by hand.
 
         They are `{% regroup %}` over a LIST that `add` turns into a string.
-        Django's answer is unchanged by #2359 — it always computed the string —
-        so the cell was djust-wrong before and djust-wrong after, for two
-        different reasons.
+        Django's answer was never touched by #2359 — it always computed the
+        string — so the cell was djust-wrong before #2359 for one reason,
+        djust-wrong after it for another, and correct now.
         """
         src = '{%% regroup p|add:"1"|%s by k as g %%}[{{ g|length }}]' % tail
         d, r = both(src, {"p": value})
         assert d == "[1]", f"Django moved: {d!r}"
-        assert r == "[0]", f"djust now renders {r!r} — see #2385"
+        assert r == "[1]", f"djust regressed to {r!r} — see #2385"
 
 
 class TestTheDateWireResidueIsNamed:
