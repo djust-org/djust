@@ -41,6 +41,76 @@ pub fn template_builtin(name: &str) -> Option<Value> {
     }
 }
 
+/// ONE path segment, resolved by Django's three steps in Django's order
+/// (#2371).
+///
+/// `django.template.base.Variable._resolve_lookup` tries three things per
+/// segment and takes the first that does not raise:
+///
+/// 1. **mapping item access, the segment as a STRING** — `current[bit]`;
+/// 2. **attribute access** — `getattr(current, bit)`;
+/// 3. **integer index** — `current[int(bit)]`.
+///
+/// The walk this replaced branched on the SPELLING of the segment instead: a
+/// numeric segment got step 3 and only step 3, a non-numeric segment got step
+/// 1 and only step 1. So each spelling was missing the other's half, and
+/// `{{ d.0 }}` resolved nothing on a dict whatever its key's type —
+/// `{'0': 4}` needs step 1, `{0: 4}` needs step 3, and neither ran. Silently:
+/// no exception, no warning, an empty render. `{{ d.0|divisibleby:"2" }}` is
+/// the sharpest of them, answering a definite **False** rather than nothing.
+///
+/// **The order is the semantics, and it is measured.** A dict carrying both
+/// spellings — `{'0': 's', 0: 'i'}` — renders `'s'` in Django, because step 1
+/// runs first. Reversing these two arms passes every single-key test and
+/// fails that one.
+///
+/// **Step 2 has no counterpart here and needs none.** A [`Value`] is inert
+/// data with no attributes; the attribute step belongs to the raw-Python
+/// sidecar walk in [`Context::resolve`], which has done all three in this
+/// order since #1997. That walk is this one's parallel path (CLAUDE.md
+/// #1646) — one had Django's rule and its twin did not, which is the drift
+/// this helper exists to end. State it once, call it from both spellings.
+///
+/// A [`Value::DictView`] is deliberately absent from step 3: Python's
+/// `dict_items` is not subscriptable, Django's `current[int(bit)]` raises on
+/// it, and `{{ d.items.0 }}` must stay empty on both engines.
+///
+/// **Not covered, and named rather than silent (#2372).** Django's step 3
+/// subscripts a `str` too — `{{ s.0 }}` on `"abc"` is `'a'` there and empty
+/// here. Closing it needs an OWNED return (the character is constructed, not
+/// borrowed), which is a return-type change across every
+/// [`Context::get`] caller rather than an arm in this `match`. Scoped out of
+/// #2371 deliberately; pinned in
+/// `python/tests/test_numeric_path_segment_2371.py::
+/// TestTheStringIndexStepIsNamedNotFixed` so it cannot be mistaken for
+/// something this change was supposed to have covered.
+fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
+    // (1) mapping item access, with the segment as a STRING. `ObjectKey`
+    //     hashes its `Str` variant exactly as the `str` does, so this is the
+    //     same `get("k")` every other caller makes.
+    if let Value::Object(obj) = current {
+        if let Some(found) = obj.get(part) {
+            return Some(found);
+        }
+    }
+
+    // (2) attribute access — see the note above; a `Value` has none.
+
+    // (3) integer index. `int(bit)`, so `"007"` is the index 7, and a segment
+    //     that is not an integer at all stops the walk here as Django's
+    //     `ValueError` does.
+    let index = part.parse::<usize>().ok()?;
+    match current {
+        Value::List(items) | Value::Tuple(items) => items.get(index),
+        // A dict subscripted by an int. `ObjectKey` compares numerics BY
+        // VALUE across `Int`/`Float`/`Bool`/`Decimal`/`BigInt` (#2339), which
+        // is what makes `{{ d.1 }}` resolve against `{1.0: …}` and
+        // `{True: …}` exactly as CPython's `{1.0: "a"}[1]` does.
+        Value::Object(obj) => obj.get(&crate::ObjectKey::Int(index as i64)),
+        _ => None,
+    }
+}
+
 /// A context for template rendering, similar to Django's Context
 ///
 /// In addition to JSON-friendly `Value` entries, `Context` can hold a
@@ -399,24 +469,7 @@ impl Context {
             let mut current = current?;
 
             for part in &parts[1..] {
-                // Check if this part is a numeric index (for list access)
-                if let Ok(index) = part.parse::<usize>() {
-                    // Try to access as list index
-                    match current {
-                        Value::List(list) | Value::Tuple(list) => {
-                            current = list.get(index)?;
-                        }
-                        _ => return None,
-                    }
-                } else {
-                    // Regular object field access
-                    match current {
-                        Value::Object(obj) => {
-                            current = obj.get(*part)?;
-                        }
-                        _ => return None,
-                    }
-                }
+                current = lookup_segment(current, part)?;
             }
 
             Some(current)
