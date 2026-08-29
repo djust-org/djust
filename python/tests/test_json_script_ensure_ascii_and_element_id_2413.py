@@ -393,31 +393,39 @@ class TestTheDivergenceTheUnMaskingRevealed:
     `json_script` cell attributable for the first time. Of the 41 plain
     `json_script <value>` cells in `scripts/filter-parity-differential.py`, 41
     diverged before and 1 diverges after: `d-typed-key`, whose non-`str` keys
-    `json.dumps` treats differently in two ways at once.
+    `json.dumps` treats differently in two ways at once — a SPELLING half and a
+    REFUSAL half.
 
-    Asserted as "these STILL diverge", so fixing #2425 turns this class red —
-    which is the signal to rewrite it as a parity assertion. That discipline in
-    #2405's own file is what surfaced #2413.
+    The class was written asserting "these STILL diverge", so that fixing #2425
+    would turn it red and force a rewrite as a parity assertion. It did, for the
+    spelling half, and the first method below is now that parity assertion. The
+    refusal half is still open (#2429) and is still asserted as divergent — so
+    `d-typed-key` stays in the scope set at the bottom, for the tuple key rather
+    than for the `True` / `None` ones.
+
+    The full re-derivation over every key type — including the two the #2425
+    table missed, `float('inf')` and `float('nan')` — lives in
+    `test_json_script_typed_keys_2425.py`; this keeps only the two cells the
+    un-masking itself revealed.
     """
 
-    def test_a_bool_or_None_KEY_is_spelled_Python_not_JSON(self) -> None:
-        """`json.dumps` writes `true` / `null` for a `bool` / `None` KEY — the
-        JSON spellings. djust routes the key through `to_display_string()` and
-        writes `True` / `None`.
+    def test_a_bool_or_None_KEY_is_now_spelled_the_JSON_way(self) -> None:
+        """CLOSED by #2425 — was `{"True": "b", "None": "c"}`.
 
-        `int` and `float` keys agree by coincidence: `str(0)` is already `"0"`.
+        `json.dumps` writes `true` / `null` for a `bool` / `None` KEY. djust
+        routed the key through `to_display_string()` (Python's `str()`) and
+        wrote `True` / `None`; it now routes it through `json_key_body`.
         """
         dj, du = both('{{ p|json_script:"d" }}', {"p": {True: "b", None: "c"}})
-        assert '{"true": "b", "null": "c"}' in dj, dj
-        assert '{"True": "b", "None": "c"}' in du, du
-        assert dj != du
-        # The two that DO agree, so the divergence is pinned per-type rather
-        # than as "non-string keys".
+        assert '{"true": "b", "null": "c"}' in du, du
+        assert dj == du
+        # The two that agreed BEFORE the fix, so the parity is pinned per-type
+        # rather than as "non-string keys" — these are the coincidence rows
+        # (`str(0)` is already `"0"`), and a fix that moved them would be a
+        # regression the top assertion cannot see.
         for agreeing in ({0: "a"}, {1.5: "d"}):
-            assert (
-                both('{{ p|json_script:"d" }}', {"p": agreeing})[0]
-                == (both('{{ p|json_script:"d" }}', {"p": agreeing})[1])
-            )
+            before, after = both('{{ p|json_script:"d" }}', {"p": agreeing})
+            assert before == after, agreeing
 
     @pytest.mark.parametrize(
         "key",
@@ -439,8 +447,19 @@ class TestTheDivergenceTheUnMaskingRevealed:
 
         Every value shape the differential carries, through the argument-less
         spelling this fix un-masked. Exactly one must still diverge, and it
-        must be the typed-key one — so a NEW body divergence cannot hide here,
-        and #2425 being fixed empties the set.
+        must be the typed-key one — so a NEW body divergence cannot hide here.
+
+        `d-typed-key` is
+        `{0: "a", True: "b", None: "c", 1.5: "d", (1, "t"): "e"}`, one key of
+        each kind. #2425 closed the `True` / `None` spellings; the `(1, "t")`
+        key is the still-open refusal half (#2429), where Django RAISES and
+        djust renders — so the cell stays divergent and this claim stays true
+        across that fix. Closing #2429 is what empties the set.
+
+        This is a claim about the CORPUS, not about the key-type axis: the
+        differential carries no non-finite-float key, so it was silent about the
+        `float('inf')` / `float('nan')` spellings #2425's fix also had to close.
+        The axis itself is swept in `test_json_script_typed_keys_2425.py`.
         """
         module = _load_differential()
         diverging = set()
