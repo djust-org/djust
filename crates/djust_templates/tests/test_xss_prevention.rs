@@ -512,11 +512,43 @@ fn filter_chain_truncatewords_still_escapes() {
 }
 
 #[test]
-fn filter_chain_default_still_escapes() {
-    // |default with HTML payload should still be escaped
+fn filter_chain_default_literal_argument_is_live_as_in_django() {
+    // A QUOTED filter argument is `SafeData` in Django —
+    // `FilterExpression.resolve` does `if not lookup:
+    // arg_vals.append(mark_safe(arg))` — and `default` hands that object back
+    // unchanged, so the markup is live (#2389). This test asserted the
+    // opposite until then, pinning djust's over-escaping.
+    //
+    // Not a weakened assertion: the payload here comes from the TEMPLATE
+    // SOURCE, which its author controls as completely as any raw HTML they
+    // type into it. The half that can carry DATA is the variable argument
+    // below, and it is still escaped.
     let result = render("{{ missing|default:\"<b>default</b>\" }}", &Context::new());
-    assert!(!result.contains("<b>"));
-    assert!(result.contains("&lt;b&gt;"));
+    assert_eq!(result, "<b>default</b>");
+}
+
+#[test]
+fn filter_chain_default_variable_argument_is_still_escaped() {
+    // The security half of #2389, and the reason the grant is gated on the
+    // argument's QUOTING rather than on it being a string: Django resolves a
+    // bare-name argument with `arg.resolve(context)`, which yields a plain
+    // `str`, so `conditional_escape` escapes it.
+    let ctx = ctx_with("fallback", "<script>alert(1)</script>");
+    let result = render("{{ missing|default:fallback }}", &ctx);
+    assert!(!result.contains("<script>"), "{result}");
+    assert!(result.contains("&lt;script&gt;"), "{result}");
+}
+
+#[test]
+fn json_script_variable_element_id_is_still_escaped() {
+    // The same gate on the third filter the grant reaches. Django's
+    // `_json_script` interpolates with `format_html`, i.e.
+    // `conditional_escape(element_id)` — raw for a literal, escaped for a
+    // resolved one.
+    let ctx = ctx_with("eid", "\"><script>alert(1)</script>");
+    let result = render("{{ missing|json_script:eid }}", &ctx);
+    assert!(!result.contains("<script>alert(1)</script>"), "{result}");
+    assert!(result.contains("&lt;script&gt;"), "{result}");
 }
 
 // ===========================================================================
