@@ -436,12 +436,41 @@ class TestEveryRegisteredHandlerIsAccountedFor:
 
     def test_the_enumeration_covers_djusts_own_registry(self, handlers) -> None:
         """A precondition, not a result: djust keeps its own registry of
-        decorator-registered handlers, and every name in it must appear here."""
+        decorator-registered handlers, and every name in it must appear here.
+
+        Scoped to handlers DEFINED IN djust. `_registered_handlers` is a
+        module-level accumulator with no teardown, so any test that registers
+        through the `@register` decorator leaves its handler there for the
+        rest of the process — `tests/unit/test_tag_registry.py` registers one
+        named `custom`. This enumeration reloads djust's own modules, so a
+        foreign handler is legitimately absent from it, and asserting over the
+        raw accumulator makes this test fail on TEST ORDERING rather than on
+        anything about djust. It passed locally and failed on CI's xdist
+        distribution for exactly that reason.
+        """
         import djust.template_tags
 
-        declared = set(djust.template_tags.get_registered_handlers())
+        declared = {
+            name
+            for name, handler in djust.template_tags.get_registered_handlers().items()
+            if type(handler).__module__.startswith("djust.")
+        }
         assert declared, "djust's own handler registry is empty — nothing was triggered"
         assert not (declared - set(handlers)), sorted(declared - set(handlers))
+
+    def test_that_scoping_still_covers_the_real_handlers(self) -> None:
+        """Non-vacuity for the filter above: it must not have narrowed
+        `declared` to nothing, or to a set that excludes the tags this PR
+        touches."""
+        import djust.template_tags
+
+        declared = {
+            name
+            for name, handler in djust.template_tags.get_registered_handlers().items()
+            if type(handler).__module__.startswith("djust.")
+        }
+        for name in ("djust_markdown", "static", "url", "regroup"):
+            assert name in declared, f"{name} was scoped out — the filter is too narrow"
 
     def test_the_theming_family_is_reached(self, handlers) -> None:
         """The family the first version of this enumeration silently missed,
