@@ -46,6 +46,28 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
+/// Django's own reading of "this value is already HTML" (#2290, #2379).
+///
+/// `render_value_in_context` stringifies any NON-`str` value —
+/// `if not issubclass(type(value), str): value = str(value)` — BEFORE it looks
+/// for `__html__` at all, so only a genuine `str` subclass carrying the marker
+/// is trusted.
+///
+/// **Requiring `str` subclass-ness is the security half, not tidiness.** A
+/// non-`str` object that advertises `__html__` and renders attacker-controlled
+/// HTML through its `__str__` would otherwise reach output unescaped, because
+/// `Value`'s `FromPyObject` stringifies an arbitrary object via `__str__`.
+/// `is_instance_of::<PyString>()` is an `isinstance(_, str)` check — true for
+/// a `SafeString`, false for the impostor.
+///
+/// One function, three callers: the custom-FILTER return (#2290), and the
+/// custom-TAG and BLOCK-tag returns (#2379). The tag path had no such test at
+/// all and inserted a handler's return verbatim; giving it a second copy of
+/// the rule is the drift this repo keeps retiring (#1646).
+pub fn py_value_is_safe_string(obj: &Bound<'_, PyAny>) -> bool {
+    obj.is_instance_of::<PyString>() && obj.hasattr("__html__").unwrap_or(false)
+}
+
 /// Per-filter metadata mirroring Django's filter object attributes.
 #[derive(Debug, Clone, Default)]
 pub struct FilterMeta {
@@ -582,8 +604,7 @@ pub fn apply_custom_filter(
         // would reach output UNESCAPED. ``is_instance_of::<PyString>()`` is an
         // ``isinstance(_, str)`` check — true for ``SafeString`` subclasses,
         // false for the impostor.
-        let is_runtime_safe = py_result.is_instance_of::<pyo3::types::PyString>()
-            && py_result.hasattr("__html__").unwrap_or(false);
+        let is_runtime_safe = py_value_is_safe_string(&py_result);
 
         // Convert back to Value. Filters typically return strings or
         // SafeStrings; via ``FromPyObject for Value`` either becomes

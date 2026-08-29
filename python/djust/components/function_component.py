@@ -26,6 +26,7 @@ import logging
 import re
 from typing import Any, Callable, Optional, Union
 
+from .._html import safe_html
 from .assigns import (
     Assign,
     AssignValidationError,
@@ -275,6 +276,23 @@ class CallTagHandler:
     """
 
     def render(self, args: list[str], content: str, context: dict[str, Any]) -> str:
+        """Mark the component's rendered HTML safe, at the ONE exit (#2379).
+
+        Since #2379 the Rust bridge escapes a tag handler's return unless it
+        carries ``__html__`` — Django's ``SimpleNode.render`` rule. A
+        COMPONENT's return is its rendered markup by contract, the same status
+        Django gives ``{% include %}``'s output rather than a ``simple_tag``'s
+        return value, so it is marked rather than escaped. What this does NOT
+        change is where the responsibility sits: a component that interpolates
+        user data into its own markup escapes it itself, exactly as a template
+        author does — that was true before this change and is true after.
+
+        Marked here rather than at the four returns of ``_render_component``:
+        N sites need N tests (#1104), and one boundary needs one.
+        """
+        return safe_html(self._render_component(args, content, context))
+
+    def _render_component(self, args: list[str], content: str, context: dict[str, Any]) -> str:
         # ``args`` arrives as a list of strings. Convert non-string entries
         # defensively since some Rust paths pass non-string tokens.
         str_args = [str(a) for a in args]
@@ -385,7 +403,13 @@ class SlotTagHandler:
                 rest = str_args[1:]
 
         attrs = _parse_kwargs(rest, context)
-        return _emit_slot_sentinel({"name": name, "attrs": attrs, "content": content})
+        # `mark_safe` since #2379: the bridge now escapes a handler return
+        # without `__html__`, and this one is a `<!--DJUST_SLOT_V1:…-->`
+        # SENTINEL that `CallTagHandler` parses back out of the rendered
+        # body. Escaping it would turn the comment into visible text and
+        # break slot collection outright — the sentinel's own payload is
+        # already JSON-encoded and HTML-escaped by `_emit_slot_sentinel`.
+        return safe_html(_emit_slot_sentinel({"name": name, "attrs": attrs, "content": content}))
 
 
 # Matches a bare identifier or a dotted chain of identifiers: `slot`,

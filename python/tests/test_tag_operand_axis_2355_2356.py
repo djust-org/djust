@@ -360,6 +360,19 @@ class _PyBlockProbe:
         return "[" + str(content) + "]"
 
 
+class _PyBlockIdentProbe:
+    """Returns the block body UNCHANGED — the sharpest block probe there is.
+
+    Django's `simple_block_tag` hands the handler `nodelist.render(context)`,
+    which is `SafeData`, so returning it unchanged emits the body once. It is
+    the cell that says whether the bridge preserves that (#2379): a bare `str`
+    on the way IN plus an escape on the way OUT escapes the body TWICE.
+    """
+
+    def render(self, args, content, context):
+        return content
+
+
 class _PyAssignProbe:
     RESOLVE_ARG_POSITIONS = None
 
@@ -380,7 +393,16 @@ def _register_probes():
     _rust.register_tag_handler("pt_safe", _PyProbe(_pt_safe))
     _rust.register_tag_handler("pt_cond", _PyProbe(_pt_cond))
     _rust.register_block_tag_handler("pb_plain", "endpb_plain", _PyBlockProbe())
+    _rust.register_block_tag_handler("pb_ident", "endpb_ident", _PyBlockIdentProbe())
     _rust.register_assign_tag_handler("pa_ident", _PyAssignProbe())
+
+    # Django's OWN `simple_block_tag` for the identity probe, not a
+    # transcription of its node: what is under test is whether djust's
+    # `content` carries the same safety Django's does, so Django's side must
+    # be Django's machinery.
+    _PROBE_LIBRARY.simple_block_tag(name="pb_ident", end_name="endpb_ident")(
+        lambda content: content
+    )
 
     _PROBE_LIBRARY.simple_tag(name="pa_ident")(_pt_ident)
 
@@ -405,6 +427,7 @@ def _register_probes():
     _rust.unregister_tag_handler("pt_safe")
     _rust.unregister_tag_handler("pt_cond")
     _rust.unregister_block_tag_handler("pb_plain")
+    _rust.unregister_block_tag_handler("pb_ident")
     _rust.unregister_assign_tag_handler("pa_ident")
 
 
@@ -428,35 +451,77 @@ class TestTheCustomTagPathIsReachableAtAll:
 
 
 class TestKnownDivergencesOnTheCustomTagPath:
-    """Recorded, not fixed — the fix is #2379 and touches every built-in handler.
+    """Three of these are CLOSED by #2379; two remain, and are still pinned.
 
-    Pinned so that change cannot land silently: each of these goes red when
-    djust starts escaping a handler's non-`SafeData` return, which is the
-    signal that #2379 has landed and these pins must be rewritten as parity
-    assertions.
+    The class docstring used to say each row would go red when djust started
+    escaping a handler's non-`SafeData` return, and that "these pins must be
+    rewritten as parity assertions". #2379 landed; they are rewritten in place
+    rather than deleted, because the ARGUMENT-side rows below are the ones
+    that did NOT close and the two halves belong together — what a handler is
+    HANDED is a different channel from what it RETURNS.
     """
 
-    def test_djust_emits_a_plain_str_return_RAW_where_django_escapes_it(self) -> None:
-        # Django: `SimpleNode.render` → `conditional_escape` on a return with
-        # no `__html__`. djust: inserted verbatim. THIS IS MORE PERMISSIVE
-        # THAN DJANGO and is the #2356 finding.
-        assert django_render("{% pt_ident p %}", {"p": XSS}) == (
-            "&lt;img src=x onerror=alert(1)&gt;"
+    def test_a_plain_str_return_is_ESCAPED_as_django_escapes_it(self) -> None:
+        """#2356's finding, CLOSED by #2379.
+
+        Django's `SimpleNode.render` runs `conditional_escape` over a return
+        with no `__html__`; djust inserted it verbatim, so a handler as
+        ordinary as `return f"Hello {name}"` emitted a live payload.
+        """
+        expected = "&lt;img src=x onerror=alert(1)&gt;"
+        assert django_render("{% pt_ident p %}", {"p": XSS}) == expected
+        assert djust_render("{% pt_ident p %}", {"p": XSS}) == expected
+
+    def test_a_marked_return_is_still_emitted_LIVE(self) -> None:
+        """The other half, and the one that makes the fix a fix rather than a
+        blanket escape: a handler that `mark_safe`s still renders markup."""
+        assert django_render("{% pt_safe p %}", {"p": XSS}) == djust_render(
+            "{% pt_safe p %}", {"p": XSS}
         )
-        assert djust_render("{% pt_ident p %}", {"p": XSS}) == XSS
+        assert "<img" in djust_render("{% pt_safe p %}", {"p": XSS})
 
     def test_the_same_holds_for_a_block_handlers_plain_str_return(self) -> None:
-        assert django_render("{% pb_plain %}x{% endpb_plain %}", {}) == "[x]"
-        # The block body is escaped by both; only the handler's own wrapper
-        # differs, so the sharpest cell is the one whose wrapper is markup.
-        assert djust_render("{% pb_plain %}{{ p }}{% endpb_plain %}", {"p": XSS}) == (
-            "[&lt;img src=x onerror=alert(1)&gt;]"
-        )
+        """Asserted as ENGINE EQUALITY, not against a transcribed answer.
+
+        `pb_plain`'s Django side is this file's hand-rolled `_BlockNode`, and
+        it concatenates: `"[" + str(nodelist.render(context)) + "]"` produces a
+        plain `str` from a `SafeData` body, so Django's own
+        `conditional_escape` escapes the ALREADY-escaped body a second time and
+        the answer is `[&amp;lt;img …&amp;gt;]`. Writing that string in here
+        would be transcribing a quirk of the probe; what this row is about is
+        that djust gives whatever Django gives.
+        """
+        src = "{% pb_plain %}{{ p }}{% endpb_plain %}"
+        assert djust_render(src, {"p": XSS}) == django_render(src, {"p": XSS})
+        # Non-vacuous: the payload is escaped at least once on both sides.
+        assert "<img" not in djust_render(src, {"p": XSS})
+
+    def test_a_block_body_reaches_the_handler_as_SafeData(self) -> None:
+        """The regression a return-only fix would have shipped (#2379).
+
+        Django's `simple_block_tag` hands the handler `nodelist.render(context)`
+        — already-rendered, already-escaped markup — so a handler returning its
+        content unchanged emits the body ONCE. Without the bridge marking that
+        content safe, the escape applied to the return escaped it a SECOND
+        time and `&lt;img …&gt;` became `&amp;lt;img …&amp;gt;`.
+        """
+        expected = "&lt;img src=x onerror=alert(1)&gt;"
+        assert django_render("{% pb_ident %}{{ p }}{% endpb_ident %}", {"p": XSS}) == expected
+        assert djust_render("{% pb_ident %}{{ p }}{% endpb_ident %}", {"p": XSS}) == expected
 
     def test_a_mark_safe_context_value_reaches_the_handler_as_a_bare_str(self) -> None:
-        # #2290's finding, one registry over: the `SafeData` marker does not
-        # survive the PyO3 hop, so `conditional_escape` escapes where Django
-        # does not. djust is STRICTER here, which is the safe direction.
+        """STILL OPEN, and #2379 made it visible rather than causing it.
+
+        #2290's finding one registry over: the `SafeData` marker does not
+        survive the PyO3 hop, so the handler's own `conditional_escape`
+        escapes where Django does not. It USED to agree with Django by
+        coincidence — the marker was lost on the way in, and the bridge then
+        emitted the result raw on the way out, so two wrongs cancelled. With
+        the return escaped, the input-side loss is no longer masked.
+
+        djust is STRICTER here, which is the safe direction: over-escaping,
+        never a leak.
+        """
         assert django_render("{% pt_cond p %}", {"p": mark_safe(XSS)}) == XSS
         assert djust_render("{% pt_cond p %}", {"p": mark_safe(XSS)}) == (
             "&lt;img src=x onerror=alert(1)&gt;"
@@ -472,7 +537,16 @@ class TestKnownDivergencesOnTheCustomTagPath:
         assert django_render("{% pt_ident p %}", {"p": [1, 2]}) == "[1, 2]"
 
     def test_a_quoted_literal_argument_keeps_its_quotes(self) -> None:
-        assert djust_render('{% pt_ident "<b>" %}', {}) == '"<b>"'
+        """STILL OPEN, and the escaping now shows on top of it.
+
+        Django's `Variable('"<b>"')` runs `mark_safe(unescape_string_literal(…))`,
+        so the literal loses its quotes AND arrives as `SafeData`. djust passes
+        the token verbatim, quotes included — so the handler returns those five
+        characters and the return escape now spells them out. It rendered a
+        live `<b>` before and renders escaped text now: stricter, and wrong for
+        the same pre-existing reason either way.
+        """
+        assert djust_render('{% pt_ident "<b>" %}', {}) == "&quot;&lt;b&gt;&quot;"
         assert django_render('{% pt_ident "<b>" %}', {}) == "<b>"
 
 

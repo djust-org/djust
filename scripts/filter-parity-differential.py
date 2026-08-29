@@ -219,6 +219,7 @@ from django import template as _django_template  # noqa: E402
 from django.template import Context, Engine, Template  # noqa: E402
 from django.template.defaultfilters import register  # noqa: E402
 from django.utils.html import conditional_escape  # noqa: E402
+from django.utils.html import escape as django_escape  # noqa: E402
 from django.utils.safestring import SafeData, mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
@@ -2864,7 +2865,40 @@ def unmasked(cid: str, base: dict, after: dict) -> bool:
 
     Empirically, when #2325 introduced the tag axis this classified 445 of 445
     reported regressions, leaving zero unexplained.
+
+    The CUSTOM-TAG axis has a second coincidence of the same kind (#2379), and
+    it needs its own arm because a `@ctag` cell has no `{{ p|expr }}` twin.
+    The `SafeData` marker on a context value does not survive the PyO3 hop
+    (#2290's finding, on the argument side) — and while the bridge emitted a
+    handler's return RAW, that loss was CANCELLED on the way out: djust escaped
+    nothing, so it matched Django's live output for the wrong reason. Once the
+    return is escaped, the input-side loss shows.
+
+    Two conditions, both mechanical, and the pair is what keeps this from
+    being an exemption keyed on the input:
+
+    1. djust's NEW output IS Django's output escaped once more — the exact
+       signature of a discarded safety marker, the same predicate
+       `test_filtered_operands_and_slice_2325_2326.py` calls
+       `djust-escaped-once-more`;
+    2. the `ct-cond` probe over the SAME input diverges on BOTH builds.
+       `ct-cond` runs `conditional_escape` INSIDE the handler, so it reads the
+       marker on the way IN. Its divergence is the input-side loss, measured,
+       and it is the same two numbers before and after — untouched by this
+       change.
+
+    A genuinely NEW `@ctag` regression fails condition 1 (its output is not
+    Django's escaped once more) and is reported.
     """
+    if cid.startswith("@ctag "):
+        _shape, key, *_ = cid.split("\t")
+        twin = f"@ctag ct-cond\t{key}\tctag"
+        b, a = base.get(twin), after.get(twin)
+        if not (b is not None and a is not None and b[0] != b[1] and a[0] != a[1]):
+            return False
+        cell = after.get(cid)
+        return cell is not None and cell[1] == django_escape(cell[0])
+
     expr, key, *shape = cid.split("\t")
     if not shape:
         return False  # A `{{ }}` cell has no mask to be behind.

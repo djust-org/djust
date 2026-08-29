@@ -297,7 +297,13 @@ class ToastContainerHandler:
         toasts = context.get("toasts", [])
         dismiss_event = "dismiss_toast"
         if not toasts:
-            return '<div class="toast-container"></div>'
+            # `_safe`, like every other return in this module (#2379). This
+            # early return was the ONE of ~190 handler returns here that
+            # missed the module's own convention, and it was invisible until
+            # the bridge started escaping an unmarked return — the empty
+            # container would have rendered as visible `&lt;div …&gt;` text.
+            # Found by CALLING every handler, not by reading them (#1104).
+            return _safe('<div class="toast-container"></div>')
         items = []
         for t in cast("list[object]", toasts):
             if not isinstance(t, dict):

@@ -29,6 +29,80 @@ use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
+/// A tag handler's return, escaped unless it is already HTML (#2379).
+///
+/// # The defect this closes
+///
+/// Django's `SimpleNode.render` runs `conditional_escape` over a
+/// `simple_tag`'s return unless it carries `__html__`:
+///
+/// ```python
+/// def render(self, context):
+///     output = self.func(*resolved_args, **resolved_kwargs)
+///     if context.autoescape:
+///         output = conditional_escape(output)
+///     return render_value_in_context(output, context)
+/// ```
+///
+/// djust inserted the return into the page VERBATIM, so a handler as ordinary
+/// as `return f"Hello {name}"` emitted `Hello <img src=x onerror=alert(1)>`
+/// live where Django renders `Hello &lt;img …&gt;`. That is the fail-OPEN half
+/// of the asymmetry #2290 found on the way IN, and it reached every
+/// `register_tag_handler` / `register_block_tag_handler` user — djust's own and
+/// any project's.
+///
+/// # Why `escape` and not `conditional_escape`
+///
+/// The `__html__` test is made HERE, on the Python object, and the escape is
+/// applied only when it fails — which is what `conditional_escape` does, split
+/// across the language boundary because `Value`'s `FromPyObject` discards the
+/// marker. Doing it after the extract would be too late by construction: a
+/// `SafeString` and a plain `str` are the same `String` by then, which is
+/// exactly the information loss #2290 documents one registry over.
+///
+/// # The audit that goes with it
+///
+/// Escaping a return that legitimately IS markup is a rendering regression,
+/// not a fix, so every handler djust registers was enumerated by intercepting
+/// the three `register_*_tag_handler` functions and CALLED. Of 221, **195**
+/// already carry `__html__`, 13 return the empty string and 5 return plain
+/// text — and **6** returned markup as a plain `str` and now `mark_safe` it.
+/// See `python/tests/test_custom_tag_return_escape_2379.py`, which re-runs
+/// that enumeration so a handler added later without the marker fails a test
+/// rather than rendering as escaped text.
+fn escape_handler_return(
+    result: &Bound<'_, PyAny>,
+    what: &str,
+    name: &str,
+) -> Result<String, String> {
+    let already_html = crate::filter_registry::py_value_is_safe_string(result);
+    let text = result
+        .extract::<String>()
+        .map_err(|_| format!("{what} '{name}' render() must return a string"))?;
+    if already_html {
+        Ok(text)
+    } else {
+        Ok(crate::filters::html_escape(&text))
+    }
+}
+
+/// `django.utils.safestring.mark_safe(text)`, or the bare string if Django is
+/// not importable (#2379).
+///
+/// Fails SOFT on purpose: a pure-Rust embedding without Django installed
+/// should keep rendering, and a handler that sees a bare `str` there sees
+/// exactly what it saw before this change.
+fn mark_safe_str<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAny>> {
+    let plain = pyo3::types::PyString::new(py, text);
+    let Ok(module) = py.import("django.utils.safestring") else {
+        return Ok(plain.into_any());
+    };
+    let Ok(mark_safe) = module.getattr("mark_safe") else {
+        return Ok(plain.into_any());
+    };
+    mark_safe.call1((plain,))
+}
+
 /// Global registry mapping tag names to Python handler objects.
 ///
 /// Thread-safe via `RwLock`. Registration is one-time bootstrap; lookup is
@@ -319,9 +393,25 @@ pub fn call_block_handler_with_py_sidecar(
         let py_args = pyo3::types::PyList::new(py, args)
             .map_err(|e| format!("Failed to create args list: {e}"))?;
 
-        let py_content = content
-            .into_pyobject(py)
-            .map_err(|e| format!("Failed to convert content: {e}"))?;
+        // The block body reaches Python as a `SafeString`, not a bare `str`
+        // (#2379). Django's `simple_block_tag` hands the handler
+        // `nodelist.render(context)` — already-rendered, already-escaped
+        // markup, and therefore `SafeData` — so a handler that returns its
+        // content unchanged keeps the marker and the body is emitted once.
+        //
+        // Load-bearing since the return started being escaped: without it,
+        // `{% cb_ident %}{{ p }}{% endcb_ident %}` over a hostile value
+        // emitted `&amp;lt;img …&amp;gt;` where Django emits `&lt;img …&gt;`
+        // — the body escaped TWICE, once by the `{{ p }}` inside it and again
+        // by the bridge. Over-escaping rather than a leak, but a visibly wrong
+        // page, and it is the block-path twin of the marker loss #2290 found
+        // on the filter-argument side.
+        //
+        // Fails SOFT: a missing `django.utils.safestring` (Django absent, as
+        // in a pure-Rust embedding) falls back to the bare string rather than
+        // failing the render — the handler then sees what it saw before.
+        let py_content =
+            mark_safe_str(py, content).map_err(|e| format!("Failed to convert content: {e}"))?;
 
         let py_context = pyo3::types::PyDict::new(py);
         for (key, value) in context {
@@ -362,9 +452,7 @@ pub fn call_block_handler_with_py_sidecar(
                 )
             })?;
 
-        result
-            .extract::<String>()
-            .map_err(|_| format!("Block handler '{name}' render() must return a string"))
+        escape_handler_return(&result, "Block handler", name)
     })
 }
 
@@ -488,10 +576,7 @@ pub fn call_handler_with_py_sidecar(
                 )
             })?;
 
-        // Extract string result
-        result
-            .extract::<String>()
-            .map_err(|_| format!("Handler '{name}' render() must return a string"))
+        escape_handler_return(&result, "Handler", name)
     })
 }
 
