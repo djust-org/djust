@@ -336,14 +336,34 @@ class TestTheGrantDoesNotWiden:
         _dj, du = both("{% a2416_probe p %}", ctx)
         assert "html=False" in du, du
 
-    def test_a_marked_LIST_does_not_hand_the_handler_live_JSON(self) -> None:
-        """The sharpest row of the narrowing: `Context::is_safe` can legitimately
-        answer `true` for a marked container, and without the `Value::String`
-        test the handler would receive that container's JSON encoding WITH a
-        grant."""
-        payload = mark_safe(f'["{XSS}"]')  # noqa: S308
-        _dj, du = both("{% a2416_probe li %}", {"li": [payload]})
-        assert "html=False" in du, du
+    @pytest.mark.parametrize("ctx", [{"li": [XSS]}, {"d": {"k": XSS}}])
+    def test_a_CONTAINER_granted_safety_still_arrives_unmarked(self, ctx: dict) -> None:
+        """The row that makes the `Value::String` narrowing load-bearing.
+
+        `render_template_with_dirs`'s `safe_keys` is a public entry point that
+        takes ARBITRARY paths, so a caller can grant safety to a CONTAINER —
+        and `Context::is_safe` then answers `true` for it. Without the
+        narrowing the handler receives that container's JSON encoding as a
+        `SafeString`, i.e. bytes the renderer synthesized, marked. A handler
+        that echoes its argument then emits the payload inside that JSON LIVE,
+        where Django escapes it: a Python list can never be `SafeData`, so
+        `conditional_escape` always runs on `str(value)`.
+
+        djust's own `_collect_safe_keys` never emits a container path — it
+        descends to the `SafeString` leaves — which is why the grant-shaped
+        rows above cannot reach this branch and why the first version of this
+        class left the narrowing unguarded (the gate-off M1 survived).
+        """
+        key = next(iter(ctx))
+        # The CONSEQUENCE first, so a gate-off failure here is definitionally
+        # the leak and not the type report: the identity probe RETURNS its
+        # argument, so a marked one carries `__html__` past
+        # `escape_handler_return` and puts the payload on the page live.
+        echoed = _rust.render_template_with_dirs(f"{{% a2416_ident {key} %}}", dict(ctx), [], [key])
+        assert not UNESCAPED_TAG.search(echoed), echoed
+        # …and the marker itself, measured at the handler.
+        probe = _rust.render_template_with_dirs(f"{{% a2416_probe {key} %}}", dict(ctx), [], [key])
+        assert "html=False" in probe, probe
 
     def test_a_kwarg_composite_is_not_marked(self) -> None:
         """The transported text is `key=<value>`, not the value; marking it
