@@ -162,7 +162,13 @@ RAISE_BIT_NOT_CLOSED: dict[str, str] = {}
 #: actually pass — which is how a stale exemption hides a regression.
 OUTPUT_DIVERGES_FOR_ANOTHER_REASON = {
     "add": "Django's three-branch int/concat/'' chain, not int(arg) (#2347)",
-    "stringformat": "an invalid printf spec, not int(arg) (#2343)",
+    # `stringformat` was here until #2358 gave it CPython's whole `%`-format
+    # grammar. `"notanumber"` is `unsupported format character 'n'`, which
+    # Django answers `""` to and djust used to echo the value for — so the
+    # row was true, and it is now closed. Removed rather than relaxed,
+    # exactly as `test_the_output_divergences_are_not_raise_divergences`
+    # demands ("now agrees - remove its row"), and as #2344 did for the two
+    # `RAISE_BIT_NOT_CLOSED` rows before it.
     "yesno": "an arity check on a comma-separated argument, not int(arg)",
 }
 
@@ -238,7 +244,7 @@ class TestTheMeasurementThatScopedTheIssue:
         )
 
     def test_the_output_divergences_are_not_raise_divergences(self) -> None:
-        """These three pass the raise sweep and still render differently. The
+        """These pass the raise sweep and still render differently. The
         distinction is the point: exempting them from the sweep — which an
         earlier draft of this file did — would have hidden a real regression in
         three filters that this issue genuinely fixed the raise bit for.

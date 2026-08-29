@@ -56,20 +56,33 @@ fn empty_spec_is_empty_for_every_value_kind() {
     }
 }
 
-/// A non-ASCII spec exercises the byte-vs-char distinction the slice depends
-/// on: `spec.len()` counts BYTES, and only a spec whose final character is
-/// one byte wide can be sliced at `len() - 1` at all. Every conversion
-/// character `apply_stringformat` matches is ASCII, so a spec ending in a
-/// multi-byte character reaches the catch-all arm, which does not slice.
+/// A non-ASCII spec exercises the byte-vs-char distinction the old slice
+/// depended on: `spec.len()` counts BYTES, and only a spec whose final
+/// character is one byte wide could be sliced at `len() - 1` at all.
+///
+/// The ANSWER moved in #2358 and the hazard did not. Until then djust
+/// echoed `'42'` here, because a multi-byte character reached the
+/// catch-all arm that did not slice; CPython answers `unsupported format
+/// character` to both of these, so Django renders `""` and now so does
+/// djust. The scanner walks `char`s rather than bytes, so there is no
+/// index left to get wrong — which is what keeps this test about the
+/// hazard rather than about the old code.
 #[test]
 fn a_multibyte_spec_does_not_slice_mid_character() {
     assert_eq!(
         render("{{ p|stringformat:\"中\" }}", Value::Integer(42)),
-        "42"
+        ""
     );
     assert_eq!(
         render("{{ p|stringformat:\"中s\" }}", Value::Integer(42)),
-        "42"
+        ""
+    );
+    // The conversion still runs when the multi-byte character is LITERAL
+    // text AFTER it, which is the case that would slice mid-character if
+    // the scanner ever went back to bytes.
+    assert_eq!(
+        render("{{ p|stringformat:\"s中\" }}", Value::Integer(42)),
+        "42中"
     );
 }
 
