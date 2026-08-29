@@ -170,6 +170,12 @@ class TestTheManifestIsCleanOnMain:
             "tag",
             "entrypoint",
             "grant-shape",
+            # The ANSWERS Django's own `ForNode.render` can give an operand
+            # (#2382). Distinct from `loop-variable`, which is about what the
+            # loop BINDS: djust collapsed the refusal into the empty branch, so
+            # every `forloop` member was correct on a cell that should not have
+            # rendered at all.
+            "for-operand-outcome",
             "loop-variable",
             "arity",
             # A COMPOSITION row (#2372): a pair of axes each individually swept
@@ -439,11 +445,19 @@ class TestTheLimitTheManifestDoesNotClose:
         already sweeps, so removing every PATH shape leaves the tag axis clean.
 
         Since #2402 the same mutation ALSO removes every ``forloop`` cell, and
-        the `loop-variable` axis DOES report those — so the assertion is now
-        "the only axis that notices is `loop-variable`", which is a sharper
-        statement of the same limit than "nothing notices" was. The dotted-path
-        half remains uncaught: no axis names ``p.items`` as a requirement, and
-        that is what keeps `input-shape` UNVERIFIED.
+        the `loop-variable` axis DOES report those; since #2382 it removes the
+        bare ``{% for x in p %}`` shape too, and `for-operand-outcome` reports
+        all three of its members. So the assertion is now "the axes that notice
+        are `loop-variable` and `for-operand-outcome`" — each widening is a
+        sharper statement of the same limit than "nothing notices" was.
+
+        The dotted-path half remains uncaught, and it is the reason this test
+        exists: no axis names ``p.items`` as a requirement. Both axes that DO
+        fire here fire for their own reason (a `forloop` member, an operand
+        outcome), neither of which mentions a dotted path — so removing every
+        ``p.items`` shape while KEEPING the bare-loop and ``forloop`` ones
+        would still be reported clean. That is what keeps `input-shape`
+        UNVERIFIED.
         """
         script = mutated_script(
             tmp_path,
@@ -451,11 +465,16 @@ class TestTheLimitTheManifestDoesNotClose:
         )
         data = run_manifest(script)
         noticed = {row["axis"] for row in data["axes"] if row.get("missing")}
-        assert noticed == {"loop-variable"}, (
-            f"axes reporting a missing member: {sorted(noticed)}. If an axis other "
-            "than `loop-variable` now notices the dict-view PATH shapes going "
-            "away, that is the catch — update this test to it."
+        assert noticed == {"loop-variable", "for-operand-outcome"}, (
+            f"axes reporting a missing member: {sorted(noticed)}. If an axis "
+            "other than these now notices the dict-view PATH shapes going away, "
+            "that is the catch — update this test to it."
         )
+        assert sorted(rows(data)["for-operand-outcome"]["missing"]) == [
+            "empty-branch",
+            "iterated",
+            "refused",
+        ], rows(data)["for-operand-outcome"]
         assert rows(data)["loop-variable"]["missing"] == [
             "counter",
             "counter0",

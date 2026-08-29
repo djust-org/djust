@@ -221,10 +221,11 @@ class TestDictIterationDetails:
         """The arm added is for ``Value::Object`` only; every other operand
         shape must be untouched.
 
-        ``5`` is the pre-existing ``django-raised`` shape: Python raises
-        ``TypeError`` for a non-iterable and djust renders ``{% empty %}``.
-        Asserted as the CURRENT answer rather than as agreement, so this test
-        pins that the new arm did not change it.
+        ``5`` used to be the ``django-raised`` shape: Python raised
+        ``TypeError`` for a non-iterable and djust rendered ``{% empty %}``.
+        Since #2382 BOTH refuse, so it is asserted as the current answer from
+        the other side — the exception CLASS still differs (djust's crosses
+        PyO3 as ``RuntimeError``) and the MESSAGE is Django's.
         """
         src = "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}"
         for value in (["a", "b"], ("a", "b"), "ab", [], "", None):
@@ -232,7 +233,8 @@ class TestDictIterationDetails:
         for value in (5, 1.5):
             d, r = both(src, {"p": value})
             assert d.startswith("<<EXC TypeError")
-            assert r == "E"
+            assert r.startswith("<<EXC RuntimeError")
+            assert TestDictIterationRandomised._same_reason(src, value)
 
 
 class TestDictIterationRandomised:
@@ -293,11 +295,12 @@ class TestDictIterationRandomised:
             f"{len(unexplained)}/{cells} disagree outside the documented residue "
             f"(residue so far: {residue}), first three: {unexplained[:3]!r}"
         )
-        # `dict-view-modelled-as-a-list` is GONE: #2340 gave the view its own
-        # `Value::DictView`, so the substitution that classifier described no
-        # longer happens and it would be a dead allowance (#1859). Only the
-        # pre-existing django-raised shape remains.
-        assert set(residue) == {"django-raised", "both-raised"}, (
+        # Two classifiers have been deleted with the divergence each described,
+        # rather than kept as dead allowances (#1859):
+        # `dict-view-modelled-as-a-list` when #2340 gave the view its own
+        # `Value::DictView`, and `django-raised` when #2382 made djust refuse a
+        # non-iterable operand. One shape remains.
+        assert set(residue) == {"both-raised"}, (
             "the documented residue shapes are no longer the ones that occur, so "
             f"one classifier is a dead exemption: {residue}"
         )
@@ -308,9 +311,13 @@ class TestDictIterationRandomised:
         lists — a name list would quietly absorb a real defect.
 
         ``django-raised`` — Django RAISED (a non-iterable value reached
-        ``{% for %}``) and djust rendered the ``{% empty %}`` block.
-        Pre-existing, unrelated to the dict arm, and not a permissiveness
-        question.
+        ``{% for %}``) and djust rendered the ``{% empty %}`` block — was the
+        second shape until #2382, which made djust refuse the same operands.
+        It is DELETED rather than kept as a belt: an arm no cell can reach is
+        an exemption the sweep carries silently, and would let a future
+        divergence of that shape through without anyone deciding it was
+        acceptable (#1859). ``test_random_dicts_agree_with_django``'s
+        ``set(residue)`` assertion is what makes that mechanical.
 
         ``both-raised`` — BOTH refuse, and only the exception TYPE differs:
         every djust render error crosses the PyO3 boundary as ``RuntimeError``
@@ -329,10 +336,8 @@ class TestDictIterationRandomised:
         plain LIST, so its answer IS Django's answer over ``list(view)``* —
         and was deleted with the divergence it described.
         """
-        if not dj.startswith("<<EXC "):
+        if not dj.startswith("<<EXC ") or not du.startswith("<<EXC "):
             return None
-        if not du.startswith("<<EXC "):
-            return "django-raised"
         return "both-raised" if cls._same_reason(shape, d) else None
 
     @staticmethod
@@ -354,6 +359,7 @@ class TestDictIterationRandomised:
             return False
         except Exception as exc:  # noqa: BLE001
             return str(exc).endswith(django_message) and bool(django_message)
+
 
 # ===========================================================================
 # #2335 — sequence comparison

@@ -605,6 +605,25 @@ INPUTS = {
     # reachable only this way.
     "dec-inf": Decimal("Infinity"),
     "dec-nan": Decimal("NaN"),
+    # The non-iterable shapes a `{% for %}` operand can hold (#2382). Every
+    # scalar entry above is an `int` or a `float`, so the corpus could build a
+    # `{% for x in p %}` over those two and over NOTHING ELSE Django refuses —
+    # and `Node::For`'s refusal arm names four Python types, not two. The issue
+    # that surfaced this framed it as a bool problem; measuring the axis showed
+    # an `int`, a `float` and a `Decimal` all raise too, and neither a bool nor
+    # a finite `Decimal` nor an `int` past `i64` could be spelled here.
+    #
+    # `b-false` as well as `b-true`, for the reason `ARG_SPELLINGS` carries all
+    # three builtins: `False` is falsy and `True` is not, so a corpus with only
+    # one of them cannot tell a rule about ITERABILITY from a rule about
+    # TRUTHINESS — which is exactly the reading #2382's own issue had to
+    # correct. `i-big` is a `Value::BigInt` rather than a `Value::Integer`, and
+    # `dec-plain` a finite `Value::Decimal`: four Rust variants reach the
+    # refusal and only two were reachable.
+    "b-true": True,
+    "b-false": False,
+    "i-big": 12345678901234567890,
+    "dec-plain": Decimal("2.5"),
     "n-none": None,
     "l-empty": [],
     # Context ITEM safety (#2287). `mark_safe` on the ELEMENTS and never on the
@@ -2010,6 +2029,83 @@ def _swept_arities() -> set[str]:
     return {f"{name}:{provided}" for name, provided, _key in arity_cells()}
 
 
+#: The three answers `ForNode.render` can give a resolved operand, and the
+#: source line each is read from. Parsed rather than transcribed, so a Django
+#: rewrite that adds or drops a branch fails here instead of drifting.
+#:
+#: `refused` is the one djust could not give until #2382: the `list(values)`
+#: call is what raises, and it is reached only for an operand with no
+#: `__len__` — so a corpus with no such input measures nothing about it.
+_FOR_OUTCOME_BRANCHES = {
+    "empty-branch": r"if\s+len_values\s*<\s*1",
+    "refused": r'if\s+not\s+hasattr\(values,\s*"__len__"\)',
+    "iterated": r"for\s+i,\s*item\s+in\s+enumerate\(values\)",
+}
+
+
+def _required_for_outcomes() -> dict[str, str]:
+    """The outcomes a `{% for %}` operand must be swept through (#2382).
+
+    Read out of Django's own `ForNode.render`, which decides an operand's fate
+    in three steps and NOT in one::
+
+        values = self.sequence.resolve(context, ignore_failures=True)
+        if values is None:                       # -> the empty branch
+            values = []
+        if not hasattr(values, "__len__"):       # -> list(), which can RAISE
+            values = list(values)
+        len_values = len(values)
+        if len_values < 1:                       # -> the empty branch
+            return self.nodelist_empty.render(context)
+
+    djust rendered the empty branch for every operand that was not a sequence,
+    which collapses the second step's two answers — materialised, or refused —
+    into the first's. So the corpus must be able to construct an operand that
+    reaches each.
+
+    WHAT THIS DOES NOT CLOSE, and it is the `input-shape` limit one axis over:
+    it requires the three OUTCOMES, not the set of Python TYPES that reach the
+    refusal. Django's source names no such set; `INPUTS` now carries a bool, a
+    finite `Decimal` and an `int` past `i64` alongside the `int` and `float`
+    that were already there, and that choice is a person's rather than a
+    derivation. `python/tests/test_for_non_iterable_2382.py` measures which of
+    them Django refuses, from Django.
+    """
+    source = inspect.getsource(_django_template.defaulttags.ForNode.render)
+    out: dict[str, str] = {}
+    for name, pattern in _FOR_OUTCOME_BRANCHES.items():
+        if re.search(pattern, source):
+            out[name] = "django defaulttags.ForNode.render"
+    if len(out) != len(_FOR_OUTCOME_BRANCHES):
+        # The `_ARG_ERROR_MARK` lesson: a source the parse can silently stop
+        # matching is the failure this axis exists to prevent, one level in.
+        missing = sorted(set(_FOR_OUTCOME_BRANCHES) - set(out))
+        raise AssertionError(
+            f"ForNode.render no longer spells {missing} — re-read it before trusting this axis"
+        )
+    return out
+
+
+def _swept_for_outcomes() -> set[str]:
+    """Derived by ASKING DJANGO what each corpus input does, never by reading
+    the same table the requirement came from (#1859: a self-comparison could
+    never go red)."""
+    shape = "{% for x in p %}[{{ x }}]{% empty %}E{% endfor %}"
+    # Read out of the shapes the corpus BUILDS: deleting `for-bare` must be
+    # noticed, and iterating `INPUTS` alone would not notice it.
+    if not any(shape == src for src in PATH_SHAPES.values()):
+        return set()
+    reached: set[str] = set()
+    for value in INPUTS.values():
+        try:
+            rendered = Template(shape).render(Context({"p": value}))
+        except Exception:  # noqa: BLE001 — a refusal is an outcome, not a skip
+            reached.add("refused")
+            continue
+        reached.add("empty-branch" if rendered == "E" else "iterated")
+    return reached
+
+
 def _required_forloop_members() -> dict[str, str]:
     source = inspect.getsource(_django_template.defaulttags.ForNode.render)
     out: dict[str, str] = {}
@@ -2264,6 +2360,12 @@ AXES = [
         what="the container shapes the CONTEXT can grant item safety on",
         swept=_swept_grant_shapes,
         required=_required_grant_shapes,
+    ),
+    Axis(
+        name="for-operand-outcome",
+        what="the answers Django's own `ForNode.render` can give a `{% for %}` operand",
+        swept=_swept_for_outcomes,
+        required=_required_for_outcomes,
     ),
     Axis(
         name="loop-variable",
