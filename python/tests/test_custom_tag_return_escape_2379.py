@@ -472,6 +472,53 @@ class TestEveryRegisteredHandlerIsAccountedFor:
         for name in ("djust_markdown", "static", "url", "regroup"):
             assert name in declared, f"{name} was scoped out — the filter is too narrow"
 
+    def test_a_FOREIGN_handler_does_not_break_the_enumeration(self, handlers) -> None:
+        """The empirical canary for the failure that got past a green local run.
+
+        `_registered_handlers` is process-global with no teardown, so a handler
+        another test registers through the `@register` decorator stays there.
+        The first version of the precondition above asserted over the raw
+        accumulator, which made it true only in a pristine process: it passed
+        locally and failed on CI, where xdist put
+        `tests/unit/test_tag_registry.py` (which registers one named `custom`)
+        and this file on the same worker.
+
+        A green full-suite run genuinely cannot rule that out — the scheduling
+        is what decides it. So the property is asserted DIRECTLY here instead:
+        register a handler under a foreign name, from a foreign module, and
+        the enumeration's precondition must still hold.
+        """
+        import djust.template_tags
+
+        registry = djust.template_tags._registered_handlers
+
+        class _ForeignHandler:
+            """Defined HERE, so `__module__` is this test file, not `djust.*`."""
+
+            def render(self, args, context):  # noqa: ARG002
+                return "x"
+
+        name = "e2379_foreign_probe"
+        assert name not in registry, "the probe name is already taken"
+        djust.template_tags.register(name)(_ForeignHandler)
+        try:
+            assert name in registry, (
+                "the decorator did not reach the accumulator, so this canary "
+                "is not reproducing the real pollution"
+            )
+            declared = {
+                n
+                for n, handler in registry.items()
+                if type(handler).__module__.startswith("djust.")
+            }
+            assert name not in declared, "the foreign handler was not scoped out"
+            assert not (declared - set(handlers)), sorted(declared - set(handlers))
+        finally:
+            # Restore, or this canary becomes the pollution it is testing for.
+            registry.pop(name, None)
+            _rust.unregister_tag_handler(name)
+        assert name not in djust.template_tags._registered_handlers
+
     def test_the_theming_family_is_reached(self, handlers) -> None:
         """The family the first version of this enumeration silently missed,
         because its AppConfig had registered before the interception."""
