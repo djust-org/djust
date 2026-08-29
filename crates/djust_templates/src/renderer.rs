@@ -1561,100 +1561,153 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             }
                         } else {
                             // Multiple variables: {% for key, value in items %}
-                            // Expect item to be a list/tuple
+                            //
+                            // Django's `ForNode.render` checks ARITY before it
+                            // unpacks anything, and RAISES on a mismatch:
+                            //
+                            //     try:               len_item = len(item)
+                            //     except TypeError:  len_item = 1
+                            //     if num_loopvars != len_item:
+                            //         raise ValueError("Need %d values to unpack
+                            //             in for loop; got %d. " % (...))
+                            //     unpacked_vars = dict(zip(self.loopvars, item))
+                            //
+                            // djust padded the extra names with `Value::Missing`
+                            // and rendered — so `{% for a, b in p %}` over
+                            // `"abc"` rendered three iterations of `[a=][b=]`
+                            // where Django refuses the template outright (#2387).
+                            // That is MORE permissive than Django, and silently:
+                            // the region rendered, with the variables empty.
+                            let len_item = filters::python_len(&item).unwrap_or(1);
+                            if len_item != var_names.len() {
+                                // Django's message verbatim, trailing space and
+                                // all. It crosses to Python as a `RuntimeError`
+                                // rather than Django's `ValueError`, as EVERY
+                                // djust render error does (see
+                                // `DjangoRustError`); what matters is that the
+                                // render is refused rather than silently padded.
+                                return Err(DjangoRustError::TemplateError(format!(
+                                    "Need {} values to unpack in for loop; got {}. ",
+                                    var_names.len(),
+                                    len_item
+                                )));
+                            }
                             match &item {
                                 Value::List(tuple_items) | Value::Tuple(tuple_items) => {
-                                    // Unpack tuple items into separate variables
-                                    for (i, var_name) in var_names.iter().enumerate() {
-                                        if i < tuple_items.len() {
-                                            // The grant for THIS component
-                                            // (#2361). Two provenances, and the
-                                            // same mutual exclusion as the
-                                            // single-variable branch:
-                                            //
-                                            // * NORMALISED — a `d.items` pair,
-                                            //   whose second half is the dict
-                                            //   VALUE. `derived_grants` looked
-                                            //   it up by key name.
-                                            // * NOT normalised — a genuine
-                                            //   sequence of tuples, where
-                                            //   `_collect_safe_keys` wrote the
-                                            //   component's own positional path
-                                            //   `<expr>.<index>.<i>`. The
-                                            //   correspondence is real here
-                                            //   (both sides positional), which
-                                            //   is exactly what it is not for a
-                                            //   dict, so no #2334 collision:
-                                            //   this is the tuple-unpacking
-                                            //   twin of the loop mapping the
-                                            //   single-variable branch
-                                            //   registers.
-                                            //
-                                            // A filtered operand gets nothing,
-                                            // for the reason the loop mapping
-                                            // is refused one (`slice` shifts
-                                            // indices, `dictsort` reorders).
-                                            let part_safe = if normalised {
-                                                i == 1 && grant.second
-                                            } else if iterable.contains('|') {
-                                                false
-                                            } else {
-                                                matches!(tuple_items.get(i), Some(Value::String(_)))
-                                                    && context
-                                                        .is_safe(&format!("{iterable}.{index}.{i}"))
-                                            };
-                                            ctx.set(var_name.clone(), tuple_items[i].clone());
-                                            ctx.set_safety(var_name, part_safe);
-                                            // The alias for the paths BENEATH
-                                            // this component (#2375).
-                                            // `set_safety` above grants the
-                                            // component ITSELF; `{{ b.z }}`
-                                            // needs `b.z -> <expr>.<index>.<i>.z`,
-                                            // which only an alias can express.
-                                            //
-                                            // Registered under EXACTLY the
-                                            // condition `part_safe`'s own
-                                            // positional lookup uses, and for
-                                            // exactly the same reason: the
-                                            // correspondence is real only when
-                                            // both sides are positional. A
-                                            // NORMALISED source (a dict view)
-                                            // is refused because
-                                            // `_collect_safe_keys` spells a
-                                            // dict BY KEY NAME and this
-                                            // asserts an INDEX — the #2334
-                                            // collision, which is a live XSS
-                                            // for attacker-controlled keys —
-                                            // and a FILTERED one because
-                                            // `slice` shifts and `dictsort`
-                                            // reorders.
-                                            if !normalised && !iterable.contains('|') {
-                                                // Against `ctx`: the loop body
-                                                // renders there, so an outer
-                                                // loop's alias on the iterable
-                                                // name is the one that applies
-                                                // — the same context
-                                                // `set_loop_mapping` uses one
-                                                // branch over.
-                                                let base = ctx.alias_path(iterable);
-                                                ctx.set_alias(
-                                                    var_name.clone(),
-                                                    format!("{base}.{index}.{i}"),
-                                                );
-                                            }
+                                    // `zip(self.loopvars, item)`, and the arity
+                                    // check above is what makes it total: the
+                                    // two lengths are now equal by construction,
+                                    // so there is no short-item branch to pad.
+                                    for (i, (var_name, part)) in
+                                        var_names.iter().zip(tuple_items.iter()).enumerate()
+                                    {
+                                        // The grant for THIS component
+                                        // (#2361). Two provenances, and the
+                                        // same mutual exclusion as the
+                                        // single-variable branch:
+                                        //
+                                        // * NORMALISED — a `d.items` pair,
+                                        //   whose second half is the dict
+                                        //   VALUE. `derived_grants` looked
+                                        //   it up by key name.
+                                        // * NOT normalised — a genuine
+                                        //   sequence of tuples, where
+                                        //   `_collect_safe_keys` wrote the
+                                        //   component's own positional path
+                                        //   `<expr>.<index>.<i>`. The
+                                        //   correspondence is real here
+                                        //   (both sides positional), which
+                                        //   is exactly what it is not for a
+                                        //   dict, so no #2334 collision:
+                                        //   this is the tuple-unpacking
+                                        //   twin of the loop mapping the
+                                        //   single-variable branch
+                                        //   registers.
+                                        //
+                                        // A filtered operand gets nothing,
+                                        // for the reason the loop mapping
+                                        // is refused one (`slice` shifts
+                                        // indices, `dictsort` reorders).
+                                        let part_safe = if normalised {
+                                            i == 1 && grant.second
+                                        } else if iterable.contains('|') {
+                                            false
                                         } else {
-                                            // If tuple has fewer items than var names, set to Null
-                                            ctx.set(var_name.clone(), Value::Missing);
-                                            ctx.set_safety(var_name, false);
+                                            matches!(part, Value::String(_))
+                                                && context
+                                                    .is_safe(&format!("{iterable}.{index}.{i}"))
+                                        };
+                                        ctx.set(var_name.clone(), part.clone());
+                                        ctx.set_safety(var_name, part_safe);
+                                        // The alias for the paths BENEATH
+                                        // this component (#2375).
+                                        // `set_safety` above grants the
+                                        // component ITSELF; `{{ b.z }}`
+                                        // needs `b.z -> <expr>.<index>.<i>.z`,
+                                        // which only an alias can express.
+                                        //
+                                        // Registered under EXACTLY the
+                                        // condition `part_safe`'s own
+                                        // positional lookup uses, and for
+                                        // exactly the same reason: the
+                                        // correspondence is real only when
+                                        // both sides are positional. A
+                                        // NORMALISED source (a dict view)
+                                        // is refused because
+                                        // `_collect_safe_keys` spells a
+                                        // dict BY KEY NAME and this
+                                        // asserts an INDEX — the #2334
+                                        // collision, which is a live XSS
+                                        // for attacker-controlled keys —
+                                        // and a FILTERED one because
+                                        // `slice` shifts and `dictsort`
+                                        // reorders.
+                                        if !normalised && !iterable.contains('|') {
+                                            // Against `ctx`: the loop body
+                                            // renders there, so an outer
+                                            // loop's alias on the iterable
+                                            // name is the one that applies
+                                            // — the same context
+                                            // `set_loop_mapping` uses one
+                                            // branch over.
+                                            let base = ctx.alias_path(iterable);
+                                            ctx.set_alias(
+                                                var_name.clone(),
+                                                format!("{base}.{index}.{i}"),
+                                            );
                                         }
                                     }
                                 }
-                                _ => {
-                                    // If item is not a list, set all vars to Null except first
-                                    ctx.set(var_names[0].clone(), item.clone());
-                                    ctx.set_safety(&var_names[0], grant.whole);
-                                    for var_name in &var_names[1..] {
-                                        ctx.set(var_name.clone(), Value::Missing);
+                                other => {
+                                    // Not a sequence, but its `len()` matched —
+                                    // so Django unpacks it too, because `zip`
+                                    // ITERATES the item rather than indexing it.
+                                    // `{% for a, b in p %}` over `[{"x": 1,
+                                    // "y": 2}]` binds `a="x"`, `b="y"` (a dict
+                                    // iterates its keys) and over `["ab"]` binds
+                                    // `a="a"`, `b="b"`. djust bound the whole
+                                    // item to the first name and `Missing` to
+                                    // the rest, so the dict case rendered its
+                                    // own repr into `{{ a }}`.
+                                    //
+                                    // Total by construction: every variant
+                                    // `python_len` answers `Some` for is one
+                                    // `iter_values` answers `Some` for, with the
+                                    // same count — the pair is pinned by
+                                    // `python_len_agrees_with_iter_values`.
+                                    //
+                                    // NO safety grant on any component, and that
+                                    // is deliberate rather than an omission.
+                                    // `_collect_safe_keys` spells a dict BY KEY
+                                    // NAME, so the positional `<expr>.<index>.<i>`
+                                    // lookup the sequence arm uses would be the
+                                    // #2334 collision — live XSS for
+                                    // attacker-controlled keys — and it never
+                                    // descends into a `str` at all. Over-escaping
+                                    // is the direction to fail in.
+                                    let parts = filters::iter_values(other).unwrap_or_default();
+                                    for (var_name, part) in var_names.iter().zip(parts) {
+                                        ctx.set(var_name.clone(), part);
                                         ctx.set_safety(var_name, false);
                                     }
                                 }
