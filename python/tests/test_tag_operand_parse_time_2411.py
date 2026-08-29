@@ -280,6 +280,15 @@ class TestTheCallerSetIsPinned:
                 "validate_tag_operand(&iterable)?",  # the `"for"` arm
                 "validate_tag_operand(&expression)?",  # the `"with"` arm, per assignment
                 "validate_tag_operand(arg)?",  # validate_if_operands' own delegation
+                # The four #2418 added. This test is the reason they were
+                # found: the set it pins is read out of `parser.rs`, and
+                # grepping the SINK for "what resolves a NAME" turned up four
+                # operand-bearing tags this list did not name. A floor would
+                # have passed (#1125); a SET does not.
+                "validate_tag_operand(parts[1])?",  # `{% include … with k=v %}`
+                "validate_tag_operand(operand)?",  # the `"widthratio"` arm
+                "validate_tag_operand(operand)?",  # the `"firstof"` arm
+                "validate_tag_operand(value)?",  # the `"cycle"` arm
             ]
         ), calls
 
@@ -298,9 +307,15 @@ class TestTheCallerSetIsPinned:
 
 
 class TestTheTwoRulesThisDoesNotClose:
-    """Both are SEPARATE defects, and the evidence is that each is visible in
+    """Both were SEPARATE defects, and the evidence is that each is visible in
     shapes that never swallow anything. Kept as executable notes rather than
-    prose so they go red the day either is fixed and this file is stale."""
+    prose so they go red the day either is fixed and this file is stale.
+
+    That is what happened: the underscore rule went red and #2418 closed it.
+    The test below is now the CLOSED half — it asserts the refusal rather than
+    the rendering, so this file keeps saying something true. ``Invalid filter``
+    (#2419) is still open and still measured here.
+    """
 
     def test_unknown_filter_is_a_RENDER_time_lookup_on_every_shape(self) -> None:
         """Not masked by ``{% if %}``: ``{{ }}`` renders it too. Moving it to
@@ -319,13 +334,18 @@ class TestTheTwoRulesThisDoesNotClose:
             "{% with v=p|date:_x %}{{ v }}{% endwith %}",
         ],
     )
-    def test_the_underscore_name_rule_is_missing_on_shapes_that_never_swallow(
-        self, source: str
-    ) -> None:
-        """``Variable.__init__``'s rule, which djust has nowhere. With ``_x``
-        BOUND, these three render on this engine and refuse on Django — so it
-        cannot be the ``{% if %}`` swallow, and a parse-time filter-chain check
-        cannot reach it either."""
+    def test_the_underscore_name_rule_is_now_implemented(self, source: str) -> None:
+        """``Variable.__init__``'s rule, which djust had nowhere until #2418.
+
+        With ``_x`` BOUND these three rendered here and refused on Django — so
+        it was never the ``{% if %}`` swallow, and a parse-time filter-CHAIN
+        check could not reach it either. It is a rule about the NAME, and it
+        needed its own call site. The full surface is in
+        ``python/tests/test_variable_underscore_rule_2418.py``; these three
+        stay here because they are the cells that proved the two defects were
+        separate.
+        """
         assert not django_renders(source), "premise"
-        rendered, _ = djust_renders(source)
-        assert rendered, "the underscore rule now exists — update this file"
+        rendered, out = djust_renders(source)
+        assert not rendered, f"the underscore rule regressed — djust rendered {out!r}"
+        assert "Variables and attributes may not begin with underscores" in out, out

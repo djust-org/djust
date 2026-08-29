@@ -314,6 +314,14 @@ class Component(ABC):
         # 2. Try hybrid: template with Rust rendering (fast, with Django fallback)
         if self.template is not None:
             context = self.get_context_data()
+            # `component_key` is the TEMPLATE spelling; `_component_key` is
+            # kept for any Python-side reader. Django's `Variable.__init__`
+            # refuses a name beginning with `_` at COMPILE time, so
+            # `{{ _component_key }}` never compiled on the Django fallback
+            # path this method falls back to — and since #2418 it does not
+            # compile on the Rust path either. Same value, a name the rule
+            # admits.
+            context["component_key"] = self._component_key
             context["_component_key"] = self._component_key
             return cast(str, mark_safe(_render_template_with_fallback(self.template, context)))
 
@@ -324,9 +332,15 @@ class Component(ABC):
         """
         Override to provide template context for hybrid rendering.
 
-        Note: The component key is automatically injected as '_component_key' by the
-        render() method, so you don't need to include it here. It's available in
-        templates for optional use (e.g., data-component-key="{{ _component_key }}").
+        Note: The component key is automatically injected by the render() method,
+        so you don't need to include it here. Read it in a template as
+        ``component_key`` (e.g., data-component-key="{{ component_key }}").
+
+        The key is also injected under its old name ``_component_key`` for any
+        Python-side reader, but that spelling is NOT readable from a template:
+        Django's ``Variable.__init__`` refuses a name beginning with ``_`` at
+        compile time, and djust matches it since #2418. The old spelling never
+        worked on the Django fallback path either.
 
         Returns:
             Dictionary of template variables

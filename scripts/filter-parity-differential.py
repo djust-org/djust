@@ -1515,6 +1515,16 @@ ARG_SPELLINGS = [
     # the same two characters Django's own lexer is built from.
     f'"a{_FILTER_SEPARATOR}b"',
     f'"a{_FILTER_ARGUMENT_SEPARATOR}b"',
+    # Names `Variable.__init__` REFUSES, and the two literal arms that run
+    # before it (#2418). Every spelling above is a name Django accepts, so the
+    # corpus could not construct one argument cell carrying a refused name —
+    # and 401 of the 495 divergent cells #2418 measured were exactly that. The
+    # `_( … )` row is the control that keeps the fix from being stricter than
+    # Django: it BEGINS with `_` and Django compiles it, because the translate
+    # arm strips the wrapper before the underscore check.
+    "_x",
+    "p._priv",
+    '_("_x")',
 ]
 
 #: Bound so the `known*` spellings above have something to resolve TO.
@@ -1525,6 +1535,11 @@ ARG_SPELLINGS = [
 #: and a dict, and Django's `except ValueError` does not catch it.
 ARG_CONTEXT = {
     "known": "3",
+    # BOUND on purpose (#2418). An unbound `_x` is refused by djust for the
+    # unrelated "does not resolve" reason, which is the masking that made the
+    # underscore rule look like part of #2411 — its sweep bound no `_x` and so
+    # reported zero rows on the three shapes that never swallow anything.
+    "_x": 9,
     "known_list": [1, 2],
     "known_tuple": (1, 2),
     "known_dict": {"a": 1},
@@ -1703,21 +1718,31 @@ MASK_POSITIONS = {
     "dead-branch-if": "{% if 0 %}{% if p|@SPEC@ %}Y{% endif %}{% endif %}",
     "dead-branch-for": "{% if 0 %}{% for x in p|@SPEC@ %}Y{% endfor %}{% endif %}",
     "dead-branch-with": "{% if 0 %}{% with v=p|@SPEC@ %}Y{% endwith %}{% endif %}",
+    # --- the four #2418 wired, each a tag arm that resolves a NAME and that
+    # #2411 did not reach. The manifest reported all four MISSING the moment
+    # the engine grew the call, which is what this axis is for.
+    "cycle": "{% cycle p|@SPEC@ 'z' %}",
+    "firstof": "{% firstof p|@SPEC@ 'F' %}",
+    "widthratio": "{% widthratio p|@SPEC@ 10 100 %}",
+    "include": '{% include "x.html" with v=p|@SPEC@ %}',
 }
 
 #: One spec per COMPILE-time refusal class, so a fix that closes one and not
-#: the others is visible per-cell rather than as a single number. The last two
-#: are the classes #2411 deliberately did NOT close — `Invalid filter` is a
-#: render-time lookup on every shape, and the underscore rule is
-#: `Variable.__init__`'s, which djust has nowhere — and they are on the axis so
-#: that stays measured rather than remembered.
+#: the others is visible per-cell rather than as a single number.
+#:
+#: `nosuchfilter` is the one class still open: `Invalid filter` is a
+#: render-time lookup on every shape, so moving it to parse time for tags only
+#: would be new drift, and it would refuse a custom filter registered after the
+#: template was parsed (#2419). `date:_y` was the second, and #2418 closed it —
+#: it stays on the axis because a spec that stops refusing is exactly what this
+#: axis exists to report.
 MASK_SPECS = [
     "cut",  # args_check: too FEW
     "join",  # args_check: too few, second filter
     'upper:"x"',  # args_check: too MANY
     'cut:"a":"b"',  # the lexer bound (#2409), not the signature
     "nosuchfilter",  # Invalid filter — still open, and this is where it shows
-    "date:_y",  # Variable.__init__'s underscore rule — also still open
+    "date:_y",  # Variable.__init__'s underscore rule (#2418)
 ]
 
 
@@ -1740,6 +1765,53 @@ def mask_cells():
         for position in MASK_POSITIONS:
             for key in INPUTS_3:
                 yield spec, position, key
+
+
+#: The VARIABLE-NAME axis (#2418) — the eighth blind spot.
+#:
+#: `Variable.__init__` refuses a name beginning with `_`, or carrying `._`
+#: anywhere, while the template is being COMPILED. It is a rule about the NAME
+#: and not about the value, so it fires whether or not the name resolves —
+#: which is why it survived #2411's 13,202-template sweep: that sweep bound no
+#: `_x`, so djust refused those cells for the unrelated "argument does not
+#: resolve" reason and they never showed as divergent.
+#:
+#: This corpus could not see it either, and for a plainer reason: every head it
+#: writes is `p` and every argument spelling was a name Django accepts. A rule
+#: Django applies at three positions went unmeasured while ~345,000 cells
+#: reported clean. The `argument` position also rides `ARG_SPELLINGS` above, so
+#: it crosses every argument-taking built-in; the rows here are what make the
+#: HEAD and OPERAND positions constructible at all.
+#:
+#: One spelling per arm of Django's own ordering, so a fix that reproduces the
+#: refusal but not the two arms that run BEFORE it is visible per-cell:
+NAME_SPELLINGS = {
+    "leading": "_x",  # refused: `var[0] == "_"`
+    "dotted": "p._priv",  # refused: `"._" in var`
+    "quoted": '"_x"',  # NOT refused: the literal arm runs first
+    "i18n": '_("_x")',  # NOT refused: `_( … )` is stripped first
+}
+
+#: The positions the rule runs at. Which ones are REQUIRED is read out of
+#: `parser.rs` in `_required_name_positions`, so a fourth call site reports
+#: this axis MISSING rather than passing silently.
+NAME_POSITIONS = {
+    "head": "{{ @NAME@ }}",
+    "head-filtered": "{{ @NAME@|upper }}",
+    "argument": "{{ p|default:@NAME@ }}",
+    "operand-if": "{% if @NAME@ %}Y{% else %}N{% endif %}",
+    "operand-for": "{% for x in @NAME@ %}[{{ x }}]{% empty %}E{% endfor %}",
+    "operand-with": "{% with q=@NAME@ %}[{{ q }}]{% endwith %}",
+    "operand-firstof": "{% firstof @NAME@ 'F' %}",
+}
+
+
+def name_cells():
+    """Every name spelling × every position the engine resolves a name at."""
+    for spelling in NAME_SPELLINGS:
+        for position in NAME_POSITIONS:
+            for key in INPUTS_3:
+                yield spelling, position, key
 
 
 def arity_cells():
@@ -1840,7 +1912,6 @@ def mapping_inputs():
 #: those bind only `p`, so a builtin literal there can never meet a mapping.
 #: This one crosses the two axes, which is the whole point.
 BUILTIN_X_MAPPING = "{% if @NAME@ in @KEY@ %}Y{% else %}N{% endif %}"
-
 
 
 def builtin_cells():
@@ -2431,6 +2502,62 @@ def _swept_mask_positions() -> set[str]:
     return {tag for tag in swept if tag in _required_mask_positions()}
 
 
+#: How each `validate_variable_name` call site in `parser.rs` maps to a
+#: corpus POSITION. Spelled here rather than derived, because the mapping is
+#: the claim: a fourth call site whose argument is not one of these three
+#: raises in `_required_name_positions` rather than being silently ignored.
+_NAME_CALLSITE_POSITION = {
+    "expr_part": "head",  # parse_token's `Token::Variable` arm
+    "arg": "argument",  # parse_filter_specs, per filter spec
+    "&parts[0]": "operand",  # validate_tag_operand's own head
+}
+
+
+def _required_name_positions() -> dict[str, str]:
+    """The positions Django's underscore rule runs at, read out of `parser.rs`.
+
+    Read from the RUST source rather than from `NAME_POSITIONS`'s keys, for the
+    reason `_required_mask_positions` gives: a key-derived requirement agrees
+    with the corpus by construction and could never report it short (#1859).
+    """
+    src = _crate_source("djust_templates", "parser")
+    out: dict[str, str] = {}
+    for callsite in re.findall(r"validate_variable_name\(([^)]*)\)\?", src):
+        position = _NAME_CALLSITE_POSITION.get(callsite.strip())
+        if position is None:
+            raise AssertionError(
+                f"parser.rs calls validate_variable_name({callsite!r}) and this "
+                f"corpus has no position for it. Add the row to "
+                f"_NAME_CALLSITE_POSITION and a cell to NAME_POSITIONS in the "
+                f"SAME commit as the engine change."
+            )
+        out[position] = f"parser.rs validate_variable_name({callsite.strip()})"
+    return out
+
+
+def _swept_name_positions() -> set[str]:
+    """The positions the corpus's own templates actually WRITE the name at.
+
+    Read out of the templates rather than off `NAME_POSITIONS`'s keys, so a
+    position renamed without its template changing cannot pass for coverage —
+    the same mechanism `_swept_mask_positions` uses.
+    """
+    swept: set[str] = set()
+    for template in NAME_POSITIONS.values():
+        if re.search(r"\{\{\s*@NAME@", template):
+            swept.add("head")
+        if ":@NAME@" in template:
+            swept.add("argument")
+        if re.search(r"\{%[^%]*@NAME@", template):
+            swept.add("operand")
+    # `ARG_SPELLINGS` carries the refused names too, which is what crosses the
+    # argument position with every argument-taking built-in rather than with
+    # `default` alone.
+    if any(s.startswith("_") or "._" in s for s in ARG_SPELLINGS):
+        swept.add("argument")
+    return swept
+
+
 #: Every `_rust` function that RENDERS a template or CHANGES how one renders.
 #:
 #: #2290 is the reason this axis exists: `register_custom_filter` had been on
@@ -2575,6 +2702,12 @@ AXES = [
         # a convenient subset of positions fails here (#1859).
         swept=_swept_mask_positions,
         required=_required_mask_positions,
+    ),
+    Axis(
+        name="variable-name",
+        what="the positions Django's `Variable.__init__` underscore rule runs at",
+        swept=_swept_name_positions,
+        required=_required_name_positions,
     ),
     Axis(
         name="entrypoint",
@@ -2724,6 +2857,8 @@ def axis_of(cid: str) -> str:
         return "cmp"
     if cid.startswith("@mask "):
         return "masked-refusal"
+    if cid.startswith("@name "):
+        return "variable-name"
     if cid.startswith("@ctag "):
         return "ctag"
     if cid.startswith("@path"):
@@ -2885,6 +3020,20 @@ def measure(out_path: str) -> None:
         dj, du = render_both(
             MASK_POSITIONS[position].replace("@SPEC@", refusal),
             {"p": INPUTS[key]},
+        )
+        result[cid] = [dj, du]
+
+    # The VARIABLE-NAME axis (#2418). Four fields, `@name` first, so no id
+    # above is renamed. `ARG_CONTEXT` is passed so `_x` and `known` are BOUND —
+    # an unbound underscore name is refused for the unrelated resolution
+    # reason, and a cell that refuses for the wrong reason measures nothing.
+    for spelling, position, key in name_cells():
+        cid = f"@name {spelling}\t{key}\tname\t{position}"
+        if cid in result:
+            continue
+        dj, du = render_both(
+            NAME_POSITIONS[position].replace("@NAME@", NAME_SPELLINGS[spelling]),
+            {"p": INPUTS[key], **ARG_CONTEXT},
         )
         result[cid] = [dj, du]
 

@@ -434,6 +434,10 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 .map(|s| s.trim().to_string())
                 .collect();
             let expr_part = &parts[0];
+            // Django builds `Variable(var)` for the HEAD before it looks at a
+            // single filter, so `{{ _x|cut }}` reports the underscore rather
+            // than `cut`'s arity (#2418). Ordering measured, not assumed.
+            validate_variable_name(expr_part)?;
             let filters = parse_filter_specs(&parts[1..], var)?;
 
             // Check for Jinja2-style inline conditional:
@@ -667,6 +671,12 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                                 if args[i].contains('=') {
                                     let parts: Vec<&str> = args[i].splitn(2, '=').collect();
                                     if parts.len() == 2 {
+                                        // Same shape as `{% with %}`: `do_include`
+                                        // runs each RHS through `token_kwargs` →
+                                        // `compile_filter` at COMPILE time, so the
+                                        // value is a TAG OPERAND and the key is a
+                                        // BINDING (#2411, #2418).
+                                        validate_tag_operand(parts[1])?;
                                         with_vars
                                             .push((parts[0].to_string(), parts[1].to_string()));
                                     }
@@ -814,6 +824,14 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                                 .to_string(),
                         ));
                     }
+                    // Each of the three is a TAG OPERAND: `do_widthratio` runs
+                    // all three through `compile_filter` at COMPILE time, so
+                    // `{% widthratio q 10 _x %}` refuses on Django (#2418).
+                    // `asvar` is a BINDING, not a lookup, and is excluded —
+                    // `{% widthratio q 10 100 as _n %}` compiles on Django.
+                    for operand in &operands {
+                        validate_tag_operand(operand)?;
+                    }
                     Ok(Some(Node::WidthRatio {
                         value: operands[0].clone(),
                         max_value: operands[1].clone(),
@@ -829,6 +847,13 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         return Err(DjangoRustError::TemplateError(
                             "firstof tag requires at least one argument".to_string(),
                         ));
+                    }
+                    // `do_firstof` compiles every operand (#2418). The quoted
+                    // fallback is a literal and `validate_variable_name`'s
+                    // literal arm lets it through, so `{% firstof a "_fb" %}`
+                    // still compiles.
+                    for operand in &operands {
+                        validate_tag_operand(operand)?;
                     }
                     Ok(Some(Node::FirstOf {
                         args: operands,
@@ -873,6 +898,13 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     } else {
                         (args.clone(), None)
                     };
+                    // `do_cycle` compiles every value (#2418). `name` is the
+                    // `as` BINDING and is excluded, like `widthratio`'s and
+                    // `firstof`'s — `{% cycle "a" "b" as _n %}` compiles on
+                    // Django.
+                    for value in &values {
+                        validate_tag_operand(value)?;
+                    }
                     Ok(Some(Node::Cycle { values, name }))
                 }
 
@@ -1930,6 +1962,15 @@ fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Opti
         specs.push((name.to_string(), arg.map(str::to_string)));
     }
     for (name, arg) in &specs {
+        // Django builds the argument's `Variable` BEFORE `args_check` runs for
+        // that same filter, and both run before the NEXT filter is looked at
+        // (`FilterExpression.__init__`). So `{{ p|upper:_x }}` reports the
+        // underscore and `{{ p|upper:"a"|cut:_y }}` reports `upper`'s arity —
+        // which is why these two checks are interleaved per spec rather than
+        // run as two passes (#2418).
+        if let Some(arg) = arg {
+            validate_variable_name(arg)?;
+        }
         if let Some(message) =
             crate::filter_arity::parse_time_arity_error(name, u8::from(arg.is_some()))
         {
@@ -1941,6 +1982,76 @@ fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Opti
         }
     }
     Ok(specs)
+}
+
+/// Django's `Variable.__init__` underscore rule, on ONE variable atom (#2418).
+///
+/// ```python
+/// if var.find(VARIABLE_ATTRIBUTE_SEPARATOR + "_") > -1 or var[0] == "_":
+///     raise TemplateSyntaxError(
+///         "Variables and attributes may not begin with underscores: '%s'" % var
+///     )
+/// ```
+///
+/// # Why it is a rule about the NAME, not about the value
+///
+/// It fires while the template is being COMPILED, so it does not care whether
+/// the name resolves. That is what made it invisible to the #2411 sweep, whose
+/// context bound no `_x`: djust refused those cells for the unrelated
+/// "argument does not resolve" reason and they never showed as divergent. With
+/// `_x` BOUND, `{{ p|date:_x }}`, `{% for i in p|date:_x %}` and
+/// `{% with v=p|date:_x %}` rendered here and refused on Django.
+///
+/// # Django's ORDER, which this reproduces
+///
+/// `Variable.__init__` tries the arms in this sequence, and only a name that
+/// survives all of them reaches the underscore check:
+///
+/// 1. **numeric** — `int`/`float`. Not reproduced here, and it does not need
+///    to be: Python rejects a leading `_` in a numeric literal (`int("_1")`
+///    raises) and no numeric spelling contains `._` (`float("1._0")` raises),
+///    so the numeric arm can never be what saves a name from this rule. A
+///    numeric pre-check would be a second mechanism with nothing to do
+///    (#2233). `TestNoNumericSpellingIsRefused` pins that against live Python.
+/// 2. **`_( … )`** — the i18n wrapper is STRIPPED, and the remaining arms then
+///    run on the inside. This one IS load-bearing: `{{ p|default:_("_x") }}`
+///    compiles on Django and must keep compiling here.
+/// 3. **quoted literal** — a literal never becomes a lookup, so
+///    `{{ p|default:"_x" }}` and `{% if "_x" %}` compile.
+/// 4. **the underscore check**, on the possibly-`_()`-stripped name.
+///
+/// # What it is NOT
+///
+/// It is not about a name BINDING. Measured on live Django:
+/// `{% for _i in items %}X{% endfor %}`, `{% with _v=q %}X{% endwith %}` and
+/// `{% cycle "a" "b" as _n %}X` all compile — you may bind an underscore name,
+/// you may just never read one back. `TestABindingIsNotALookup` pins that, and
+/// it is the reason no call site passes a loop variable, a `{% with %}` target
+/// or an `as`-name to this function.
+pub(crate) fn validate_variable_name(atom: &str) -> Result<()> {
+    let mut var = atom.trim();
+
+    // Arm 2: strip `_( … )` before the literal and underscore checks, exactly
+    // as Django reassigns `var` in the `translate` branch — including for the
+    // error message, which reports the STRIPPED name.
+    if var.len() >= 3 && var.starts_with("_(") && var.ends_with(')') {
+        var = &var[2..var.len() - 1];
+    }
+
+    // Arm 3: a quoted literal. `strip_filter_arg_quotes` is the same
+    // quote-recogniser the render path uses, called rather than restated
+    // (#1646) — if it changes its mind about what a literal is, both change.
+    if strip_filter_arg_quotes(var) != var {
+        return Ok(());
+    }
+
+    if var.starts_with('_') || var.contains("._") {
+        // Django's `TemplateSyntaxError` text verbatim.
+        return Err(DjangoRustError::TemplateError(format!(
+            "Variables and attributes may not begin with underscores: '{var}'"
+        )));
+    }
+    Ok(())
 }
 
 /// Run the PARSE-time half of Django's `compile_filter` over one TAG operand
@@ -1997,16 +2108,27 @@ fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Opti
 ///   renders on this engine and refuses on Django. Checking it HERE and not
 ///   there would be a new parallel path, and would refuse a custom filter
 ///   registered after the template was parsed. Tracked at #2419.
-/// * **`Variables and attributes may not begin with underscores`.** That is
-///   `Variable.__init__`'s rule, and djust has no equivalent anywhere: with
-///   `_x` bound in the context, `{{ p|date:_x }}`, `{% for i in p|date:_x %}`
-///   and `{% with v=p|date:_x %}` all render on this engine too. A missing
-///   rule, not a masked one. Tracked at #2418.
+///
+/// # What it checks SINCE #2418
+///
+/// `Variables and attributes may not begin with underscores` — the rule
+/// `Variable.__init__` applies to the operand's own NAME, which djust had
+/// nowhere. It was NOT part of this defect: with `_x` bound in the context,
+/// `{{ p|date:_x }}`, `{% for i in p|date:_x %}` and `{% with v=p|date:_x %}`
+/// rendered here and refused on Django, and none of those three swallows
+/// anything. It is now the first thing this function does, via
+/// [`validate_variable_name`], and the operand's filter chain is checked
+/// second — Django's own order inside `FilterExpression.__init__`.
 pub(crate) fn validate_tag_operand(expr: &str) -> Result<()> {
     let parts: Vec<String> = crate::filter_lexer::split_pipes(expr)
         .into_iter()
         .map(|s| s.trim().to_string())
         .collect();
+    // The operand's own name, then its filter chain — Django's order inside
+    // `FilterExpression.__init__` (#2418). This is the third and last caller
+    // of `validate_variable_name`; between them they cover every place djust
+    // turns a template NAME into a lookup.
+    validate_variable_name(&parts[0])?;
     parse_filter_specs(&parts[1..], expr).map(|_| ())
 }
 
@@ -2026,10 +2148,15 @@ pub(crate) fn validate_tag_operand(expr: &str) -> Result<()> {
 /// behaviour, which is the definition of decorative (#2233), so it is one
 /// comment rather than one constant.
 ///
-/// A future check that reads the operand as a NAME rather than as a filter
-/// chain — `Variable.__init__`'s underscore rule is the open one — would need
-/// the operator set reinstated before it could run here, because `==` is not a
-/// variable.
+/// The name check this now also runs — `Variable.__init__`'s underscore rule
+/// (#2418) — was predicted here to need the operator set reinstated, "because
+/// `==` is not a variable". Measured against live `smartif.OPERATORS`, that
+/// prediction is wrong and the set stays absent: no Django operator token
+/// begins with `_` or contains `._`, so the rule is a no-op on every one of
+/// them, exactly as `split_pipes` is. Reinstating the set would be a second
+/// mechanism that changes no behaviour — decorative by the same argument
+/// (#2233). `test_no_django_if_operator_word_is_refusable_as_an_operand`
+/// checks the claim against Django rather than against this comment.
 pub(crate) fn validate_if_operands(args: &[String]) -> Result<()> {
     for arg in args {
         validate_tag_operand(arg)?;

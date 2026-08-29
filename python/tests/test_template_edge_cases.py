@@ -251,10 +251,15 @@ class TestRustEngineGapFixes:
                 self._private = "hidden"
 
         model = FakeModel()
-        result = render_template("{{ obj.public_field }}|{{ obj._private }}", {"obj": model})
-        # public_field renders, _private is excluded and renders empty
-        assert "visible" in result
-        assert "hidden" not in result
+        # Since #2418 the template does not COMPILE at all: Django's
+        # `Variable.__init__` refuses a name carrying `._` while the template
+        # is being compiled, and djust now matches it. That is strictly
+        # stronger than "renders empty" — the value has no path to the page.
+        with pytest.raises(RuntimeError, match="may not begin with underscores"):
+            render_template("{{ obj.public_field }}|{{ obj._private }}", {"obj": model})
+        # The public half still renders, so the refusal is about the NAME and
+        # not about the object.
+        assert render_template("{{ obj.public_field }}", {"obj": model}) == "visible"
 
     def test_quote_escaping_in_attribute_values(self):
         """Double quotes in template variables are escaped to &quot; in output.
