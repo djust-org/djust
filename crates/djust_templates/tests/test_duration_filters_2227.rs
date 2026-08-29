@@ -32,12 +32,19 @@ use djust_templates::Template;
 const NBSP: char = '\u{a0}';
 
 fn render(source: &str, value: &str) -> String {
+    try_render(source, value).expect("template should render")
+}
+
+/// The render, or its error — for the cases where a REFUSAL is the answer
+/// (#2399: a truthy value these filters cannot read reaches `value.year` in
+/// Django, which raises past both of its `except`s).
+fn try_render(source: &str, value: &str) -> Result<String, String> {
     let mut ctx = Context::new();
     ctx.set("v".to_string(), Value::String(value.to_string()));
     Template::new(source)
         .expect("template should parse")
         .render(&ctx)
-        .expect("template should render")
+        .map_err(|e| format!("{e:?}"))
 }
 
 /// A naive datetime `hours` in the past, in the shape Python's `.isoformat()`
@@ -115,13 +122,18 @@ fn a_bare_time_is_refused_rather_than_measured_from_1970() {
     // The trap the `allow_time_only` flag exists for. A bare time is anchored
     // on an arbitrary epoch date inside the formatter, so a parser that
     // accepted it here would report the decades since 1970 — a confidently
-    // wrong answer. Django raises; djust falls back to its input, which is the
-    // fail-soft convention for an unparseable value.
-    let out = render("{{ v|timesince }}", "09:30:00");
-    assert_eq!(out, "09:30:00", "got {out:?}");
+    // wrong answer.
+    //
+    // The REFUSAL is now a raise rather than an echo of the input (#2399):
+    // Django raises `AttributeError` for every truthy value it cannot read,
+    // and echoing put the unfiltered input on the page where Django puts no
+    // page at all. The property this test is about — never measured against
+    // the epoch — is unchanged and asserted on the message.
+    let err = try_render("{{ v|timesince }}", "09:30:00").expect_err("a bare time must be refused");
+    assert!(err.contains("needs a date"), "got {err:?}");
     assert!(
-        !out.contains("year"),
-        "a bare time must never be measured against the epoch anchor"
+        !err.contains("year") || err.contains("value.year"),
+        "a bare time must never be measured against the epoch anchor: {err:?}"
     );
 }
 
@@ -133,7 +145,9 @@ fn timeuntil_gets_the_same_parse_and_the_same_refusal() {
         render("{{ v|timeuntil }}", &naive_hours_ago(30)),
         format!("0{NBSP}minutes")
     );
-    assert_eq!(render("{{ v|timeuntil }}", "09:30:00"), "09:30:00");
+    // Refused, not echoed — see the bare-time case above (#2399).
+    let err = try_render("{{ v|timeuntil }}", "09:30:00").expect_err("a bare time must be refused");
+    assert!(err.contains("needs a date"), "got {err:?}");
 
     let future = (chrono::Local::now().naive_local() + chrono::Duration::hours(30))
         .format("%Y-%m-%dT%H:%M:%S%.f")

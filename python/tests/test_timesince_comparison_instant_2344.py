@@ -115,6 +115,19 @@ def djust_render(source: str, ctx: dict[str, Any]) -> str:
     return _rust.render_template(source, ctx)
 
 
+def _outcome(source: str, ctx: dict[str, Any]) -> str:
+    """djust's answer, or a comparable marker for its raise.
+
+    So a test can compare two spellings' OUTCOMES without depending on whether
+    the outcome is a render or a refusal — which is what the ordering property
+    in `TestTheValueDecidesFirst` is actually about.
+    """
+    try:
+        return djust_render(source, ctx)
+    except BaseException as exc:  # noqa: BLE001 — a pyo3 panic is not an `Exception`
+        return f"<<{type(exc).__name__}: {exc}>>"
+
+
 def raises_django(source: str, ctx: dict[str, Any]) -> bool:
     try:
         django_render(source, ctx)
@@ -359,14 +372,22 @@ class TestTheValueDecidesFirst:
     """Django normalizes `d` before it touches `now`, and so does this."""
 
     @pytest.mark.parametrize("value", ["notadate", "", "abc"])
-    def test_an_unreadable_value_falls_soft_before_the_argument_is_judged(self, value: str) -> None:
-        """djust's fail-soft convention for an unreadable VALUE (#2227) is
-        pre-existing and out of scope here. What #2344 must not do is let the
-        ARGUMENT raise first and turn that fail-soft into a 500 — the ordering
-        mistake #2328's `floatformat` pass made and had to undo.
+    def test_an_unreadable_value_is_judged_before_the_argument(self, value: str) -> None:
+        """What #2344 must not do is let the ARGUMENT decide first — the
+        ordering mistake #2328's `floatformat` pass made and had to undo.
+
+        Stated as "the two spellings give the same OUTCOME", which is the
+        ordering property itself and is independent of what that outcome is.
+        #2399 changed the outcome for a TRUTHY unreadable value from an echo of
+        the input to Django's own refusal, and this class is unaffected by that
+        because it never asserted the echo — only that the argument's
+        `is not a date or datetime` is not what surfaces.
         """
-        assert djust_render('{{ p|timesince:"whenever" }}', {"p": value}) == (
-            djust_render("{{ p|timesince }}", {"p": value})
+        with_arg = _outcome('{{ p|timesince:"whenever" }}', {"p": value})
+        without_arg = _outcome("{{ p|timesince }}", {"p": value})
+        assert with_arg == without_arg
+        assert "is not a date or datetime" not in with_arg, (
+            "the ARGUMENT's raise reached the caller ahead of the value's answer"
         )
 
     def test_and_with_a_readable_value_the_argument_does_raise(self) -> None:

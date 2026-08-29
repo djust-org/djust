@@ -819,6 +819,15 @@ HOT2 = [
     # echoing filter and the conclusion generalised to the axis.
     "date",
     "time",
+    # The two arms #2401 / #2403 gave a per-CALL grant. Both are
+    # return-the-INPUT branches — `yesno`'s `len(bits) < 2` and `get_digit`'s
+    # `except ValueError` — so they join the `default` / `cut` / `add` family
+    # the paragraph above is about, and the enforcing test
+    # (`test_every_safety_set_member_is_in_the_differential_hot_sets`) requires
+    # them here as soon as the arm exists. It is what made this edit part of the
+    # same commit.
+    "yesno",
+    "get_digit",
 ]
 HOT3 = [
     "safe",
