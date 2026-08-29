@@ -44,9 +44,16 @@ pytest.importorskip("django")
 from djust import _rust  # noqa: E402
 
 #: Characters `json_escape_for_script` rewrites AFTER `json_string_body` has
-#: run. Excluded from the byte-parity differential only — `json.dumps` leaves
-#: them alone, so a difference there is the composition working as designed.
-SCRIPT_STAGE_CHARS = ("<", ">", "&", "\u2028", "\u2029")
+#: run — Django's `_json_script_escapes`, which holds exactly these three.
+#: Excluded from the byte-parity differential only: `json.dumps` leaves them
+#: alone, so a difference there is the composition working as designed.
+#:
+#: `U+2028` / `U+2029` used to be here too. They were the right
+#: compensation while this engine emitted raw UTF-8; `ensure_ascii` (#2413)
+#: now escapes them upstream in `json_string_body`, exactly as `json.dumps`
+#: does, so they belong to the FIRST stage and are swept like any other
+#: non-ASCII character.
+SCRIPT_STAGE_CHARS = ("<", ">", "&")
 
 
 def script_body(value: object) -> str:
@@ -190,11 +197,16 @@ def test_a_tagged_decimal_escapes_the_whole_control_range() -> None:
 # ---------------------------------------------------------------------------
 
 #: Every control character, the two structural escapes, an ASCII spread, DEL,
-#: and two multi-byte characters — minus the five `json_escape_for_script`
-#: claims, which are not `json_string_body`'s to emit.
+#: two multi-byte characters, the two line separators and an ASTRAL codepoint
+#: (a surrogate PAIR under `ensure_ascii`, #2413) — minus the three
+#: `json_escape_for_script` claims, which are not `json_string_body`'s to
+#: emit.
 DIFFERENTIAL_ALPHABET = [
     c
-    for c in ([chr(code) for code in range(0x00, 0x22)] + list('"\\/aZ9 -\x7f\u00e9\u4e16'))
+    for c in (
+        [chr(code) for code in range(0x00, 0x22)]
+        + list('"\\/aZ9 -\x7f\u00e9\u4e16\u2028\u2029\U0001f600')
+    )
     if c not in SCRIPT_STAGE_CHARS
 ]
 
@@ -219,7 +231,11 @@ def test_the_escaped_body_is_byte_identical_to_json_dumps() -> None:
         key, value = payload(), payload()
         for shape in (value, {key: value}, [value, {key: [value]}]):
             got = script_body(shape)
-            want = json.dumps(shape, ensure_ascii=False)
+            # NO `ensure_ascii=False`: `json_script` never passes the flag, so
+            # it takes `json.dumps`'s default of True (#2413). This line read
+            # `ensure_ascii=False` and so pinned the wrong encoder — true
+            # about a call Django does not make.
+            want = json.dumps(shape)
             assert got == want, f"{shape!r}: rust {got!r} != json.dumps {want!r}"
 
 
@@ -233,16 +249,27 @@ def test_the_escaped_body_is_byte_identical_to_json_dumps() -> None:
         ("a\fb", r'"a\fb"'),
         ("a\x00b", r'"a\u0000b"'),
         ("a\x1fb", r'"a\u001fb"'),
-        ("a\x7fb", '"a\x7fb"'),
+        # DEL is ESCAPED: this is the `ensure_ascii=True` path, and
+        # `json.dumps("\\x7f")` is `'"\\u007f"'` (#2413). This row read
+        # `'"a\\x7fb"'`, which is what `ensure_ascii=False` produces.
+        ("a\x7fb", r'"a\u007fb"'),
+        # The `ensure_ascii` arms the short forms would otherwise shadow.
+        ("a\u00e9b", r'"a\u00e9b"'),
+        ("a\u2028b", r'"a\u2028b"'),
+        ("a\U0001f600b", r'"a\ud83d\ude00b"'),
     ],
 )
 def test_the_short_forms_are_the_ones_json_dumps_uses(payload: str, expected: str) -> None:
-    """The five short forms, named — and the two neighbours that must NOT get one.
+    """The five short forms, named — plus the `\\uXXXX` neighbours that must NOT
+    get one, on both sides of the short-form range and above the BMP.
 
-    Spelled out rather than left to the sweep so a failure names the arm.
+    Spelled out rather than left to the sweep so a failure names the arm. The
+    reference call takes `json.dumps`'s DEFAULT `ensure_ascii`, because that is
+    the call `json_script` makes (#2413); it read `ensure_ascii=False` and so
+    asserted the wrong encoder for the two rows where the flags disagree.
     """
     assert script_body(payload) == expected
-    assert script_body(payload) == json.dumps(payload, ensure_ascii=False)
+    assert script_body(payload) == json.dumps(payload)
 
 
 # ---------------------------------------------------------------------------
