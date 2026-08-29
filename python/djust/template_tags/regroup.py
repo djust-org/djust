@@ -19,9 +19,13 @@ Operand resolution (#2041)
 --------------------------
 ``RegroupTagHandler`` declares ``RESOLVE_ARG_POSITIONS = {0}``, so the
 Rust engine resolves **only** ``args[0]`` (the ``<expr>`` source) against
-the context — JSON-encoding the structured (list/object) value, so
-``<expr>`` arrives as a JSON string which the handler decodes back into
-the source records. The ``by`` / ``<attr>`` / ``as`` / ``<var>`` operands
+the context and hands it over JSON-encoded, which the handler decodes back
+into the source value. Since #2385 that encoding covers a **string** too
+(``'"ab"'``, quoted) and not only the structured list/object shapes: this
+channel's contract is "unresolved ⇒ pass the raw token", so a resolved
+string and an unresolved bare name were otherwise the same bytes and the
+handler could only guess between them. See :meth:`_decode_source`.
+The ``by`` / ``<attr>`` / ``as`` / ``<var>`` operands
 (positions 1-4) arrive **unresolved**, as literal tokens, matching Django
 (``RegroupNode`` never resolves the attribute against the outer context).
 This makes the attribute-name shadowing bug impossible: before #2041 the
@@ -32,8 +36,12 @@ silently corrupting the grouping.
 
 Known limitations vs. Django:
 
-* The ``<expr>`` source must resolve to a JSON-encodable sequence
+* The ``<expr>`` source must resolve to a JSON-encodable value
   (django-normalised context values always are).
+* A source Python cannot iterate — an ``int``, a ``bool``, a ``Decimal`` —
+  renders an empty region where Django raises ``TypeError``. Never more
+  permissive than Django; pinned in
+  ``python/tests/test_regroup_string_source_2385_2394.py``.
 
 Filter expressions on the source (``cities|dictsort:"country"``) ARE
 supported as of #2333 — the renderer's ``resolve_tag_operand`` resolves a
@@ -164,22 +172,43 @@ class RegroupTagHandler(AssignTagHandler):
 
         Two shapes are accepted:
 
-        * **Rust engine path** — a resolved list arg arrives JSON-encoded
-          (``"[{...}, ...]"``); decode it back into records.
+        * **Rust engine path** — a resolved arg arrives JSON-encoded
+          (``"[{...}, ...]"`` for a list, and — since #2385 — ``'"ab"'`` for a
+          STRING, quoted precisely so it is not mistaken for the next case);
+          decode it back into the source value.
         * **Direct/fallback path** — an unresolved bare name (missing
           variable, or a direct handler call) is looked up as a
           variable / dotted path in ``context``.
 
-        Non-sequence results are treated as empty (regroup expects a
-        sequence of records).
+        The result is then iterated with **Python's own semantics**, which is
+        what Django does: ``RegroupNode.render`` runs ``groupby(obj_list, …)``
+        over whatever ``self.target.resolve`` returned, so a ``str`` yields its
+        characters, a ``dict`` yields its keys, and a missing variable yields
+        nothing. Before #2385 this matched only ``list``/``tuple`` and answered
+        ``[]`` for everything else, so ``{% regroup s by k as g %}`` over
+        ``s = "ab"`` built ZERO groups where Django builds one — silently, with
+        ``{{ g|length }}`` rendering ``0`` and every ``{% for %}`` over the
+        groups rendering nothing (#2394, #2385). Every operand spelling that
+        resolves to a string was affected, not just the bare-variable one:
+        ``p.0``, ``p.a``, ``p|first``, ``p|upper``, ``p|slice:':2'`` and a
+        quoted literal all landed here as text.
+
+        A value Python cannot iterate — ``None``, an ``int``, a ``Decimal`` —
+        stays ``[]``. Django's answer for ``None`` is also no groups (its
+        ``ignore_failures`` branch); for the others Django raises ``TypeError``
+        and djust renders an empty region instead. That divergence predates
+        this fix, is never MORE permissive than Django, and is deliberately
+        left alone (CLAUDE.md #1079).
         """
         try:
             decoded = json.loads(expr)
         except (ValueError, TypeError):
             decoded = cls._lookup(context, expr)
-        if isinstance(decoded, (list, tuple)):
+        try:
             return list(decoded)
-        return []
+        except TypeError:
+            # Not iterable (None / int / bool / Decimal / a model instance).
+            return []
 
     @staticmethod
     def _lookup(item: Any, path: str) -> Any:
