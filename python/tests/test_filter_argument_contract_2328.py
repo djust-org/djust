@@ -155,13 +155,17 @@ VALUES: dict[str, Any] = {
 #: have looked handled.
 RAISE_BIT_NOT_CLOSED: dict[str, str] = {}
 
-#: Three filters agree with Django on the raise bit and still produce a
+#: The filters that agree with Django on the raise bit and still produce a
 #: different STRING, because their unparseable-argument behaviour is governed
 #: by something other than `int(arg)`. Listed separately because conflating
 #: them with the row above would have exempted them from the raise sweep they
 #: actually pass — which is how a stale exemption hides a regression.
+#:
+#: It read "Three filters" until #2358 and #2359 closed two of them. The count
+#: is deliberately not restated here now: a number in prose beside a literal
+#: it describes is one edit away from being wrong, and this file has a test
+#: that recomputes every count it cares about.
 OUTPUT_DIVERGES_FOR_ANOTHER_REASON = {
-    "add": "Django's three-branch int/concat/'' chain, not int(arg) (#2347)",
     # `stringformat` was here until #2358 gave it CPython's whole `%`-format
     # grammar. `"notanumber"` is `unsupported format character 'n'`, which
     # Django answers `""` to and djust used to echo the value for — so the
@@ -169,6 +173,12 @@ OUTPUT_DIVERGES_FOR_ANOTHER_REASON = {
     # exactly as `test_the_output_divergences_are_not_raise_divergences`
     # demands ("now agrees - remove its row"), and as #2344 did for the two
     # `RAISE_BIT_NOT_CLOSED` rows before it.
+    #
+    # `add` went the same way in #2359, which gave its third branch Django's
+    # `""`. `"notanumber"` reaches that branch for the `TEXT` value, so that
+    # row was true too and is now closed. Two independent branches each
+    # removed one row and each left this note; the merge keeps both, because
+    # the value of the note is the record that the row was TRUE when written.
     "yesno": "an arity check on a comma-separated argument, not int(arg)",
 }
 

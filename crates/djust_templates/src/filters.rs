@@ -1012,44 +1012,25 @@ fn apply_builtin_filter(
                 None => match (value, arg) {
                     // Concatenation branch.
                     (Value::String(s), Some(a)) => Ok(Value::String(format!("{s}{a}"))),
-                    // Django's third branch returns "". djust returns the value
-                    // unchanged instead: turning a rendered value into silent
-                    // emptiness on upgrade is the silent-wrong-output class this
-                    // engine keeps having to fix. Documented divergence, not an
-                    // oversight.
-                    _ => Ok(value.clone()),
+                    // Django's third branch: `except Exception: return ""`.
+                    //
+                    // This returned the value UNCHANGED until #2359, on the
+                    // argument that "turning a rendered value into silent
+                    // emptiness on upgrade is the silent-wrong-output class
+                    // this engine keeps having to fix". Measuring the class
+                    // inverted the argument: echoing is the MORE PERMISSIVE
+                    // direction — it puts the unfiltered input on the page
+                    // where Django puts nothing — and the values that reach
+                    // here are exactly the ones Django decided have no sum
+                    // and no concatenation (`None`, a list, a dict, a tuple).
+                    // Rendering them is not "preserving" anything; it is
+                    // rendering a Python repr into a page that asked for a
+                    // number.
+                    _ => Ok(Value::String(String::new())),
                 },
             }
         }
-        "pluralize" => {
-            // pluralize filter: returns plural suffix if value != 1
-            let suffix = arg.unwrap_or("s");
-            match value {
-                Value::Integer(n) => {
-                    if *n == 1 {
-                        Ok(Value::String(String::new()))
-                    } else {
-                        Ok(Value::String(suffix.to_string()))
-                    }
-                }
-                // A dict VIEW answers `len()` in Python, so `pluralize` counts
-                // its entries like any other sized value (#2340). Reached
-                // through the `_` arm before, which returns the SUFFIX
-                // unconditionally — right for a 2-entry view by luck, wrong for
-                // a 1-entry one. Found by auditing the 19 `List | Tuple`
-                // or-patterns, NOT by the filter sweep: that used a fixed
-                // 2-entry dict, so the one length where the two answers differ
-                // was the one length it never tried.
-                Value::List(l) | Value::Tuple(l) | Value::DictView { items: l, .. } => {
-                    if l.len() == 1 {
-                        Ok(Value::String(String::new()))
-                    } else {
-                        Ok(Value::String(suffix.to_string()))
-                    }
-                }
-                _ => Ok(Value::String(suffix.to_string())),
-            }
-        }
+        "pluralize" => Ok(Value::String(pluralize(value, arg.unwrap_or("s")))),
         "slugify" => {
             // slugify filter: converts to URL-friendly slug
             Ok(Value::String(crate::truncate::slugify(&value.to_string())))
@@ -1259,9 +1240,18 @@ fn apply_builtin_filter(
                         value = %datetime_str,
                         format = %format_str,
                         error = %e,
-                        "|date filter parse failed; returning original value unchanged",
+                        "|date filter parse failed; rendering Django's own answer",
                     );
-                    Ok(value.clone()) // If parsing fails, return original value
+                    // This returned `value.clone()` until #2359 — the MORE
+                    // PERMISSIVE direction, since it put the unfiltered input
+                    // on the page for every `{{ p|date }}` over a string, an
+                    // int, a list or a dict. Django's answer is usually `""`
+                    // and is not ALWAYS: see `django_literal_only_format`.
+                    // The djust EXTENSION is untouched — a value that parses
+                    // still formats, which is not optional, because a Python
+                    // `date` reaches this renderer as its ISO string
+                    // (`Value` has no date variant).
+                    Ok(Value::String(django_literal_only_format(value, format_str)))
                 }
             }
         }
@@ -1292,9 +1282,15 @@ fn apply_builtin_filter(
                         value = %datetime_str,
                         format = %format_str,
                         error = %e,
-                        "|time filter parse failed; returning original value unchanged",
+                        "|time filter parse failed; rendering Django's own answer",
                     );
-                    Ok(value.clone())
+                    // `except (AttributeError, TypeError): return ""` — see
+                    // the `date` arm above for why the echo was the wrong
+                    // default, and `django_literal_only_format` for why the
+                    // answer is not unconditionally empty. `TimeFormat` and
+                    // `DateFormat` share one `Formatter.format`, so the rule
+                    // is the same function for both filters (#1646).
+                    Ok(Value::String(django_literal_only_format(value, format_str)))
                 }
             }
         }
@@ -3347,6 +3343,69 @@ fn iso_8601(dt: &DateTime<chrono::FixedOffset>, time_only: bool) -> String {
 /// did not would be worse than the disagreement, because the guard would blank
 /// a render the formatter was about to produce correctly. The pre-existing
 /// double-escape divergence belongs with the other format-string gaps (#2217).
+/// Django's answer when the value is not a date — which is NOT always `""`.
+///
+/// `dateformat.Formatter.format` splits the format string on UNESCAPED
+/// specifier characters and touches the value only when it reaches one:
+///
+/// ```python
+/// re_formatchars = re.compile(r"(?<!\\)([aAbcdDeEfFgGhHiIjlLmMnNoOPrsStTUuwWyYzZ])")
+/// re_escaped = re.compile(r"\\(.)")
+///
+/// for i, piece in enumerate(re_formatchars.split(str(formatstr))):
+///     if i % 2:
+///         pieces.append(str(getattr(self, piece)()))   # AttributeError here
+///     elif piece:
+///         pieces.append(re_escaped.sub(r"\1", piece))
+/// ```
+///
+/// So a format carrying **no** specifier never raises, and its literal text
+/// comes back for a value the filter otherwise refuses: `{{ 0|date:"1-1" }}`
+/// is `'1-1'` in Django and `{{ 0|date:"," }}` is `','`. The first specifier
+/// raises `AttributeError`, which the filter swallows — discarding everything
+/// accumulated before it — so it is all-or-nothing.
+///
+/// Found by the #2359 randomised sweep, not by reading the source: the fix's
+/// first pass returned a flat `""` here and 296 of 4,000 cells disagreed.
+///
+/// **The specifier test is positional, not semantic.** The regex lookbehind is
+/// `(?<!\)`, so a character preceded by a backslash is not a specifier *even
+/// when that backslash was itself escaped*: `"\\Y"` carries no specifier and
+/// renders `\Y`. Deciding it by "is this backslash an escape" instead gives
+/// `""` there, which is the one case a hand-rolled unescape-then-scan gets
+/// wrong.
+///
+/// `None` and `""` never reach the formatter at all — `if value in (None, "")`
+/// is the filter's first line — so they answer `""` whatever the format says.
+fn django_literal_only_format(value: &Value, format_str: &str) -> String {
+    if matches!(value, Value::None | Value::Missing)
+        || matches!(value, Value::String(s) if s.is_empty())
+    {
+        return String::new();
+    }
+    const SPECIFIERS: &str = "aAbcdDeEfFgGhHiIjlLmMnNoOPrsStTUuwWyYzZ";
+    let chars: Vec<char> = format_str.chars().collect();
+    for (i, ch) in chars.iter().enumerate() {
+        if SPECIFIERS.contains(*ch) && (i == 0 || chars[i - 1] != '\\') {
+            return String::new();
+        }
+    }
+    // `re_escaped.sub(r"\1", piece)` over the whole string, which is one
+    // piece precisely because no specifier split it.
+    let mut out = String::with_capacity(format_str.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            out.push(chars[i + 1]);
+            i += 2;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 fn format_has_date_code(format_str: &str) -> bool {
     const DATE_ONLY: &[char] = &[
         'b', 'd', 'D', 'F', 'I', 'j', 'l', 'L', 'm', 'M', 'n', 'N', 'o', 'S', 't', 'w', 'W', 'y',
@@ -4859,6 +4918,104 @@ fn add_linenumbers(s: &str, autoescape: bool) -> String {
 ///
 /// Leading zeros survive: `add_int_digits` normalizes them and `get_digit`'s
 /// only consumer indexes from the RIGHT, so neither cares.
+/// Django's `pluralize`, whole (#2359).
+///
+/// ```python
+/// if "," not in arg:
+///     arg = "," + arg
+/// bits = arg.split(",")
+/// if len(bits) > 2:
+///     return ""
+/// singular_suffix, plural_suffix = bits[:2]
+/// try:
+///     return singular_suffix if float(value) == 1 else plural_suffix
+/// except ValueError:   # Invalid string that's not a number.
+///     pass
+/// except TypeError:    # Value isn't a string or a number; maybe a list?
+///     try:
+///         return singular_suffix if len(value) == 1 else plural_suffix
+///     except TypeError:
+///         pass
+/// return ""
+/// ```
+///
+/// What was here had an `Integer` arm, a sequence arm and
+/// `_ => plural_suffix`, which is three of the four answers Django can give
+/// and never the empty one. Two consequences, and the second is the sharper:
+///
+/// * `{{ True|pluralize }}` rendered `'s'` where Django renders `''`, because
+///   `float(True)` is `1.0`. Per-VALUE, not per-type: `False` AGREED, which
+///   is why an arm keyed on "is it a bool" would have been the wrong shape.
+/// * the comma form was **entirely unimplemented** — `{{ n|pluralize:"y,ies" }}`
+///   rendered the literal text `y,ies`. That is not a separate bug so much as
+///   the same missing rule: the argument is a suffix PAIR, and the catch-all
+///   never split it.
+///
+/// **The two `except` arms are NOT the same arm.** A `ValueError` — a string
+/// that is not a number — falls straight to `""`, and does not try `len()`.
+/// So `{{ "abc"|pluralize }}` is `''` while `{{ l|pluralize }}` on a 3-list
+/// is the plural suffix, even though both are "sized things that are not
+/// numbers". Reading the two `pass`es as one is the obvious mistake here, and
+/// it is measured against live Django rather than inferred.
+fn pluralize(value: &Value, arg: &str) -> String {
+    let owned;
+    let arg = if arg.contains(',') {
+        arg
+    } else {
+        owned = format!(",{arg}");
+        owned.as_str()
+    };
+    let bits: Vec<&str> = arg.split(',').collect();
+    if bits.len() > 2 {
+        return String::new();
+    }
+    let singular = bits[0].to_string();
+    let plural = bits.get(1).copied().unwrap_or("").to_string();
+    let pick = |is_one: bool| {
+        if is_one {
+            singular.clone()
+        } else {
+            plural.clone()
+        }
+    };
+
+    // `float(value)`, and the three outcomes it has.
+    match value {
+        Value::Integer(n) => return pick(*n == 1),
+        Value::Float(f) => return pick(*f == 1.0),
+        Value::Bool(b) => return pick(*b),
+        Value::Decimal(d) | Value::BigInt(d) => {
+            return match d.parse::<f64>() {
+                Ok(f) => pick(f == 1.0),
+                // `float(Decimal(...))` cannot fail for a real Decimal, so
+                // this is the unreachable-in-practice arm; `""` is the
+                // conservative answer either way.
+                Err(_) => String::new(),
+            };
+        }
+        // A STRING is `float(s)`, and on failure it is the `ValueError` arm —
+        // which does NOT fall through to `len()`. `float` accepts surrounding
+        // whitespace, `inf` and `nan`, and so does Rust's parse.
+        Value::String(s) => {
+            return match s.trim().parse::<f64>() {
+                Ok(f) => pick(f == 1.0),
+                Err(_) => String::new(),
+            };
+        }
+        // `len(value)`, the `TypeError` arm. A dict VIEW answers `len()` in
+        // Python, so it counts its entries like any other sized value
+        // (#2340).
+        Value::List(l) | Value::Tuple(l) | Value::DictView { items: l, .. } => {
+            return pick(l.len() == 1)
+        }
+        Value::Object(map) => return pick(map.len() == 1),
+        // `None` and an absent variable have neither a `float()` nor a
+        // `len()`. Django's final `return ""`.
+        Value::None | Value::Missing => {}
+    }
+    String::new()
+}
+
 fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
     let from_digits = |s: &str| -> Option<String> {
         let t = s.trim();
@@ -6325,15 +6482,26 @@ mod tests {
 
     #[test]
     fn test_date_filter_invalid_input() {
-        // #725: Invalid date strings return original value (Django convention),
-        // not an error. The date filter gracefully degrades.
+        // #725 read "invalid date strings return original value (Django
+        // convention)". The second half was never true — Django's `date` ends
+        // `except AttributeError: return ""`, measured — and returning the
+        // input was the more permissive direction, since it put unparsed
+        // upstream data on the page. #2359 gave both arms Django's own answer.
         let invalid_date = Value::String("2026-13-45".to_string());
         let result = apply_filter("date", &invalid_date, Some("Y-m-d")).unwrap();
-        assert_eq!(result.to_string(), "2026-13-45");
+        assert_eq!(result.to_string(), "");
 
         let not_a_date = Value::String("not-a-date".to_string());
         let result = apply_filter("date", &not_a_date, Some("Y-m-d")).unwrap();
-        assert_eq!(result.to_string(), "not-a-date");
+        assert_eq!(result.to_string(), "");
+
+        // ...and "Django's own answer" is not unconditionally empty: a format
+        // carrying no specifier never touches the value, so its literal text
+        // comes back. `django_literal_only_format` states that rule; this is
+        // the arm that would go unexercised if the failure path were a flat
+        // `String::new()`.
+        let result = apply_filter("date", &not_a_date, Some("1-1")).unwrap();
+        assert_eq!(result.to_string(), "1-1");
 
         let empty = Value::String("".to_string());
         let result = apply_filter("date", &empty, Some("Y-m-d")).unwrap();
@@ -6341,7 +6509,7 @@ mod tests {
 
         let partial = Value::String("2026-03".to_string());
         let result = apply_filter("date", &partial, Some("Y-m-d")).unwrap();
-        assert_eq!(result.to_string(), "2026-03");
+        assert_eq!(result.to_string(), "");
     }
 
     #[test]

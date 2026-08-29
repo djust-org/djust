@@ -567,13 +567,19 @@ class TestLengthOfAnObject:
         #2318 both landed in ``filters.rs`` and grew this corpus; the first run,
         on 27,684 cells, gave the same three numbers.)
 
-        It is not this filter's defect. Django's ``add`` third branch returns
-        ``""`` for a value it can neither sum nor concatenate; djust returns the
-        value UNCHANGED, which ``filters.rs``'s ``add`` arm calls a "documented
-        divergence, not an oversight" — the deliberate choice not to turn a
-        rendered value into silent emptiness on upgrade. So ``add`` hands
-        ``length`` the dict itself where Django hands it ``""``, and a correct
-        ``length`` then answers 2 rather than 0.
+        It was not this filter's defect. Django's ``add`` third branch returns
+        ``""`` for a value it can neither sum nor concatenate; djust returned
+        the value UNCHANGED, which ``filters.rs``'s ``add`` arm called a
+        "documented divergence, not an oversight". So ``add`` handed ``length``
+        the dict itself where Django hands it ``""``, and a correct ``length``
+        then answered 2 rather than 0.
+
+        **#2359 closed it at the source**, which is what the docstring below
+        said would have to happen: "Closing it means revisiting ``add``'s
+        documented decision, which belongs to ``add``." The row is kept rather
+        than deleted, with its assertion inverted, because the cell is the
+        canonical example of two wrongs cancelling (#2272) and of the chain
+        axis being the only place either was visible.
 
         The class is PRE-EXISTING: FOUR twins of this cell — ``l-plain``,
         ``l-mixed``, ``l-marked`` and ``t-marked`` (the marked TUPLE #2316
@@ -584,18 +590,16 @@ class TestLengthOfAnObject:
         belongs to ``add``.
         """
         value = {"a": 1, "b": 2}
-        django_out, djust_out = render_both('{{ p|add:"1"|length }}', value)
-        assert django_out == "0"
-        assert djust_out == "2", "now AGREES -- delete this row"
-        # `add` is where the divergence is, and it is unchanged by this branch.
-        assert render_both('{{ p|add:"1" }}', value)[0] == ""
-        # ...and the list AND tuple twins diverge identically, which is what
-        # makes this a pre-existing class rather than something the dict fix
-        # introduced. #2316's marked-tuple corpus input made the tuple twin
-        # visible to the differential; it is asserted here too so the claim
-        # "four twins" in the docstring has a test behind each shape.
-        assert render_both('{{ p|add:"1"|length }}', [1, 2]) == ("0", "2")
-        assert render_both('{{ p|add:"1"|length }}', (1, 2)) == ("0", "2")
+        assert render_both('{{ p|add:"1"|length }}', value) == ("0", "0")
+        # `add` is where the divergence WAS, and #2359 is where it closed.
+        assert render_both('{{ p|add:"1" }}', value) == ("", "")
+        # ...and the list AND tuple twins closed with it, which is what makes
+        # this a CLASS rather than something the dict fix introduced. #2316's
+        # marked-tuple corpus input made the tuple twin visible to the
+        # differential; it is asserted here too so the claim "four twins" in
+        # the docstring has a test behind each shape.
+        assert render_both('{{ p|add:"1"|length }}', [1, 2]) == ("0", "0")
+        assert render_both('{{ p|add:"1"|length }}', (1, 2)) == ("0", "0")
 
     def test_the_other_length_arms_are_unchanged(self) -> None:
         for value in ["", "abc", "中文", [], [1, 2, 3], (), (1,), None, True, 42, 3.5]:
