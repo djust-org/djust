@@ -219,14 +219,64 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
 
     def test_2325_no_tag_cell_existed_at_all(self, tmp_path: pathlib.Path) -> None:
         """The corpus was entirely ``{{ p|… }}``; a filter on a TAG operand is a
-        different resolution path and djust had open-coded it four times."""
+        different resolution path and djust had open-coded it four times.
+
+        The expected list grew from three to nine in #2355, and the growth is
+        the point rather than churn: ``cycle`` / ``firstof`` / ``ifchanged`` /
+        ``regroup`` / ``widthratio`` / ``filter`` take a filter-expression
+        operand too and carried an exemption row reading "TAKES A
+        FILTER-EXPRESSION OPERAND and is not swept" — an admission rather than
+        a property. With shapes for all nine, emptying the shape dicts reports
+        all nine, which is what this canary is for.
+        """
         script = mutated_script(
             tmp_path,
             ('TAG_SHAPES = {\n    "for":', 'TAG_SHAPES = {}\n_PRE_2325_TAG_SHAPES = {\n    "for":'),
             ("PATH_SHAPES = {\n", "PATH_SHAPES: dict[str, str] = {}\n_PRE_2334_PATH_SHAPES = {\n"),
         )
         missing = rows(run_manifest(script))["tag"]["missing"]
-        assert sorted(missing) == ["for", "if", "with"], missing
+        assert sorted(missing) == [
+            "cycle",
+            "filter",
+            "firstof",
+            "for",
+            "if",
+            "ifchanged",
+            "regroup",
+            "widthratio",
+            "with",
+        ], missing
+
+    def test_2355_six_tags_took_a_filter_operand_and_were_exempt(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The #2355 pre-fix state: the shapes absent AND the exemption rows
+        present, which is how the manifest reported CLEAN over four
+        divergences — three of them silent.
+
+        The distinction this canary draws is the one the issue turns on: an
+        exempt member is not reported as missing, so an exemption row whose
+        reason is "nobody got to it" makes a gap invisible in exactly the way
+        no-cell-at-all does. Removing the shapes ALONE (the test above) reports
+        them; removing the shapes AND writing the exemption rows reports
+        nothing.
+        """
+        exemptions = "".join(
+            f'    "{tag}": "TAKES A FILTER-EXPRESSION OPERAND and is not swept",\n'
+            for tag in ("cycle", "firstof", "ifchanged", "regroup", "widthratio", "filter")
+        )
+        script = mutated_script(
+            tmp_path,
+            ('TAG_SHAPES = {\n    "for":', 'TAG_SHAPES = {}\n_PRE_2355_TAG_SHAPES = {\n    "for":'),
+            ("PATH_SHAPES = {\n", "PATH_SHAPES: dict[str, str] = {}\n_PRE_2334_PATH_SHAPES = {\n"),
+            ("TAGS_NOT_SWEPT = {\n", "TAGS_NOT_SWEPT = {\n" + exemptions),
+        )
+        row = rows(run_manifest(script))["tag"]
+        # The six are silent — exempt, so not missing — while the three #2325
+        # added are still reported. That asymmetry IS the #2355 finding.
+        assert sorted(row["missing"]) == ["for", "if", "with"], row["missing"]
+        for tag in ("cycle", "firstof", "ifchanged", "regroup", "widthratio", "filter"):
+            assert tag in row["exempt"], tag
 
     def test_2290_the_custom_filter_entry_point_was_never_called(
         self, tmp_path: pathlib.Path

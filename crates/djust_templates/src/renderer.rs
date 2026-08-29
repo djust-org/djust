@@ -517,59 +517,125 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
             None => context,
         };
 
-        match node {
-            Node::AssignTag { name, args } => {
-                // Resolve variable references in args, mirroring only the
-                // JSON *encoding* of `Node::CustomTag` (structured
-                // list/object values survive as JSON instead of collapsing
-                // to "[List]"). NB: the *resolution mechanism* is not
-                // identical — `CustomTag` uses `get_value` (filter-aware,
-                // e.g. `x|upper`), whereas `resolve_tag_arg` uses plain
-                // `context.get` (no filter support), consistent with
-                // regroup's documented "no filter expressions" limitation.
-                // Keyword/name operands the handler declares literal
-                // (RESOLVE_ARG_POSITIONS) are passed raw (#2041).
-                let resolved_args = resolve_assign_tag_args(name, args, active_ctx);
-                let context_map = active_ctx.to_hashmap();
-                // Forward the raw-Python sidecar so assign handlers
-                // can reach Python-only context (request, view) the
-                // same way `Node::CustomTag` handlers do (#1167).
-                let raw_py = active_ctx.raw_py_objects();
-                let updates = crate::registry::call_assign_handler_with_py_sidecar(
-                    name,
-                    &resolved_args,
-                    &context_map,
-                    raw_py,
-                )
-                .map_err(|e| {
-                    DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
-                })?;
-
-                // Promote to owned context if we haven't already, then
-                // merge the handler's returned dict.
+        match sibling_updates(node, active_ctx)? {
+            Some(updates) => {
+                // Promote to owned context if we haven't already, then merge.
                 if mutated.is_none() {
                     mutated = Some(active_ctx.clone());
                 }
                 if let Some(ctx) = mutated.as_mut() {
-                    for (k, v) in updates {
-                        // `bind`, not `set`: an assign tag's handler returns
-                        // plain `Value`s across the PyO3 boundary with no
-                        // safety channel at all, so the honest grant is
-                        // `false` — and a `{% … as x %}` that lands on a name
-                        // the context had marked must not inherit that stale
-                        // grant and emit the handler's output RAW (#2361).
-                        ctx.bind(k, v, false);
+                    for binding in updates {
+                        // `bind`, not `set` + `mark_safe`: `bind` REVOKES any
+                        // stale grant on the name first, so a `{% … as x %}`
+                        // landing on a name the context had marked cannot
+                        // inherit that grant and emit its value RAW (#2361).
+                        // The flag is per binding rather than a constant
+                        // `false`: an assign handler's `Value` crosses PyO3
+                        // with no safety channel and is honestly unsafe, while
+                        // `{% firstof … as v %}` binds what Django binds —
+                        // `render_value_in_context(...)`, a `SafeString`
+                        // (#2355).
+                        ctx.bind(binding.name, binding.value, binding.safe);
                     }
                 }
-                // Assign tags emit no HTML.
+                // A context-mutating tag emits no HTML.
             }
-            _ => {
+            None => {
                 output.push_str(&render_node_with_loader(node, active_ctx, loader)?);
             }
         }
     }
 
     Ok(output)
+}
+
+/// The context updates a node contributes to the siblings that FOLLOW it, or
+/// `None` for a node that renders normally.
+///
+/// One definition for all three sibling-aware loops — `render_nodes_with_loader`,
+/// `render_nodes_collecting`, `render_nodes_partial` — which carried three
+/// hand-copied `Node::AssignTag` arms before #2355. Adding a second kind of
+/// context-mutating node would have made that four copies of two arms each, so
+/// the copies are retired rather than extended (CLAUDE.md #1646).
+///
+/// `Some(updates)` also means "emits no HTML", which is what all three call
+/// sites do with it and what Django's assignment tags do.
+fn sibling_updates(node: &Node, context: &Context) -> Result<Option<Vec<SiblingBinding>>> {
+    match node {
+        Node::AssignTag { name, args } => {
+            // Resolve variable references in args, mirroring only the JSON
+            // *encoding* of `Node::CustomTag` (structured list/object values
+            // survive as JSON instead of collapsing to "[List]"). NB: the
+            // *resolution mechanism* is not identical — `CustomTag` uses
+            // `get_value` (filter-aware, e.g. `x|upper`), whereas
+            // `resolve_tag_arg` uses `resolve_tag_operand`. Keyword/name
+            // operands the handler declares literal (RESOLVE_ARG_POSITIONS)
+            // are passed raw (#2041).
+            let resolved_args = resolve_assign_tag_args(name, args, context);
+            let context_map = context.to_hashmap();
+            // Forward the raw-Python sidecar so assign handlers can reach
+            // Python-only context (request, view) the same way
+            // `Node::CustomTag` handlers do (#1167).
+            let raw_py = context.raw_py_objects();
+            let updates = crate::registry::call_assign_handler_with_py_sidecar(
+                name,
+                &resolved_args,
+                &context_map,
+                raw_py,
+            )
+            .map_err(|e| {
+                DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
+            })?;
+            Ok(Some(
+                updates
+                    .into_iter()
+                    .map(|(name, value)| SiblingBinding {
+                        name,
+                        value,
+                        safe: false,
+                    })
+                    .collect(),
+            ))
+        }
+        // `{% widthratio a b c as name %}` and `{% firstof a b as name %}`
+        // (#2355). Django binds the SAME string it would otherwise have
+        // rendered — already escaped, for `firstof` — so the two forms cannot
+        // disagree about the value, and the computation is the one function
+        // the render arm calls.
+        Node::WidthRatio {
+            value,
+            max_value,
+            max_width,
+            asvar: Some(name),
+        } => Ok(Some(vec![SiblingBinding {
+            name: name.clone(),
+            value: Value::String(width_ratio(value, max_value, max_width, context)?),
+            // Django binds `str(round(...))` — a PLAIN `str`, not a
+            // `SafeString`. Measured, and it differs from `firstof` below.
+            safe: false,
+        }])),
+        Node::FirstOf {
+            args,
+            asvar: Some(name),
+        } => Ok(Some(vec![SiblingBinding {
+            name: name.clone(),
+            value: Value::String(first_of(args, context)?.unwrap_or_default()),
+            // `FirstOfNode` binds `render_value_in_context(...)`, which is a
+            // `SafeString` — measured, not assumed. Without the grant
+            // `{{ v }}` escapes an already-escaped string and renders
+            // `&amp;lt;b&amp;gt;` where Django renders `&lt;b&gt;`.
+            safe: true,
+        }])),
+        _ => Ok(None),
+    }
+}
+
+/// One name a context-mutating node binds for the siblings that follow it.
+struct SiblingBinding {
+    name: String,
+    value: Value,
+    /// Django bound a `SafeString` here, so `{{ name }}` must not re-escape.
+    safe: bool,
 }
 
 /// Serialize a resolved template-tag argument [`Value`] to the string a
@@ -783,40 +849,29 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
             None => context,
         };
 
-        let frag = match node {
-            Node::AssignTag { name, args } => {
-                // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
-                // as in render_nodes_with_loader (#2041).
-                let resolved_args = resolve_assign_tag_args(name, args, active_ctx);
-                let context_map = active_ctx.to_hashmap();
-                // Forward raw-Python sidecar (#1167).
-                let raw_py = active_ctx.raw_py_objects();
-                let updates = crate::registry::call_assign_handler_with_py_sidecar(
-                    name,
-                    &resolved_args,
-                    &context_map,
-                    raw_py,
-                )
-                .map_err(|e| {
-                    DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
-                })?;
+        let frag = match sibling_updates(node, active_ctx)? {
+            Some(updates) => {
                 if mutated.is_none() {
                     mutated = Some(active_ctx.clone());
                 }
                 if let Some(ctx) = mutated.as_mut() {
-                    for (k, v) in updates {
-                        // `bind`, not `set`: an assign tag's handler returns
-                        // plain `Value`s across the PyO3 boundary with no
-                        // safety channel at all, so the honest grant is
-                        // `false` — and a `{% … as x %}` that lands on a name
-                        // the context had marked must not inherit that stale
-                        // grant and emit the handler's output RAW (#2361).
-                        ctx.bind(k, v, false);
+                    for binding in updates {
+                        // `bind`, not `set` + `mark_safe`: `bind` REVOKES any
+                        // stale grant on the name first, so a `{% … as x %}`
+                        // landing on a name the context had marked cannot
+                        // inherit that grant and emit its value RAW (#2361).
+                        // The flag is per binding rather than a constant
+                        // `false`: an assign handler's `Value` crosses PyO3
+                        // with no safety channel and is honestly unsafe, while
+                        // `{% firstof … as v %}` binds what Django binds —
+                        // `render_value_in_context(...)`, a `SafeString`
+                        // (#2355).
+                        ctx.bind(binding.name, binding.value, binding.safe);
                     }
                 }
                 String::new()
             }
-            _ => render_node_with_loader(node, active_ctx, loader)?,
+            None => render_node_with_loader(node, active_ctx, loader)?,
         };
         full_output.push_str(&frag);
         fragments.push(frag);
@@ -859,40 +914,22 @@ pub fn render_nodes_partial<L: TemplateLoader>(
         };
 
         if needs_render {
-            let html = match node {
-                Node::AssignTag { name, args } => {
-                    // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
-                    // as in render_nodes_with_loader (#2041).
-                    let resolved_args = resolve_assign_tag_args(name, args, active_ctx);
-                    let context_map = active_ctx.to_hashmap();
-                    // Forward raw-Python sidecar (#1167).
-                    let raw_py = active_ctx.raw_py_objects();
-                    let updates = crate::registry::call_assign_handler_with_py_sidecar(
-                        name,
-                        &resolved_args,
-                        &context_map,
-                        raw_py,
-                    )
-                    .map_err(|e| {
-                        DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
-                    })?;
+            let html = match sibling_updates(node, active_ctx)? {
+                Some(updates) => {
                     if mutated.is_none() {
                         mutated = Some(active_ctx.clone());
                     }
                     if let Some(ctx) = mutated.as_mut() {
-                        for (k, v) in updates {
-                            // `bind`, not `set`: an assign tag's handler returns
-                            // plain `Value`s across the PyO3 boundary with no
-                            // safety channel at all, so the honest grant is
-                            // `false` — and a `{% … as x %}` that lands on a name
-                            // the context had marked must not inherit that stale
-                            // grant and emit the handler's output RAW (#2361).
-                            ctx.bind(k, v, false);
+                        for binding in updates {
+                            // See the sibling loop above: `bind` revokes a
+                            // stale grant on the name first, and the flag is
+                            // per binding (#2361 + #2355).
+                            ctx.bind(binding.name, binding.value, binding.safe);
                         }
                     }
                     String::new()
                 }
-                _ => render_node_with_loader(node, active_ctx, loader)?,
+                None => render_node_with_loader(node, active_ctx, loader)?,
             };
             full_output.push_str(&html);
             fragments.push(html);
@@ -1851,40 +1888,28 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             value,
             max_value,
             max_width,
+            asvar,
         } => {
-            // {% widthratio value max_value max_width %} → round(value / max_value * max_width)
-            let val = get_value(value, context)?.to_f64().unwrap_or(0.0);
-            let max_val = get_value(max_value, context)?.to_f64().unwrap_or(0.0);
-            let max_w = get_value(max_width, context)?.to_f64().unwrap_or(0.0);
-
-            if max_val == 0.0 {
-                Ok("0".to_string())
+            let result = width_ratio(value, max_value, max_width, context)?;
+            // `as <var>` renders NOTHING (Django's `WidthRatioNode.render`).
+            // The ASSIGNMENT half lives in `sibling_updates`, which only the
+            // sibling-aware loops can apply — a lone node has no sibling to
+            // hand a mutated context to, exactly as `Node::AssignTag` here
+            // invokes its handler and discards the updates.
+            Ok(if asvar.is_some() {
+                String::new()
             } else {
-                let result = (val / max_val * max_w).round() as i64;
-                Ok(result.to_string())
-            }
+                result
+            })
         }
 
-        Node::FirstOf { args } => {
-            // {% firstof var1 var2 ... "fallback" %} → first truthy value
-            // Uses get_value_safe for dotted path support (e.g., user.name)
-            // AND to thread the runtime-safe flag (#1672, parallel-path per
-            // CLAUDE.md #1646): a custom filter that `mark_safe()`s at runtime
-            // (e.g. `{% firstof a|md %}`) must NOT be re-escaped, matching the
-            // Variable/InlineIf arms (#1660). `runtime_safe` is true ONLY when
-            // the LAST filter produced a genuine SafeString → fail-safe.
-            for arg in args {
-                let (val, runtime_safe) = get_value_safe(arg.trim(), context)?;
-                if val.is_truthy() {
-                    let text = val.to_string();
-                    return Ok(if runtime_safe {
-                        text
-                    } else {
-                        filters::html_escape(&text)
-                    });
-                }
+        Node::FirstOf { args, asvar } => {
+            // `as <var>` renders NOTHING; the assignment is `sibling_updates`'
+            // job, exactly as for `Node::WidthRatio` above.
+            if asvar.is_some() {
+                return Ok(String::new());
             }
-            Ok(String::new())
+            Ok(first_of(args, context)?.unwrap_or_default())
         }
 
         Node::TemplateTag(name) => {
@@ -1939,8 +1964,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // the LAST filter produced a genuine SafeString → fail-safe.
             let (resolved, runtime_safe) = get_value_safe(val.trim(), context)?;
             let output = if matches!(resolved, Value::Missing) {
-                // Unresolved variable — output the raw name (Django behavior)
-                filters::html_escape(val.trim())
+                // An unresolved operand renders NOTHING, and the comment this
+                // replaces claimed the opposite ("output the raw name (Django
+                // behavior)"). Django compiles each `{% cycle %}` operand with
+                // `compile_filter`, and a `FilterExpression` whose variable is
+                // missing resolves to `string_if_invalid` — `""` by default.
+                // Measured: `{% cycle nope 'z' %}` renders `""` in Django and
+                // rendered `nope` here, putting the template's own source text
+                // on the page. That is the #2325 echo symptom, in the one tag
+                // whose operands the corpus did not build a cell for (#2355).
+                String::new()
             } else if runtime_safe {
                 resolved.to_string()
             } else {
@@ -3444,6 +3477,238 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
     }
 }
 
+/// `{% firstof %}`'s value — the first truthy operand, already escaped.
+///
+/// `None` means every operand was falsy, which renders as the empty string and
+/// assigns the empty string. Extracted from the render arm so the `as <var>`
+/// form computes it exactly once, from one definition, rather than the arm and
+/// the assignment growing their own copies (CLAUDE.md #1646).
+///
+/// Uses `get_value_safe` for dotted-path support (e.g. `user.name`) AND to
+/// thread the runtime-safe flag (#1672): a custom filter that `mark_safe()`s
+/// at runtime (e.g. `{% firstof a|md %}`) must NOT be re-escaped, matching the
+/// `Variable` / `InlineIf` arms (#1660). `runtime_safe` is true ONLY when the
+/// LAST filter produced a genuine `SafeString` → fail-safe.
+fn first_of(args: &[String], context: &Context) -> Result<Option<String>> {
+    for arg in args {
+        let (val, runtime_safe) = get_value_safe(arg.trim(), context)?;
+        if val.is_truthy() {
+            let text = val.to_string();
+            return Ok(Some(if runtime_safe {
+                text
+            } else {
+                filters::html_escape(&text)
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// `{% widthratio %}`'s value, arm for arm with Django's `WidthRatioNode`.
+///
+/// Before #2355 this was `to_f64().unwrap_or(0.0)` three times over, so every
+/// non-numeric operand answered `0` where Django answers the empty string —
+/// 16,006 of the 17,298 cells the `widthratio` shape builds. The corpus could
+/// not report it because it built no `widthratio` cell at all.
+///
+/// Django's order is load-bearing and reproduced here rather than tidied:
+///
+/// * `int(max_width)` happens FIRST, and its failure is a
+///   `TemplateSyntaxError` — not the empty string. A raise is the harder
+///   answer, and it is Django's.
+/// * `float(value)` / `float(max_value)` failing is a `ValueError`, caught,
+///   and the result is `""`. `Value::Missing` reaches that arm the same way
+///   Django's does: `FilterExpression` swallows `VariableDoesNotExist` into
+///   `string_if_invalid` (`""`), and `float("")` raises.
+/// * a zero divisor is `"0"`, and it is checked as `== 0.0` so `-0.0` is
+///   included — Python raises `ZeroDivisionError` for both.
+/// * a non-finite ratio is `""`: `round(inf)` raises `OverflowError` and
+///   `round(nan)` raises `ValueError`, and Django catches both.
+fn width_ratio(value: &str, max_value: &str, max_width: &str, context: &Context) -> Result<String> {
+    let max_w = py_int(&get_value(max_width, context)?).ok_or_else(|| {
+        DjangoRustError::TemplateError("widthratio final argument must be a number".to_string())
+    })?;
+    let (Some(val), Some(max_val)) = (
+        get_value(value, context)?.to_f64(),
+        get_value(max_value, context)?.to_f64(),
+    ) else {
+        return Ok(String::new());
+    };
+    if max_val == 0.0 {
+        return Ok("0".to_string());
+    }
+    Ok(py_round_to_string(val / max_val * max_w as f64).unwrap_or_default())
+}
+
+/// `int(v)` for the one operand Django applies it to, or `None` for a raise.
+///
+/// Deliberately NOT `to_f64().map(|f| f as i64)`: Python's `int()` rejects a
+/// string that merely LOOKS numeric (`int("100.6")` is a `ValueError` while
+/// `float("100.6")` is fine), and that difference is the whole reason Django
+/// treats this operand's failure as a syntax error rather than an empty
+/// render.
+fn py_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Integer(i) => Some(*i),
+        Value::Bool(b) => Some(i64::from(*b)),
+        // `int(float)` truncates toward zero; a non-finite float raises.
+        Value::Float(f) if f.is_finite() => Some(*f as i64),
+        Value::String(s) => s.trim().parse::<i64>().ok(),
+        Value::Decimal(_) | Value::BigInt(_) => {
+            value.as_f64().filter(|f| f.is_finite()).map(|f| f as i64)
+        }
+        _ => None,
+    }
+}
+
+/// `str(round(x))`, or `None` where Python's `round` raises.
+///
+/// `f64::round` is half-AWAY-FROM-ZERO and Python's `round` is
+/// half-to-EVEN, so they disagree on every exact `.5`: `round(2.5)` is `2` in
+/// Python and `3` in Rust. Measured, not remembered — `{% widthratio 1 2 5 %}`
+/// renders `2` in Django and rendered `3` here.
+///
+/// The halfway correction is guarded on `|x| < 2^52` because above that a
+/// double has no fractional part at all, so the branch cannot apply and
+/// `x.trunc() as i64` would be a saturating cast rather than a rounding one.
+/// The result is formatted with `{:.0}` on an already-integral float, which
+/// prints a double's exact integer value however large — Python's `str(int)`
+/// does the same, and `1e20|first`-shaped inputs really do reach here.
+fn py_round_to_string(x: f64) -> Option<String> {
+    if !x.is_finite() {
+        return None; // OverflowError for inf, ValueError for nan — both caught.
+    }
+    let truncated = x.trunc();
+    let rounded = if x.abs() < 4_503_599_627_370_496.0 && (x - truncated).abs() == 0.5 {
+        let low = truncated;
+        let high = truncated + x.signum();
+        if (low as i64) % 2 == 0 {
+            low
+        } else {
+            high
+        }
+    } else {
+        x.round()
+    };
+    let text = format!("{rounded:.0}");
+    // `format!("{:.0}", -0.0)` is `"-0"`; Python's `str(round(-0.4))` is `"0"`.
+    Some(if text == "-0" { "0".to_string() } else { text })
+}
+
+#[cfg(test)]
+mod asvar_standalone_tests {
+    //! `render_node_with_loader` on an `as <var>` node emits NOTHING (#2355).
+    //!
+    //! Every template-reachable path routes these nodes through
+    //! `sibling_updates` instead — a `{% for %}` body, an `{% if %}` branch, a
+    //! `{% with %}` block and a `{% spaceless %}` block all render their
+    //! children with a sibling-aware loop, so the render arm's `asvar` check
+    //! never fires from a template. It is kept for the same reason
+    //! `Node::AssignTag`'s standalone arm is — a direct caller of this public
+    //! function has no sibling to hand a mutated context to, and the one
+    //! honest answer is the empty string rather than the value Django
+    //! assigns silently. These are the tests that make that arm reachable, so
+    //! it is a mechanism rather than a decoration.
+
+    use super::*;
+
+    fn render(node: &Node, context: &Context) -> String {
+        render_node_with_loader::<NoOpLoader>(node, context, None).unwrap()
+    }
+
+    #[test]
+    fn widthratio_with_asvar_renders_nothing_when_rendered_alone() {
+        let mut context = Context::new();
+        context.set("p".to_string(), Value::Integer(5));
+        let with_asvar = Node::WidthRatio {
+            value: "p".into(),
+            max_value: "10".into(),
+            max_width: "100".into(),
+            asvar: Some("w".into()),
+        };
+        let without = Node::WidthRatio {
+            value: "p".into(),
+            max_value: "10".into(),
+            max_width: "100".into(),
+            asvar: None,
+        };
+        // The gate-off sibling: the same node WITHOUT `as` must render the
+        // value, so "renders nothing" cannot pass for an unrelated reason.
+        assert_eq!(render(&without, &context), "50");
+        assert_eq!(render(&with_asvar, &context), "");
+    }
+
+    #[test]
+    fn an_asvar_node_carries_the_assign_tags_wildcard_dependency() {
+        //! A context-mutating node must always re-render under partial render.
+        //!
+        //! `Node::AssignTag` emits `"*"` for exactly this reason — it mutates
+        //! the context for LATER SIBLINGS, so skipping it because its own
+        //! operands are unchanged means the binding never happens and every
+        //! sibling that reads the name sees nothing. The `as <var>` forms have
+        //! the identical effect and so need the identical dep (#2355), which
+        //! the first version of that fix missed.
+        //!
+        //! The EMITTING form is the gate-off sibling: it has no such effect
+        //! and must keep its precise dep set, so `"*"` there would be a
+        //! silent performance regression on every `{% widthratio %}` in a
+        //! partially-rendered template.
+        use crate::parser::extract_per_node_deps;
+
+        let emitting = vec![
+            Node::WidthRatio {
+                value: "p".into(),
+                max_value: "10".into(),
+                max_width: "100".into(),
+                asvar: None,
+            },
+            Node::FirstOf {
+                args: vec!["p".into()],
+                asvar: None,
+            },
+        ];
+        for deps in extract_per_node_deps(&emitting) {
+            assert!(
+                !deps.contains("*"),
+                "an emitting form must not be a wildcard"
+            );
+            assert!(deps.contains("p"), "and must still depend on its operand");
+        }
+
+        let assigning = vec![
+            Node::WidthRatio {
+                value: "p".into(),
+                max_value: "10".into(),
+                max_width: "100".into(),
+                asvar: Some("w".into()),
+            },
+            Node::FirstOf {
+                args: vec!["p".into()],
+                asvar: Some("v".into()),
+            },
+        ];
+        for deps in extract_per_node_deps(&assigning) {
+            assert!(deps.contains("*"), "an `as <var>` form must be a wildcard");
+        }
+    }
+
+    #[test]
+    fn firstof_with_asvar_renders_nothing_when_rendered_alone() {
+        let mut context = Context::new();
+        context.set("p".to_string(), Value::String("<b>".to_string()));
+        let with_asvar = Node::FirstOf {
+            args: vec!["p".into(), "'F'".into()],
+            asvar: Some("v".into()),
+        };
+        let without = Node::FirstOf {
+            args: vec!["p".into(), "'F'".into()],
+            asvar: None,
+        };
+        assert_eq!(render(&without, &context), "&lt;b&gt;");
+        assert_eq!(render(&with_asvar, &context), "");
+    }
+}
+
 /// Convert a Value to f64 for arithmetic operations (widthratio)
 trait ToF64 {
     fn to_f64(&self) -> Option<f64>;
@@ -3454,7 +3719,9 @@ impl ToF64 for Value {
         match self {
             Value::Integer(i) => Some(*i as f64),
             Value::Float(f) => Some(*f),
-            Value::String(s) => s.parse::<f64>().ok(),
+            // `.trim()` because Python's `float(" 5 ")` is 5.0 — and the one
+            // caller is `width_ratio`, whose contract is Python's `float()`.
+            Value::String(s) => s.trim().parse::<f64>().ok(),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             // Delegates rather than re-parsing: `Value::as_f64` is the one
             // definition of what a Decimal is worth numerically (#1646).
