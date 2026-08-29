@@ -2722,6 +2722,8 @@ def axis_of(cid: str) -> str:
         return "builtin x mapping"
     if cid.startswith("@cmp "):
         return "cmp"
+    if cid.startswith("@mask "):
+        return "masked-refusal"
     if cid.startswith("@ctag "):
         return "ctag"
     if cid.startswith("@path"):
