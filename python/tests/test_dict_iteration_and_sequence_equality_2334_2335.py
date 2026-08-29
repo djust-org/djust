@@ -297,29 +297,63 @@ class TestDictIterationRandomised:
         # `Value::DictView`, so the substitution that classifier described no
         # longer happens and it would be a dead allowance (#1859). Only the
         # pre-existing django-raised shape remains.
-        assert set(residue) == {"django-raised"}, (
+        assert set(residue) == {"django-raised", "both-raised"}, (
             "the documented residue shapes are no longer the ones that occur, so "
             f"one classifier is a dead exemption: {residue}"
         )
 
     @classmethod
     def _classify(cls, shape: str, d: dict, dj: str, du: str) -> str | None:
-        """One documented shape, a MECHANICAL predicate rather than a name
-        list — a name list would quietly absorb a real defect.
+        """Two documented shapes, both MECHANICAL predicates rather than name
+        lists — a name list would quietly absorb a real defect.
 
-        Django RAISED (a non-iterable value reached ``{% for %}``, or a
-        2-unpack over something that is not a 2-sequence) and djust rendered
-        the ``{% empty %}`` block. Pre-existing, unrelated to the dict arm,
-        and not a permissiveness question.
+        ``django-raised`` — Django RAISED (a non-iterable value reached
+        ``{% for %}``) and djust rendered the ``{% empty %}`` block.
+        Pre-existing, unrelated to the dict arm, and not a permissiveness
+        question.
 
-        A second shape lived here until #2340 — *djust models a dict view as a
+        ``both-raised`` — BOTH refuse, and only the exception TYPE differs:
+        every djust render error crosses the PyO3 boundary as ``RuntimeError``
+        where Django raises its own class. Since #2387 the 2-unpack arity
+        mismatch lives here rather than in ``django-raised``, which is the
+        whole point of that change — `{% for k, v in p.items %}` over a dict
+        whose own ``items`` KEY shadows the method (mapping-before-attribute,
+        so `p.items` is that key's value) reaches the unpack with a non-pair
+        and is now refused rather than padded.
+
+        The type alone would be a name list, so this predicate compares the
+        MESSAGES: djust's must end with Django's, byte for byte. A djust
+        failure that merely coincided with a Django one is `None` and gates.
+
+        A third shape lived here until #2340 — *djust models a dict view as a
         plain LIST, so its answer IS Django's answer over ``list(view)``* —
         and was deleted with the divergence it described.
         """
-        if dj.startswith("<<EXC ") and not du.startswith("<<EXC "):
+        if not dj.startswith("<<EXC "):
+            return None
+        if not du.startswith("<<EXC "):
             return "django-raised"
-        return None
+        return "both-raised" if cls._same_reason(shape, d) else None
 
+    @staticmethod
+    def _same_reason(shape: str, d: dict) -> bool:
+        """Did the two engines refuse for the same stated reason?
+
+        `both()` records only the exception CLASS, and djust's is always
+        `RuntimeError`, so the class cannot answer this. Re-raise and compare
+        the text: djust's is Django's message under a `Template error: `
+        prefix.
+        """
+        try:
+            django_render(shape, {"p": d})
+            return False
+        except Exception as exc:  # noqa: BLE001
+            django_message = str(exc)
+        try:
+            djust_render(shape, {"p": d})
+            return False
+        except Exception as exc:  # noqa: BLE001
+            return str(exc).endswith(django_message) and bool(django_message)
 
 # ===========================================================================
 # #2335 — sequence comparison
