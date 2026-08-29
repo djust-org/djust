@@ -508,20 +508,22 @@ def test_normalize_then_rust_update_state_no_quote_wrap():
 # Embedded-quote input — the actual root cause surfaced by the third reopen
 # of #1081. When upstream code (a custom ``BaseLiveView`` override, a
 # ``JSONField`` storing a JSON-encoded string, etc.) passes a value with
-# literal ``"`` characters into ``update_state``, the framework correctly:
-#  (1) attempts to parse it as a date via the ``|date`` filter,
-#  (2) fails (the embedded-quote string isn't a valid date),
-#  (3) returns the value unchanged from the filter,
-#  (4) HTML-escapes the literal ``"`` characters to ``&quot;``.
-# This is correct, defensive behavior. Lock the contract so a future "let's
-# silently strip embedded quotes from filter inputs" refactor can't sneak
-# through (that would be a real correctness regression — the ``"`` chars
-# may be load-bearing for non-date data).
+# literal ``"`` characters into ``update_state``, the ``|date`` filter tries
+# to parse it, fails, and renders NOTHING — which is what Django renders for
+# the same template and the same value, measured.
+#
+# It used to render the value back, escaped. #2359 changed that: echoing the
+# input is the more permissive direction, and the diagnostic it was defending
+# survives in the ``tracing::debug!`` the ``date`` arm still emits on a parse
+# failure. The contract this locks is therefore the OPPOSITE one — that a
+# failed parse does not put unparsed upstream data on the page — and the
+# quote-preservation half it was really about is covered by the sibling test
+# below, which renders the same value without the filter.
 # ---------------------------------------------------------------------------
 
 
-def test_date_filter_on_embedded_quote_string_html_escapes_quotes():
-    """Date string with embedded literal quotes — ``|date`` parse fails, HTML escape preserves chars.
+def test_date_filter_on_embedded_quote_string_renders_nothing_as_django_does():
+    """Date string with embedded literal quotes — ``|date`` parse fails, renders "".
 
     The string ``'"2026-04-25"'`` (10 chars + 2 surrounding ``"``) is what
     ``json.dumps(date.isoformat())`` produces, and it's the symptom the
@@ -534,14 +536,29 @@ def test_date_filter_on_embedded_quote_string_html_escapes_quotes():
     rv.update_state({"claims": [{"filed_date": '"2026-04-25"'}]})
     out = rv.render()
 
-    # Filter parse fails on embedded-quote string; value passes through;
-    # HTML escape converts the ``"`` chars to ``&quot;``.
-    assert out == "&quot;2026-04-25&quot;|"
-    # Sanity: the framework is *not* silently swallowing the quote chars —
-    # they're correctly preserved through HTML escaping.
-    assert "&quot;" in out
+    # Django, measured, renders exactly this for the same template and value:
+    # its `date` body ends `except AttributeError: return ""`.
+    assert out == "|"
     # Sanity: the date filter did NOT format the value (because parse failed).
     assert "Apr 25" not in out
+
+
+def test_an_embedded_quote_string_is_still_preserved_without_the_filter():
+    """The half the test above was really defending.
+
+    The ``"`` characters may be load-bearing for non-date data, so a future
+    "let's silently strip embedded quotes from filter inputs" refactor must
+    still be caught. Without ``|date`` in the way, the value renders in full
+    with its quotes HTML-escaped.
+    """
+    template = "{% for c in claims %}{{ c.filed_date }}|{% endfor %}"
+
+    rv = RustLiveView(template)
+    rv.update_state({"claims": [{"filed_date": '"2026-04-25"'}]})
+    out = rv.render()
+
+    assert out == "&quot;2026-04-25&quot;|"
+    assert "&quot;" in out
 
 
 def test_resolve_inheritance_then_render_no_double_quote_filter_arg(tmp_path):

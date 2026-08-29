@@ -388,27 +388,39 @@ class TestKnownRemainingDivergences:
         # The give-up that DOES remain, one width further out: past CPython's
         # `sys.get_int_max_str_digits()` Django raises `ValueError` (its
         # `except (ValueError, TypeError)` is around the `%` in `stringformat`,
-        # not around `add`'s `int()`), and djust renders the input rather than
-        # 500ing. Never a fabricated number.
+        # not around `add`'s `int()`), and djust renders rather than 500ing.
+        # Never a fabricated number.
+        #
+        # WHAT it renders moved in #2359, from the input to `""` — the answer
+        # Django's own third branch gives, for every value that reaches it
+        # without raising. This width is past even that, so there is no Django
+        # output to agree with; `""` is simply the less permissive of the two
+        # things djust could put on the page.
         assert (
             _rust.render_template(
                 "{{ p|add:1 }}", normalize_django_value({"p": Decimal("1E+5000")})
             )
-            == "1e+5000"
+            == ""
         )
         with pytest.raises(ValueError):
             DjangoTemplate("{{ p|add:1 }}").render(DjangoContext({"p": Decimal("1E+5000")}))
 
-    def test_add_still_returns_the_value_rather_than_djangos_empty_string(self) -> None:
-        """Django's third branch is `return ""`; djust returns the input.
+    def test_adds_third_branch_now_returns_djangos_empty_string(self) -> None:
+        """CLOSED by #2359 — kept and INVERTED, per this class's own contract.
 
-        Predates #2253 and is documented in the filter itself: turning a
-        rendered value into silent emptiness on upgrade is the failure class
-        this engine keeps having to fix.
+        This entry read "Django's third branch is `return ""`; djust returns
+        the input … turning a rendered value into silent emptiness on upgrade
+        is the failure class this engine keeps having to fix." Measuring the
+        class inverted the argument: echoing is the MORE PERMISSIVE direction,
+        because the value that reaches this branch is one Django decided has
+        neither a sum nor a concatenation, and rendering it puts a Python repr
+        on a page that asked for a number.
         """
-        django_out, djust_out = render_both('{{ p|add:"a" }}', Decimal("19.99"))
-        assert django_out == ""
-        assert djust_out == "19.99"
+        assert render_both('{{ p|add:"a" }}', Decimal("19.99")) == ("", "")
+        # The branch is reached by shape, not by this one value: `None` and
+        # every unsummable container land on it too.
+        for value in (None, [1], {"a": 1}, (1,)):
+            assert render_both('{{ p|add:"1" }}', value) == ("", ""), value
 
     def test_an_empty_floatformat_argument_raises_on_both_engines(self) -> None:
         """CLOSED by #2346 — kept and INVERTED, per this class's own contract.
