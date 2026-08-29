@@ -14,6 +14,7 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+pub mod filter_arity;
 pub mod filter_registry;
 pub mod filters;
 pub mod floatformat;

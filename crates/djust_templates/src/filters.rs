@@ -592,6 +592,28 @@ pub fn apply_filter_full_safe(
     arg_was_quoted: bool,
     input_safety: InputSafety,
 ) -> Result<(Value, bool)> {
+    // The ARGUMENT COUNT, before anything else touches the argument (#2400).
+    //
+    // FIRST, and that is Django's order rather than a convenience: `args_check`
+    // runs inside `FilterExpression.__init__`, so it fires before any resolution
+    // — `{% if p|upper:missingvar %}` is a `TemplateSyntaxError` in Django and
+    // never a `VariableDoesNotExist`. Putting this below the resolve would swap
+    // the two errors for every wrong-arity cell whose argument is also a miss.
+    //
+    // This is the CALL-time bound. The `{{ }}` path has already been refused at
+    // PARSE time by `parser::parse_filter_specs` (Django's own timing), so the
+    // cells that reach here are the TAG operands — `{% if p|f:"x" %}`,
+    // `{% for x in p|f %}` — which `renderer::get_value_safe` splits out of a
+    // raw string at render time and which no parse-time check can see. The two
+    // sites take DIFFERENT bounds, which is why `filter_arity` exposes two
+    // functions: for the five `needs_autoescape` built-ins Django COMPILES
+    // `{{ p|urlize:"x" }}` and raises `TypeError` when the call happens, and a
+    // parse-time refusal there would refuse a template Django accepts.
+    if let Some(message) =
+        crate::filter_arity::call_time_arity_error(filter_name, u8::from(arg.is_some()))
+    {
+        return Err(DjangoRustError::TemplateError(message));
+    }
     // #2202: Django resolves a bare-identifier filter argument as a context
     // variable (`Variable(arg).resolve(context)`); only a QUOTED argument is a
     // literal. The custom-filter path already does this
@@ -7094,9 +7116,18 @@ mod tests {
 
     #[test]
     fn test_stringformat_filter_default() {
+        // There is no default. `stringformat` takes a REQUIRED argument, so
+        // Django refuses `{{ p|stringformat }}` at compile time — "stringformat
+        // requires 2 arguments, 1 provided" — and this pinned djust rendering
+        // it (#2400). Corrected rather than relaxed: the name kept, because the
+        // question it asks ("what happens with no argument") still has an
+        // answer, and the answer is a refusal.
         let value = Value::Integer(42);
-        let result = apply_filter("stringformat", &value, None).unwrap();
-        assert_eq!(result.to_string(), "42");
+        let err = apply_filter("stringformat", &value, None).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("stringformat requires 2 arguments, 1 provided"),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -7146,9 +7177,14 @@ mod tests {
 
     #[test]
     fn test_wordwrap_filter_default() {
+        // Same as `test_stringformat_filter_default`: `wordwrap`'s argument is
+        // required, so there is no no-argument behaviour to pin (#2400).
         let value = Value::String("short".to_string());
-        let result = apply_filter("wordwrap", &value, None).unwrap();
-        assert_eq!(result.to_string(), "short");
+        let err = apply_filter("wordwrap", &value, None).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("wordwrap requires 2 arguments, 1 provided"),
+            "{err:?}"
+        );
     }
 
     #[test]

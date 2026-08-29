@@ -171,6 +171,7 @@ class TestTheManifestIsCleanOnMain:
             "entrypoint",
             "grant-shape",
             "loop-variable",
+            "arity",
             # A COMPOSITION row (#2372): a pair of axes each individually swept
             # is not thereby swept together. Not the full N-squared — a pair
             # earns a row when both axes touch the same resolution step.
@@ -343,6 +344,35 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         joined = "\n".join(row["missing"])
         for kind in ("does not resolve", "is a ValueError", "is a TypeError", "past djust's"):
             assert kind in joined, kind
+
+    def test_2400_no_cell_could_have_the_wrong_argument_COUNT(self, tmp_path: pathlib.Path) -> None:
+        """The seventh, and the largest: 48 of Django's 57 built-ins.
+
+        ``cells()`` gives every argument-taking filter exactly ONE argument out
+        of ``FILTER_ARGS`` and gives the rest none; ``arg_cells()`` sweeps
+        spellings of a single argument over the filters that take one. Neither
+        can write ``{{ p|upper:"x" }}`` or ``{{ p|default }}`` — so the manifest
+        reported ``0 MISSING`` on ten axes over ~345,000 cells while the single
+        biggest class of divergence in the corpus went unseen.
+
+        A set comparison rather than a count, so it survives Django adding or
+        dropping a built-in.
+        """
+        script = mutated_script(
+            tmp_path,
+            (
+                "    for name in sorted(register.filters):\n"
+                "        for provided in ARITY_COUNTS:\n",
+                "    for name in []:\n        for provided in ARITY_COUNTS:\n",
+            ),
+        )
+        row = rows(run_manifest(script))["arity"]
+        assert sorted(row["missing"]) == sorted(row["required"]), row["missing"]
+        assert len(row["missing"]) == 48
+        # The two shapes the axis is about, both named in the report.
+        joined = " ".join(row["missing"])
+        assert "upper:1" in joined, "the EXTRA-argument half is not reported"
+        assert "default:0" in joined, "the MISSING-argument half is not reported"
 
     def test_removing_the_pad_cap_spelling_makes_the_cap_unreachable(
         self, tmp_path: pathlib.Path
@@ -926,10 +956,27 @@ class TestTheArgumentAxisCorpus:
             check=True,
         )
         payload = json.loads(out.read_text())
-        randoms = {k: v for k, v in payload.items() if "random" in k.split("\t")[0]}
+        randoms = {
+            k: v
+            for k, v in payload.items()
+            if "random" in k.split("\t")[0] and not k.startswith("@arity ")
+        }
         assert randoms, "no `random` cell in the corpus"
         assert all(v[0].startswith("<NONDET len=") for v in randoms.values()), (
             "a `random` cell now records an agreement bit, which flaps between runs"
+        )
+        # The ARITY axis is the one place a `random` cell is DETERMINISTIC and
+        # must stay comparable (#2400): `{{ p|random:"x" }}` is refused before
+        # the filter runs, so there is no draw to flap. Collapsing it would
+        # erase the movement this axis exists to measure.
+        arity_randoms = {
+            k: v
+            for k, v in payload.items()
+            if k.startswith("@arity ") and "random" in k.split("\t")[0]
+        }
+        assert arity_randoms, "the arity axis built no `random` cell"
+        assert all(not v[0].startswith("<NONDET len=") for v in arity_randoms.values()), (
+            "an arity `random` cell was collapsed; a refusal is deterministic"
         )
 
 

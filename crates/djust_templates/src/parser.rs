@@ -427,7 +427,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
             // Parse variable and filters: {{ var|filter1:arg1|filter2 }}
             let parts: Vec<String> = var.split('|').map(|s| s.trim().to_string()).collect();
             let expr_part = &parts[0];
-            let filters = parse_filter_specs(&parts[1..]);
+            let filters = parse_filter_specs(&parts[1..])?;
 
             // Check for Jinja2-style inline conditional:
             //   {{ true_expr if condition else false_expr }}
@@ -1865,8 +1865,24 @@ fn find_if_keyword(expr: &str) -> Option<usize> {
 }
 
 /// Parse a slice of filter spec strings into `(filter_name, Option<arg>)` pairs.
-fn parse_filter_specs(parts: &[String]) -> Vec<(String, Option<String>)> {
-    parts
+///
+/// Refuses a wrong ARGUMENT COUNT, which is what Django does here and at this
+/// TIME (#2400). `FilterExpression.__init__` calls `args_check` while the
+/// template is being COMPILED, so `{% if False %}{{ p|upper:"x" }}{% endif %}`
+/// raises in Django even though the node never renders — and a `{{ }}` node
+/// inside a branch nothing takes is exactly the shape a render-time check
+/// cannot see. See [`crate::filter_arity`] for the table and for why there are
+/// two bounds; this site takes the COMPILE-time one.
+///
+/// It is not the only site: a filter chain on a TAG operand
+/// (`{% if p|upper:"x" %}`) is a raw string at parse time and is resolved by
+/// `renderer::get_value_safe`, which takes the CALL-time bound. Two sites, one
+/// table, each asking its own question — the `python_len` shape (#1646) rather
+/// than two copies of the rule. `TestBothSitesRefuse` in
+/// `python/tests/test_filter_arity_2400.py` names the test that goes red when
+/// only one of them is removed.
+fn parse_filter_specs(parts: &[String]) -> Result<Vec<(String, Option<String>)>> {
+    let specs: Vec<(String, Option<String>)> = parts
         .iter()
         .map(|filter_spec| {
             if let Some(colon_pos) = filter_spec.find(':') {
@@ -1883,7 +1899,19 @@ fn parse_filter_specs(parts: &[String]) -> Vec<(String, Option<String>)> {
                 (filter_spec.clone(), None)
             }
         })
-        .collect()
+        .collect();
+    for (name, arg) in &specs {
+        if let Some(message) =
+            crate::filter_arity::parse_time_arity_error(name, u8::from(arg.is_some()))
+        {
+            // Django's `TemplateSyntaxError` text verbatim. It crosses to
+            // Python as a `RuntimeError` rather than Django's class, as every
+            // djust template error does; the property both engines share is
+            // that the template does not compile.
+            return Err(DjangoRustError::TemplateError(message));
+        }
+    }
+    Ok(specs)
 }
 
 /// Strip surrounding single/double quotes from a filter argument when it

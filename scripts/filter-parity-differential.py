@@ -1239,9 +1239,7 @@ PATH_SHAPES = {
     "with-subpath-marked": "{% with q=p %}[{{ q.a }}]{% endwith %}",
     "with-subpath-unmarked": "{% with q=p %}[{{ q.z }}]{% endwith %}",
     "with-subpath-filtered": "{% with q=p|dictsort:'a' %}[{{ q.a }}]{% endwith %}",
-    "with-subpath-rebound": (
-        "{% with q=p %}{% with q=p.z %}[{{ q.a }}]{% endwith %}{% endwith %}"
-    ),
+    "with-subpath-rebound": ("{% with q=p %}{% with q=p.z %}[{{ q.a }}]{% endwith %}{% endwith %}"),
     "with-target-rebound": (
         "{% with q=p %}{% with p=p.z|safe %}[{{ q }}]{% endwith %}{% endwith %}"
     ),
@@ -1485,7 +1483,12 @@ def django_argument_filters() -> list[str]:
     cannot drift again.
 
     `needs_autoescape=True` injects an `autoescape` kwarg that is not a
-    template argument; excluded, as `FilterExpression.args_check` excludes it.
+    template argument, so it is excluded here — but NOT because `args_check`
+    excludes it. It does not: `args_check` reads the RAW argspec, so
+    `{{ p|urlize:"x" }}` passes the compile-time check and the CALL then raises
+    `TypeError: got multiple values for argument 'autoescape'`. An earlier
+    version of this docstring stated the opposite, and that is exactly the
+    premise #2400 turns on — see `arity_cells` below, which needs both bounds.
     """
     names = []
     for name, fn in sorted(register.filters.items()):
@@ -1501,6 +1504,81 @@ def arg_cells():
         for arg in ARG_SPELLINGS:
             for key in INPUTS_2:
                 yield name, arg, key
+
+
+# ---------------------------------------------------------------------------
+# The ARITY axis (#2400) — the eleventh, and the sixth blind spot
+# ---------------------------------------------------------------------------
+#
+# The corpus swept every filter, every argument SPELLING, every value shape and
+# every tag — and could not construct one cell with the wrong argument COUNT.
+# `cells()` gives each argument-taking filter exactly one VALID argument out of
+# `FILTER_ARGS` and gives every other filter none; `arg_cells()` sweeps
+# spellings of a single argument over the filters that take one. Neither can
+# write `{{ p|upper:"x" }}` or `{{ p|default }}`.
+#
+# So the manifest reported `0 MISSING` on ten axes over ~345,000 cells while 48
+# of Django's 57 built-ins rendered a template Django REFUSES TO COMPILE — the
+# largest single class of divergence in the whole corpus, invisible because
+# nothing here built a cell that could see it.
+#
+# Both bounds are needed and they are not the same, which is the finding this
+# axis exists to keep visible:
+#
+#   * `args_check` runs at COMPILE time and reads the RAW argspec, so it counts
+#     `autoescape` as a slot;
+#   * the CALL supplies `autoescape` as a keyword, so a positional argument in
+#     that slot passes the compile check and raises `TypeError` at render.
+#
+# Five built-ins sit between them (`linebreaks`, `linebreaksbr`, `linenumbers`,
+# `unordered_list`, `urlize`): Django compiles `{{ p|urlize:"x" }}` and refuses
+# it at render. An axis that used one bound would either miss those five or
+# demand a refusal Django does not make.
+
+
+def django_arity_bounds(name: str) -> tuple[int, int, int]:
+    """`(min, parse_max, call_max)` on the number of TEMPLATE arguments.
+
+    Read out of DJANGO — the same `getfullargspec` on the same unwrapped
+    callable that `FilterExpression.args_check` reads — and deliberately NOT
+    out of `crates/djust_templates/src/filter_arity.rs`. A requirement derived
+    from djust's own table would agree with it by construction and could never
+    report it wrong, which is the trap #2404's `loop-variable` axis was written
+    to avoid one axis over.
+    """
+    spec = inspect.getfullargspec(inspect.unwrap(register.filters[name]))
+    args, dlen = spec.args, len(spec.defaults or [])
+    has_autoescape = "autoescape" in args
+    n_template = len(args) - 1 - (1 if has_autoescape else 0)
+    d_template = max(0, dlen - (1 if has_autoescape else 0))
+    return n_template - d_template, len(args) - 1, n_template
+
+
+def django_refuses_arity(name: str, provided: int) -> bool:
+    """Does Django refuse this count AT ALL — at compile time or at the call?"""
+    lo, _parse_max, call_max = django_arity_bounds(name)
+    return provided < lo or provided > call_max
+
+
+#: The counts djust can SPELL. `parse_filter_specs` splits on the first colon
+#: and keeps the rest as one argument, so a template cannot express two — which
+#: is also why Django's own `filter_raw_string` regex allows at most one, and
+#: why a two-argument cell would be measuring the lexer rather than the arity.
+ARITY_COUNTS = (0, 1)
+
+
+def arity_cells():
+    """Every built-in × every argument COUNT its own signature refuses.
+
+    The LEGAL counts are already swept by the `filter` and `argument` axes, so
+    this axis carries only the refused ones — the cells that did not exist.
+    """
+    for name in sorted(register.filters):
+        for provided in ARITY_COUNTS:
+            if not django_refuses_arity(name, provided):
+                continue
+            for key in INPUTS_3:
+                yield name, provided, key
 
 
 #: The BUILTIN-VALUE axis (#2347).
@@ -1912,6 +1990,26 @@ _FORLOOP_MEMBER = re.compile(
 )
 
 
+def _required_arities() -> dict[str, str]:
+    """Every `(filter, count)` Django refuses, read out of Django's registry.
+
+    `getfullargspec` on the unwrapped callable — the same call
+    `FilterExpression.args_check` makes — so the requirement cannot be
+    satisfied by the omission it exists to detect (#2400).
+    """
+    return {
+        f"{name}:{provided}": "django defaultfilters.register (getfullargspec)"
+        for name in register.filters
+        for provided in ARITY_COUNTS
+        if django_refuses_arity(name, provided)
+    }
+
+
+def _swept_arities() -> set[str]:
+    """Derived from the cells the corpus BUILDS, never from the requirement."""
+    return {f"{name}:{provided}" for name, provided, _key in arity_cells()}
+
+
 def _required_forloop_members() -> dict[str, str]:
     source = inspect.getsource(_django_template.defaulttags.ForNode.render)
     out: dict[str, str] = {}
@@ -2203,6 +2301,12 @@ AXES = [
         },
     ),
     Axis(
+        name="arity",
+        what="the argument COUNTS each built-in's own signature refuses",
+        swept=_swept_arities,
+        required=_required_arities,
+    ),
+    Axis(
         name="input-shape",
         what="the VALUE shapes each cell is rendered over",
         swept=lambda: set(INPUTS),
@@ -2272,6 +2376,8 @@ def axis_of(cid: str) -> str:
     needs a line here, and `test_every_cell_prefix_has_an_axis` fails until it
     gets one.
     """
+    if cid.startswith("@arity "):
+        return "arity"
     if cid.startswith("@arg "):
         return "argument"
     if cid.startswith("@builtin "):
@@ -2410,6 +2516,18 @@ def measure(out_path: str) -> None:
         )
         if name in NONDET:
             dj, du = nondet_agreement(dj, du)
+        result[cid] = [dj, du]
+
+    # The ARITY axis (#2400). Four fields, `@arity` first, so no id above is
+    # renamed. No `safe_keys`: every cell here is one Django REFUSES, so there
+    # is no rendered output for a grant to change — and the payload inputs are
+    # carried by `INPUTS_3` so a refusal that leaked the value would show.
+    for name, provided, key in arity_cells():
+        spelling = ':"x"' if provided else ""
+        cid = f"@arity {name}{spelling}\t{key}\tarity"
+        if cid in result:
+            continue
+        dj, du = render_both("{{ p|" + name + spelling + " }}", {"p": INPUTS[key]})
         result[cid] = [dj, du]
 
     # The CUSTOM-TAG axis (#2356). Three fields, `@ctag` first, so no id above
