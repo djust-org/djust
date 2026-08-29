@@ -103,6 +103,75 @@ fn mark_safe_str<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAny>
     mark_safe.call1((plain,))
 }
 
+/// One resolved tag argument, as the Python handler receives it (#2416).
+///
+/// # Why the bool travels beside the text
+///
+/// Django's `SimpleNode.render` resolves each operand with
+/// `FilterExpression.resolve(context)` and hands the handler the resolved
+/// **object** — so a `mark_safe`d context value arrives as a `SafeString` and
+/// a handler's defensive `conditional_escape(value)` is a no-op. djust's tag
+/// channel transports every argument as a `String`, which is the information
+/// loss #2290 documents one registry over: the marker cannot survive
+/// `Value` → `value_to_arg_string`, so the handler re-escapes markup Django
+/// emits live.
+///
+/// The renderer knows the answer at resolution time (`get_value_safe` already
+/// returns it, and it is the same bool that decides whether `{{ p }}` escapes).
+/// Carrying it here lets [`build_py_args`] re-mint the `SafeString` on the
+/// Python side, where `SafeData` actually means something.
+///
+/// This is deliberately NOT a general "make the argument a real Python object"
+/// channel: an `int` still arrives as `"5"`, a list still arrives as JSON. Only
+/// the `SafeData` bit crosses, because only that bit changes an escaping
+/// decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagArg {
+    /// The text the handler receives.
+    pub text: String,
+    /// Django would have handed this argument `SafeData`.
+    pub safe: bool,
+}
+
+impl TagArg {
+    /// An argument with no safety grant — the shape every argument had before
+    /// #2416, and the one every unresolved / composite / non-string operand
+    /// keeps.
+    pub fn plain(text: String) -> Self {
+        Self { text, safe: false }
+    }
+
+    /// An argument Django would have handed `SafeData`.
+    pub fn marked(text: String) -> Self {
+        Self { text, safe: true }
+    }
+}
+
+/// The `list[str]` a handler's `render` receives, with the marked positions
+/// re-minted as `SafeString` (#2416).
+///
+/// One builder for all three registries, so a future registry cannot acquire a
+/// hand-copied twin that forgets the marker (#1646). `mark_safe_str` fails
+/// SOFT — without Django importable the position degrades to the plain `str` it
+/// was before this change rather than failing the render.
+fn build_py_args<'py>(
+    py: Python<'py>,
+    args: &[TagArg],
+) -> Result<Bound<'py, pyo3::types::PyList>, String> {
+    let list = pyo3::types::PyList::empty(py);
+    for arg in args {
+        let item = if arg.safe {
+            mark_safe_str(py, &arg.text)
+                .map_err(|e| format!("Failed to mark an argument safe: {e}"))?
+        } else {
+            pyo3::types::PyString::new(py, &arg.text).into_any()
+        };
+        list.append(item)
+            .map_err(|e| format!("Failed to create args list: {e}"))?;
+    }
+    Ok(list)
+}
+
 /// Global registry mapping tag names to Python handler objects.
 ///
 /// Thread-safe via `RwLock`. Registration is one-time bootstrap; lookup is
@@ -349,7 +418,7 @@ pub fn block_handler_exists(name: &str) -> Option<String> {
 /// equivalent to passing `None` for the raw Python sidecar.
 pub fn call_block_handler(
     name: &str,
-    args: &[String],
+    args: &[TagArg],
     content: &str,
     context: &HashMap<String, djust_core::Value>,
 ) -> Result<String, String> {
@@ -370,7 +439,7 @@ pub fn call_block_handler(
 /// Existing block handlers that ignore the extra keys are unaffected.
 pub fn call_block_handler_with_py_sidecar(
     name: &str,
-    args: &[String],
+    args: &[TagArg],
     content: &str,
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
@@ -390,8 +459,7 @@ pub fn call_block_handler_with_py_sidecar(
     Python::attach(|py| {
         use pyo3::IntoPyObject;
 
-        let py_args = pyo3::types::PyList::new(py, args)
-            .map_err(|e| format!("Failed to create args list: {e}"))?;
+        let py_args = build_py_args(py, args)?;
 
         // The block body reaches Python as a `SafeString`, not a bare `str`
         // (#2379). Django's `simple_block_tag` hands the handler
@@ -485,7 +553,7 @@ pub fn handler_exists(name: &str) -> bool {
 /// - Handler's `render` method doesn't return a string
 pub fn call_handler(
     name: &str,
-    args: &[String],
+    args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
 ) -> Result<String, String> {
     call_handler_with_py_sidecar(name, args, context, None)
@@ -507,7 +575,7 @@ pub fn call_handler(
 /// handler nearly always wants the live object, not the projection.
 pub fn call_handler_with_py_sidecar(
     name: &str,
-    args: &[String],
+    args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<String, String> {
@@ -530,8 +598,7 @@ pub fn call_handler_with_py_sidecar(
         use pyo3::IntoPyObject;
 
         // Convert args to Python list
-        let py_args = pyo3::types::PyList::new(py, args)
-            .map_err(|e| format!("Failed to create args list: {e}"))?;
+        let py_args = build_py_args(py, args)?;
 
         // Convert context to Python dict
         let py_context = pyo3::types::PyDict::new(py);
@@ -710,7 +777,7 @@ pub fn assign_handler_resolve_positions(name: &str) -> Option<HashSet<usize>> {
 /// equivalent to passing `None` for the raw Python sidecar.
 pub fn call_assign_handler(
     name: &str,
-    args: &[String],
+    args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
 ) -> Result<HashMap<String, djust_core::Value>, String> {
     call_assign_handler_with_py_sidecar(name, args, context, None)
@@ -730,7 +797,7 @@ pub fn call_assign_handler(
 /// unaffected.
 pub fn call_assign_handler_with_py_sidecar(
     name: &str,
-    args: &[String],
+    args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<HashMap<String, djust_core::Value>, String> {
@@ -747,8 +814,7 @@ pub fn call_assign_handler_with_py_sidecar(
     Python::attach(|py| {
         use pyo3::IntoPyObject;
 
-        let py_args = pyo3::types::PyList::new(py, args)
-            .map_err(|e| format!("Failed to create args list: {e}"))?;
+        let py_args = build_py_args(py, args)?;
 
         let py_context = pyo3::types::PyDict::new(py);
         for (key, value) in context {
@@ -840,5 +906,42 @@ mod tests {
 
         let tags = get_registered_tags().unwrap();
         assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn every_registry_builds_its_args_through_the_one_builder() {
+        // The SINK pin (#2416). Three registries hand a handler a `list[str]`,
+        // and the `SafeData` re-minting happens in exactly one place. A fourth
+        // registry — or a hand-rolled `PyList::new(py, args)` creeping back
+        // into one of the three — silently drops the marker for that path,
+        // which is the #1646 shape this whole change exists to retire.
+        let whole = include_str!("registry.rs");
+        let (src, tests) = whole
+            .split_once("\n#[cfg(test)]\n")
+            .expect("the test-module boundary moved; this pin scans the wrong half");
+        assert!(
+            tests.contains("every_registry_builds_its_args_through_the_one_builder"),
+            "the split landed in the wrong place"
+        );
+        assert_eq!(
+            src.matches("build_py_args(py, args)").count(),
+            3,
+            "the tag, block and assign registries must all build args here"
+        );
+        assert!(
+            !src.contains("PyList::new(py, args)"),
+            "a registry is building its args list without the marker again"
+        );
+        // And the builder is the only place `mark_safe_str` reaches an
+        // ARGUMENT: the block body's own call (#2379) is the other one, and
+        // there must be exactly those two.
+        assert_eq!(src.matches("mark_safe_str(py, ").count(), 2);
+    }
+
+    #[test]
+    fn a_tag_arg_is_plain_unless_explicitly_marked() {
+        assert!(!TagArg::plain("x".to_string()).safe);
+        assert!(TagArg::marked("x".to_string()).safe);
+        assert_eq!(TagArg::plain("x".to_string()).text, "x");
     }
 }

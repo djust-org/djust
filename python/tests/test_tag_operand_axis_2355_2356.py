@@ -68,6 +68,7 @@ from django.utils.html import conditional_escape  # noqa: E402
 from django.utils.safestring import mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
+from djust.mixins.rust_bridge import _collect_safe_keys  # noqa: E402
 
 #: A live payload, so every cell doubles as a permissiveness probe.
 XSS = "<img src=x onerror=alert(1)>"
@@ -83,6 +84,22 @@ def django_render(src: str, ctx: dict) -> str:
 
 
 def djust_render(src: str, ctx: dict) -> str:
+    """djust, over the same input INCLUDING the context's safety grants (#2416).
+
+    Django reads a value's `SafeData` off the object; djust is told which
+    context paths carry it through a separate `safe_keys` channel, and
+    `render_template` has no parameter for it — only `render_template_with_dirs`
+    does (#2287). Until #2416 this helper called `render_template`, so the
+    `mark_safe`d-context rows in this file measured "the engine was never told"
+    rather than "the marker did not survive the PyO3 hop". Derived with djust's
+    own `_collect_safe_keys` so a test cannot claim a grant the bridge would
+    not produce.
+    """
+    safe_keys: list[str] = []
+    for key, value in ctx.items():
+        safe_keys.extend(_collect_safe_keys(value, key))
+    if safe_keys:
+        return _rust.render_template_with_dirs(src, dict(ctx), [], safe_keys)
     return _rust.render_template(src, ctx)
 
 
@@ -451,14 +468,20 @@ class TestTheCustomTagPathIsReachableAtAll:
 
 
 class TestKnownDivergencesOnTheCustomTagPath:
-    """Three of these are CLOSED by #2379; two remain, and are still pinned.
+    """All but ONE of these are now CLOSED — by #2379 and then #2416.
 
-    The class docstring used to say each row would go red when djust started
+    The class docstring first said each row would go red when djust started
     escaping a handler's non-`SafeData` return, and that "these pins must be
-    rewritten as parity assertions". #2379 landed; they are rewritten in place
-    rather than deleted, because the ARGUMENT-side rows below are the ones
-    that did NOT close and the two halves belong together — what a handler is
-    HANDED is a different channel from what it RETURNS.
+    rewritten as parity assertions". #2379 landed and closed the RETURN rows;
+    #2416 landed and closed the two ARGUMENT rows (the `SafeData` marker on the
+    way in, and a quoted literal's quotes). They are rewritten in place rather
+    than deleted, so a revert goes red on the axis that found each one.
+
+    The ONE that remains open is `test_every_argument_arrives_as_a_string`:
+    #2416 carries the safety BIT across the hop and not the OBJECT, so a
+    handler that type-checks its argument still sees `"5"` where Django hands
+    it `5`. #2416's issue body predicted the marker fix would close that too;
+    run, it does not — they are different halves of the same flattening.
     """
 
     def test_a_plain_str_return_is_ESCAPED_as_django_escapes_it(self) -> None:
@@ -509,23 +532,22 @@ class TestKnownDivergencesOnTheCustomTagPath:
         assert django_render("{% pb_ident %}{{ p }}{% endpb_ident %}", {"p": XSS}) == expected
         assert djust_render("{% pb_ident %}{{ p }}{% endpb_ident %}", {"p": XSS}) == expected
 
-    def test_a_mark_safe_context_value_reaches_the_handler_as_a_bare_str(self) -> None:
-        """STILL OPEN, and #2379 made it visible rather than causing it.
+    def test_a_mark_safe_context_value_reaches_the_handler_as_SafeData(self) -> None:
+        """CLOSED in #2416; #2379 made it visible rather than causing it.
 
-        #2290's finding one registry over: the `SafeData` marker does not
+        #2290's finding one registry over: the `SafeData` marker did not
         survive the PyO3 hop, so the handler's own `conditional_escape`
-        escapes where Django does not. It USED to agree with Django by
+        escaped where Django does not. It USED to agree with Django by
         coincidence — the marker was lost on the way in, and the bridge then
         emitted the result raw on the way out, so two wrongs cancelled. With
-        the return escaped, the input-side loss is no longer masked.
+        the return escaped the input-side loss showed, and #2416 carries the
+        marker across the hop so the two agree for the right reason.
 
-        djust is STRICTER here, which is the safe direction: over-escaping,
-        never a leak.
+        Kept here rather than moved: this file is where the divergence was
+        written down, so a revert of #2416 goes red on the axis that found it.
         """
         assert django_render("{% pt_cond p %}", {"p": mark_safe(XSS)}) == XSS
-        assert djust_render("{% pt_cond p %}", {"p": mark_safe(XSS)}) == (
-            "&lt;img src=x onerror=alert(1)&gt;"
-        )
+        assert djust_render("{% pt_cond p %}", {"p": mark_safe(XSS)}) == XSS
 
     def test_every_argument_arrives_as_a_string(self) -> None:
         # Django hands the handler the real object; the Rust bridge encodes
@@ -536,18 +558,24 @@ class TestKnownDivergencesOnTheCustomTagPath:
         assert djust_render("{% pt_ident p %}", {"p": [1, 2]}) == "[1,2]"
         assert django_render("{% pt_ident p %}", {"p": [1, 2]}) == "[1, 2]"
 
-    def test_a_quoted_literal_argument_keeps_its_quotes(self) -> None:
-        """STILL OPEN, and the escaping now shows on top of it.
+    def test_a_quoted_literal_argument_LOSES_its_quotes(self) -> None:
+        """CLOSED in #2416.
 
         Django's `Variable('"<b>"')` runs `mark_safe(unescape_string_literal(…))`,
-        so the literal loses its quotes AND arrives as `SafeData`. djust passes
-        the token verbatim, quotes included — so the handler returns those five
-        characters and the return escape now spells them out. It rendered a
-        live `<b>` before and renders escaped text now: stricter, and wrong for
-        the same pre-existing reason either way.
+        so the literal loses its quotes AND arrives as `SafeData`. djust passed
+        the token verbatim, quotes included — so the handler returned those five
+        characters and the return escape spelled them out. Both halves are now
+        Django's, through the ONE `django_literal` helper the `{{ }}` arm
+        already used (#2376).
         """
-        assert djust_render('{% pt_ident "<b>" %}', {}) == "&quot;&lt;b&gt;&quot;"
+        assert djust_render('{% pt_ident "<b>" %}', {}) == "<b>"
         assert django_render('{% pt_ident "<b>" %}', {}) == "<b>"
+
+    def test_a_quoted_literal_with_no_markup_also_loses_its_quotes(self) -> None:
+        """The half a markup-bearing literal could not show: the quotes were
+        wrong for EVERY quoted literal, not only one containing a tag."""
+        assert djust_render('{% pt_ident "post" %}', {}) == "post"
+        assert django_render('{% pt_ident "post" %}', {}) == "post"
 
 
 # ===========================================================================
