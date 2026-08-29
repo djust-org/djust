@@ -789,10 +789,45 @@ class TestModelPkSerialization:
         assert view.model_label == "myapp.Thing"
 
 
+def _liveviewform_deprecations(captured):
+    """The LiveViewForm deprecations among `captured`, and only those.
+
+    Selected by MESSAGE alone, deliberately. A category clause here would be
+    redundant — every stray the canary emits is already excluded by the
+    message — and a redundant filter clause cannot be shown to do anything,
+    which is the shape this repo deletes rather than tests around. The
+    category is asserted on the RESULT instead, where it is a real claim
+    about the warning rather than a second way of not selecting it.
+
+    Stated once rather than at each call site: two copies of a filter is the
+    drift this repo keeps retiring.
+    """
+    return [x for x in captured if "liveviewform" in str(x.message).lower()]
+
+
 class TestLiveViewFormDeprecation:
     """Test that LiveViewForm emits deprecation warning."""
 
     def test_subclass_emits_deprecation_warning(self):
+        """Assert on the DeprecationWarning, not on how many warnings arrived.
+
+        This used to end `assert len(w) == 1`, which measures the whole
+        PROCESS rather than the subject: `catch_warnings` mutates the global
+        filter list, so every warning raised anywhere during the window —
+        including one a garbage collection happens to surface — is recorded.
+        It failed roughly one full-suite run in five with `assert 2 == 1`,
+        depending only on which xdist worker held this file.
+
+        The stray was `RuntimeWarning: coroutine
+        'LiveViewConsumer._run_async_work' was never awaited`, from a mocked
+        `asyncio.ensure_future` in `test_async_integration.py`. That leak is
+        fixed at its source in the same change, but the count assertion is
+        narrowed anyway: ANY future stray from anywhere would re-break it,
+        and the number was never what this test is about.
+
+        `tests/integration/test_chunks_overlap.py` already filters its own
+        captured list this way for the same reason.
+        """
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
 
@@ -800,6 +835,60 @@ class TestLiveViewFormDeprecation:
                 name = forms.CharField()
 
             assert MyForm is not None  # use the class to satisfy linters
-            assert len(w) == 1
-            assert issubclass(w[0].category, DeprecationWarning)
-            assert "deprecated" in str(w[0].message).lower()
+
+        deprecations = _liveviewform_deprecations(w)
+        assert len(deprecations) == 1, (
+            "expected exactly one LiveViewForm DeprecationWarning; got "
+            f"{[(x.category.__name__, str(x.message)) for x in w]}"
+        )
+        assert issubclass(deprecations[0].category, DeprecationWarning)
+        assert "deprecated" in str(deprecations[0].message).lower()
+
+    def test_the_narrowing_survives_an_unrelated_warning(self):
+        """The empirical canary for the assertion above.
+
+        Without this, the narrowing is untestable: with no stray present the
+        filtered list and the raw list are identical, so gating the filter off
+        changes nothing and the mutation is a semantic no-op. This test
+        MANUFACTURES the stray, so the filter is the only thing standing
+        between the subject and a wrong answer.
+
+        It also pins, in the same breath, that the OLD assertion would have
+        failed here — which is the whole reason the count was wrong.
+        """
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            class MyForm(LiveViewForm):
+                name = forms.CharField()
+
+            assert MyForm is not None
+            # Exactly the shape the real stray had: an unrelated CATEGORY,
+            # raised by something with nothing to do with this subject.
+            warnings.warn(
+                "coroutine 'LiveViewConsumer._run_async_work' was never awaited",
+                RuntimeWarning,
+                stacklevel=1,
+            )
+            # ...and an unrelated warning of the SAME category, so the
+            # category clause alone is not enough to identify the subject.
+            # Without this the message clause would be shadowed by the
+            # category clause and neither the filter nor the identity
+            # assertion could be shown to do anything.
+            warnings.warn(
+                "THEMES is deprecated since djust 0.5",
+                DeprecationWarning,
+                stacklevel=1,
+            )
+
+        deprecations = _liveviewform_deprecations(w)
+        # The subject is still found, unambiguously, among both strays...
+        assert len(deprecations) == 1, [(x.category.__name__, str(x.message)) for x in w]
+        # The warning's own properties (category, wording) are the SUBJECT of
+        # `test_subclass_emits_deprecation_warning` and are asserted there.
+        # Re-asserting them here would be a second copy that shadows the
+        # first: dropping either would leave the property covered, so neither
+        # could be shown to do anything.
+        # ...and the count the old assertion used is NOT 1, which is exactly
+        # how this test failed in CI roughly one run in five.
+        assert len(w) == 3

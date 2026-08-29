@@ -133,7 +133,15 @@ def _is_about_the_literal(source: str, name: str, ctx: dict[str, Any]) -> bool:
     agrees on ``False``, so any name-level exclusion is wrong in one direction
     or the other.
     """
-    probe = "__djust_2347_control"
+    # NOT leading-underscore: Django's `Variable.__init__` refuses one
+    # (`Variables and attributes may not begin with underscores`) at PARSE
+    # time, so `DjangoTemplate(control_src)` raised for every cell and the
+    # `except` below returned False unconditionally. Measured: with the old
+    # `__djust_2347_control` name all 84 swept cells classified
+    # `django-raised`, which made `mismatched` in the sweep below
+    # permanently EMPTY — a vacuous assertion, found when #2413 emptied the
+    # known-divergence list and the sweep's own canary fired.
+    probe = "djust2347control"
     control_src = source.replace(name, probe)
     control_ctx = dict(ctx, **{probe: _OBJECTS[name]})
     try:
@@ -166,7 +174,7 @@ class TestTheValuePosition:
         Django says ``yes``. A fix that special-cased only the bare form would
         leave every one of these.
         """
-        mismatched, value_side, swept = [], 0, 0
+        mismatched, value_side, about_literal, swept = [], 0, 0, 0
         for filter_name in sorted(register.filters):
             if filter_name in _NONDETERMINISTIC:
                 continue
@@ -183,19 +191,39 @@ class TestTheValuePosition:
                 mismatched.append(f"{source}: django={django_out!r} djust={djust_out!r}")
             else:
                 value_side += 1
+        # Counted over EVERY swept cell, divergent or not, so it measures the
+        # classifier rather than whatever happens to be broken today.
+        about_literal = sum(
+            1
+            for filter_name in sorted(register.filters)
+            if filter_name not in _NONDETERMINISTIC
+            and _is_about_the_literal("{{ %s|%s }}" % (name, filter_name), name, {})
+        )
         # Django raises `TemplateSyntaxError` for every filter that REQUIRES an
         # argument when it is called bare, so only the no-argument half of the
         # registry is comparable in this shape. The argument half is swept by
         # `TestTheArgumentChannel` and by the differential's argument axis.
         assert swept >= 20, f"the sweep collapsed to {swept} filters"
         assert not mismatched, "\n".join(mismatched)
-        # The value-side cells are real divergences, just not this issue's — see
-        # `TestKnownPreExistingDivergencesNotFixedHere`. Asserted non-zero so a
-        # change that makes the control stop discriminating is visible rather
-        # than silently turning this into a weaker test.
-        assert value_side > 0, (
-            "no cell was classified value-side; either every filter now agrees "
-            "(shrink the known list) or `_is_about_the_literal` stopped working"
+        # NOTHING diverges any more, on either classification. This read
+        # `assert value_side > 0` — a canary for "the control still
+        # discriminates" whose only contributors were the three `json_script`
+        # cells, so #2413 fixing them made it fire on a FIX rather than on a
+        # broken classifier. An assertion whose subject can legitimately reach
+        # zero measures the wrong thing (#1859); zero is now the right answer
+        # and is asserted directly, which is strictly stronger than the
+        # exclusion it replaces.
+        assert value_side == 0, (
+            f"{value_side} cell(s) diverge for a reason other than the bare "
+            "literal — name each one and file it, or add it back to `_KNOWN`"
+        )
+        # The non-vacuity guard the old canary was standing in for, now on the
+        # classifier itself rather than on incidental production divergences:
+        # `_is_about_the_literal` must be able to answer True at all.
+        assert about_literal == swept, (
+            f"`_is_about_the_literal` answered True for {about_literal} of "
+            f"{swept} swept cells — it should agree on every one while nothing "
+            "diverges; a collapse to 0 is the vacuous-probe bug again"
         )
 
     def test_lowercase_spellings_are_not_builtins_in_a_value_position(self) -> None:
@@ -361,11 +389,18 @@ class TestKnownPreExistingDivergencesNotFixedHere:
         # to shrink the list rather than leave a stale exclusion:
         # "now AGREES - drop this row from _KNOWN and let the sweeps cover it".
         #
-        # djust stamps a default `id="data"`; Django emits no id without an
-        # argument. Nothing to do with the literal at all.
-        ("json_script", "True"),
-        ("json_script", "False"),
-        ("json_script", "None"),
+        # The three `json_script` rows went the same way in #2413. They read:
+        #
+        #     # djust stamps a default `id="data"`; Django emits no id without
+        #     # an argument. Nothing to do with the literal at all.
+        #     ("json_script", "True"), ("json_script", "False"),
+        #     ("json_script", "None"),
+        #
+        # — and this class's message is again what surfaced them, because the
+        # `id` half of #2413 removed the invented default and all three
+        # started agreeing. The list is now EMPTY, which is the state the
+        # sweeps above want: every builtin x literal cell is covered by them
+        # and nothing is excluded.
     ]
 
     @pytest.mark.parametrize("filter_name,name", _KNOWN)

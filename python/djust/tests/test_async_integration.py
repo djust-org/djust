@@ -16,6 +16,37 @@ from djust.live_view import LiveView
 from djust.decorators import event_handler, background
 
 
+def _close_swallowed_coroutines(mock_ensure_future):
+    """Close the coroutines a mocked ``asyncio.ensure_future`` swallowed.
+
+    ``patch.object(asyncio, "ensure_future")`` records the coroutine and never
+    schedules it, so it is never awaited. CPython emits
+    ``RuntimeWarning: coroutine 'LiveViewConsumer._run_async_work' was never
+    awaited`` when the collector eventually reclaims it — at an arbitrary
+    allocation point, attributed to whatever frame happens to be running then
+    (observed in the wild at ``_pytest/config/compat.py`` and
+    ``django/utils/translation/trans_real.py``, neither of which has anything
+    to do with this file).
+
+    That made it a cross-test hazard rather than local noise: it landed inside
+    ``tests/unit/test_forms.py``'s ``warnings.catch_warnings(record=True)``
+    window often enough to fail that test's ``assert len(w) == 1`` roughly one
+    run in five, on whichever xdist worker happened to hold both files.
+
+    Closing the coroutine here removes the warning at its source. The
+    assertion in ``test_forms.py`` is narrowed separately, because ANY future
+    stray from anywhere would re-break a count-based assertion — the two fixes
+    are independent and both are wanted.
+    """
+    closed = 0
+    for call in mock_ensure_future.call_args_list:
+        for arg in call.args:
+            if asyncio.iscoroutine(arg):
+                arg.close()
+                closed += 1
+    return closed
+
+
 class AsyncTestView(LiveView):
     """Test view with async operations."""
 
@@ -260,6 +291,11 @@ class TestConsumerAsyncDispatch:
             # Should have called ensure_future twice (once per task)
             assert mock_ensure_future.call_count == 2
 
+            # Asserted, not just performed: the leak's only other symptom is a
+            # warning that surfaces in an unrelated test on an unrelated
+            # worker, which no single-file run can see (#2379 follow-up).
+            assert _close_swallowed_coroutines(mock_ensure_future) == 2
+
         # Tasks should be cleared after dispatch
         assert len(view._async_tasks) == 0
 
@@ -280,6 +316,8 @@ class TestConsumerAsyncDispatch:
 
             # Should dispatch the legacy task
             assert mock_ensure_future.call_count == 1
+
+            assert _close_swallowed_coroutines(mock_ensure_future) == 1
 
         # Should be cleared
         assert view._async_pending is None
