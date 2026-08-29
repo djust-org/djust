@@ -355,25 +355,23 @@ class TestEveryFilter:
             assert_agrees(src, {"p": rows})
             assert_agrees(src, {"p": {"b": 2, "a": 1}})
 
-    def test_a_view_reaches_a_tag_operand_through_the_pipe_branch_only(self) -> None:
-        """Two halves, and only one of them is this PR's.
+    def test_a_view_reaches_a_tag_operand_through_BOTH_branches(self) -> None:
+        """Two halves, and each was a separate defect on a separate channel.
 
         ``{% regroup %}`` hands its source through ``value_to_arg_string``,
         whose match has a ``_`` fallback — so the compiler could not ask about
         a view, and the view fell to ``to_string()``, handing the Python
         handler the TEXT ``dict_items([…])`` instead of the rows. That is the
-        #2042 ``[List]``-collapse class one placeholder over, it is fixed here,
-        and the PIPE-branch cell below is what proves the arm is live rather
+        #2042 ``[List]``-collapse class one placeholder over, and #2340 fixed
+        it; the PIPE-branch cell below is what proves that arm is live rather
         than decoration.
 
-        The BARE dotted path still misses, and that is NOT this model:
-        ``resolve_tag_operand``'s non-pipe branch uses ``Context::get``, and
-        ``d.values`` resolves in ``Context::resolve``. Measured identical on
-        the pre-#2340 build, so the variant neither caused nor changed it —
-        filed as #2368 (the #2333 channel, one operand form over) rather than
-        widened into here (#1079).
-
-        **Delete the second half of this test when #2368 is fixed.**
+        The BARE dotted path was a second, unrelated miss —
+        ``resolve_tag_operand``'s non-pipe branch used ``Context::get``, and
+        ``d.values`` resolves only in ``Context::resolve`` — measured identical
+        on the pre-#2340 build, filed as #2368 and closed there. This test
+        asserted ``djust == "0"`` for it until then; it now asserts agreement,
+        which is what the pin said should happen the day it was fixed.
         """
         rows = {"a": {"k": 2}, "b": {"k": 1}}
         SRC = "{% regroup p.values|slice:':2' by k as g %}{{ g|length }}"
@@ -385,10 +383,11 @@ class TestEveryFilter:
         )
 
         bare = "{% regroup p.values by k as g %}{{ g|length }}"
-        dj, du = both(bare, {"p": rows})
-        assert (dj, du) == ("2", "0"), (
-            f"the bare dotted path now resolves — #2368 has been fixed, so "
-            f"delete this half and close it. got django={dj!r} djust={du!r}"
+        assert_agrees(bare, {"p": rows})
+        assert djust_render(bare, {"p": rows}) == "2", (
+            "the BARE dotted path must reach the handler too (#2368) — the "
+            "non-pipe branch resolves through `Context::resolve`, which is "
+            "where the dict views live"
         )
 
     def test_the_differential_corpus_can_reach_the_raising_half(self) -> None:
@@ -419,7 +418,6 @@ class TestEveryFilter:
             )
 
     def test_the_sweep_actually_covers_the_raising_filters(self) -> None:
-
         """Premise assertion: if Django stopped raising for these, the sweep
         above would silently become a weaker test.
         """

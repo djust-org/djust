@@ -756,7 +756,45 @@ fn resolve_tag_operand(expr: &str, context: &Context) -> Option<String> {
             Ok(value) => Some(value_to_arg_string(&value)),
         };
     }
-    context.get(expr).map(value_to_arg_string)
+    // `Context::resolve`, NOT `Context::get` (#2368). `d.items` / `.keys` /
+    // `.values` live in `resolve` — `dict_view` is only reachable from there,
+    // which is where #2334 put it — so the pipe branch above saw a view and
+    // this one did not. `{% regroup p.values by k as g %}` therefore fell to
+    // the "unresolved ⇒ keep the raw token" contract, the handler decoded
+    // nothing, and `{{ g|length }}` rendered `0`: silently, with no exception
+    // and no warning. Same shape as #2333, one operand form over — that fix
+    // made this channel FILTER-aware and left it dict-view-blind.
+    //
+    // `resolve` is strictly wider than `get`, and each thing it adds was
+    // decided rather than inherited:
+    //
+    // * **the dict views** — the point of the change;
+    // * **the raw-Python sidecar walk plus ADR-024's auto-call** — the same
+    //   widening the pipe branch already has, since `get_value_safe` ends with
+    //   a `context.resolve` fallback. A tag operand naming a model attribute
+    //   resolved through `p|<filter>` and not through `p` alone, which is the
+    //   #1646 split this closes;
+    // * **`template_builtin`** — textually inert here. `Value::None` /
+    //   `Bool(true)` / `Bool(false)` serialize back to `None` / `True` /
+    //   `False`, byte-identical to the raw tokens the miss path would have
+    //   passed.
+    //
+    // The keyword-operand hazard #2041's `RESOLVE_ARG_POSITIONS` exists to
+    // prevent is unaffected: a handler that declares one (regroup declares
+    // `{0}`) never routes its `by` / `<attr>` / `as` / `<var>` tokens through
+    // this function at all — `resolve_assign_tag_args` passes them through raw
+    // before this is reached. For a handler that declares none, every arg was
+    // already being resolved through `get`; the only newly-shadowable spelling
+    // is a name present ONLY in the raw-Python sidecar.
+    //
+    // `Err` is a miss, exactly as in the pipe branch: an exception raised
+    // inside an auto-called method leaves the raw token rather than aborting
+    // the render, which is what this channel's contract has always done for a
+    // name it cannot answer.
+    match context.resolve(expr) {
+        Ok(Some(value)) => Some(value_to_arg_string(&value)),
+        Ok(None) | Err(_) => None,
+    }
 }
 
 /// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared

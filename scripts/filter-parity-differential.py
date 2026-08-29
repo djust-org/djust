@@ -1163,6 +1163,27 @@ PATH_SHAPES = {
     # view to the index step at all (`{{ p.keys.0 }}` dies at the `keys`
     # segment before any view exists).
     "with-keys-0": "{% with q=p.keys %}[{{ q.0 }}]{% endwith %}",
+    # A dict VIEW as the BARE dotted operand of an assign tag (#2368). Every
+    # `regroup` cell the tag axis builds writes `p|<filter>`, and the shapes
+    # above that write a dotted path put it in `{% for %}` / `{{ }}` / `{% if %}`
+    # — so nothing reached `resolve_tag_operand`'s NON-pipe branch with a path
+    # only `Context::resolve` can answer. That branch used `Context::get`,
+    # which has no dict-view arm, so the tag fell back to its "unresolved ⇒
+    # keep the raw token" contract and `{{ g|length }}` rendered `0`.
+    #
+    # The `|slice` twin is the CONTROL: it goes through the pipe branch, which
+    # #2333 already routed through `get_value`, and agreed on both builds.
+    # Without it the two halves of the channel cannot be told apart.
+    "regroup-values-bare": "{% regroup p.values by k as g %}[{{ g|length }}]",
+    "regroup-keys-bare": "{% regroup p.keys by k as g %}[{{ g|length }}]",
+    "regroup-items-bare": "{% regroup p.items by k as g %}[{{ g|length }}]",
+    "regroup-values-piped": "{% regroup p.values|slice:':2' by k as g %}[{{ g|length }}]",
+    # The GROUPERS, not just the count: two empty groups have the same length
+    # as two real ones, and a cell that cannot tell them apart would agree
+    # while the rows never arrived.
+    "regroup-values-groupers": (
+        "{% regroup p.values by k as g %}{% for x in g %}({{ x.grouper }}){% endfor %}"
+    ),
     # NOT `random` / `timesince` / `timeuntil`: this axis has no `NONDET`
     # collapse, so a nondeterministic cell would differ between two runs of the
     # SAME build and read as a regression.
