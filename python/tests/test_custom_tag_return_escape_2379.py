@@ -89,6 +89,7 @@ from django.utils.html import conditional_escape  # noqa: E402
 from django.utils.safestring import mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
+from djust.mixins.rust_bridge import _collect_safe_keys  # noqa: E402
 
 XSS = "<img src=x onerror=alert(1)>"
 
@@ -169,10 +170,26 @@ def _probes():
 
 
 def both(source: str, ctx: dict) -> tuple[str, str]:
-    return (
-        DjangoTemplate(source, engine=Engine.get_default()).render(DjangoContext(dict(ctx))),
-        _rust.render_template(source, dict(ctx)),
-    )
+    """Both engines, over the SAME input — grants included (#2416).
+
+    Django reads a value's `SafeData` off the object itself; djust is told
+    which context paths carry it through a separate `safe_keys` channel, and
+    `render_template` has no parameter for it — only `render_template_with_dirs`
+    does (#2287). Before #2416 this helper called `render_template`, so no row
+    in this file could grant anything and the marked-context rows measured "the
+    engine was never told" rather than "the marker did not survive the hop".
+    The grants are DERIVED with djust's own `_collect_safe_keys` rather than
+    hand-listed, so a test cannot claim one the bridge would not produce.
+    """
+    dj = DjangoTemplate(source, engine=Engine.get_default()).render(DjangoContext(dict(ctx)))
+    safe_keys: list[str] = []
+    for key, value in ctx.items():
+        safe_keys.extend(_collect_safe_keys(value, key))
+    if safe_keys:
+        du = _rust.render_template_with_dirs(source, dict(ctx), [], safe_keys)
+    else:
+        du = _rust.render_template(source, dict(ctx))
+    return dj, du
 
 
 # ---------------------------------------------------------------------------
@@ -591,47 +608,177 @@ class TestEveryRegisteredHandlerIsAccountedFor:
         assert hasattr(toast.render([], {"toasts": [{"id": "1", "message": "m"}]}), "__html__")
 
 
+#: Argument vectors a handler is plausibly called with — the shapes the Rust
+#: dispatch actually produces after `value_to_arg_string`, not invented ones.
+#: A bare word, a value carrying MARKUP (which is where the unmarked-return
+#: question lives), a JSON-encoded structured value, and dotted paths.
+_ARG_VECTORS: tuple[list[str], ...] = (
+    [],
+    ["x"],
+    ["<em>cell</em>"],
+    ['{"name":"col","attrs":{},"content":"<em>cell</em>"}'],
+    ["slots.col.0"],
+    ["slots.col.0.content"],
+    ["p"],
+    ["x", "y"],
+)
+
+#: A context those vectors can resolve against.
+_ARG_CONTEXT = {
+    "slots": {"col": [{"name": "col", "attrs": {}, "content": "<em>cell</em>"}]},
+    "col": [{"name": "col", "attrs": {}, "content": "<em>cell</em>"}],
+    "p": "<em>cell</em>",
+}
+
+
+class TestTheEnumerationReachesTheMarkupBranchesToo:
+    """The audit gap #2423 names, closed (#2416).
+
+    :class:`TestEveryRegisteredHandlerIsAccountedFor` calls every handler with
+    ``render([], {})``. A handler that returns ``""`` for no arguments was
+    therefore audited on a branch that CANNOT return markup — and #2421 is what
+    that cost: ``render_slot`` returns ``""`` with no args, sat in the
+    empty-string bucket, and its markup branch was never reached, so #2379
+    escaped a slot's already-escaped content and every function component
+    rendered its own markup as visible text.
+
+    So the enumeration is re-run here with REPRESENTATIVE arguments. The
+    measurement, on this build:
+
+    * **18** of the 221 handlers return ``""`` for the no-argument call;
+    * **4** of those 18 reach a non-empty return once given an argument —
+      ``djust_markdown``, ``kbd``, ``render_slot``, ``static`` — so the
+      no-argument audit could see nothing about them at all;
+    * of every return reached, exactly one carries MARKUP without ``__html__``:
+      ``render_slot``, which is #2423's own limit and is asserted as such
+      below rather than left as a silence.
+
+    (The three counts are what this build measures under the repo's own test
+    settings; a differently-configured project can legitimately move them,
+    because several handlers delegate to a Django tag whose availability
+    depends on ``INSTALLED_APPS``.)
+
+    The counts are not asserted — a handler added later legitimately moves
+    them, and a count assertion would fail on the addition rather than on
+    anything about safety. What IS asserted is the offender SET, so a NEW
+    handler returning unmarked markup on an argument-bearing branch fails here.
+    """
+
+    @pytest.fixture(scope="class")
+    def handlers(self) -> dict[str, tuple[str, object]]:
+        return _registered_handlers()
+
+    @staticmethod
+    def _reached(handler, kind: str) -> list[tuple[list[str], str]]:
+        """Every string return this handler produces over `_ARG_VECTORS`."""
+        render = getattr(handler, "render", handler)
+        out: list[tuple[list[str], str]] = []
+        for vector in _ARG_VECTORS:
+            try:
+                got = (
+                    render(vector, "<b>body</b>", dict(_ARG_CONTEXT))
+                    if kind == "block"
+                    else render(vector, dict(_ARG_CONTEXT))
+                )
+            except Exception:  # noqa: BLE001 — a handler needing different args
+                continue
+            if isinstance(got, str):
+                out.append((vector, got))
+        return out
+
+    def test_arguments_reach_branches_the_no_arg_call_cannot(self, handlers) -> None:
+        """The premise, measured rather than asserted from the issue.
+
+        Non-vacuous by construction: if giving arguments reached nothing new,
+        this file's whole audit-gap claim would be false and the set is empty.
+        """
+        newly_reached = set()
+        for name, (kind, handler) in handlers.items():
+            render = getattr(handler, "render", handler)
+            try:
+                base = render([], "<b>body</b>", {}) if kind == "block" else render([], {})
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(base, str) or base != "":
+                continue
+            if any(got for _vector, got in self._reached(handler, kind)):
+                newly_reached.add(name)
+        assert "render_slot" in newly_reached, (
+            "`render_slot` is the handler whose unreached markup branch cost "
+            f"#2421; if it is not here the vectors are wrong: {sorted(newly_reached)}"
+        )
+        assert len(newly_reached) >= 3, sorted(newly_reached)
+
+    def test_the_only_unmarked_markup_return_is_the_named_limit(self, handlers) -> None:
+        """The audit's assertion, on the branches arguments unlock.
+
+        `render_slot` is #2423: its Shape-3 scalar passthrough cannot tell a
+        slot's already-escaped `.content` from a hostile bare context string,
+        because the engine resolved both to an opaque string before the call,
+        so it takes the escape. Over-escaping, never a leak — and named here so
+        it is a limit rather than a silence.
+        """
+        offenders = {}
+        for name, (kind, handler) in sorted(handlers.items()):
+            for vector, got in self._reached(handler, kind):
+                if hasattr(got, "__html__"):
+                    continue
+                if UNESCAPED_TAG.search(got):
+                    offenders.setdefault(name, (vector, got[:90]))
+        assert set(offenders) <= {"render_slot"}, (
+            "these handlers return markup without `__html__` on an "
+            f"argument-bearing branch, so the bridge renders it as escaped "
+            f"text: { {k: v for k, v in offenders.items() if k != 'render_slot'} }"
+        )
+
+
 # ---------------------------------------------------------------------------
 # What this does NOT close
 # ---------------------------------------------------------------------------
 
 
-class TestKnownDivergencesThisUnmasks:
-    """Two argument-channel defects that were MASKED by the raw return.
+class TestTheDivergencesThisUnmaskedAreNowCLOSED:
+    """The two argument-channel defects this PR's first version left open.
 
-    Both are djust being STRICTER than Django — over-escaping, never a leak —
-    and both are #2290's finding on the argument side rather than this issue's.
-    They used to agree with Django by coincidence: the marker was lost on the
-    way IN and the bridge emitted the result raw on the way OUT, so two wrongs
-    cancelled. Pinned so they are a named limit rather than a silent one.
+    Both were MASKED by the raw return — the marker was lost on the way IN and
+    the bridge emitted the result raw on the way OUT, so two wrongs cancelled
+    and djust matched Django's live output for the wrong reason. They were
+    pinned here as named limits and are now fixed in #2416, so these rows
+    become PARITY assertions and name their successor rather than being
+    deleted: a revert of #2416 must go red somewhere, and this file is where
+    the divergence was first written down.
+
+    Full coverage of the fix lives in
+    `python/tests/test_tag_argument_safedata_2416.py`.
     """
 
-    def test_a_marked_context_value_reaches_the_handler_as_a_bare_str(self) -> None:
+    def test_a_marked_context_value_reaches_the_handler_as_SafeData(self) -> None:
         dj, du = both("{% e2379_cond p %}", {"p": mark_safe(XSS)})  # noqa: S308
         assert dj == XSS
-        assert du == "&lt;img src=x onerror=alert(1)&gt;"
-        assert not UNESCAPED_TAG.search(du), "over-escaping, never a leak"
+        assert du == dj, "the SafeData marker was lost on the way IN again (#2416)"
 
-    def test_a_quoted_literal_argument_keeps_its_quotes(self) -> None:
+    def test_a_quoted_literal_argument_LOSES_its_quotes(self) -> None:
         """Django's `Variable('"<b>"')` runs
         `mark_safe(unescape_string_literal(…))`, so the literal loses its
-        quotes AND arrives as SafeData. djust passes the token verbatim."""
+        quotes AND arrives as SafeData."""
         dj, du = both('{% e2379_ident "<b>" %}', {})
         assert dj == "<b>"
-        assert du == "&quot;&lt;b&gt;&quot;"
+        assert du == dj, "the literal kept its quotes / lost its grant again (#2416)"
 
 
-class TestTheDifferentialCanTELLThatUnmaskingApart:
-    """The `@ctag` arm `unmasked()` grew for this change.
+class TestTheDifferentialHasNoCtagExemptionAnyMore:
+    """`unmasked()`'s `@ctag` arm is GONE, and its absence is the point (#2416).
 
-    A `@ctag` cell that agreed before and disagrees now is normally a
-    regression. The marked-context-value cell has a third way to have agreed:
-    the marker was lost on the way IN and the raw return cancelled it on the
-    way OUT, so djust matched Django's live output for the wrong reason.
+    #2379 added it because a custom-tag cell had a second way of having agreed
+    on the baseline: the input-side marker loss cancelled the raw return. The
+    arm excused a cell whose new output was Django's escaped once more WHEN the
+    `ct-cond` probe over the same input diverged on both builds.
 
-    Without the arm, the differential reports that cell as `REGRESSIONS: 1`
-    and exits non-zero — which would train the next reader to ignore the
-    number, the failure mode #2325's own comment warns about.
+    #2416 fixed the input-side loss, so `ct-cond` AGREES on any build carrying
+    it and the arm's second condition can never hold again — it became a
+    classifier that could only ever mask a future custom-tag regression, i.e. a
+    second mechanism shadowing the first (#2233). Deleted rather than tested
+    around, so a `@ctag` regression is now always REPORTED.
     """
 
     @staticmethod
@@ -649,31 +796,33 @@ class TestTheDifferentialCanTELLThatUnmaskingApart:
         spec.loader.exec_module(module)
         return module
 
-    def test_the_unmasking_needs_BOTH_conditions(self) -> None:
-        """Not an exemption keyed on the input: a cell whose new output is NOT
-        Django's escaped once more is still reported, even over the same
-        marked input."""
+    def test_a_ctag_cell_is_never_excused(self) -> None:
+        """The exact rows the deleted arm used to excuse. All three are now
+        reported, which is what a regression on this axis should be."""
         module = self._module()
         key = "s-marked"
         cond_twin = f"@ctag ct-cond\t{key}\tctag"
         cid = f"@ctag ct-ident\t{key}\tctag"
-        # The twin diverges on both builds — condition 2 holds.
         base = {cond_twin: ["<b>", "&lt;b&gt;"], cid: ["<b>", "<b>"]}
+        for after in (
+            {cond_twin: ["<b>", "&lt;b&gt;"], cid: ["<b>", "&lt;b&gt;"]},
+            {cond_twin: ["<b>", "&lt;b&gt;"], cid: ["<b>", "something else"]},
+            {cond_twin: ["<b>", "<b>"], cid: ["<b>", "&lt;b&gt;"]},
+        ):
+            assert not module.unmasked(cid, base, after), after
 
-        # Condition 1 holds: djust's new output IS Django's escaped once more.
-        after_ok = {cond_twin: ["<b>", "&lt;b&gt;"], cid: ["<b>", "&lt;b&gt;"]}
-        assert module.unmasked(cid, base, after_ok)
+    def test_the_generic_tag_arm_still_works(self) -> None:
+        """Non-vacuity: deleting the `@ctag` arm must not have deleted the
+        `{% tag %}`-operand rule #2325 added, which is a different mechanism
+        and still load-bearing."""
+        module = self._module()
+        cid = "p|upper\ts-img\ttag-if"
+        twin = "p|upper\ts-img"
+        base = {twin: ["a", "b"]}
+        after = {twin: ["a", "b"], cid: ["x", "y"]}
+        assert module.unmasked(cid, base, after)
 
-        # Condition 1 FAILS: a different new output is a real regression.
-        after_bad = {cond_twin: ["<b>", "&lt;b&gt;"], cid: ["<b>", "something else"]}
-        assert not module.unmasked(cid, base, after_bad)
-
-        # Condition 2 FAILS: the twin agrees, so the marker was NOT already
-        # lost and this change is what broke the cell.
-        after_no_twin = {cond_twin: ["<b>", "<b>"], cid: ["<b>", "&lt;b&gt;"]}
-        assert not module.unmasked(cid, base, after_no_twin)
-
-    def test_a_non_ctag_cell_is_unaffected(self) -> None:
-        """The `{{ }}` and tag arms keep their own rule."""
+    def test_a_plain_variable_cell_is_unaffected(self) -> None:
+        """A `{{ }}` cell has no mask to be behind."""
         module = self._module()
         assert not module.unmasked("p|upper\ts-img", {}, {})

@@ -3,6 +3,7 @@
 use crate::filters;
 use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
+use crate::registry::TagArg;
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Result, Value};
 use once_cell::sync::Lazy;
@@ -571,7 +572,7 @@ fn sibling_updates(node: &Node, context: &Context) -> Result<Option<Vec<SiblingB
             // `resolve_tag_arg` uses `resolve_tag_operand`. Keyword/name
             // operands the handler declares literal (RESOLVE_ARG_POSITIONS)
             // are passed raw (#2041).
-            let resolved_args = resolve_assign_tag_args(name, args, context);
+            let resolved_args = plain_args(resolve_assign_tag_args(name, args, context));
             let context_map = context.to_hashmap();
             // Forward the raw-Python sidecar so assign handlers can reach
             // Python-only context (request, view) the same way
@@ -670,6 +671,178 @@ fn value_to_arg_string(v: &Value) -> String {
             serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
         }
         _ => v.to_string(),
+    }
+}
+
+/// Resolve a [`Node::CustomTag`]'s args, honoring the handler's declared
+/// `RESOLVE_ARG_POSITIONS` policy (#2423) and then #2416's `SafeData` rule.
+///
+/// The inline-tag twin of [`resolve_assign_tag_args`], and the ONE place the
+/// two rules compose. They arrived from opposite directions — #2416 replaced
+/// this arm's hand-rolled resolution with [`resolve_custom_tag_arg`], #2423
+/// wrapped that same resolution in a policy check — so stating the order once,
+/// here, is what keeps them from being re-derived differently at a second site.
+///
+/// # The order, and why the policy comes first
+///
+/// A declared-literal position short-circuits BEFORE any resolution. That is
+/// the point of the policy: the handler asked for the token because resolution
+/// is lossy for it. `{% render_slot slots.col.0.content %}` and a hostile
+/// `{% render_slot p %}` are the same opaque string once flattened, and only
+/// the un-resolved path can tell a slot's already-escaped content from a bare
+/// context value.
+///
+/// # `safe` on the literal-passthrough path is FALSE, and that is a decision
+///
+/// The passthrough returns [`TagArg::plain`] — never `marked` — even though
+/// the bytes are the template author's own, which is the exact argument #2416
+/// uses to mint a `SafeString` for a RESOLVED quoted literal. The two cases
+/// are not the same, and conflating them is the permissive direction:
+///
+/// * A resolved quoted literal is a **value**. `django_literal` hands back the
+///   unescaped text and those exact bytes reach the page, which is why Django
+///   marks them (`Variable.__init__` ends its quoted branch with
+///   `mark_safe(unescape_string_literal(var))`). The grant describes bytes
+///   that are already what the reader will see.
+/// * A passthrough token is a **name**. `slots.col.0.content`, `p`,
+///   `"slots.col.0"` — quotes included — are references the handler is about
+///   to resolve into something else entirely. `SafeData` asserts "these bytes
+///   are ready for the page"; that assertion is not true of a name, and it says
+///   nothing whatever about the value the name resolves to. Mint it and a
+///   handler that carries the marker forward onto its resolved value would let
+///   a hostile `p` ride a grant issued for the one character `p` — which is
+///   the class #2379 and #2421 closed, on the one handler (`render_slot`) that
+///   made it framework-reachable with no `|safe` and no `mark_safe`.
+///
+/// Django has no rule to match here, because Django never hands a
+/// `simple_tag` an un-resolved token at all — the policy is a djust extension
+/// for handlers that must do their own resolution. With no reference
+/// behaviour to copy, the escaping direction is the one to fail in.
+///
+/// It costs nothing: `render_slot`, the only handler that declares a policy,
+/// does not read its argument's marker. It resolves the path itself and marks
+/// its own RETURN, at the one exit where the path terminates in a slot
+/// entry's `content` — a structural discriminator in Python, not a bit
+/// carried across the boundary.
+fn resolve_custom_tag_args(name: &str, args: &[String], context: &Context) -> Vec<TagArg> {
+    let resolve_positions = crate::registry::tag_handler_resolve_positions(name);
+    args.iter()
+        .enumerate()
+        .map(|(position, arg)| {
+            if resolve_positions
+                .as_ref()
+                .is_some_and(|declared| !declared.contains(&position))
+            {
+                // A position the handler wants LITERAL. Passed exactly as the
+                // template wrote it — quotes, dots and all — and with NO
+                // grant. See the doc comment above for why the grant is
+                // withheld from a token even though it is author-written.
+                return TagArg::plain(arg.clone());
+            }
+            resolve_custom_tag_arg(arg, context)
+        })
+        .collect()
+}
+
+/// Resolve ONE [`Node::CustomTag`] operand into the `(text, SafeData)` pair
+/// the Python handler receives (#2416).
+///
+/// # The two divergences this closes
+///
+/// Django's `SimpleNode.render` builds each operand with
+/// `parser.compile_filter(bit)` and resolves it with
+/// `FilterExpression.resolve(context)`, handing the handler the resolved
+/// **object**. djust flattened every operand to a `String` through
+/// [`value_to_arg_string`], which lost two things Django keeps:
+///
+/// 1. **The `SafeData` marker.** `{% ct_cond p %}` over
+///    `p = mark_safe("<img …>")` — a handler whose body is the ordinary
+///    defensive `conditional_escape(value)` — is a NO-OP in Django and the
+///    markup renders; djust handed it a bare `str`, so the handler's own
+///    escape fired. #2290's finding on the ARGUMENT side of the tag registry
+///    rather than the filter registry.
+///
+/// 2. **A quoted literal's quotes.** Django's `Variable('"<b>"')` runs
+///    `mark_safe(unescape_string_literal(var))`, so the literal loses its
+///    surrounding quotes AND arrives as `SafeData`; djust passed the token
+///    verbatim, so `{% ct_ident "<b>" %}` handed the handler the five
+///    characters `"<b>"` and (since #2379) the return escape spelled them out
+///    as `&quot;&lt;b&gt;&quot;`. This is not only a markup problem —
+///    `{% t "post" %}` handed the handler `"post"` WITH the quotes, where
+///    Django hands it `post`.
+///
+/// Both were MASKED before #2379: the marker was lost on the way in, the
+/// bridge emitted the return raw on the way out, and the two wrongs cancelled.
+///
+/// # Why `get_value_safe` and not a second literal rule
+///
+/// [`get_value_safe`] already answers both questions — it ends at
+/// [`django_literal`], the ONE place a bare token is recognized as a literal
+/// and the ONE place the grant one carries is minted (#2376) — and it is the
+/// same bool that decides whether `{{ p }}` escapes. Writing a literal rule
+/// here would be a second mechanism shadowing the first (#2233); calling the
+/// existing one is what makes `{% t "<b>" %}` and `{{ "<b>" }}` answer from
+/// the same place by construction.
+///
+/// # What is deliberately NOT marked
+///
+/// * **A `key=value` composite.** The transported text is `key=<value>`, not
+///   the value — marking it would mark the `key=` bytes too, and djust's
+///   kwarg channel has no way to spell "the value half is safe". Django's
+///   `simple_tag` passes a real kwarg, which this channel cannot represent at
+///   all. Left over-escaping, and unchanged in every other respect.
+/// * **Anything that is not a `Value::String`.** Django's `SafeData` is a
+///   `str` subclass, so an `Integer`, `Float`, `Bool`, `None`, list or dict is
+///   never `SafeData` — and a JSON-encoded container's brackets are structure
+///   rather than markup. [`tag_arg`] enforces this, which is what keeps the
+///   grant from widening past what Django grants.
+/// * **An operand that did not resolve.** The raw token is kept, exactly as
+///   before, with no grant.
+fn resolve_custom_tag_arg(arg: &str, context: &Context) -> TagArg {
+    let arg_trimmed = arg.trim();
+    // The literal test comes FIRST, before the `key=value` split, exactly as it
+    // did before this change: `{% t "a=b" %}` is one quoted literal and must
+    // not be torn into a keyword operand.
+    if strip_quotes(arg_trimmed).is_some() {
+        return match get_value_safe(arg_trimmed, context) {
+            Ok((value, safe)) => tag_arg(&value, safe),
+            Err(_) => TagArg::plain(arg.to_string()),
+        };
+    }
+    if let Some(eq_pos) = arg.find('=') {
+        // Named parameter: key=value. Unchanged, and unmarked — see the doc
+        // comment above for why the composite cannot carry the grant.
+        let key = &arg[..eq_pos];
+        let value = arg[eq_pos + 1..].trim();
+        if strip_quotes(value).is_some() {
+            return TagArg::plain(arg.to_string());
+        }
+        return match get_value(value, context) {
+            Ok(resolved) => TagArg::plain(format!("{}={}", key, value_to_arg_string(&resolved))),
+            Err(_) => TagArg::plain(arg.to_string()),
+        };
+    }
+    match get_value_safe(arg_trimmed, context) {
+        Ok((value, safe)) => tag_arg(&value, safe),
+        Err(_) => TagArg::plain(arg.to_string()),
+    }
+}
+
+/// A resolved [`Value`] plus its runtime-safe flag, as the tag-argument
+/// channel transports them (#2416).
+///
+/// The `matches!` narrowing is the security boundary of the whole change and
+/// is Django's own: `SafeString` is a `str` subclass, so ONLY a string can be
+/// `SafeData`. Without it a `mark_safe`d LIST — which `Context::is_safe` can
+/// legitimately answer `true` for — would hand the handler its JSON encoding
+/// with a grant, i.e. mark bytes the renderer synthesized rather than bytes
+/// anyone vouched for.
+fn tag_arg(value: &Value, safe: bool) -> TagArg {
+    let text = value_to_arg_string(value);
+    if safe && matches!(value, Value::String(_)) {
+        TagArg::marked(text)
+    } else {
+        TagArg::plain(text)
     }
 }
 
@@ -932,6 +1105,27 @@ fn localize_if_number(value: &Value) -> String {
         }
         _ => value.to_string(),
     }
+}
+
+/// The token/value channels of the ASSIGN and BLOCK paths, unchanged by
+/// #2416, expressed as [`TagArg`]s so all three registries take one argument
+/// type (#1646).
+///
+/// Every position is `plain` — no `SafeData` grant — and that is a decision
+/// rather than an omission. Those two channels have a contract the
+/// [`Node::CustomTag`] one does not: "unresolved ⇒ the caller keeps the raw
+/// token", which is what lets `{% regroup … by … as … %}`'s keyword operands
+/// through and what `RESOLVE_ARG_POSITIONS` (#2041) and the JSON-quoting value
+/// channel (#2385) are built on. A quoted literal there is deliberately passed
+/// VERBATIM, quotes included, because the quotes are the type tag that makes
+/// the channel decodable. Marking a resolved string safe there without first
+/// settling that quoting convention would be half a change; an ASSIGN
+/// handler's return is also a `dict[str, Value]` with no safety channel of its
+/// own (`SiblingBinding.safe` is a hard `false`), so the grant would be
+/// unobservable even if it were carried. Tracked as a named limit rather than
+/// a silent one.
+fn plain_args(texts: Vec<String>) -> Vec<TagArg> {
+    texts.into_iter().map(TagArg::plain).collect()
 }
 
 fn resolve_assign_tag_args(name: &str, args: &[String], context: &Context) -> Vec<String> {
@@ -2447,9 +2641,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // retires that parallel-path-drift class (CLAUDE.md #1646, #2042):
             // block handlers now receive the structured payload like the
             // CustomTag and AssignTag paths already do.
-            let resolved_args: Vec<String> = args
+            let resolved_args: Vec<TagArg> = args
                 .iter()
-                .map(|arg| resolve_tag_arg(arg, context))
+                .map(|arg| TagArg::plain(resolve_tag_arg(arg, context)))
                 .collect();
 
             let context_map = context.to_hashmap();
@@ -2479,7 +2673,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             //
             // Resolve args (JSON-aware) honoring RESOLVE_ARG_POSITIONS,
             // as in render_nodes_with_loader (#2041).
-            let resolved_args = resolve_assign_tag_args(name, args, context);
+            let resolved_args = plain_args(resolve_assign_tag_args(name, args, context));
             let context_map = context.to_hashmap();
             // Forward raw-Python sidecar (#1167).
             let raw_py = context.raw_py_objects();
@@ -2517,61 +2711,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // shared by AssignTag / BlockCustomTag.
             //
             // A handler may DECLARE `RESOLVE_ARG_POSITIONS` and take some
-            // positions as literal TOKENS instead (#2423, the inline-tag twin
-            // of #2041's assign-tag policy). The resolution above is lossy by
-            // construction — `{% render_slot slots.col.0.content %}` and a
-            // hostile `{% render_slot p %}` are the SAME opaque string once
-            // the engine has flattened them, and only the un-resolved path can
-            // tell a slot's already-escaped content from a bare context value.
-            // A handler that declares nothing is untouched: the policy is
-            // `None` and every position resolves, exactly as before.
-            let resolve_positions = crate::registry::tag_handler_resolve_positions(name);
-            let resolved_args: Vec<String> = args
-                .iter()
-                .enumerate()
-                .map(|(position, arg)| {
-                    if resolve_positions
-                        .as_ref()
-                        .is_some_and(|declared| !declared.contains(&position))
-                    {
-                        // A position the handler wants LITERAL. Passed exactly
-                        // as the template wrote it — quotes, dots and all.
-                        return arg.clone();
-                    }
-                    // Check if arg is a variable reference (not a string literal)
-                    let arg_trimmed = arg.trim();
-                    if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
-                        || (arg_trimmed.starts_with('\'') && arg_trimmed.ends_with('\''))
-                    {
-                        // String literal - keep as-is
-                        arg.clone()
-                    } else if let Some(eq_pos) = arg.find('=') {
-                        // Named parameter: key=value
-                        let key = &arg[..eq_pos];
-                        let value = arg[eq_pos + 1..].trim();
-                        if (value.starts_with('"') && value.ends_with('"'))
-                            || (value.starts_with('\'') && value.ends_with('\''))
-                        {
-                            // Value is a string literal
-                            arg.clone()
-                        } else {
-                            // Value is a variable (possibly with filters) - try to resolve
-                            match get_value(value, context) {
-                                Ok(resolved) => {
-                                    format!("{}={}", key, value_to_arg_string(&resolved))
-                                }
-                                Err(_) => arg.clone(),
-                            }
-                        }
-                    } else {
-                        // Might be a variable (possibly with filters) - try to resolve
-                        match get_value(arg_trimmed, context) {
-                            Ok(resolved) => value_to_arg_string(&resolved),
-                            Err(_) => arg.clone(),
-                        }
-                    }
-                })
-                .collect();
+            // positions as literal TOKENS instead (#2423). Both rules apply,
+            // in that order, through `resolve_custom_tag_args`.
+            let resolved_args = resolve_custom_tag_args(name, args, context);
 
             // Convert context to HashMap for the handler
             let context_map = context.to_hashmap();
@@ -3610,15 +3752,25 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
     if pipe_parts.len() > 1 {
         let var_name = pipe_parts[0].trim();
 
-        // Resolve the base variable
-        let mut value = get_value(var_name, context)?;
-
+        // Resolve the base variable, KEEPING its safety flag (#2416).
+        //
         // Track the LAST filter's runtime safeness, mirroring the Variable arm
         // (#1660). A plain-returning filter after a runtime-safe one re-taints.
-        // Seeded with the context's own safety so this arm carries Django's
-        // input term too (#2274) — the third of the three sites, kept in step
-        // with the other two by construction (#1646).
-        let mut runtime_safe = context.is_safe(var_name);
+        // Seeded with the base's own safety so this arm carries Django's input
+        // term too (#2274) — the third of the three sites, kept in step with
+        // the other two by construction (#1646).
+        //
+        // The seed is this RECURSIVE call rather than `context.is_safe(var_name)`
+        // because the base can be a quoted LITERAL, which `Variable.__init__`
+        // `mark_safe`s and `is_safe` cannot answer about — it is not a name.
+        // With the name-only seed, `{% firstof "<B>"|lower %}` came out
+        // ESCAPED where Django emits live markup (`lower` is registered
+        // `is_safe=True`, so a safe input stays safe), while the `{{ }}` arm —
+        // which seeds from `django_literal`'s own bool — was already right.
+        // Same two-resolvers-one-blind split #2376 closed for the bare literal,
+        // one filter along. The recursion terminates: `var_name` is
+        // `split_pipes`'s FIRST part and so contains no pipe.
+        let (mut value, mut runtime_safe) = get_value_safe(var_name, context)?;
         // See the Variable arm: item-level safety, seeded from the context
         // (#2283, #2287) — the third of the three sites, kept in step with the
         // other two by construction (#1646).
@@ -5589,6 +5741,158 @@ mod tests {
         // Scalars go through Display, so this follows it to `True` (#2203).
         assert_eq!(value_to_arg_string(&Value::Bool(true)), "True");
         assert_eq!(value_to_arg_string(&Value::String("hi".to_string())), "hi");
+    }
+
+    // ---- #2416: the CustomTag argument channel's (text, SafeData) pair -----
+
+    #[test]
+    fn tag_arg_marks_only_a_safe_string_value() {
+        // The security boundary of #2416, spelled as a table. `SafeString` is a
+        // `str` subclass in Django, so ONLY a string can be `SafeData` — and a
+        // container's JSON encoding is structure the renderer synthesized
+        // rather than bytes anyone vouched for.
+        let s = Value::String("<b>".to_string());
+        assert!(tag_arg(&s, true).safe, "a safe string must be marked");
+        assert!(!tag_arg(&s, false).safe, "an unmarked string must not be");
+        for value in [
+            Value::Integer(5),
+            Value::Float(1.5),
+            Value::Bool(true),
+            Value::None,
+            Value::List(vec![Value::String("<b>".to_string())]),
+        ] {
+            assert!(
+                !tag_arg(&value, true).safe,
+                "a non-string was marked: {value:?}"
+            );
+        }
+        // The text is `value_to_arg_string`'s, marked or not — this carries
+        // only the safety BIT, never a different encoding.
+        assert_eq!(tag_arg(&s, true).text, "<b>");
+        assert_eq!(tag_arg(&s, false).text, "<b>");
+    }
+
+    #[test]
+    fn resolve_custom_tag_arg_unquotes_and_marks_a_literal() {
+        let ctx = obj_ctx();
+        // Django's `Variable.__init__` strips the quotes AND `mark_safe`s.
+        for token in ["\"<b>\"", "'<b>'"] {
+            let arg = resolve_custom_tag_arg(token, &ctx);
+            assert_eq!(arg.text, "<b>", "{token}");
+            assert!(arg.safe, "{token}");
+        }
+        // A literal with no markup loses its quotes too — the half a
+        // markup-bearing literal could not show.
+        assert_eq!(resolve_custom_tag_arg("\"post\"", &ctx).text, "post");
+        // The literal test runs BEFORE the `key=value` split, so a literal
+        // carrying an `=` stays one argument.
+        let eq = resolve_custom_tag_arg("\"a=b\"", &ctx);
+        assert_eq!(eq.text, "a=b");
+        assert!(eq.safe);
+        // A NUMBER is not marked: Django `mark_safe`s only the quoted branch.
+        let five = resolve_custom_tag_arg("5", &ctx);
+        assert_eq!(five.text, "5");
+        assert!(!five.safe);
+    }
+
+    #[test]
+    fn resolve_custom_tag_arg_carries_the_contexts_grant() {
+        let mut ctx = obj_ctx();
+        ctx.set("marked".to_string(), Value::String("<b>".to_string()));
+        ctx.mark_safe("marked".to_string());
+        assert!(resolve_custom_tag_arg("marked", &ctx).safe);
+        // …and only for the granted name.
+        assert!(!resolve_custom_tag_arg("name", &ctx).safe);
+        // An unresolved name keeps its raw token and no grant.
+        let miss = resolve_custom_tag_arg("nope", &ctx);
+        assert!(!miss.safe);
+    }
+
+    #[test]
+    fn resolve_custom_tag_arg_never_marks_a_kwarg_composite() {
+        // The transported text is `key=<value>`, not the value; marking it
+        // would mark the `key=` bytes too. Left over-escaping, and unchanged
+        // in every other respect.
+        let mut ctx = obj_ctx();
+        ctx.set("marked".to_string(), Value::String("<b>".to_string()));
+        ctx.mark_safe("marked".to_string());
+        let kw = resolve_custom_tag_arg("k=marked", &ctx);
+        assert_eq!(kw.text, "k=<b>");
+        assert!(!kw.safe);
+        // A quoted kwarg value is still passed verbatim, quotes included.
+        assert_eq!(resolve_custom_tag_arg("k=\"v\"", &ctx).text, "k=\"v\"");
+        // And the structured encoding is untouched.
+        assert_eq!(
+            resolve_custom_tag_arg("rows=items", &ctx).text,
+            "rows=[1,2,3]"
+        );
+    }
+
+    #[test]
+    fn every_handler_arg_construction_site_is_accounted_for() {
+        // The caller SET, not a floor (#1125 / the v1.1.1-2 "grep for the
+        // SINK" rule). Three dispatch arms build the `Vec<TagArg>` a registry
+        // call receives, and exactly ONE of them carries the marker; a fourth
+        // arm added later without a decision fails here rather than silently
+        // shipping an unmarked channel.
+        // Scanned over the PRODUCTION half only: this file's own test module
+        // contains each of these strings as an assertion literal, and counting
+        // those too makes every number 2 and the pin meaningless.
+        let whole = include_str!("renderer.rs");
+        let (src, tests) = whole
+            .split_once("\n#[cfg(test)]\n")
+            .expect("the test-module boundary moved; this pin scans the wrong half");
+        assert!(
+            tests.contains("every_handler_arg_construction_site_is_accounted_for"),
+            "the split landed in the wrong place"
+        );
+        assert_eq!(
+            src.matches("resolve_custom_tag_args(name, args, context)")
+                .count(),
+            1,
+            "the CustomTag arm builds its args at exactly one site"
+        );
+        assert_eq!(
+            src.matches("resolve_custom_tag_arg(arg, context)").count(),
+            1,
+            "`resolve_custom_tag_args` is the ONE caller of the marker-carrying \
+             per-operand resolver"
+        );
+        // The #2423 policy short-circuit is INSIDE that site, and it hands back
+        // a `plain` arg. Pinned mechanically because it is the security
+        // decision of the #2416/#2423 merge: a passthrough token is a NAME the
+        // handler will resolve, not bytes bound for the page, so it must never
+        // carry a grant. An edit that switched it to `marked` — or dropped the
+        // branch entirely, taking the policy with it — passes every behavioural
+        // test `render_slot` has, because `render_slot` does not read its
+        // argument's marker.
+        assert_eq!(
+            src.matches("return TagArg::plain(arg.clone());").count(),
+            1,
+            "the literal-passthrough position must hand back an UNMARKED arg"
+        );
+        assert!(
+            src.contains("tag_handler_resolve_positions(name)"),
+            "the CustomTag arm stopped consulting the RESOLVE_ARG_POSITIONS policy"
+        );
+        assert_eq!(
+            src.matches("TagArg::plain(resolve_tag_arg(arg, context))")
+                .count(),
+            1,
+            "the BlockCustomTag arm"
+        );
+        assert_eq!(
+            src.matches("plain_args(resolve_assign_tag_args(name, args, context))")
+                .count(),
+            2,
+            "the two AssignTag arms — the sibling-aware loop and the standalone render"
+        );
+        // And no arm may go back to building a bare `Vec<String>` for a
+        // registry call: the type is what makes the decision explicit.
+        assert!(
+            !src.contains("let resolved_args: Vec<String>"),
+            "a dispatch arm is building untyped args again"
+        );
     }
 
     #[test]

@@ -226,7 +226,6 @@ from django import template as _django_template  # noqa: E402
 from django.template import Context, Engine, Template  # noqa: E402
 from django.template.defaultfilters import register  # noqa: E402
 from django.utils.html import conditional_escape  # noqa: E402
-from django.utils.html import escape as django_escape  # noqa: E402
 from django.utils.safestring import SafeData, mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
@@ -451,6 +450,28 @@ _rust.register_assign_tag_handler("ca_ident", _RustTagProbe(_ca_ident, "assign")
 #: return does on the way out — `ct-filtered` is the one shape that puts a
 #: filter in front, because a chain's output is the value most likely to
 #: arrive at the boundary with a marker the boundary drops.
+#:
+#: The four LITERAL shapes are the argument axis crossed with the operand
+#: SPELLING (#2416), which is its own axis: `ct-literal` alone could not
+#: separate the two defects stacked on `{% ct_ident "<b>" %}` — Django's
+#: `Variable.__init__` both strips the quotes AND `mark_safe`s, so a cell that
+#: fixed one and not the other still diverges and reads the same.
+#:
+#: * `ct-literal-plain` is the quotes ALONE, over a literal with no markup in
+#:   it: `{% t "post" %}` handed the handler `"post"` WITH the quotes, and that
+#:   is the half nothing here could see, because every other literal cell's
+#:   divergence could be read as the escaping.
+#: * `ct-literal-cond` is the GRANT alone: `conditional_escape` inside the
+#:   handler is a no-op only if the literal arrived as `SafeData`, so this cell
+#:   moves for the marker and not for the quotes.
+#: * `ct-literal-filtered` is the literal crossed with a FILTER — a cross of
+#:   two covered axes, and so its own axis. `ct-filtered` writes `p|upper` (a
+#:   NAME base) and `ct-literal` writes a bare literal; neither could construct
+#:   a filter over a literal, which is where `get_value_safe`'s seed lost the
+#:   grant `Node::Variable` kept. `lower` rather than `upper` on purpose:
+#:   Django registers `lower` `is_safe=True`, so a safe input stays safe and
+#:   the cell can tell the two seeds apart. Over `upper` (`is_safe=False`) both
+#:   seeds give the same answer, which is why `ct-filtered` never moved.
 CUSTOM_TAG_SHAPES = {
     "ct-ident": "{% ct_ident p %}",
     "ct-safe": "{% ct_safe p %}",
@@ -458,6 +479,9 @@ CUSTOM_TAG_SHAPES = {
     "ct-filtered": "{% ct_ident p|upper %}",
     "ct-safe-filtered": "{% ct_cond p|safe %}",
     "ct-literal": '{% ct_ident "<b>" %}',
+    "ct-literal-plain": '{% ct_ident "post" %}',
+    "ct-literal-cond": '{% ct_cond "<b>" %}',
+    "ct-literal-filtered": '{% ct_ident "<B>"|lower %}',
     "cb-ident": "{% cb_ident %}{{ p }}{% endcb_ident %}",
     "cb-plain": "{% cb_plain %}{{ p }}{% endcb_plain %}",
     "ca-ident": "{% ca_ident p as v %}[{{ v }}]",
@@ -3153,39 +3177,24 @@ def unmasked(cid: str, base: dict, after: dict) -> bool:
     Empirically, when #2325 introduced the tag axis this classified 445 of 445
     reported regressions, leaving zero unexplained.
 
-    The CUSTOM-TAG axis has a second coincidence of the same kind (#2379), and
-    it needs its own arm because a `@ctag` cell has no `{{ p|expr }}` twin.
-    The `SafeData` marker on a context value does not survive the PyO3 hop
-    (#2290's finding, on the argument side) — and while the bridge emitted a
-    handler's return RAW, that loss was CANCELLED on the way out: djust escaped
-    nothing, so it matched Django's live output for the wrong reason. Once the
-    return is escaped, the input-side loss shows.
+    There is NO `@ctag` arm any more, and its absence is deliberate (#2416).
 
-    Two conditions, both mechanical, and the pair is what keeps this from
-    being an exemption keyed on the input:
+    #2379 added one: a custom-tag cell had a second coincidence of the same
+    kind, because the `SafeData` marker on a context value did not survive the
+    PyO3 hop (#2290's finding, on the argument side) and — while the bridge
+    emitted a handler's return RAW — that loss was CANCELLED on the way out.
+    Two wrongs, agreeing with Django for the wrong reason. The arm excused a
+    cell whose new output was Django's escaped once more WHEN the `ct-cond`
+    probe over the same input diverged on both builds.
 
-    1. djust's NEW output IS Django's output escaped once more — the exact
-       signature of a discarded safety marker, the same predicate
-       `test_filtered_operands_and_slice_2325_2326.py` calls
-       `djust-escaped-once-more`;
-    2. the `ct-cond` probe over the SAME input diverges on BOTH builds.
-       `ct-cond` runs `conditional_escape` INSIDE the handler, so it reads the
-       marker on the way IN. Its divergence is the input-side loss, measured,
-       and it is the same two numbers before and after — untouched by this
-       change.
-
-    A genuinely NEW `@ctag` regression fails condition 1 (its output is not
-    Django's escaped once more) and is reported.
+    #2416 fixed the input-side loss, so `ct-cond` AGREES on any build carrying
+    it and the arm's second condition can never hold again: it became a
+    classifier that could only ever mask a future custom-tag regression, which
+    is a second mechanism shadowing the first (#2233). Deleted rather than
+    tested around. A `@ctag` cell now falls to the generic rule below, has no
+    `{{ p|expr }}` twin, and is therefore always REPORTED — which is what a
+    regression on this axis should be.
     """
-    if cid.startswith("@ctag "):
-        _shape, key, *_ = cid.split("\t")
-        twin = f"@ctag ct-cond\t{key}\tctag"
-        b, a = base.get(twin), after.get(twin)
-        if not (b is not None and a is not None and b[0] != b[1] and a[0] != a[1]):
-            return False
-        cell = after.get(cid)
-        return cell is not None and cell[1] == django_escape(cell[0])
-
     expr, key, *shape = cid.split("\t")
     if not shape:
         return False  # A `{{ }}` cell has no mask to be behind.
