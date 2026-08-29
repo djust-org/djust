@@ -171,6 +171,10 @@ class TestTheManifestIsCleanOnMain:
             "entrypoint",
             "grant-shape",
             "loop-variable",
+            # A COMPOSITION row (#2372): a pair of axes each individually swept
+            # is not thereby swept together. Not the full N-squared — a pair
+            # earns a row when both axes touch the same resolution step.
+            "builtin x mapping",
             "input-shape",
         }
 
