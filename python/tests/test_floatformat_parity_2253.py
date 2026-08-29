@@ -410,21 +410,37 @@ class TestKnownRemainingDivergences:
         assert django_out == ""
         assert djust_out == "19.99"
 
-    def test_an_empty_floatformat_argument_raises_in_django_and_not_here(self) -> None:
-        """`arg[-1]` on `""` is an IndexError in Django 5.2 — a Django bug.
+    def test_an_empty_floatformat_argument_raises_on_both_engines(self) -> None:
+        """CLOSED by #2346 — kept and INVERTED, per this class's own contract.
 
-        djust does not reproduce crashes; the empty argument is treated as an
-        absent one.
+        This entry read "`arg[-1]` on `""` is an IndexError in Django 5.2 — a
+        Django bug. djust does not reproduce crashes; the empty argument is
+        treated as an absent one." Both halves of that reasoning were wrong in
+        a way worth recording, because the second is a rule this codebase
+        otherwise follows:
+
+        * it is not a crash. `IndexError` is an ordinary Python exception that
+          Django's own `except ValueError` does not catch, so it reaches the
+          template renderer exactly as `ZeroDivisionError` does from
+          `divisibleby` — a 500, not a segfault.
+        * "treated as the absent argument" is a SILENT different answer:
+          `{{ 1.55|floatformat:"" }}` rendered `1.6` where the page it came from
+          got a 500. Rendering a plausible number in place of a raise is the
+          silent-wrong-output class, which is worse than the raise.
+
+        The placement is asserted separately, in
+        `python/tests/test_argument_axis_divergences_2346.py::
+        TestTheEmptyArgumentIsAskedFirst`: `arg[-1]` is the FIRST statement in
+        Django's `floatformat`, so it raises for values that would otherwise
+        have taken a give-up path — the opposite side of the value parse from
+        #2328's `None`-argument guard.
         """
         with pytest.raises(IndexError):
             DjangoTemplate('{{ p|floatformat:"" }}').render(DjangoContext({"p": Decimal("1.55")}))
-        assert (
+        with pytest.raises(RuntimeError, match="IndexError"):
             _rust.render_template(
                 '{{ p|floatformat:"" }}', normalize_django_value({"p": Decimal("1.55")})
             )
-            # Treated as the absent argument, i.e. Django's `p = -1`.
-            == "1.6"
-        )
 
     def test_a_python_int_past_i64_survives_the_value_boundary(self) -> None:
         """CLOSED by #2260 — this entry named where the fix belonged.

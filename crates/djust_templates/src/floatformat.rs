@@ -63,6 +63,30 @@ pub fn floatformat(
     arg: Option<&str>,
     arg_was_quoted: bool,
 ) -> djust_core::Result<Value> {
+    // An EMPTY argument is an `IndexError`, and it happens BEFORE the value is
+    // read (#2346):
+    //
+    //     if isinstance(arg, str):
+    //         last_char = arg[-1]          # IndexError on ""
+    //
+    // That is the first statement in the function, ahead of the `Decimal(...)`
+    // the whole ORDER-IS-LOAD-BEARING note below is about — so this guard, and
+    // only this guard, belongs above the value parse. Measured: Django raises
+    // `IndexError` for `{{ 3.14159|floatformat:"" }}` AND for
+    // `{{ "abc"|floatformat:"" }}`, where every other give-up path returns
+    // something. It is ugly, and it is the behaviour.
+    //
+    // Not gated on `arg_was_quoted`: `isinstance(arg, str)` is true for a
+    // quoted literal and for a resolved context value alike, and an UNQUOTED
+    // numeric literal can never be empty.
+    if arg == Some("") {
+        return Err(djust_core::DjangoRustError::TemplateError(
+            "filter 'floatformat' indexes its argument's last character, and \"\" has \
+             none — Django raises IndexError here, before it reads the value"
+                .to_string(),
+        ));
+    }
+
     // `str(text)` — what Django returns verbatim from all three give-up paths,
     // and what it feeds to `Decimal(...)`.
     let input_val: String = match value {
