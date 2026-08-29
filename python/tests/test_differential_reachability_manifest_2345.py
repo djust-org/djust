@@ -168,6 +168,14 @@ class TestTheManifestIsCleanOnMain:
             "argument",
             "argument-filter",
             "tag",
+            # The positions Django's `Variable.__init__` underscore rule runs
+            # at (#2418). A rule about the NAME rather than the value, so it
+            # fires whether or not the name resolves — and this corpus could
+            # not see it, because every head it wrote was `p` and every
+            # argument spelling was a name Django ACCEPTS. Its `required` set
+            # is read out of `parser.rs`'s `validate_variable_name` call sites,
+            # so a fourth position is reported MISSING until a cell exists.
+            "variable-name",
             # The TAG-OPERAND parse sites a COMPILE-time refusal must survive
             # (#2411). A cross of `tag` and `argument`, and neither could build
             # its cells: `arity` writes `{{ }}` only and `tag` gives each
@@ -824,6 +832,24 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
             '#2409 — the same at the ARGUMENT separator: `{{ p|date:"H:i" }}` '
             "is one filter with one argument, and a `find(':')` split made it "
             "two"
+        ),
+        "_x": (
+            "#2418 — a name Django's `Variable.__init__` REFUSES. Every "
+            "spelling above is one it accepts, so the corpus could not build "
+            "an argument cell carrying a refused name, which is the position "
+            "the bulk of that defect's divergent cells lived at"
+        ),
+        "p._priv": (
+            "#2418 — the OTHER half of the same rule: `._` anywhere in the "
+            "name, not just a leading `_`. `p` rather than `known` because a "
+            "dotted path cannot be a context key and the binding pin below "
+            "requires every `known*` spelling to be bound"
+        ),
+        '_("_x")': (
+            "#2418 — the COUNTER-example: it BEGINS with `_` and Django "
+            "compiles it, because the translate arm strips `_( … )` before the "
+            "underscore check. A fix without that arm is stricter than Django "
+            "and only this row can tell"
         ),
     }
 

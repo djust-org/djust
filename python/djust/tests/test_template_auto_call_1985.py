@@ -480,27 +480,41 @@ class TestSidecarSerializationFloor:
     def test_underscore_prefixed_refused(self):
         """#1986 re-review 🟡: `_`-prefixed names must be refused (Django
         parity). `{{ obj._meta }}` would otherwise segfault the worker
-        (Options extraction) and `{{ obj._meta.db_table }}` disclose schema."""
+        (Options extraction) and `{{ obj._meta.db_table }}` disclose schema.
+
+        Since #2418 there are TWO layers and this pins both, because they are
+        different seams and either one alone would leave the other untested:
+
+        1. the template carrying `._` no longer COMPILES — Django's
+           `Variable.__init__` rule, now implemented in the parser, so no
+           resolve walk runs at all;
+        2. `_SidecarModelProxy.__getattr__` still refuses the name when it is
+           reached DIRECTLY, which is what protects a value materialised
+           without a template naming it.
+
+        Layer 1 alone would make layer 2 unreachable from a template and so
+        untested by any render (#2233); layer 2 alone is what this test pinned
+        before #2418 existed.
+        """
+        from djust._rust import render_template  # noqa: PLC0415
+
+        from djust.serialization import _SidecarModelProxy  # noqa: PLC0415
+
         u = self._user()
 
-        class _V(LiveView):
-            template = (
-                "<div>meta=[{{ m._meta }}] tbl=[{{ m._meta.db_table }}] st=[{{ m._state }}]</div>"
-            )
+        # Layer 1 — the template does not compile.
+        for source in ("{{ m._meta }}", "{{ m._meta.db_table }}", "{{ m._state }}"):
+            with pytest.raises(RuntimeError, match="may not begin with underscores"):
+                render_template(source, {"m": {"pk": 1}})
 
-            def mount(self, request, **kwargs):
-                self._m = u
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                ctx["m"] = self._m
-                return ctx
-
-        client = LiveViewTestClient(_V)
-        client.mount()
-        html, _, _ = client.render_with_patches()  # must not crash the worker
-        assert "meta=[]" in html and "tbl=[]" in html and "st=[]" in html
-        assert "auth_user" not in html, f"schema disclosed via _meta: {html}"
+        # Layer 2 — the proxy still refuses the name on its own.
+        proxy = _SidecarModelProxy(u)
+        for name in ("_meta", "_state"):
+            with pytest.raises(AttributeError):
+                getattr(proxy, name)
+        # ...and a safe field still delegates, so the refusal is about the
+        # NAME and not about the proxy refusing everything.
+        assert proxy.username == u.username
 
     def test_non_model_intermediary_does_not_leak(self):
         """#1986 re-review vector 6: a non-model, non-JSON-serializable custom
@@ -526,7 +540,12 @@ class TestSidecarSerializationFloor:
                 "<div>"
                 "a=[{{ p.user.password }}] b=[{{ p.user.is_superuser }}] "
                 "c=[{{ p.get_user.password }}] d=[{{ p.mgr.first.password }}] "
-                "e=[{{ p.user._meta.db_table }}]"
+                # `e=[{{ p.user._meta.db_table }}]` was here until #2418, when
+                # the template stopped compiling — a `._` path is refused at
+                # parse time now, which is a stronger guarantee than the empty
+                # render this asserted. The schema-disclosure vector is pinned
+                # by `test_underscore_prefixed_refused` above, at both layers.
+                ""
                 "{% for x in p.qs %}<i>f=[{{ x.password }}] u=[{{ x.username }}]</i>{% endfor %}"
                 "</div>"
             )
@@ -544,6 +563,9 @@ class TestSidecarSerializationFloor:
         html, _, _ = client.render_with_patches()
         assert "pbkdf2" not in html, f"non-model intermediary leaked password: {html}"
         assert "b=[]" in html and "auth_user" not in html
+        # `auth_user` can no longer arrive via `._meta.db_table` because that
+        # template does not compile (#2418); the assertion above is kept as the
+        # backstop for every OTHER way the table name could reach the page.
         assert "f=[]" in html  # queryset-via-custom-object row floored
         assert "u=[jordan]" in html  # ...but the safe field still renders
 
