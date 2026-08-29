@@ -317,7 +317,7 @@ class TestTheMissesThatMustStayMisses:
 
 
 class TestTheStringIndexStepIsNamedNotFixed:
-    """Django's step 3 subscripts a ``str``; djust's does not (#2372).
+    """Django's step 3 subscripts a ``str``; djust's does not (#2373).
 
     ``{{ s.0 }}`` on ``"abc"`` is ``'a'`` in Django and empty here. Closing it
     needs an OWNED return — the character is constructed, not borrowed — which
@@ -341,7 +341,7 @@ class TestTheStringIndexStepIsNamedNotFixed:
         d, r = both(src, ctx)
         assert d == django_says, f"Django moved: {src} on {ctx!r} is now {d!r}"
         assert r == "", (
-            f"{src} now renders {r!r} — if this is the #2372 fix, delete this "
+            f"{src} now renders {r!r} — if this is the #2373 fix, delete this "
             "class and add the cell to TestTheThreeStepsAndTheirOrder"
         )
 
@@ -436,7 +436,7 @@ def _random_path(rng: random.Random) -> str:
 def _walks_through_a_string_index(root, path: str) -> bool:
     """Whether resolving *path* would use Django's step 3 on a ``str``.
 
-    That is the whole of the #2372 gap, computed by running Django's own three
+    That is the whole of the #2373 gap, computed by running Django's own three
     steps rather than by guessing from the outputs — so the sweep below can
     separate "the known, named limit" from "a real divergence" mechanically
     instead of by a heuristic on the rendered text.
@@ -501,7 +501,7 @@ class TestARandomisedDifferentialOverTheSegmentSurface:
             "sweep is not reaching the surface it claims to measure"
         )
         assert known_gap >= 10, (
-            f"the #2372 string-index classifier fired {known_gap} times — if "
+            f"the #2373 string-index classifier fired {known_gap} times — if "
             "it is 0 the sweep never builds the shape it excuses, and the "
             "exclusion is unfalsifiable rather than bounded"
         )

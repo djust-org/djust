@@ -75,7 +75,7 @@ pub fn template_builtin(name: &str) -> Option<Value> {
 /// `dict_items` is not subscriptable, Django's `current[int(bit)]` raises on
 /// it, and `{{ d.items.0 }}` must stay empty on both engines.
 ///
-/// **Not covered, and named rather than silent (#2372).** Django's step 3
+/// **Not covered, and named rather than silent (#2373).** Django's step 3
 /// subscripts a `str` too — `{{ s.0 }}` on `"abc"` is `'a'` there and empty
 /// here. Closing it needs an OWNED return (the character is constructed, not
 /// borrowed), which is a return-type change across every
