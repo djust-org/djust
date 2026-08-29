@@ -297,6 +297,169 @@ for _name, _fn in _CUSTOM_LIBRARY.filters.items():
         bool(getattr(_fn, "needs_autoescape", False)),
     )
 
+
+# ---------------------------------------------------------------------------
+# The CUSTOM-TAG corpus (#2356)
+# ---------------------------------------------------------------------------
+#
+# The #2290 gap, one registry over. `register_tag_handler`,
+# `register_block_tag_handler` and `register_assign_tag_handler` had been on
+# the `_rust` module the whole time and the corpus dispatched through NONE of
+# them — every tag cell above goes through a tag the RUST engine implements
+# natively, so the Python-callable boundary a project's tag crosses was
+# unmeasured in exactly the way a custom FILTER's was before #2290.
+#
+# Three probes per registry, mirroring `cf_ident` / `cf_canon` / `cf_cond`:
+# one that returns its input untouched (the sharpest, since Django escapes iff
+# the FINAL value lacks `__html__`), one that `mark_safe`s, and one that
+# `conditional_escape`s. Registered on BOTH engines from the same function
+# body, so the same source renders through both with no `{% load %}`.
+#
+# WHAT THIS AXIS FOUND, on its first run: djust inserts a tag handler's return
+# value into the page RAW. Django escapes a `simple_tag` / `simple_block_tag`
+# return unless it carries `__html__` (`SimpleNode.render` →
+# `conditional_escape`), so a handler returning a plain `str` built from user
+# data is emitted LIVE by djust and escaped by Django — the fail-OPEN half of
+# the same asymmetry #2290 found on the way IN. Tracked at #2379; every
+# `ct-ident` / `cb-plain` cell here is that divergence, and they are the
+# corpus's standing record of it rather than a note in a file.
+
+
+@_CUSTOM_LIBRARY.simple_tag(name="ct_ident")
+def _ct_ident(value):
+    """Returns its argument untouched — the sharpest probe there is."""
+    return value
+
+
+@_CUSTOM_LIBRARY.simple_tag(name="ct_safe")
+def _ct_safe(value):
+    """`mark_safe`s, so Django must NOT escape the result."""
+    return mark_safe("[" + str(value) + "]")
+
+
+@_CUSTOM_LIBRARY.simple_tag(name="ct_cond")
+def _ct_cond(value):
+    """`conditional_escape` — reads the SafeData marker on the way IN.
+
+    The half of #2290's finding that applies to arguments rather than returns:
+    a `mark_safe`d context value reaches a Rust-dispatched handler as a bare
+    `str`, so this escapes where Django does not.
+    """
+    return conditional_escape(value)
+
+
+def _cb_ident(content):
+    """A block probe returning the rendered body untouched (already SafeData)."""
+    return content
+
+
+def _cb_plain(content):
+    """A block probe returning a PLAIN `str` — not SafeData.
+
+    The block-registry twin of `ct_ident`: Django escapes this return, so it is
+    the cell that says whether the block path carries the same fail-open shape
+    as the simple-tag one.
+    """
+    return "[" + str(content) + "]"
+
+
+if hasattr(_CUSTOM_LIBRARY, "simple_block_tag"):  # Django >= 5.1
+    _CUSTOM_LIBRARY.simple_block_tag(name="cb_ident", end_name="endcb_ident")(_cb_ident)
+    _CUSTOM_LIBRARY.simple_block_tag(name="cb_plain", end_name="endcb_plain")(_cb_plain)
+else:  # pragma: no cover — Django 4.2 / 5.0, which `pyproject.toml` still allows
+
+    def _register_block_probe(name, fn):
+        """`simple_block_tag`'s node, hand-rolled for Django < 5.1.
+
+        A transcription, and named as one: it exists so the axis is PRESENT on
+        an older Django rather than silently absent, which is the failure mode
+        this whole manifest is about. On Django >= 5.1 the real decorator is
+        used and this branch never runs.
+        """
+
+        class _Node(_django_template.Node):
+            def __init__(self, nodelist):
+                self.nodelist = nodelist
+
+            def render(self, context):
+                output = fn(self.nodelist.render(context))
+                return conditional_escape(output) if context.autoescape else output
+
+        @_CUSTOM_LIBRARY.tag(name=name)
+        def _compile(parser, token):
+            nodelist = parser.parse((f"end{name}",))
+            parser.delete_first_token()
+            return _Node(nodelist)
+
+    _register_block_probe("cb_ident", _cb_ident)
+    _register_block_probe("cb_plain", _cb_plain)
+
+
+@_CUSTOM_LIBRARY.simple_tag(name="ca_ident")
+def _ca_ident(value):
+    """The ASSIGN probe. Django spells an assignment tag `{% t x as v %}`."""
+    return value
+
+
+class _RustTagProbe:
+    """The `.render(args, context)` shape `registry.rs` calls a handler with.
+
+    One adapter class rather than three: the three registries differ only in
+    the handler signature, and a per-registry copy is the parallel-path shape
+    this repo keeps retiring (#1646).
+    """
+
+    def __init__(self, fn, kind):
+        self.fn, self.kind = fn, kind
+
+    def render(self, args, *rest):
+        if self.kind == "block":
+            content, _context = rest
+            return self.fn(content, *args)
+        if self.kind == "assign":
+            # `{% ca_ident p as v %}` → args = [<resolved p>, "as", "v"].
+            return {args[-1]: self.fn(args[0])}
+        return self.fn(*args)
+
+
+_rust.register_tag_handler("ct_ident", _RustTagProbe(_ct_ident, "tag"))
+_rust.register_tag_handler("ct_safe", _RustTagProbe(_ct_safe, "tag"))
+_rust.register_tag_handler("ct_cond", _RustTagProbe(_ct_cond, "tag"))
+_rust.register_block_tag_handler(
+    "cb_ident", "endcb_ident", _RustTagProbe(lambda content: _cb_ident(content), "block")
+)
+_rust.register_block_tag_handler(
+    "cb_plain", "endcb_plain", _RustTagProbe(lambda content: _cb_plain(content), "block")
+)
+_rust.register_assign_tag_handler("ca_ident", _RustTagProbe(_ca_ident, "assign"))
+
+#: One shape per probe, rendered over every input.
+#:
+#: Not the filter grid: a custom TAG takes its operand as an argument rather
+#: than composing, so "which filter precedes it" is already the `tag` axis's
+#: question. What varies here is the VALUE the handler is handed and what its
+#: return does on the way out — `ct-filtered` is the one shape that puts a
+#: filter in front, because a chain's output is the value most likely to
+#: arrive at the boundary with a marker the boundary drops.
+CUSTOM_TAG_SHAPES = {
+    "ct-ident": "{% ct_ident p %}",
+    "ct-safe": "{% ct_safe p %}",
+    "ct-cond": "{% ct_cond p %}",
+    "ct-filtered": "{% ct_ident p|upper %}",
+    "ct-safe-filtered": "{% ct_cond p|safe %}",
+    "ct-literal": '{% ct_ident "<b>" %}',
+    "cb-ident": "{% cb_ident %}{{ p }}{% endcb_ident %}",
+    "cb-plain": "{% cb_plain %}{{ p }}{% endcb_plain %}",
+    "ca-ident": "{% ca_ident p as v %}[{{ v }}]",
+}
+
+
+def custom_tag_cells():
+    for shape in CUSTOM_TAG_SHAPES:
+        for key in INPUTS:
+            yield shape, key
+
+
 #: One benign argument per filter that requires one. Chosen so the filter runs
 #: rather than raising — the point is to compare escaping, not argument parsing.
 FILTER_ARGS = {
@@ -746,7 +909,20 @@ def spec(name: str) -> str:
 
 def render_both(tpl: str, ctx: dict, safe_keys: list[str] | None = None) -> tuple[str, str]:
     try:
-        dj = Template(tpl).render(Context(ctx))
+        # `dict(ctx)`, and it is load-bearing (#2355). `Context(d)` keeps `d`
+        # itself as `dicts[-1]`, and `Context.__setitem__` writes THERE — so a
+        # Django ASSIGNMENT tag (`{% firstof … as v %}`, `{% widthratio … as w %}`,
+        # `{% regroup … as g %}`) mutates the caller's dict, and the djust render
+        # below then runs against a context Django wrote into. The two engines
+        # stop being handed the same input, which is the one thing a
+        # differential must guarantee.
+        #
+        # Found by adding the `as`-form shapes: djust looked like it assigned
+        # `v` (and double-escaped it), when in fact Django had put the key
+        # there. Shallow is enough — Django's assignment writes a NEW top-level
+        # key; the `@cmp` axis, which needs two structurally-equal operands
+        # that are not the same object, does its own `deepcopy`.
+        dj = Template(tpl).render(Context(dict(ctx)))
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as exc:  # noqa: BLE001 — a raise is a comparable outcome
@@ -829,10 +1005,47 @@ def cells():
 #: conversion specifier and rejects.  Each shape renders its operand back out,
 #: so the live-payload check applies to the tag path exactly as it does to
 #: `{{ }}`.
+#: The six added in #2355 are the same class one tag over, and they are NOT a
+#: coverage tidy-up: `for`/`with`/`if` were three of the four operand channels
+#: #2325 found broken, and the manifest's first run named these six as the
+#: unswept remainder. Each is spelled to render its operand back out, so a
+#: `p|safe` chain reaching the page is visible to the live-payload half.
+#:
+#: A shape KEY is not a tag name — `_swept_tags` reads the tag out of the
+#: SOURCE — so a tag can carry more than one shape where more than one of its
+#: operands is a filter expression. Three do:
+#:
+#: * `widthratio` / `firstof` take an `as <var>` form whose contract is
+#:   "assign, emit NOTHING". That is a different question from the emitting
+#:   form and cannot share its cell.
+#: * `regroup`'s `by` operand is its own filter expression — Django compiles
+#:   `<var>.<attr>` with `compile_filter`, so `by k|upper` applies `upper` per
+#:   item. #2333 fixed the SOURCE operand; the `by` one was never measured.
+#:
+#: `filter` is the one shape whose `@EXPR@` is not preceded by `p|`: the tag
+#: takes the chain itself (`{% filter upper %}`), and Django compiles it by
+#: prepending a variable. `ifchanged` and `filter` are both UNSUPPORTED by the
+#: Rust engine today, so every one of their cells is the same refusal — kept
+#: anyway, because "the corpus builds no cell for it" and "the corpus builds
+#: cells that all say `<<EXC …>>`" are different states, and only the second
+#: goes red the day someone implements the tag and gets its escaping wrong.
 TAG_SHAPES = {
     "for": "{% for x in p|@EXPR@ %}[{{ x }}]{% empty %}E{% endfor %}",
     "with": "{% with q=p|@EXPR@ %}[{{ q }}]{% endwith %}",
     "if": "{% if p|@EXPR@ %}Y{% else %}N{% endif %}",
+    # --- the #2355 six ---
+    "cycle": "{% cycle p|@EXPR@ 'z' %}",
+    "firstof": "{% firstof p|@EXPR@ 'F' %}",
+    "firstof-as": "{% firstof p|@EXPR@ 'F' as v %}[{{ v }}]",
+    "widthratio": "{% widthratio p|@EXPR@ 10 100 %}",
+    "widthratio-as": "{% widthratio p|@EXPR@ 10 100 as w %}[{{ w }}]",
+    "ifchanged": "{% ifchanged p|@EXPR@ %}[{{ p }}]{% endifchanged %}",
+    "filter": "{% filter @EXPR@ %}{{ p }}{% endfilter %}",
+    "regroup": "{% regroup p|@EXPR@ by k as g %}[{{ g|length }}]",
+    "regroup-by": (
+        "{% regroup p by k|@EXPR@ as g %}[{{ g|length }}]"
+        "{% for x in g %}({{ x.grouper }}){% endfor %}"
+    ),
 }
 
 
@@ -1325,9 +1538,16 @@ def _swept_argument_errors() -> set[str]:
 #: had open-coded four times — was entirely unmeasured. With this row, the
 #: pre-#2325 corpus reports 25 missing tags instead of reporting clean.
 #:
-#: A tag NOT swept needs a reason here. Six of them take a filter-expression
-#: operand and are genuinely the #2325 gap one tag over; they are called out as
-#: such rather than waved through, and are filed as #2354.
+#: A tag NOT swept needs a reason here — and the reason has to be a PROPERTY of
+#: the tag, not a note that nobody got to it. Six rows here once read "TAKES A
+#: FILTER-EXPRESSION OPERAND and is not swept"; that is an admission, and #2355
+#: closed it. Sweeping `cycle` / `firstof` / `ifchanged` / `regroup` /
+#: `widthratio` / `filter` found six divergences, three of them silent.
+#:
+#: What is left needs no operand cell BECAUSE OF WHAT IT IS: it emits nothing,
+#: it takes no operand, it needs a second template on disk, a URLconf, a
+#: request, or the wall clock. `autoescape` is the one row that is a real
+#: unmeasured surface rather than a non-question, and it says so.
 TAGS_NOT_SWEPT = {
     "autoescape": (
         "changes the ESCAPING POLICY for a block. Every cell renders under the "
@@ -1350,12 +1570,6 @@ TAGS_NOT_SWEPT = {
     "url": "resolves a URLconf; the corpus configures no ROOT_URLCONF",
     "spaceless": "whitespace-strips its body; no operand",
     "resetcycle": "names a `{% cycle %}`; no filter expression of its own",
-    "cycle": "TAKES A FILTER-EXPRESSION OPERAND and is not swept — the #2325 gap class (#2355)",
-    "firstof": "TAKES A FILTER-EXPRESSION OPERAND and is not swept — the #2325 gap class (#2355)",
-    "ifchanged": "TAKES A FILTER-EXPRESSION OPERAND and is not swept — the #2325 gap class (#2355)",
-    "regroup": "TAKES A FILTER-EXPRESSION OPERAND and is not swept — the #2325 gap class (#2355)",
-    "widthratio": "TAKES A FILTER-EXPRESSION OPERAND and is not swept — the #2325 gap class (#2355)",
-    "filter": "TAKES A FILTER-EXPRESSION OPERAND and is not swept — the #2325 gap class (#2355)",
 }
 
 
@@ -1368,8 +1582,23 @@ def _required_tags() -> dict[str, str]:
 
 
 def _swept_tags() -> set[str]:
-    swept = set(TAG_SHAPES)
-    for source in PATH_SHAPES.values():
+    """Every built-in tag any shape's SOURCE opens, read out of the source.
+
+    Read out of the source rather than off `TAG_SHAPES`'s KEYS (#2355). The
+    keys were the answer while every shape was named for its tag, and that
+    coupling is exactly the kind that quietly stops being true: `regroup-by`
+    and `firstof-as` are second shapes for a tag that already has one, and a
+    key-derived set would have reported them as unswept tags named
+    `regroup-by` / `firstof-as` — which are not tags at all, so they would
+    have been filtered out and the real tag would have looked missing.
+    Deriving from the source is the same mechanism `PATH_SHAPES` already used
+    and cannot drift from what the corpus actually renders.
+    """
+    swept = set()
+    sources = (
+        list(TAG_SHAPES.values()) + list(PATH_SHAPES.values()) + list(CUSTOM_TAG_SHAPES.values())
+    )
+    for source in sources:
         swept |= set(re.findall(r"\{%\s*(\w+)", source))
     return {tag for tag in swept if tag in _required_tags()}
 
@@ -1385,12 +1614,6 @@ def _swept_tags() -> set[str]:
 #:
 #: An unexercised entry point needs a reason here.
 ENTRY_POINTS_NOT_SWEPT = {
-    "register_tag_handler": (
-        "the custom-TAG dispatch path — the exact shape of the #2290 gap one "
-        "registry over, and genuinely unmeasured. Filed as #2356"
-    ),
-    "register_block_tag_handler": "custom BLOCK tags; same unmeasured path (#2356)",
-    "register_assign_tag_handler": "custom ASSIGN tags; same unmeasured path (#2356)",
     "set_number_format": (
         "the localization channel (#2221). Every cell renders under the default "
         "English format; a localized sweep is a second corpus, not a spelling"
@@ -1606,6 +1829,8 @@ def axis_of(cid: str) -> str:
         return "builtin"
     if cid.startswith("@cmp "):
         return "cmp"
+    if cid.startswith("@ctag "):
+        return "ctag"
     if cid.startswith("@path"):
         return "path"
     expr, _key, *shape = cid.split("\t")
@@ -1734,6 +1959,22 @@ def measure(out_path: str) -> None:
         )
         if name in NONDET:
             dj, du = nondet_agreement(dj, du)
+        result[cid] = [dj, du]
+
+    # The CUSTOM-TAG axis (#2356). Three fields, `@ctag` first, so no id above
+    # is renamed. `safe_keys` is passed for the same reason the `{{ }}` corpus
+    # passes it: the marker the CONTEXT grants is half of what this axis is
+    # about — a `mark_safe`d value reaching a Python handler as a bare `str` is
+    # #2290's finding, and without the grant the cell cannot ask.
+    for shape, key in custom_tag_cells():
+        cid = f"@ctag {shape}\t{key}\tctag"
+        if cid in result:
+            continue
+        dj, du = render_both(
+            CUSTOM_TAG_SHAPES[shape],
+            {"p": INPUTS[key]},
+            CONTEXT_SAFE_KEYS.get(key),
+        )
         result[cid] = [dj, du]
 
     # The BUILTIN-VALUE axis (#2347). `p` stays bound so the `firstof` / `==` /

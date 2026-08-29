@@ -102,10 +102,14 @@ pub enum Node {
         value: String,
         max_value: String,
         max_width: String,
+        /// `{% widthratio a b c as name %}` — assign, emit nothing (#2355).
+        asvar: Option<String>,
     },
     /// {% firstof var1 var2 ... "fallback" %} - outputs first truthy variable
     FirstOf {
         args: Vec<String>,
+        /// `{% firstof a b as name %}` — assign, emit nothing (#2355).
+        asvar: Option<String>,
     },
     /// {% templatetag name %} - outputs literal template syntax characters
     TemplateTag(String),
@@ -736,28 +740,34 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 }
 
                 "widthratio" => {
-                    // {% widthratio value max_value max_width %}
-                    if args.len() < 3 {
+                    // {% widthratio value max_value max_width [as name] %}
+                    let (operands, asvar) = split_asvar(args);
+                    if operands.len() < 3 {
                         return Err(DjangoRustError::TemplateError(
                             "widthratio tag requires 3 arguments: {% widthratio value max_value max_width %}"
                                 .to_string(),
                         ));
                     }
                     Ok(Some(Node::WidthRatio {
-                        value: args[0].clone(),
-                        max_value: args[1].clone(),
-                        max_width: args[2].clone(),
+                        value: operands[0].clone(),
+                        max_value: operands[1].clone(),
+                        max_width: operands[2].clone(),
+                        asvar,
                     }))
                 }
 
                 "firstof" => {
-                    // {% firstof var1 var2 ... "fallback" %}
-                    if args.is_empty() {
+                    // {% firstof var1 var2 ... "fallback" [as name] %}
+                    let (operands, asvar) = split_asvar(args);
+                    if operands.is_empty() {
                         return Err(DjangoRustError::TemplateError(
                             "firstof tag requires at least one argument".to_string(),
                         ));
                     }
-                    Ok(Some(Node::FirstOf { args: args.clone() }))
+                    Ok(Some(Node::FirstOf {
+                        args: operands,
+                        asvar,
+                    }))
                 }
 
                 "templatetag" => {
@@ -1018,6 +1028,23 @@ fn parse_with_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)
     Err(DjangoRustError::TemplateError(
         "Unclosed with tag".to_string(),
     ))
+}
+
+/// Split a trailing `as <name>` off a tag's argument list (#2355).
+///
+/// Django's `firstof` and `widthratio` compilers both do exactly this
+/// (`if len(bits) >= 2 and bits[-2] == "as"`), and both were parsed here as if
+/// the two extra tokens were more operands — so `{% firstof a b as v %}`
+/// treated the literal `as` as a fallback value, RENDERED the result Django
+/// assigns silently, and never bound `v` at all.
+///
+/// `{% cycle %}` keeps its own inline split: its `as <name>` also admits a
+/// trailing `silent`, so the shapes are not the same question.
+fn split_asvar(args: &[String]) -> (Vec<String>, Option<String>) {
+    match args.len() {
+        n if n >= 2 && args[n - 2] == "as" => (args[..n - 2].to_vec(), Some(args[n - 1].clone())),
+        _ => (args.to_vec(), None),
+    }
 }
 
 fn parse_spaceless_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
@@ -1579,12 +1606,22 @@ fn extract_from_nodes(
                 value,
                 max_value,
                 max_width,
+                asvar,
             } => {
                 extract_from_variable(value, variables);
                 extract_from_variable(max_value, variables);
                 extract_from_variable(max_width, variables);
+                // The `as <var>` form MUTATES the context for later siblings,
+                // exactly as `Node::AssignTag` does — so it needs the same
+                // `"*"` wildcard, or partial render skips it whenever its own
+                // operands are unchanged and the binding never happens
+                // (#2355). The emitting form has no such effect and keeps its
+                // precise dep set.
+                if asvar.is_some() {
+                    variables.entry("*".to_string()).or_default();
+                }
             }
-            Node::FirstOf { args } => {
+            Node::FirstOf { args, asvar } => {
                 for arg in args {
                     if !((arg.starts_with('"') && arg.ends_with('"'))
                         || (arg.starts_with('\'') && arg.ends_with('\''))
@@ -1592,6 +1629,12 @@ fn extract_from_nodes(
                     {
                         extract_from_variable(arg, variables);
                     }
+                }
+                // See `Node::WidthRatio` above: the `as <var>` form mutates
+                // the context for later siblings and needs `Node::AssignTag`'s
+                // `"*"` wildcard (#2355).
+                if asvar.is_some() {
+                    variables.entry("*".to_string()).or_default();
                 }
             }
             Node::Spaceless { nodes } => {
@@ -3143,9 +3186,11 @@ mod dep_tests {
                 value: "a".into(),
                 max_value: "b".into(),
                 max_width: "100".into(),
+                asvar: None,
             },
             Node::FirstOf {
                 args: vec!["a".into(), "b".into()],
+                asvar: None,
             },
             Node::TemplateTag("openblock".into()),
             Node::Spaceless {

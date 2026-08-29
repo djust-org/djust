@@ -589,11 +589,20 @@ fn node_to_template_string(node: &Node) -> String {
             value,
             max_value,
             max_width,
+            asvar,
         } => {
-            format!("{{% widthratio {value} {max_value} {max_width} %}}")
+            let tail = asvar
+                .as_deref()
+                .map(|v| format!(" as {v}"))
+                .unwrap_or_default();
+            format!("{{% widthratio {value} {max_value} {max_width}{tail} %}}")
         }
-        Node::FirstOf { args } => {
-            format!("{{% firstof {} %}}", args.join(" "))
+        Node::FirstOf { args, asvar } => {
+            let tail = asvar
+                .as_deref()
+                .map(|v| format!(" as {v}"))
+                .unwrap_or_default();
+            format!("{{% firstof {}{tail} %}}", args.join(" "))
         }
         Node::TemplateTag(name) => {
             format!("{{% templatetag {name} %}}")
