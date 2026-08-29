@@ -84,6 +84,21 @@ pub(crate) struct ArgType {
     /// [`int_arg_is_type_error`]'s own "why there is no spelling fallback"
     /// section reaches from the other side.
     pub is_none: bool,
+    /// The argument is FALSY the way Python's `if arg:` reads it (#2413).
+    ///
+    /// `json_script`'s Django source branches on `if element_id:` — a
+    /// truthiness test on the resolved OBJECT, not `is not None` — and omits
+    /// the whole `id` attribute when it fails. `str(0)`, `str(False)`,
+    /// `str(None)` and `str([])` are all non-empty, so the dispatch table's
+    /// `&str` cannot answer it; measured, `{{ p|json_script:e }}` emits no
+    /// `id` on Django for every one of `None`, `""`, `0`, `0.0`, `False`,
+    /// `[]` and `{}`.
+    ///
+    /// Answers only about an argument that IS present. "No argument at all"
+    /// is a shape the call site already sees in its own `Option`, and having
+    /// this bit answer it too would be the second mechanism that shadows the
+    /// first.
+    pub is_falsy: bool,
 }
 
 /// Is the resolved filter argument Python `None`? (#2401)
@@ -93,6 +108,56 @@ pub(crate) struct ArgType {
 /// [`int_arg_is_type_error`]'s `None` arm takes.
 pub(crate) fn arg_is_python_none(resolved: Option<&Value>) -> bool {
     matches!(resolved, Some(Value::None))
+}
+
+/// Is the filter ARGUMENT falsy, the way Python's `if arg:` reads it? (#2413)
+///
+/// One function for BOTH channels an argument can arrive through, because
+/// Django has one: `FilterExpression.resolve` produces a Python object either
+/// way — `Variable(token).resolve(context)` for a bare identifier, the
+/// parse-time literal for a constant — and `if element_id:` then tests that
+/// object. Splitting the answer across the arm and here would be two
+/// mechanisms for one question.
+///
+/// See [`ArgType::is_falsy`] for what the caller does with it. This answers
+/// only about an argument that is present; `arg == None` is the call site's
+/// own `Option` to read.
+pub(crate) fn arg_is_falsy(
+    resolved: Option<&Value>,
+    arg: Option<&str>,
+    arg_was_quoted: bool,
+) -> bool {
+    match (resolved, arg) {
+        // The CONTEXT channel. The `Value` IS the object Django tests, so
+        // `is_truthy` — which already encodes Python's rules for every
+        // variant, `Decimal('0.00')` included — is the whole answer.
+        (Some(v), _) => !v.is_truthy(),
+        (None, None) => false,
+        // A QUOTED literal is a `str` (Django `mark_safe`s it), and the only
+        // falsy `str` is the empty one. The token arrives already stripped of
+        // its quotes, so `""` is `""`.
+        (None, Some(a)) if arg_was_quoted => a.is_empty(),
+        // An UNQUOTED token that did NOT resolve. `None` / `True` / `False`
+        // come back through the context's builtins above, so what is left is
+        // the NUMBER shape `is_literal_filter_arg` admits — read for
+        // zero-ness on the same float-vs-int split it uses. Anything else
+        // (including a `_("…")` gettext literal, which is a non-empty `str`
+        // in every real use) is truthy.
+        (None, Some(a)) => literal_number_is_zero(a),
+    }
+}
+
+/// `bool(number)` for the unquoted-literal channel of [`arg_is_falsy`].
+///
+/// Mirrors [`is_literal_filter_arg`]'s split rather than re-deriving it: a
+/// token with `.` / `e` / `E` is Django's `float()` branch, everything else
+/// its `int()` branch. `-0.0 == 0.0` in IEEE-754 and `bool(-0.0)` is `False`
+/// in Python, so the direct comparison is the right one.
+fn literal_number_is_zero(a: &str) -> bool {
+    if a.contains('.') || a.contains(['e', 'E']) {
+        return python_float(a) == Some(0.0);
+    }
+    python_int(a) == Some(0)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -695,6 +760,9 @@ pub fn apply_filter_full_safe(
     let arg_type = ArgType {
         int_is_type_error: int_arg_is_type_error(resolved_type.as_ref()),
         is_none: arg_is_python_none(resolved_type.as_ref()),
+        // `arg`, not `builtin_arg`: on the resolved channel the `Value` above
+        // answers, and on the literal channel the two are the same string.
+        is_falsy: arg_is_falsy(resolved_type.as_ref(), arg, arg_was_quoted),
     };
 
     // Built-ins take precedence over custom filters (mirrors the original
@@ -1770,8 +1838,7 @@ fn apply_builtin_filter(
             if matches!(value, Value::DictView { .. }) {
                 return Some(Ok(Value::Missing));
             }
-            // json_script filter: wrap value as JSON inside <script id="..."> tag
-            let element_id = arg.unwrap_or("data");
+            // json_script filter: wrap value as JSON inside a <script> tag.
             let json_str = value_to_json(value);
             let safe_json = json_escape_for_script(&json_str);
             // Django builds the tag with `format_html`, whose interpolation is
@@ -1792,13 +1859,36 @@ fn apply_builtin_filter(
             // literal written in the TEMPLATE SOURCE, which the author already
             // controls as completely as any raw HTML they type. The variable
             // channel still escapes, which is the half that can carry data.
-            let safe_id = if arg_was_quoted {
-                element_id.to_string()
-            } else {
-                html_escape(element_id)
+            //
+            // The `id` attribute is emitted ONLY for a TRUTHY argument, and
+            // is omitted whole — not emitted empty — otherwise (#2413).
+            // Django has two templates, not one with a default:
+            //
+            //     if element_id:
+            //         template = '<script id="{}" type="application/json">{}</script>'
+            //     else:
+            //         template = '<script type="application/json">{}</script>'
+            //
+            // This engine defaulted the argument to the invented id `"data"`,
+            // so `{{ p|json_script }}` produced an attribute Django does not
+            // write — and TWO argument-less calls on one page collided on the
+            // same DOM id. `arg_type.is_falsy` carries the truthiness of the
+            // resolved OBJECT, which the `&str` cannot spell (`str(0)` is
+            // `"0"`); the absent-argument case is this `match`'s own, so
+            // there is one mechanism per question rather than two for either.
+            let id_attr = match arg {
+                Some(element_id) if !arg_type.is_falsy => {
+                    let safe_id = if arg_was_quoted {
+                        element_id.to_string()
+                    } else {
+                        html_escape(element_id)
+                    };
+                    format!(" id=\"{safe_id}\"")
+                }
+                _ => String::new(),
             };
             Ok(Value::String(format!(
-                "<script id=\"{safe_id}\" type=\"application/json\">{safe_json}</script>"
+                "<script{id_attr} type=\"application/json\">{safe_json}</script>"
             )))
         }
         "force_escape" => {
@@ -4219,14 +4309,32 @@ fn strip_tags(s: &str) -> String {
     crate::htmlparser::strip_tags(s)
 }
 
+/// Django's `_json_script_escapes`, applied to the assembled JSON document —
+/// the second of the two steps `json_script` composes.
+///
+/// EXACTLY three characters, which is exactly what Django's map holds:
+///
+/// ```python
+/// _json_script_escapes = {ord(">"): "\\u003E", ord("<"): "\\u003C", ord("&"): "\\u0026"}
+/// ```
+///
+/// Uppercase hex, and deliberately so — `.translate()` writes those literal
+/// strings, while the `ensure_ascii` pass in [`json_string_body`] writes
+/// LOWERCASE. Both spellings are Django's, from its two different steps.
+///
+/// This used to carry two more arms, `U+2028` and `U+2029`, which were the
+/// right compensation while this engine emitted raw UTF-8: neither is legal
+/// in a JavaScript string literal. `ensure_ascii` (#2413) now escapes every
+/// non-ASCII character upstream, so nothing outside `0x20..=0x7E` can reach
+/// here at all — `json_string_body_output_is_pure_ascii_2413` pins that
+/// — and the two arms became unreachable. They are deleted rather than kept:
+/// a dead second mechanism for a job the first already does can only shadow
+/// it, and their absence is also what makes this map Django's, character for
+/// character.
 fn json_escape_for_script(s: &str) -> String {
-    // Escape characters that could break out of <script> tags
-    // Matches Django's _json_script_escapes (django/utils/html.py)
     s.replace('&', "\\u0026")
         .replace('<', "\\u003C")
         .replace('>', "\\u003E")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029")
 }
 
 /// The escaped BODY of a JSON string, without the surrounding quotes.
@@ -4243,12 +4351,37 @@ fn json_escape_for_script(s: &str) -> String {
 /// a string, so `{"k": "a\u{0}b"}` did not parse either — in every arm, which
 /// is why the range moved here rather than into the key path alone.
 ///
-/// Deliberately does NOT escape `<`, `>`, `&`, U+2028 or U+2029:
+/// **`ensure_ascii` (#2413).** `django.utils.html.json_script` calls
+/// `json.dumps(value, cls=encoder or DjangoJSONEncoder)` and passes no
+/// `ensure_ascii`, so it takes `json.dumps`'s default of **`True`** —
+/// `DjangoJSONEncoder` overrides only `default()`, never the flag. Every
+/// non-ASCII character therefore leaves Django as a `\uXXXX` escape, and one
+/// above the BMP as a SURROGATE PAIR: `json.dumps("😀")` is
+/// `"\ud83d\ude00"` — not `"\U0001f600"`, and not the raw character. This
+/// engine emitted raw UTF-8, which is a different byte string for the same
+/// value, for KEYS as much as values and at every nesting depth.
+///
+/// The rule below is DERIVED by running `json.dumps` over every codepoint
+/// rather than read off the C encoder. What comes back raw is exactly
+/// `U+0020..U+0021`, `U+0023..U+005B`, `U+005D..U+007E` — printable ASCII
+/// minus `"` and `\` — so everything outside `0x20..=0x7E` is escaped, with
+/// the seven short forms above taking precedence. Hex is LOWERCASE, which is
+/// the opposite of `json_escape_for_script`'s `<`; both spellings are
+/// Django's, from the two different steps it composes.
+///
+/// That range is why `0x7F` (DEL) now escapes to `\u007f` where it used to be
+/// left raw: `json.dumps(ensure_ascii=False)` does emit it unescaped, but
+/// `json_script` is the `ensure_ascii=True` path and `json.dumps("\x7f")` is
+/// `'"\\u007f"'`.
+///
+/// Deliberately does NOT escape `<`, `>`, `&`:
 /// `json_escape_for_script` runs over the assembled document afterwards and
 /// covers exactly those (`json_script` composes the two). Escaping them here
 /// too would be the double-application the single-helper shape exists to
-/// avoid. `0x7F` (DEL) is left raw because JSON permits it raw — `json.loads`
-/// round-trips it, and `json.dumps(ensure_ascii=False)` emits it unescaped.
+/// avoid. U+2028 / U+2029 are in that helper's list too, and after
+/// `ensure_ascii` they can no longer reach it raw — exactly as in Django,
+/// whose `.translate(_json_script_escapes)` runs on already-escaped text and
+/// finds them gone for the same reason.
 fn json_string_body(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -4262,8 +4395,20 @@ fn json_string_body(s: &str) -> String {
             // matches Python's for the same input.
             '\u{08}' => out.push_str("\\b"),
             '\u{0C}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
+            c if !(0x20..=0x7E).contains(&(c as u32)) => {
+                let cp = c as u32;
+                if cp > 0xFFFF {
+                    // CPython encodes an astral codepoint as the UTF-16
+                    // surrogate PAIR, so the escape is two `\uXXXX` units.
+                    let v = cp - 0x1_0000;
+                    out.push_str(&format!(
+                        "\\u{:04x}\\u{:04x}",
+                        0xD800 + (v >> 10),
+                        0xDC00 + (v & 0x3FF)
+                    ));
+                } else {
+                    out.push_str(&format!("\\u{cp:04x}"));
+                }
             }
             c => out.push(c),
         }
@@ -4702,6 +4847,209 @@ mod value_to_json_structure {
             count_ident(&body, "escape_js"),
             0,
             "the slice ran past the end of value_to_json"
+        );
+    }
+}
+
+/// Structural pins over the `"json_script" =>` ARM, from Rust's own token
+/// stream (#2413, on #2249's cure for the same pin done as text).
+///
+/// Two things the behavioural tests structurally cannot see:
+///
+/// 1. **The invented `"data"` default is gone**, not merely unreachable. The
+///    defect was one token — `arg.unwrap_or("data")` — and a behavioural test
+///    proving the current arm omits the attribute cannot tell a REMOVED
+///    default from one a later edit re-reaches.
+/// 2. **The arm decides on `arg_type.is_falsy`**, so the truthiness question
+///    is answered from the resolved `Value` and not re-derived from the
+///    `&str` at the call site (the two-mechanism shape #2233 warns about).
+///
+/// Token-based, not text-based, for the reason `value_to_json_structure`
+/// spells out at length: the arm's own doc comment NAMES `"data"` while
+/// explaining why it is gone, and a text pin counts that comment as code.
+/// The first version of this pin did exactly that and failed on its own
+/// prose — which is the empirical canary for why the lexer is required, not
+/// a hypothetical.
+#[cfg(test)]
+mod json_script_arm_structure {
+    use proc_macro2::{Delimiter, TokenStream, TokenTree};
+    use std::str::FromStr;
+
+    /// This file's own source, embedded at COMPILE time — a moved file is a
+    /// build error, never a silently skipped test.
+    const SOURCE: &str = include_str!("filters.rs");
+
+    /// The token trees inside the `"json_script" => { … }` match arm.
+    ///
+    /// Located in the token tree rather than by `str::find`, so the slice is
+    /// exactly the brace group and not "everything up to the next arm".
+    fn arm_tokens() -> Vec<TokenTree> {
+        let toks: Vec<TokenTree> = TokenStream::from_str(SOURCE)
+            .expect("filters.rs must lex as Rust")
+            .into_iter()
+            .collect();
+        find_arm(&toks).expect(
+            "the `\"json_script\" => { … }` arm was not found — did the filter move \
+             or get renamed?",
+        )
+    }
+
+    fn find_arm(toks: &[TokenTree]) -> Option<Vec<TokenTree>> {
+        for i in 0..toks.len() {
+            if let TokenTree::Literal(lit) = &toks[i] {
+                if lit.to_string() == "\"json_script\"" {
+                    // `=>` then the brace group.
+                    if let Some(TokenTree::Group(g)) = toks.get(i + 3) {
+                        if g.delimiter() == Delimiter::Brace {
+                            return Some(g.stream().into_iter().collect());
+                        }
+                    }
+                }
+            }
+            if let TokenTree::Group(g) = &toks[i] {
+                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                if let Some(found) = find_arm(&inner) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    fn count_literal(toks: &[TokenTree], text: &str) -> usize {
+        let mut n = 0;
+        for tok in toks {
+            match tok {
+                TokenTree::Literal(lit) if lit.to_string() == text => n += 1,
+                TokenTree::Group(g) => {
+                    n += count_literal(&g.stream().into_iter().collect::<Vec<_>>(), text)
+                }
+                _ => {}
+            }
+        }
+        n
+    }
+
+    fn count_ident(toks: &[TokenTree], name: &str) -> usize {
+        let mut n = 0;
+        for tok in toks {
+            match tok {
+                TokenTree::Ident(id) if *id == name => n += 1,
+                TokenTree::Group(g) => {
+                    n += count_ident(&g.stream().into_iter().collect::<Vec<_>>(), name)
+                }
+                _ => {}
+            }
+        }
+        n
+    }
+
+    /// The arm must not name an `id` of its own again (#2413).
+    #[test]
+    fn the_arm_names_no_default_element_id() {
+        let arm = arm_tokens();
+        assert_eq!(
+            count_literal(&arm, "\"data\""),
+            0,
+            "the `json_script` arm names a default id again — Django emits NO \
+             `id` attribute for a falsy `element_id`, it does not invent one"
+        );
+    }
+
+    /// Exactly ONE literal in the arm writes an `id=` attribute (#2413).
+    ///
+    /// The sibling pin above bans the pre-fix shape `arg.unwrap_or("data")`,
+    /// which names a bare `"data"`. It does NOT catch a second writer that
+    /// spells the whole attribute inline (`_ => " id=\"data\"".to_string()`),
+    /// because that is a different literal token — measured, by mutating the
+    /// arm that way and watching the sibling stay green. So the two shapes get
+    /// two checks, and neither shadows the other: this one counts ATTRIBUTE
+    /// writers, that one counts invented IDs.
+    #[test]
+    fn exactly_one_literal_in_the_arm_writes_an_id_attribute() {
+        let arm = arm_tokens();
+        let writers = literals_containing(&arm, "id=");
+        assert_eq!(
+            writers.len(),
+            1,
+            "the `json_script` arm has {} literals that write an `id` attribute, \
+             not 1: {:?} — Django writes at most one, from one place",
+            writers.len(),
+            writers
+        );
+        assert!(
+            writers[0].contains("{safe_id}"),
+            "the one `id` writer stopped interpolating the escaped id: {:?}",
+            writers[0]
+        );
+    }
+
+    /// Every string literal in `toks` whose text contains `needle`.
+    fn literals_containing(toks: &[TokenTree], needle: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for tok in toks {
+            match tok {
+                TokenTree::Literal(lit) => {
+                    let s = lit.to_string();
+                    if s.starts_with('"') && s.contains(needle) {
+                        out.push(s);
+                    }
+                }
+                TokenTree::Group(g) => out.extend(literals_containing(
+                    &g.stream().into_iter().collect::<Vec<_>>(),
+                    needle,
+                )),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// The truthiness decision comes from the resolved `Value` (#2413).
+    ///
+    /// Without this, a future edit could answer the same question from the
+    /// `&str` — which cannot: `str(0)` is `"0"`.
+    #[test]
+    fn the_arm_reads_is_falsy_rather_than_re_deriving_it() {
+        let arm = arm_tokens();
+        assert_eq!(
+            count_ident(&arm, "is_falsy"),
+            1,
+            "the `json_script` arm stopped reading `arg_type.is_falsy` (or grew a \
+             second reader) — the resolved-object truthiness is the only channel \
+             that can answer `if element_id:`"
+        );
+    }
+
+    /// Empirical canary (#1459): the pin is blind to PROSE and sees CODE.
+    ///
+    /// The arm's real doc comment contains the text `"data"`, so a text pin
+    /// reads 1 where the lexer reads 0. Both directions are shown against the
+    /// same `count_literal` the pins use, so this cannot drift from them.
+    #[test]
+    fn a_comment_naming_the_default_is_not_a_default() {
+        let prose = "\
+            // This engine defaulted the argument to the invented id `\"data\"`.\n\
+            let id_attr = String::new();\n";
+        assert!(
+            prose.contains("\"data\""),
+            "the RAW text must still read 1 — that IS the false positive being shown"
+        );
+        let toks: Vec<TokenTree> = TokenStream::from_str(prose)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+        assert_eq!(count_literal(&toks, "\"data\""), 0);
+
+        let real_default = "let element_id = arg.unwrap_or(\"data\");\n";
+        let toks: Vec<TokenTree> = TokenStream::from_str(real_default)
+            .expect("the canary fixture must lex")
+            .into_iter()
+            .collect();
+        assert_eq!(
+            count_literal(&toks, "\"data\""),
+            1,
+            "the pin must SEE the pre-fix shape it exists to ban"
         );
     }
 }
@@ -7424,6 +7772,30 @@ mod tests {
         assert!(s.contains("\"hello\""));
     }
 
+    /// No argument, and every FALSY argument, omits the `id` attribute
+    /// WHOLE — Django's `if element_id:` (#2413).
+    ///
+    /// The `apply_filter` entry point cannot resolve a context variable, so
+    /// the falsy shapes that only exist as objects (`0`, `False`, `[]`) are
+    /// pinned against live Django in
+    /// `python/tests/test_json_script_ensure_ascii_and_element_id_2413.py`.
+    /// What is reachable here is the absent argument and the empty quoted
+    /// one — the two shapes that carry no `Value` at all.
+    #[test]
+    fn test_json_script_omits_the_id_attribute_for_a_falsy_element_id() {
+        let value = Value::String("hello".to_string());
+        for arg in [None, Some("")] {
+            let s = apply_filter("json_script", &value, arg)
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                s, "<script type=\"application/json\">\"hello\"</script>",
+                "arg={arg:?}"
+            );
+            assert!(!s.contains("id="), "an id attribute survived: {s}");
+        }
+    }
+
     #[test]
     fn test_json_script_filter_escapes_script_tags() {
         let value = Value::String("</script><script>alert(1)".to_string());
@@ -7432,6 +7804,37 @@ mod tests {
         // Must not contain literal </script> inside the JSON
         assert!(!s[..s.len() - 9].contains("</script>"));
         assert!(s.contains("\\u003C"));
+    }
+
+    /// The property that makes [`json_escape_for_script`]'s non-ASCII arms
+    /// unreachable, and so licenses their deletion (#2413).
+    ///
+    /// `value_to_json` routes every quoted string through `json_string_body`
+    /// (pinned structurally by
+    /// `value_to_json_escapes_every_string_through_the_one_helper`) and emits
+    /// nothing else but ASCII structure, number literals and
+    /// `true`/`false`/`null`. So if this helper's output is pure ASCII, so is
+    /// the whole document, and `U+2028` / `U+2029` cannot arrive raw at the
+    /// second step. Asserted rather than reasoned about, because the deletion
+    /// depends on it.
+    #[test]
+    fn json_string_body_output_is_pure_ascii_2413() {
+        // Every branch of the escaper: short forms, C0, DEL, the three
+        // `_json_script_escapes` characters, the line separators, a BMP
+        // non-ASCII, the boundary and the astral plane.
+        let sample: String = "a\"\\\n\r\t\u{08}\u{0C}\u{00}\u{1f}\u{7f}<>&\u{2028}\u{2029}\
+             \u{a0}é→\u{d7ff}\u{e000}\u{ffff}\u{10000}\u{1f600}\u{10ffff}"
+            .to_string();
+        let body = json_string_body(&sample);
+        assert!(
+            body.is_ascii(),
+            "json_string_body emitted a non-ASCII byte: {body:?}"
+        );
+        // And specifically the two the second step no longer covers.
+        assert!(
+            body.contains("\\u2028") && body.contains("\\u2029"),
+            "{body:?}"
+        );
     }
 
     #[test]
@@ -7479,13 +7882,48 @@ mod tests {
         }
     }
 
-    /// `0x7F` is legal raw in a JSON string and `json.dumps(ensure_ascii=False)`
-    /// leaves it alone; escaping it would be a divergence, not a fix.
+    /// `0x7F` (DEL) is ESCAPED, and this test used to assert the opposite
+    /// (#2413).
+    ///
+    /// Its old reading — "`json.dumps(ensure_ascii=False)` leaves it alone, so
+    /// escaping it would be a divergence" — is true about the wrong flag.
+    /// `json_script` never passes `ensure_ascii`, so it takes the default of
+    /// `True`, and `json.dumps("\x7f")` is `'"\\u007f"'`. The test is kept
+    /// rather than deleted because DEL is the one codepoint where the two
+    /// flags disagree while every other ASCII character agrees, so it is the
+    /// sharpest single witness that this path is the `ensure_ascii=True` one.
     #[test]
-    fn test_json_script_leaves_delete_raw() {
+    fn test_json_script_escapes_delete_as_ensure_ascii_does() {
         let value = Value::String("a\u{7f}b".to_string());
         let result = apply_filter("json_script", &value, Some("d")).unwrap();
-        assert!(result.to_string().contains("\"a\u{7f}b\""));
+        let s = result.to_string();
+        assert!(s.contains("\"a\\u007fb\""), "{s:?}");
+        assert!(!s.contains('\u{7f}'), "DEL reached the body raw: {s:?}");
+    }
+
+    /// A codepoint above the BMP is a SURROGATE PAIR, not one `\u{…}` escape
+    /// and not the raw character (#2413).
+    ///
+    /// The astral arm is the half of `ensure_ascii` a BMP-only sample cannot
+    /// see: `\u{1f600}` has no 4-hex spelling, so an implementation that
+    /// formatted the codepoint directly would emit a SIX-hex-digit escape,
+    /// which a JSON parser reads as a 4-hex escape followed by two literal
+    /// characters.
+    #[test]
+    fn test_json_script_encodes_astral_as_a_surrogate_pair() {
+        for (ch, expected) in [
+            ('\u{10000}', "\\ud800\\udc00"),
+            ('\u{1f600}', "\\ud83d\\ude00"),
+            ('\u{10ffff}', "\\udbff\\udfff"),
+            // The BMP boundary, one below the first pair.
+            ('\u{ffff}', "\\uffff"),
+        ] {
+            let value = Value::String(ch.to_string());
+            let result = apply_filter("json_script", &value, Some("d")).unwrap();
+            let s = result.to_string();
+            assert!(s.contains(expected), "U+{:04X} -> {s:?}", ch as u32);
+            assert!(!s.contains(ch), "U+{:04X} reached the body raw", ch as u32);
+        }
     }
 
     /// `json.dumps`'s float, at the helper rather than through a render (#2270).

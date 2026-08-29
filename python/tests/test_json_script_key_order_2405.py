@@ -26,12 +26,15 @@ which ran ``parts.sort()``. So it was never a ``forloop`` defect: EVERY dict
 inside a list. A ``forloop``-shaped fix would have special-cased one instance
 of a general defect.
 
-What is NOT fixed here, and is measured rather than assumed
-----------------------------------------------------------
-``json.dumps`` defaults to ``ensure_ascii=True``; djust emits raw UTF-8. That
-is a second byte-divergence in the same filter, by a different mechanism
-(string escaping, not ordering), and it is pinned below as a named divergence
-rather than left silent (#1079).
+What was NOT fixed here, and was measured rather than assumed
+-------------------------------------------------------------
+``json.dumps`` defaults to ``ensure_ascii=True`` while djust emitted raw
+UTF-8, and a missing ``element_id`` still emitted ``id="data"``. Two more
+byte-divergences in the same filter, by two different mechanisms (string
+escaping and attribute presence, not ordering), filed as #2413 rather than
+folded in (#1079) and pinned at the bottom of this file as named divergences
+rather than left silent. Both are now CLOSED; those pins are parity
+assertions.
 
 Every expectation here is LIVE Django, never a transcription.
 """
@@ -207,19 +210,20 @@ class TestEveryOrderObservableFilterAgrees:
         assert any("json_script" in s for s in spellings), spellings
 
     def test_each_one_agrees_with_django(self) -> None:
-        """The only permitted mismatch is the argument-less `json_script`,
-        whose `id` attribute is a different divergence pinned below.
+        """NO mismatch is permitted.
 
-        Stated as an exact set rather than an exclusion, so this goes red both
-        ways: if another filter starts diverging, AND if the `id` divergence is
-        fixed without this being updated.
+        Stated as an exact set rather than an exclusion, so it goes red both
+        ways: if a filter starts diverging, AND if a permitted divergence is
+        fixed without this being updated. It did the second — the set was
+        `{"{{ p|json_script }}"}` while the argument-less spelling still
+        emitted `id="data"`, and #2413 emptied it.
         """
         mismatched = {
             spelling
             for spelling in order_observable_filters()
             if both(spelling, {"p": dict(UNSORTED)})[0] != both(spelling, {"p": dict(UNSORTED)})[1]
         }
-        assert mismatched == {"{{ p|json_script }}"}, mismatched
+        assert mismatched == set(), mismatched
 
 
 # ---------------------------------------------------------------------------
@@ -303,39 +307,47 @@ class TestTheCorpusGapThatHidThisFromTheForloopCells:
 
 
 # ---------------------------------------------------------------------------
-# What this does NOT close
+# What this did NOT close, and #2413 did
 # ---------------------------------------------------------------------------
 
 
 class TestKnownDivergencesOnTheSamePath:
-    """Named rather than silent, so the next reader does not re-find them.
+    """Two divergences this fix deliberately left, now CLOSED by #2413.
 
-    Both go red the day they are fixed, which is the signal to rewrite them as
-    parity assertions.
+    They were written as "these still diverge" assertions precisely so that
+    fixing them would go red rather than pass silently — the signal to rewrite
+    them as parity assertions, which is what they are below. The full
+    treatment (astral surrogate pairs, non-ASCII KEYS, every falsy
+    `element_id` shape, a randomized differential) is in
+    `test_json_script_ensure_ascii_and_element_id_2413.py`; what stays here is
+    the pair of cells this file's own reasoning referred to, so the narrative
+    above keeps a runnable ending.
     """
 
-    def test_ensure_ascii_is_NOT_matched(self) -> None:
-        """`json.dumps` defaults to `ensure_ascii=True`; djust emits UTF-8.
+    def test_ensure_ascii_IS_matched(self) -> None:
+        """`json.dumps` defaults to `ensure_ascii=True`, and now so does djust.
 
-        A different mechanism from ordering (string escaping), so it is filed
-        rather than folded in here (#1079).
+        Was `test_ensure_ascii_is_NOT_matched`, asserting `"héllo" in du` and
+        `dj != du` (#2413).
         """
         dj, du = both('{{ p|json_script:"d" }}', {"p": {"k": "héllo"}})
         assert "\\u00e9" in dj
-        assert "héllo" in du
-        assert dj != du
+        assert dj == du
+        assert "héllo" not in du, du
 
-    def test_a_missing_element_id_still_emits_one(self) -> None:
+    def test_a_missing_element_id_emits_no_id_attribute(self) -> None:
         """`{{ p|json_script }}` — Django omits the `id` attribute entirely
-        when `element_id` is None; djust writes `id="data"`.
+        for a falsy `element_id`, and djust no longer invents `id="data"`.
 
-        This is why the differential could not see the ordering defect on its
-        own `json_script` cells: every one of them already diverged on the
-        `id`, and the key order sat underneath.
+        Was `test_a_missing_element_id_still_emits_one` (#2413). This is why
+        the differential could not see the ordering defect on its own
+        `json_script` cells: every one of them already diverged on the `id`,
+        and the key order sat underneath — a masking that is now gone, which
+        is what lets the corpus's argument-less cells carry the body.
         """
         dj, du = both("{{ p|json_script }}", {"p": dict(UNSORTED)})
         assert "id=" not in dj, dj
-        assert 'id="data"' in du, du
+        assert dj == du
 
     def test_the_order_defect_was_visible_under_the_id_one(self) -> None:
         """With an id supplied, the pre-fix divergence was pure ordering — the
