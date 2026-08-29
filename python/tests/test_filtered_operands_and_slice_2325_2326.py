@@ -967,26 +967,31 @@ class TestTheCorpusGapThatHidThisFromTheDifferential:
 class TestAdjacentDivergencesNotFixedHere:
     """Scope discipline (CLAUDE.md #1079): found, filed, pinned — not fixed.
 
-    Three of the divergences this class pinned — ``{% regroup %}`` with a
-    filtered source (#2333), ``{% for k, v in d.items %}`` (#2334) and
-    sequence equality in ``{% if %}`` (#2335) — have since been FIXED, so
-    their pins are gone and their coverage lives in
-    ``test_dict_iteration_and_sequence_equality_2334_2335.py``. That is the
-    contract those pins carried: each named itself as the thing to delete.
+    Four of the divergences this class pinned — ``{% regroup %}`` with a
+    filtered source (#2333), ``{% for k, v in d.items %}`` (#2334),
+    sequence equality in ``{% if %}`` (#2335) and ``{{ forloop.* }}``
+    (#2402) — have since been FIXED, so their pins are gone and their
+    coverage lives in
+    ``test_dict_iteration_and_sequence_equality_2334_2335.py`` and
+    ``test_forloop_parity_2402.py``. That is the contract those pins
+    carried: each named itself as the thing to delete.
     """
 
-    def test_forloop_is_not_available_through_render_template(self) -> None:
-        """Pinned so the string-iteration tests above are not read as having
-        lost it: ``forloop`` is absent for a LIST too, through this entry
-        point, and normalising a string into the same arm neither gains nor
-        loses it.
+    def test_forloop_IS_now_available_through_render_template(self) -> None:
+        """Was ``test_forloop_is_not_available_…``, and pinned the #2402 bug.
+
+        Kept rather than simply deleted, and inverted in place, because the
+        claim it makes is about THIS entry point and THIS pair of operand
+        shapes: a list and the string that #2325 normalises into the same
+        arm. The fix must reach both, and the string is the one a
+        normalisation could plausibly lose.
         """
         for value in (["a", "b"], "ab"):
             assert (
                 djust_render(
                     "{% for x in p %}{{ forloop.counter }}{{ x }}{% endfor %}", {"p": value}
                 )
-                == "ab"
+                == "1a2b"
             )
 
     def test_ifchanged_is_an_unsupported_tag(self) -> None:

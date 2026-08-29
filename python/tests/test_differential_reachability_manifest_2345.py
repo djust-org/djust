@@ -170,6 +170,7 @@ class TestTheManifestIsCleanOnMain:
             "tag",
             "entrypoint",
             "grant-shape",
+            "loop-variable",
             "input-shape",
         }
 
@@ -402,16 +403,34 @@ class TestTheLimitTheManifestDoesNotClose:
         resolution shape, and the `tag` axis cannot see its absence: the tags
         those shapes use (`for`, `if`, `with`) are the same ones `TAG_SHAPES`
         already sweeps, so removing every PATH shape leaves the tag axis clean.
+
+        Since #2402 the same mutation ALSO removes every ``forloop`` cell, and
+        the `loop-variable` axis DOES report those — so the assertion is now
+        "the only axis that notices is `loop-variable`", which is a sharper
+        statement of the same limit than "nothing notices" was. The dotted-path
+        half remains uncaught: no axis names ``p.items`` as a requirement, and
+        that is what keeps `input-shape` UNVERIFIED.
         """
         script = mutated_script(
             tmp_path,
             ("PATH_SHAPES = {\n", "PATH_SHAPES: dict[str, str] = {}\n_PRE_2334_PATH_SHAPES = {\n"),
         )
         data = run_manifest(script)
-        assert not any(row.get("missing") for row in data["axes"]), (
-            "removing every dict-view PATH shape is now reported — good, but this "
-            "test documents the opposite. Update it to the catch."
+        noticed = {row["axis"] for row in data["axes"] if row.get("missing")}
+        assert noticed == {"loop-variable"}, (
+            f"axes reporting a missing member: {sorted(noticed)}. If an axis other "
+            "than `loop-variable` now notices the dict-view PATH shapes going "
+            "away, that is the catch — update this test to it."
         )
+        assert rows(data)["loop-variable"]["missing"] == [
+            "counter",
+            "counter0",
+            "first",
+            "last",
+            "parentloop",
+            "revcounter",
+            "revcounter0",
+        ], rows(data)["loop-variable"]
 
 
 def run_compare(

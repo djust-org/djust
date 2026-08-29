@@ -1532,6 +1532,20 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                         ctx.revoke_safe_subtree(var_name);
                     }
 
+                    // `forloop` is about to become this loop's own dict, so
+                    // whatever a context variable of that name was granted
+                    // goes with it — the same argument, and the same call,
+                    // that binding a loop variable makes one line up (#2402).
+                    // `{% for a in p %}{{ forloop }}{% endfor %}` over a
+                    // context carrying a marked `forloop` would otherwise
+                    // answer `is_safe("forloop")` from the shadowed grant and
+                    // emit this dict unescaped; the dict is engine-built, but
+                    // the ALIAS half of the revoke is what additionally keeps
+                    // `{% with q=forloop %}` from resolving through a stale
+                    // `forloop -> <marked path>`. Over-escaping is the
+                    // direction to fail in.
+                    ctx.revoke_safe_subtree("forloop");
+
                     // Create an iterator with indices, reversing if needed
                     let items_vec = items;
                     let indices_and_items: Vec<(usize, Value)> = if *reversed {
@@ -1539,6 +1553,46 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     } else {
                         items_vec.into_iter().enumerate().collect()
                     };
+
+                    // Django's `forloop` (#2402). `ForNode.render` opens with
+                    //
+                    //     if "forloop" in context: parentloop = context["forloop"]
+                    //     else: parentloop = {}
+                    //
+                    // and then, once the sequence is known non-empty, writes
+                    // `context["forloop"] = {"parentloop": parentloop}` and
+                    // updates six counters per iteration. Every one of those
+                    // seven names was UNBOUND here, so `{{ forloop.counter }}`
+                    // missed and rendered `string_if_invalid` — a numbered
+                    // list with no numbers, `{% if forloop.first %}` never
+                    // true, `{% if not forloop.last %},{% endif %}` a comma
+                    // after every element. Silent under-render, the shape this
+                    // area keeps producing (#2325, #2334, #2377).
+                    //
+                    // Read out of `context`, not `ctx`: Django captures the
+                    // parent BEFORE `context.push()`, and for a nested loop
+                    // that parent is the enclosing loop's own dict (the outer
+                    // `Node::For` rendered this body against its `ctx`).
+                    // Absent at the outermost level, where Django's
+                    // `parentloop` is an empty dict — NOT missing, so
+                    // `{{ forloop.parentloop }}` renders `{}` and
+                    // `{{ forloop.parentloop.counter }}` renders nothing.
+                    let parentloop = match context.get("forloop") {
+                        Some(value) => value.clone(),
+                        None => Value::Object(Default::default()),
+                    };
+                    // Built once and mutated in place per iteration.
+                    // `IndexMap::insert` on a present key keeps its POSITION,
+                    // so the insertion order below is the render order of
+                    // `{{ forloop }}` itself — which Django spells
+                    // `{'parentloop': …, 'counter0': …, 'counter': …,
+                    // 'revcounter': …, 'revcounter0': …, 'first': …,
+                    // 'last': …}` and is a comparable output, not an internal
+                    // detail.
+                    let len_values = indices_and_items.len() as i64;
+                    let mut loop_dict: indexmap::IndexMap<djust_core::ObjectKey, Value> =
+                        indexmap::IndexMap::with_capacity(7);
+                    loop_dict.insert("parentloop".into(), parentloop);
 
                     // Save outer cycle counter for nested loop support
                     let saved_cycle_counter = ctx.get("__djust_cycle_counter").cloned();
@@ -1596,6 +1650,37 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             "__djust_if_loop_path".to_string(),
                             Value::String(format!("{parent_if_loop_path}-{index}")),
                         );
+
+                        // The six per-iteration counters, in Django's own
+                        // arithmetic (#2402). `counter` is the ITERATION
+                        // ordinal, not the item's original index: Django
+                        // reverses `values` and THEN enumerates, so under
+                        // `{% for x in p reversed %}` the first item rendered
+                        // is `counter == 1` / `first == True` while its
+                        // `index` — which `__djust_if_loop_path` uses, and
+                        // deliberately — is the LAST one. Using `index` here
+                        // would agree on every forward loop and silently
+                        // reverse the numbering on a reversed one.
+                        loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
+                        loop_dict.insert("counter".into(), Value::Integer(counter as i64 + 1));
+                        loop_dict.insert(
+                            "revcounter".into(),
+                            Value::Integer(len_values - counter as i64),
+                        );
+                        loop_dict.insert(
+                            "revcounter0".into(),
+                            Value::Integer(len_values - counter as i64 - 1),
+                        );
+                        loop_dict.insert("first".into(), Value::Bool(counter == 0));
+                        loop_dict
+                            .insert("last".into(), Value::Bool(counter as i64 == len_values - 1));
+                        // BEFORE the loop-variable binding below, so a loop
+                        // whose variable is literally named `forloop`
+                        // (`{% for forloop in p %}`) binds the ITEM and wins —
+                        // which is Django's order: `loop_dict` is written at
+                        // the top of the iteration and `context[loopvar]` at
+                        // the bottom.
+                        ctx.set("forloop".to_string(), Value::Object(loop_dict.clone()));
 
                         // The grant this item carries (#2361). Non-empty only
                         // for a NORMALISED operand, where the positional
