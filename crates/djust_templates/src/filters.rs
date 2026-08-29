@@ -4488,6 +4488,71 @@ fn json_float_body(f: f64) -> String {
     djust_core::decimal::python_float_repr(f)
 }
 
+/// A dict KEY's JSON spelling, which is NOT its `str()` (#2425).
+///
+/// `json.dumps` coerces a key with its own table rather than `str()`, in the
+/// order CPython's `c_make_encoder` writes it: `str` unchanged, then the three
+/// JSON literals for `True` / `False` / `None`, then `float.__repr__`, then
+/// `int.__repr__`, and `TypeError` for anything else.
+///
+/// The arm this replaces was [`djust_core::ObjectKey::to_display_string`], the
+/// key's TEMPLATE display — what `{% for k in d %}{{ k }}{% endfor %}` writes.
+/// Measured against `json.dumps`:
+///
+/// | key            | `to_display_string()` | `json.dumps` |
+/// |----------------|-----------------------|--------------|
+/// | `True`         | `True`                | `true`       |
+/// | `False`        | `False`               | `false`      |
+/// | `None`         | `None`                | `null`       |
+/// | `float('inf')` | `inf`                 | `Infinity`   |
+/// | `float('nan')` | `nan`                 | `NaN`        |
+/// | `1e16`         | `10000000000000000`   | `1e+16`      |
+/// | `1e-5`         | `0.00001`             | `1e-05`      |
+/// | `0` / `1.5`    | `0` / `1.5`           | same         |
+///
+/// The bottom row is why this was invisible until measured: `int` and the
+/// middle band of finite `float` agree by coincidence, because `str(0)` is
+/// already the JSON form. #2425's own table stopped there and concluded "the
+/// `int` and `float` arms agree" — true of the two floats it sampled and false
+/// in both directions away from them. The float arm therefore takes the same
+/// [`json_float_body`] the float VALUE arm has taken since #2270, which is
+/// `float.__repr__` plus the three non-finite names. Re-derived over every key
+/// type rather than inherited.
+///
+/// # `bool` is checked BEFORE `int`, as CPython checks it
+///
+/// `bool` is an `int` subclass there, so an `isinstance(key, int)` arm placed
+/// first would spell `True` as `1`. Here the variants are disjoint and the
+/// order is cosmetic — stated because the invariant is CPython's, and a reader
+/// porting the table back must keep it.
+///
+/// # What is deliberately NOT here: the refusal
+///
+/// `json.dumps` raises `TypeError: keys must be str, int, float, bool or None`
+/// for a `tuple` / `bytes` / `frozenset` / `Decimal` / `date` / `Enum` /
+/// arbitrary-object key, and `json_script` passes no `skipkeys=True`. djust
+/// emits the key's `str()` instead — the MORE-permissive direction.
+///
+/// That half is not closed here because djust does not refuse an unserialisable
+/// **VALUE** either: `{{ p|json_script:"d" }}` over `{"a": object()}` renders a
+/// document where Django raises the matching `TypeError: Object of type Obj is
+/// not JSON serializable`. Refusing keys alone would make the two positions
+/// disagree — a new inconsistency wearing a fix's clothes. Both positions want
+/// one decision, taken together; tracked at #2429 and pinned as still-divergent
+/// in `python/tests/test_json_script_typed_keys_2425.py::TestTheRefusalHalfIsNotClosedHere`.
+fn json_key_body(key: &djust_core::ObjectKey) -> std::borrow::Cow<'_, str> {
+    use djust_core::ObjectKey;
+    match key {
+        ObjectKey::Bool(true) => std::borrow::Cow::Borrowed("true"),
+        ObjectKey::Bool(false) => std::borrow::Cow::Borrowed("false"),
+        ObjectKey::None => std::borrow::Cow::Borrowed("null"),
+        ObjectKey::Float(f) => std::borrow::Cow::Owned(json_float_body(*f)),
+        // `Str` verbatim, `Int` / `BigInt` already their own repr, and every
+        // type CPython REFUSES kept on `str()` — see the refusal note above.
+        other => other.to_display_string(),
+    }
+}
+
 fn value_to_json(value: &Value) -> String {
     match value {
         // Both are JSON `null`: JSON cannot distinguish absent from None.
@@ -4557,7 +4622,13 @@ fn value_to_json(value: &Value) -> String {
                     // `json.dumps({0: 1})` is `'{"0": 1}'` in CPython too, so
                     // stringifying here is the FAITHFUL encoding, not a
                     // shortcut around the typed key (#2339).
-                    let key_json = format!("\"{}\"", json_string_body(&k.to_display_string()));
+                    //
+                    // WHICH string is `json_key_body`'s (#2425), not
+                    // `to_display_string`'s: `json.dumps` spells a `bool` /
+                    // `None` / non-finite `float` key with the JSON literal,
+                    // not Python's. The `str()` this used to call agreed only
+                    // on `str` / `int` / finite `float`.
+                    let key_json = format!("\"{}\"", json_string_body(&json_key_body(k)));
                     format!("{}: {}", key_json, value_to_json(v))
                 })
                 .collect();
