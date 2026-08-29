@@ -3515,10 +3515,19 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
 /// only ever mark MORE values safe — never under-escape a plain value.
 fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
     // Handle pipe filters in expressions (e.g., "project.id|stringformat:\"s\"")
-    if expr.contains('|') {
-        let parts: Vec<&str> = expr.splitn(2, '|').collect();
-        let var_name = parts[0].trim();
-        let filter_expr = parts[1].trim();
+    //
+    // The split is QUOTE-AWARE (#2409). `expr.contains('|')` and
+    // `splitn(2, '|')` cut `{% if p|cut:"a|b" %}` inside its own quoted
+    // argument, and the loop below took the first colon so
+    // `{% for x in p|cut:"a":"b" %}` silently accepted a SECOND argument that
+    // Django's lexer refuses. Both sites — this one and
+    // `parser::parse_filter_specs` — go through `filter_lexer` rather than
+    // carrying a copy of the rule each (#1646); a `{{ }}`-only fix would have
+    // left `{% if %}`, `{% for %}` and `{% with %}` over-permissive, which is
+    // what #2409's measurement across the four shapes shows.
+    let pipe_parts = crate::filter_lexer::split_pipes(expr);
+    if pipe_parts.len() > 1 {
+        let var_name = pipe_parts[0].trim();
 
         // Resolve the base variable
         let mut value = get_value(var_name, context)?;
@@ -3535,21 +3544,20 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         let mut items_safe = context.items_are_safe(var_name);
 
         // Parse and apply filters (handles chained filters too)
-        for filter_part in filter_expr.split('|') {
+        for filter_part in &pipe_parts[1..] {
             let filter_part = filter_part.trim();
-            let (filter_name, arg, arg_was_quoted) = if let Some(colon_pos) = filter_part.find(':')
-            {
-                let name = &filter_part[..colon_pos];
-                let raw_arg = filter_part[colon_pos + 1..].trim();
-                let was_quoted = is_quoted_arg(raw_arg);
-                let arg_str = if was_quoted {
-                    raw_arg[1..raw_arg.len() - 1].to_string()
-                } else {
-                    raw_arg.to_string()
-                };
-                (name, Some(arg_str), was_quoted)
-            } else {
-                (filter_part, None, false)
+            let (filter_name, raw_arg) = crate::filter_lexer::split_filter_spec(filter_part, expr)?;
+            let (arg, arg_was_quoted) = match raw_arg {
+                Some(raw_arg) => {
+                    let was_quoted = is_quoted_arg(raw_arg);
+                    let arg_str = if was_quoted {
+                        raw_arg[1..raw_arg.len() - 1].to_string()
+                    } else {
+                        raw_arg.to_string()
+                    };
+                    (Some(arg_str), was_quoted)
+                }
+                None => (None, false),
             };
 
             // Thread the (Value, bool) shape out so callers in the firstof/cycle
