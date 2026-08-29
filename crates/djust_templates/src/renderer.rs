@@ -1529,6 +1529,43 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                             };
                                             ctx.set(var_name.clone(), tuple_items[i].clone());
                                             ctx.set_safety(var_name, part_safe);
+                                            // The alias for the paths BENEATH
+                                            // this component (#2375).
+                                            // `set_safety` above grants the
+                                            // component ITSELF; `{{ b.z }}`
+                                            // needs `b.z -> <expr>.<index>.<i>.z`,
+                                            // which only an alias can express.
+                                            //
+                                            // Registered under EXACTLY the
+                                            // condition `part_safe`'s own
+                                            // positional lookup uses, and for
+                                            // exactly the same reason: the
+                                            // correspondence is real only when
+                                            // both sides are positional. A
+                                            // NORMALISED source (a dict view)
+                                            // is refused because
+                                            // `_collect_safe_keys` spells a
+                                            // dict BY KEY NAME and this
+                                            // asserts an INDEX — the #2334
+                                            // collision, which is a live XSS
+                                            // for attacker-controlled keys —
+                                            // and a FILTERED one because
+                                            // `slice` shifts and `dictsort`
+                                            // reorders.
+                                            if !normalised && !iterable.contains('|') {
+                                                // Against `ctx`: the loop body
+                                                // renders there, so an outer
+                                                // loop's alias on the iterable
+                                                // name is the one that applies
+                                                // — the same context
+                                                // `set_loop_mapping` uses one
+                                                // branch over.
+                                                let base = ctx.alias_path(iterable);
+                                                ctx.set_alias(
+                                                    var_name.clone(),
+                                                    format!("{base}.{index}.{i}"),
+                                                );
+                                            }
                                         } else {
                                             // If tuple has fewer items than var names, set to Null
                                             ctx.set(var_name.clone(), Value::Missing);
@@ -1727,10 +1764,22 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // With `only`, `include_context` is fresh and carries no
                 // grants, so `bind`'s revoke half is a no-op there and its
                 // grant half is the whole of the work.
+                // The sub-path alias, by the same rule and through the same
+                // door as `{% with %}` (#2375). Deciding this site EXPLICITLY
+                // rather than by omission is the #1646 discipline: it is the
+                // same operation under a third spelling. Under `only` the
+                // fresh context carries no grants, so every alias resolves
+                // against an empty set and costs nothing.
+                let mut pending: Vec<(String, String)> = Vec::new();
                 for (key, value_expr) in with_vars {
                     let (value, runtime_safe) = get_value_safe(value_expr, context)?;
                     include_context.bind(key.clone(), value, runtime_safe);
+                    if let Some(path) = bare_dotted_path(value_expr) {
+                        pending.push((key.clone(), context.alias_path(path)));
+                    }
                 }
+                let bound: Vec<&str> = with_vars.iter().map(|(k, _)| k.as_str()).collect();
+                register_binding_aliases(&mut include_context, pending, &bound);
 
                 render_nodes_with_loader(&nodes, &include_context, Some(loader))
             } else {
@@ -1863,10 +1912,39 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // this one turned up: with `p` marked in the context,
             // `{% with p=hostile %}{{ p }}{% endwith %}` inherited the stale
             // by-name grant and emitted the hostile value RAW.
+            // The grant on the paths BENEATH each bound name (#2375).
+            // `bind` moves it at the NAME granularity, and
+            // `_collect_safe_keys` writes a dict's marks at `p.<key>` — so
+            // `{{ q.a }}` asked `is_safe("q.a")`, which nothing had ever
+            // written, and the marked value came out escaped.
+            //
+            // An ALIAS rather than a copy: `q -> p` makes `is_safe` rewrite the
+            // whole dotted path in `O(1)`, where copying every `p.…` entry to
+            // `q.…` is `O(len(safe_keys))` per bind and still would not survive
+            // a third level.
+            //
+            // Collected here and registered AFTER every bind, by
+            // `register_binding_aliases` — read its docs before touching the
+            // order. Two things depend on it: `bind` REVOKES the alias on the
+            // name it binds, so registering inside the loop would be undone by
+            // a later assignment to the same name; and an alias may not target
+            // a name this same tag rebinds.
+            //
+            // The path is expanded against `context`, the OUTER one. Django
+            // resolves every assignment in a `{% with %}` against the outer
+            // context (`WithNode.render` builds the whole `values` dict before
+            // `context.update`), so `b` in `{% with a=p b=a %}` binds the OUTER
+            // `a`.
+            let mut pending: Vec<(String, String)> = Vec::new();
             for (var_name, expression) in assignments {
                 let (value, runtime_safe) = get_value_safe(expression, context)?;
                 new_context.bind(var_name.clone(), value, runtime_safe);
+                if let Some(path) = bare_dotted_path(expression) {
+                    pending.push((var_name.clone(), context.alias_path(path)));
+                }
             }
+            let bound: Vec<&str> = assignments.iter().map(|(n, _)| n.as_str()).collect();
+            register_binding_aliases(&mut new_context, pending, &bound);
 
             // Render children with new context
             render_nodes_with_loader(nodes, &new_context, loader)
@@ -2899,6 +2977,81 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     // backed by the raw-Python sidecar now answers like `{{ }}` does rather
     // than being silently false.
     Ok(get_value(condition, context)?.is_truthy())
+}
+
+/// Register the sub-path aliases for ONE multi-assignment binding tag
+/// (`{% with %}`, `{% include … with %}`), after every bind in it has run.
+///
+/// `pending` is `(bound name, already-expanded target path)`; `bound` is every
+/// name this tag assigns.
+///
+/// # The exclusion, and why it is not a nicety
+///
+/// An alias is looked up in the NEW context's `safe_keys`, while its target
+/// path describes the OUTER context. Every later rebinding retires it —
+/// `Context::revoke_safe_subtree` sweeps the alias TARGETS — but a rebinding
+/// that happened EARLIER IN THE SAME TAG cannot be swept, because the alias
+/// did not exist yet. So:
+///
+/// ```text
+/// {% with a=p b=a %}{{ b }}{% endwith %}     p marked, outer a hostile
+/// ```
+///
+/// binds `a` to `p`'s marked value (`set_safety("a", true)` — the NAME `a` is
+/// now marked in the new context) and binds `b` to the OUTER `a`, which is
+/// hostile. An alias `b -> a` then reads `a`'s BRAND-NEW mark and `{{ b }}`
+/// went to the page RAW. Measured; Django escapes.
+///
+/// The rule that closes it is about the OPERATION rather than the values
+/// (#2129): **an alias may not target a name this same binding tag rebinds.**
+/// Skipping costs only over-escaping, which is the direction to fail in.
+fn register_binding_aliases(ctx: &mut Context, pending: Vec<(String, String)>, bound: &[&str]) {
+    for (name, target) in pending {
+        let head = target.split('.').next().unwrap_or(target.as_str());
+        if bound.contains(&head) {
+            continue;
+        }
+        ctx.set_alias(name, target);
+    }
+}
+
+/// The expression, when it is a BARE DOTTED PATH into the context — and
+/// therefore NAMES the very value a binding is about to bind (#2375).
+///
+/// This is the guard on every [`Context::set_alias`] call, and it is a
+/// security boundary rather than a tidiness check. An alias asserts
+/// "`name` IS the value at `<path>`", and [`Context::is_safe`] then resolves
+/// `name.<rest>` against `safe_keys` as `<path>.<rest>`. That is true for
+/// `{% with q=p %}` and FALSE the moment anything transforms the value:
+///
+/// * a FILTER — `{% with q=p|dictsort:"a" %}` reorders, `|slice` shifts, so
+///   `q.0` is not `p.0`. `_collect_safe_keys` wrote the marks against the
+///   ORIGINAL order, and resolving through them would grant a mark belonging
+///   to a DIFFERENT element. For a dict whose keys are user data that is a
+///   live XSS, not a theoretical one — the same shape #2334 refused the loop
+///   mapping for;
+/// * a LITERAL or an operator — there is no context path to alias at all.
+///
+/// So: every segment is `[A-Za-z0-9_]`, non-empty, and the FIRST segment
+/// starts with a letter or `_`. A leading digit is refused because `5` and
+/// `5.5` are literals, not paths; a numeric segment LATER is fine and
+/// necessary, since `_collect_safe_keys` spells a list's marks positionally
+/// (`p.0.a`).
+///
+/// Refusing too much costs only over-escaping, which is the direction to fail
+/// in; refusing too little emits raw HTML.
+fn bare_dotted_path(expr: &str) -> Option<&str> {
+    let expr = expr.trim();
+    let mut segments = expr.split('.');
+    let first = segments.next()?;
+    let head_ok = first
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    let all_ok = expr
+        .split('.')
+        .all(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+    (head_ok && all_ok).then_some(expr)
 }
 
 fn get_value(expr: &str, context: &Context) -> Result<Value> {
