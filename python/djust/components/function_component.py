@@ -481,16 +481,60 @@ class RenderSlotTagHandler:
         # bool, or string). Emit as-is — this is the value the user asked
         # for. Covers `{% render_slot slot.content %}` where the content is
         # a string that doesn't itself look like a dotted identifier.
+        #
+        # Returned as a plain `str`, so the #2379 bridge escapes it. This
+        # exit CANNOT tell a slot's already-escaped `.content` apart from a
+        # hostile bare context string (`{% render_slot p %}`, p = "<img …>"):
+        # the engine resolved both to an opaque string before the call. It
+        # therefore takes the escaping, which is over-escaping for the
+        # `.content` spelling and never a leak. See #2423; the slot-entry
+        # spellings the docs use (`{% render_slot col %}`,
+        # `{% render_slot slots.col.0 %}`) all reach `_render_value` instead.
         return raw
 
     @staticmethod
     def _render_value(value: Any) -> str:
+        """The ONE already-escaped exit is the slot entry's ``content`` (#2421).
+
+        Since #2379 the Rust bridge escapes a handler's return unless it
+        carries ``__html__``. That is right for a value this handler merely
+        echoes out of the render context, and wrong for the one value it
+        echoes that the PARENT already rendered — so the two are separated
+        here rather than at the call sites (#1104: mark at one exit, not N).
+
+        **``value["content"]`` — marked.** A slot entry reaches this handler
+        as ``{"name", "attrs", "content"}``, built by ``_extract_slots`` from
+        the ``<!--DJUST_SLOT_V1:…-->`` sentinel that ``SlotTagHandler`` emits.
+        ``content`` there is the *pre-rendered* block body the engine handed
+        the block handler, which is verified — not merely documented — to be
+        already-escaped: ``{% slot h %}{{ evil }}{% endslot %}`` with
+        ``evil = "<img src=x onerror=alert(1)>"`` puts
+        ``&lt;img src=x onerror=alert(1)&gt;`` in the entry, while literal
+        markup written in the block body survives raw. That is exactly the
+        status Django gives ``{% include %}``'s output, and escaping it again
+        is the #2421 regression: every function component and named slot
+        renders its own markup as visible text, and any context data inside
+        it double-escapes to ``&amp;lt;``.
+
+        **The trailing ``str(value)`` — NOT marked.** That branch is reached
+        when ``REF`` resolves to a bare context value rather than a slot
+        entry, e.g. ``{% render_slot p %}`` with ``p = "<img src=x
+        onerror=alert(1)>"``. Nothing has escaped it, so it must stay a plain
+        ``str`` and let the bridge escape it — that is the framework-reachable
+        half of the #2379 XSS, live on 1.0.0 / 1.0.8 / 1.1.0 with no
+        ``|safe``, no ``mark_safe`` and no app-written handler. Marking the
+        whole return would restore it.
+
+        ``render()``'s Shape-3 ``return raw`` is deliberately left unmarked
+        for the same reason: a pre-resolved scalar is indistinguishable there
+        from a hostile bare string, so it takes the escaping (see #2423).
+        """
         if isinstance(value, list):
             if not value:
                 return ""
             value = value[0]
         if isinstance(value, dict):
-            return str(value.get("content", ""))
+            return safe_html(str(value.get("content", "")))
         return str(value)
 
 
