@@ -1316,6 +1316,15 @@ PATH_SHAPES = {
     # added, removed, renamed or REORDERED: `{{ forloop }}` renders the whole
     # repr in insertion order.
     "forloop-whole": "{% for x in p %}[{{ forloop }}]{% empty %}E{% endfor %}",
+    # The dict through a SERIALIZER, which is a different question from the
+    # repr above and the one `forloop-whole` cannot ask (#2405). Both engines
+    # spell `{{ forloop }}` in the same order, so a reordering visible only in
+    # `json.dumps` — where djust ran `parts.sort()` and Python preserves
+    # insertion order — passed that cell and every other `forloop` cell here.
+    # An explicit `id` is load-bearing: `{{ p|json_script }}` diverges on the
+    # `id` ATTRIBUTE on both builds, which would mask the body this cell is
+    # about.
+    "forloop-json": '{% for x in p %}{{ forloop|json_script:"d" }}{% empty %}E{% endfor %}',
     # NESTED, where `parentloop` is a real loop rather than the empty dict —
     # and where the inner `{% empty %}` must see the OUTER `forloop`, because
     # Django writes its own `loop_dict` only AFTER the `len < 1` early return.
