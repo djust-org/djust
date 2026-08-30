@@ -138,6 +138,88 @@ impl Context {
         self.safe_keys.insert(key);
     }
 
+    /// Bind `name` to `value`, **REPLACING** whatever safety grant `name`
+    /// carried.
+    ///
+    /// This is the one door for every template construct that binds a
+    /// resolved value to a NEW NAME — `{% with %}`, `{% include … with %}`
+    /// and the `{% … as x %}` assign-tag merge. [`Context::set`] moves the
+    /// VALUE; this moves the value AND revokes the grant that described the
+    /// value being SHADOWED.
+    ///
+    /// # Why the grant must be REPLACED, not merely carried
+    ///
+    /// djust's safety channel is keyed BY NAME: `safe_keys` holds dotted
+    /// paths written by `rust_bridge._collect_safe_keys`, and
+    /// [`Context::is_safe`] answers by looking a name up in it. A bind copies
+    /// the value, so without this the grant stays attached to a name that now
+    /// holds a DIFFERENT — possibly attacker-controlled — value:
+    ///
+    /// ```text
+    /// safe_keys = ["p"],  p = mark_safe("<b>trusted</b>")
+    /// {% with p=hostile %}{{ p }}{% endwith %}   ->  hostile emitted RAW
+    /// ```
+    ///
+    /// That is an UNDER-escape — djust MORE permissive than Django, the one
+    /// direction this machinery must never move in.
+    ///
+    /// # The paths BENEATH the name go too
+    ///
+    /// `safe_keys` holds `p.a` as readily as `p`, and those descendants
+    /// described the value being SHADOWED. Leaving them makes
+    /// `{% with p=hostile_dict %}{{ p.a }}{% endwith %}` emit raw. So a bind
+    /// revokes `name` and every `name.…` beneath it.
+    ///
+    /// # Why no `safe` argument on this branch
+    ///
+    /// None of the 1.1.x bind sinks has a runtime-safe channel to carry: the
+    /// `{% with %}` / `{% include … with %}` arms resolve their operand with a
+    /// bare `Context::get` (no filter pipeline, so no `filter_output_is_safe`
+    /// bool exists to thread), and an assign tag's handler returns plain
+    /// `Value`s across the PyO3 boundary with no safety information at all.
+    /// The honest replacement grant is therefore always "none", and taking a
+    /// `bool` that every call site passes `false` would be dead config. When a
+    /// sink gains a genuine runtime-safe bool, widen this signature then — the
+    /// revoke half is what closes the leak and is unaffected either way.
+    ///
+    /// The `{% for %}` loop variable is the fourth bind sink and hoists the
+    /// [`Context::revoke_safe_subtree`] half OUT of its iteration rather than
+    /// calling this per item — see that method's docs.
+    pub fn bind(&mut self, name: String, value: Value) {
+        self.revoke_safe_subtree(&name);
+        self.set(name, value);
+    }
+
+    /// The SUBTREE half of a [`Context::bind`]: drop the grant on `key` and on
+    /// every dotted path beneath it. `O(len(safe_keys))`.
+    ///
+    /// The descendants go because they described the value being SHADOWED.
+    /// With `p.a` marked, leaving them makes
+    /// `{% with p=hostile_dict %}{{ p.a }}{% endwith %}` emit raw.
+    ///
+    /// A `{% for %}` binds the same names once per iteration, so it calls this
+    /// ONCE before the loop instead of `bind` per item: the shadowed outer
+    /// grants every iteration would clear are the same ones, so clearing them
+    /// once is identical in effect and turns an `O(N·len(safe_keys))` scan
+    /// into one. `context::tests::the_loop_decomposition_of_bind_agrees_with_bind`
+    /// pins that the two spellings agree so the split cannot drift.
+    ///
+    /// The scan is skipped entirely when the set is empty — the common case
+    /// for a render with no context marks at all.
+    ///
+    /// This deliberately does NOT touch [`Context::set_loop_mapping`]'s
+    /// aliases: that mapping is how a real list's per-item marks resolve
+    /// (`{% for x in p %}` → `p.<index>`), which is a grant the bound value
+    /// genuinely carries rather than a stale one it inherited.
+    pub fn revoke_safe_subtree(&mut self, key: &str) {
+        if self.safe_keys.is_empty() {
+            return;
+        }
+        self.safe_keys.remove(key);
+        let prefix = format!("{key}.");
+        self.safe_keys.retain(|k| !k.starts_with(&prefix));
+    }
+
     /// Check if a variable name is marked safe.
     pub fn is_safe(&self, key: &str) -> bool {
         // First check directly
@@ -577,5 +659,108 @@ mod tests {
 
         ctx.pop();
         assert!(matches!(ctx.get("a"), Some(Value::Integer(1))));
+    }
+
+    // ---- `Context::bind` — a binding REPLACES the grant ----
+
+    /// The three-key fixture every bind test below shadows one name of.
+    fn ctx_with_a_marked_name() -> Context {
+        let mut ctx = Context::new();
+        ctx.set("p".to_string(), Value::String("<b>x</b>".into()));
+        ctx.mark_safe("p".to_string());
+        ctx.mark_safe("p.a".to_string());
+        ctx.mark_safe("q".to_string());
+        ctx
+    }
+
+    #[test]
+    fn bind_revokes_a_stale_grant_on_the_shadowed_name() {
+        let mut ctx = ctx_with_a_marked_name();
+        ctx.bind("p".to_string(), Value::String("<img>".into()));
+        assert!(!ctx.is_safe("p"), "the shadowed name kept its grant");
+    }
+
+    #[test]
+    fn bind_revokes_the_grants_beneath_the_shadowed_name() {
+        let mut ctx = ctx_with_a_marked_name();
+        ctx.bind("p".to_string(), Value::String("<img>".into()));
+        assert!(
+            !ctx.is_safe("p.a"),
+            "a descendant of the shadowed name survived"
+        );
+    }
+
+    #[test]
+    fn bind_leaves_every_other_name_alone() {
+        let mut ctx = ctx_with_a_marked_name();
+        ctx.bind("p".to_string(), Value::String("<img>".into()));
+        assert!(ctx.is_safe("q"), "bind revoked an unrelated name");
+    }
+
+    #[test]
+    fn bind_still_moves_the_value() {
+        let mut ctx = ctx_with_a_marked_name();
+        ctx.bind("p".to_string(), Value::String("<img>".into()));
+        assert!(matches!(ctx.get("p"), Some(Value::String(s)) if s == "<img>"));
+    }
+
+    /// The `{% for %}` arm hoists `revoke_safe_subtree` out of its iteration
+    /// and calls plain `set` per item. That decomposition is a COST decision,
+    /// so it must be observationally identical to calling `bind` each time, or
+    /// the split has drifted.
+    #[test]
+    fn the_loop_decomposition_of_bind_agrees_with_bind() {
+        let items = [
+            Value::String("<b>0</b>".into()),
+            Value::String("<i>1</i>".into()),
+            Value::String("<u>2</u>".into()),
+        ];
+
+        // Spelling A — `bind` per iteration.
+        let mut a = ctx_with_a_marked_name();
+        // Spelling B — one subtree revoke, then `set` per item.
+        let mut b = ctx_with_a_marked_name();
+        b.revoke_safe_subtree("p");
+
+        for value in items.iter() {
+            a.bind("p".to_string(), value.clone());
+            b.set("p".to_string(), value.clone());
+
+            assert_eq!(
+                a.is_safe("p"),
+                b.is_safe("p"),
+                "bind and its loop decomposition disagree on `p` at {value:?}"
+            );
+            assert_eq!(a.is_safe("p.a"), b.is_safe("p.a"), "…and on `p.a`");
+            assert_eq!(a.is_safe("q"), b.is_safe("q"), "…and on the untouched `q`");
+        }
+    }
+
+    #[test]
+    fn revoke_safe_subtree_does_not_touch_a_sibling_sharing_a_prefix() {
+        // `pp` starts with `p` but is not beneath it — only `p.` is.
+        let mut ctx = Context::new();
+        ctx.mark_safe("p".to_string());
+        ctx.mark_safe("pp".to_string());
+        ctx.mark_safe("p.a".to_string());
+        ctx.revoke_safe_subtree("p");
+        assert!(!ctx.is_safe("p"));
+        assert!(!ctx.is_safe("p.a"));
+        assert!(ctx.is_safe("pp"), "a prefix-sharing SIBLING was revoked");
+    }
+
+    /// The revoke must not disturb the loop-mapping alias, which is how a real
+    /// list's per-item marks reach the loop variable. That grant is one the
+    /// bound value genuinely carries, not a stale one it inherited.
+    #[test]
+    fn revoke_safe_subtree_leaves_the_loop_mapping_channel_intact() {
+        let mut ctx = Context::new();
+        ctx.mark_safe("items.0".to_string());
+        ctx.set_loop_mapping("x".to_string(), "items".to_string(), 0);
+        ctx.revoke_safe_subtree("x");
+        assert!(
+            ctx.is_safe("x"),
+            "revoking the loop variable's name dropped its per-item mark"
+        );
     }
 }

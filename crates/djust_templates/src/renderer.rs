@@ -191,7 +191,13 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
                 }
                 if let Some(ctx) = mutated.as_mut() {
                     for (k, v) in updates {
-                        ctx.set(k, v);
+                        // `bind`, not `set`: an assign tag's handler returns
+                        // plain `Value`s across the PyO3 boundary with no
+                        // safety channel at all, so the honest grant is NONE
+                        // -- and a `{% ... as x %}` that lands on a name the
+                        // context had marked must not inherit that stale grant
+                        // and emit the handler's output RAW.
+                        ctx.bind(k, v);
                     }
                 }
                 // Assign tags emit no HTML.
@@ -357,7 +363,13 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
                 }
                 if let Some(ctx) = mutated.as_mut() {
                     for (k, v) in updates {
-                        ctx.set(k, v);
+                        // `bind`, not `set`: an assign tag's handler returns
+                        // plain `Value`s across the PyO3 boundary with no
+                        // safety channel at all, so the honest grant is NONE
+                        // -- and a `{% ... as x %}` that lands on a name the
+                        // context had marked must not inherit that stale grant
+                        // and emit the handler's output RAW.
+                        ctx.bind(k, v);
                     }
                 }
                 String::new()
@@ -427,7 +439,13 @@ pub fn render_nodes_partial<L: TemplateLoader>(
                     }
                     if let Some(ctx) = mutated.as_mut() {
                         for (k, v) in updates {
-                            ctx.set(k, v);
+                            // `bind`, not `set`: an assign tag's handler returns
+                            // plain `Value`s across the PyO3 boundary with no
+                            // safety channel at all, so the honest grant is NONE
+                            // -- and a `{% ... as x %}` that lands on a name the
+                            // context had marked must not inherit that stale grant
+                            // and emit the handler's output RAW.
+                            ctx.bind(k, v);
                         }
                     }
                     String::new()
@@ -688,6 +706,25 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
                     let mut output = String::new();
                     let mut ctx = context.clone();
+
+                    // The SUBTREE half of `Context::bind`, hoisted out of the
+                    // iteration. Every iteration binds the SAME names, so the
+                    // shadowed outer grants each would clear are the same ones
+                    // -- clearing them once is identical in effect (pinned by
+                    // `context::tests::the_loop_decomposition_of_bind_agrees_with_bind`)
+                    // and turns an O(N*len(safe_keys)) scan into one.
+                    //
+                    // Without this, `{% for p in hostile %}{{ p }}{% endfor %}`
+                    // with `p` marked in the context emitted the hostile items
+                    // RAW: the loop bound the value and inherited the stale
+                    // by-name grant.
+                    //
+                    // This does NOT disturb `set_loop_mapping` below, which is
+                    // the LEGITIMATE per-item channel (`x` -> `items.<index>`)
+                    // -- a grant the bound item genuinely carries.
+                    for var_name in var_names {
+                        ctx.revoke_safe_subtree(var_name);
+                    }
 
                     // Create an iterator with indices, reversing if needed
                     let items_vec = items;
@@ -962,7 +999,14 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                             Value::String(value_expr.clone())
                         }
                     });
-                    include_context.set(key.clone(), value);
+                    // `bind`, not `set`: this is the third spelling of one
+                    // binding, and a fix that reached only `{% with %}` would
+                    // be the parallel-path drift CLAUDE.md #1646 describes.
+                    // With `only`, `include_context` is fresh and carries no
+                    // grants, so the revoke is a no-op there; WITHOUT `only`
+                    // it inherits every grant the parent context holds, which
+                    // is exactly where the stale one would have leaked.
+                    include_context.bind(key.clone(), value);
                 }
 
                 render_nodes_with_loader(&nodes, &include_context, Some(loader))
@@ -1076,7 +1120,18 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     .get(expression)
                     .cloned()
                     .unwrap_or_else(|| Value::String(expression.clone()));
-                new_context.set(var_name.clone(), value);
+                // `bind`, not `set`: `Context::bind` REVOKES whatever grant
+                // `var_name` carried before attaching the new value. Without
+                // it, `{% with p=hostile %}{{ p }}{% endwith %}` over a
+                // context that marked `p` safe emitted the hostile value RAW
+                // -- djust MORE permissive than Django, an UNDER-escape.
+                //
+                // No grant is attached in its place: this arm resolves its
+                // operand with a bare `Context::get`, which carries no
+                // runtime-safe bool. `{% with q=p %}` over a marked `p`
+                // therefore stays escaped, as it was before this change and as
+                // it is on `main`.
+                new_context.bind(var_name.clone(), value);
             }
 
             // Render children with new context
