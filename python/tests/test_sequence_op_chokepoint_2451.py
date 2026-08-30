@@ -162,12 +162,14 @@ def corpus() -> dict:
         and isinstance(n.targets[0], ast.Name)
         and n.targets[0].id == "INPUTS"
     )
-    # `Decimal(...)` / `mark_safe(...)` are calls, so `literal_eval` cannot take
-    # the dict whole; each value is evaluated in a namespace holding exactly
-    # the two names the corpus uses.
+    # `Decimal(...)` / `mark_safe(...)` / `datetime.timedelta(...)` are calls,
+    # so `literal_eval` cannot take the dict whole; each value is evaluated in a
+    # namespace holding exactly the names the corpus uses. `datetime` arrived
+    # with the `timedelta` rows (#2469) — the only member of the
+    # `Value::Encoded` family with a falsy inhabitant.
     from decimal import Decimal
 
-    env = {"Decimal": Decimal, "mark_safe": mark_safe}
+    env = {"Decimal": Decimal, "mark_safe": mark_safe, "datetime": datetime}
     return {
         ast.literal_eval(k): eval(  # noqa: S307 — a repo file's own literals
             compile(ast.Expression(v), "<corpus>", "eval"), env
@@ -189,6 +191,32 @@ class TestTheReferenceTableIsRunNotTranscribed:
     """
 
     def test_no_cell_renders_where_django_refuses(self) -> None:
+        """...except on a `timedelta`, and that exception is #2467 rather than
+        this fix — pinned as an exact SET so it cannot go stale.
+
+        `outcome(..., "djust")` renders through
+        `normalize_django_value`, so this sweep's djust column is the
+        **LiveView** path. #2469 put a `timedelta` in the corpus and twelve
+        cells appeared here at once: the normalizer flattens it to the ISO
+        duration string `"P0DT00H00M00S"` in Python, so djust iterates the
+        thirteen CHARACTERS of that string where Django raises
+        `TypeError: 'datetime.timedelta' object is not iterable`.
+        `{{ p|unordered_list }}` emits thirteen `<li>`s; `{{ p|first }}` is
+        `'P'`; `{{ p|phone2numeric }}` is `7038004006007`.
+
+        The same twelve cells REFUSE on the RAW path — `render_template` with
+        the object, where `Value::Encoded` reaches this chokepoint and is
+        correctly not a sequence — measured, not assumed. So this is not a hole
+        in #2451's chokepoint; it is the two djust paths answering differently
+        because one of them destroys the type first, which is exactly what
+        #2467 is about, in its most consequential form: djust is MORE
+        PERMISSIVE than Django on the path most djust pages actually use.
+
+        Asserted as equality rather than as an allow-list membership so it
+        works in both directions (#1859): a thirteenth offender fails, and so
+        does closing #2467, which forces this pin to be deleted with that fix
+        rather than left behind as a stale exemption.
+        """
         offenders = []
         for name in ALL_SEVEN:
             if name in NONDET:
@@ -199,9 +227,27 @@ class TestTheReferenceTableIsRunNotTranscribed:
                 du = outcome(source, value, "djust")
                 if dj.startswith("<<") and not du.startswith("<<"):
                     offenders.append((name, key, dj, du))
-        assert not offenders, f"{len(offenders)} cells render where Django refuses:\n" + "\n".join(
+        assert [(n, k) for n, k, _a, _b in offenders] == [
+            (name, key)
+            for name in ("escapeseq", "safeseq", "unordered_list", "first", "last", "phone2numeric")
+            for key in ("td-zero", "td-plain")
+        ], f"{len(offenders)} cells render where Django refuses:\n" + "\n".join(
             f"  {n} <{k}>: django={a} djust={b!r}" for n, k, a, b in offenders[:15]
         )
+
+    def test_2467_the_same_twelve_cells_refuse_on_the_RAW_path(self) -> None:
+        """The other half of the claim above, run rather than asserted.
+
+        If these twelve refused on both paths, the pin above would be a hole in
+        this fix's own chokepoint. They do not: handed the `timedelta` OBJECT,
+        `Value::Encoded` reaches the chokepoint and is refused like any other
+        non-sequence. The offender set exists only because the LiveView path
+        replaced the object with a string before Rust could see it.
+        """
+        for name in ("escapeseq", "safeseq", "unordered_list", "first", "last", "phone2numeric"):
+            for key in ("td-zero", "td-plain"):
+                with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
+                    _rust.render_template("{{ p|%s }}" % name, {"p": CORPUS[key]})
 
     def test_no_cell_refuses_where_django_renders(self) -> None:
         """The other direction, and the one a refusal-shaped fix gets wrong.
@@ -256,9 +302,15 @@ class TestTheReferenceTableIsRunNotTranscribed:
         """Gate-off for the three above: Django must actually refuse somewhere.
 
         Without this, a corpus of only iterables would make all three pass by
-        construction. Measured over the six DETERMINISTIC filters: 101 of the
-        246 cells refuse on Django (`phone2numeric` 30, `last` 19, `first` 16,
-        and 12 each for the three iterators).
+        construction. Measured over the six DETERMINISTIC filters: 135 of the
+        288 cells refuse on Django (`phone2numeric` 37, `last` 25, `first` 22,
+        and 17 each for the three iterators).
+
+        Was 101 of 246 before #2469 widened the corpus by seven values — a
+        falsy inhabitant of five `Value` variants plus a `timedelta` in both
+        answers. Every one of the seven is non-iterable and non-subscriptable
+        except the empty container pair, so the counts move by more than the
+        cell count does.
 
         `random` is excluded on purpose rather than rounded off: over a mapping
         `random.choice` draws an index and THEN looks it up, so whether Django
@@ -276,14 +328,14 @@ class TestTheReferenceTableIsRunNotTranscribed:
             if name not in NONDET
         }
         assert per_filter == {
-            "escapeseq": 12,
-            "safeseq": 12,
-            "unordered_list": 12,
-            "first": 16,
-            "last": 19,
-            "phone2numeric": 30,
+            "escapeseq": 17,
+            "safeseq": 17,
+            "unordered_list": 17,
+            "first": 22,
+            "last": 25,
+            "phone2numeric": 37,
         }, per_filter
-        assert sum(per_filter.values()) == 101
+        assert sum(per_filter.values()) == 135
 
 
 class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
@@ -319,9 +371,15 @@ class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
 
     def test_last_refuses_every_dict_the_corpus_has(self) -> None:
         """`d[-1]`, and no corpus dict carries a `-1` key — which is why `last`
-        raises on all seven where `first` raises on four."""
+        raises on all eight where `first` raises on four.
+
+        Eight since #2469 added `d-empty`, the falsy `Value::Object`. An EMPTY
+        dict has no `-1` key either, so it belongs to the same answer rather
+        than being a new case; the count is asserted so a dict added without
+        thinking about this test is caught here.
+        """
         dicts = [k for k, v in CORPUS.items() if isinstance(v, dict)]
-        assert len(dicts) == 7, dicts
+        assert len(dicts) == 8, dicts
         for key in dicts:
             with pytest.raises(Exception, match="KeyError|not subscriptable"):
                 _rust.render_template("{{ p|last }}", normalize_django_value({"p": CORPUS[key]}))
