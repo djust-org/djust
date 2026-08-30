@@ -44,13 +44,17 @@ branch, with no signal anywhere that the operand was a scalar.
 
 What this deliberately does NOT close
 --------------------------------------
-The WIRE RESIDUE. ``Value`` has no date variant and no opaque-object variant,
-so a Python ``date``, ``datetime``, ``time``, ``timedelta``, ``set`` or plain
-``object()`` reaches this renderer as its ``str()`` — and a string is a
-sequence, so it iterates CHARACTER BY CHARACTER where Django raises. That is a
+The WIRE RESIDUE. ``Value`` has no opaque-object variant, so a Python ``set``
+or a plain ``object()`` reaches this renderer as its ``str()`` — and a string is
+a sequence, so it iterates CHARACTER BY CHARACTER where Django raises. That is a
 boundary defect (the #2214 / #2366 family), not a ``{% for %}`` one: the type
 is already gone by the time ``Node::For`` sees the value, and no arm here can
 recover it. Pinned in ``TestTheWireResidueIsNamed`` and filed separately.
+
+``date``, ``datetime``, ``time`` and ``timedelta`` were on that list until
+#2448 gave them ``Value::Encoded``, which carries CPython's ``tp_name``. They
+are parity rows now, in the same class — the arm below did not change; the
+boundary did, and the arm was already right.
 
 Every expectation here is LIVE Django, never a transcription.
 """
@@ -269,12 +273,26 @@ class TestTheWireResidueIsNamed:
 
     #: Django REFUSES these — no `__len__`, not iterable — and djust iterates
     #: the `str()` it received instead.
+    #: Four names left this dict in #2448. `date`, `datetime`, `time` and
+    #: `timedelta` now cross the boundary as `Value::Encoded`, which carries
+    #: CPython's `tp_name`, so `{% for x in dt %}` raises
+    #: `'datetime.datetime' object is not iterable` — the message Django
+    #: raises, from the arm this file's headline fix added. This class's own
+    #: docstring predicted the shape of that day ("rewrite them as parity
+    #: assertions"), and `test_the_datetime_family_now_refuses_with_CPythons_own_message`
+    #: below is the rewrite.
     RESIDUE: dict[str, object] = {
+        "object()": object(),
+    }
+
+    #: The four that moved, kept here as PARITY rows rather than deleted: a
+    #: closed residue that leaves no test behind is a residue nobody would
+    #: notice reopening.
+    WAS_RESIDUE_NOW_PARITY: dict[str, object] = {
         "date": datetime.date(2020, 1, 2),
         "datetime": datetime.datetime(2020, 1, 2, 3, 4),
         "time": datetime.time(3, 4),
         "timedelta": datetime.timedelta(days=1),
-        "object()": object(),
     }
 
     #: And the other direction of the SAME mechanism, which a residue list of
@@ -301,9 +319,31 @@ class TestTheWireResidueIsNamed:
     def test_it_is_the_STRING_that_is_iterated_and_not_something_else(self) -> None:
         """The mechanism, stated so the next reader does not re-derive it: the
         rendered output is exactly what the same loop over `str(value)`
-        renders."""
-        value = datetime.date(2020, 1, 2)
+        renders.
+
+        The witness was a `date` until #2448 gave the datetime family a typed
+        variant; it is a bare `object()` now, which is the shape still on the
+        `str()` path.
+        """
+        value = object()
         assert djust_out({"p": value}) == djust_out({"p": str(value)})
+
+    @pytest.mark.parametrize("name", sorted(WAS_RESIDUE_NOW_PARITY))
+    def test_the_datetime_family_now_refuses_with_CPythons_own_message(self, name: str) -> None:
+        """The rewrite this class's docstring asked for (#2448 closing #2382's
+        residue for four of its five shapes).
+
+        Not merely "djust also raises": the MESSAGE is CPython's, which is what
+        says the boundary carries the real `tp_name` rather than a guess. A
+        `date` is `'datetime.date'`, not `'date'` and not `'object'`.
+        """
+        value = self.WAS_RESIDUE_NOW_PARITY[name]
+        assert django_refuses(value), f"Django moved for {name}"
+        out = djust_out({"p": value})
+        assert out.startswith("<<EXC "), f"{name}: djust no longer refuses — {out!r}"
+        expected = "'datetime.%s' object is not iterable" % name
+        assert expected in out, f"{name}: expected {expected!r} in {out!r}"
+        assert expected in django_out({"p": value}), "the expectation is not Django's"
 
 
 class TestTheOneShapeDjustIsNowSTRICTERAbout:
