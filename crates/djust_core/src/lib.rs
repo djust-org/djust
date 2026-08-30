@@ -70,9 +70,17 @@ pub(crate) const TUPLE_TAG: &str = "__djust_tuple__";
 /// backend. The `Decimal` version of this was shipped once and caught by a
 /// gate-off (#2135); it is not being shipped twice.
 ///
-/// The payload is a THREE-element list, not a string, which is also what keeps
-/// it from colliding with [`DECIMAL_TAG`] / [`BIGINT_TAG`] (string payloads)
-/// and [`TUPLE_TAG`] (a list, but under a different key).
+/// The payload is a LIST, not a string, which is also what keeps it from
+/// colliding with [`DECIMAL_TAG`] / [`BIGINT_TAG`] (string payloads) and
+/// [`TUPLE_TAG`] (a list, but under a different key).
+///
+/// It is `[type_name, display, json, truthy]` since #2458 and was
+/// `[type_name, display, json]` in #2448. BOTH are read, because state written
+/// by a #2448-era process outlives it: `SerializableViewState` is what a Redis
+/// state backend holds across a rolling deploy, so a three-element payload is a
+/// live input on the first request after an upgrade — not a hypothetical. It
+/// deserializes to the pre-#2458 truthiness (`!display.is_empty()`) rather than
+/// guessing, which is exactly the value that entry had when it was written.
 pub(crate) const ENCODED_TAG: &str = "__djust_encoded__";
 
 /// The [`ENCODED_TAG`] value, for tests outside the crate. `#[doc(hidden)]`, not
@@ -292,6 +300,18 @@ pub enum Value {
     /// `datetime.datetime` (a C type carries its dotted name) where
     /// `type(o).__name__` would say `datetime` and `uuid.UUID`'s is the bare
     /// `UUID`. It is what lets the refusal filters (#2449) name the type.
+    ///
+    /// `truthy` is `bool(o)` — Python's own answer for the object, asked at the
+    /// conversion (#2458). #2448 shipped without it and read
+    /// `!display.is_empty()` instead, which is "always true" for this family
+    /// and so kept the pre-#2448 answer for the one member that is falsy:
+    /// `bool(timedelta(0))` is `False` in Python and was `True` here. The
+    /// alternative — reading it back off `json == "P0DT00H00M00S"` or off
+    /// `display == "0:00:00"` — answers a truthiness question with a string
+    /// comparison, cannot see a subclass that overrides `__bool__`, and (for
+    /// the display spelling) is indistinguishable from the perfectly ordinary
+    /// Python-TRUTHY `str` `"0:00:00"`. Carrying the bit is exact for every
+    /// member, present and future.
     Encoded(Box<Encoded>),
 }
 
@@ -308,6 +328,9 @@ pub struct Encoded {
     pub display: String,
     /// `DjangoJSONEncoder.default(o)` — the string `json.dumps` writes.
     pub json: String,
+    /// `bool(o)` — Python's own truthiness for the object (#2458). See the
+    /// [`Value::Encoded`] doc for why this is carried rather than derived.
+    pub truthy: bool,
 }
 
 /// Untagged in human-readable formats, with ONE exception (#2214).
@@ -365,14 +388,27 @@ impl Serialize for Value {
             // An `Encoded` takes the same two-format split, for the reason
             // `ENCODED_TAG` documents: untagged, a state round trip through
             // msgpack turns it back into the display string and reopens #2448.
-            // The payload is `[type_name, display, json]` — a LIST, which is
-            // what keeps the tag from colliding with the two string-payload
-            // tags above.
+            // The payload is `[type_name, display, json, truthy]` — a LIST,
+            // which is what keeps the tag from colliding with the two
+            // string-payload tags above. The fourth element is #2458's
+            // `bool(o)`; without it a state round trip restores the value with
+            // the pre-#2458 truthiness and `{% if p %}` on a `timedelta(0)`
+            // flips back after one cache hit — the same reopening `ENCODED_TAG`
+            // exists to prevent for the JSON spelling.
+            //
+            // Serialized as a heterogeneous tuple rather than an array because
+            // the elements are no longer all strings; `serde` writes a tuple as
+            // the same msgpack array either way.
             Value::Encoded(e) if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
                 m.serialize_entry(
                     ENCODED_TAG,
-                    &[e.type_name.as_str(), e.display.as_str(), e.json.as_str()],
+                    &(
+                        e.type_name.as_str(),
+                        e.display.as_str(),
+                        e.json.as_str(),
+                        e.truthy,
+                    ),
                 )?;
                 m.end()
             }
@@ -526,11 +562,27 @@ impl<'de> Deserialize<'de> for Value {
                     if let Some(Value::List(items)) = obj.get(TUPLE_TAG) {
                         return Ok(Value::Tuple(items.clone()));
                     }
-                    // The binary-format `Encoded` tag (#2448). A list payload
-                    // like the tuple's, but of EXACTLY three strings — anything
-                    // else is a real dict and falls through, so a user dict
-                    // under this key cannot forge one.
+                    // The binary-format `Encoded` tag (#2448, #2458). A list
+                    // payload like the tuple's, but of EXACTLY three strings
+                    // and an optional trailing bool — anything else is a real
+                    // dict and falls through, so a user dict under this key
+                    // cannot forge one.
                     if let Some(Value::List(parts)) = obj.get(ENCODED_TAG) {
+                        // Four elements: the #2458 shape, `truthy` carried.
+                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy)] =
+                            parts.as_slice()
+                        {
+                            return Ok(Value::Encoded(Box::new(Encoded {
+                                type_name: type_name.clone(),
+                                display: display.clone(),
+                                json: json.clone(),
+                                truthy: *truthy,
+                            })));
+                        }
+                        // Three elements: the #2448 shape, still readable
+                        // because a Redis state backend hands one back across
+                        // a rolling deploy. `!display.is_empty()` is the
+                        // truthiness that entry was written with.
                         if let [Value::String(type_name), Value::String(display), Value::String(json)] =
                             parts.as_slice()
                         {
@@ -538,6 +590,7 @@ impl<'de> Deserialize<'de> for Value {
                                 type_name: type_name.clone(),
                                 display: display.clone(),
                                 json: json.clone(),
+                                truthy: !display.is_empty(),
                             })));
                         }
                     }
@@ -686,10 +739,18 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         ty.getattr("__name__").ok()?.extract::<String>().ok()?
     };
 
+    // Python's own answer, not a re-derivation from either spelling (#2458).
+    // `is_truthy` is `PyObject_IsTrue`, so a subclass overriding `__bool__`
+    // (or `__len__`) is answered by the object rather than by this function's
+    // idea of the family. Fails closed with the rest: a raising `__bool__`
+    // takes the whole value back to its pre-#2448 `Value::String` path.
+    let truthy = ob.is_truthy().ok()?;
+
     Some(Encoded {
         type_name,
         display,
         json,
+        truthy,
     })
 }
 
@@ -854,14 +915,15 @@ impl Value {
             // gives `inf` for a 400-digit value.
             Value::BigInt(d) => d.bytes().any(|b| b.is_ascii_digit() && b != b'0'),
             Value::String(s) => !s.is_empty(),
-            // The DISPLAY string's emptiness — i.e. always true, since `str()`
-            // of any of the four datetime types is non-empty. Deliberately the
-            // pre-#2448 answer and not Python's: `bool(timedelta(0))` is False
-            // there, and it was True here when a `timedelta` was a
-            // `Value::String("0:00:00")`. Fixing that is a truthiness change
-            // this JSON-spelling fix has no business making silently; it is
-            // filed as #2458 rather than folded in.
-            Value::Encoded(e) => !e.display.is_empty(),
+            // Python's own `bool(o)`, asked at the conversion and carried
+            // (#2458). #2448 read `!e.display.is_empty()` here — always true
+            // for this family — which kept `bool(timedelta(0))` at `True`
+            // where Python and Django say `False`. Carrying the bit rather
+            // than deriving it is also what makes a `timedelta` SUBCLASS with
+            // an overridden `__bool__` right, and what keeps the answer from
+            // depending on a string comparison against `"0:00:00"` — which is
+            // ALSO the display text of a perfectly ordinary truthy `str`.
+            Value::Encoded(e) => e.truthy,
             Value::List(l) => !l.is_empty(),
             Value::Tuple(t) => !t.is_empty(),
             Value::Object(o) => !o.is_empty(),

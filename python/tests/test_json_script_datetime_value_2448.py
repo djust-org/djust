@@ -541,19 +541,36 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         out = djust_render(TPL, {"p": {"a": value}})
         assert json.loads(body_of(out)) == {"a": "03:04:05+00:00"}
 
-    def test_a_zero_timedelta_is_still_truthy_here_and_falsy_in_python(self) -> None:
-        """`bool(timedelta(0))` is `False` in Python and Django, and `True`
-        here — before this fix as well as after, because the value was a
-        non-empty `Value::String("0:00:00")` then.
+    def test_a_zero_timedelta_agrees_since_2458_closed_it(self) -> None:
+        """CLOSED by #2458 — kept, inverted, rather than deleted.
 
-        `Value::Encoded::is_truthy` deliberately keeps the pre-#2448 answer: a
-        truthiness change is not something a JSON-spelling fix should make
-        silently.  Filed as #2458, not folded in.
+        `bool(timedelta(0))` is `False` in Python and Django, and was `True`
+        here — before #2448 as well as after, because the value was a non-empty
+        `Value::String("0:00:00")` then and `Value::Encoded::is_truthy`
+        deliberately kept that answer (`!display.is_empty()`), a truthiness
+        change being no business of a JSON-spelling fix.
+
+        #2458 gave `Encoded` a fourth field, `bool(o)` asked at the conversion,
+        which `is_truthy` now reads. This row moved from
+        `TestWhatThisDeliberatelyDoesNOTClose` to agreement; it stays in this
+        file because the exemption it replaces was stated here.
         """
         src = "{% if p %}T{% else %}F{% endif %}"
         assert bool(datetime.timedelta(0)) is False
         assert django_render(src, {"p": datetime.timedelta(0)}) == "F"
-        assert djust_render(src, {"p": datetime.timedelta(0)}) == "T"
+        assert djust_render(src, {"p": datetime.timedelta(0)}) == "F"
+        # Non-vacuity: every OTHER member of the family is truthy in Python for
+        # every value, so a fix that answered "falsy" for the variant outright
+        # would pass the assertion above and be wrong here.
+        for value in (
+            datetime.timedelta(seconds=1),
+            datetime.time(0, 0),
+            datetime.date(2020, 1, 1),
+            datetime.datetime(2020, 1, 1),
+        ):
+            assert bool(value) is True, repr(value)
+            assert django_render(src, {"p": value}) == "T", repr(value)
+            assert djust_render(src, {"p": value}) == "T", repr(value)
 
     def test_pprint_still_shows_the_str_and_not_the_constructor(self) -> None:
         """`pprint.pformat(datetime(...))` is the CONSTRUCTOR form in Python,
