@@ -414,10 +414,9 @@ pub const CMP_DOMAIN_DATE: u8 = 2;
 pub const CMP_DOMAIN_DATETIME_NAIVE: u8 = 3;
 /// A `datetime` whose `utcoffset()` is not `None`, normalised to UTC.
 pub const CMP_DOMAIN_DATETIME_AWARE: u8 = 4;
-/// A `time` whose `utcoffset()` is `None`.
+/// A `time` whose `utcoffset()` is `None`. There is deliberately no aware-time
+/// domain — see the `datetime.time` arm of [`comparison_key`].
 pub const CMP_DOMAIN_TIME_NAIVE: u8 = 5;
-/// A `time` whose `utcoffset()` is not `None`, normalised by its offset.
-pub const CMP_DOMAIN_TIME_AWARE: u8 = 6;
 
 impl Encoded {
     /// Python's answer for `a <op> b`, or `None` where Python refuses (#2471).
@@ -1036,26 +1035,29 @@ fn comparison_key(ob: &Bound<'_, PyAny>, tp_name: &str) -> Option<CmpKey> {
                 }
             }
         }
-        "datetime.time" => {
-            let lo = micros_of_day(ob)?;
-            match utc_offset_limbs(ob)? {
-                None => Some(CmpKey {
-                    domain: CMP_DOMAIN_TIME_NAIVE,
-                    hi: 0,
-                    lo,
-                }),
-                // An aware `time` is compared by its offset-adjusted value and
-                // does NOT wrap into a neighbouring day — there is no day to
-                // wrap into — so the whole offset lands in `lo`, which may go
-                // negative or past a day. Both are fine: `lo` is only ever
-                // compared against another key in the same domain.
-                Some((off_hi, off_lo)) => Some(CmpKey {
-                    domain: CMP_DOMAIN_TIME_AWARE,
-                    hi: 0,
-                    lo: lo - (off_hi.checked_mul(86_400_000_000)?.checked_add(off_lo)?),
-                }),
-            }
-        }
+        "datetime.time" => match utc_offset_limbs(ob)? {
+            None => Some(CmpKey {
+                domain: CMP_DOMAIN_TIME_NAIVE,
+                hi: 0,
+                lo: micros_of_day(ob)?,
+            }),
+            // An AWARE `time` gets no key, and there is no aware-time domain.
+            //
+            // Not an oversight and not a gap: a timezone-aware `time` never
+            // becomes a `Value::Encoded` at all. `DjangoJSONEncoder.default`
+            // RAISES for it — `ValueError: JSON can't represent timezone-aware
+            // times.` — so `django_json_encoded` fails closed above this and
+            // the value stays the `Value::String(str(o))` it was before #2448.
+            // That is the refusal direction #2429 declined, unchanged here.
+            //
+            // Writing a `CMP_DOMAIN_TIME_AWARE` arm anyway would be an
+            // unreachable branch no test could cover — the decorative-code
+            // shape #1859 is about. `None` is the conservative answer if the
+            // path ever opens: never equal, never ordered, i.e. exactly what
+            // this variant answered before #2471. Pinned in
+            // `TestAnAwareTimeIsNotAnEncodedAtAll`.
+            Some(_) => None,
+        },
         _ => None,
     }
 }

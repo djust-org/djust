@@ -254,7 +254,21 @@ class TestTheStateRoundTripKeepsTheAnswer:
         payload = msgpack.unpackb(blob, raw=False, strict_map_key=False)[1]["p"][
             "__djust_encoded__"
         ]
-        assert payload == ["datetime.timedelta", "0:00:00", "P0DT00H00M00S", False]
+        # Grew to SIX in #2471/#2472: `repr(o)` and the comparison key take the
+        # same trip, for the same reason this bit does — a state entry that
+        # dropped them restores a value whose `{% if a == b %}` and `|pprint`
+        # answers are the pre-fix ones after one cache hit. This assertion
+        # stays about the FOURTH element being `bool(o)`; the tail is spelled
+        # out so a silent reshuffle cannot pass.
+        assert payload == [
+            "datetime.timedelta",
+            "0:00:00",
+            "P0DT00H00M00S",
+            False,
+            "datetime.timedelta(0)",
+            [1, 0, 0],
+        ]
+        assert payload[3] is False, "the truthiness bit moved off element 3"
 
     def test_a_three_element_payload_still_reads(self) -> None:
         """A #2448-era process's state outlives it: a Redis backend hands back
@@ -276,7 +290,7 @@ class TestTheStateRoundTripKeepsTheAnswer:
         view.set_state("p", datetime.timedelta(0))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 4, payload
+        assert len(payload) == 6, payload  # four until #2471/#2472 grew it
         decoded[1]["p"]["__djust_encoded__"] = payload[:3]
         legacy = msgpack.packb(decoded, use_bin_type=True)
 
@@ -398,10 +412,16 @@ class TestTheSinkHasExactlyTheCallersItClaims:
     def test_both_payload_widths_are_read_and_only_the_narrow_one_derives(self) -> None:
         """The compatibility read is deliberate and bounded: exactly ONE arm
         may fall back to `!display.is_empty()`, and it is the three-element
-        one."""
+        one.
+
+        The arms that carry the bit VERBATIM are two since #2471/#2472 grew the
+        payload to six — the current six-element arm and the four-element
+        compatibility read — and neither derives anything, which is the
+        property this bounds. A third would mean a third payload width.
+        """
         src = self._production(CORE_RS.read_text(encoding="utf-8"))
         assert self._count(src, "truthy: !display.is_empty(),") == 1
-        assert self._count(src, "truthy: *truthy,") == 1
+        assert self._count(src, "truthy: *truthy,") == 2
 
     def test_the_counter_goes_red_in_BOTH_directions(self) -> None:
         """The canary. Each mutation asserts it APPLIED before its count is
