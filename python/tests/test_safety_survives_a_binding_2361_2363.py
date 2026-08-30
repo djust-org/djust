@@ -390,7 +390,16 @@ class TestTheBindPathGrantsNothingTheEmitPathDoesNot:
 
     def _render(self, tpl: str, value) -> str:
         keys = _collect_safe_keys(value, "p")
-        return _rust.render_template_with_dirs(tpl, {"p": value}, [], keys or None)
+        try:
+            return _rust.render_template_with_dirs(tpl, {"p": value}, [], keys or None)
+        except Exception:  # noqa: BLE001 — a REFUSAL is an outcome, not a skip
+            # Since #2451 the sequence filters refuse a non-iterable value
+            # rather than escaping it, and `unordered_list` / `safeseq` /
+            # `escapeseq` are three of the eleven minters swept here. A refusal
+            # emits NO output, so it cannot be live — recorded as the empty
+            # string rather than dropped, so the cell still counts toward the
+            # non-vacuity assertion below.
+            return ""
 
     def test_no_bind_emits_live_markup_its_emit_twin_does_not(self):
         exprs = [f"p|{f}" for f in self.SAFE_MINTING]

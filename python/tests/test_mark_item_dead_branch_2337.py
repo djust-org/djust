@@ -602,7 +602,9 @@ class TestTheProducerEnumerationIsComplete:
             ("safeseq", "Value::String(item.py_str())"),
             ("escapeseq", "Value::String(conditional_escape(item, input_safety.items))"),
         ):
-            start = src.index('"%s" => match iter_values(value)' % name)
+            # `python_iter` since #2451 — the same sink, wrapped so its `None`
+            # can name the exception Python raises there.
+            start = src.index('"%s" => match python_iter(value)' % name)
             body = src[start : start + 700]
             assert builder in body, (
                 f"{name} no longer constructs Value::String elements — it can "

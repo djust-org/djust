@@ -3273,24 +3273,20 @@ fn get_prop(key: &str, props: &[(String, String)], context: &Context) -> Result<
 /// keeps paying for (#1646).
 /// The Python type name CPython puts in `'X' object is not iterable` (#2382).
 ///
-/// Every arm names the type the value HELD IN PYTHON, not the Rust variant:
-/// `Value::BigInt` is a Python `int` too large for an `i64`, and CPython's
-/// message for a `Decimal` is `'decimal.Decimal'` — the qualified name, since
-/// `decimal` is not a builtin.
+/// A thin alias for [`filters::python_type_name`] since #2451, and the alias
+/// is the point: this function WAS a four-arm copy of that question, and #2451
+/// needed the same answer for seven filters. Two spellings of one fact is the
+/// drift this codebase keeps paying for (#1646), so there is one.
 ///
-/// The four shapes here are exactly the ones that reach `{% for %}`'s refusal
-/// arm: `String`, `Object`, `DictView`, `List` and `Tuple` are normalised or
-/// iterated above, and `Missing` / `None` take Django's empty branch. The
-/// catch-all is unreachable today and answers `object`, which is what CPython
-/// says for an instance of a class with neither `__len__` nor `__iter__`.
-fn python_type_name_for_iteration(value: &Value) -> &'static str {
-    match value {
-        Value::Bool(_) => "bool",
-        Value::Integer(_) | Value::BigInt(_) => "int",
-        Value::Float(_) => "float",
-        Value::Decimal(_) => "decimal.Decimal",
-        _ => "object",
-    }
+/// The four shapes the copy covered are exactly the ones that reach
+/// `{% for %}`'s refusal arm — `String`, `Object`, `DictView`, `List` and
+/// `Tuple` are normalised or iterated above, and `Missing` / `None` take
+/// Django's empty branch — so the wider answer is unreachable from here and
+/// every message this arm can emit is byte-identical to what it emitted
+/// before. `test_the_for_refusal_messages_are_unchanged_by_the_unification`
+/// is the pin.
+fn python_type_name_for_iteration(value: &Value) -> &str {
+    filters::python_type_name(value)
 }
 
 fn evaluate_condition_for_if(condition: &str, context: &Context) -> Result<bool> {

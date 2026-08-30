@@ -341,7 +341,9 @@ class TestOneStringifyMechanism:
 
     def test_safeseq_maps_its_items_through_py_str(self) -> None:
         src = FILTERS_RS.read_text(encoding="utf-8")
-        arm = src.split('"safeseq" => match iter_values(value)', 1)
+        # `python_iter` since #2451 — the same sink, wrapped so its `None` can
+        # name the exception Python raises there.
+        arm = src.split('"safeseq" => match python_iter(value)', 1)
         assert len(arm) == 2, "the `safeseq` arm moved — update this pin"
         body = arm[1].split('"escapeseq"', 1)[0]
         assert "py_str()" in body, (

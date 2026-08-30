@@ -981,16 +981,21 @@ class TestTheNarrowingsTheExtractorsInherit:
         records its VALUES by name, so a by-index check can never confuse the
         two — a hostile KEY must never ride a grant its value earned.
 
-        Django is not the bar here and cannot be: its ``first`` is ``value[0]``
-        and its ``last`` is ``value[-1]``, both a ``KeyError`` on a dict, so it
-        500s rather than producing output to compare against. That is a
-        pre-existing shape divergence (djust fails soft), unrelated to safety —
-        so the assertion is the absolute one: nothing live, whatever the grant.
+        Django's ``first`` is ``value[0]`` and its ``last`` is ``value[-1]``,
+        both a ``KeyError`` on a dict with neither key, so it 500s. djust
+        failed soft there until #2451 and now refuses too, which is why this
+        reads as a raise on BOTH sides — but the assertion that matters is
+        still the absolute one, because a future grant regression would show as
+        OUTPUT rather than as a refusal: nothing live, whatever the grant.
         """
         value = {"<img src=x onerror=alert(1)>": mark_safe("z")}
         with pytest.raises(Exception):
             django_render(EXTRACTORS[name], value)
-        out = djust_render(EXTRACTORS[name], value)
+        try:
+            out = djust_render(EXTRACTORS[name], value)
+        except Exception as exc:  # noqa: BLE001 — a refusal is the strongest form
+            assert "KeyError" in str(exc) or "not subscriptable" in str(exc), exc
+            return
         assert payload_capabilities(out) == set(), out
 
     @pytest.mark.parametrize("name", sorted(EXTRACTORS))

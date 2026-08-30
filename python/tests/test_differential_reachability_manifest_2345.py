@@ -166,6 +166,17 @@ class TestTheManifestIsCleanOnMain:
             "chain",
             "whitespace",
             "argument",
+            # The failures the VALUE-side chokepoints raise (#2435/#2451).
+            # Split out of `argument` rather than added beside it: that axis
+            # keeps every literal naming a filter, on the reasoning that
+            # "nothing else in these modules does" — which stopped being true
+            # when `int_value_error` and `value_op_error` arrived. The first
+            # hid the break because `get_digit` and `divisibleby` take an
+            # argument, so `arg_cells()` reaches it by coincidence; the second
+            # is raised only by filters that take NONE, so the argument corpus
+            # could never build a cell for it and the manifest reported it
+            # MISSING from an axis it does not belong to.
+            "value-op",
             "argument-filter",
             "tag",
             # The positions Django's `Variable.__init__` underscore rule runs
