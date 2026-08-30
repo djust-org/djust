@@ -1752,6 +1752,28 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     let grants = dict_view_item_grants(iterable, kind, &items, context);
                     (Value::List(items), true, grants)
                 }
+                // A Python-falsy container with no `Value` variant — `set()`,
+                // `frozenset()`, an empty `dict_keys`, a class whose
+                // `__len__` is 0 — iterates to NOTHING (#2466). Django's
+                // `ForNode` reads `len` when the object has one, so it renders
+                // the `{% empty %}` block for every one of these rather than
+                // raising, and `Encoded::sized_empty` is that `len(o) == 0`
+                // asked at the conversion.
+                //
+                // An `Encoded` that is NOT `sized_empty` falls through to
+                // `other` and reaches the refusal arm below, which is right
+                // for both the members that reach it: a `datetime` has no
+                // `__len__` and `list(dt)` raises, and so does `complex(0)`
+                // and a class whose `__bool__` is `False` with no `__len__`.
+                // The message names `e.type_name`, so it is CPython's own.
+                //
+                // The set of shapes normalised here MUST equal the set
+                // `filters::iter_values` answers `Some` for, or the two
+                // probes disagree about what a value IS (#1646). Pinned by
+                // `for_iterability_agrees_with_iter_values`.
+                Value::Encoded(ref e) if e.sized_empty => {
+                    (Value::List(Vec::new()), true, Vec::new())
+                }
                 other => (other, false, Vec::new()),
             };
 
@@ -2115,6 +2137,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                                     // `iter_values` answers `Some` for, with the
                                     // same count — the pair is pinned by
                                     // `python_len_agrees_with_iter_values`.
+                                    //
+                                    // One shape is exempt there and cannot
+                                    // reach here (#2466): a Python class with
+                                    // only `__len__` has a length and is not
+                                    // iterable, but `falsy_opaque` only ever
+                                    // builds it with length 0, and the arity
+                                    // check above refuses any item whose length
+                                    // is not `var_names.len()` — which is never
+                                    // 0. So the `unwrap_or_default()` below
+                                    // still cannot silently pad.
                                     //
                                     // NO safety grant on any component, and that
                                     // is deliberate rather than an omission.
@@ -5788,6 +5820,134 @@ mod tests {
         ctx.set("count".to_string(), Value::Integer(42));
         ctx.set("name".to_string(), Value::String("hello".to_string()));
         ctx
+    }
+
+    /// `{% for %}`'s own normalisation and `filters::iter_values` answer
+    /// RELATED questions, and this pins the exact relation (#1646, #2466).
+    ///
+    /// The `Node::For` arm does NOT call `iter_values` — it has its own match
+    /// that turns a `String` / `Object` / `DictView` / `sized_empty` `Encoded`
+    /// into a `List` and lets everything else fall to the refusal arm. Two
+    /// implementations of "what does this value iterate to", which is the
+    /// shape that keeps coming back here. They agree today; this is what goes
+    /// red when one of them grows a shape the other does not.
+    ///
+    /// They are NOT the same question, and Django is why. `ForNode.render`
+    /// reads `__len__` when the object has one; the iterating filters are
+    /// comprehensions and call `iter()`. So the for-arm's iterable set is
+    /// `iter_values`'s Some-set PLUS `Value::None` (Django's `values is None`
+    /// arm) PLUS an `Encoded` that is `sized_empty` without being `iterable` —
+    /// a class with a zero `__len__` and no `__iter__`, which renders the
+    /// `{% empty %}` block here and raises from `|safeseq`, exactly as it does
+    /// on Django.
+    ///
+    /// Written as an EQUIVALENCE over that stated relation, so a REMOVED arm
+    /// reddens it as loudly as an added one — and the `(sized_empty,
+    /// !iterable)` sample is what makes the extra term reachable rather than
+    /// decorative.
+    #[test]
+    fn for_iterability_agrees_with_iter_values() {
+        let samples = vec![
+            Value::Missing,
+            Value::None,
+            Value::Bool(true),
+            Value::Integer(7),
+            Value::Float(1.5),
+            Value::Decimal("1.50".to_string()),
+            Value::BigInt("123456789012345678901".to_string()),
+            Value::String("ab".to_string()),
+            Value::String(String::new()),
+            Value::List(vec![Value::Integer(1)]),
+            Value::List(Vec::new()),
+            Value::Tuple(vec![Value::Integer(1)]),
+            Value::Object(IndexMap::new()),
+            Value::DictView {
+                kind: djust_core::DictViewKind::Keys,
+                items: vec![Value::Integer(1)],
+            },
+            // A datetime: no `__len__`, `list(dt)` raises, so BOTH probes must
+            // say "not iterable".
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "datetime.datetime".to_string(),
+                display: "2020-01-01 03:04:05".to_string(),
+                json: "2020-01-01T03:04:05".to_string(),
+                truthy: true,
+                sized_empty: false,
+                iterable: false,
+            })),
+            // A `set()`: `len` 0 and iterable, so both probes say
+            // "iterates to nothing".
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "set".to_string(),
+                display: "set()".to_string(),
+                json: "set()".to_string(),
+                truthy: false,
+                sized_empty: true,
+                iterable: true,
+            })),
+            // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
+            // the empty branch, `iter_values` refuses. The one sample that
+            // makes the two questions distinguishable.
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "LenZero".to_string(),
+                display: "<LenZero object>".to_string(),
+                json: "<LenZero object>".to_string(),
+                truthy: false,
+                sized_empty: true,
+                iterable: false,
+            })),
+        ];
+        // `Value::None` and `Value::Missing` are Django's `values is None`
+        // arm: `ForNode` turns them into `[]` and renders the empty branch,
+        // and `iter_values` answers `Some(vec![])` for `Missing` for the same
+        // reason. `None` is the one place the two spellings differ, and it
+        // differs in the SAME direction (both render), so it is exercised
+        // through the rendered output rather than excluded.
+        let mut refusing = 0;
+        for value in &samples {
+            let mut ctx = Context::new();
+            ctx.set("p".to_string(), value.clone());
+            // The node is built rather than parsed: this test module has no
+            // parser entry point, and the arm under test is the renderer's.
+            let node = Node::For {
+                var_names: vec!["x".to_string()],
+                iterable: "p".to_string(),
+                reversed: false,
+                nodes: vec![Node::Text("[item]".to_string())],
+                empty_nodes: vec![Node::Text("[empty]".to_string())],
+            };
+            let rendered = render_node_with_loader::<NoOpLoader>(&node, &ctx, None);
+            let refuses = rendered.is_err();
+            let for_iterable = filters::iter_values(value).is_some()
+                || matches!(value, Value::None)
+                || matches!(value, Value::Encoded(e) if e.sized_empty);
+            let expected = !for_iterable;
+            assert_eq!(
+                refuses, expected,
+                "{{% for %}} and iter_values disagree about {value:?}: \
+                 for-refuses={refuses}, iter_values-refuses={expected}",
+            );
+            if refuses {
+                refusing += 1;
+            }
+        }
+        // The canary: the sweep is not vacuous in either direction. Six of the
+        // samples refuse and eleven do not, so a change that made EVERYTHING
+        // refuse — or nothing — cannot pass by making the equality trivially
+        // true.
+        assert_eq!(refusing, 6, "expected exactly six refusing samples");
+        assert_eq!(samples.len(), 17);
+        // Non-vacuity for the extra term: the `sized_empty && !iterable`
+        // sample must be one the two probes DISAGREE about, or the relation
+        // above is indistinguishable from a plain equality.
+        let split = samples
+            .iter()
+            .filter(|v| matches!(v, Value::Encoded(e) if e.sized_empty && !e.iterable))
+            .count();
+        assert_eq!(
+            split, 1,
+            "the asymmetric sample is what makes this test able to fail"
+        );
     }
 
     #[test]
