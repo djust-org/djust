@@ -580,10 +580,11 @@ endif
 	@echo "$(YELLOW)Creating release v$(VERSION)...$(NC)"
 	@# Verify we're on main or release branch
 	@BRANCH=$$(git branch --show-current); \
-	if [ "$$BRANCH" != "main" ] && [[ "$$BRANCH" != release/* ]]; then \
-		echo "$(RED)ERROR: Must be on main or release/* branch$(NC)"; \
-		exit 1; \
-	fi
+	case "$$BRANCH" in \
+		main|release/*) ;; \
+		[0-9].[0-9]|[0-9].[0-9][0-9]|[0-9][0-9].[0-9]|[0-9][0-9].[0-9][0-9]) ;; \
+		*) echo "$(RED)ERROR: Must be on main, release/*, or an X.Y maintenance branch (got '$$BRANCH')$(NC)"; exit 1 ;; \
+	esac
 	@# Verify working directory is clean
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "$(RED)ERROR: Working directory not clean$(NC)"; \
