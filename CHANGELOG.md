@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-08-30
+
+Security-only patch release on the `1.1` maintenance branch, closing one XSS
+class 1.1.1 left open: a template **binding** carried a safety grant it had not
+earned. Present in every release from 1.0.0 through 1.1.1.
+
+### Security
+
+- **A `{% with %}`, `{% for %}`, `{% include … with %}` or `{% … as x %}` bind that shadowed a `mark_safe`d name emitted the NEW, attacker-controlled value LIVE (#2361, #2363).** djust's context safety channel is keyed BY NAME — `Context::safe_keys` holds dotted paths written by `rust_bridge._collect_safe_keys`, and `Context::is_safe` answers by looking a NAME up in it. Every construct that binds a resolved value to a name copied the VALUE and left the GRANT attached, so with `p` marked safe anywhere in the view's context, `{% with p=hostile %}{{ p }}{% endwith %}` rendered `<img src=x onerror=alert(1)>` as a real element where Django escapes it. No `|safe`, no custom filter: one prior `mark_safe` on a name, and any template that later binds that name. Eight bind shapes reproduce, each measured on unmodified `1.1` against its own `safe_keys=None` control: `{% with %}` rebinding the granted name and its `p.a` descendant, `{% with %}` binding any other name the context had marked, the `{% for %}` loop variable and its `p.a` descendant, `{% for k, v in … %}` tuple unpacking, `{% include … with %}`, and an assign tag's `{% … as x %}` merge. `{% include … with … only %}` was already inert (the fresh context carries no grants) and is pinned so a future change cannot quietly reintroduce it.
+
+  The cure is a rule about the **operation**, not the values: **a bind REPLACES the grant.** `Context::bind` revokes `name` and every `name.…` beneath it before attaching the new value; the `{% for %}` arm hoists that same revoke out of its iteration — identical in effect, since every iteration binds the same names, and `O(len(safe_keys))` once instead of per item. The descendants go because they described the value being SHADOWED: with `p.a` marked, leaving them makes `{% with p=hostile %}{{ p.a }}{% endwith %}` emit raw. Stating the rule the other way round — "a bind also CARRIES a grant", which is what the two issues above asked for, both being **over**-escapes — would have left this leak open. Both directions are the same rule, and `main` states it the same way (PR #2378).
+
+  **Both directions are tested.** The two channels that legitimately carry a grant across a bind on this branch are asserted still live: the `{% for %}` positional loop mapping (`x` → `items.<index>`, including dotted `r.body` paths), and a plain `{% include %}`'s inherited parent context. So are unrelated and prefix-sharing sibling names (`pp` is not beneath `p`), and the parent context's own grant after the block ends.
+
+### Known divergences from Django, unchanged by this release
+
+- `{% with q=p %}` over a marked `p` binds a NEW name and stays **escaped** where Django renders it live. This arm resolves its operand with a bare `Context::get`, so there is no runtime-safe bool to attach and the honest replacement grant is "none". Over-escaping, and `main` behaves the same way — its `Context::bind` takes a `safe` bool from `get_value_safe`, which returns `false` for a bare context name there too. Pinned rather than silently accepted.
+- `{% with q=p|filter %}` does not resolve the filter at all on 1.1.x; it binds the literal token `p|filter`. A pre-existing resolution gap (`main`'s #2325), not an escaping defect. Pinned so the fix cannot be read as having caused it.
+
+### Not fixed in 1.1.2
+
+- The **over-escape** half of this defect — `main`'s #2363 (`{% with body=post.text|linebreaks %}` renders escaped tag text) and #2361 (a `mark_safe` value reached through `d.values` / `d.items` loses its mark). Both need machinery this branch does not have: a filter pipeline in the `{% with %}` arm, and the `Value::DictView` normalisation the `{% for %}` arm gained on `main`. Backporting either is a feature change, not a patch. Neither is a leak — both escape more than Django, which is the direction to fail in.
+
+### Verification
+
+All eight leaking shapes reproduce on unmodified `1.1` and are closed here, with the two legitimate-grant shapes and the `only` case unchanged. Gate-off across 7 mutations — mutation text asserted present at its declared count, source asserted changed, the Rust crate rebuilt and its `.so` mtime asserted to advance each iteration, `__pycache__` cleared, `N error` counted separately from `N failed` — all 7 RED, 0 survivors, 0 INVALIDs, and every mechanism has at least one test that goes red for it alone: neutering only the descendant sweep fails exactly the two `p.a` cases and nothing else. Both sources restored byte-identical. 10,302 Python tests across `tests/`, `python/tests/` and `python/djust/tests/`, 0 failed; `make test-rust` green across 44 test binaries; clippy, `cargo fmt --check` and ruff clean.
+
+New cases in `TestABindRevokesAStaleGrant`, `TestALegitimateGrantStillReachesItsValue`, `TestTheAcceptedDivergences` and `TestEveryAssignTagMergeSiteUsesTheBind`, plus `context::tests` in `crates/djust_core/src/context.rs`. Every Python case runs through `_rust.render_template_with_dirs` — the only entry point carrying `safe_keys` — with keys from the **production** collector, renders the same template twice (channel off, then on) so a green cell cannot mean the channel was never engaged, and asserts liveness **structurally** (an `<img>` opening tag carrying an `onerror` attribute) rather than by substring, paired with a positive assertion that the payload arrived escaped so no case can pass by the payload never reaching the output. The three assign-tag merge sites are pinned as a **set**, not a floor, so a fourth added with a bare `set` fails.
+
 ## [1.1.1] - 2026-08-29
 
 Security-only patch release on the `1.1` maintenance branch. Six live XSS
