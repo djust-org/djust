@@ -191,31 +191,21 @@ class TestTheReferenceTableIsRunNotTranscribed:
     """
 
     def test_no_cell_renders_where_django_refuses(self) -> None:
-        """...except on a `timedelta`, and that exception is #2467 rather than
-        this fix — pinned as an exact SET so it cannot go stale.
+        """No exceptions — and for twelve cells that is new, as of #2467.
 
-        `outcome(..., "djust")` renders through
-        `normalize_django_value`, so this sweep's djust column is the
-        **LiveView** path. #2469 put a `timedelta` in the corpus and twelve
-        cells appeared here at once: the normalizer flattens it to the ISO
-        duration string `"P0DT00H00M00S"` in Python, so djust iterates the
-        thirteen CHARACTERS of that string where Django raises
-        `TypeError: 'datetime.timedelta' object is not iterable`.
-        `{{ p|unordered_list }}` emits thirteen `<li>`s; `{{ p|first }}` is
-        `'P'`; `{{ p|phone2numeric }}` is `7038004006007`.
+        `outcome(..., "djust")` renders through `normalize_django_value`, so
+        this sweep's djust column is the **LiveView** path. #2469 put a
+        `timedelta` in the corpus and twelve cells appeared here at once: the
+        normalizer flattened it to the ISO duration string `"P0DT00H00M00S"` in
+        Python, so djust iterated the thirteen CHARACTERS of that string where
+        Django raises `TypeError: 'datetime.timedelta' object is not iterable`
+        — `{{ p|unordered_list }}` emitted thirteen `<li>`s, `{{ p|first }}` was
+        `'P'`, `{{ p|phone2numeric }}` was `7038004006007`.
 
-        The same twelve cells REFUSE on the RAW path — `render_template` with
-        the object, where `Value::Encoded` reaches this chokepoint and is
-        correctly not a sequence — measured, not assumed. So this is not a hole
-        in #2451's chokepoint; it is the two djust paths answering differently
-        because one of them destroys the type first, which is exactly what
-        #2467 is about, in its most consequential form: djust is MORE
-        PERMISSIVE than Django on the path most djust pages actually use.
-
-        Asserted as equality rather than as an allow-list membership so it
-        works in both directions (#1859): a thirteenth offender fails, and so
-        does closing #2467, which forces this pin to be deleted with that fix
-        rather than left behind as a stale exemption.
+        They refused on the RAW path throughout, which is what identified it as
+        the flattening rather than a hole in this chokepoint. #2467 stopped the
+        flattening; the exact-set pin that recorded the twelve is deleted with
+        it, per its own terms.
         """
         offenders = []
         for name in ALL_SEVEN:
@@ -227,27 +217,26 @@ class TestTheReferenceTableIsRunNotTranscribed:
                 du = outcome(source, value, "djust")
                 if dj.startswith("<<") and not du.startswith("<<"):
                     offenders.append((name, key, dj, du))
-        assert [(n, k) for n, k, _a, _b in offenders] == [
-            (name, key)
-            for name in ("escapeseq", "safeseq", "unordered_list", "first", "last", "phone2numeric")
-            for key in ("td-zero", "td-plain")
-        ], f"{len(offenders)} cells render where Django refuses:\n" + "\n".join(
+        assert not offenders, f"{len(offenders)} cells render where Django refuses:\n" + "\n".join(
             f"  {n} <{k}>: django={a} djust={b!r}" for n, k, a, b in offenders[:15]
         )
 
-    def test_2467_the_same_twelve_cells_refuse_on_the_RAW_path(self) -> None:
-        """The other half of the claim above, run rather than asserted.
+    def test_2467_a_timedelta_refuses_on_BOTH_paths_now(self) -> None:
+        """Non-vacuity for the twelve cells the sweep above stopped reporting.
 
-        If these twelve refused on both paths, the pin above would be a hole in
-        this fix's own chokepoint. They do not: handed the `timedelta` OBJECT,
-        `Value::Encoded` reaches the chokepoint and is refused like any other
-        non-sequence. The offender set exists only because the LiveView path
-        replaced the object with a string before Rust could see it.
+        `not offenders` passing is also what a corpus with no `timedelta` in it
+        would print, so the claim is asserted directly: the same value, the same
+        six filters, refused through the normalizer AND through the raw entry
+        point. Before #2467 only the second half held.
         """
         for name in ("escapeseq", "safeseq", "unordered_list", "first", "last", "phone2numeric"):
             for key in ("td-zero", "td-plain"):
                 with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
                     _rust.render_template("{{ p|%s }}" % name, {"p": CORPUS[key]})
+                with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
+                    _rust.render_template(
+                        "{{ p|%s }}" % name, normalize_django_value({"p": CORPUS[key]})
+                    )
 
     def test_no_cell_refuses_where_django_renders(self) -> None:
         """The other direction, and the one a refusal-shaped fix gets wrong.
@@ -682,16 +671,21 @@ class TestTheResidueThisDoesNotTouch:
         # Both paths render: `int()` has only text on either one.
         assert _rust.render_template('{{ p|get_digit:"1" }}', normalize_django_value({"p": value}))
         assert _rust.render_template('{{ p|get_digit:"1" }}', {"p": value})
-        # …and on the RAW path the boundary now carries the type, which is the
-        # half of the old docstring that #2448 falsified. Without this the
-        # rewritten reason is prose again: the same value, one filter over,
-        # names the real Python type.
-        with pytest.raises(RuntimeError) as exc:
-            _rust.render_template("{{ p|first }}", {"p": value})
-        assert "datetime.datetime" in str(exc.value), str(exc.value)
-        # And the normalized path does NOT, which is what makes it a PATH
-        # split rather than a fix that half-landed.
-        assert _rust.render_template("{{ p|first }}", normalize_django_value({"p": value})) == "2"
+        # …and BOTH now carry the type, which is the half of the original
+        # docstring #2448 falsified for the raw path and #2467 falsified for
+        # the normalized one. Without this the rewritten reason is prose again:
+        # the same value, one filter over, names the real Python type.
+        #
+        # `get_digit` itself is the surviving cell, and it survives for the
+        # reason stated above — `Value::Encoded` carries `str()` and the
+        # encoder's JSON, no integer — so `int()` still answers `ValueError`
+        # where Django gets a `TypeError`. That gap is filed as #2473; it is a
+        # question about `get_digit`'s refusal, not about which path the value
+        # took, which is why closing #2467 did not close it.
+        for context in (normalize_django_value({"p": value}), {"p": value}):
+            with pytest.raises(RuntimeError) as exc:
+                _rust.render_template("{{ p|first }}", context)
+            assert "datetime.datetime" in str(exc.value), str(exc.value)
 
     def test_the_survivors_were_get_digits_RETURN_TYPE_and_are_CLOSED(self) -> None:
         """**Inverted by #2459**, as this test's first version said it should be.
@@ -968,47 +962,56 @@ class TestTheDatetimeFamilyReachesTheChokepointWithItsRealTypeName:
         assert outcome(source, text, "django") == self._raw_outcome(source, text) == "2"
 
 
-class TestTheLiveViewPathNormalizesBeforeRustSeesIt:
-    """The other path, pinned rather than left as a surprise (#2448 merge).
+class TestTheLiveViewPathCarriesTheTypeSince2467:
+    """The residue this class was written to record, INVERTED (#2467).
 
-    `normalize_django_value` converts a `datetime` to an ISO string in PYTHON,
-    so on the LiveView path the type is gone before `Value::Encoded` can carry
-    it and the seven filters see a `str` — which subscripts and iterates.
+    It read: *"`normalize_django_value` converts a `datetime` to an ISO string
+    in PYTHON, so on the LiveView path the type is gone before `Value::Encoded`
+    can carry it and the seven filters see a `str` — which subscripts and
+    iterates. This is NOT closed by #2448 and is not claimed to be."*
 
-    This is NOT closed by #2448 and is not claimed to be: the Rust variant
-    cannot see a value the Python pre-pass already flattened. Recorded here
-    because a residue nobody wrote down is indistinguishable from a fix that
-    did not work, and because the two paths disagreeing about the same template
-    is the shape worth knowing about.
+    That was exactly right, and writing it down is what made it findable: the
+    normalizer now carries the value UNCONVERTED (the `Decimal` split, #2239),
+    so `Value::Encoded` reaches this chokepoint on both paths and both refuse.
+    Inverted rather than deleted, the way #2462 inverted #2448's pins — a
+    residue that leaves no test behind is one nobody would notice reopening.
+
+    The class name changed with the claim, deliberately: a class still called
+    `…NormalizesBeforeRustSeesIt` with inverted bodies is worse than either.
     """
 
     VALUE = datetime.datetime(2020, 1, 1, 3, 4, 5)
 
-    def test_the_normalizer_flattens_the_type_in_python(self) -> None:
-        flattened = normalize_django_value({"p": self.VALUE})["p"]
-        assert isinstance(flattened, str), type(flattened)
-        assert flattened == "2020-01-01T03:04:05"
+    def test_the_normalizer_carries_the_type_into_python(self) -> None:
+        carried = normalize_django_value({"p": self.VALUE})["p"]
+        assert carried is self.VALUE, type(carried)
 
     @pytest.mark.parametrize("name", SUBSCRIPTERS + ITERATORS)
-    def test_so_the_seven_see_a_string_and_do_not_refuse(self, name: str) -> None:
+    def test_so_the_seven_see_the_OBJECT_and_refuse_as_django_does(self, name: str) -> None:
         source = "{{ p|%s }}" % name
-        # Django, holding the real object, refuses.
+        # Django, holding the real object, refuses...
         assert outcome(source, self.VALUE, "django").startswith("<<")
-        # djust on the NORMALIZED path renders, because it has a string.
-        assert not outcome(source, self.VALUE, "djust").startswith("<<")
+        # ...and so does djust on the normalized path, which is the change.
+        assert outcome(source, self.VALUE, "djust").startswith("<<")
 
-    def test_and_the_raw_path_refuses_which_is_what_makes_this_a_PATH_split(
+    def test_and_the_raw_path_answers_the_SAME_which_is_what_closed_the_split(
         self,
     ) -> None:
-        """Non-vacuity: the same value, same template, two answers.
+        """Non-vacuity, inverted with the rest: the same value, same template,
+        now ONE answer.
 
-        Without this the class above reads as "djust does not refuse a
-        datetime", which is false of the path #2448 fixed.
+        The old version asserted the two paths differ; this asserts they agree,
+        and names the type in the message so a future regression that refuses
+        for an unrelated reason is not mistaken for this passing.
         """
         source = "{{ p|first }}"
-        assert not outcome(source, self.VALUE, "djust").startswith("<<")
-        with pytest.raises(RuntimeError):
+        assert outcome(source, self.VALUE, "djust").startswith("<<")
+        with pytest.raises(RuntimeError) as exc:
+            _rust.render_template(source, normalize_django_value({"p": self.VALUE}))
+        assert "datetime.datetime" in str(exc.value), str(exc.value)
+        with pytest.raises(RuntimeError) as raw:
             _rust.render_template(source, {"p": self.VALUE})
+        assert "datetime.datetime" in str(raw.value), str(raw.value)
 
 
 class TestAnAbsentVariableIsStringIfInvalidOnEveryOneOfTheSeven:

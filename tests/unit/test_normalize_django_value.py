@@ -105,32 +105,39 @@ class TestUUID:
 
 
 class TestDateTimeTypes:
-    """datetime, date, time -> isoformat strings."""
+    """datetime, date, time, timedelta -> the value ITSELF (#2467); the
+    encoder's string only at the ``state_roundtrip=True`` boundary.
 
-    def test_datetime_isoformat(self):
+    These four asserted the isoformat string until #2467, which stopped the
+    pre-pass flattening so the Rust renderer builds ``Value::Encoded`` (#2448)
+    on the LiveView path as it already did on the raw one. Each row keeps BOTH
+    halves — carried, and converted at the boundary — because the pair is the
+    whole contract, and asserting only the first would let the boundary silently
+    stop converting.
+    """
+
+    def test_datetime_is_carried_and_converts_at_the_boundary(self):
         dt = datetime(2024, 1, 15, 10, 30, 0)
-        result = normalize_django_value(dt)
-        assert result == "2024-01-15T10:30:00"
-        assert isinstance(result, str)
+        assert normalize_django_value(dt) is dt
+        assert normalize_django_value(dt, state_roundtrip=True) == "2024-01-15T10:30:00"
 
-    def test_date_isoformat(self):
+    def test_date_is_carried_and_converts_at_the_boundary(self):
         d = date(2024, 1, 15)
-        result = normalize_django_value(d)
-        assert result == "2024-01-15"
-        assert isinstance(result, str)
+        assert normalize_django_value(d) is d
+        assert normalize_django_value(d, state_roundtrip=True) == "2024-01-15"
 
-    def test_time_isoformat(self):
+    def test_time_is_carried_and_converts_at_the_boundary(self):
         t = time(10, 30, 0)
-        result = normalize_django_value(t)
-        assert result == "10:30:00"
-        assert isinstance(result, str)
+        assert normalize_django_value(t) is t
+        assert normalize_django_value(t, state_roundtrip=True) == "10:30:00"
 
-    def test_timedelta_iso_string(self):
+    def test_timedelta_is_carried_and_converts_at_the_boundary(self):
         td = timedelta(days=1, hours=2, minutes=30)
-        result = normalize_django_value(td)
+        assert normalize_django_value(td) is td
+        stored = normalize_django_value(td, state_roundtrip=True)
         # Django's duration_iso_string produces ISO-8601 format
-        assert isinstance(result, str)
-        assert "P" in result  # ISO-8601 duration starts with P
+        assert isinstance(stored, str)
+        assert "P" in stored  # ISO-8601 duration starts with P
 
 
 class TestDictRecursion:

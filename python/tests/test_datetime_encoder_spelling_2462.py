@@ -526,47 +526,70 @@ class TestThreeTestsWereBlindOnComplementaryAxes:
 
 
 class TestWhatThisDeliberatelyDoesNOTClose:
-    """Pinned as still-divergent so a stale exemption goes red (#1859)."""
+    """Pinned as still-divergent so a stale exemption goes red (#1859).
+
+    Three of the four rows below have since gone red on purpose: #2467 stopped
+    the LiveView flattening this class recorded, so they are INVERTED here
+    rather than deleted — exactly the treatment this file gave #2448's four
+    rows above. What is left genuinely un-closed is #2429's aware `time`.
+    """
 
     @pytest.mark.parametrize("us", [0, 123456])
     def test_an_aware_time_still_emits_where_django_refuses(self, us: int) -> None:
+        """#2429's decision, still open and still the only row here that is.
+
+        The `normalize_django_value` assertion moved to the ROUNDTRIP form
+        (#2467): the pre-pass now carries the object, so the permissive
+        spelling is what the boundary that must produce a string writes.
+        """
         value = datetime.time(3, 4, 5, us, tzinfo=UTC)
         with pytest.raises(ValueError):
             RealEncoder().default(value)
         # djust stays permissive (#2429), with the pre-fix spelling.
         assert django_json_datetime(value) == value.isoformat()
-        assert normalize_django_value(value) == value.isoformat()
+        assert normalize_django_value(value, state_roundtrip=True) == value.isoformat()
         assert json.loads(_dumps(value, DjustEncoder)) == value.isoformat()
+        # And the value itself is carried for the renderer, like every other
+        # member of the family — an aware `time` is not a special case there.
+        assert normalize_django_value(value) is value
 
-    def test_the_liveview_path_still_flattens_before_rust_sees_it(self) -> None:
-        """`Value::Encoded` (#2448) is never built on this path, so `{{ p }}`
-        renders the FLATTENED string rather than `str(o)`.
+    def test_the_liveview_path_carries_the_type_since_2467(self) -> None:
+        """**Inverted by #2467.**
 
-        Spelling that string correctly is what this fix does; not flattening at
-        all is a larger change to what every consumer of the function receives.
+        It read: *"`Value::Encoded` (#2448) is never built on this path, so
+        `{{ p }}` renders the FLATTENED string rather than `str(o)`. Spelling
+        that string correctly is what this fix does; not flattening at all is a
+        larger change to what every consumer of the function receives."*
+
+        That larger change is #2467, and the consumer audit it names is what
+        that PR ran. `{{ p }}` on the LiveView path now renders `str(o)`.
         """
-        flattened = normalize_django_value({"p": datetime.datetime(2020, 1, 1, 3, 4, 5)})["p"]
-        assert isinstance(flattened, str), type(flattened)
-        assert flattened != str(datetime.datetime(2020, 1, 1, 3, 4, 5))
+        value = datetime.datetime(2020, 1, 1, 3, 4, 5)
+        assert normalize_django_value({"p": value})["p"] is value
 
-    def test_the_bare_render_spelling_of_an_aware_datetime_changed(self) -> None:
-        """The cost, stated rather than discovered later.
+    def test_the_bare_render_spelling_of_an_aware_datetime_changed_TWICE(self) -> None:
+        """The cost, stated rather than discovered later — and then reversed.
 
-        On the LiveView path `{{ p }}` renders the pre-pass's string, so an
-        aware datetime now renders `…Z` where it rendered `…+00:00`. Both
-        already diverged from Django, which LOCALIZES a bare datetime
-        (`Jan. 1, 2020, 3:04 a.m.`); this moves one non-Django spelling to
-        another and buys exact JSON parity.
+        This fix (#2462) made an aware datetime render `…Z` on the LiveView
+        path where it rendered `…+00:00`, because `{{ p }}` rendered the
+        pre-pass's string. #2467 stopped the pre-pass converting at all, so it
+        renders `str(o)` — `…+00:00` again, and now identical to the raw path.
+
+        Both spellings diverge from Django, which LOCALIZES a bare datetime
+        (`Jan. 1, 2020, 3:04 a.m.`); what #2467 bought is that djust's own two
+        paths agree. The JSON parity this fix is actually about is untouched,
+        and the second assertion is what says so.
         """
         from djust import _rust
 
         value = datetime.datetime(2020, 1, 1, 3, 4, 5, tzinfo=UTC)
-        assert normalize_django_value(value) == "2020-01-01T03:04:05Z"
-        # And the string still parses as the same instant, so every date filter
-        # downstream is unaffected — which is the half that would have been a
-        # regression rather than a cost.
-        assert _rust.render_template(
-            '{{ p|date:"Y-m-d H:i:s e" }}', {"p": normalize_django_value(value)}
-        ) == _rust.render_template(
+        assert normalize_django_value(value, state_roundtrip=True) == "2020-01-01T03:04:05Z"
+        assert json.loads(_dumps(value, DjustEncoder)) == "2020-01-01T03:04:05Z"
+        # The instant is unchanged either way, so every date filter downstream
+        # is unaffected — the half that would have been a regression rather
+        # than a cost, asserted across BOTH spellings and the live object.
+        expected = _rust.render_template(
             '{{ p|date:"Y-m-d H:i:s e" }}', {"p": "2020-01-01T03:04:05+00:00"}
         )
+        for carried in (value, "2020-01-01T03:04:05Z", normalize_django_value(value)):
+            assert _rust.render_template('{{ p|date:"Y-m-d H:i:s e" }}', {"p": carried}) == expected
