@@ -48,7 +48,7 @@ The **KeyError** class.  A ``dict`` IS subscriptable, so Django gets past the
 ``TypeError`` and raises ``KeyError: 0`` from ``d[0]`` instead.  That is a
 different exception class reachable only by implementing the integer-key lookup
 (and one that can legitimately SUCCEED, for a dict with an integer key), so it
-is filed rather than folded in — and pinned as still-divergent below.
+is filed as #2457 rather than folded in — and pinned as still-divergent below.
 
 Every expectation here is LIVE Django, never a transcription.
 """
@@ -255,7 +255,7 @@ class TestWhatThisDeliberatelyDoesNOTClose:
 
         A different exception class, reachable only by implementing the
         integer-key lookup — which can legitimately SUCCEED for a dict that has
-        an integer key, so it is not a refusal rule at all. Filed, not folded
+        an integer key, so it is not a refusal rule at all. Filed as #2457, not folded
         into a `TypeError` fix.
         """
         src = "{{ p|%s }}" % name

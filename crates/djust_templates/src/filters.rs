@@ -2291,7 +2291,7 @@ fn apply_builtin_filter(
 /// divergence rather than agreement: a dict is subscriptable, so Django gets
 /// past the `TypeError` and raises `KeyError: 0` from `d[0]` instead — a
 /// different exception class, reachable only by implementing the integer-key
-/// lookup, and filed rather than folded in.
+/// lookup, and filed as #2457 rather than folded in.
 fn is_python_scalar(value: &Value) -> bool {
     match value {
         Value::Bool(_)

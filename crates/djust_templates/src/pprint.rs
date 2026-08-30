@@ -100,7 +100,8 @@ fn flat_repr(value: &Value) -> String {
         // the `Decimal` arm above spells `Decimal('…')`; that is out of reach
         // here because `Encoded` carries `str()` and the encoder's JSON and not
         // `repr()`, and adding a fourth field to fix `|pprint` is a divergence
-        // this JSON-spelling fix did not come to close. Filed, not folded in.
+        // this JSON-spelling fix did not come to close. Filed as #2458's sibling
+        // question; not folded in.
         Value::Encoded(e) => py_repr_string(&e.display),
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(flat_repr).collect();

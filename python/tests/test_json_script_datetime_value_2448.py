@@ -438,7 +438,7 @@ class TestWhatThisDeliberatelyDoesNOTClose:
 
         `Value::Encoded::is_truthy` deliberately keeps the pre-#2448 answer: a
         truthiness change is not something a JSON-spelling fix should make
-        silently.  Filed, not folded in.
+        silently.  Filed as #2458, not folded in.
         """
         src = "{% if p %}T{% else %}F{% endif %}"
         assert bool(datetime.timedelta(0)) is False

@@ -521,7 +521,7 @@ class TestTheFalsinessResidueIsNamed:
         #: and its text was not in the falsy set either.  Unchanged, not
         #: introduced; the same one-line question as ``{% if timedelta(0) %}``,
         #: which djust answers ``True`` and Django ``False``.  Filed, not folded
-        #: into a JSON-spelling fix.
+        #: into a JSON-spelling fix (#2458).
         FALSY_BUT_DELIBERATELY_NOT_ACCEPTED = {"Encoded"}
 
         unmapped = variants - set(FALSY_TEXT) - FALSY_BUT_DELIBERATELY_NOT_ACCEPTED

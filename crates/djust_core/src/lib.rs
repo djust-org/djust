@@ -894,7 +894,7 @@ impl Value {
             // there, and it was True here when a `timedelta` was a
             // `Value::String("0:00:00")`. Fixing that is a truthiness change
             // this JSON-spelling fix has no business making silently; it is
-            // filed rather than folded in.
+            // filed as #2458 rather than folded in.
             Value::Encoded(e) => !e.display.is_empty(),
             Value::List(l) => !l.is_empty(),
             Value::Tuple(t) => !t.is_empty(),
@@ -1607,7 +1607,7 @@ impl<'py> IntoPyObject<'py> for Value {
             // right there because a type change would break `isinstance`
             // downstream; here there is no type to change back TO, because
             // there was none before this variant either. Widening the round
-            // trip is a separate behaviour change, filed rather than folded in.
+            // trip is a separate behaviour change, filed as #2458 rather than folded in.
             Value::Encoded(e) => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
             // Back to a real `decimal.Decimal`, not a str: a value that made
             // the round-trip as a Decimal must come back as one, or handlers
