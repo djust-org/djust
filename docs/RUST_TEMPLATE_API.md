@@ -868,6 +868,31 @@ limit is a comparison bound, never an allocation.
 `{% if p|center:missing %}` takes the `{% else %}` branch. That applies to the
 unresolvable case only — `{% if p|center:"nope" %}` still raises.
 
+### Filter values: `int(value)` refuses too
+
+Four built-ins call `int()` on the **value** rather than on the argument, and
+each of their Django bodies catches a *different* subset of what `int()` can
+raise — so which exception it is decides whether the page renders:
+
+| filter | Django's body | `int("abc")`<br>`ValueError` | `int(None)`, `int([1])`<br>`TypeError` | `int(±inf)`<br>`OverflowError` |
+|---|---|---|---|---|
+| `divisibleby` | `int(value) % int(arg)` | raises | raises | raises |
+| `get_digit` | `except ValueError: return value` | the input | raises | raises |
+| `add` | `except (ValueError, TypeError)` | concatenates, else `""` | `""` | raises |
+| `filesizeformat` | `except (TypeError, ValueError, UnicodeDecodeError)` | `0 bytes` | `0 bytes` | raises |
+
+`int(float("nan"))` is a **ValueError** and `int(float("inf"))` an
+**OverflowError**, which is why `{{ p|filesizeformat }}` renders `0 bytes` for
+a NaN and refuses the template for an infinity. A `Decimal` behaves the same
+way (`Decimal("NaN")` / `Decimal("Infinity")`).
+
+The reader is Python's `int()`, not a Rust parse: `" 5 "`, `"+5"`, `"1_0"` and
+`"007"` all work, `True` is `1`, a float truncates toward zero, and a value
+past `i64` keeps every digit — `{{ big|divisibleby:"7" }}` on a 31-digit `int`
+is exact. `"2.5"` does **not** work, because `int("2.5")` is a `ValueError`
+(`float("2.5")` is fine, and that difference is why `{% widthratio %}`'s third
+operand refuses strings its first two accept).
+
 A raised filter error reaches Python as
 `RuntimeError: Template error: …`, naming the filter and the offending argument.
 Over a LiveView WebSocket it is caught by the consumer, which sends an error

@@ -170,10 +170,20 @@ def test_get_digit_reads_int_of_the_value_not_the_rendering(n: int, value: float
         # Django's `except` here covers only the `int(value)` ValueError and the
         # `str(value)[-arg]` IndexError, so `int(inf)`'s OverflowError and the
         # `int('-')` a negative value's sign position produces both escape and
-        # 500 the page. djust renders rather than 500ing on a value it used to
-        # render — a documented divergence, asserted rather than skipped so it
-        # cannot silently become a fabricated digit.
-        djust_out = _rust.render_template(source, normalize_django_value({"p": value}))
+        # 500 the page.
+        #
+        # djust used to RENDER `str(value)` here; #2435 routed `get_digit`
+        # through the `int(value)` chokepoint, which knows an OverflowError is
+        # not a ValueError, so an infinity now refuses the template as Django
+        # does. The `int('-')` sign-position case is a different arm — it never
+        # reaches `int(value)` at all — and still fails soft, so both outcomes
+        # are asserted rather than one blanket `pytest.raises`, and neither can
+        # silently become a fabricated digit.
+        try:
+            djust_out = _rust.render_template(source, normalize_django_value({"p": value}))
+        except RuntimeError as exc:
+            assert "calls int() on its value" in str(exc), f"{value!r} -> {exc}"
+            return
         assert djust_out == str(value), f"{value!r} -> {djust_out!r}"
         return
     _, djust_out = render_both(source, value)

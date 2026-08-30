@@ -842,12 +842,22 @@ class TestChokepointIsTheOnlyParser:
 
 
 class TestTheValueAxisIsUntouched:
-    """The argument is one half of `int(value) % int(arg)`; the value keeps its
-    own fail-soft answer, or this fix would have changed two things at once.
+    """The argument is one half of `int(value) % int(arg)`; #2328 changed only
+    that half, and the value kept its own fail-soft answer so the fix would not
+    change two things at once.
+
+    #2435 has since closed the OTHER half, through its own `int(value)`
+    chokepoint. This class keeps its name and its remaining rows because what
+    it pins is still true — nothing here reads the ARGUMENT — and the row that
+    named the deferred half now asserts the answer that half arrived at.
     """
 
-    def test_divisibleby_still_fails_soft_on_an_unparseable_value(self) -> None:
-        assert _rust.render_template('{{ p|divisibleby:"2" }}', {"p": "notanumber"}) == "False"
+    def test_divisibleby_now_raises_on_an_unparseable_value_too(self) -> None:
+        """Was `"False"` until #2435. `int("notanumber")` is a ValueError that
+        `int(value) % int(arg)` does not catch, and the message names the
+        VALUE chokepoint, so the two halves stay distinguishable."""
+        with pytest.raises(RuntimeError, match="calls int\\(\\) on its value"):
+            _rust.render_template('{{ p|divisibleby:"2" }}', {"p": "notanumber"})
 
     def test_a_parsed_width_of_zero_still_raises_for_its_own_reason(self) -> None:
         """`wordwrap:0` is `textwrap._wrap_chunks`'s guard, not `int()`'s, and

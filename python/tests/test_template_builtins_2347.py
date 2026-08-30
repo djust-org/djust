@@ -476,7 +476,16 @@ class TestOnlyAddWasBrokenByTheBareLiteral:
     #  the value). Each row is a cell measured as divergent on the argument
     #  axis before this change.
     _ROWS = [
-        ("divisibleby", "True", "1", 1.5),
+        # `divisibleby` was here until #2435, and it left the same way
+        # `get_digit`, `stringformat`, `date` and `time` did. Its numeric
+        # control `{{ 1.5|divisibleby:1 }}` diverged because djust's VALUE-side
+        # `int()` read `Value::Integer` and a `parse::<i64>()` on a string and
+        # nothing else — a float was simply unreadable, so the answer was
+        # `False` where Django says `int(1.5) % int(1) == 0`. So the cell
+        # belonged to the value axis, not to the bare-literal one this class
+        # tests. With the `int(value)` chokepoint in place BOTH spellings agree
+        # (measured: `divisibleby:True` and `divisibleby:1` are `True` on both
+        # engines over `1.5`), so the row has nothing left to assert.
         ("dictsort", "False", "0", "ab"),
         ("pluralize", "True", "1", 5),
         # `get_digit` was here until #2403, and it left the same way
