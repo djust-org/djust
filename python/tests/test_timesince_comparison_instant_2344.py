@@ -62,6 +62,7 @@ that ordering, asserted from both sides.
 from __future__ import annotations
 
 import datetime
+import decimal
 import importlib.util
 import json
 import os
@@ -398,13 +399,34 @@ class TestTheValueDecidesFirst:
 
 
 class TestTheFalsinessResidueIsNamed:
-    """What the string-level falsiness rule can and cannot recover.
+    """What the falsiness rule can and cannot recover — re-derived for #2458.
 
-    The argument reaches the dispatch table as a STRING — a quoted literal
-    verbatim, or a resolved context value through `Value`'s `Display` — so
-    Python's truthiness has to be recovered from the text plus the quoting hint.
-    Enumerating that is the honest form; asserting "it is exact" would be
-    false.
+    It used to be a STRING-level rule: the argument reaches the dispatch table
+    as text (a quoted literal verbatim, or a resolved context value through
+    `Value`'s `Display`), so `timesince_arg_is_falsy` recovered Python's
+    truthiness from that text plus the quoting hint. Enumerating what a text
+    rule could not recover was the honest form of the claim, and this class was
+    that enumeration.
+
+    #2458 replaced the text rule with the value-typed answer that already
+    existed one level up — `ArgType::is_falsy` (#2413), which reads
+    `Value::is_truthy` on the RESOLVED argument, the object Django actually
+    tests. Three of the residues this class named were consequences of asking
+    the text rather than the object, and all three closed with it:
+
+    * a resolved `str` `"0"` / `"None"` / `"False"` was read as the falsy
+      object it spells; it is now truthy, and djust raises exactly where Django
+      does;
+    * an empty list under `legacy_display` (which renders EVERY sequence as
+      `[List]`) was indistinguishable from a full one; the `Value` is not;
+    * `timedelta(0)` could not be accepted at all, because its `Display` text
+      `"0:00:00"` is shared with a perfectly ordinary truthy `str` — which is
+      the whole of why #2458 needed a value-typed bit rather than a text edit.
+
+    What is left is the ONE residue that is genuinely about the wire format and
+    not about truthiness: a resolved `str` that is DATE-shaped is read as the
+    datetime it spells, because a Python `datetime` crosses into Rust as a
+    string and has no other spelling.
     """
 
     def test_the_legacy_render_mode_spells_False_differently_and_is_handled(self) -> None:
@@ -435,126 +457,107 @@ class TestTheFalsinessResidueIsNamed:
             "{{ p|timesince }}", {"p": NOON}
         )
 
-    def test_the_legacy_mode_cannot_tell_an_empty_sequence_from_a_full_one(self) -> None:
-        """The one residue the two-mode rule does NOT close, stated.
+    def test_the_legacy_mode_sequence_residue_is_CLOSED_by_the_value_typed_answer(
+        self,
+    ) -> None:
+        """The residue the two-mode TEXT rule could not close, now closed
+        (#2458).
 
         `legacy_display` renders EVERY sequence as the literal `[List]`, so an
-        empty list is indistinguishable from a full one — and both are
-        non-dates, so Django measures from now for the first and raises for the
-        second. djust raises for both.
+        empty list and a full one had the same text — and both are non-dates,
+        so Django measures from now for the first and raises for the second
+        while djust raised for both.
 
-        In the DEFAULT mode there is no such gap: `[]` and `['a']` have
-        different texts, and the first is in the falsy set. This is a
-        legacy-flag residue, not a general one.
+        `ArgType::is_falsy` reads the `Value`, which is `List([])` either way
+        the renderer would have spelled it, so the flag cannot reach the
+        answer at all. Both modes now agree with Django.
         """
-        _rust.set_django_value_repr(False)
-        try:
-            assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": []})
-            assert not raises_django("{{ p|timesince:q }}", {"p": NOON, "q": []})
-        finally:
-            _rust.set_django_value_repr(True)
-        # The default mode: no divergence, which is what bounds this to the flag.
-        assert not raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": []})
-        assert djust_render("{{ p|timesince:q }}", {"p": NOON, "q": []}) == djust_render(
-            "{{ p|timesince }}", {"p": NOON}
-        )
+        for repr_mode in (False, True):
+            _rust.set_django_value_repr(repr_mode)
+            try:
+                assert not raises_django("{{ p|timesince:q }}", {"p": NOON, "q": []})
+                assert not raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": []}), repr_mode
+                assert djust_render("{{ p|timesince:q }}", {"p": NOON, "q": []}) == djust_render(
+                    "{{ p|timesince }}", {"p": NOON}
+                ), repr_mode
+                # Non-vacuity: a NON-empty list is truthy and is not a date, so
+                # it must still raise. A rule that accepted every list would
+                # pass the assertions above and be wrong here.
+                assert raises_django("{{ p|timesince:q }}", {"p": NOON, "q": ["a"]})
+                assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": ["a"]}), repr_mode
+            finally:
+                _rust.set_django_value_repr(True)
 
-    def test_every_display_arm_that_can_be_falsy_is_handled(self) -> None:
-        """Mechanical, against `Value`'s `Display` (#1859: a pin that is not
-        derived from the thing it pins is decorative).
+    def test_the_falsiness_question_is_answered_ONCE_and_value_typed(self) -> None:
+        """Mechanical, and pointed at the mechanism that now answers (#1859: a
+        pin that is not derived from the thing it pins is decorative).
 
-        A new `Value` variant whose `Display` can produce a falsy Python object
-        has to be considered here, and this fails until its spelling is either
-        in the predicate or listed below with a reason.
+        This used to enumerate `Value`'s `Display` arms and demand that
+        `timesince_arg_is_falsy` accept each falsy inhabitant's TEXT. That
+        predicate is gone; the answer is `ArgType::is_falsy`, computed once in
+        `apply_filter_full` from the resolved `Value`. So what has to hold is
+        the structural claim: no second copy of the rule, and this filter reads
+        the shared one.
+
+        `Value::is_truthy` needs no enumeration pin of its own — it is a
+        `match` over `Value`, so a new variant that forgets an arm does not
+        compile.
         """
-        core = (
-            pathlib.Path(__file__).resolve().parents[2] / "crates" / "djust_core" / "src" / "lib.rs"
-        ).read_text(encoding="utf-8")
-        body = core.split("impl fmt::Display for Value {", 1)[1].split("\n}\n", 1)[0]
-        # Variants only: `Value::py_repr` in the same body is a method call, and
-        # a regex that swept it in would demand a falsy-text answer for a
-        # function. Rust variants are UpperCamel by convention and this file's
-        # are without exception.
-        variants = {v for v in re.findall(r"Value::(\w+)", body) if v[:1].isupper()}
-        assert len(variants) >= 10, f"the Display match did not parse: {variants}"
-
-        #: The falsy Python object each variant can hold, and the text its
-        #: `Display` produces for it. A variant with no falsy inhabitant is
-        #: mapped to `None`.
-        FALSY_TEXT = {
-            "Missing": "",
-            "None": "None",
-            "Bool": "False",
-            "Integer": "0",
-            "Float": "0.0",
-            "Decimal": "0",
-            "BigInt": "0",
-            "String": "",
-            "List": "[]",
-            "Tuple": "()",
-            "Object": None,  # a serialized model map; never falsy in Python
-            # An EMPTY dict view (#2340). `bool({}.items())` is False, and
-            # `Display` spells each view by name. Only `items` is listed
-            # because the map below checks ONE text per variant; the predicate
-            # accepts all three and `test_an_empty_dict_view_is_falsy` covers
-            # them.
-            "DictView": "dict_items([])",
-            "Dict": "{}",
-        }
-
-        #: The third answer, which #2448 forced this map to grow: a variant that
-        #: HAS a falsy inhabitant whose text the predicate deliberately does not
-        #: accept.
-        #:
-        #: ``Value::Encoded`` carries a ``datetime`` / ``date`` / ``time`` /
-        #: ``timedelta``, and exactly one of those is falsy in Python —
-        #: ``bool(timedelta(0))`` is ``False`` (a midnight ``time`` has been
-        #: truthy since 3.5).  Its ``Display`` text is ``"0:00:00"``, which is
-        #: ALSO the text of the perfectly ordinary and Python-TRUTHY string
-        #: ``"0:00:00"``; ``timesince_arg_is_falsy`` takes a ``&str``, so
-        #: accepting it would trade one divergence for another.
-        #:
-        #: Measured, so the residue is stated rather than assumed:
-        #: ``{{ p|timesince:q }}`` with ``q = timedelta(0)`` measures from now in
-        #: Django and raises in djust — BEFORE #2448 as well as after, because
-        #: the value reached the predicate as ``Value::String("0:00:00")`` then
-        #: and its text was not in the falsy set either.  Unchanged, not
-        #: introduced; the same one-line question as ``{% if timedelta(0) %}``,
-        #: which djust answers ``True`` and Django ``False``.  Filed as #2458,
-        #: not folded into a JSON-spelling fix.
-        FALSY_BUT_DELIBERATELY_NOT_ACCEPTED = {"Encoded"}
-
-        unmapped = variants - set(FALSY_TEXT) - FALSY_BUT_DELIBERATELY_NOT_ACCEPTED
-        assert not unmapped, (
-            f"{sorted(unmapped)} are `Value` variants this test has no falsy-text "
-            "answer for. Decide whether each can hold a Python-falsy object, and if "
-            "it can, make sure `timesince_arg_is_falsy` in filters.rs accepts its "
-            "`Display` text — in the SAME commit."
+        source = FILTERS_RS.read_text(encoding="utf-8")
+        assert "fn timesince_arg_is_falsy(" not in source, (
+            "the text-shaped predicate is back — it answers a truthiness "
+            "question with a string comparison, and #2458 removed it because "
+            "`timedelta(0)`'s text is shared with a truthy `str`"
         )
+        assert source.count("pub(crate) fn arg_is_falsy(") == 1
+        # The filter takes the threaded bit rather than re-deriving one.
+        assert "arg_is_falsy: bool," in source
+        # Both dispatch arms pass it; `test_the_two_arms_share_one_body` pins
+        # that the two are one per direction.
+        assert source.count("arg_type.is_falsy,") == 2, source.count("arg_type.is_falsy,")
 
-        predicate = FILTERS_RS.read_text(encoding="utf-8")
-        predicate = predicate.split("fn timesince_arg_is_falsy(", 1)[1].split("\n}", 1)[0]
-        for variant, text in FALSY_TEXT.items():
-            if text is None:
-                continue
-            if text == "":
-                assert "arg.is_empty()" in predicate, variant
-                continue
-            assert f'"{text}"' in predicate or "python_float" in predicate, (
-                f"Value::{variant} displays a falsy object as {text!r} and "
-                "`timesince_arg_is_falsy` does not accept it"
-            )
-        # Non-vacuity for the third category: a name parked there must still be
-        # a real variant, and its text must still be absent from the predicate.
-        # If somebody teaches the predicate `"0:00:00"`, this goes red rather
-        # than leaving a stale exemption (#1859).
-        assert FALSY_BUT_DELIBERATELY_NOT_ACCEPTED <= variants
-        assert '"0:00:00"' not in predicate, (
-            "`timesince_arg_is_falsy` learned the zero-timedelta text — which "
-            "also makes the truthy STRING '0:00:00' falsy. Move Encoded out of "
-            "FALSY_BUT_DELIBERATELY_NOT_ACCEPTED only with a value-typed "
-            "predicate, not a text one."
-        )
+    def test_the_value_typed_answer_covers_every_falsy_shape_a_context_can_hold(
+        self,
+    ) -> None:
+        """The behavioural half of the pin above, over one falsy inhabitant of
+        every `Value` shape a template context can actually produce — including
+        `timedelta(0)`, which is the shape a text rule structurally could not
+        accept (#2458).
+
+        Django measures from now for every one of these, so agreement is the
+        assertion. `test_a_truthy_non_date_RESOLVED_argument_raises_too` above
+        is the non-vacuity sibling: a rule that answered "falsy" for everything
+        would pass here and fail there.
+        """
+        falsy_inhabitants = [
+            None,
+            False,
+            0,
+            0.0,
+            decimal.Decimal("0.00"),
+            "",
+            [],
+            (),
+            {},
+            datetime.timedelta(0),
+        ]
+        # NOT in the list, and measured rather than assumed: a `set` has no
+        # `Value` variant at all, so it lands on the conversion's final
+        # `Value::String(str(o))` and arrives as the non-empty `"set()"`.
+        # `is_truthy` then answers `True` where `bool(set())` is `False` — a
+        # divergence in the same family as #2458 but one level up, at the
+        # CONVERSION rather than at the truthiness rule, and visible in
+        # `{% if q %}` before any filter runs. Out of this fix's scope (#1079)
+        # and filed separately; asserted here so the exclusion is a measured
+        # fact rather than a gap in the list.
+        assert djust_render("{% if q %}T{% else %}F{% endif %}", {"q": set()}) == "T"
+        assert bool(set()) is False
+        source = "{{ p|timesince:q }}"
+        baseline = djust_render("{{ p|timesince }}", {"p": NOON})
+        for value in falsy_inhabitants:
+            assert not raises_django(source, {"p": NOON, "q": value}), repr(value)
+            assert not raises_djust(source, {"p": NOON, "q": value}), repr(value)
+            assert djust_render(source, {"p": NOON, "q": value}) == baseline, repr(value)
 
     @pytest.mark.parametrize("view", ["items", "keys", "values"])
     def test_an_empty_dict_view_is_falsy(self, view: str) -> None:
@@ -575,9 +578,28 @@ class TestTheFalsinessResidueIsNamed:
         assert raises_django(source, {"p": NOON, "q": {"a": 1}}), "Django changed"
         assert raises_djust(source, {"p": NOON, "q": {"a": 1}})
 
-    @pytest.mark.parametrize("text", ["0", "None", "False", "2020-01-01 15:30:00"])
+    @pytest.mark.parametrize("text", ["0", "None", "False"])
+    def test_a_resolved_string_that_SPELLS_a_falsy_object_is_truthy_again(self, text: str) -> None:
+        """Three rows that used to be residue, now agreement (#2458).
+
+        `bool("0")` is `True` in Python and a `str` has no `.year`, so Django
+        raises. The text rule read `"0"` as the number it spells and measured
+        from now; the value-typed rule sees `Value::String("0")`, which
+        `is_truthy` answers correctly. Same for `"None"` and `"False"`.
+        """
+        source = "{{ p|timesince:q }}"
+        assert raises_django(source, {"p": NOON, "q": text}), (
+            f"Django changed: a str argument {text!r} no longer raises"
+        )
+        assert raises_djust(source, {"p": NOON, "q": text}), (
+            f"{text!r} stopped raising in djust — the value-typed falsiness "
+            "answer (#2458) is what makes this agree, so this going red means "
+            "the text rule came back"
+        )
+
+    @pytest.mark.parametrize("text", ["2020-01-01 15:30:00"])
     def test_the_residue_is_a_RESOLVED_STRING_that_reads_as_something_else(self, text: str) -> None:
-        """The residue, measured and named rather than hoped away.
+        """The residue that is left, measured and named rather than hoped away.
 
         A Python `datetime` crosses into Rust as a STRING and has no other
         spelling, so djust reads a date-shaped argument as a date — the same
@@ -585,11 +607,17 @@ class TestTheFalsinessResidueIsNamed:
         `{{ "2020-01-01 12:00:00"|timesince }}` renders and Django's
         `'str' object has no attribute 'year'` does not.
 
-        The cost is symmetric and is here: a resolved argument that is genuinely
-        a `str` is indistinguishable from the object whose `str()` it matches.
-        Django raises for all four of these (a `str` is truthy and has no
-        `.year`); djust reads `"0"`/`"None"`/`"False"` as the falsy objects they
-        spell and the fourth as the datetime it spells.
+        The cost is here: a resolved argument that is genuinely a `str` is
+        indistinguishable from the datetime whose `str()` it matches. Django
+        raises (a `str` is truthy and has no `.year`); djust reads it as the
+        datetime it spells.
+
+        This is the LAST row of what used to be a four-row residue. The other
+        three — `"0"`, `"None"`, `"False"` — were about TRUTHINESS rather than
+        about parsing, and #2458 closed them by asking the `Value` instead of
+        its text; the sibling test above is where they now live. This one is
+        genuinely about the wire format: the parse happens after the truthiness
+        gate and has no type to consult either way.
 
         This is the pre-existing wire-format convention rather than anything
         #2344 introduced, and it is bounded: a QUOTED argument never came from
@@ -776,7 +804,9 @@ class TestOneBodyForTwoFilters:
         source = self.source()
         assert source.count("fn timesince_or_until(") == 1
         calls = re.findall(
-            r"timesince_or_until\(filter_name, value, arg, arg_was_quoted, (\w+)\)", source
+            r"timesince_or_until\(\s*filter_name,\s*value,\s*arg,\s*arg_was_quoted,"
+            r"\s*arg_type\.is_falsy,\s*(\w+),",
+            source,
         )
         assert sorted(calls) == ["false", "true"], (
             f"expected exactly the two dispatch arms, one per direction: {calls}"
@@ -792,7 +822,16 @@ class TestOneBodyForTwoFilters:
             )
 
     def test_one_definition_of_the_falsiness_rule(self) -> None:
-        assert self.source().count("fn timesince_arg_is_falsy(") == 1
+        """One definition, and since #2458 it is the SHARED one.
+
+        The rule used to have a private copy here (`timesince_arg_is_falsy`,
+        text-shaped) alongside `arg_is_falsy` (value-typed) in the same file —
+        two mechanisms for one question, the #1646 shape at filter-argument
+        scale. The copy is gone; this filter reads the shared answer.
+        """
+        source = self.source()
+        assert source.count("pub(crate) fn arg_is_falsy(") == 1
+        assert "fn timesince_arg_is_falsy(" not in source
 
     def test_the_three_outcomes_are_an_enum_rather_than_two_bools(self) -> None:
         """`Now` / `At` / `Incomparable` are genuinely three answers — the
