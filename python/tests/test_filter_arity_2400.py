@@ -409,9 +409,14 @@ class TestCustomFiltersAreNotArityChecked:
 
     Django arity-checks a project's own ``@register.filter`` too, from the same
     ``getfullargspec``. djust's parser runs in Rust and cannot introspect a
-    Python signature — and a custom filter is registered after the templates
-    that use it may already have been parsed. Refusing an unknown name would
-    break every custom filter there is, so the table answers ``None`` for one.
+    Python signature, so the ARITY table answers ``None`` for a name it does
+    not describe and the count goes unchecked.
+
+    That is the ARITY question only. The NAME question moved to parse time in
+    #2419 — via the custom-filter REGISTRY rather than this table, which is why
+    a registered custom filter still compiles while an unregistered name no
+    longer does. ``test_a_custom_filter_takes_any_count_djust_can_spell`` is
+    the half that pins the first, and it registers before it renders.
     """
 
     @staticmethod
@@ -426,18 +431,24 @@ class TestCustomFiltersAreNotArityChecked:
         assert _rust.render_template("{{ p|cf_arity_probe }}", {"p": "a"}) == "[a:None]"
         assert _rust.render_template('{{ p|cf_arity_probe:"z" }}', {"p": "a"}) == "[a:z]"
 
-    def test_an_unknown_filter_still_fails_at_RENDER_not_at_parse(self) -> None:
-        """The pre-existing timing, unchanged: djust does not know the name yet."""
+    def test_an_unknown_filter_now_fails_at_PARSE_time(self) -> None:
+        """Flipped by #2419; it read ``…_at_RENDER_not_at_parse`` until then.
+
+        The arity table still answers ``None`` for the name — that half is
+        unchanged and is what this class is about. What changed is that the
+        name is now LOOKED UP while the template compiles, so the unrendered
+        shape below is refused too, as Django refuses it.
+        """
         refused, out = _djust_refused("{{ p|no_such_filter_anywhere }}", {"p": "a"})
         assert refused
         assert "Unknown filter" in out
-        # …and an unrendered one is NOT refused, which is what "render-time"
-        # means and is the pre-existing divergence from Django this PR does not
-        # change (Django's `Invalid filter` is a TemplateSyntaxError).
-        refused, _ = _djust_refused(
+        # …and an UNRENDERED one is refused as well, which is what "parse-time"
+        # means. Django raises `TemplateSyntaxError: Invalid filter` here.
+        refused, out = _djust_refused(
             "{% if False %}{{ p|no_such_filter_anywhere }}{% endif %}", {"p": "a"}
         )
-        assert not refused
+        assert refused, "the #2419 parse-time lookup regressed"
+        assert "Unknown filter" in out
 
 
 class TestTheCorpusGapThatHidThisFromTheDifferential:

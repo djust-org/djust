@@ -1980,6 +1980,52 @@ fn parse_filter_specs(parts: &[String], token: &str) -> Result<Vec<(String, Opti
             // that the template does not compile.
             return Err(DjangoRustError::TemplateError(message));
         }
+        // `Invalid filter` — the name LOOKUP, at Django's time (#2419).
+        //
+        // Django resolves the name in `FilterExpression.__init__`
+        // (`filter_func = parser.find_filter(filter_name)`), so a name nothing
+        // implements refuses the template whether or not the node ever
+        // renders. djust looked it up in `filters::apply_filter_full_safe`, on
+        // the value — so `{% if 0 %}{{ p|nosuchfilter }}{% endif %}` and
+        // `{% if 0 and p|nosuchfilter %}` compiled here and refused there.
+        //
+        // Its position among the three refusals is NOT a behavioural choice,
+        // and saying so is the point (#2233). Django's own order inside
+        // `FilterExpression.__init__` is argument-`Variable` → `find_filter`
+        // → `args_check`, and this sits third — but the arity check and this
+        // one are MUTUALLY EXCLUSIVE by construction: `parse_time_arity_error`
+        // answers `None` for every name outside the built-in table, which is
+        // exactly the set this refuses. No template can reach both, so no
+        // test could tell the two orderings apart, and reordering to "match
+        // Django" would be a mechanism that changes nothing.
+        //
+        // The one place djust's order IS visible is against the LEXER bound
+        // above: `{{ p|nosuchfilter:"a":"b" }}` is `Invalid filter` on Django
+        // and `Could not parse the remainder` here, because `split_filter_spec`
+        // is what produces the name at all and so has to run first. Both
+        // engines refuse the template, which is the property this closes;
+        // only the wording differs. `TestDjangosOrderAmongTheRefusals`
+        // measures all of this against live Django rather than asserting the
+        // comment.
+        //
+        // ONE site closes both shapes, which is the condition #2411 attached
+        // to moving this at all: `{{ … }}` reaches here through
+        // `parse_token`, and every tag operand reaches here through
+        // `validate_tag_operand`. A check written for one of them would have
+        // been a second parallel path (#1646).
+        //
+        // The message keeps djust's existing `Unknown filter: <name>` wording
+        // rather than Django's `Invalid filter: '<name>'`. Both engines refuse,
+        // which is the property that matters; the wording is a published
+        // contract here — `template/rendering.py` keys its "not supported by
+        // the Rust engine" hint off this substring, and
+        // `tests/unit/test_rust_custom_filters_1121.py` pins it — so a second
+        // spelling for the same condition would be a drift of its own.
+        if !crate::filters::is_known_filter(name) {
+            return Err(DjangoRustError::TemplateError(format!(
+                "Unknown filter: {name}"
+            )));
+        }
     }
     Ok(specs)
 }
@@ -2101,13 +2147,15 @@ pub(crate) fn validate_variable_name(atom: &str) -> Result<()> {
 /// is a raw string at parse time, which is the whole of why it was skipped;
 /// splitting it on its unquoted pipes is all that was missing.
 ///
-/// # What it deliberately does NOT check
+/// # What it checks SINCE #2419
 ///
-/// * **`Invalid filter`.** djust looks a filter name up at RENDER time, for
-///   `{{ }}` as much as for a tag — `{% if 0 %}{{ p|nosuchfilter }}{% endif %}`
-///   renders on this engine and refuses on Django. Checking it HERE and not
-///   there would be a new parallel path, and would refuse a custom filter
-///   registered after the template was parsed. Tracked at #2419.
+/// **`Invalid filter`** — the filter-NAME lookup. It was left out here on
+/// purpose, because djust looked a name up at RENDER time for `{{ }}` as much
+/// as for a tag, and checking it for tags only would have been a new parallel
+/// path. #2419 moved it for BOTH at once, and the reason one edit could do
+/// that is this function: `{{ … }}` and every tag operand reach
+/// [`parse_filter_specs`] and nothing else, so the name check went there
+/// rather than here.
 ///
 /// # What it checks SINCE #2418
 ///

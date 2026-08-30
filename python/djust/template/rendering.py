@@ -794,6 +794,25 @@ class DjustTemplate:
             from ..render_env import apply_render_env
 
             apply_render_env()
+            # The project's ``@register.filter`` callables, forwarded to the
+            # Rust registry BEFORE the engine can parse this source (#2419).
+            #
+            # Since #2419 an unknown filter refuses at PARSE time, as it does
+            # on Django, so "which names exist" has to be settled before the
+            # first parse rather than at the moment a value flows through the
+            # filter. ``DjustConfig.ready()`` already warms the bridge at
+            # startup, and the LiveView path re-arms it in
+            # ``_initialize_rust_view`` — this is the third top-level render
+            # entry and was the one relying on the startup warm alone, so a
+            # project that sets ``filter_bridge_warm = False`` had no bridge
+            # here at all and its custom filters did not resolve. Same
+            # parallel-path shape as #2223, one entry point over.
+            #
+            # Free after the first call: ``_ensure_custom_filters_bridged``
+            # short-circuits on a module-level flag and never raises.
+            from ..mixins.rust_bridge import _ensure_custom_filters_bridged
+
+            _ensure_custom_filters_bridged()
             template_dirs = [str(d) for d in self.backend.template_dirs]
             html = self.backend._render_fn_with_dirs(
                 resolved_template,

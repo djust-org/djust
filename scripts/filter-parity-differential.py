@@ -1739,6 +1739,14 @@ MASK_POSITIONS = {
     "short-circuit-and": "{% if 0 and p|@SPEC@ %}Y{% else %}N{% endif %}",
     "short-circuit-or": "{% if 1 or p|@SPEC@ %}Y{% else %}N{% endif %}",
     "elif": "{% if 0 %}A{% elif p|@SPEC@ %}B{% else %}C{% endif %}",
+    # --- the `{{ }}` half of the class, added by #2419. Every position above
+    # writes a TAG operand, so the corpus could report the tag half of a
+    # compile-time refusal closed while the `{{ }}` half stayed open — and
+    # `Invalid filter` was open on BOTH. A cross of two covered axes is its own
+    # axis, which is the lesson this whole axis exists to carry.
+    "dead-branch-var": "{% if 0 %}{{ p|@SPEC@ }}{% endif %}",
+    "else-branch-var": "{% if 1 %}A{% else %}{{ p|@SPEC@ }}{% endif %}",
+    "block-in-dead-branch-var": "{% block b2419 %}{% if 0 %}{{ p|@SPEC@ }}{% endif %}{% endblock %}",
     "dead-branch-if": "{% if 0 %}{% if p|@SPEC@ %}Y{% endif %}{% endif %}",
     "dead-branch-for": "{% if 0 %}{% for x in p|@SPEC@ %}Y{% endfor %}{% endif %}",
     "dead-branch-with": "{% if 0 %}{% with v=p|@SPEC@ %}Y{% endwith %}{% endif %}",
@@ -1754,18 +1762,18 @@ MASK_POSITIONS = {
 #: One spec per COMPILE-time refusal class, so a fix that closes one and not
 #: the others is visible per-cell rather than as a single number.
 #:
-#: `nosuchfilter` is the one class still open: `Invalid filter` is a
-#: render-time lookup on every shape, so moving it to parse time for tags only
-#: would be new drift, and it would refuse a custom filter registered after the
-#: template was parsed (#2419). `date:_y` was the second, and #2418 closed it —
-#: it stays on the axis because a spec that stops refusing is exactly what this
-#: axis exists to report.
+#: Every spec here is CLOSED, and each one was open when it was added — a spec
+#: that stops refusing is exactly what this axis exists to report, so they stay.
+#: `date:_y` was closed by #2418; `nosuchfilter` by #2419, which moved the name
+#: LOOKUP to parse time for `{{ }}` and the tag operands together (one site,
+#: `parser::parse_filter_specs`) after measuring that djust's filter registry is
+#: populated during `django.setup()`, before any template can be parsed.
 MASK_SPECS = [
     "cut",  # args_check: too FEW
     "join",  # args_check: too few, second filter
     'upper:"x"',  # args_check: too MANY
     'cut:"a":"b"',  # the lexer bound (#2409), not the signature
-    "nosuchfilter",  # Invalid filter — still open, and this is where it shows
+    "nosuchfilter",  # Invalid filter — the name lookup (#2419)
     "date:_y",  # Variable.__init__'s underscore rule (#2418)
 ]
 
