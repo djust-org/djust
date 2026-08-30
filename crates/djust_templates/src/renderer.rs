@@ -985,8 +985,8 @@ fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
 /// Serialize a resolved arg for a **value-channel** position — one the
 /// handler declared in `RESOLVE_ARG_POSITIONS` (#2385).
 ///
-/// Identical to [`value_to_arg_string`] except for [`Value::String`], which is
-/// JSON-encoded (so it arrives QUOTED) rather than inlined bare.
+/// Identical to [`value_to_arg_string`] except for [`Value::String`] and
+/// [`Value::Bool`], which are JSON-encoded rather than inlined bare.
 ///
 /// The quoting is not cosmetic; it is what makes the channel decodable at all.
 /// This channel's contract is "unresolved ⇒ the caller keeps the raw token",
@@ -1007,8 +1007,23 @@ fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
 ///   form is already unambiguous, so they keep it.
 /// * `List` / `Tuple` / `Object` / `DictView` were ALREADY JSON — that is what
 ///   [`value_to_arg_string`] exists for — so nothing changes for them.
-/// * Every other scalar's `Display` form (`42`, `True`, `None`, `1.5`) is
-///   unambiguous against a bare name, so nothing changes for them either.
+/// * `Bool` IS re-encoded, as of #2463, and the sentence that used to stand
+///   here — "every other scalar's `Display` form (`42`, `True`, `None`,
+///   `1.5`) is unambiguous against a bare name" — was false of exactly this
+///   one. `42` and `1.5` ARE valid JSON, so the handler's `json.loads`
+///   decodes them and refuses a non-iterable the way Django does; Python's
+///   `True` / `False` are NOT, so `json.loads` raised, the handler took its
+///   "this must be an unresolved bare name" branch, looked up a context key
+///   called `True`, found nothing, and answered NO GROUPS. Django raises
+///   `TypeError: 'bool' object is not iterable`. Encoding the bool as JSON
+///   `true` / `false` is the same type tag the `String` arm above is, for the
+///   same reason — a value that is not valid JSON is indistinguishable from a
+///   token on this channel.
+/// * `None` keeps its `Display` form. It is the one spelling where the
+///   mis-decode is HARMLESS: the fallback lookup answers `None`, and `None`
+///   is exactly what Django's `if obj_list is None` arm wants. Encoding it as
+///   `null` would be more honest and change no output; left alone rather than
+///   ridden along on a bug fix (#1079).
 ///
 /// Reached only for a handler that DECLARES `RESOLVE_ARG_POSITIONS`, and only
 /// at a position inside that set — the positions it declares are, by
@@ -1017,6 +1032,8 @@ fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
 fn value_channel_arg_string(v: &Value) -> String {
     match v {
         Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| s.clone()),
+        // JSON `true` / `false`, not Python's `True` / `False` (#2463).
+        Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
         _ => value_to_arg_string(v),
     }
 }
@@ -5964,7 +5981,7 @@ mod tests {
     }
 
     #[test]
-    fn value_channel_quotes_only_strings() {
+    fn value_channel_json_encodes_a_string_and_a_bool() {
         // A `String` is JSON-encoded so the handler can tell it from the raw
         // token an unresolved operand leaves behind (#2385).
         assert_eq!(
@@ -5987,10 +6004,23 @@ mod tests {
             value_channel_arg_string(&Value::BigInt("123456789012345678901".to_string())),
             "123456789012345678901"
         );
+        // A `Bool` IS re-encoded, as of #2463: Python's `True` is not valid
+        // JSON, so the handler's `json.loads` raised on it and it took the
+        // "unresolved bare name" branch — answering NO GROUPS where Django
+        // raises `TypeError: 'bool' object is not iterable`.
+        assert_eq!(value_channel_arg_string(&Value::Bool(true)), "true");
+        assert_eq!(value_channel_arg_string(&Value::Bool(false)), "false");
+        assert_ne!(
+            value_channel_arg_string(&Value::Bool(true)),
+            value_to_arg_string(&Value::Bool(true))
+        );
         // Everything else is byte-identical to the historical encoding.
+        // `None` is here deliberately: its `Display` spelling is not JSON
+        // either, but the mis-decode is HARMLESS — the handler's fallback
+        // answers `None`, which is exactly Django's `if obj_list is None`
+        // arm. Left alone rather than ridden along (#1079).
         for v in [
             Value::Integer(42),
-            Value::Bool(true),
             Value::None,
             Value::Float(1.5),
             Value::List(vec![Value::Integer(1)]),
