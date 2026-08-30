@@ -254,7 +254,18 @@ class TestTheStateRoundTripKeepsTheAnswer:
         payload = msgpack.unpackb(blob, raw=False, strict_map_key=False)[1]["p"][
             "__djust_encoded__"
         ]
-        assert payload == ["datetime.timedelta", "0:00:00", "P0DT00H00M00S", False]
+        # Six elements since #2466 appended `sized_empty` and `iterable` —
+        # the fourth is still this issue's bit, and its POSITION is what
+        # matters: every optional is TRAILING, the safe slot in a positional
+        # msgpack payload (#1541).
+        assert payload == [
+            "datetime.timedelta",
+            "0:00:00",
+            "P0DT00H00M00S",
+            False,
+            False,
+            False,
+        ]
 
     def test_a_three_element_payload_still_reads(self) -> None:
         """A #2448-era process's state outlives it: a Redis backend hands back
@@ -276,14 +287,37 @@ class TestTheStateRoundTripKeepsTheAnswer:
         view.set_state("p", datetime.timedelta(0))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 4, payload
+        assert len(payload) == 6, payload
         decoded[1]["p"]["__djust_encoded__"] = payload[:3]
         legacy = msgpack.packb(decoded, use_bin_type=True)
 
         assert RustLiveView.deserialize_msgpack(legacy).render() == "T"
-        # And the four-element payload for the same value says `F`, which is
-        # what makes the arm above a compatibility read rather than a bug.
+        # And the CURRENT payload for the same value says `F`, which is what
+        # makes the arm above a compatibility read rather than a bug.
         assert self._round_trip(datetime.timedelta(0)) == "F"
+
+    def test_a_FOUR_element_payload_still_reads(self) -> None:
+        """The #2458-era shape, which #2466 widened to five.
+
+        Same argument as the three-element arm one method up, one release
+        later: a Redis backend hands back a four-element payload on the first
+        request after a rolling deploy. It restores `truthy` from the payload
+        (so `timedelta(0)` stays `F`) and `sized_empty` as `false` — correct
+        for every value that shape could have held, since all four were
+        datetimes and none has a `__len__`.
+        """
+        import msgpack
+
+        from djust._rust import RustLiveView
+
+        view = RustLiveView(IF)
+        view.set_state("p", datetime.timedelta(0))
+        decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
+        payload = decoded[1]["p"]["__djust_encoded__"]
+        assert len(payload) == 6, payload
+        decoded[1]["p"]["__djust_encoded__"] = payload[:4]
+        legacy = msgpack.packb(decoded, use_bin_type=True)
+        assert RustLiveView.deserialize_msgpack(legacy).render() == "F"
 
     def test_a_payload_of_the_wrong_shape_is_a_plain_dict(self) -> None:
         """The discrimination that keeps a user dict under this key from
@@ -395,13 +429,21 @@ class TestTheSinkHasExactlyTheCallersItClaims:
         )
         assert "!e.display.is_empty()" not in src, "the pre-#2458 display-emptiness rule is back"
 
-    def test_both_payload_widths_are_read_and_only_the_narrow_one_derives(self) -> None:
+    def test_every_payload_width_is_read_and_only_the_narrowest_derives(self) -> None:
         """The compatibility read is deliberate and bounded: exactly ONE arm
         may fall back to `!display.is_empty()`, and it is the three-element
-        one."""
+        one.
+
+        Three widths since #2466 appended `sized_empty` — five (current), four
+        (#2458-era) and three (#2448-era) — so exactly TWO arms carry the bit
+        from the payload. The count is an equality rather than a floor so a
+        DELETED compatibility arm reddens it as loudly as an added derivation:
+        dropping the four-element read would silently turn every state entry
+        written by a 1.1.x process into a plain dict after a rolling deploy.
+        """
         src = self._production(CORE_RS.read_text(encoding="utf-8"))
         assert self._count(src, "truthy: !display.is_empty(),") == 1
-        assert self._count(src, "truthy: *truthy,") == 1
+        assert self._count(src, "truthy: *truthy,") == 2
 
     def test_the_counter_goes_red_in_BOTH_directions(self) -> None:
         """The canary. Each mutation asserts it APPLIED before its count is
@@ -433,18 +475,24 @@ class TestTheSinkHasExactlyTheCallersItClaims:
 class TestWhatThisDeliberatelyDoesNOTClose:
     """Pinned as still-divergent so a stale exemption goes red (#1859)."""
 
-    def test_a_set_is_still_truthy_because_it_never_becomes_an_Encoded(self) -> None:
-        """The same family, one level up, and NOT closed here.
+    def test_a_set_was_still_truthy_here_and_is_now_CLOSED(self) -> None:
+        """The same family one level up — filed as #2466 and closed there.
 
-        A `set` has no `Value` variant, so the conversion lands it on its final
-        `Value::String(str(o))` and it arrives as the non-empty `"set()"`.
-        `bool(set())` is `False`. That is a defect at the CONVERSION rather
-        than in the truthiness rule — `Encoded` never enters it — and it is out
-        of a datetime fix's scope (#1079).
+        A `set` had no `Value` variant, so the conversion landed it on its
+        final `Value::String(str(o))` and it arrived as the non-empty
+        `"set()"` while `bool(set())` is `False`. That was a defect at the
+        CONVERSION rather than in the truthiness rule — `Encoded` never
+        entered it — and it was out of a datetime fix's scope (#1079).
+
+        This method was written to fail the day it was closed, and it did.
+        Flipped rather than deleted: the localisation ("the rule is right, the
+        value never reaches it") is what makes the two issues separable, and
+        that stays worth checking in the other direction. Full coverage lives
+        in `python/tests/test_falsy_conversion_2466.py`.
         """
         assert bool(set()) is False
         assert django_render(IF, {"p": set()}) == "F"
-        assert djust_render(IF, {"p": set()}) == "T"
+        assert djust_render(IF, {"p": set()}) == "F"
 
     def test_a_date_shaped_STRING_argument_still_reads_as_a_date(self) -> None:
         """The residue of the wire format, not of truthiness.
