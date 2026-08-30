@@ -20,6 +20,9 @@ Usage in templates::
 import logging
 from typing import Any, Dict, List
 
+from django.utils.html import escape
+
+from .._html import safe_html
 from . import TagHandler, register
 
 logger = logging.getLogger(__name__)
@@ -74,7 +77,30 @@ def _render_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
         return str(Template(tpl_str).render(DjangoContext({})))
     except Exception:
         logger.exception("Error rendering {%% %s %%}", tag_name)
-        return "<!-- djust: %s render failed (check server logs) -->" % tag_name
+        # MARKED, so the diagnostic stays an invisible HTML comment (#2434).
+        #
+        # Since #2379 the bridge escapes a handler's plain-`str` return, and
+        # this arm is a `str` carrying markup — so the comment reached the page
+        # as the visible text `&lt;!-- djust: … --&gt;`, shouting a server-side
+        # failure at the END USER on the one path whose whole job is to be
+        # readable in view-source and invisible on the page.
+        #
+        # Marked rather than emptied, and rather than left to the log alone,
+        # for two reasons. The failure is an ABSENCE — no manifest link, no
+        # service-worker registration — and an absence is otherwise
+        # unattributable from the browser; the comment is what tells a
+        # front-end developer which tag went missing and where to look. And
+        # `{% call %}`'s sibling diagnostic
+        # (`components/function_component.py`) is already marked, by #2379's
+        # own single-exit `safe_html`; emptying this one would make two
+        # diagnostics of the same kind disagree.
+        #
+        # `escape` on the interpolated value, per CLAUDE.md's `mark_safe`
+        # rule: the marker then covers a CONSTANT shape plus a value that
+        # cannot carry `-->` (escape rewrites `>`), so the argument holds
+        # without depending on every caller passing a literal. Today all four
+        # do.
+        return safe_html("<!-- djust: %s render failed (check server logs) -->" % escape(tag_name))
 
 
 def _extract_kwargs(

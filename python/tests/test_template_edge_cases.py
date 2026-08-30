@@ -69,10 +69,18 @@ class TestExpressionParsingEdgeCases:
         assert "active" not in result
 
     def test_attribute_access_vs_string_literal(self):
-        """Test distinguishing between attribute access and string literals."""
+        """Test distinguishing between attribute access and string literals.
+
+        The filter is ``default`` rather than the invented ``filter`` this read
+        until #2419: an unknown name is now refused while the template is
+        parsed, as Django refuses it, so a fixture naming a filter nothing
+        implements is no longer a template either engine will compile. What is
+        under test — a dotted path inside a quoted ARGUMENT is not a variable —
+        is unchanged, and needs only a real filter that takes an argument.
+        """
         template = """
             {{ obj.real.path }}
-            {{ other|filter:"fake.path" }}
+            {{ other|default:"fake.path" }}
         """
         result = extract_template_variables(template)
         assert "obj" in result
@@ -212,8 +220,14 @@ class TestRealWorldEdgeCases:
         assert "items" not in result or result.get("items") == []
 
     def test_regex_pattern_in_template(self):
-        """Test regex patterns don't interfere."""
-        template = '{{ text|match:"[a-z]+\\.txt$" }}'
+        """Test regex patterns don't interfere.
+
+        ``cut`` rather than the invented ``match`` this read until #2419 — see
+        ``test_attribute_access_vs_string_literal`` for why a fixture may no
+        longer name a filter nothing implements. The regex still sits in the
+        argument, which is the whole of what this checks.
+        """
+        template = '{{ text|cut:"[a-z]+\\.txt$" }}'
         result = extract_template_variables(template)
         assert "text" in result
         # Regex pattern should not create variables

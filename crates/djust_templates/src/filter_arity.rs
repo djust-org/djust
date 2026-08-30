@@ -152,9 +152,11 @@ fn message(name: &str, min_provided: u8, provided: u8) -> String {
 /// The check Django runs at COMPILE time (`FilterExpression.__init__` →
 /// `args_check`), for a filter given `provided` template arguments.
 ///
-/// `None` for a name outside the built-in table, so an unknown filter is left
-/// to the render-time "Unknown filter" path and a project's custom filter is
-/// not refused by a table that does not describe it.
+/// `None` for a name outside the built-in table, so a project's custom filter
+/// is not refused by a table that does not describe it. The name LOOKUP is a
+/// separate question, answered one line below this check by
+/// `filters::is_known_filter`, which reads the custom-filter registry as well
+/// as this table (#2419) — so a name with no row here is not thereby accepted.
 pub fn parse_time_arity_error(name: &str, provided: u8) -> Option<String> {
     let (lo, parse_max, _) = builtin_arity(name)?;
     (provided < lo || provided > parse_max).then(|| message(name, lo, provided))

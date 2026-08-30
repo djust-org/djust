@@ -311,20 +311,30 @@ class TestTheTwoRulesThisDoesNotClose:
     shapes that never swallow anything. Kept as executable notes rather than
     prose so they go red the day either is fixed and this file is stale.
 
-    That is what happened: the underscore rule went red and #2418 closed it.
-    The test below is now the CLOSED half — it asserts the refusal rather than
-    the rendering, so this file keeps saying something true. ``Invalid filter``
-    (#2419) is still open and still measured here.
+    That is what happened, twice. The underscore rule went red and #2418 closed
+    it; the unknown-filter lookup went red and #2419 closed it. Both tests now
+    assert the REFUSAL rather than the rendering, so the file keeps saying
+    something true — and the class name is kept as the record of what this PR's
+    own scope was.
     """
 
-    def test_unknown_filter_is_a_RENDER_time_lookup_on_every_shape(self) -> None:
-        """Not masked by ``{% if %}``: ``{{ }}`` renders it too. Moving it to
-        parse time for one shape only would be new drift, and would refuse a
-        custom filter registered after the template was parsed."""
-        source = "{% if 0 %}{{ p|nosuchfilter }}{% endif %}"
-        assert not django_renders(source), "premise"
-        rendered, _ = djust_renders(source)
-        assert rendered, "unknown-filter now refuses at parse time — update this file"
+    def test_unknown_filter_is_now_a_PARSE_time_lookup_on_every_shape(self) -> None:
+        """Closed by #2419; it asserted the RENDERING until then.
+
+        The condition #2411 attached to moving this was that ``{{ … }}`` and
+        the tag operands move together, since checking one and not the other
+        would be new parallel-path drift (#1646). They did: both shapes reach
+        ``parse_filter_specs``, and the name lookup went there. Both are
+        asserted below for that reason.
+        """
+        for source in (
+            "{% if 0 %}{{ p|nosuchfilter }}{% endif %}",
+            "{% if 0 and p|nosuchfilter %}Y{% endif %}",
+        ):
+            assert not django_renders(source), f"premise: {source}"
+            rendered, out = djust_renders(source)
+            assert not rendered, f"the #2419 parse-time lookup regressed on {source}"
+            assert "Unknown filter" in out, out
 
     @pytest.mark.parametrize(
         "source",
