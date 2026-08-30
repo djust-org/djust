@@ -4106,6 +4106,22 @@ fn values_equal(a: &Value, b: &Value) -> bool {
                 && a.iter()
                     .all(|(k, v)| b.get(k).is_some_and(|other| values_equal(v, other)))
         }
+        // Two members of the datetime family (#2471). Without this arm two
+        // `Encoded`s fell to `_ => false` and were never equal — not even to
+        // themselves — so `{% if a == b %}` on a datetime against ITSELF took
+        // the `{% else %}` branch, the direction that HIDES content. The exact
+        // shape #2335 fixed for lists, one variant later; `Value::Encoded`
+        // arrived in #2448 and got neither this arm nor `try_compare`'s.
+        //
+        // Through `python_partial_cmp`, so equality is `Some(Equal)` and not a
+        // second rule that could drift from the ordering one — the failure
+        // #2244/#2243/#2335 each had. A pair Python refuses (a `date` against a
+        // `datetime`, a naive against an aware) answers `None` there and so
+        // stays `false` here, which is what Django answers and what this
+        // wildcard already answered before the arm existed.
+        (Value::Encoded(a), Value::Encoded(b)) => {
+            a.python_partial_cmp(b) == Some(std::cmp::Ordering::Equal)
+        }
         // Pairs involving a DECIMAL, and only those. Without this
         // `{% if p == 19.99 %}` went false the moment a Decimal stopped being a
         // Float (#2214).
@@ -4327,6 +4343,16 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
             }
             Some(a.len().cmp(&b.len()) as i32)
         }
+        // Two members of the datetime family (#2471). The mirror of
+        // `values_equal`'s arm and the SAME call, so the two cannot answer
+        // differently — the drift #2244, #2243 and #2335 each shipped once.
+        //
+        // Without it `{% if a < b %}` on two `timedelta`s fell to
+        // `numeric_pair`, which admits no `Encoded`, and answered `None` — so
+        // `<` and `>` were both false and the template silently took the wrong
+        // branch. A pair Python cannot order stays `None`, which is Django's
+        // own answer (`smart_if` swallows the `TypeError` to False).
+        (Value::Encoded(a), Value::Encoded(b)) => a.python_partial_cmp(b).map(|ord| ord as i32),
         // No `(Missing, Missing) => 0` arm, and its absence is deliberate
         // (#2338): Python's `None < None` RAISES, so Django answers False for
         // all four operators, and the 0 this used to return made `>=` and `<=`

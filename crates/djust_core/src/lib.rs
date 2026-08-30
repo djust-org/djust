@@ -331,6 +331,119 @@ pub struct Encoded {
     /// `bool(o)` — Python's own truthiness for the object (#2458). See the
     /// [`Value::Encoded`] doc for why this is carried rather than derived.
     pub truthy: bool,
+    /// `repr(o)` — Python's own constructor spelling (#2472).
+    ///
+    /// Carried rather than derived, for the reason `truthy` is: `repr` for this
+    /// family is **not** a format string. `repr(timedelta(0))` is
+    /// `datetime.timedelta(0)` while `repr(timedelta(seconds=90))` is
+    /// `datetime.timedelta(seconds=90)` — the KEYWORD is chosen by the value,
+    /// and `repr(datetime(2020, 1, 1))` prints the zero time fields
+    /// (`datetime.datetime(2020, 1, 1, 0, 0)`) but not the zero microsecond.
+    /// A hand port would be four transcriptions with a per-value branch in
+    /// each; `repr()` answers it exactly, once, at the conversion.
+    ///
+    /// `display` is `str(o)` and is a DIFFERENT string for every member of this
+    /// family, which is the whole of why both are carried: `{{ p }}` wants
+    /// `str`, and `{{ p|pprint }}`, `{{ p|stringformat:"r" }}` and a datetime
+    /// NESTED in a list or dict all want `repr`.
+    pub repr: String,
+    /// Python's own ordering for the object, reduced to a comparable key
+    /// (#2471). `None` only where Python could not be asked — see
+    /// [`Encoded::python_partial_cmp`], which is the ONE place this is read.
+    pub cmp_key: Option<CmpKey>,
+}
+
+/// A [`Encoded`] value's position in Python's ordering (#2471).
+///
+/// `(domain, hi, lo)`, compared lexicographically, and comparable ONLY within a
+/// domain — which is what makes the pairs Python refuses fall out for free
+/// rather than needing their own rules. Every field is measured from the live
+/// object at the PyO3 boundary; nothing here is parsed back off a string.
+///
+/// # Why a key at all, and why not the strings already carried
+///
+/// Two `Encoded`s cannot be compared by calling Python: the render happens with
+/// no interpreter in reach. So the question is which of the carried spellings
+/// answers Python's `==` and `<`, and the measured answer is **neither**:
+///
+/// * `display` (`str(o)`) does not ORDER. `str(timedelta(seconds=90))` is
+///   `"0:01:30"` and `str(timedelta(days=10))` is `"10 days, 0:00:00"`, so a
+///   lexicographic compare puts ten days before ninety seconds. It also does
+///   not answer `==`: two aware datetimes naming the SAME instant in different
+///   zones are equal in Python and have different `str()`.
+/// * `json` (`DjangoJSONEncoder.default(o)`) does not answer `==` either, in
+///   the direction that matters more: it TRUNCATES a datetime's microseconds to
+///   milliseconds (`r[:23] + r[26:]`), so two datetimes 1 µs apart encode
+///   identically and a string compare would call them equal. `duration_iso_string`
+///   leaves the day count unpadded (`P10DT…` vs `P9DT…`) and appends the
+///   microseconds only when non-zero, so it does not order either.
+///
+/// # The domains, and what each one buys
+///
+/// A domain is "the set of values Python will compare with this one". Splitting
+/// on it is not tidiness: `date(2020, 1, 1) == datetime(2020, 1, 1)` is `False`
+/// in CPython even though `datetime` IS a `date` subclass, and
+/// `date < datetime` RAISES — which Django's `{% if %}` swallows to `False`
+/// (`smart_if`'s `except Exception: return False`). Naive-against-aware is the
+/// same pair of answers. Both fall out of "different domains do not compare".
+///
+/// `hi`/`lo` is a two-limb integer rather than one because a `timedelta` does
+/// not fit an `i64` of microseconds: `timedelta.max` is ~8.64e19 µs and
+/// `i64::MAX` is ~9.22e18. Python normalises a `timedelta` to
+/// `(days, 0 <= seconds < 86400, 0 <= microseconds < 10**6)`, so
+/// `(days, seconds * 10**6 + microseconds)` compared lexicographically IS
+/// Python's ordering, and both limbs fit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CmpKey {
+    /// Which set of values Python will compare this one with. Values that
+    /// disagree here are never equal and never ordered.
+    pub domain: u8,
+    /// Days — `toordinal()` for a date/datetime, `timedelta.days` for a delta,
+    /// `0` for a time.
+    pub hi: i64,
+    /// Microseconds within the day. Aware values are normalised by their
+    /// `utcoffset()` first, which is exactly what CPython compares.
+    pub lo: i64,
+}
+
+/// A `timedelta`, the only member whose values span more than a day.
+pub const CMP_DOMAIN_TIMEDELTA: u8 = 1;
+/// A `date` that is not a `datetime`.
+pub const CMP_DOMAIN_DATE: u8 = 2;
+/// A `datetime` whose `utcoffset()` is `None`.
+pub const CMP_DOMAIN_DATETIME_NAIVE: u8 = 3;
+/// A `datetime` whose `utcoffset()` is not `None`, normalised to UTC.
+pub const CMP_DOMAIN_DATETIME_AWARE: u8 = 4;
+/// A `time` whose `utcoffset()` is `None`.
+pub const CMP_DOMAIN_TIME_NAIVE: u8 = 5;
+/// A `time` whose `utcoffset()` is not `None`, normalised by its offset.
+pub const CMP_DOMAIN_TIME_AWARE: u8 = 6;
+
+impl Encoded {
+    /// Python's answer for `a <op> b`, or `None` where Python refuses (#2471).
+    ///
+    /// **THE** comparison for this family, and the only one: `values_equal`,
+    /// `try_compare` and `dictsort`'s ordering all read it, so `==` and `<` can
+    /// never drift apart the way they did for `Bool` (#2244), `Float` (#2243)
+    /// and `List` (#2335) before their arms were written as a pair (#1646).
+    /// Equality is `Some(Equal)` rather than a second rule.
+    ///
+    /// `None` — which every caller renders as Django's own answer for a pair
+    /// Python cannot compare: `False` for all four ordering operators, and NOT
+    /// equal — covers three cases, and they are the same case:
+    ///
+    /// * different domains (`date` against `datetime`, naive against aware);
+    /// * either side carrying no key at all, which happens only where the PyO3
+    ///   boundary could not read the object (a `utcoffset()` that raises) or
+    ///   where a value was restored from a pre-#2471 msgpack state entry. Both
+    ///   keep the pre-fix answer rather than guessing one.
+    pub fn python_partial_cmp(&self, other: &Encoded) -> Option<std::cmp::Ordering> {
+        let (a, b) = (self.cmp_key?, other.cmp_key?);
+        if a.domain != b.domain {
+            return None;
+        }
+        Some((a.hi, a.lo).cmp(&(b.hi, b.lo)))
+    }
 }
 
 /// Untagged in human-readable formats, with ONE exception (#2214).
@@ -399,6 +512,17 @@ impl Serialize for Value {
             // Serialized as a heterogeneous tuple rather than an array because
             // the elements are no longer all strings; `serde` writes a tuple as
             // the same msgpack array either way.
+            //
+            // #2471/#2472 grew it to SIX: `repr` and the comparison key take
+            // the same trip for the same reason `truthy` does — both are
+            // measured from a live Python object that no longer exists by the
+            // time a state entry comes back, so an entry that dropped them
+            // would restore a value whose `{% if a == b %}` and `|pprint`
+            // answers are the pre-fix ones after one cache hit. That is the
+            // exact reopening `ENCODED_TAG` exists to prevent, twice already.
+            //
+            // The key is written as its three limbs rather than as a struct so
+            // the payload stays a flat msgpack array; `Option` writes `nil`.
             Value::Encoded(e) if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
                 m.serialize_entry(
@@ -408,6 +532,8 @@ impl Serialize for Value {
                         e.display.as_str(),
                         e.json.as_str(),
                         e.truthy,
+                        e.repr.as_str(),
+                        e.cmp_key.map(|k| (k.domain, k.hi, k.lo)),
                     ),
                 )?;
                 m.end()
@@ -568,7 +694,46 @@ impl<'de> Deserialize<'de> for Value {
                     // dict and falls through, so a user dict under this key
                     // cannot forge one.
                     if let Some(Value::List(parts)) = obj.get(ENCODED_TAG) {
-                        // Four elements: the #2458 shape, `truthy` carried.
+                        // Six elements: the #2471/#2472 shape, `repr` and the
+                        // comparison key carried. The key is `nil` or a
+                        // three-integer array; anything else is not one this
+                        // crate wrote, so it reads as absent rather than being
+                        // guessed at.
+                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), Value::String(repr), key] =
+                            parts.as_slice()
+                        {
+                            let cmp_key = match key {
+                                Value::List(limbs) | Value::Tuple(limbs) => {
+                                    match limbs.as_slice() {
+                                        [Value::Integer(domain), Value::Integer(hi), Value::Integer(lo)] => {
+                                            u8::try_from(*domain).ok().map(|domain| CmpKey {
+                                                domain,
+                                                hi: *hi,
+                                                lo: *lo,
+                                            })
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            };
+                            return Ok(Value::Encoded(Box::new(Encoded {
+                                type_name: type_name.clone(),
+                                display: display.clone(),
+                                json: json.clone(),
+                                truthy: *truthy,
+                                repr: repr.clone(),
+                                cmp_key,
+                            })));
+                        }
+                        // Four elements: the #2458 shape, `truthy` carried but
+                        // not `repr` or the key. Still readable because a Redis
+                        // state backend hands one back across a rolling deploy;
+                        // the two missing fields restore to the answers that
+                        // entry was WRITTEN with — `display` for `repr` (what
+                        // `py_repr` delegated to) and no key (never equal), so
+                        // a stale entry behaves exactly as it did before this
+                        // fix rather than half-way between.
                         if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy)] =
                             parts.as_slice()
                         {
@@ -577,6 +742,8 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: *truthy,
+                                repr: display.clone(),
+                                cmp_key: None,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -591,6 +758,8 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: !display.is_empty(),
+                                repr: display.clone(),
+                                cmp_key: None,
                             })));
                         }
                     }
@@ -746,12 +915,149 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // takes the whole value back to its pre-#2448 `Value::String` path.
     let truthy = ob.is_truthy().ok()?;
 
+    // `repr(o)` (#2472). Python's answer, not a format string — see the field
+    // doc for the three shapes a transcription would have to get right.
+    let repr = ob.repr().ok()?.extract::<String>().ok()?;
+
+    // Python's ordering, measured (#2471). Fails SOFT to `None`, unlike the
+    // fields above: a value with no key keeps the pre-fix comparison answer,
+    // where a value with no `display` would have nothing to render.
+    let cmp_key = comparison_key(ob, tp_name);
+
     Some(Encoded {
         type_name,
         display,
         json,
         truthy,
+        repr,
+        cmp_key,
     })
+}
+
+/// `(days, microseconds-within-the-day)` for a `datetime.timedelta`.
+///
+/// Read off the three NORMALISED attributes rather than derived from a total,
+/// which is what keeps both limbs inside an `i64`: Python guarantees
+/// `0 <= seconds < 86400` and `0 <= microseconds < 10**6` with the whole sign
+/// carried by `days`, so the pair orders lexicographically exactly as the
+/// `timedelta` does — including for negatives, which Python normalises the same
+/// way (`timedelta(seconds=-1)` is `days=-1, seconds=86399`).
+fn timedelta_limbs(ob: &Bound<'_, PyAny>) -> Option<(i64, i64)> {
+    let days: i64 = ob.getattr("days").ok()?.extract().ok()?;
+    let seconds: i64 = ob.getattr("seconds").ok()?.extract().ok()?;
+    let micros: i64 = ob.getattr("microseconds").ok()?.extract().ok()?;
+    Some((days, seconds.checked_mul(1_000_000)?.checked_add(micros)?))
+}
+
+/// Microseconds since midnight, for anything carrying `hour`/`minute`/
+/// `second`/`microsecond`.
+fn micros_of_day(ob: &Bound<'_, PyAny>) -> Option<i64> {
+    let hour: i64 = ob.getattr("hour").ok()?.extract().ok()?;
+    let minute: i64 = ob.getattr("minute").ok()?.extract().ok()?;
+    let second: i64 = ob.getattr("second").ok()?.extract().ok()?;
+    let micro: i64 = ob.getattr("microsecond").ok()?.extract().ok()?;
+    Some(((hour * 60 + minute) * 60 + second) * 1_000_000 + micro)
+}
+
+/// `o.utcoffset()` as `(days, micros)`, or `None` for a NAIVE value.
+///
+/// Awareness is decided by `utcoffset()` returning `None`, NOT by
+/// `tzinfo is None` — that is CPython's own rule, and the two differ for a
+/// `tzinfo` whose `utcoffset()` returns `None`, which Python treats as naive.
+/// A `utcoffset()` that RAISES takes the whole key to `None` with the rest of
+/// the fail-soft chain rather than being read as naive.
+fn utc_offset_limbs(ob: &Bound<'_, PyAny>) -> Option<Option<(i64, i64)>> {
+    let off = ob.call_method0("utcoffset").ok()?;
+    if off.is_none() {
+        return Some(None);
+    }
+    Some(Some(timedelta_limbs(&off)?))
+}
+
+/// Carry `lo` back into range after an offset subtraction, moving whole days
+/// into `hi`. One borrow is enough — a `utcoffset()` is bounded to
+/// `(-24h, 24h)` — but the loop form is written so a future widening cannot
+/// silently leave `lo` out of range.
+fn normalise_limbs(mut hi: i64, mut lo: i64) -> (i64, i64) {
+    const DAY: i64 = 86_400_000_000;
+    while lo < 0 {
+        lo += DAY;
+        hi -= 1;
+    }
+    while lo >= DAY {
+        lo -= DAY;
+        hi += 1;
+    }
+    (hi, lo)
+}
+
+/// The [`CmpKey`] for one value of the datetime family, measured from the live
+/// object (#2471).
+///
+/// `tp_name` is the LITERAL the caller matched the type against, so this
+/// dispatches on the same `datetime`-before-`date` ordering the encoder does
+/// rather than re-deriving it (#1646). A subclass reaches the arm of the
+/// builtin it derives from, which is also how Python compares it.
+fn comparison_key(ob: &Bound<'_, PyAny>, tp_name: &str) -> Option<CmpKey> {
+    match tp_name {
+        "datetime.timedelta" => {
+            let (hi, lo) = timedelta_limbs(ob)?;
+            Some(CmpKey {
+                domain: CMP_DOMAIN_TIMEDELTA,
+                hi,
+                lo,
+            })
+        }
+        "datetime.date" => Some(CmpKey {
+            domain: CMP_DOMAIN_DATE,
+            hi: ob.call_method0("toordinal").ok()?.extract().ok()?,
+            lo: 0,
+        }),
+        "datetime.datetime" => {
+            let ordinal: i64 = ob.call_method0("toordinal").ok()?.extract().ok()?;
+            let lo = micros_of_day(ob)?;
+            match utc_offset_limbs(ob)? {
+                None => Some(CmpKey {
+                    domain: CMP_DOMAIN_DATETIME_NAIVE,
+                    hi: ordinal,
+                    lo,
+                }),
+                // CPython compares two aware datetimes by their UTC instants,
+                // so two spellings of the same moment in different zones are
+                // EQUAL — which a compare on `display` or on `json` (both of
+                // which keep the local wall clock and the offset) gets wrong.
+                Some((off_hi, off_lo)) => {
+                    let (hi, lo) = normalise_limbs(ordinal - off_hi, lo - off_lo);
+                    Some(CmpKey {
+                        domain: CMP_DOMAIN_DATETIME_AWARE,
+                        hi,
+                        lo,
+                    })
+                }
+            }
+        }
+        "datetime.time" => {
+            let lo = micros_of_day(ob)?;
+            match utc_offset_limbs(ob)? {
+                None => Some(CmpKey {
+                    domain: CMP_DOMAIN_TIME_NAIVE,
+                    hi: 0,
+                    lo,
+                }),
+                // An aware `time` is compared by its offset-adjusted value and
+                // does NOT wrap into a neighbouring day — there is no day to
+                // wrap into — so the whole offset lands in `lo`, which may go
+                // negative or past a day. Both are fine: `lo` is only ever
+                // compared against another key in the same domain.
+                Some((off_hi, off_lo)) => Some(CmpKey {
+                    domain: CMP_DOMAIN_TIME_AWARE,
+                    hi: 0,
+                    lo: lo - (off_hi.checked_mul(86_400_000_000)?.checked_add(off_lo)?),
+                }),
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The exact decimal digits of a Python `int`, or `None` if this is not one
@@ -1248,6 +1554,14 @@ impl Value {
             // third site of the same str/repr split the string-filter coercion
             // and `floatformat` already carry.
             Value::Float(f) => decimal::python_float_repr(*f),
+            // Python's own `repr(o)`, carried since #2472. The delegation below
+            // gave `display` — `str(o)` — so a datetime NESTED in a list or
+            // dict rendered `[0:00:00]` where Django renders
+            // `[datetime.timedelta(0)]`, and `{{ p|stringformat:"r" }}` (which
+            // is this function, padded) rendered the same wrong spelling. The
+            // fourth site of the str/repr split the `Decimal` arm two lines up
+            // and the `Float` arm one line up already carry.
+            Value::Encoded(e) => e.repr.clone(),
             other => other.to_string(),
         }
     }
