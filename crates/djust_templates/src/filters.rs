@@ -2075,10 +2075,33 @@ fn apply_builtin_filter(
             // the `-` raises in Django (`int('-')`) and returns the value
             // unchanged here, the same fail-soft posture the rest of this
             // module takes rather than 500ing (documented divergence).
+            //
+            // Both numeric exits are an `int` and not a one-character STRING
+            // (#2459). Django's are `int(str(value)[-arg])` and
+            // `except IndexError: return 0`, and its own docstring says so in
+            // as many words — *"output is always an integer"*. The type is the
+            // whole of the divergence, because a `str` ITERATES and
+            // SUBSCRIPTS and an `int` does neither: with a string here,
+            // `{{ p|get_digit:"1"|first }}` rendered where Django raises
+            // `TypeError: 'int' object is not subscriptable`, and the #2451
+            // chokepoint was right about every one of those cells — it was
+            // being handed the wrong subject. Three more divergences ride on
+            // the same type and are not sequence filters at all:
+            // `{% if p|get_digit:"5" %}` took the TRUE branch because `"0"` is
+            // truthy and `0` is not, `|length` answered 1 where Django's
+            // `len(int)` raises into its own `except` and answers 0, and
+            // `|stringformat:"d"` answered `""` because `"%d" % "2"` is a
+            // TypeError.
+            //
+            // `int_value_of` is deliberately NOT called: it exists to parse an
+            // arbitrary digit STRING (and to widen past `i64` into
+            // `Value::BigInt`), and neither question arises for a single ASCII
+            // digit, which is 0..=9 by construction of the `is_ascii_digit`
+            // guard above.
             Ok(match d.as_bytes().get(d.len().wrapping_sub(n)) {
-                Some(b) if b.is_ascii_digit() => Value::String((*b as char).to_string()),
+                Some(b) if b.is_ascii_digit() => Value::Integer(i64::from(b - b'0')),
                 Some(_) => value.clone(),
-                None => Value::String("0".to_string()),
+                None => Value::Integer(0),
             })
         }
         "iriencode" => {
@@ -8760,6 +8783,34 @@ mod tests {
         // 0 returns original (Django behavior)
         let result = apply_filter("get_digit", &value, Some("0")).unwrap();
         assert_eq!(result.to_string(), "12345");
+    }
+
+    #[test]
+    fn test_get_digit_answers_an_int_on_both_numeric_exits() {
+        // Django's docstring: *"output is always an integer"* (#2459). Every
+        // assertion above this one reads `.to_string()`, which is exactly how
+        // a one-character STRING went unnoticed for so long: the TEXT is
+        // identical and the TYPE is not, and the type is what a consumer that
+        // iterates, subscripts or asks for truthiness reads.
+        let value = Value::String("12345".to_string());
+        let result = apply_filter("get_digit", &value, Some("1")).unwrap();
+        assert!(matches!(result, Value::Integer(5)), "{result:?}");
+        // The `except IndexError: return 0` exit is an `int` too, and it is
+        // the one `{% if p|get_digit:"9" %}` reads: `0` is falsy, `"0"` is not.
+        let result = apply_filter("get_digit", &value, Some("10")).unwrap();
+        assert!(matches!(result, Value::Integer(0)), "{result:?}");
+        // …and the two exits that hand back the INPUT still do. Landing on the
+        // `-` of a negative is the documented divergence (Django raises on
+        // `int('-')`), and it must not become an integer with the rest.
+        let neg = Value::Integer(-42);
+        let result = apply_filter("get_digit", &neg, Some("3")).unwrap();
+        assert!(matches!(result, Value::Integer(-42)), "{result:?}");
+        let text = Value::String("abc".to_string());
+        let result = apply_filter("get_digit", &text, Some("1")).unwrap();
+        assert!(
+            matches!(result, Value::String(ref s) if s == "abc"),
+            "{result:?}"
+        );
     }
 
     #[test]
