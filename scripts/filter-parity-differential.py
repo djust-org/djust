@@ -40,9 +40,17 @@ Build the BASELINE first, then the branch, and compare::
 
 `--compare` prints three things and exits non-zero on either failure mode:
 
-* the agreement counts before and after. **They must differ** — identical
-  counts mean both files were produced by the same build and the baseline is
-  not real, which is a silent way to "prove" zero regressions;
+* the agreement counts before and after, under TWO definitions (#2454) — byte
+  equality, and refusal-collapsed, where two engines that both REFUSE a
+  template agree whatever their exception texts are. Both are printed because
+  a refusal-class parity fix (the whole of `masked-refusal`, `variable-name`,
+  the arity and lexer bounds) moves ZERO cells into byte-equal agreement even
+  when completely successful: both engines raise, and `TemplateSyntaxError:
+  Invalid filter` never equals `RuntimeError: Unknown filter`. Alongside them
+  is the class such a fix actually moves — `django REFUSES & djust RENDERS`,
+  before and after — which is the number to read for that work. Identical
+  counts under BOTH definitions with two different builds means the change
+  moved nothing this corpus sweeps;
 * every cell that agreed before and disagrees after (must be empty). Since
   #2325 this is split: a TAG-operand cell whose own `{{ p|f }}` twin diverges
   on BOTH builds agreed only by COINCIDENCE — the operand bug made djust
@@ -1010,6 +1018,66 @@ def _outcome(out: str) -> str:
     if out.startswith("<<EXC "):
         return "<<RAISED>>"
     return out
+
+
+def agreement(data: dict[str, list[str]]) -> tuple[set[str], set[str]]:
+    """The two agreement sets a comparison needs, EXACT and refusal-collapsed (#2454).
+
+    `exact` is byte equality — the historical definition, kept unchanged so
+    every baseline ever measured stays comparable against it.
+
+    `collapsed` runs both sides through :func:`_outcome` first, so two engines
+    that both REFUSE a template agree whatever their exception classes and
+    wordings are. Django raises `TemplateSyntaxError: Invalid filter:
+    'nosuchfilter'` and djust raises `RuntimeError: Template error: Unknown
+    filter: nosuchfilter`; those strings can never match, so a parity fix whose
+    whole effect is *"djust now refuses a template Django refuses"* moves ZERO
+    cells into `exact` agreement no matter how completely it succeeds.
+
+    Measured, and the reason this exists (#2454): #2419 moved 44
+    `masked-refusal` cells out of "djust renders what Django refuses", and
+    `--compare` printed `agree BEFORE == agree AFTER` and `newly AGREEING: 0`
+    over it — then its same-build NOTE suggested the change might move nothing.
+    The `44 moved` line and `REGRESSIONS: 0` carried the evidence, two screens
+    from the number a reader anchors on. Under this definition the same run
+    reports `newly AGREEING (refusal-collapsed): 40` — and the four-cell gap is
+    itself the point: those four ALREADY agreed by refusal, because djust
+    refused them for an unrelated reason (`{% include %}` with no loader
+    configured), so they moved without moving into agreement.
+
+    Both are returned and both are printed. Adding a number is safe where
+    redefining one is not: a results file carries no record of which definition
+    a reader used, so silently changing what `agree` means would make two runs
+    of two copies of this script incomparable in a way nothing could detect.
+    """
+    exact = {k for k, (dj, du) in data.items() if dj == du}
+    collapsed = {k for k, (dj, du) in data.items() if _outcome(dj) == _outcome(du)}
+    return exact, collapsed
+
+
+def refusal_split(data: dict[str, list[str]]) -> tuple[int, int]:
+    """`(django refuses & djust renders, djust refuses & django renders)`.
+
+    The direction every refusal-class parity fix moves, as its own number. The
+    first is djust being MORE PERMISSIVE than Django — a template Django would
+    have refused renders here — which is the class #2418, #2419, `variable-name`
+    and the arity/lexer bounds all close. The second is the over-strict
+    direction, printed beside it so a fix that overshoots is visible in the same
+    glance rather than only as a regression list.
+
+    A PANIC counts as neither: it is a transport-level failure rather than an
+    answer (#2343), and folding it into "refuses" would let a cell that started
+    panicking read as a parity improvement.
+    """
+    permissive = sum(
+        1
+        for dj, du in data.values()
+        if dj.startswith("<<EXC ") and not (du.startswith("<<EXC ") or du.startswith("<<PANIC "))
+    )
+    strict = sum(
+        1 for dj, du in data.values() if du.startswith("<<EXC ") and not dj.startswith("<<EXC ")
+    )
+    return permissive, strict
 
 
 def spec(name: str) -> str:
@@ -3209,9 +3277,21 @@ def measure(out_path: str) -> None:
         dj, du = render_both(source, {"p": INPUTS[key]}, CONTEXT_SAFE_KEYS.get(key))
         result[cid] = [dj, du]
 
-    agree = sum(1 for v in result.values() if v[0] == v[1])
+    exact, collapsed = agreement(result)
+    permissive, strict = refusal_split(result)
     panicked = sum(1 for v in result.values() if v[1].startswith("<<PANIC "))
-    print(f"cells={len(result)}  agree={agree}  disagree={len(result) - agree}")
+    print(f"cells={len(result)}  agree={len(exact)}  disagree={len(result) - len(exact)}")
+    # The refusal-collapsed reading, printed beside the exact one for the same
+    # reason `compare` prints both (#2454): a cell where both engines refuse the
+    # template AGREES, and comparing the two exception texts can only ever call
+    # it a disagreement.
+    print(
+        f"cells={len(result)}  agree(refusal-collapsed)={len(collapsed)}"
+        f"  disagree={len(result) - len(collapsed)}"
+    )
+    print(
+        f"django REFUSES & djust RENDERS: {permissive}   (djust refuses, Django renders: {strict})"
+    )
     # Printed separately and always, even at zero: a panic is a transport-level
     # failure rather than a rendering one, so "how many cells disagree" is the
     # wrong number to read it off (#2343).
@@ -3304,7 +3384,15 @@ def unmasked(cid: str, base: dict, after: dict) -> bool:
         return False  # A `{{ }}` cell has no mask to be behind.
     twin = f"{expr}\t{key}"
     b, a = base.get(twin), after.get(twin)
-    return b is not None and a is not None and b[0] != b[1] and a[0] != a[1]
+    if b is None or a is None:
+        return False
+    # Judged by the SAME definition the tag cell is judged by (#2454). Under raw
+    # equality a twin where both engines merely RAISE — different classes,
+    # different wordings, the same refusal — reads as "the filter itself
+    # diverges", and would excuse a tag cell whose divergence that twin does not
+    # explain. `_outcome` inequality is a subset of raw inequality, so this can
+    # only ever excuse FEWER cells than before.
+    return _outcome(b[0]) != _outcome(b[1]) and _outcome(a[0]) != _outcome(a[1])
 
 
 def compare(base_path: str, after_path: str, require_moved: tuple[str, ...] = ()) -> int:
@@ -3314,11 +3402,23 @@ def compare(base_path: str, after_path: str, require_moved: tuple[str, ...] = ()
         print("FAIL: the two runs cover different cells and are not comparable")
         return 1
 
-    agree_b = {k for k, (a, b) in base.items() if a == b}
-    agree_a = {k for k, (a, b) in after.items() if a == b}
+    agree_b, coll_b = agreement(base)
+    agree_a, coll_a = agreement(after)
+    perm_b, strict_b = refusal_split(base)
+    perm_a, strict_a = refusal_split(after)
     print(f"cells        : {len(base)}")
-    print(f"agree BEFORE : {len(agree_b)}")
-    print(f"agree AFTER  : {len(agree_a)}")
+    print(f"agree BEFORE : {len(agree_b)}   (refusal-collapsed: {len(coll_b)})")
+    print(f"agree AFTER  : {len(agree_a)}   (refusal-collapsed: {len(coll_a)})")
+    # The class every refusal-class parity fix moves, as its own headline (#2454).
+    # `agree` cannot show it: both engines raise, with texts that can never match.
+    print(
+        f"django REFUSES & djust RENDERS: {perm_b} -> {perm_a}"
+        f"   ({perm_b - perm_a:+d}; djust more permissive than Django)"
+    )
+    print(
+        f"djust REFUSES & Django RENDERS: {strict_b} -> {strict_a}"
+        f"   ({strict_b - strict_a:+d}; djust stricter than Django)"
+    )
 
     # Per-axis movement, so "0 moved" is never reported without saying WHERE.
     moved_by_axis: dict[str, int] = {}
@@ -3346,16 +3446,20 @@ def compare(base_path: str, after_path: str, require_moved: tuple[str, ...] = ()
             )
             return 1
         print(f"\nbuilds       : {meta_b['build']} -> {meta_a['build']}  (genuinely two builds)")
-        if len(agree_b) == len(agree_a):
+        # BOTH definitions have to be unchanged before this fires (#2454). Under
+        # exact equality alone it fired over #2419 — a fix that moved 44 cells and
+        # closed 40 of them — and told the reader the change might move nothing.
+        if len(agree_b) == len(agree_a) and len(coll_b) == len(coll_a):
             print(
-                "NOTE: identical agreement counts, and the two builds DIFFER — so this is\n"
-                "      not a stale baseline. Either the change moves nothing, or it moves\n"
+                "NOTE: identical agreement counts under BOTH definitions — exact AND\n"
+                "      refusal-collapsed — and the two builds DIFFER, so this is not a\n"
+                "      stale baseline. Either the change moves nothing, or it moves\n"
                 "      an axis this corpus does not sweep. The axes with zero moved cells\n"
                 "      are listed above; the manifest below lists what cannot be reached\n"
                 "      at all. #2328 was the second case: it moved 1,601 argument-axis\n"
                 "      cells and this corpus built none of them."
             )
-    elif len(agree_b) == len(agree_a):
+    elif len(agree_b) == len(agree_a) and len(coll_b) == len(coll_a):
         print(
             "\nFAIL: identical agreement counts, and at least one file predates the build\n"
             "      digest (#2345), so the same-build question cannot be answered.\n"
@@ -3374,10 +3478,20 @@ def compare(base_path: str, after_path: str, require_moved: tuple[str, ...] = ()
             "      could not move is unmeasured, not verified."
         )
 
-    changed = sorted(agree_b - agree_a)
+    # The regression set is the UNION of the two definitions (#2454), which can
+    # only ever be a superset of what exact equality alone reported.
+    #
+    # The exact half is unchanged. The collapsed half closes a blind spot of the
+    # same shape as the headline one: a cell where BOTH engines raised — with
+    # different texts, so exact equality already called it a disagreement — and
+    # where djust afterwards STOPS refusing is a permissiveness regression that
+    # `agree_b - agree_a` cannot see, because the cell was never in `agree_b`.
+    # Django's side is fixed across the two files, so every member of either set
+    # is djust having moved away from Django.
+    changed = sorted((agree_b - agree_a) | (coll_b - coll_a))
     coincidental = [c for c in changed if unmasked(c, base, after)]
     regressions = [c for c in changed if not unmasked(c, base, after)]
-    print(f"newly AGREEING: {len(agree_a - agree_b)}")
+    print(f"newly AGREEING: {len(agree_a - agree_b)}   (refusal-collapsed: {len(coll_a - coll_b)})")
     print(f"no longer agreeing: {len(changed)}")
     print(f"  coincidental (the filter itself diverges on both builds): {len(coincidental)}")
     print(f"  REGRESSIONS : {len(regressions)}")
