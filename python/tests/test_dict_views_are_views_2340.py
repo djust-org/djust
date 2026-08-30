@@ -105,20 +105,17 @@ class TestTheIssueTable:
             assert djust_render("{{ p.%s }}" % kind, {"p": p}).startswith(f"dict_{kind}([")
 
     def test_a_view_is_not_subscriptable(self) -> None:
-        """Both engines refuse since #2449.
+        """djust rendered NOTHING here until #2451 and REFUSES now.
 
-        This asserted ``r == ""`` — djust rendering NOTHING where Python raises,
-        which #2340 recorded as "never more permissive" and accepted. #2449
-        closed the same ``TypeError`` for every scalar shape, and a view is the
-        same refusal one variant over, so it refuses here too. The exception
-        TYPES still differ (``TypeError`` vs the ``RuntimeError`` every djust
-        render error becomes at the PyO3 boundary); the comparable property is
-        the bit — does this template render or fail.
+        The accepted shape #2325 classifies — Django raises, djust renders
+        nothing — was never more permissive, and it was never parity either.
+        `first` and `last` go through one subscript chokepoint since #2451, and
+        a view is exactly what that chokepoint answers `NotSubscriptable` for.
         """
-        for src in ("{{ p.items|first }}", "{{ p.items|last }}"):
+        for src in ("{{ p.items|first }}", "{{ p.items|last }}", "{{ p.items|random }}"):
             d, r = both(src, {"p": {"a": 1}})
             assert d == "<<EXC TypeError>>", d
-            assert r == "<<EXC RuntimeError>>", f"djust must refuse too, got {r!r}"
+            assert r.startswith("<<EXC"), f"djust must REFUSE where Python raises, got {r!r}"
 
     def test_slice_returns_the_view_unchanged_rather_than_raising(self) -> None:
         """The issue said ``slice`` was in the not-sequence-like set.
@@ -273,11 +270,21 @@ class TestEveryFilter:
         The exemption is a MECHANICAL PREDICATE, not a name list: a cell is
         exempt only when the SAME filter over a PLAIN LIST of the same
         elements diverges too — which proves the divergence belongs to the
-        filter and not to the view. Eight of Django's built-ins raise or
-        return ``''`` for any non-scalar (``add``, ``date``, ``divisibleby``,
+        filter and not to the view. Eight of Django's built-ins raised or
+        returned ``''`` for any non-scalar (``add``, ``date``, ``divisibleby``,
         ``get_digit``, ``phone2numeric``, ``time``, ``timesince``,
-        ``timeuntil``) and djust has answered them its own way for every list
-        and every dict since long before this change.
+        ``timeuntil``) and djust answered them its own way for every list and
+        every dict.
+
+        **It no longer fires, and that is the finding rather than a hole**
+        (#2451). Every filter it used to excuse now either agrees or REFUSES
+        where Django refuses — `phone2numeric` through the `.lower()`
+        chokepoint, `get_digit`/`divisibleby` through #2435's `int(value)` one
+        — so the twin diverges nowhere the sweep can build. The predicate is
+        kept rather than deleted precisely because it is now measured to be
+        empty: `test_the_exemption_no_longer_fires` asserts the empty set,
+        which is a stronger statement than the old "it fires" and goes red if a
+        future change reopens the class.
         """
         bad: list = []
         exempt: dict[str, set[str]] = {k: set() for k in KINDS}
@@ -294,18 +301,10 @@ class TestEveryFilter:
                         src = "{{ p.%s|%s%s }}" % (kind, name, suffix)
                         cells += 1
                         d, r = both(src, {"p": p_dict})
-                        # BOTH refuse. The exception TYPES differ and always
-                        # will — Django's is CPython's, djust's is the
-                        # `RuntimeError` every render error becomes at the PyO3
-                        # boundary — so the comparable property is the bit.
-                        # `first` / `last` / `random` over a non-empty view
-                        # joined this branch in #2449.
-                        if d.startswith("<<EXC") and r.startswith("<<EXC"):
-                            continue
-                        # Where DJANGO raises, djust renders nothing instead.
-                        # That is the accepted shape (#2325), never more
-                        # permissive.
-                        if d.startswith("<<EXC") and r == "":
+                        # Where DJANGO raises, djust either raises too — the
+                        # sequence filters since #2451 — or renders nothing,
+                        # the shape #2325 accepts. Neither is more permissive.
+                        if d.startswith("<<EXC") and (r == "" or r.startswith("<<EXC")):
                             continue
                         if d == r:
                             continue
@@ -323,19 +322,29 @@ class TestEveryFilter:
             f"  {s}: django={a!r} djust={b!r}" for s, a, b in bad[:30]
         )
 
-    def test_the_exemption_fires_and_is_a_property_of_the_filter(self) -> None:
-        """Two guards on the predicate above.
+    def test_the_exemption_no_longer_fires(self) -> None:
+        """The guard, inverted by #2451 — and stronger for it.
 
-        It must actually FIRE — a dead classifier carries an allowance
-        nothing needs (#1859) — and the set it produces must be IDENTICAL
-        across the three kinds. A divergence that appeared for ``keys`` and
-        not for ``values`` would be a property of the VIEW, which is exactly
-        what this change could have broken, and the equality is what stops
-        the exemption from absorbing one.
+        It used to assert the predicate FIRES, because a dead classifier
+        carries an allowance nothing needs (#1859). Every cell it excused was a
+        filter that diverged over a plain list too, and #2451 closed the last
+        of them: `phone2numeric` refuses a non-string, `first`/`last`/`random`
+        refuse a non-subscriptable, and #2435 had already closed
+        `get_digit`/`divisibleby`. So the honest assertion is now the EMPTY
+        set — every cell in the sweep is explained by agreement or by a shared
+        refusal, none by an allowance — and it goes red the moment a change
+        reopens the class, which is what the old form was for.
+
+        The equality across kinds is kept: an allowance that appeared for
+        ``keys`` and not for ``values`` would be a property of the VIEW rather
+        than of the filter, which is exactly what this file exists to catch.
         """
         _, exempt, _ = self._sweep()
-        assert exempt["keys"], "the exemption never fired — it is a dead allowance"
         assert exempt["keys"] == exempt["items"] == exempt["values"], exempt
+        assert exempt["keys"] == set(), (
+            "the exemption fired again — a filter diverges over a plain list, "
+            f"so it is a FILTER bug rather than a view one: {exempt}"
+        )
 
     def test_pluralize_counts_a_views_entries(self) -> None:
         """The one the fixed-size sweep could not see.

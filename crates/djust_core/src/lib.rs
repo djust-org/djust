@@ -838,40 +838,6 @@ impl Value {
         }
     }
 
-    /// CPython's `tp_name` for the Python type this value held — the string it
-    /// writes into `'X' object is not iterable` and its siblings (#2382, #2449).
-    ///
-    /// Every arm names the type the value HELD IN PYTHON, not the Rust variant:
-    /// `BigInt` is a Python `int` too large for an `i64`, `Decimal`'s name is
-    /// the QUALIFIED `decimal.Decimal` (a C type carries its dotted name where
-    /// a pure-Python class carries a bare one), and an `Encoded` carries the
-    /// name measured at its conversion.
-    ///
-    /// ONE definition, not two: this used to be
-    /// `renderer::python_type_name_for_iteration`, private to the module that
-    /// raised for `{% for %}`. #2449 gave six filters the same question, and a
-    /// second copy is the drift this codebase keeps paying for (#1646).
-    ///
-    /// `Missing` answers `object` and is unreachable from every raise site:
-    /// Django substitutes `string_if_invalid` (a `str`) for an absent variable,
-    /// so `{{ nope|first }}` renders `''` on both engines rather than raising.
-    pub fn python_type_name(&self) -> &str {
-        match self {
-            Value::Bool(_) => "bool",
-            Value::Integer(_) | Value::BigInt(_) => "int",
-            Value::Float(_) => "float",
-            Value::Decimal(_) => "decimal.Decimal",
-            Value::None => "NoneType",
-            Value::String(_) => "str",
-            Value::List(_) => "list",
-            Value::Tuple(_) => "tuple",
-            Value::Object(_) => "dict",
-            Value::DictView { kind, .. } => kind.container_name(),
-            Value::Encoded(e) => &e.type_name,
-            Value::Missing => "object",
-        }
-    }
-
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Missing => false,

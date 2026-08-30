@@ -431,59 +431,55 @@ class TestMarkSafeCollapsesASequence:
 
 
 class TestNonIterableFallThrough:
-    """#2285's escape on the non-sequence branch, and what became of it.
+    """#2285's escape on the non-sequence branch, and what became of it (#2451).
 
     #2285 added ``html_escape`` there because ``safeseq``/``unordered_list``
     hold an unconditional safe-output grant and were handing a hostile STRING
     back raw under it.  #2283 moved every markup-carrying value onto the
-    ITERATING side, so the branch was reachable only by numbers, booleans,
-    ``None`` and ``Decimal`` — none of which contain a character the escape
-    changes.
+    ITERATING side, so the branch became reachable only by numbers, booleans,
+    ``None`` and ``Decimal``.
 
-    #2449 then put a refusal in FRONT of the iteration for all four filters, so
-    the branch is not reachable from a template at all: every shape that used to
-    fall through now raises CPython's own ``TypeError`` text, which is what
-    Django does.  The escape stays — a future ``Value`` variant that lands on
-    the non-iterating side must not ride ``unordered_list``'s unconditional
-    safe-output grant raw — and its markup-free property is pinned on the enum
-    side by ``every_non_iterable_variant_is_markup_free`` in
-    ``crates/djust_templates/src/filters.rs``, which is compiler-checked and so
-    cannot go stale the way a value list can.
-
-    What is asserted here is therefore the REFUSAL, which is the behaviour a
-    page author sees.
+    #2451 removed the branch instead of escaping it: Django's bodies iterate or
+    subscript with no ``except``, so the ``TypeError`` IS the filter's answer
+    and there is no output left for a grant to protect.  The property #2285
+    protected is now held in the strongest possible form — a refusal emits
+    nothing at all — and this is where that is asserted, so a future fix
+    reinstating a fall-through would have to reinstate the escape with it.
     """
-
-    #: The CPython message each filter's operation reaches, by value type.
-    #: ``random`` is ``len()`` first, so it is the odd one out — measured
-    #: against live Django, not transcribed.
-    _TYPE_NAMES = {
-        42: "int",
-        -1: "int",
-        1.5: "float",
-        True: "bool",
-        False: "bool",
-        None: "NoneType",
-    }
 
     @pytest.mark.parametrize("value", [42, -1, 1.5, True, False, None])
     @pytest.mark.parametrize("name", ["safeseq", "unordered_list", "escapeseq", "random"])
-    def test_the_reachable_non_iterables_now_refuse_as_django_does(self, name: str, value) -> None:
-        src = "{{ p|%s }}" % name
-        tname = self._TYPE_NAMES[value]
-        expected = (
-            "object of type '%s' has no len()" % tname
-            if name == "random"
-            else "'%s' object is not iterable" % tname
-        )
-        # Django's own text, read from Django rather than trusted from here.
-        with pytest.raises(TypeError) as django_exc:
-            DjangoTemplate(src).render(DjangoContext({"p": value}))
-        assert expected in str(django_exc.value), str(django_exc.value)
+    def test_the_reachable_non_iterables_refuse_and_so_carry_no_markup(
+        self, name: str, value
+    ) -> None:
+        with pytest.raises(Exception) as caught:
+            _rust.render_template("{{ p|%s }}" % name, normalize_django_value({"p": value}))
+        message = str(caught.value)
+        assert f"filter '{name}'" in message, message
+        assert "TypeError" in message, message
+        # Django's own answer, run rather than transcribed.
+        with pytest.raises(TypeError):
+            DjangoTemplate("{{ p|%s }}" % name).render(DjangoContext({"p": value}))
 
-        with pytest.raises(RuntimeError) as djust_exc:
-            _rust.render_template(src, normalize_django_value({"p": value}))
-        assert expected in str(djust_exc.value), str(djust_exc.value)
+    @pytest.mark.parametrize("name", ["safeseq", "unordered_list", "escapeseq"])
+    def test_a_string_still_iterates_rather_than_refusing(self, name: str) -> None:
+        """The half the refusal must NOT take with it (#2283).
+
+        A ``str`` IS iterable and IS subscriptable, so every one of these keeps
+        its per-character answer, byte-for-byte Django's. Without this the
+        refusal could have been written as "anything that is not a list", and
+        the whole of #2283 would have gone back — which no assertion about
+        markup could have caught, since ``unordered_list`` emits ``<li>`` by
+        design.
+        """
+        assert_agrees("{{ p|%s }}" % name, "ab")
+
+    def test_random_still_draws_a_character_from_a_string(self) -> None:
+        """``random``'s half of the same claim, which cannot be
+        ``assert_agrees``: the two engines draw independently."""
+        for _ in range(8):
+            out = _rust.render_template("{{ p|random }}", normalize_django_value({"p": "ab"}))
+            assert out in {"a", "b"}, out
 
     def test_join_returns_a_non_iterable_untouched_as_django_does(self) -> None:
         """Django's ``except TypeError: return value``.
@@ -509,7 +505,15 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
     source = (
         Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src" / "filters.rs"
     ).read_text()
-    body = source.split("fn apply_builtin_filter", 1)[1]
+    # Bounded at BOTH ends. It was open-ended to the end of the file, so the
+    # LAST arm's "body" swallowed every helper defined below
+    # `apply_builtin_filter` — and #2451, which put an `iter_values(value)` call
+    # inside `python_iter`, made the pin report an arm named `False` (a
+    # `"False" =>` match in a later helper) as a caller of the sink. A window
+    # that can reach past the function it claims to scan is the same drift one
+    # level up.
+    after = source.split("fn apply_builtin_filter", 1)[1]
+    body = after.split("\n}\n", 1)[0]
     # Each arm's OWN body, delimited by the next arm at the same indent — not a
     # fixed character window. The window was 400 chars, and #2340 pushed
     # ``random``'s call past it by adding a guard with a comment above it, so
@@ -517,12 +521,28 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
     # it had not. A delimiter cannot drift that way, and it is strictly TIGHTER
     # than a window: it can never reach into a NEIGHBOURING arm's call either.
     arm_starts = [(m.start(), m.group(1)) for m in re.finditer(r'\n        "(\w+)" =>', body)]
-    arms = set()
+    raw: set[str] = set()
+    wrapped: set[str] = set()
+    subscripted: set[str] = set()
     for i, (pos, name) in enumerate(arm_starts):
         end = arm_starts[i + 1][0] if i + 1 < len(arm_starts) else len(body)
-        if "iter_values(value)" in body[pos:end]:
-            arms.add(name)
-    assert arms == {"join", "safeseq", "escapeseq", "unordered_list", "random"}, arms
+        arm_body = body[pos:end]
+        if "iter_values(value)" in arm_body:
+            raw.add(name)
+        if "python_iter(value)" in arm_body:
+            wrapped.add(name)
+        if "python_getitem(value" in arm_body:
+            subscripted.add(name)
+    # The RAW sink, for the one filter that must FAIL SOFT: Django's `join` has
+    # `except TypeError: return value`, so it needs the `None` rather than a raise.
+    assert raw == {"join"}, raw
+    # The WRAPPED sink, for the three whose Django bodies have no `except` at
+    # all — `python_iter` is `iter_values` plus the name of the exception Python
+    # raises where it answers `None` (#2451).
+    assert wrapped == {"safeseq", "escapeseq", "unordered_list"}, wrapped
+    # `random` moved OFF the iteration sink entirely: `random.choice(seq)` is
+    # `seq[i]`, so it belongs with `first`/`last` on the subscript chokepoint.
+    assert subscripted == {"first", "last", "random"}, subscripted
 
 
 #: The corpus reachability manifest (#2345), read once per module.

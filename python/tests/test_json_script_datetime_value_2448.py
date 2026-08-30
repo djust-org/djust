@@ -52,6 +52,17 @@ The KEY position is untouched and still diverges — that IS #2429's refusal
 question — and is pinned as still-divergent below so this file cannot be read as
 claiming more than it closed.
 
+Which PATH this is on
+---------------------
+Every case here uses ``render_template(tpl, raw_dict)`` — the raw PyO3
+conversion, which ``djust/template/backend.py`` takes, so it is what a plain
+Django view rendering through ``DjustTemplateBackend`` gets. The LiveView path
+runs its context through ``normalize_django_value`` first, which flattens a
+``datetime`` to an ISO string in PYTHON, so ``Value::Encoded`` is never built
+there. That path was already mostly right — and only mostly.
+:class:`TestWhichPathThisFixIsOn` measures both and pins the four shapes the
+Python pre-pass still gets wrong.
+
 Every expectation here is LIVE Django, never a transcription.
 """
 
@@ -393,6 +404,105 @@ class TestTheTypeNameIsCPythonsOwn:
         ctx = {"p": {"a": value}}
         assert djust_render(TPL, ctx) == django_render(TPL, ctx)
         assert '"P0DT00H01M30S"' in djust_render(TPL, ctx)
+
+
+class TestWhichPathThisFixIsOn:
+    """djust has TWO ways into the renderer, and this fix is on one of them.
+
+    * **Raw** — `render_template(tpl, {"p": dt})`. The Python object crosses
+      the PyO3 boundary intact; `djust/template/backend.py` takes this path, so
+      it is what a plain Django view rendering through `DjustTemplateBackend`
+      gets. `Value::Encoded` exists for this path, and every case above is on
+      it.
+    * **Normalized** — the LiveView path, which runs the context through
+      `djust.serialization.normalize_django_value` first. That converts a
+      `datetime` to an ISO string IN PYTHON, so Rust never sees a datetime and
+      `Value::Encoded` is never constructed.
+
+    On the normalized path `json_script` was already mostly right before this
+    fix, because the normalizer is a `DjangoJSONEncoder` pre-pass — but only
+    mostly, and the gap is the same two rules #2448 is about. Its own docstring
+    claims the identity
+
+        json.dumps(normalize_django_value(v), cls=Enc) == json.dumps(v, cls=Enc)
+
+    and that is FALSE for 4 of 10 datetime shapes, measured below: it does not
+    truncate microseconds to milliseconds and does not rewrite a trailing
+    `+00:00` to `Z`. Filed as #2462 rather than fixed here — it is
+    Python, a different file, a different path — and pinned so this file cannot
+    be read as claiming the LiveView path is closed.
+    """
+
+    #: The claim, run rather than read.
+    @staticmethod
+    def _identity_holds(value: object) -> bool:
+        from djust.serialization import normalize_django_value
+
+        return json.dumps(normalize_django_value(value), cls=DjangoJSONEncoder) == json.dumps(
+            value, cls=DjangoJSONEncoder
+        )
+
+    @pytest.mark.parametrize("name", sorted(FAMILY))
+    def test_the_raw_path_is_the_one_this_fix_closes(self, name: str) -> None:
+        ctx = {"p": {"a": FAMILY[name]}}
+        assert djust_render(TPL, ctx) == django_render(TPL, ctx)
+
+    def test_the_normalizer_flattens_the_type_before_rust_can_carry_it(self) -> None:
+        from djust.serialization import normalize_django_value
+
+        flattened = normalize_django_value({"p": FAMILY["datetime naive"]})["p"]
+        assert isinstance(flattened, str), type(flattened)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "datetime microseconds",
+            "datetime microseconds tiny",
+            "datetime utc",
+            "time microseconds",
+        ],
+    )
+    def test_the_normalized_path_still_diverges_on_these_four(self, name: str) -> None:
+        """The residue, named. Each is a `DjangoJSONEncoder` rule the Python
+        pre-pass does not apply."""
+        assert not self._identity_holds(FAMILY[name]), (
+            f"{name} now round-trips identically — the normalizer was fixed, so "
+            "move this row out of the residue rather than leaving a stale pin"
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        ["datetime naive", "datetime offset", "date", "time", "timedelta seconds"],
+    )
+    def test_and_holds_for_the_rest_so_the_residue_is_four_not_ten(self, name: str) -> None:
+        """Non-vacuity: the identity is not simply broken everywhere, which
+        would make the four above unremarkable."""
+        assert self._identity_holds(FAMILY[name])
+
+    def test_the_parity_test_that_should_have_caught_it_samples_no_such_value(self) -> None:
+        """Why it survived — and it is this file's own headline defect, one
+        layer up.
+
+        `tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip`
+        exists to pin exactly this identity. Every `datetime`/`time` in its
+        17-value list has `microsecond == 0` and no `tzinfo`, so it samples the
+        one band where the two encoders agree — the same
+        coincidence-in-the-sampled-band that made #2448's own issue table mark
+        `time` as agreeing.
+        """
+        source = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "tests"
+            / "unit"
+            / "test_normalize_django_value.py"
+        ).read_text(encoding="utf-8")
+        block = source.split("class TestParityWithJSONRoundtrip", 1)[1].split("def test_", 1)[0]
+        assert "datetime(" in block, "the parity list moved — update this pin"
+        # No microsecond argument (a 7th positional) and no tzinfo anywhere in
+        # the sampled datetimes/times.
+        assert "tzinfo" not in block, block
+        for call in re.findall(r"(?:datetime|time)\(([^)]*)\)", block):
+            assert len(call.split(",")) <= 6, f"a value now carries microseconds: {call}"
 
 
 class TestWhatThisDeliberatelyDoesNOTClose:

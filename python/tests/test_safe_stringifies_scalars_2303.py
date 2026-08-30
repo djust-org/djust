@@ -456,27 +456,22 @@ class TestTheStringifyIsComplete:
 
     def test_the_identity_probe_can_actually_fail(self) -> None:
         """Gate-off for the sweep above: WITHOUT ``|safe`` the two spellings do
-        diverge, so the assertion is discriminating and not trivially true.
-
-        Since #2449 a bare scalar makes the six sequence filters RAISE — a
-        `42`/`'42'` distinction sharper than any string difference, and one this
-        probe has to be able to see rather than die on.  The outcome is captured
-        so a raise counts as a distinguishing answer; the sweep above is
-        unaffected because every one of its cells goes through ``|safe`` first,
-        which makes the value a string before any filter sees it.
-        """
-
-        def outcome(src: str, ctx: dict) -> str:
-            try:
-                return "OK " + djust_render(src, ctx)
-            except Exception as exc:  # noqa: BLE001
-                return f"RAISE {exc}"
-
+        diverge, so the assertion is discriminating and not trivially true."""
         ctx = {"p": 42, "q": "42"}
         assert djust_render("{{ p|add:'1' }}", ctx) == djust_render("{{ q|add:'1' }}", ctx)
+
+        def outcome(src: str) -> str:
+            """The render, or the REFUSAL — since #2451 a sequence filter
+            raises on an `int` and renders on a `str`, which is the sharpest
+            possible distinction and must not crash the probe."""
+            try:
+                return djust_render(src, ctx)
+            except Exception as exc:  # noqa: BLE001 — the refusal IS the answer
+                return f"<<EXC {exc}>>"
+
         differ = [
             tail
             for tail in TestTheBuiltInChainIsNotWorseOff._tails()
-            if outcome("{{ p" + tail + " }}", ctx) != outcome("{{ q" + tail + " }}", ctx)
+            if outcome("{{ p" + tail + " }}") != outcome("{{ q" + tail + " }}")
         ]
         assert differ, "no filter distinguishes 42 from '42' — the sweep proves nothing"

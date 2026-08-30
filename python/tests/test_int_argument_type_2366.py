@@ -128,14 +128,6 @@ TYPED_REFUSALS = {
     "dict": {"a": 1},
     "empty-dict": {},
     "none": None,
-    # The four that moved out of STRINGIFIED_AT_EXTRACTION in #2448, which gave
-    # the datetime family `Value::Encoded` at the conversion. They are typed
-    # refusals now for the ordinary reason: `int(datetime)` is a `TypeError`,
-    # and djust can finally see that the argument is not a string.
-    "datetime": datetime.datetime(2020, 1, 1, 15, 30),
-    "date": datetime.date(2020, 1, 1),
-    "time": datetime.time(15, 30),
-    "timedelta": datetime.timedelta(seconds=90),
 }
 
 #: The same rule for an argument that is a dict VIEW — reached by a PATH
@@ -144,15 +136,10 @@ TYPED_REFUSALS = {
 VIEW_PATHS = ["d.keys", "d.items", "d.values"]
 
 #: The same rule, for arguments whose type was already lost at extraction.
-#:
-#: This held `datetime`, `date` and `time` until #2448. The class's own
-#: assertion message named the condition under which they would leave — "if the
-#: extraction boundary learned the type, move this row into
-#: TestTheFourReturnInputFiltersNowRaise" — and that is exactly what happened:
-#: `Value::Encoded` carries the four datetime types across the conversion, so
-#: `{{ p|floatformat:q }}` with a `datetime` argument now raises as Django's
-#: `int()` does. A `set` is still stringified, so the class is not vacuous.
 STRINGIFIED_AT_EXTRACTION = {
+    "datetime": datetime.datetime(2020, 1, 1, 15, 30),
+    "date": datetime.date(2020, 1, 1),
+    "time": datetime.time(15, 30),
     "set": {1, 2},
 }
 

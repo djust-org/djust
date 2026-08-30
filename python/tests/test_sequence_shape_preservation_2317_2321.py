@@ -556,6 +556,20 @@ class TestEveryRebuildSiteIsAccountedFor:
     #: test exists to make somebody justify.
     HELPER_DEFAULT = {"_ => Value::List(items),": (1, "rebuild_like's default arm")}
 
+    #: Bare ``Value::List`` MATCHES that construct nothing, so tuple-ness has
+    #: nothing to be lost from — and where the bareness is the POINT rather
+    #: than an oversight. Enumerated in the same table because the grep cannot
+    #: tell a match from a construction, and a category that swallowed them
+    #: silently would be the hole this test exists to close.
+    LIST_NAMED = {
+        'Value::List(_) => "list",': (
+            1,
+            "python_type_name (#2451) — CPython answers 'list' and 'tuple' "
+            "differently, so pairing this arm with | Value::Tuple(_) would be "
+            "the DEFECT rather than the fix; the tuple arm is the next line",
+        )
+    }
+
     #: ``slice`` routes through the helper on its ONE sequence exit. It had two
     #: — populated and empty — until #2326 replaced the hand-rolled index math
     #: with Python's own slice algorithm, which computes a (possibly empty)
@@ -593,6 +607,7 @@ class TestEveryRebuildSiteIsAccountedFor:
                 for line, (count, _reason) in {
                     **self.LIST_ALWAYS,
                     **self.HELPER_DEFAULT,
+                    **self.LIST_NAMED,
                 }.items()
             }
         )
@@ -602,8 +617,9 @@ class TestEveryRebuildSiteIsAccountedFor:
             f"  gone/less: {sorted((expected - found).elements())}\n"
             "Every one is a place tuple-ness can be lost (#2317/#2321). Decide it "
             "explicitly: add it to LIST_ALWAYS with Django's own reason for "
-            "returning a list, route it through rebuild_like(), or pair the match "
-            "with | Value::Tuple(x)."
+            "returning a list, route it through rebuild_like(), pair the match "
+            "with | Value::Tuple(x), or — if a list and a tuple must answer "
+            "DIFFERENTLY there — add it to LIST_NAMED with the reason."
         )
         assert len(built) == sum(expected.values())
 

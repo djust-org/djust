@@ -501,30 +501,7 @@ class TestTheFalsinessResidueIsNamed:
             "DictView": "dict_items([])",
             "Dict": "{}",
         }
-
-        #: The third answer, which #2448 forced this map to grow: a variant that
-        #: HAS a falsy inhabitant whose text the predicate deliberately does not
-        #: accept.
-        #:
-        #: ``Value::Encoded`` carries a ``datetime`` / ``date`` / ``time`` /
-        #: ``timedelta``, and exactly one of those is falsy in Python —
-        #: ``bool(timedelta(0))`` is ``False`` (a midnight ``time`` has been
-        #: truthy since 3.5).  Its ``Display`` text is ``"0:00:00"``, which is
-        #: ALSO the text of the perfectly ordinary and Python-TRUTHY string
-        #: ``"0:00:00"``; ``timesince_arg_is_falsy`` takes a ``&str``, so
-        #: accepting it would trade one divergence for another.
-        #:
-        #: Measured, so the residue is stated rather than assumed:
-        #: ``{{ p|timesince:q }}`` with ``q = timedelta(0)`` measures from now in
-        #: Django and raises in djust — BEFORE #2448 as well as after, because
-        #: the value reached the predicate as ``Value::String("0:00:00")`` then
-        #: and its text was not in the falsy set either.  Unchanged, not
-        #: introduced; the same one-line question as ``{% if timedelta(0) %}``,
-        #: which djust answers ``True`` and Django ``False``.  Filed, not folded
-        #: into a JSON-spelling fix (#2458).
-        FALSY_BUT_DELIBERATELY_NOT_ACCEPTED = {"Encoded"}
-
-        unmapped = variants - set(FALSY_TEXT) - FALSY_BUT_DELIBERATELY_NOT_ACCEPTED
+        unmapped = variants - set(FALSY_TEXT)
         assert not unmapped, (
             f"{sorted(unmapped)} are `Value` variants this test has no falsy-text "
             "answer for. Decide whether each can hold a Python-falsy object, and if "
@@ -544,17 +521,6 @@ class TestTheFalsinessResidueIsNamed:
                 f"Value::{variant} displays a falsy object as {text!r} and "
                 "`timesince_arg_is_falsy` does not accept it"
             )
-        # Non-vacuity for the third category: a name parked there must still be
-        # a real variant, and its text must still be absent from the predicate.
-        # If somebody teaches the predicate `"0:00:00"`, this goes red rather
-        # than leaving a stale exemption (#1859).
-        assert FALSY_BUT_DELIBERATELY_NOT_ACCEPTED <= variants
-        assert '"0:00:00"' not in predicate, (
-            "`timesince_arg_is_falsy` learned the zero-timedelta text — which "
-            "also makes the truthy STRING '0:00:00' falsy. Move Encoded out of "
-            "FALSY_BUT_DELIBERATELY_NOT_ACCEPTED only with a value-typed "
-            "predicate, not a text one."
-        )
 
     @pytest.mark.parametrize("view", ["items", "keys", "values"])
     def test_an_empty_dict_view_is_falsy(self, view: str) -> None:

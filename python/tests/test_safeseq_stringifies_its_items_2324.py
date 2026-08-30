@@ -341,12 +341,9 @@ class TestOneStringifyMechanism:
 
     def test_safeseq_maps_its_items_through_py_str(self) -> None:
         src = FILTERS_RS.read_text(encoding="utf-8")
-        # `"safeseq" => match …` no longer names `iter_values` on its own line:
-        # #2449 put a refusal check in front of the iteration, so the arm opens
-        # `match not_a_sequence_error(SequenceOp::Iterate, value)` and reaches
-        # `iter_values` one level in. The pin follows the ARM, which is what it
-        # was always about.
-        arm = src.split('"safeseq" => match not_a_sequence_error(', 1)
+        # `python_iter` since #2451 — the same sink, wrapped so its `None` can
+        # name the exception Python raises there.
+        arm = src.split('"safeseq" => match python_iter(value)', 1)
         assert len(arm) == 2, "the `safeseq` arm moved — update this pin"
         body = arm[1].split('"escapeseq"', 1)[0]
         assert "py_str()" in body, (
