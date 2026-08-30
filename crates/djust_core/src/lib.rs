@@ -331,6 +331,48 @@ pub struct Encoded {
     /// `bool(o)` — Python's own truthiness for the object (#2458). See the
     /// [`Value::Encoded`] doc for why this is carried rather than derived.
     pub truthy: bool,
+    /// `hasattr(o, "__len__") and len(o) == 0` — asked at the conversion
+    /// (#2466). `false` for every datetime member: `len(timedelta(0))` raises.
+    ///
+    /// One BIT and not a carried `Vec`, because one bit is all that is
+    /// decidable here and all that is needed. Django's `ForNode` reads `len`
+    /// when the object has one and calls `list()` only when it does not:
+    ///
+    /// ```text
+    /// {% for x in set() %}      len 0        -> the {% empty %} branch
+    /// {% for x in complex(0) %} no __len__   -> TypeError, not iterable
+    /// ```
+    ///
+    /// So an `Encoded` that is `sized_empty` iterates to NOTHING and has
+    /// length 0, and one that is not is not iterable at all. The path that
+    /// builds an `Encoded` outside [`django_json_encoded`] is gated on the
+    /// object being Python-FALSY with a zero-or-absent `len`, which is what
+    /// makes that exhaustive — and what makes this field safe: it never has to
+    /// call `list(o)`, so it cannot consume a generator or hang on
+    /// `itertools.count()`. Enumerating a TRUTHY unmodelled object would need
+    /// a real `Vec`, and is a separate decision deliberately not taken here.
+    pub sized_empty: bool,
+    /// `iter(o)` succeeds — asked at the conversion, and a DIFFERENT question
+    /// from [`Encoded::sized_empty`] (#2466).
+    ///
+    /// Django asks both, in different places, and gets different answers for
+    /// the same object:
+    ///
+    /// * `ForNode.render` reads `__len__` when the object has one and calls
+    ///   `list()` only when it does not — so `{% for %}` over a class with a
+    ///   zero `__len__` and NO `__iter__` renders the `{% empty %}` block;
+    /// * `join` / `safeseq` / `escapeseq` / `unordered_list` are
+    ///   comprehensions, so they call `iter()` on the same object and RAISE.
+    ///
+    /// One bit answering both would have to be wrong for one of them. This is
+    /// the filters' half — `filters::iter_values` reads it — and `sized_empty`
+    /// is `{% for %}`'s.
+    ///
+    /// `iter(o)` is safe to ask: it builds an iterator and consumes nothing,
+    /// so a generator is not advanced by the question. Enumerating one WOULD
+    /// consume it, which is why the gate in [`falsy_opaque`] declines any
+    /// object that is iterable without being empty.
+    pub iterable: bool,
     /// `repr(o)` — Python's own constructor spelling (#2472).
     ///
     /// Carried rather than derived, for the reason `truthy` is: `repr` for this
@@ -500,13 +542,22 @@ impl Serialize for Value {
             // An `Encoded` takes the same two-format split, for the reason
             // `ENCODED_TAG` documents: untagged, a state round trip through
             // msgpack turns it back into the display string and reopens #2448.
-            // The payload is `[type_name, display, json, truthy]` — a LIST,
-            // which is what keeps the tag from colliding with the two
+            // The payload is `[type_name, display, json, truthy, items]` — a
+            // LIST, which is what keeps the tag from colliding with the two
             // string-payload tags above. The fourth element is #2458's
             // `bool(o)`; without it a state round trip restores the value with
             // the pre-#2458 truthiness and `{% if p %}` on a `timedelta(0)`
             // flips back after one cache hit — the same reopening `ENCODED_TAG`
-            // exists to prevent for the JSON spelling.
+            // exists to prevent for the JSON spelling. The fifth and sixth
+            // are #2466's `sized_empty` and `iterable`, for the same reason
+            // one element over: without them a `set()` comes back unable to
+            // answer `{% for %}` or `|join`.
+            //
+            // Every new element is appended at the END, which is the safe
+            // position in a POSITIONAL msgpack payload (#1541): a leading or
+            // interior optional shifts every later slot on read. The reader
+            // below accepts a 6-, 4- or 3-element payload, so a Redis state
+            // entry written by an older build still loads.
             //
             // Serialized as a heterogeneous tuple rather than an array because
             // the elements are no longer all strings; `serde` writes a tuple as
@@ -531,6 +582,8 @@ impl Serialize for Value {
                         e.display.as_str(),
                         e.json.as_str(),
                         e.truthy,
+                        e.sized_empty,
+                        e.iterable,
                         e.repr.as_str(),
                         e.cmp_key.map(|k| (k.domain, k.hi, k.lo)),
                     ),
@@ -687,18 +740,18 @@ impl<'de> Deserialize<'de> for Value {
                     if let Some(Value::List(items)) = obj.get(TUPLE_TAG) {
                         return Ok(Value::Tuple(items.clone()));
                     }
-                    // The binary-format `Encoded` tag (#2448, #2458). A list
-                    // payload like the tuple's, but of EXACTLY three strings
-                    // and an optional trailing bool — anything else is a real
-                    // dict and falls through, so a user dict under this key
-                    // cannot forge one.
+                    // The binary-format `Encoded` tag (#2448, #2458, #2466).
+                    // A list payload like the tuple's, but of EXACTLY three
+                    // strings and up to two optional trailing elements —
+                    // anything else is a real dict and falls through, so a
+                    // user dict under this key cannot forge one.
                     if let Some(Value::List(parts)) = obj.get(ENCODED_TAG) {
-                        // Six elements: the #2471/#2472 shape, `repr` and the
-                        // comparison key carried. The key is `nil` or a
-                        // three-integer array; anything else is not one this
-                        // crate wrote, so it reads as absent rather than being
-                        // guessed at.
-                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), Value::String(repr), key] =
+                        // Eight elements: the #2471/#2472 shape, `repr` and
+                        // the comparison key carried after #2466's two bits.
+                        // The key is `nil` or a three-integer array; anything
+                        // else is not one this crate wrote, so it reads as
+                        // absent rather than being guessed at.
+                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), Value::Bool(sized_empty), Value::Bool(iterable), Value::String(repr), key] =
                             parts.as_slice()
                         {
                             let cmp_key = match key {
@@ -721,18 +774,38 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: *truthy,
+                                sized_empty: *sized_empty,
+                                iterable: *iterable,
                                 repr: repr.clone(),
                                 cmp_key,
                             })));
                         }
-                        // Four elements: the #2458 shape, `truthy` carried but
-                        // not `repr` or the key. Still readable because a Redis
-                        // state backend hands one back across a rolling deploy;
-                        // the two missing fields restore to the answers that
-                        // entry was WRITTEN with — `display` for `repr` (what
-                        // `py_repr` delegated to) and no key (never equal), so
-                        // a stale entry behaves exactly as it did before this
-                        // fix rather than half-way between.
+                        // Six elements: the #2466 shape, `sized_empty` and
+                        // `iterable` carried but not `repr` or the key.
+                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), Value::Bool(sized_empty), Value::Bool(iterable)] =
+                            parts.as_slice()
+                        {
+                            return Ok(Value::Encoded(Box::new(Encoded {
+                                type_name: type_name.clone(),
+                                display: display.clone(),
+                                json: json.clone(),
+                                truthy: *truthy,
+                                sized_empty: *sized_empty,
+                                iterable: *iterable,
+                                // The two fields THIS shape does not carry
+                                // restore to the answers that entry was WRITTEN
+                                // with — `display` for `repr` (what `py_repr`
+                                // delegated to before #2472) and no key (never
+                                // equal, the pre-#2471 answer) — so a stale
+                                // entry behaves exactly as it did rather than
+                                // half-way between.
+                                repr: display.clone(),
+                                cmp_key: None,
+                            })));
+                        }
+                        // Four elements: the #2458 shape, `truthy` carried and
+                        // `sized_empty` absent. Still readable because a Redis
+                        // state backend hands one back across a rolling deploy.
                         if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy)] =
                             parts.as_slice()
                         {
@@ -741,6 +814,11 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: *truthy,
+                                // Every value written in the #2458 shape was a
+                                // datetime, and none of the four has a
+                                // `__len__` or an `__iter__`.
+                                sized_empty: false,
+                                iterable: false,
                                 repr: display.clone(),
                                 cmp_key: None,
                             })));
@@ -757,6 +835,8 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: !display.is_empty(),
+                                sized_empty: false,
+                                iterable: false,
                                 repr: display.clone(),
                                 cmp_key: None,
                             })));
@@ -928,6 +1008,11 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         display,
         json,
         truthy,
+        // A `datetime` / `date` / `time` / `timedelta` has no `__len__` and is
+        // NOT iterable in Python, and `{% for %}` over one raises on both
+        // engines today (#2466). `false` on both is what keeps that true.
+        sized_empty: false,
+        iterable: false,
         repr,
         cmp_key,
     })
@@ -1924,9 +2009,145 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                     }
                 }
             }
+            // #2466: an object Python calls FALSY that no variant above
+            // models. Placed HERE — after the `__dict__` arm — deliberately:
+            // an object WITH attributes keeps its `Value::Object`, because
+            // routing it through this carrier would take `{{ obj.a }}` with
+            // it. So this reaches exactly the values that were about to
+            // become `Value::String(str(o))`.
+            if let Some(encoded) = falsy_opaque(&ob.to_owned()) {
+                return Ok(Value::Encoded(Box::new(encoded)));
+            }
             Ok(Value::String(ob.str()?.to_string()))
         }
     }
+}
+
+/// A Python object that is FALSY and that no [`Value`] variant models (#2466).
+///
+/// `bool(set())` is `False` in Python and was `True` here, because a `set` has
+/// no variant: the conversion landed it on its final
+/// `Ok(Value::String(ob.str()?))` and it arrived as the non-empty string
+/// `"set()"`, whose `is_truthy` is `!s.is_empty()`. The same was true of
+/// `frozenset()`, `complex(0)`, an empty `dict_keys` / `dict_values` /
+/// `dict_items`, and any user class with a `__len__` returning 0 or a
+/// `__bool__` returning `False` — an OPEN set, which is why this is answered
+/// by carrying `bool(o)` rather than by giving `set` a variant. A one-type fix
+/// is the shape #2129 took five rounds over.
+///
+/// **Why `Encoded` and not a new variant.** `Encoded` already IS this carrier:
+/// a Python object held by its `type_name` / `display` / `json` / `truthy`
+/// spellings because the object itself cannot cross. #2448 built it for the
+/// four `DjangoJSONEncoder` types and #2458 added the truthiness bit; this
+/// widens the set of objects that use it and adds no mechanism. A new variant
+/// would be a second carrier for one question (#1646), and would have to be
+/// classified at every wildcard `match` arm in the workspace.
+///
+/// **`json` is `str(o)`, and that is not a lie by omission.** For an object
+/// `DjangoJSONEncoder` cannot spell there is no encoder spelling to carry, and
+/// `str(o)` is exactly what the `Value::String` path this replaces already
+/// wrote into `json_script` — so that axis does not move. Django REFUSES
+/// `{{ p|json_script:"x" }}` over a `set` (`Object of type set is not JSON
+/// serializable`); that divergence is #2429's declined refusal direction,
+/// unchanged here rather than grown.
+///
+/// **The gate is "falsy AND every consumer is answerable without RUNNING the
+/// object", and each arm of it is load-bearing.** Two bits come back, because
+/// Django asks two different questions (see [`Encoded::iterable`]):
+///
+/// * `len(o) == 0` — `{% for %}` renders the empty branch and `|length` is 0,
+///   while the iterating filters do whatever `iter(o)` does. Claimed, with
+///   both bits measured independently. A `set()`, a `frozenset()`, an empty
+///   `dict_keys` and a zero-`__len__` class all land here, and the last of
+///   those is `sized_empty` WITHOUT being `iterable` — `{% for %}` renders
+///   empty for it while `|safeseq` raises, on Django too.
+/// * `len(o)` raises AND `iter(o)` raises — nothing can iterate it, so every
+///   consumer refuses with `'X' object is not iterable`. Claimed, both bits
+///   false. `complex(0)` and a `__bool__`-False class land here.
+/// * `len(o)` raises but `iter(o)` SUCCEEDS — a falsy object with `__iter__`
+///   and no `__len__`. Django's `ForNode` calls `list(values)` and renders
+///   whatever comes out; this carrier cannot produce those items without
+///   RUNNING the object, and running it would consume a generator. DECLINED:
+///   the value keeps its previous `Value::String` path, so it stays
+///   permissively wrong rather than becoming STRICTER than Django.
+/// * `len(o) > 0` on a falsy object — `__bool__` returning `False` with a
+///   non-zero `__len__`. `{% for %}` renders its N items; same reasoning,
+///   same decline.
+///
+/// The two declines are why this fix moves nothing into the
+/// `djust REFUSES & Django RENDERS` column. Recorded rather than guessed.
+///
+/// Fails CLOSED with [`django_json_encoded`] and [`is_decimal`]: a raising
+/// `__bool__` or `__len__` takes the value back to the string path exactly as
+/// before.
+///
+/// Reached only in the fallback block, after every extraction has already
+/// failed, so it costs a string / int / list / dict / model nothing.
+pub fn falsy_opaque(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
+    // Python's own answer, via `PyObject_IsTrue`, so a class overriding
+    // `__bool__` or `__len__` is answered by the object rather than by this
+    // function's idea of which types are containers.
+    if ob.is_truthy().ok()? {
+        return None;
+    }
+    // `PyObject_GetIter`, which builds an iterator and consumes nothing — a
+    // generator is not advanced by being asked.
+    let iterable = ob.try_iter().is_ok();
+    // `PyObject_Size`: `Ok` for anything with a `__len__`, `Err` otherwise.
+    let sized_empty = match ob.len() {
+        Ok(0) => true,
+        // Falsy with a non-zero length — see the doc above. Declined.
+        Ok(_) => return None,
+        // Iterable with no `__len__`: Django would `list()` it and render the
+        // items. Declined rather than claimed as empty.
+        Err(_) if iterable => return None,
+        Err(_) => false,
+    };
+    // `__name__`, NOT `__qualname__`, and for the reason `django_json_encoded`
+    // records: a heap type's `tp_name` is the name it was created with, so a
+    // class defined inside a function is `LenZero` where its `__qualname__`
+    // says `outer.<locals>.LenZero`. CPython writes the former into
+    // `'X' object is not iterable`.
+    let type_name = ob
+        .get_type()
+        .getattr("__name__")
+        .ok()?
+        .extract::<String>()
+        .ok()?;
+    let display = ob.str().ok()?.extract::<String>().ok()?;
+    // MEASURED, not `display.clone()` (#2472). For `set()`, `frozenset()` and
+    // `complex(0)` the two spellings coincide, which is exactly why copying
+    // `display` here would look correct on every builtin this function was
+    // written for — and be wrong for the case it was widened to carry: a USER
+    // class may define `__str__` and `__repr__` independently, so
+    // `{{ p|pprint }}` over a `__bool__`-False instance renders whichever this
+    // field holds. `repr()` is one call and answers it exactly.
+    let repr = ob.repr().ok()?.extract::<String>().ok()?;
+    Some(Encoded {
+        type_name,
+        // No encoder spelling exists for these; `str(o)` is what the
+        // `Value::String` path this replaces already wrote.
+        json: display.clone(),
+        display,
+        truthy: false,
+        sized_empty,
+        iterable,
+        repr,
+        // No comparison key, and this is the ONE arm where that matters as a
+        // decision rather than as a fallback (#2471/#2466). `django_json_encoded`
+        // builds an `Encoded` whose Python type has a total order; this one
+        // builds them for `set()`, `complex(0)` and arbitrary user classes,
+        // whose orderings are partial, absent, or defined by the object. So
+        // `python_partial_cmp` answers `None` for every pair either side of
+        // which came from here — never equal, never ordered — which is byte
+        // for byte what the `_ => false` wildcard answered for these values
+        // before #2471, and what it still answered for them between #2466 and
+        // this merge. Widening the comparison arm to reach them would need the
+        // object's own `__eq__` — `set() == frozenset()` is True ACROSS type
+        // names and `LenZero() == LenZero()` is False WITHIN one — so no
+        // carried spelling decides it. Filed as #2480.
+        cmp_key: None,
+    })
 }
 
 /// Convert Value to Python object using the new IntoPyObject trait.

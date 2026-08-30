@@ -262,6 +262,11 @@ pub fn python_len(value: &Value) -> Option<usize> {
         // `|length` is unaffected: it answered 0 through its own
         // `unwrap_or(0)` fallback and now answers 0 through this arm.
         Value::Missing => Some(0),
+        // The length half of the same carried answer (#2466), so this probe
+        // and `iter_values` cannot disagree about what an `Encoded` IS — the
+        // disagreement `Value::Missing` above records for the `Missing` case
+        // (#1646). `None` for a datetime: `len(timedelta(0))` raises.
+        Value::Encoded(e) if e.sized_empty => Some(0),
         _ => None,
     }
 }
@@ -281,6 +286,19 @@ pub fn iter_values(value: &Value) -> Option<Vec<Value>> {
         // subscripting that it refuses (#2340).
         Value::DictView { items, .. } => Some(items.clone()),
         Value::Missing => Some(Vec::new()),
+        // `iter(o)`, asked at the conversion (#2466) — and NOT the bit
+        // `{% for %}` reads. This sink is what `join` / `safeseq` /
+        // `escapeseq` / `unordered_list` call, and every one of those is a
+        // COMPREHENSION in Django, so it calls `iter()`; `ForNode` reads
+        // `__len__` first and never gets there. A class with a zero `__len__`
+        // and no `__iter__` therefore renders the `{% empty %}` block AND
+        // raises from `|safeseq`, on Django as well as here, and one bit
+        // answering both would have to be wrong for one of them.
+        //
+        // Empty by construction: `falsy_opaque` declines any object that is
+        // iterable without being empty, precisely so this arm never has to
+        // produce items it would have to run the object to get.
+        Value::Encoded(e) if e.iterable => Some(Vec::new()),
         _ => None,
     }
 }
@@ -6817,31 +6835,159 @@ mod tests {
                 kind: djust_core::DictViewKind::Keys,
                 items: vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
             },
+            // Both `Encoded` shapes. The variant was absent from this list
+            // entirely until #2466 — so the `python_len` / `iter_values`
+            // agreement below has never been checked for it, in either
+            // direction, since #2448 added it.
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "datetime.datetime".to_string(),
+                display: "2020-01-01 03:04:05".to_string(),
+                json: "2020-01-01T03:04:05".to_string(),
+                truthy: true,
+                sized_empty: false,
+                iterable: false,
+                repr: "datetime.datetime(2020, 1, 1, 3, 4, 5)".to_string(),
+                cmp_key: Some(djust_core::CmpKey {
+                    domain: djust_core::CMP_DOMAIN_DATETIME_NAIVE,
+                    hi: 737425,
+                    lo: 11_045_000_000,
+                }),
+            })),
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "set".to_string(),
+                display: "set()".to_string(),
+                json: "set()".to_string(),
+                truthy: false,
+                sized_empty: true,
+                iterable: true,
+                repr: "set()".to_string(),
+                cmp_key: None,
+            })),
+            // The THIRD shape, and the one that proves the two bits are two
+            // questions: a class with a zero `__len__` and no `__iter__`.
+            // Django renders the `{% empty %}` block for it and RAISES from
+            // `|safeseq`, because `ForNode` reads `__len__` and the filters
+            // are comprehensions.
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "LenZero".to_string(),
+                display: "<LenZero object>".to_string(),
+                json: "<LenZero object>".to_string(),
+                truthy: false,
+                sized_empty: true,
+                iterable: false,
+                repr: "<LenZero object>".to_string(),
+                cmp_key: None,
+            })),
         ]
+    }
+
+    /// [`python_len`] and [`iter_values`] read DIFFERENT bits off an
+    /// `Encoded`, and each reads the one Django's corresponding consumer asks
+    /// for (#2466).
+    ///
+    /// `ForNode.render` reads `__len__` when the object has one and calls
+    /// `list()` only when it does not; `join` / `safeseq` / `escapeseq` /
+    /// `unordered_list` are comprehensions and call `iter()` unconditionally.
+    /// So a class with a zero `__len__` and no `__iter__` renders the
+    /// `{% empty %}` block AND raises from `|safeseq` — on Django. One bit
+    /// answering both would have to be wrong for one of them, and the first
+    /// version of this fix had exactly one bit.
+    ///
+    /// EQUALITIES over the variant list, so a REMOVED arm reddens as loudly as
+    /// a wrong one — the direction this class fails in: #2448 added the
+    /// variant and neither probe named it for two releases.
+    #[test]
+    fn each_probe_reads_its_own_bit_off_an_encoded() {
+        for value in every_variant() {
+            let Value::Encoded(ref e) = value else {
+                continue;
+            };
+            assert_eq!(
+                iter_values(&value).is_some(),
+                e.iterable,
+                "iter_values must follow `iterable` for {value:?}",
+            );
+            assert_eq!(
+                python_len(&value).is_some(),
+                e.sized_empty,
+                "python_len must follow `sized_empty` for {value:?}",
+            );
+            if e.iterable {
+                // `Value` has no `PartialEq`, so the emptiness is asserted
+                // rather than the vec compared.
+                assert!(iter_values(&value).is_some_and(|items| items.is_empty()));
+            }
+            if e.sized_empty {
+                assert_eq!(python_len(&value), Some(0));
+            }
+        }
+        // The canary: the loop ran, and ran over all THREE shapes. Two of them
+        // would leave the two bits indistinguishable — the sample that makes
+        // this test able to fail is `(sized_empty, !iterable)`.
+        let shapes: Vec<(bool, bool)> = every_variant()
+            .iter()
+            .filter_map(|v| match v {
+                Value::Encoded(e) => Some((e.sized_empty, e.iterable)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            vec![(false, false), (true, true), (true, false)],
+            "every_variant() must carry one Encoded of EACH shape",
+        );
     }
 
     /// The `{% for a, b in … %}` unpack arm relies on this and says so (#2387).
     ///
     /// It checks arity with [`python_len`] and then unpacks with
-    /// [`iter_values`], so if a variant ever answered a length without being
-    /// iterable — or answered a DIFFERENT count — the arm's non-sequence
-    /// branch would silently bind `Missing` to the tail names instead of
-    /// raising. This is the pin that makes "total by construction" mechanical
-    /// rather than a comment.
+    /// [`iter_values`], so a variant that answered a length while refusing to
+    /// iterate — or answered a DIFFERENT count — would let the arm's
+    /// non-sequence branch silently bind `Missing` to the tail names instead
+    /// of raising.
+    ///
+    /// **One shape is exempt, and Python is why (#2466).** `len(o)` uses
+    /// `__len__` and `iter(o)` needs `__iter__` or `__getitem__`, so a class
+    /// defining only `__len__` has a length and is not iterable — that is a
+    /// real Python object, not a modelling artefact, and no `Value` variant
+    /// could express it before `Encoded` carried both bits. It cannot reach
+    /// the gap: `python_len` answers 0 for it, every `{% for %}` has at least
+    /// one loop variable, so the arity check refuses first with Django's own
+    /// `Need N values to unpack in for loop; got 0.` and `iter_values` is
+    /// never called. Asserted below rather than argued.
     #[test]
     fn python_len_agrees_with_iter_values() {
         for value in every_variant() {
-            if let Some(len) = python_len(&value) {
-                let items = iter_values(&value).unwrap_or_else(|| {
-                    panic!("python_len answered {len} for {value:?} but iter_values refused it")
-                });
+            let Some(len) = python_len(&value) else {
+                continue;
+            };
+            if matches!(&value, Value::Encoded(e) if e.sized_empty && !e.iterable) {
+                // The exempt shape. Its length must be 0, which is what makes
+                // the arity check unreachable-past for every real loop.
                 assert_eq!(
-                    items.len(),
-                    len,
-                    "python_len and iter_values disagree about {value:?}"
+                    len, 0,
+                    "the len-without-iter shape must be empty: {value:?}"
                 );
+                assert!(iter_values(&value).is_none());
+                continue;
             }
+            let items = iter_values(&value).unwrap_or_else(|| {
+                panic!("python_len answered {len} for {value:?} but iter_values refused it")
+            });
+            assert_eq!(
+                items.len(),
+                len,
+                "python_len and iter_values disagree about {value:?}"
+            );
         }
+        // The canary: the exemption is exercised rather than merely written.
+        assert_eq!(
+            every_variant()
+                .iter()
+                .filter(|v| matches!(v, Value::Encoded(e) if e.sized_empty && !e.iterable))
+                .count(),
+            1,
+        );
     }
 
     /// `len(model)` raises in Python, and both maps are `Value::Object`.
@@ -7154,6 +7300,8 @@ mod tests {
                 display: "2020-01-01 03:04:05".to_string(),
                 json: "2020-01-01T03:04:05".to_string(),
                 truthy: true,
+                sized_empty: false,
+                iterable: false,
                 repr: "datetime.datetime(2020, 1, 1, 3, 4, 5)".to_string(),
                 cmp_key: Some(djust_core::CmpKey {
                     domain: djust_core::CMP_DOMAIN_DATETIME_NAIVE,
@@ -7161,7 +7309,56 @@ mod tests {
                     lo: 11_045_000_000,
                 }),
             })),
+            // The SAME variant on the ITERATING side (#2466), which is why one
+            // sample of it is no longer enough. Since `falsy_opaque` widened
+            // the set of Python objects that become an `Encoded`, `display` is
+            // no longer digits-and-punctuation: it is `str(o)` of an arbitrary
+            // object, and a class whose `__repr__` returns markup puts markup
+            // here. That is exactly the input #2285's escape exists for, so
+            // the NON-`sized_empty` sample below carries a hostile display and
+            // the assertion in the loop is what proves the escape still
+            // reaches it.
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "EmptyThing".to_string(),
+                display: "EmptyThing()".to_string(),
+                json: "EmptyThing()".to_string(),
+                truthy: false,
+                sized_empty: true,
+                iterable: true,
+                // A `falsy_opaque` sample, so `repr` is MEASURED from the
+                // object rather than copied from `display` — for a user class
+                // the two differ, and the hostile spelling belongs in both.
+                repr: "EmptyThing()".to_string(),
+                // No key: `python_partial_cmp` must answer `None` for every
+                // pair either side of which came from `falsy_opaque` (#2471).
+                cmp_key: None,
+            })),
         ];
+        // The hostile-display member, kept OUT of the array above so the
+        // `seen.len()` count still reads "one sample per variant". It is
+        // NON-iterating, so #2285's fall-through escape is the only thing
+        // between it and the page.
+        let hostile = Value::Encoded(Box::new(djust_core::Encoded {
+            type_name: "Sneaky".to_string(),
+            display: "<script>alert(1)</script>".to_string(),
+            json: "<script>alert(1)</script>".to_string(),
+            truthy: false,
+            sized_empty: false,
+            iterable: false,
+            repr: "<script>alert(1)</script>".to_string(),
+            cmp_key: None,
+        }));
+        assert!(
+            iter_values(&hostile).is_none(),
+            "a non-`sized_empty` Encoded must reach #2285's fall-through escape",
+        );
+        assert_ne!(
+            html_escape(&hostile.to_string()),
+            hostile.to_string(),
+            "since #2466 an Encoded's display is `str()` of an ARBITRARY object \
+             and CAN carry markup — #2285's escape on the fall-through is \
+             load-bearing again, and this is the sample that says so",
+        );
         let mut iterating = 0;
         for v in &variants {
             match iter_values(v) {
@@ -7179,9 +7376,10 @@ mod tests {
             }
         }
         assert_eq!(
-            iterating, 6,
+            iterating, 7,
             "the iterating set is exactly String / List / Tuple / Object / \
-             Missing / DictView — a change here is a change to what #2283 fixed",
+             Missing / DictView, plus a `sized_empty` Encoded (#2466) — a \
+             change here is a change to what #2283 and #2466 fixed",
         );
         // The half that makes "exhaustive" true rather than aspirational: every
         // arm `variant_name` can return is exercised by a sample. Deleting a

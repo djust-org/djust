@@ -253,11 +253,22 @@ class TestEncoderMatchesRealDjango:
         encoder and false of Django's. #2462 gave djust's the same
         `duration_iso_string` branch, so it is in the sweep above now and this
         is the row that says the omission was fixed rather than forgotten.
+
+        Still closed after #2467, by the same route: the gap this names is the
+        **encoder's**, and #2467 changed the pre-pass rather than the encoder.
+        What moved is where the pre-pass's string appears — the value is
+        carried unconverted for the Rust renderer and spelled at the
+        `state_roundtrip=True` boundary — so the third assertion below moved
+        with it and a fourth was added, which is the stronger claim anyway:
+        encoding the pre-pass's output is byte-identical to encoding the input,
+        which is the identity `normalize_django_value`'s docstring states and
+        the property every wire consumer actually depends on.
         """
         td = __import__("datetime").timedelta(days=1, seconds=90)
         assert json.dumps(td, cls=RealDjangoEncoder) == '"P1DT00H01M30S"'
         assert json.dumps(td, cls=DjustEncoder) == '"P1DT00H01M30S"'
-        assert normalize_django_value(td) == "P1DT00H01M30S"
+        assert normalize_django_value(td, state_roundtrip=True) == "P1DT00H01M30S"
+        assert json.dumps(normalize_django_value(td), cls=DjustEncoder) == '"P1DT00H01M30S"'
 
     def test_the_differential_would_catch_a_regression(self) -> None:
         """Gate-off for the harness (#1468): a wrong answer must fail it."""

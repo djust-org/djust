@@ -48,8 +48,10 @@ The equality semantics, stated
 ``a == b`` iff both carry a key, the keys are in the SAME comparison domain,
 and the ``(hi, lo)`` limbs are equal. A domain is "the set of values Python
 will compare this one with": ``timedelta``, ``date``, naive ``datetime``,
-aware ``datetime``, naive ``time``, aware ``time``. Everything Django answers
-falls out of that one rule rather than needing its own:
+aware ``datetime``, naive ``time``. FIVE, not six — an aware ``time`` never
+becomes an ``Encoded`` at all (:class:`TestAnAwareTimeIsNotAnEncodedAtAll`).
+Everything Django answers falls out of that one rule rather than needing its
+own:
 
 ===============================  ==============  ==========================
 pair                             Python          this rule
@@ -70,15 +72,26 @@ Django's ``{% if %}`` swallows the ``TypeError`` (``smart_if``'s
 ``None``" produce the same rendered output — which is what every cross-domain
 row below asserts against the live engine rather than from this table.
 
-Which path this is on
-----------------------
-The RAW ``render_template`` path, where a live Python ``datetime`` reaches Rust
-and becomes a ``Value::Encoded``. The LiveView path is different and this fix
-does not touch it: ``normalize_django_value`` (#2462/#2468) spells a datetime
-as its ``DjangoJSONEncoder`` string BEFORE the conversion, so it arrives as a
-``Value::String`` and compares as text. That is #2467's question, not this one
-— and it is why every helper here passes the context dict UNNORMALISED, the
-way ``scripts/filter-parity-differential.py`` does.
+Which path this is on — BOTH, since #2475
+------------------------------------------
+Everything below renders through the RAW ``render_template`` path, where a live
+Python ``datetime`` reaches Rust and becomes a ``Value::Encoded``; that is what
+``scripts/filter-parity-differential.py`` does and it is why every helper here
+passes the context dict UNNORMALISED.
+
+An earlier version of this docstring said the LiveView path was a separate
+question — ``normalize_django_value`` (#2462/#2468) spelled a datetime as its
+``DjangoJSONEncoder`` string BEFORE the conversion, so it arrived as a
+``Value::String`` and compared as text. **That stopped being true while this
+branch was open**: #2475 closed #2467 by removing the Python-side flattening,
+so the LiveView path now carries the object to Rust and builds the same
+``Value::Encoded``. All three fixes therefore reach both paths, which
+:class:`TestBothPathsCarryTheSameEncoded` asserts rather than assumes — and
+``test_sequence_op_chokepoint_2451.py``'s pin, which had been rewritten into a
+PATH split, is rewritten again as CLOSED.
+
+The lesson is the merge's, not the fix's: a premise about a NEIGHBOURING path
+has the same shelf life as a premise about the cited one (#1516).
 
 Sites decided but NOT changed (#1079)
 --------------------------------------
@@ -902,14 +915,19 @@ class TestTheStateRoundTripKeepsTheAnswers:
             "0:00:00",
             "P0DT00H00M00S",
             False,
+            # #2466's two bits, which sit BEFORE these two because they were
+            # appended first — a positional payload only stays readable if
+            # every widening appends at the end (#1541).
+            False,
+            False,
             "datetime.timedelta(0)",
             [1, 0, 0],
         ]
 
     def test_a_shorter_payload_still_reads_without_fabricating_the_answers(self) -> None:
-        """A #2448/#2458-era process's state outlives it — a Redis backend
-        hands back a three- or four-element payload on the first request after
-        a rolling deploy — so this is a live input.
+        """A #2448/#2458/#2466-era process's state outlives it — a Redis
+        backend hands back a three-, four- or six-element payload on the first
+        request after a rolling deploy — so this is a live input.
 
         It restores WITHOUT INVENTING what the entry never recorded: no
         comparison key (so not equal to itself, the pre-#2471 answer) and
@@ -920,8 +938,8 @@ class TestTheStateRoundTripKeepsTheAnswers:
         recorded repr from a restored one, so the field carries the only
         spelling that entry has.
 
-        Built by TRUNCATING a real six-element blob, so the test cannot drift
-        from the shape the serializer actually writes."""
+        Built by TRUNCATING a real eight-element blob, so the test cannot
+        drift from the shape the serializer actually writes."""
         msgpack = pytest.importorskip("msgpack")
 
         from djust._rust import RustLiveView
@@ -931,17 +949,158 @@ class TestTheStateRoundTripKeepsTheAnswers:
             view.set_state("p", datetime.timedelta(0))
             view.set_state("q", datetime.timedelta(0))
             decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
-            assert len(decoded[1]["p"]["__djust_encoded__"]) == 6
+            assert len(decoded[1]["p"]["__djust_encoded__"]) == 8
             for key in ("p", "q"):
                 decoded[1][key]["__djust_encoded__"] = decoded[1][key]["__djust_encoded__"][:n]
             packed = msgpack.packb(decoded, use_bin_type=True)
             return RustLiveView.deserialize_msgpack(packed).render()
 
-        for n in (3, 4):
+        for n in (3, 4, 6):
             assert truncated(self.EQ, n) == "N", f"{n}-element payload gained a key"
             assert truncated(self.REPR, n) == "0:00:00", f"{n}-element payload gained a repr"
-        # And the SIX-element payload for the same value answers both the new
+        # And the EIGHT-element payload for the same value answers both the new
         # way, which is what makes the arms above a compatibility read rather
         # than the bug.
         assert self._round_trip(self.EQ, datetime.timedelta(0)) == "Y"
         assert self._round_trip(self.REPR, datetime.timedelta(0)) == "datetime.timedelta(0)"
+
+
+class TestBothPathsCarryTheSameEncoded:
+    """#2475 (#2467) removed the Python-side flattening while this branch was
+    open, so the LiveView path now builds the same ``Value::Encoded`` the raw
+    path does — and all three fixes reach it.
+
+    Asserted rather than assumed, because the premise moved once already: an
+    earlier version of this module's docstring, of the CHANGELOG entry, and of
+    ``test_sequence_op_chokepoint_2451.py``'s pin all described a PATH split
+    that no longer exists.
+    """
+
+    @staticmethod
+    def _paths(value: object) -> tuple[dict, dict]:
+        from djust.serialization import normalize_django_value
+
+        return {"p": value, "q": value}, normalize_django_value({"p": value, "q": value})
+
+    def test_normalize_no_longer_flattens_a_datetime(self) -> None:
+        """The premise itself, run rather than quoted."""
+        from djust.serialization import normalize_django_value
+
+        value = datetime.datetime(2020, 1, 1, 12, 0)
+        restored = normalize_django_value({"p": value})["p"]
+        assert isinstance(restored, datetime.datetime)
+        assert restored == value
+
+    @pytest.mark.parametrize("domain", sorted(GENERATORS))
+    def test_all_three_fixes_reach_the_liveview_path_too(self, domain: str) -> None:
+        rng = random.Random(24750)
+        for _ in range(6):
+            v = GENERATORS[domain](rng)
+            for ctx in self._paths(v):
+                # #2471
+                assert _rust.render_template("{% if p == q %}Y{% else %}N{% endif %}", ctx) == "Y"
+                # #2472
+                assert _rust.render_template("{{ p|pprint }}", ctx) == repr(v)
+                # #2473
+                with pytest.raises(Exception):  # noqa: B017 - the refusal IS the fix
+                    _rust.render_template('{{ p|get_digit:"1" }}', ctx)
+
+
+class TestAFalsyOpaqueEncodedIsNotComparable:
+    """#2476 widened ``Value::Encoded`` to carry ``set()``, ``frozenset()``,
+    ``complex(0)`` and any falsy user object — so the comparison arm this PR
+    adds is REACHED for values whose Python ordering it cannot know.
+
+    It answers ``None`` for every such pair, because ``falsy_opaque`` sets no
+    ``cmp_key``: never equal, never ordered. Pinned here for two reasons.
+
+    **It is not this PR's regression, and the pin says whose it is.** Before
+    #2476 a ``set()`` was a ``Value::String("set()")`` and two of them compared
+    EQUAL through the ``(String, String)`` arm, which is Django's answer.
+    #2476 made it an ``Encoded``, which fell to ``_ => false``. This PR's arm
+    answers the same ``false`` — measured, not argued: the gate-off mutation
+    that reverts ``values_equal``'s arm to ``false`` (M1) leaves every
+    assertion in this class green, which is the same-answer proof.
+
+    **No derivable rule exists, which is why it is filed rather than fixed
+    (#1079).** ``set() == frozenset()`` is True in Python ACROSS type names,
+    and ``LenZero() == LenZero()`` on two distinct instances is False WITHIN
+    one — so neither ``type_name`` nor any carried spelling separates them.
+    Answering it needs the object's ``__eq__``, i.e. a token the conversion
+    would have to invent. Filed as #2480.
+    """
+
+    class LenZero:
+        def __len__(self) -> int:
+            return 0
+
+    class BoolFalse:
+        def __bool__(self) -> bool:
+            return False
+
+        def __str__(self) -> str:
+            return "STR-SPELLING"
+
+        def __repr__(self) -> str:
+            return "REPR-SPELLING"
+
+    FALSY_OPAQUE = ("set()", "frozenset()", "complex(0)", "LenZero()", "BoolFalse()")
+
+    def _values(self) -> dict:
+        return {
+            "set()": set(),
+            "frozenset()": frozenset(),
+            "complex(0)": complex(0),
+            "LenZero()": self.LenZero(),
+            "BoolFalse()": self.BoolFalse(),
+        }
+
+    @pytest.mark.parametrize("name", FALSY_OPAQUE)
+    def test_it_is_never_equal_even_to_itself_which_diverges_from_django(self, name: str) -> None:
+        """The divergence, stated as a measurement so it cannot be mistaken for
+        an intended answer. Django renders ``Y``; this renders ``N``."""
+        v = self._values()[name]
+        dj, du = branch("==", v, v)
+        assert dj == "Y", "Django stopped answering equal — the pin needs revisiting"
+        assert du == "N", f"{name} gained a comparison key — #2480 may be closed"
+
+    @pytest.mark.parametrize("name", FALSY_OPAQUE)
+    @pytest.mark.parametrize("op", ["<", ">"])
+    def test_the_ordering_operators_agree(self, name: str, op: str) -> None:
+        """The half that is RIGHT, and the reason the arm is not simply wrong:
+        Python cannot order any of these either (``set`` has only a partial
+        order, and ``<`` on two equal sets is False), so ``None`` is Django's
+        own answer for the ordering operators."""
+        v = self._values()[name]
+        dj, du = branch(op, v, v)
+        assert du == dj
+
+    def test_a_falsy_opaque_against_a_datetime_is_not_comparable_on_either_engine(self) -> None:
+        """The mixed pair the merge made reachable — one operand with a key and
+        one without. ``python_partial_cmp``'s ``?`` short-circuits on the
+        missing key before the domain check, so this is the same ``None``, and
+        Django agrees for every operator."""
+        for op in OPS:
+            dj, du = branch(op, set(), datetime.timedelta(0))
+            assert du == dj
+
+    def test_its_repr_is_MEASURED_and_not_a_copy_of_display(self) -> None:
+        """The bug the merge would otherwise have shipped, and the reason
+        ``falsy_opaque`` calls ``repr()`` rather than cloning ``display`` the
+        way it clones it into ``json``.
+
+        For ``set()``, ``frozenset()`` and ``complex(0)`` the two spellings
+        coincide — so every builtin ``falsy_opaque`` was written for would have
+        passed a ``display``-copying implementation. A user class defines them
+        independently, and ``{{ p|pprint }}`` renders whichever field is
+        carried.
+        """
+        v = self.BoolFalse()
+        assert str(v) != repr(v)
+        for src, expected in (("{{ p|pprint }}", repr(v)), ("{{ p }}", str(v))):
+            dj, du = both(src, {"p": v})
+            assert du == expected, f"{src}: {du!r}"
+            assert du == dj
+        # And nested, which is `py_repr`'s own path.
+        dj, du = both("{{ p }}", {"p": [v]})
+        assert du == dj == f"[{v!r}]"

@@ -540,18 +540,23 @@ class TestTheFalsinessResidueIsNamed:
             (),
             {},
             datetime.timedelta(0),
+            # A `set` was the ONE exclusion from this list, and it is one no
+            # longer (#2466). It has no `Value` variant, so it landed on the
+            # conversion's final `Value::String(str(o))` and arrived as the
+            # non-empty `"set()"`, which `is_truthy` called `True` where
+            # `bool(set())` is `False` — the same family as #2458 but one
+            # level up, at the CONVERSION rather than at the truthiness rule.
+            # It is now in the sweep proper rather than excluded below it.
+            set(),
+            frozenset(),
+            # The other members of the class #2466 closed, so this list is one
+            # falsy inhabitant of every shape a context can hold rather than
+            # of every shape that happened to have a variant.
+            complex(0),
+            {}.keys(),
         ]
-        # NOT in the list, and measured rather than assumed: a `set` has no
-        # `Value` variant at all, so it lands on the conversion's final
-        # `Value::String(str(o))` and arrives as the non-empty `"set()"`.
-        # `is_truthy` then answers `True` where `bool(set())` is `False` — a
-        # divergence in the same family as #2458 but one level up, at the
-        # CONVERSION rather than at the truthiness rule, and visible in
-        # `{% if q %}` before any filter runs. Out of this fix's scope (#1079)
-        # and filed separately; asserted here so the exclusion is a measured
-        # fact rather than a gap in the list.
-        assert djust_render("{% if q %}T{% else %}F{% endif %}", {"q": set()}) == "T"
         assert bool(set()) is False
+        assert djust_render("{% if q %}T{% else %}F{% endif %}", {"q": set()}) == "F"
         source = "{{ p|timesince:q }}"
         baseline = djust_render("{{ p|timesince }}", {"p": NOON})
         for value in falsy_inhabitants:

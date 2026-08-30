@@ -1250,10 +1250,11 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     which is a meaningful speedup in hot paths (context serialization, state
     sync). ``TestParityWithJSONRoundtrip`` pins exactly that composition.
 
-    The output is NOT ``json.dumps``-able on its own, because ``Decimal`` is
-    carried through unconverted (see the branch below, #2239). Every caller
-    either hands it to the Rust renderer / a djust encoder — both of which take
-    a ``Decimal`` — or passes ``state_roundtrip=True``.
+    The output is NOT ``json.dumps``-able on its own, because ``Decimal`` and
+    the ``datetime`` family are carried through unconverted (see those branches
+    below, #2239 / #2467). Every caller either hands it to the Rust renderer / a
+    djust encoder — both of which take all of them — or passes
+    ``state_roundtrip=True``.
 
     **Enhancements beyond DjangoJSONEncoder**: the following type would raise
     ``TypeError`` under ``json.dumps(value, cls=DjangoJSONEncoder)`` but is
@@ -1276,11 +1277,15 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     - Decimal                      -- carried through EXACTLY (see the branch, #2239);
                                       float() under ``state_roundtrip=True``
     - UUID                         -- str()
-    - datetime, date, time         -- ``DjangoJSONEncoder.default``'s spelling,
-                                      which is NOT ``.isoformat()``: microseconds
-                                      truncate to milliseconds and a trailing
-                                      ``+00:00`` becomes ``Z`` (#2462)
-    - timedelta                    -- ISO-8601 duration string (via Django util)
+    - datetime, date, time,
+      timedelta                    -- carried through UNCONVERTED (#2467), so Rust
+                                      builds ``Value::Encoded`` (#2448) and the
+                                      LiveView path answers what the raw path
+                                      answers. Under ``state_roundtrip=True`` it
+                                      takes ``DjangoJSONEncoder.default``'s
+                                      spelling, which is NOT ``.isoformat()``:
+                                      microseconds truncate to milliseconds and a
+                                      trailing ``+00:00`` becomes ``Z`` (#2462)
     - Promise (lazy strings)       -- str()
     - dict                         -- recurse values
     - list / tuple                 -- recurse elements (always returns list)
@@ -1375,20 +1380,40 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     if isinstance(value, UUID):
         return str(value)
 
-    # datetime / date / time / timedelta -> the encoder's own spelling (#2462).
+    # datetime / date / time / timedelta -> the value ITSELF (#2467), except at
+    # the state-roundtrip boundary, where it takes the encoder's own spelling
+    # (#2462).
     #
-    # Four branches calling three different converters became one call to the
-    # encoder, because this function's documented contract IS the encoder:
+    # The ``Decimal`` branch above, verbatim, and for the same reason. This
+    # function's output goes into the TEMPLATE CONTEXT, so the Rust renderer
+    # sees it -- and Rust carries the whole datetime family exactly, as
+    # ``Value::Encoded`` (#2448), which holds ``str(o)``, Django's encoder
+    # spelling, CPython's ``tp_name`` and (since #2458) ``bool(o)``. Flattening
+    # to a string here meant that variant was never constructed on the LiveView
+    # path, so every downstream decision was made on TEXT and djust's two paths
+    # answered differently for the same value:
     #
-    #     json.dumps(normalize_django_value(v), cls=Enc)
-    #         == json.dumps(v, cls=Enc)
+    # - ``{% if p %}`` over ``timedelta(0)`` was ``T`` here and ``F`` on the raw
+    #   path, because a non-empty string is truthy;
+    # - ``{{ p }}`` rendered the ISO string rather than ``str(o)``;
+    # - and the sharpest one, which is a PERMISSIVENESS gap rather than a
+    #   spelling: the seven #2451 filters that refuse a non-iterable were handed
+    #   the string ``"P0DT00H00M00S"`` and iterated its thirteen CHARACTERS,
+    #   so ``{{ p|unordered_list }}`` emitted thirteen ``<li>``s where Django
+    #   raises ``TypeError: 'datetime.timedelta' object is not iterable``.
     #
-    # and ``isoformat()`` is not what ``default()`` writes. The ordering comment
-    # this replaces (``datetime`` before ``date``, since ``datetime`` IS a
-    # ``date``) is still load-bearing -- it just lives inside
-    # ``DjangoJSONEncoder.default`` now, which is where Django keeps it.
+    # The documented identity above survives this, exactly as it survives for
+    # ``Decimal``: ``json.dumps`` with either encoder handles a datetime, so
+    # every wire consumer emits byte-identical bytes with and without the
+    # pre-pass. ``state_roundtrip=True`` is the one boundary that cannot take
+    # the live object -- Django's session serializer passes no encoder -- and
+    # every ``request.session[...]`` write already sets it.
+    #
+    # ``django_json_datetime`` is still the converter there, so the ordering
+    # subtlety (``datetime`` before ``date``, since ``datetime`` IS a ``date``)
+    # stays inside ``DjangoJSONEncoder.default``, which is where Django keeps it.
     if isinstance(value, (datetime, date, time, timedelta)):
-        return django_json_datetime(value)
+        return django_json_datetime(value) if state_roundtrip else value
 
     # Django Form / BoundField — must come before FieldFile check because
     # Form/BoundField objects don't have `.url` but duck-typing could match.
