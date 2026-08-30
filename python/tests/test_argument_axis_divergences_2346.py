@@ -238,12 +238,18 @@ class TestDivisiblebyZeroDivisor:
         assert raises_django('{{ p|divisibleby:"0" }}', value), repr(value)
         assert raises_djust('{{ p|divisibleby:"0" }}', value), repr(value)
 
-    def test_a_nonzero_divisor_keeps_the_values_fail_soft_answer(self) -> None:
-        """The value axis is untouched: `int(value)` on something unparseable
-        is a `ValueError` in Django and `False` here, which is pre-existing and
-        a separate question (#2328 says so in as many words)."""
-        assert djust_render('{{ p|divisibleby:"2" }}', "notanumber") == "False"
+    def test_a_nonzero_divisor_still_judges_the_value_on_its_own(self) -> None:
+        """The value axis answered `False` here until #2435 closed it.
+
+        `int("notanumber")` is a `ValueError` Django's bare
+        `int(value) % int(arg)` does not catch, so both engines now refuse the
+        template — and the two raises stay DISTINGUISHABLE from the
+        divisor-zero one above, which is what makes this row non-vacuous
+        rather than "everything raises now".
+        """
         assert raises_django('{{ p|divisibleby:"2" }}', "notanumber")
+        with pytest.raises(RuntimeError, match="calls int\\(\\) on its value"):
+            djust_render('{{ p|divisibleby:"2" }}', "notanumber")
 
     @pytest.mark.parametrize(
         ("value", "arg"), [(10, '"2"'), (10, '"3"'), (0, '"5"'), (-9, '"3"'), ("42", '"7"')]

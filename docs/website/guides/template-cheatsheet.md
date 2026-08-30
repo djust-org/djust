@@ -659,7 +659,12 @@ Pass them via `context` / `self.*`; the serializer handles the rest.
 > unparseable argument raises for `center`, `ljust`, `rjust`, `wordwrap`,
 > `urlizetrunc` and `divisibleby`, and returns the value unchanged for the
 > `truncate*` family, `get_digit` and `floatformat` — matching each filter's
-> Django source. Full rules: `docs/RUST_TEMPLATE_API.md`, "Filter arguments".
+> Django source. The **value** follows the same rule where a filter coerces it:
+> `divisibleby`, `get_digit`, `add` and `filesizeformat` call `int(value)`, and
+> each raises for exactly the exceptions its own Django `except` misses — so
+> `{{ "abc"|divisibleby:"2" }}` refuses the template as Django does, while
+> `{{ "abc"|get_digit:"1" }}` renders `abc`. Full rules:
+> `docs/RUST_TEMPLATE_API.md`, "Filter arguments" and "Filter values".
 
 **String**
 
