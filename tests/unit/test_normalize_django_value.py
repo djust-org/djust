@@ -105,32 +105,39 @@ class TestUUID:
 
 
 class TestDateTimeTypes:
-    """datetime, date, time -> isoformat strings."""
+    """datetime, date, time, timedelta -> the value ITSELF (#2467); the
+    encoder's string only at the ``state_roundtrip=True`` boundary.
 
-    def test_datetime_isoformat(self):
+    These four asserted the isoformat string until #2467, which stopped the
+    pre-pass flattening so the Rust renderer builds ``Value::Encoded`` (#2448)
+    on the LiveView path as it already did on the raw one. Each row keeps BOTH
+    halves — carried, and converted at the boundary — because the pair is the
+    whole contract, and asserting only the first would let the boundary silently
+    stop converting.
+    """
+
+    def test_datetime_is_carried_and_converts_at_the_boundary(self):
         dt = datetime(2024, 1, 15, 10, 30, 0)
-        result = normalize_django_value(dt)
-        assert result == "2024-01-15T10:30:00"
-        assert isinstance(result, str)
+        assert normalize_django_value(dt) is dt
+        assert normalize_django_value(dt, state_roundtrip=True) == "2024-01-15T10:30:00"
 
-    def test_date_isoformat(self):
+    def test_date_is_carried_and_converts_at_the_boundary(self):
         d = date(2024, 1, 15)
-        result = normalize_django_value(d)
-        assert result == "2024-01-15"
-        assert isinstance(result, str)
+        assert normalize_django_value(d) is d
+        assert normalize_django_value(d, state_roundtrip=True) == "2024-01-15"
 
-    def test_time_isoformat(self):
+    def test_time_is_carried_and_converts_at_the_boundary(self):
         t = time(10, 30, 0)
-        result = normalize_django_value(t)
-        assert result == "10:30:00"
-        assert isinstance(result, str)
+        assert normalize_django_value(t) is t
+        assert normalize_django_value(t, state_roundtrip=True) == "10:30:00"
 
-    def test_timedelta_iso_string(self):
+    def test_timedelta_is_carried_and_converts_at_the_boundary(self):
         td = timedelta(days=1, hours=2, minutes=30)
-        result = normalize_django_value(td)
+        assert normalize_django_value(td) is td
+        stored = normalize_django_value(td, state_roundtrip=True)
         # Django's duration_iso_string produces ISO-8601 format
-        assert isinstance(result, str)
-        assert "P" in result  # ISO-8601 duration starts with P
+        assert isinstance(stored, str)
+        assert "P" in stored  # ISO-8601 duration starts with P
 
 
 class TestDictRecursion:
@@ -467,6 +474,62 @@ class TestParityWithJSONRoundtrip:
         assert self._encoded_by_django(normalize_django_value(value)) == self._encoded_by_django(
             value
         )
+
+    #: The datetime family, which the pre-pass carries through since #2467 and
+    #: whose `state_roundtrip=True` form is the ENCODER's own spelling.
+    _CARRIED_ENCODER_SPELLED = [
+        datetime(2024, 6, 15, 12, 30, 45, 123456, tzinfo=timezone.utc),
+        date(2024, 6, 15),
+        time(23, 59, 59, 123456),
+        timedelta(seconds=-90),
+    ]
+
+    @pytest.mark.parametrize("value", _CARRIED_ENCODER_SPELLED)
+    def test_the_ROUNDTRIP_form_encodes_the_same_as_the_object(self, value):
+        """The non-vacuous half of the two sweeps above, for the carried types.
+
+        Said plainly because it is easy to miss: for a value the pre-pass
+        carries through, `_encoded(normalize(v)) == _encoded(v)` is true BY
+        CONSTRUCTION — both sides encode the same object. That has been so for
+        `Decimal` since #2239 and is so for the datetime family since #2467,
+        and the class docstring's *"it also still covers `Decimal`"* is the
+        design decision rather than an oversight: composition is the property,
+        and a definitionally-true row is the correct answer to it.
+
+        What is NOT definitional, and is what this asserts, is the other form:
+        whatever the `state_roundtrip=True` boundary stores must encode to the
+        same JSON the live object does. That is the claim a session or signed
+        snapshot depends on, and the one that breaks if the boundary's
+        converter and the encoder drift apart (#1646) — the exact drift #2462
+        found across three sinks.
+        """
+        stored = normalize_django_value(value, state_roundtrip=True)
+        assert stored is not value, "this row is not a carried-through type"
+        assert self._encoded_by_django(stored) == self._encoded_by_django(value)
+
+    def test_a_DECIMAL_takes_a_different_boundary_contract_and_that_is_the_point(self):
+        """The row the sweep above deliberately does NOT contain, and why.
+
+        Writing that sweep with `Decimal` in it was the first version, and it
+        failed: `{'__djust_decimal__': '9.99'} != '9.99'`. The two carried
+        types do not share a boundary form, and the difference is load-bearing
+        rather than incidental.
+
+        A datetime's stored form is the encoder's own string, which every
+        consumer already reads as a date. A `Decimal`'s cannot be — #2252
+        measured that a bare digit string restored onto the view stops
+        `|floatformat` rounding and a `float` loses the type and the trailing
+        zeros — so it is stored as a TAG and `decode_state_roundtrip` restores
+        a real `Decimal`. Asserted here so the asymmetry is recorded where
+        someone would otherwise "fix" the sweep above by widening it.
+        """
+        from djust.serialization import decode_state_roundtrip
+
+        value = Decimal("9.99")
+        stored = normalize_django_value(value, state_roundtrip=True)
+        assert stored == {"__djust_decimal__": "9.99"}
+        assert self._encoded_by_django(stored) != self._encoded_by_django(value)
+        assert decode_state_roundtrip(stored) == value
 
     def test_djusts_encoder_agrees_with_djangos(self):
         """And the reason the two assertions above are not redundant: the

@@ -75,17 +75,22 @@ class TestNormalizeAsyncResult:
         assert result["result"] == "hello"
 
     def test_succeeded_recurses_into_result(self):
-        """Inner result containing a non-primitive is normalized too."""
+        """Inner result containing a non-primitive is normalized too.
+
+        The recursion is what is under test, not the datetime's spelling: since
+        #2467 the family is carried UNCONVERTED for the renderer and takes the
+        encoder's string only at ``state_roundtrip=True``. Both halves are
+        asserted, because "the recursion reached it" is exactly what a carried
+        value cannot show on its own.
+        """
         from datetime import datetime
 
-        # AsyncResult.succeeded with a datetime payload — the nested
-        # datetime should be ISO-stringified by the recursive call.
-        result = normalize_django_value(
-            AsyncResult.succeeded({"ts": datetime(2026, 5, 1, 12, 0, 0)})
-        )
+        ts = datetime(2026, 5, 1, 12, 0, 0)
+        result = normalize_django_value(AsyncResult.succeeded({"ts": ts}))
         assert result["ok"] is True
-        # datetime stringified by normalize_django_value's recursion.
-        assert result["result"]["ts"] == "2026-05-01T12:00:00"
+        assert result["result"]["ts"] is ts
+        stored = normalize_django_value(AsyncResult.succeeded({"ts": ts}), state_roundtrip=True)
+        assert stored["result"]["ts"] == "2026-05-01T12:00:00"
 
     def test_async_result_inside_dict(self):
         """AsyncResult as a value in a context dict: still serialized."""

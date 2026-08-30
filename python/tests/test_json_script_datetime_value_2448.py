@@ -440,8 +440,11 @@ class TestWhichPathThisFixIsOn:
     was both of them disagreeing with Django, not the pre-pass disagreeing with
     the encoder.
 
-    The LiveView path still FLATTENS, which is unchanged by either fix and is
-    pinned below: `Value::Encoded` is never constructed there.
+    The LiveView path used to FLATTEN, which neither fix changed — pinned
+    below so that closing it would redden the pin rather than leave a stale
+    claim. #2467 closed it: the normalizer now carries the value unconverted,
+    `Value::Encoded` is constructed on both paths, and the pin is INVERTED
+    rather than deleted (the way #2462's four rows above were).
     """
 
     #: The claim, run rather than read.
@@ -458,11 +461,19 @@ class TestWhichPathThisFixIsOn:
         ctx = {"p": {"a": FAMILY[name]}}
         assert djust_render(TPL, ctx) == django_render(TPL, ctx)
 
-    def test_the_normalizer_flattens_the_type_before_rust_can_carry_it(self) -> None:
+    def test_the_normalizer_carries_the_type_since_2467(self) -> None:
+        """**Inverted by #2467**, which is what this class existed to enable.
+
+        It asserted the flattening — `isinstance(flattened, str)` — precisely
+        so that closing the LiveView path would redden it rather than leave a
+        stale claim. The normalizer now carries the value UNCONVERTED (the
+        `Decimal` split, #2239), so `Value::Encoded` is built on both paths.
+        """
         from djust.serialization import normalize_django_value
 
-        flattened = normalize_django_value({"p": FAMILY["datetime naive"]})["p"]
-        assert isinstance(flattened, str), type(flattened)
+        value = FAMILY["datetime naive"]
+        carried = normalize_django_value({"p": value})["p"]
+        assert carried is value, type(carried)
 
     @pytest.mark.parametrize(
         "name",

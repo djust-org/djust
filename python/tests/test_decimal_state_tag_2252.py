@@ -78,6 +78,7 @@ from djust.serialization import (  # noqa: E402
     decimal_for_state_roundtrip,
     decimal_tags_to_strings,
     decode_state_roundtrip,
+    django_json_datetime,
     normalize_django_value,
 )
 
@@ -325,31 +326,111 @@ class TestTheCollisionHazard:
 # 5. Non-regression — every other type these paths carry.
 # ===========================================================================
 
-_OTHER_TYPES = [
+#: The types the flag genuinely MOVES, and the reason it has to (#2467).
+#:
+#: ``normalize_django_value`` carries these through UNCONVERTED for the Rust
+#: renderer — the ``Decimal`` split (#2239) applied to the datetime family, so
+#: ``Value::Encoded`` (#2448) is built on the LiveView path as it already was
+#: on the raw one. Django's session serializer passes no encoder and refuses
+#: every one of them, which is precisely the boundary this flag exists for, so
+#: the flag CANNOT be a no-op here. ``test_the_flag_DOES_move_a_carried_through_value``
+#: and ``test_the_carry_through_types_are_exactly_the_ones_the_boundary_must_convert``
+#: below assert both halves rather than exempting them.
+_CARRIED_THROUGH = [
+    pytest.param(date(2024, 6, 15), id="date"),
+    pytest.param(datetime(2024, 6, 15, 12, 30, 45), id="datetime"),
+    pytest.param(time(12, 30, 45), id="time"),
+    pytest.param(timedelta(days=2, hours=3), id="timedelta"),
+]
+
+#: The types the flag does not touch — the set the no-op claim still holds for.
+_UNTOUCHED = [
     pytest.param(None, id="none"),
     pytest.param(True, id="bool"),
     pytest.param(42, id="int"),
     pytest.param(1.5, id="float"),
     pytest.param("hello", id="str"),
     pytest.param(uuid.UUID("12345678-1234-5678-1234-567812345678"), id="uuid"),
-    pytest.param(date(2024, 6, 15), id="date"),
-    pytest.param(datetime(2024, 6, 15, 12, 30, 45), id="datetime"),
-    pytest.param(time(12, 30, 45), id="time"),
-    pytest.param(timedelta(days=2, hours=3), id="timedelta"),
     pytest.param([1, "two", None, {"three": 3}], id="nested-list"),
     pytest.param({"a": {"b": [1, 2, {"c": "d"}]}}, id="nested-dict"),
     pytest.param({1, 2, 3}, id="set"),
     pytest.param((1, "two"), id="tuple"),
 ]
 
+#: Both halves. The two claims below that hold across the WHOLE set — the
+#: decode is the identity, and the real session serializer round-trips it —
+#: keep sweeping it, because #2467 changed which types the flag converts and
+#: not whether the stored form survives.
+_OTHER_TYPES = _UNTOUCHED + _CARRIED_THROUGH
+
 
 class TestEveryOtherTypeIsUntouched:
-    @pytest.mark.parametrize("value", _OTHER_TYPES)
-    def test_the_flag_changes_nothing_for_a_decimal_free_value(self, value) -> None:
-        """The state-roundtrip flag's ONLY effect is the `Decimal` branch, so
-        for a value holding none, flagged output == unflagged output. That is
-        the pre-#2252 output byte for byte."""
+    @pytest.mark.parametrize("value", _UNTOUCHED)
+    def test_the_flag_changes_nothing_for_a_CARRY_FREE_value(self, value) -> None:
+        """NARROWED by #2467, and the narrower rule is the durable one.
+
+        This asserted *"the state-roundtrip flag's ONLY effect is the `Decimal`
+        branch"*, which was true when #2252 wrote it. #2467 gave the datetime
+        family the same treatment `Decimal` has — carried through unconverted
+        for the Rust renderer, converted at this boundary — so the flag now has
+        two branches, and the honest invariant is not a list of exempt types
+        but the RULE behind them:
+
+            the flag changes nothing for a value that holds no type
+            `normalize_django_value` carries through unconverted.
+
+        That is strictly stronger than an exemption list, because the two sets
+        are the same set by construction: a future type added to the
+        carry-through side and forgotten at this boundary would leave a value
+        the session serializer refuses, and
+        `test_the_carry_through_types_are_exactly_the_ones_the_boundary_must_convert`
+        goes red rather than the gap being silent.
+        """
         assert normalize_django_value(value, state_roundtrip=True) == normalize_django_value(value)
+
+    @pytest.mark.parametrize("value", _CARRIED_THROUGH)
+    def test_the_flag_DOES_move_a_carried_through_value(self, value) -> None:
+        """Non-vacuity for the narrowing above (#1468/#1859).
+
+        Without this, moving four ids out of one parametrisation reads as an
+        exemption — and an exemption nobody can distinguish from a bug is the
+        failure mode this file's own `RAISE_BIT_NOT_CLOSED` rule is about. So
+        the four are asserted POSITIVELY: unflagged is the object, flagged is
+        the encoder's string, and they differ.
+        """
+        assert normalize_django_value(value) is value
+        stored = normalize_django_value(value, state_roundtrip=True)
+        assert isinstance(stored, str)
+        assert stored == django_json_datetime(value)
+        assert stored != normalize_django_value(value)
+
+    @pytest.mark.parametrize("value", _CARRIED_THROUGH)
+    def test_the_carry_through_types_are_exactly_the_ones_the_boundary_must_convert(
+        self, value
+    ) -> None:
+        """WHY the flag is not a no-op for these, run rather than asserted.
+
+        Django's session serializer passes no encoder. It refuses the carried
+        value and accepts the converted one — which is the entire reason
+        `state_roundtrip` exists, and the reason "carry it through on both
+        sides" was not an option for #2467.
+        """
+        with pytest.raises(TypeError):
+            DjangoSessionSerializer().dumps({"p": normalize_django_value(value)})
+        assert DjangoSessionSerializer().dumps(
+            {"p": normalize_django_value(value, state_roundtrip=True)}
+        )
+
+    @pytest.mark.parametrize("value", _UNTOUCHED)
+    def test_an_untouched_value_needed_no_conversion_in_the_first_place(self, value) -> None:
+        """The other side of the same coin, and what makes the split a RULE
+        rather than two hand-written lists: every type the flag leaves alone is
+        one the session serializer already accepts unflagged.
+
+        A type that reached `_UNTOUCHED` while actually needing conversion
+        would fail here, so the two lists cannot drift apart silently.
+        """
+        assert DjangoSessionSerializer().dumps({"p": normalize_django_value(value)})
 
     @pytest.mark.parametrize("value", _OTHER_TYPES)
     def test_the_decode_is_the_identity_on_it(self, value) -> None:
@@ -402,35 +483,82 @@ class TestEveryOtherTypeIsUntouched:
         old = {"p": 1.2345678901234567e19, "n": 3, "s": "x", "d": {"k": [1.5]}}
         assert decode_state_roundtrip(old) == old
 
-    def test_a_randomized_decimal_free_corpus_is_bit_identical(self) -> None:
-        """The curated list samples the shapes someone thought of."""
+    #: Leaves that need no conversion, and the ones that do (#2467).
+    #: Kept as two lists rather than one with `date` deleted: dropping the
+    #: carried-through leaf would have made the sweep pass by shrinking, which
+    #: is the failure this file's own randomized-corpus argument is against.
+    @staticmethod
+    def _carry_free_leaf(rng: random.Random):
+        return rng.choice(
+            [
+                None,
+                rng.randint(-(10**9), 10**9),
+                rng.random(),
+                "s" * rng.randint(0, 5),
+                True,
+                uuid.UUID(int=rng.getrandbits(128)),
+            ]
+        )
+
+    @staticmethod
+    def _carried_leaf(rng: random.Random):
+        return rng.choice(
+            [
+                date(2024, 1, 1 + rng.randint(0, 27)),
+                datetime(2024, 1, 1 + rng.randint(0, 27), rng.randint(0, 23), 30),
+                time(rng.randint(0, 23), 30),
+                timedelta(seconds=rng.randint(0, 10**5)),
+            ]
+        )
+
+    @classmethod
+    def _build(cls, rng: random.Random, leaf, depth: int = 0):
+        if depth >= 3 or rng.random() < 0.4:
+            return leaf(rng)
+        if rng.random() < 0.5:
+            return [cls._build(rng, leaf, depth + 1) for _ in range(rng.randint(0, 3))]
+        return {f"k{i}": cls._build(rng, leaf, depth + 1) for i in range(rng.randint(0, 3))}
+
+    def test_a_randomized_CARRY_FREE_corpus_is_bit_identical(self) -> None:
+        """The curated list samples the shapes someone thought of.
+
+        `date` moved out of the leaf set with #2467 — it is a carried-through
+        type now, so a corpus containing one is not carry-free and the claim
+        this test makes is not the claim to make about it. The sibling below
+        sweeps those instead of dropping them.
+        """
         rng = random.Random(2252)
-
-        def leaf():
-            return rng.choice(
-                [
-                    None,
-                    rng.randint(-(10**9), 10**9),
-                    rng.random(),
-                    "s" * rng.randint(0, 5),
-                    True,
-                    date(2024, 1, 1 + rng.randint(0, 27)),
-                    uuid.UUID(int=rng.getrandbits(128)),
-                ]
-            )
-
-        def build(depth=0):
-            if depth >= 3 or rng.random() < 0.4:
-                return leaf()
-            if rng.random() < 0.5:
-                return [build(depth + 1) for _ in range(rng.randint(0, 3))]
-            return {f"k{i}": build(depth + 1) for i in range(rng.randint(0, 3))}
-
         for _ in range(500):
-            value = build()
+            value = self._build(rng, self._carry_free_leaf)
             flagged = normalize_django_value(value, state_roundtrip=True)
             assert flagged == normalize_django_value(value)
             assert decode_state_roundtrip(flagged) == flagged
+
+    def test_a_randomized_corpus_of_CARRIED_types_still_reaches_the_session(self) -> None:
+        """The half the sweep above stopped covering, asserted on the property
+        that actually matters for them: whatever the flag writes has to survive
+        Django's encoder-less session serializer, at any nesting depth.
+
+        Non-vacuity is built in — the same values WITHOUT the flag are fed to
+        the same serializer and must be refused, so a change that quietly made
+        the flag a no-op again would fail here rather than pass quietly.
+        """
+        rng = random.Random(2467)
+        refused = 0
+        for _ in range(500):
+            value = self._build(rng, self._carried_leaf)
+            flagged = normalize_django_value(value, state_roundtrip=True)
+            assert DjangoSessionSerializer().dumps({"p": flagged})
+            assert decode_state_roundtrip(flagged) == flagged
+            try:
+                DjangoSessionSerializer().dumps({"p": normalize_django_value(value)})
+            except TypeError:
+                refused += 1
+        assert refused > 100, (
+            f"only {refused} of 500 unflagged values were refused — the corpus is "
+            "generating containers with no carried leaf in them, so the sweep is "
+            "measuring nothing"
+        )
 
 
 # ===========================================================================
