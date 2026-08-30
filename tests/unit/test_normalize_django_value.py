@@ -475,6 +475,62 @@ class TestParityWithJSONRoundtrip:
             value
         )
 
+    #: The datetime family, which the pre-pass carries through since #2467 and
+    #: whose `state_roundtrip=True` form is the ENCODER's own spelling.
+    _CARRIED_ENCODER_SPELLED = [
+        datetime(2024, 6, 15, 12, 30, 45, 123456, tzinfo=timezone.utc),
+        date(2024, 6, 15),
+        time(23, 59, 59, 123456),
+        timedelta(seconds=-90),
+    ]
+
+    @pytest.mark.parametrize("value", _CARRIED_ENCODER_SPELLED)
+    def test_the_ROUNDTRIP_form_encodes_the_same_as_the_object(self, value):
+        """The non-vacuous half of the two sweeps above, for the carried types.
+
+        Said plainly because it is easy to miss: for a value the pre-pass
+        carries through, `_encoded(normalize(v)) == _encoded(v)` is true BY
+        CONSTRUCTION — both sides encode the same object. That has been so for
+        `Decimal` since #2239 and is so for the datetime family since #2467,
+        and the class docstring's *"it also still covers `Decimal`"* is the
+        design decision rather than an oversight: composition is the property,
+        and a definitionally-true row is the correct answer to it.
+
+        What is NOT definitional, and is what this asserts, is the other form:
+        whatever the `state_roundtrip=True` boundary stores must encode to the
+        same JSON the live object does. That is the claim a session or signed
+        snapshot depends on, and the one that breaks if the boundary's
+        converter and the encoder drift apart (#1646) — the exact drift #2462
+        found across three sinks.
+        """
+        stored = normalize_django_value(value, state_roundtrip=True)
+        assert stored is not value, "this row is not a carried-through type"
+        assert self._encoded_by_django(stored) == self._encoded_by_django(value)
+
+    def test_a_DECIMAL_takes_a_different_boundary_contract_and_that_is_the_point(self):
+        """The row the sweep above deliberately does NOT contain, and why.
+
+        Writing that sweep with `Decimal` in it was the first version, and it
+        failed: `{'__djust_decimal__': '9.99'} != '9.99'`. The two carried
+        types do not share a boundary form, and the difference is load-bearing
+        rather than incidental.
+
+        A datetime's stored form is the encoder's own string, which every
+        consumer already reads as a date. A `Decimal`'s cannot be — #2252
+        measured that a bare digit string restored onto the view stops
+        `|floatformat` rounding and a `float` loses the type and the trailing
+        zeros — so it is stored as a TAG and `decode_state_roundtrip` restores
+        a real `Decimal`. Asserted here so the asymmetry is recorded where
+        someone would otherwise "fix" the sweep above by widening it.
+        """
+        from djust.serialization import decode_state_roundtrip
+
+        value = Decimal("9.99")
+        stored = normalize_django_value(value, state_roundtrip=True)
+        assert stored == {"__djust_decimal__": "9.99"}
+        assert self._encoded_by_django(stored) != self._encoded_by_django(value)
+        assert decode_state_roundtrip(stored) == value
+
     def test_djusts_encoder_agrees_with_djangos(self):
         """And the reason the two assertions above are not redundant: the
         pre-pass agreeing with djust's encoder is only worth something while
