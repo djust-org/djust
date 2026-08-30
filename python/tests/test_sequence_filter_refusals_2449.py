@@ -236,6 +236,21 @@ class TestTheDictViewSplit:
         assert djust_outcome(src, {"p": {}}) == "OK ", djust_outcome(src, {"p": {}})
 
     @pytest.mark.parametrize("kind", ["keys", "values", "items"])
+    @pytest.mark.parametrize("name", SUBSCRIPT)
+    def test_an_EMPTY_view_still_refuses_for_first_and_last(self, kind: str, name: str) -> None:
+        """The other half of the emptiness split, and the reason `random`'s
+        guard is `Choice`-only rather than a property of views.
+
+        `d.keys()[0]` raises whether or not the view is empty — the subscript
+        check comes first — so an emptiness exemption applied to all three
+        filters would be wrong for two of them.
+        """
+        src = "{{ p.%s|%s }}" % (kind, name)
+        d, r = django_outcome(src, {"p": {}}), djust_outcome(src, {"p": {}})
+        assert "'dict_%s' object is not subscriptable" % kind in d, d
+        assert "'dict_%s' object is not subscriptable" % kind in r, r
+
+    @pytest.mark.parametrize("kind", ["keys", "values", "items"])
     @pytest.mark.parametrize("name", ITERATE)
     def test_a_view_still_ITERATES_for_the_iterating_three(self, kind: str, name: str) -> None:
         """A view IS iterable in Python, so these three must not refuse it —
