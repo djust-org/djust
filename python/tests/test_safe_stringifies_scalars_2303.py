@@ -459,9 +459,19 @@ class TestTheStringifyIsComplete:
         diverge, so the assertion is discriminating and not trivially true."""
         ctx = {"p": 42, "q": "42"}
         assert djust_render("{{ p|add:'1' }}", ctx) == djust_render("{{ q|add:'1' }}", ctx)
+
+        def outcome(src: str) -> str:
+            """The render, or the REFUSAL — since #2451 a sequence filter
+            raises on an `int` and renders on a `str`, which is the sharpest
+            possible distinction and must not crash the probe."""
+            try:
+                return djust_render(src, ctx)
+            except Exception as exc:  # noqa: BLE001 — the refusal IS the answer
+                return f"<<EXC {exc}>>"
+
         differ = [
             tail
             for tail in TestTheBuiltInChainIsNotWorseOff._tails()
-            if djust_render("{{ p" + tail + " }}", ctx) != djust_render("{{ q" + tail + " }}", ctx)
+            if outcome("{{ p" + tail + " }}") != outcome("{{ q" + tail + " }}")
         ]
         assert differ, "no filter distinguishes 42 from '42' — the sweep proves nothing"

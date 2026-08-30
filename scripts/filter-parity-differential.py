@@ -2193,18 +2193,108 @@ _ARG_ERROR_MARK = re.compile(r"filter '(?:\{filter_name\}|\w+)'")
 _ARG_ERROR_MODULES = ("filters", "floatformat")
 
 
+#: The VALUE-side error constructors, whose messages this axis must NOT claim
+#: (#2451).
+#:
+#: `_ARG_ERROR_MARK` keeps every literal naming a filter, on the reasoning that
+#: "every argument error does, and nothing else in these modules does". The
+#: second half stopped being true when the value-side chokepoints arrived: both
+#: `int_value_error` (#2435) and `value_op_error` (#2451) interpolate
+#: `filter_name` too, and neither is about an argument at all.
+#:
+#: `int_value_error` hid it — `get_digit` and `divisibleby` both TAKE an
+#: argument, so the argument sweep reaches it by coincidence. `value_op_error`
+#: does not: `first`, `last`, `random`, `escapeseq`, `safeseq`,
+#: `unordered_list` and `phone2numeric` take NO argument, so `arg_cells()`
+#: builds no cell that can ever reach it and the manifest correctly reported it
+#: MISSING — from the wrong axis. They get their own row below rather than an
+#: exemption, because the corpus does reach them; it reaches them HERE.
+_VALUE_OP_ERROR_FNS = ("int_value_error", "value_op_error")
+
+
+def _fn_source(module: str, name: str) -> str:
+    """One Rust function's source text, `fn <name>(` to its closing brace."""
+    joined = re.sub(r"\\\n\s*", "", _crate_source("djust_templates", module))
+    marker = f"fn {name}("
+    start = joined.find(marker)
+    if start < 0:
+        raise AssertionError(
+            f"{module}.rs no longer defines `{name}` — re-read it before trusting this axis"
+        )
+    end = joined.find("\n}\n", start)
+    return joined[start : end if end > 0 else len(joined)]
+
+
+def _filter_named_literals(text: str) -> list[str]:
+    """Every string literal in `text` that names a filter."""
+    return [
+        literal
+        for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', text)
+        if _ARG_ERROR_MARK.search(literal)
+    ]
+
+
 def _required_argument_errors() -> dict[str, str]:
     out = {}
     for module in _ARG_ERROR_MODULES:
         # Rust string literals continue across a trailing `\`; rejoin them,
-        # then keep the ones that name a filter — every argument error does,
-        # and nothing else in these modules does.
+        # then keep the ones that name a filter — every argument error does.
         joined = re.sub(r"\\\n\s*", "", _crate_source("djust_templates", module))
-        for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', joined):
-            if not _ARG_ERROR_MARK.search(literal):
-                continue
+        # ...MINUS the value-side constructors, which name a filter for their
+        # own reasons and belong to the `value-op` axis below (#2451).
+        for name in _VALUE_OP_ERROR_FNS:
+            if f"fn {name}(" in joined:
+                joined = joined.replace(_fn_source(module, name), "", 1)
+        for literal in _filter_named_literals(joined):
             out.setdefault(_error_signature(literal), f"{module}.rs")
     return out
+
+
+def _required_value_op_errors() -> dict[str, str]:
+    """Every message the VALUE-side chokepoints can raise (#2435/#2451).
+
+    Read out of the two constructors rather than transcribed, for the reason
+    `_required_argument_errors` reads its own out of the source: a message the
+    engine can raise and the corpus cannot reach is precisely the blind spot
+    this manifest exists to name.
+    """
+    out = {}
+    for module in _ARG_ERROR_MODULES:
+        joined = re.sub(r"\\\n\s*", "", _crate_source("djust_templates", module))
+        for name in _VALUE_OP_ERROR_FNS:
+            if f"fn {name}(" not in joined:
+                continue
+            for literal in _filter_named_literals(_fn_source(module, name)):
+                out.setdefault(_error_signature(literal), f"{module}.rs::{name}")
+    if not out:
+        raise AssertionError(
+            "no value-side error constructor was found — re-read filters.rs "
+            "before trusting this axis"
+        )
+    return out
+
+
+def _swept_value_op_errors() -> set[str]:
+    """The value-side errors the SINGLE-FILTER corpus actually reaches.
+
+    Rendered rather than reasoned about, and over the `{{ p|f }}` product
+    rather than `arg_cells()`: the whole finding is that these errors belong to
+    the VALUE, so the filters that raise them need no argument and the argument
+    corpus cannot build a cell for one.
+    """
+    required = _required_value_op_errors()
+    reached: set[str] = set()
+    for name in sorted(register.filters):
+        for key in INPUTS:
+            _, du = render_both("{{ p|%s }}" % spec(name), {"p": INPUTS[key]})
+            if not du.startswith("<<EXC "):
+                continue
+            for signature in required:
+                if _signature_matches(signature, du):
+                    reached.add(signature)
+        if len(reached) == len(required):
+            break
+    return reached
 
 
 def _rust_unescape(literal: str) -> str:
@@ -2776,6 +2866,12 @@ AXES = [
         what="the argument spellings, over every failure the chokepoint can raise",
         swept=_swept_argument_errors,
         required=_required_argument_errors,
+    ),
+    Axis(
+        name="value-op",
+        what="the failures the VALUE-side chokepoints can raise, over the single-filter corpus",
+        swept=_swept_value_op_errors,
+        required=_required_value_op_errors,
     ),
     Axis(
         name="argument-filter",
