@@ -405,23 +405,27 @@ class TestTheGateOffWouldFail:
 
     Restoring the pre-fix branch — `return django_json_datetime(value)`
     unconditionally, with every `__pycache__` cleared and pytest ERRORS counted
-    apart from failures (#2129/#2135) — reddens **39 of this file's 131** cases
-    and **20** across the pins other files carry:
+    apart from failures (#2129/#2135) — reddens **71** cases:
 
-        this file                          39 failed, 92 passed
-        the inverted pins elsewhere        20 failed, 645 passed
-        the consumers this must NOT move    1 failed, 121 passed
+        this file                          39 failed,  92 passed
+        the inverted pins elsewhere        16 failed, 556 passed
+        the nine CI pins re-judged         16 failed, 326 passed
+        the consumers this must NOT move    0 failed, 113 passed
 
-    That third line was predicted as 0 and came back 1, which is a question
-    rather than a pass — the honest half of a gate-off report. The answer is
-    that the CLASSIFICATION was wrong, not the test:
+    The last line is the load-bearing one and it is stated as a NEGATIVE
+    deliberately: `TestTheWireBytesAreUnchanged`, #2458's literal msgpack
+    payload pin and #2216's time-only renders pass in BOTH states, which is
+    what says this change moves no wire shape and no date-filter answer. A
+    gate-off that only reports what went red cannot say that.
+
+    One correction worth keeping, because it is the discipline rather than the
+    number: the first run predicted 0 for that group and got 1. A surprising
+    gate-off result is a question, not a pass — and the answer was that the
+    CLASSIFICATION was wrong, not the test.
     `TestStateRoundtripBoundary::test_django_session_serializer_refuses_the_bare_datetime`
     asserts the PREMISE that makes `state_roundtrip=True` necessary, and that
-    premise is only observable once the pre-pass stops converting. It belongs
-    with the reddening group. Everything genuinely unmoved —
-    `TestTheWireBytesAreUnchanged`, the roundtrip-FORM rows, #2458's msgpack
-    payload pin, and #2216's time-only renders — passes in both states, which
-    is what says the wire and the session boundary are untouched.
+    premise only becomes observable once the pre-pass stops converting, so it
+    belongs with the reddening group.
     """
 
     def test_the_flattened_spelling_is_still_what_the_boundary_stores(self) -> None:
