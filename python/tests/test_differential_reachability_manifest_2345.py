@@ -215,6 +215,14 @@ class TestTheManifestIsCleanOnMain:
             # is not thereby swept together. Not the full N-squared — a pair
             # earns a row when both axes touch the same resolution step.
             "builtin x mapping",
+            # A falsy AND a truthy inhabitant of every `Value` variant, in both
+            # the value and the argument channel (#2469). The one slice of
+            # `input-shape` the ENGINE does name — `Value::is_truthy` is a
+            # `match` over the enum — carved out of it and made mechanical,
+            # because the corpus held a falsy inhabitant of four variants out
+            # of eleven and no `timedelta` at all, so #2458 (whose whole
+            # subject is `bool(o)`) moved zero cells on every axis.
+            "value-truthiness",
             "input-shape",
         }
 
@@ -444,8 +452,22 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         the mutation removes the ONE spelling by name rather than truncating
         the list at it — which is what the first version did, and what made
         this test fail with "edit matched 0x" the moment anything was appended.
+
+        Since #2469 the cap has TWO inhabitants and the mutation removes both.
+        ``known_big`` binds ``12345678901234567890`` — added for
+        ``arg:BigInt:truthy`` on the ``value-truthiness`` axis, since a
+        magnitude past ``i64`` has no falsy inhabitant — and a resolved
+        argument of that size reaches the cap by the same route the literal
+        does. That is a real second route rather than an accident, and this
+        test going red on the first run of #2469 is how it was found: removing
+        only the literal reported the cap REACHABLE, which is the honest
+        answer once a second spelling reaches it.
         """
-        script = mutated_script(tmp_path, ("\n    '\"99999999999999999999\"',", ""))
+        script = mutated_script(
+            tmp_path,
+            ("\n    '\"99999999999999999999\"',", ""),
+            ('\n    "known_big",', ""),
+        )
         row = rows(run_manifest(script))["argument"]
         assert len(row["missing"]) == 1 and "past djust's" in row["missing"][0], row["missing"]
         # And every OTHER required error is still reachable from the nineteen,
@@ -454,6 +476,130 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         # argument error, and the claim does not.
         assert len(row["required"]) - len(row["missing"]) >= 3
         assert set(row["missing"]) < set(row["required"])
+
+    #: The three contiguous runs #2469 added, so the mutation removes the
+    #: corpus rows rather than the axis that reports them — an axis deleted
+    #: alongside its inhabitants would report clean for the wrong reason.
+    PRE_2469_INPUTS = """    "i-zero": 0,
+    "f-zero": 0.0,
+    "dec-zero": Decimal("0"),
+    "t-empty": (),
+    "d-empty": {},
+    "td-zero": datetime.timedelta(0),
+    "td-plain": datetime.timedelta(seconds=90),
+"""
+    PRE_2469_ARG_CONTEXT = """    "known_empty": "",
+    "known_zero": 0,
+    "known_float": 1.5,
+    "known_float_zero": 0.0,
+    "known_true": True,
+    "known_false": False,
+    "known_none": None,
+    "known_big": 12345678901234567890,
+    "known_decimal": Decimal("2.5"),
+    "known_decimal_zero": Decimal("0"),
+    "known_empty_list": [],
+    "known_empty_tuple": (),
+    "known_empty_dict": {},
+    "known_td": datetime.timedelta(seconds=90),
+    "known_td_zero": datetime.timedelta(0),
+"""
+    PRE_2469_ARG_SPELLINGS = """    "known_empty",
+    "known_zero",
+    "known_float",
+    "known_float_zero",
+    "known_true",
+    "known_false",
+    "known_none",
+    "known_big",
+    "known_decimal",
+    "known_decimal_zero",
+    "known_empty_list",
+    "known_empty_tuple",
+    "known_empty_dict",
+    "known_td",
+    "known_td_zero",
+"""
+
+    def test_2469_no_cell_could_have_a_FALSY_argument_and_no_timedelta_existed(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The eighth blind spot, and the first the design could have caught.
+
+        ``ARG_CONTEXT`` bound six objects and every one was Python-TRUTHY, so
+        the corpus could construct no cell where a *resolved* argument's
+        falsiness is the question — which is the whole of what
+        ``ArgType::is_falsy``'s first arm answers. And no entry of ``INPUTS``
+        was a ``timedelta``, the ONE member of the ``Value::Encoded`` family
+        with a falsy inhabitant. So #2458 — whose entire subject is
+        ``bool(timedelta(0))`` — moved **zero cells on every axis** while
+        changing four measured behaviours.
+
+        The reconstruction removes the corpus rows and leaves the axis in
+        place, and the axis names all 21 gaps: six ``value:`` variants, plus
+        ``value:Encoded`` in BOTH answers (nothing in the corpus reached that
+        variant at all), plus fourteen in the argument channel.
+        """
+        script = mutated_script(
+            tmp_path,
+            (self.PRE_2469_INPUTS, ""),
+            (self.PRE_2469_ARG_CONTEXT, ""),
+            (self.PRE_2469_ARG_SPELLINGS, ""),
+        )
+        row = rows(run_manifest(script))["value-truthiness"]
+        missing = set(row["missing"])
+        # The two the issue names first, and the reason it was filed at all.
+        assert "arg:Encoded:falsy" in missing, missing
+        assert {"value:Encoded:falsy", "value:Encoded:truthy"} <= missing, missing
+        # Every variant that HAS a falsy inhabitant was unreachable in one
+        # channel or the other. Stated as a superset so a future variant does
+        # not have to be added here as well.
+        assert {
+            "value:Decimal:falsy",
+            "value:Float:falsy",
+            "value:Integer:falsy",
+            "value:Object:falsy",
+            "value:Tuple:falsy",
+            "arg:Bool:falsy",
+            "arg:Decimal:falsy",
+            "arg:Integer:falsy",
+            "arg:List:falsy",
+            "arg:None:falsy",
+            "arg:Object:falsy",
+            "arg:String:falsy",
+            "arg:Tuple:falsy",
+        } <= missing, sorted(missing)
+        # ...and the axis is not simply reporting everything: the truthy
+        # inhabitants the pre-#2469 corpus DID have are still swept, so the
+        # report names the gap rather than blaming the whole axis.
+        assert "value:String:falsy" not in missing, "`s-empty` was already there"
+        assert "value:List:falsy" not in missing, "`l-empty` was already there"
+        assert "value:Bool:falsy" not in missing, "`b-false` was already there"
+        assert "arg:String:truthy" not in missing, "`known` was already there"
+        assert "arg:Encoded:truthy" not in missing, "`known_dt` was already there"
+        assert set(row["missing"]) < set(row["required"])
+
+    def test_2469_the_mutation_is_a_corpus_edit_and_not_an_axis_deletion(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Non-vacuity for the canary above (#1468/#2135).
+
+        A reconstruction that deleted the axis would also report ``missing``
+        as empty rather than as 21 rows, and the test above would pass by
+        arithmetic. Assert the axis is still declared in the mutated copy, and
+        that every OTHER axis is still clean — so the 21 rows are this axis's
+        report and not fallout from a broken script.
+        """
+        script = mutated_script(
+            tmp_path,
+            (self.PRE_2469_INPUTS, ""),
+            (self.PRE_2469_ARG_CONTEXT, ""),
+            (self.PRE_2469_ARG_SPELLINGS, ""),
+        )
+        data = rows(run_manifest(script))
+        assert "value-truthiness" in data, "the mutation deleted the axis, not the corpus"
+        broken = {a: r["missing"] for a, r in data.items() if r.get("missing")}
+        assert set(broken) == {"value-truthiness"}, broken
 
 
 class TestTheLimitTheManifestDoesNotClose:
@@ -861,6 +1007,39 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
             "compiles it, because the translate arm strips `_( … )` before the "
             "underscore check. A fix without that arm is stricter than Django "
             "and only this row can tell"
+        ),
+        # #2469: the resolved-context channel had six bindings and all six
+        # were TRUTHY, so no cell could ask about an argument's falsiness —
+        # which is the whole of what `ArgType::is_falsy`'s first arm answers.
+        # One per `Value` variant, in both answers where the variant admits
+        # both, which is what `value-truthiness` requires of this channel.
+        **{
+            spelling: f"#2469 — a resolved argument at {shape}"
+            for spelling, shape in {
+                "known_empty": "the falsy `String`",
+                "known_zero": "the falsy `Integer`",
+                "known_float": "the truthy `Float`",
+                "known_float_zero": "the falsy `Float`",
+                "known_true": "the truthy `Bool`",
+                "known_false": "the falsy `Bool`",
+                "known_none": "`Value::None`, whose only inhabitant is falsy",
+                "known_big": "`Value::BigInt`, which is never zero",
+                "known_decimal": "the truthy `Decimal`",
+                "known_decimal_zero": "the falsy `Decimal`",
+                "known_empty_list": "the falsy `List`",
+                "known_empty_tuple": "the falsy `Tuple`",
+                "known_empty_dict": "the falsy `Object`",
+                "known_td": "the truthy `Encoded` (a `timedelta`)",
+                "known_td_zero": "the falsy `Encoded` — the ONE member of the "
+                "datetime family with a falsy inhabitant, and the reason "
+                "#2458 measured 0 moved on every axis",
+            }.items()
+        },
+        "known_str_zero": (
+            "#2469 — the COUNTER-example: a resolved `str` spelling `0` is "
+            "TRUTHY in Python and has no `.year`, so Django's `timesince` "
+            "raises. A text-shaped falsiness rule read the number it spells "
+            "and measured from now; only this row separates the two"
         ),
     }
 
