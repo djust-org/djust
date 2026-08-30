@@ -95,16 +95,27 @@ refuse), ``python_getitem`` / ``|first`` (not subscriptable → both refuse),
 ``add`` (both branches raise → empty), ``apply_slice`` (returns the input),
 ``value_to_json`` (already has its own arm).
 
-Two are known divergences left alone, both predating this variant:
+Four are known divergences left alone, all predating this variant:
 
-* ``{{ p }}`` on a BARE datetime — Django LOCALIZES (``Jan. 1, 2020, 3:04
-  a.m.``) and djust renders ``str(o)``. Declared out of scope in
-  ``Value::Encoded``'s own doc, and ``|slice`` inherits it by returning the
-  input. Pinned as a divergence in
-  :func:`test_the_bare_render_localization_divergence_is_still_the_known_one`.
+* ``{{ p }}`` on a BARE date/datetime/time — Django LOCALIZES (``Jan. 1, 2020,
+  3:04 a.m.``) and djust renders ``str(o)``. Declared out of scope in
+  ``Value::Encoded``'s own doc, and ``|slice`` and ``|join`` inherit it by
+  handing the value back. Pinned in
+  :func:`test_the_localization_divergence_is_still_the_known_one`, with a
+  ``timedelta`` control that AGREES on the identical templates.
 * ``ObjectKey`` flattens an ``Encoded`` DICT KEY to its ``display``, so two
   aware datetimes at the same instant are different keys. Same false-negative
   class as the ``display`` compare; needs an ``ObjectKey`` variant, not an arm.
+* ``value_to_arg_string`` — the CUSTOM TAG / ``{% regroup %}`` argument channel
+  — hands an ``Encoded`` through as ``str(o)``, because that channel is text
+  by construction (#2042/#2203/#2416/#2423) and a scalar goes through
+  ``Display`` there. Unchanged by this fix: it was the same string before
+  #2448, when the value WAS a ``Value::String(str(o))``.
+* ``IntoPyObject`` returns an ``Encoded`` to Python as its ``display`` string
+  rather than rebuilding the object — documented on that arm as a deliberate
+  #2458-era decision, and a type change rather than a spelling one.
+* A timezone-aware ``time`` is not an ``Encoded`` at all, so none of the three
+  fixes reaches it — see :class:`TestAnAwareTimeIsNotAnEncodedAtAll`.
 """
 
 from __future__ import annotations
@@ -314,6 +325,36 @@ class TestComparisonAgreesWithDjango2471:
                     bad.append((a, b, dj, du))
         assert not bad, f"{len(bad)}/{len(corpus) ** 2} cells diverge on {op}: {bad[:5]}"
 
+    @pytest.mark.parametrize("op", OPS)
+    def test_a_randomised_sweep_of_NEAR_aware_pairs_agrees(self, op: str) -> None:
+        """The sweep above cannot see an offset error, and finding that out is
+        the reason this test exists.
+
+        ``GENERATORS["datetime-aware"]`` draws a random YEAR, so any two of its
+        values are years apart and a ``utcoffset()`` bounded to ±24h can never
+        flip their order. Gating the UTC normalisation off reddened exactly ONE
+        test — the hand-built same-instant pair — and the 400-cell randomised
+        sweep stayed green over a genuinely wrong engine.
+
+        So this one draws pairs whose wall clocks are within ±36h, which is the
+        window where the offset decides. Same lesson as v1.1.1-2's: a
+        randomised corpus is only as good as the axis its generator varies.
+        """
+        rng = random.Random(24710)
+        bad = []
+        for _ in range(300):
+            base = datetime.datetime(
+                2020, rng.randint(1, 12), rng.randint(1, 28), rng.randint(0, 23), rng.randint(0, 59)
+            )
+            a = base.replace(tzinfo=_rand_tz(rng))
+            b = (base + datetime.timedelta(minutes=rng.randint(-2160, 2160))).replace(
+                tzinfo=_rand_tz(rng)
+            )
+            dj, du = branch(op, a, b)
+            if du != dj:
+                bad.append((a, b, dj, du))
+        assert not bad, f"{len(bad)}/300 near-instant aware cells diverge on {op}: {bad[:5]}"
+
     def test_a_microsecond_apart_is_not_equal(self) -> None:
         """The direction ``json`` would get wrong. ``DjangoJSONEncoder`` writes
         ``r[:23] + r[26:]`` for a datetime, truncating microseconds to
@@ -425,6 +466,20 @@ class TestComparisonAgreesWithDjango2471:
         )
         assert du == dj
         assert du == "[2020-01-01][2020-03-01]"
+
+    @pytest.mark.parametrize("domain", sorted(GENERATORS))
+    def test_dictsort_orders_every_domain_as_python_sorts_it(self, domain: str) -> None:
+        """One column per domain, checked against Python's own ``sorted()`` —
+        so ``compare_sort_values``' arm is exercised for every key shape rather
+        than for the one that happened to be written first (#1104)."""
+        rng = random.Random(24711)
+        src = "{% for r in p|dictsort:'k' %}[{{ r.i }}]{% endfor %}"
+        for _ in range(8):
+            rows = [{"k": GENERATORS[domain](rng), "i": i} for i in range(5)]
+            order = [r["i"] for r in sorted(rows, key=lambda r: r["k"])]
+            dj, du = both(src, {"p": rows})
+            assert du == dj
+            assert du == "".join(f"[{i}]" for i in order), f"{domain}: {rows!r}"
 
 
 class TestReprAgreesWithDjango2472:
