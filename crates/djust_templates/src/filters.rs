@@ -1902,6 +1902,18 @@ fn apply_builtin_filter(
         "json_script" => {
             // `json.dumps(d.keys())` raises `TypeError`. Same treatment as
             // `random` above (#2340).
+            //
+            // This reaches only the ATTRIBUTE route — `{{ d.keys|json_script:"i" }}`,
+            // where the view is built inside Rust. A view bound in PYTHON
+            // (`ctx = {"p": d.keys()}`) never becomes a `DictView`: the PyO3
+            // conversion has no arm for it, so it arrives as
+            // `Value::String("dict_keys([…])")` and is emitted like any other
+            // string. Django raises for both routes; djust answers them
+            // differently, and that route-dependence is the same type erasure
+            // #2429 decided not to fight (see `value_to_json`). Pinned in
+            // `python/tests/test_json_script_refusal_decision_2429.py::`
+            // `TestTheValuePositionCannotSeeTheTypeAtAll::`
+            // `test_one_object_two_routes_two_values`.
             if matches!(value, Value::DictView { .. }) {
                 return Some(Ok(Value::Missing));
             }
@@ -4543,9 +4555,27 @@ fn json_float_body(f: f64) -> String {
 /// **VALUE** either: `{{ p|json_script:"d" }}` over `{"a": object()}` renders a
 /// document where Django raises the matching `TypeError: Object of type Obj is
 /// not JSON serializable`. Refusing keys alone would make the two positions
-/// disagree — a new inconsistency wearing a fix's clothes. Both positions want
-/// one decision, taken together; tracked at #2429 and pinned as still-divergent
-/// in `python/tests/test_json_script_typed_keys_2425.py::TestTheRefusalHalfIsNotClosedHere`.
+/// disagree — a new inconsistency wearing a fix's clothes.
+///
+/// **#2429 took that decision, and it is to stay permissive in BOTH.** The key
+/// position is decidable here — [`ObjectKey`] keeps the type (#2339) — and the
+/// value position is not: `FromPyObject for Value` converts an arbitrary object
+/// to its `__dict__` (an `Object`) or its `str()` (a `String`) at the boundary,
+/// so `{"a": Obj()}` and `{"a": "OBJ"}` produce byte-identical documents and a
+/// refusal would have to refuse the second. Recovering the type means a new
+/// `Value` variant threaded through every construction site, filter, renderer
+/// and serializer that matches on `Value` — an architectural change to the
+/// boundary that makes `{{ obj.name }}` work, in exchange for turning a
+/// rendering page into a 500 that only a djust-native template can reach
+/// (a template that ran under Django never carried these values).
+///
+/// Note Django is itself asymmetric here: `tuple` / `Decimal` / `date` /
+/// `datetime` / `time` / `timedelta` / `UUID` are refused as KEYS and accepted
+/// as VALUES, because `DjangoJSONEncoder.default` never sees a key.
+///
+/// Recorded in `python/tests/test_json_script_refusal_decision_2429.py`, and
+/// pinned as a decided limit in
+/// `python/tests/test_json_script_typed_keys_2425.py::TestTheRefusalHalfIsADecidedLimit`.
 fn json_key_body(key: &djust_core::ObjectKey) -> std::borrow::Cow<'_, str> {
     use djust_core::ObjectKey;
     match key {
@@ -4566,8 +4596,14 @@ fn value_to_json(value: &Value) -> String {
         // A dict view is NOT JSON-serializable: `json.dumps(d.keys())` raises
         // `TypeError`, and so does Django's `{{ d.keys|json_script:"i" }}`.
         // `null` is the closest honest answer — the `json_script` arm refuses
-        // the whole filter before reaching here, so this is only the nested
-        // case (#2340).
+        // the whole filter before reaching here, so this is only the NESTED
+        // case, and only for a view built by the ATTRIBUTE route (#2340).
+        //
+        // A view bound in Python is a `Value::String` by the time it arrives —
+        // the PyO3 conversion has no `DictView` arm — so `{"x": d.keys()}`
+        // emits the repr as a JSON string rather than reaching this. Corrected
+        // (#2429): the original wording said "the whole filter" without the
+        // route qualifier, and running it showed the two routes disagree.
         Value::DictView { .. } => "null".to_string(),
         Value::Bool(b) => {
             if *b {
