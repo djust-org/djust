@@ -70,9 +70,9 @@ Why that settles it
 -------------------
 #2429's own scope line requires one decision applied to BOTH positions. The
 key position is decidable — `ObjectKey` keeps the type (#2339) — and the value
-position is not, short of a new `Value` variant threaded through the ~578
-`Value::String` construction sites and every filter, renderer and serializer
-that matches on `Value`. That is an architectural change to the boundary that
+position is not, short of a new `Value` variant threaded through the ~460
+`Value::String` sites in `crates/**/src` and every filter, renderer and
+serializer that matches on `Value`. That is an architectural change to the boundary that
 exists so ordinary attribute access works, undertaken so that one filter can
 turn a rendering page into a 500.
 
