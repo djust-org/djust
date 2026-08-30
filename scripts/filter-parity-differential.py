@@ -168,6 +168,18 @@ neither could construct a cell that had both at once — so 1,227 `{% if %}`
 templates Django refuses to compile rendered here, with every axis reporting
 `0 MISSING`. A cross of two covered axes is its own axis.
 
+#2469 is the EIGHTH, and it is the first one the design could have caught —
+which is why the fix is an axis rather than another hand-added row. `INPUTS`
+held a falsy inhabitant of four `Value` variants and a truthy one of the rest,
+`ARG_CONTEXT` bound six objects and all six were truthy, and the corpus carried
+no `timedelta` anywhere. So a change whose entire subject is `bool(o)` (#2458)
+moved ZERO cells on every axis while fixing four measured behaviours. The
+remedy is `value-truthiness`: the `Value` variants are read out of
+`crates/djust_core/src/lib.rs` and each must have BOTH a falsy and a truthy
+inhabitant, in the value channel AND the argument channel. `input-shape` stays
+UNVERIFIED for everything else — this closes the one slice of it the engine
+does name, and says so.
+
 Two more things follow from it:
 
 * **The same-build guard is answered rather than inferred.** Identical
@@ -665,6 +677,37 @@ INPUTS = {
     "i-big": 12345678901234567890,
     "dec-plain": Decimal("2.5"),
     "n-none": None,
+    # A FALSY inhabitant of each remaining `Value` variant, and the whole
+    # `timedelta` type (#2469). Not a coverage tidy-up: `bool(value)` is a
+    # question the engine answers in `{% if %}`, in `{% for %}`'s `{% empty %}`
+    # arm, in `default`, in `yesno`, in `firstof` and in `Value::is_truthy` —
+    # and before these rows the corpus held a falsy inhabitant of exactly four
+    # variants (`None` / `Bool` / `String` / `List`, via `n-none`, `b-false`,
+    # `s-empty` and `l-empty` below). Every `Integer`, `Float`, `Decimal`,
+    # `Tuple` and `Object` cell it built was TRUTHY, so a rule that answered
+    # truthiness by TYPE rather than by value was indistinguishable from a
+    # correct one on five of the variants that reach it.
+    #
+    # `timedelta` is the sharper half and is the reason this landed as its own
+    # change: it is a member of the `Value::Encoded` family (#2448) and the
+    # ONLY member with a falsy inhabitant — `date` and `datetime` are always
+    # truthy and `time(0, 0)` has been truthy since Python 3.5. The corpus
+    # contained no `timedelta` at all, in any position, so #2458's
+    # `bool(timedelta(0)) is False` moved **zero** cells here while changing
+    # four measured behaviours. `s-datetime` is a date-shaped STRING and
+    # reaches `Value::String`; no entry above reaches `Value::Encoded`.
+    #
+    # The `value-truthiness` axis below is what keeps this from happening a
+    # seventh time: it reads the `Value` variants out of the Rust source and
+    # reports a variant with no falsy (or no truthy) inhabitant as MISSING,
+    # rather than leaving the gap silent the way the six before it were.
+    "i-zero": 0,
+    "f-zero": 0.0,
+    "dec-zero": Decimal("0"),
+    "t-empty": (),
+    "d-empty": {},
+    "td-zero": datetime.timedelta(0),
+    "td-plain": datetime.timedelta(seconds=90),
     "l-empty": [],
     # Context ITEM safety (#2287). `mark_safe` on the ELEMENTS and never on the
     # list, which is what `safeseq` produces and what a view returning a list of
@@ -1603,6 +1646,43 @@ ARG_SPELLINGS = [
     "known_tuple",
     "known_dict",
     "known_dt",
+    # Arguments whose resolved value is FALSY (#2469). Every spelling above
+    # resolves to a truthy object or to a literal, so the corpus could not
+    # construct a single cell where the ARGUMENT's falsiness is the question —
+    # which is the axis `ArgType::is_falsy`'s first arm answers, and the whole
+    # of what #2458's second half moved. `'"0"'`, `'""'`, `"False"` and
+    # `"None"` are on the list already and are *literal* spellings: they never
+    # reach the resolved-context channel at all.
+    #
+    # One per `Value` variant that HAS a falsy inhabitant, plus the truthy
+    # partners the variants that had none were missing, because a corpus with
+    # only one truthiness per variant cannot tell a rule about the VALUE from a
+    # rule about the TYPE — the same argument `b-false` carries beside
+    # `b-true` in `INPUTS`, and the one `_swept_value_truthiness` below makes
+    # mechanical rather than a thing a person has to notice.
+    "known_empty",
+    "known_zero",
+    "known_float",
+    "known_float_zero",
+    "known_true",
+    "known_false",
+    "known_none",
+    "known_big",
+    "known_decimal",
+    "known_decimal_zero",
+    "known_empty_list",
+    "known_empty_tuple",
+    "known_empty_dict",
+    "known_td",
+    "known_td_zero",
+    # The counter-example, and the one row that distinguishes a VALUE-typed
+    # falsiness rule from a TEXT-shaped one: a resolved argument holding the
+    # string `"0"` is TRUTHY in Python and has no `.year`, so Django's
+    # `timesince` raises — and a rule that read the argument's rendered text
+    # saw the number it spells and measured from now instead. Truthy, so it is
+    # not in the block above; here because it is the same axis seen from the
+    # side that catches the wrong fix.
+    "known_str_zero",
     # Arguments carrying a SEPARATOR inside the quotes (#2409). Django's
     # `constant_string` grammar admits any character between the quotes,
     # including the two characters the expression is split on — so
@@ -1646,6 +1726,30 @@ ARG_CONTEXT = {
     "known_tuple": (1, 2),
     "known_dict": {"a": 1},
     "known_dt": datetime.datetime(2020, 1, 1, 15, 30),
+    # The FALSY half, and the truthy partners it needs to be readable (#2469).
+    # One pair per `Value` variant that admits both truthiness values, so
+    # `value-truthiness` below reports this channel covered; `known_big` and
+    # `known_none` are single because their variants admit one answer each (a
+    # magnitude past `i64` is never zero; `Value::None` has one inhabitant).
+    "known_empty": "",
+    "known_zero": 0,
+    "known_float": 1.5,
+    "known_float_zero": 0.0,
+    "known_true": True,
+    "known_false": False,
+    "known_none": None,
+    "known_big": 12345678901234567890,
+    "known_decimal": Decimal("2.5"),
+    "known_decimal_zero": Decimal("0"),
+    "known_empty_list": [],
+    "known_empty_tuple": (),
+    "known_empty_dict": {},
+    "known_td": datetime.timedelta(seconds=90),
+    "known_td_zero": datetime.timedelta(0),
+    # TRUTHY, and a string: `bool("0")` is True and `"0"` has no `.year`, so
+    # every filter that reads its argument as a date REFUSES this where a
+    # text-shaped rule read the falsy number it spells.
+    "known_str_zero": "0",
 }
 
 
@@ -2566,6 +2670,171 @@ def _swept_separators_in_constants() -> set[str]:
     return reached
 
 
+# ---------------------------------------------------------------------------
+# The VALUE-TRUTHINESS axis (#2469) — the seventh blind spot, mechanised
+# ---------------------------------------------------------------------------
+#
+# `input-shape` is declared UNVERIFIED below because nothing mechanically names
+# which VALUE shapes matter. That is still true in general — no source says a
+# dict's keys must be hostile — but it is NOT true of one slice of the
+# question, and that slice is where the sixth blind spot lived.
+#
+# `Value::is_truthy` is a `match` over `Value`, so the ENGINE does name the set:
+# every variant it can hold is a shape whose truthiness the corpus should be
+# able to ask about, in BOTH answers. Before #2469 it could ask in one answer
+# for five of them and in neither for `Encoded` — so #2458, whose whole subject
+# is `bool(timedelta(0))`, moved zero cells on every axis.
+#
+# The variants are read out of the Rust source rather than transcribed, which
+# is the property that makes this go red on its own: a new `Value` variant with
+# no falsy (or no truthy) inhabitant in the corpus is reported as MISSING the
+# first time the manifest runs after it lands.
+#
+# What it does NOT close: it names the TRUTHINESS of each variant and nothing
+# else. A shape question inside a variant — a hostile dict KEY (#2334), a tuple
+# at the NESTING position (#2317), a non-string ITEM (#2324) — is still the
+# unverified class, and `input-shape` still says so.
+_VALUE_ENUM_SOURCE = "crates/djust_core/src/lib.rs `enum Value`"
+
+
+def _rust_value_variants() -> list[str]:
+    """The `Value` variant names, in declaration order, read from the crate."""
+    body = _crate_source("djust_core", "lib").split("pub enum Value {", 1)[1]
+    depth, chars = 1, []
+    for char in body:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        chars.append(char)
+    text = re.sub(r"///[^\n]*", "", "".join(chars))
+    return re.findall(r"^\s{4}([A-Z]\w*)", text, re.M)
+
+
+def _value_variant(obj: object) -> str:
+    """The `Value` variant *obj* becomes at the PyO3 conversion.
+
+    A TRANSCRIPTION of `impl FromPyObject for Value`'s arm order, and named as
+    one — there is no introspection hook that answers this, and a probe that
+    inferred the variant from a rendering would be reading `Display` rather
+    than the conversion. The requirement side of the axis is mechanical (the
+    variant LIST comes out of the crate), so a variant this function cannot
+    produce shows up as MISSING rather than as a silence; and an object it
+    cannot classify RAISES, so a future corpus row of an unmodelled shape fails
+    the manifest loudly instead of vanishing from the swept set.
+
+    Arm order matters and is Rust's, not Python's convenience: `bool` before
+    `int` (a Python `bool` IS an `int`), the `i64` bound before `BigInt`, and
+    `Decimal` before `float` — the last of which is the ordering #2214 is
+    about, because `extract::<f64>()` honours `Decimal.__float__`.
+    """
+    if obj is None:
+        return "None"
+    if isinstance(obj, bool):
+        return "Bool"
+    if isinstance(obj, int):
+        return "Integer" if -(2**63) <= obj < 2**63 else "BigInt"
+    if isinstance(obj, Decimal):
+        return "Decimal"
+    if isinstance(obj, float):
+        return "Float"
+    if isinstance(obj, str):
+        return "String"
+    if isinstance(obj, tuple):
+        return "Tuple"
+    if isinstance(obj, list):
+        return "List"
+    if isinstance(obj, dict):
+        return "Object"
+    if isinstance(obj, (datetime.datetime, datetime.date, datetime.time, datetime.timedelta)):
+        return "Encoded"
+    raise AssertionError(
+        f"{obj!r} ({type(obj).__name__}) has no arm in this transcription of "
+        f"`impl FromPyObject for Value`. Add one, in the SAME position the "
+        f"Rust arm sits at, or the axis is measuring a set it cannot classify."
+    )
+
+
+#: Combinations no Python value can inhabit, each with the reason. An exemption
+#: that becomes reachable is reported as STALE and must be deleted (#1859).
+VALUE_TRUTHINESS_NOT_INHABITABLE = {
+    "Missing": "an ABSENT key, which reaches the resolver as `Option::None` and never this conversion",
+    "DictView": "built only by `Context::dict_view` DURING a render; it never arrives from Python",
+}
+VALUE_TRUTHINESS_ONE_ANSWER = {
+    ("None", "truthy"): "`Value::None` has exactly one inhabitant, `None`, and it is falsy",
+    ("BigInt", "falsy"): "a magnitude past `i64` is never zero — the variant's own invariant",
+}
+
+
+def _value_truthiness_channels() -> dict[str, dict[str, object]]:
+    """The two channels a resolved value reaches a filter through.
+
+    `value` is the corpus `p` binds; `arg` is what a `known*` spelling resolves
+    to. Both are swept, because they are different code paths — #2458's first
+    arm reads the ARGUMENT and its `{% if p %}` half reads the VALUE, and the
+    corpus was blind on both for different reasons.
+    """
+    return {
+        "value": dict(INPUTS),
+        "arg": dict(ARG_CONTEXT),
+    }
+
+
+def _value_truthiness_members() -> list[tuple[str, str, str]]:
+    """`(channel, variant, answer)` for every combination the enum admits."""
+    return [
+        (channel, variant, answer)
+        for channel in _value_truthiness_channels()
+        for variant in _rust_value_variants()
+        for answer in ("falsy", "truthy")
+    ]
+
+
+def _required_value_truthiness() -> dict[str, str]:
+    """EVERY combination, exemptions included.
+
+    The uninhabitable ones are `exempt` rather than absent, so the manifest
+    prints them and `stale_exemptions` fires the day one becomes reachable —
+    an exemption that quietly stopped applying is the same silence this whole
+    file exists to remove.
+    """
+    return {
+        f"{channel}:{variant}:{answer}": _VALUE_ENUM_SOURCE
+        for channel, variant, answer in _value_truthiness_members()
+    }
+
+
+#: Keyed by MEMBER, built from the two reason tables above so a variant added
+#: to the enum inherits nothing by accident.
+VALUE_TRUTHINESS_EXEMPT = {
+    f"{channel}:{variant}:{answer}": (
+        VALUE_TRUTHINESS_NOT_INHABITABLE.get(variant)
+        or VALUE_TRUTHINESS_ONE_ANSWER[(variant, answer)]
+    )
+    for channel, variant, answer in _value_truthiness_members()
+    if variant in VALUE_TRUTHINESS_NOT_INHABITABLE
+    or (variant, answer) in VALUE_TRUTHINESS_ONE_ANSWER
+}
+
+
+def _swept_value_truthiness() -> set[str]:
+    """Derived from the corpus's own inhabitants, never from the requirement.
+
+    A self-comparison could never go red (#1859): the point is that a corpus
+    holding no falsy `Decimal` fails here, and it can only do that if this side
+    is computed by CLASSIFYING what the corpus actually holds.
+    """
+    reached: set[str] = set()
+    for channel, inhabitants in _value_truthiness_channels().items():
+        for value in inhabitants.values():
+            answer = "truthy" if value else "falsy"
+            reached.add(f"{channel}:{_value_variant(value)}:{answer}")
+    return reached
+
+
 def _required_forloop_members() -> dict[str, str]:
     source = inspect.getsource(_django_template.defaulttags.ForNode.render)
     out: dict[str, str] = {}
@@ -2980,6 +3249,13 @@ AXES = [
         what="the expression separators a QUOTED argument must be swept carrying",
         swept=_swept_separators_in_constants,
         required=_required_separators_in_constants,
+    ),
+    Axis(
+        name="value-truthiness",
+        what="a falsy AND a truthy inhabitant of every `Value` variant, in both channels",
+        swept=_swept_value_truthiness,
+        required=_required_value_truthiness,
+        exempt=VALUE_TRUTHINESS_EXEMPT,
     ),
     Axis(
         name="input-shape",

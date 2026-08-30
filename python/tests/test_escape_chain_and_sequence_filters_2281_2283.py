@@ -39,6 +39,7 @@ only the first passes on fully-escaped output and proves nothing.
 from __future__ import annotations
 
 import ast
+import datetime
 import inspect
 import re
 from decimal import Decimal
@@ -585,7 +586,10 @@ def _differential_literal(name: str):
         # `Decimal` joined `mark_safe` when the corpus grew a list carrying one
         # (#2324): the `str()`-vs-render split `safeseq` had to get right is a
         # `Decimal`/`Float` rule, and a corpus with neither cannot measure it.
-        {"mark_safe": mark_safe, "Decimal": Decimal},
+        # `datetime` joined both when it grew a `timedelta` (#2469) — the only
+        # member of the `Value::Encoded` family with a falsy inhabitant, and
+        # the third CALL form in a corpus this reader evaluates by hand.
+        {"mark_safe": mark_safe, "Decimal": Decimal, "datetime": datetime},
     )
 
 
