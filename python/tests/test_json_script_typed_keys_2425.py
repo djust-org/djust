@@ -48,10 +48,13 @@ What this does NOT close
 ------------------------
 `json.dumps` REFUSES a `tuple` / `bytes` / `frozenset` / `Decimal` / `date` /
 `Enum` / arbitrary-object key with `TypeError`, and djust emits its `str()`.
-That half stays open on purpose, because **djust does not refuse an
+That half stayed open on purpose, because **djust does not refuse an
 unserialisable VALUE either** — refusing in the key position alone would make
 the two positions disagree, which is a new inconsistency rather than a fix.
-Measured in `TestTheRefusalHalfIsNotClosedHere` and tracked at #2429.
+#2429 decided it: djust stays permissive in BOTH positions, because the value
+position cannot see the Python type at all once `FromPyObject for Value` has
+converted the object. Measured in `TestTheRefusalHalfIsADecidedLimit` here,
+recorded in full in `python/tests/test_json_script_refusal_decision_2429.py`.
 
 Every expectation here is LIVE `json.dumps` / LIVE Django, never a
 transcription.
@@ -353,16 +356,25 @@ class TestEveryKeyTypeReDerived:
             assert body_of(du) == want, f"{label}: got {body_of(du)!r} want {want!r}"
 
 
-class TestTheRefusalHalfIsNotClosedHere:
-    """djust is more permissive than Django in BOTH positions (#2429).
+class TestTheRefusalHalfIsADecidedLimit:
+    """djust is more permissive than Django in BOTH positions — decided (#2429).
 
-    Pinned as "these still diverge" rather than fixed, per CLAUDE.md #1079 —
-    and the second method is the reason it is not fixed here. A key-only
-    refusal would leave the value position emitting, which is a new
-    inconsistency dressed as a fix rather than a narrowing.
+    Left open by #2425 per CLAUDE.md #1079, and #2429 answered it: djust stays
+    permissive in both positions and does NOT refuse. The reason is the second
+    method's, taken one step further — the value position cannot see the type
+    at all. `FromPyObject for Value` converts an arbitrary object to its
+    `__dict__` or its `str()` at the boundary, so by the time this filter runs
+    an unserialisable value is byte-identical to an ordinary serialisable one,
+    and a refusal would have to refuse the ordinary one too. The key position
+    IS decidable (`ObjectKey` keeps the type, #2339), so refusing there alone
+    is the disagreement #2425 declined.
 
-    Turning either method red is the signal #2429 landed and this class should
-    become a parity assertion.
+    Kept here as a limit rather than deleted: this is where the divergence was
+    first written down, and both methods must stay green. The full decision
+    record — the re-derived divergent set, the `{% for %}` raise that proves
+    djust does refuse on data shape elsewhere, and the byte-identity
+    measurement the decision rests on — is
+    `python/tests/test_json_script_refusal_decision_2429.py`.
     """
 
     @pytest.mark.parametrize(
@@ -383,8 +395,10 @@ class TestTheRefusalHalfIsNotClosedHere:
     def test_an_unserialisable_VALUE_is_emitted_too_which_is_why(self, value: object) -> None:
         """The consistency argument, run rather than asserted.
 
-        If this method ever raises, the value position has been made strict and
-        the key position must follow in the same change.
+        If this method ever raises, the value position has been made strict —
+        the fact #2429's decision rests on has stopped being true, and that
+        decision should be revisited rather than the key position quietly
+        following.
         """
         with pytest.raises(TypeError, match="is not JSON serializable"):
             DjangoTemplate(TPL).render(DjangoContext({"p": {"a": value}}))
