@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-29
+
+Security-only patch release on the `1.1` maintenance branch. Six live XSS
+classes present in every release from 1.0.0 through 1.1.0, re-implemented
+against 1.1.0's own code rather than cherry-picked — every one of `main`'s
+fixes conflicts at the tag, because they are built on an `InputSafety` /
+per-key-grant model this release does not have (`filters.rs` alone grew
+2,536 → 7,204 lines on `main`).
+
+Where a faithful port would have needed that machinery, these fixes
+**over-escape** instead, and each such divergence is named below.
+Over-escaping is a rendering bug; under-escaping is the vulnerability.
+
+### Security
+
+- **`{{ bio|unordered_list }}` and `{{ bio|safeseq }}` emitted a hostile string LIVE, with no precondition whatsoever (#2283).** No `|safe`, no `mark_safe`, no custom code — `{{ user_bio|unordered_list }}` is an ordinary thing to write. Both filter names sit in the renderer's name-based `SAFE_OUTPUT_FILTERS` list, which suppresses auto-escaping on the filter **name** alone, and both returned a **non-sequence** value unchanged: so the suppression applied to a value nothing had escaped, and `bio = "<img src=x onerror=alert(1)>"` rendered a real element. Both non-list arms now escape. Django reaches inert differently — it iterates a string into its characters (`<li>&lt;</li><li>i</li>…`) and escapes each — so the output differs from Django's for this input; inert is the property that matters, and no caller passes a scalar to a per-item filter on purpose. `escapeseq` was already inert (it escapes, and is not on the name list) and is unchanged. The list arms are untouched: `{{ items|unordered_list }}` still renders `<li>` markup and still escapes each item.
+
+- **`{% render_slot p %}` — djust's OWN tag — emitted a hostile context string LIVE (#2379).** The framework-reachable half of the unescaped-handler-return class: no `|safe`, no `mark_safe`, and **no app-written handler**, only using component slots. The Rust engine inserts a tag handler's return into the page verbatim, and `RenderSlotTagHandler` has two exits that merely echo a value straight out of the render context — the Shape-3 pre-resolved scalar passthrough, and `_render_value`'s trailing `str(value)` reached by the direct-Python-caller path. Both now escape. The third exit, a slot entry's `content`, deliberately stays raw: it is the pre-rendered block body the parent already escaped — the trust status Django gives `{% include %}`'s output — and escaping it again would render every function component's and named slot's own markup as visible text. **Not fixed in 1.1.1**: the general case, an *app-written* tag handler returning attacker data as a plain `str`. That needs the escape-unless-`__html__` bridge plus an audit of all 221 registered handlers (`main`'s #2379 → #2421 → #2423 → #2416 chain), which is not a patch-release change. Apps registering their own handlers via `register_tag_handler` should `mark_safe` only what is genuinely markup and escape the rest.
+
+- **A `mark_safe` grant outlived the value it was granted for, for the life of a WebSocket connection (#2300).** `RustLiveView::mark_safe_keys` accumulated into a set nothing ever cleared, so a key marked safe once stayed safe for the lifetime of the view — which spans every event on the connection. A view that rendered trusted markup into `p` at mount and later rendered an attacker-controlled `p` emitted it live from a **bare `{{ p }}`**, no filter chain anywhere. `update_state` now revokes a key's grant when it replaces that key's value, so a grant lives exactly as long as the value it was granted for, whoever is driving the API. Scoped per key rather than wholesale, because `update_state` is a partial merge: updating `p` drops `p` and its `p.0` / `p.field` descendants and leaves an untouched `q`'s still-valid grant alone. **Revocation alone**, without `main`'s companion replace-in-`mark_safe_keys`: the bridge calls `mark_safe_keys` only `if safe_keys:`, so the empty case never clears and a replace cannot fix it — and two mechanisms covering the same half is one fix plus one decoration, which no test can separate.
+
+- **`{{ p|escape|safe }}` performed no escaping at all and emitted a live element (#2281).** The `escape` filter was a literal no-op, on the theory that render-time auto-escaping handles it — but `|safe` **suppresses** that auto-escape, so the chain escaped nothing anywhere. Django's filter returns `conditional_escape(value)`, an already-escaped `SafeString` that the `safe` marker merely carries through. It now escapes, using the five-character escape (`& < > " '`) that matches Django's `escape()` exactly, so it is attribute-safe as well. `crates/djust_templates/src/filters.rs::test_escape_filter_is_noop` asserted the defect as a contract; inverted in place to `test_escape_filter_escapes`.
+
+- **`{{ p|linenumbers|safe }}` emitted `1. <img src=x onerror=alert(1)>` live (#2291).** Same shape as `escape`: the filter emitted raw lines inside markup it generates and leaned on the auto-escape a later `|safe` removes. Django's `linenumbers` is `needs_autoescape=True` — it escapes each line itself and `mark_safe`s the joined result — and so is this one now. Correction to the issue's framing, measured rather than reasoned: its claim that an html-aware consumer is a live cell with no `|safe` anywhere does **not** hold — `{{ p|linenumbers|truncatewords_html:2 }}` measures inert at 1.1.0.
+
+- **`{{ bio|linebreaks|safe }}` and `{{ bio|linebreaksbr|safe }}` emitted the content LIVE — and `|safe` was mandatory for the filter to work at all (#2284).** Not one of the five in the advisory classification; found by sweeping every built-in filter against live Django and asking the only question that means anything — *where is djust live and Django not* — rather than "where is the output live", which flags every `|safe` cell and is no measurement at all. It is the **most reachable** of the `|safe`-preconditioned cells. Both filters emit `<p>`/`<br>` and neither was reported safe, so the bare `{{ bio|linebreaks }}` escaped the filter's **own** tags and put literal `<p>` text on the page: the only spelling that rendered correctly was `{{ bio|linebreaks|safe }}`, and that spelling was the live XSS. Any 1.1.0 app rendering user-entered text with paragraph breaks is almost certainly written that way. Both now escape each line before wrapping it, mirroring Django's `needs_autoescape=True` versions, which fixes both spellings at once — the bare form now emits real tags around escaped content.
+
+### Changed
+
+- **Four built-in filters now report their output already-escaped, at the LAST-filter position (#2281, #2284, #2291).** `escape`, `linenumbers`, `linebreaks` and `linebreaksbr` escape their own output, so the renderer must not escape it a second time. This is reported through `apply_filter_full_safe`'s runtime-safe channel rather than by adding the four names to the renderer's `SAFE_OUTPUT_FILTERS` list, because the two have different scopes: the runtime flag is overwritten per filter, so a later plain filter re-taints, while the **name list matches any position in the chain** — using it would have made `{{ p|escape|<anything> }}` emit the last filter's output raw, closing four holes and opening a fifth.
+
+### Known divergences from `main`, all in the safe direction
+
+- `{{ p|escape|F }}`, `{{ p|linenumbers|F }}` and `{{ p|linebreaks|F }}` for a plain `F` **double-escape** (`&amp;lt;`). Django propagates safeness per value through `is_safe=True` filters; 1.1.0 has no per-value tracking, so the grant ends at the escaping filter's own position. The alternative — the any-position name list — under-escapes, which is not a trade this release makes.
+- `{% render_slot slot.content %}`, the one spelling that reaches the Shape-3 exit, **over-escapes**. That exit cannot tell an already-escaped `.content` from a hostile bare context string: the engine resolved both to an opaque string before the call. The slot-entry spellings the docs use (`{% render_slot col %}`, `{% render_slot slots.col.0 %}`) reach `_render_value` and are unaffected.
+- A `mark_safe`d value passed through `|escape` is escaped rather than passed through, because 1.1.0 cannot see the marker at the filter boundary.
+
+### Not fixed in 1.1.1
+
+- **App-written tag handlers returning attacker data as a plain `str`** — see #2379 above. Only djust's own `render_slot` is fixed.
+- **Five type-coercion cells** where djust passes a malformed value through under an explicit `|safe` and Django discards it first: `{{ p|date|safe }}`, `{{ p|time|safe }}`, `{{ p|floatformat|safe }}`, `{{ p|random|safe }}`, `{{ p|filesizeformat|safe }}`. These are not escaping defects — no filter here claims to escape — and closing them means implementing Django's coercion semantics, a parity change with real regression risk for apps relying on the passthrough. Recorded rather than fixed so the list is accurate.
+
+### Verification
+
+All six classes reproduce on unmodified `1.1` and are closed by this release: 18 of 27 cases red on the base build, 0 red after. Gate-off across 10 mutations — mutation text asserted present and unique, source asserted changed, the Rust crate rebuilt and its `.so` hash asserted to differ each iteration, `__pycache__` cleared, errors counted separately from failures — all 10 RED, no survivors and no INVALIDs, with each mechanism having at least one test that goes red for it alone. A differential against live Django over 268 comparable filter cells found 7 cells where djust was live and Django was not before this change and 5 after, all 5 the type-coercion class above. 10,282 Python tests across `tests/`, `python/tests/` and `python/djust/tests/`, 0 failed; Rust workspace green; clippy, `cargo fmt --check` and ruff clean.
+
+27 cases in `python/djust/tests/test_security_1_1_1_backports.py`, including a real `WebsocketCommunicator` round-trip for the stale-grant class — it is defined over a connection's lifetime, so no renderer-level test can confirm it. Liveness on the wire is asserted **structurally** (an element node carrying an `on*` attribute), not by scanning the serialized frame: a `#text` node is written with `textContent` and is inert whatever characters it carries, and conflating the two reports a correct fix as broken in one direction and a real XSS as inert in the other.
+
 ## [1.1.0] - 2026-08-22
 
 ### Added

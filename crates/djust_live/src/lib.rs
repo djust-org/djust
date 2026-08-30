@@ -284,6 +284,37 @@ impl RustLiveViewBackend {
 
     /// Update state with a dictionary
     fn update_state(&mut self, updates: HashMap<String, Value>) {
+        // Replacing a value REVOKES the safety granted to the old one (#2300).
+        //
+        // `mark_safe_keys` accumulates into a set that nothing ever cleared,
+        // so a key marked safe once stayed safe for the lifetime of this view
+        // -- which spans every event on a WebSocket connection. A view that
+        // rendered trusted markup into `p` and later rendered an
+        // attacker-controlled `p` emitted it live, from a bare `{{ p }}` with
+        // no `|safe` anywhere in the template:
+        //
+        //     sync(view, mark_safe("<b>trusted</b>"));  render()  // '<b>trusted</b>'
+        //     sync(view, "<img src=x onerror=alert(1)>");
+        //     render()                                            // LIVE
+        //
+        // Tying the grant to the value makes staleness structurally
+        // impossible, whoever drives the API -- as opposed to relying on the
+        // caller to re-send the full safe-key set every render, which holds
+        // only while every call site remembers, and the bridge does not: it
+        // calls `mark_safe_keys` only `if safe_keys:`, so the empty case
+        // never cleared anything.
+        //
+        // Scoped per key rather than wholesale, because `update_state` is a
+        // partial merge: clearing everything would revoke grants for keys this
+        // call never touched. Updating `p` drops `p` and its `p.0` / `p.field`
+        // descendants; a grant on an untouched `q` survives.
+        if !self.safe_keys.is_empty() {
+            for key in updates.keys() {
+                self.safe_keys.remove(key);
+                let prefix = format!("{key}.");
+                self.safe_keys.retain(|k| !k.starts_with(&prefix));
+            }
+        }
         self.state.extend(updates);
     }
 

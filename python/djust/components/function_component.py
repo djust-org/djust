@@ -454,20 +454,48 @@ class RenderSlotTagHandler:
             return self._render_value(value)
 
         # Shape 3: a pre-resolved scalar (Rust engine stringified a number,
-        # bool, or string). Emit as-is — this is the value the user asked
-        # for. Covers `{% render_slot slot.content %}` where the content is
-        # a string that doesn't itself look like a dotted identifier.
-        return raw
+        # bool, or string).
+        #
+        # #2379: ESCAPED, not emitted as-is. This exit used to return `raw`
+        # verbatim, and the Rust engine inserts a tag handler's return into
+        # the page without escaping it — so `{% render_slot p %}` with
+        # `p = "<img src=x onerror=alert(1)>"` rendered a live element. That
+        # is djust's OWN tag: no `|safe`, no `mark_safe`, and no app-written
+        # handler needed, which makes it the framework-reachable half of the
+        # unescaped-handler-return class.
+        #
+        # This exit cannot tell a slot's already-escaped `.content` apart from
+        # a hostile bare context string — the engine resolved both to an
+        # opaque string before the call — so it takes the escaping. That
+        # over-escapes the `{% render_slot slot.content %}` spelling; the
+        # slot-entry spellings the docs use (`{% render_slot col %}`,
+        # `{% render_slot slots.col.0 %}`) reach `_render_value` instead and
+        # are unaffected.
+        return html.escape(raw)
 
     @staticmethod
     def _render_value(value: Any) -> str:
+        """The ONE already-escaped exit is the slot entry's ``content`` (#2379).
+
+        ``value["content"]`` is the *pre-rendered* block body the parent
+        handed the block handler -- already escaped by the parent's own
+        render, the same trust status Django gives ``{% include %}``'s
+        output. Escaping it again would render every function component and
+        named slot's markup as visible text.
+
+        The trailing ``str(value)`` is the opposite: it is reached when the
+        reference resolves to a bare context value rather than a slot entry,
+        e.g. ``{% render_slot p %}`` with ``p = "<img src=x
+        onerror=alert(1)>"``. Nothing has escaped it, and the Rust engine
+        inserts a handler's return verbatim, so it must be escaped here.
+        """
         if isinstance(value, list):
             if not value:
                 return ""
             value = value[0]
         if isinstance(value, dict):
             return str(value.get("content", ""))
-        return str(value)
+        return html.escape(str(value))
 
 
 def _resolve_context_path(path: str, context: dict[str, Any]) -> Any:

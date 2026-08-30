@@ -60,9 +60,27 @@ pub fn apply_filter_full_safe(
     arg_was_quoted: bool,
 ) -> Result<(Value, bool)> {
     // Built-ins take precedence over custom filters (mirrors the original
-    // dispatch order). A built-in hit is never runtime-safe.
+    // dispatch order).
     if let Some(builtin) = apply_builtin_filter(filter_name, value, arg, context) {
-        return builtin.map(|v| (v, false));
+        // Four built-ins now escape their own output (#2281 `escape`, #2291
+        // `linenumbers`, #2284 `linebreaks` / `linebreaksbr`), because
+        // deferring to the render-time auto-escape is wrong whenever a later
+        // `|safe` suppresses it. Reporting them safe here stops the plain
+        // `{{ p|escape }}` / `{{ p|linenumbers }}` spellings escaping twice,
+        // and stops `linebreaks` escaping the `<p>`/`<br>` tags it emits.
+        //
+        // Reported through THIS channel rather than by adding the names to
+        // the renderer's `SAFE_OUTPUT_FILTERS` list, because the two have
+        // different scopes: this flag is LAST-filter (every render path
+        // overwrites it per filter, so a later plain filter re-taints), while
+        // the name list matches ANY position in the chain. `{{ p|escape|add:q
+        // }}` must still escape `q`, so last-filter is the correct scope --
+        // the name list would have opened a new hole while closing these two.
+        let self_escaping = matches!(
+            filter_name,
+            "escape" | "linenumbers" | "linebreaks" | "linebreaksbr"
+        );
+        return builtin.map(|v| (v, self_escaping));
     }
     // Built-in match miss — fall through to the custom filter registry for
     // project-defined ``@register.filter`` callables (#1121).
@@ -115,8 +133,21 @@ fn apply_builtin_filter(
                 Ok(Value::String(arg.unwrap_or("").to_string()))
             }
         }
-        "escape" => Ok(value.clone()), // No-op: auto-escaping at render time handles this
-        "safe" => Ok(value.clone()),   // No-op: renderer checks for |safe to skip auto-escaping
+        // #2281: `escape` must ESCAPE, not defer to the render-time
+        // auto-escape. It used to be a no-op on the theory that auto-escaping
+        // handles it — but `|safe` SUPPRESSES the auto-escape, so
+        // `{{ p|escape|safe }}` performed no escaping at all and emitted a
+        // live element. Django's filter returns `conditional_escape(value)`,
+        // an already-escaped SafeString that the `safe` marker then merely
+        // carries through.
+        //
+        // `html_escape` escapes all five of `& < > " '`, matching Django's
+        // `escape()` exactly, so this is attribute-safe as well.
+        // The double-escape this could otherwise cause is avoided by
+        // reporting the result safe at the LAST-filter position — see
+        // `apply_filter_full_safe`.
+        "escape" => Ok(Value::String(html_escape(&value.to_string()))),
+        "safe" => Ok(value.clone()), // No-op: renderer checks for |safe to skip auto-escaping
         "first" => match value {
             Value::List(l) => Ok(l.first().cloned().unwrap_or(Value::Null)),
             Value::String(s) => Ok(Value::String(
@@ -236,6 +267,21 @@ fn apply_builtin_filter(
             };
             Ok(Value::String(result.to_string()))
         }
+        // #2284: both filters PRODUCE html (`<p>`, `<br>`) and must therefore
+        // escape the content they wrap, exactly as Django's
+        // `needs_autoescape=True` versions do. Neither did, and neither was
+        // reported safe, which broke the filter in BOTH spellings:
+        //
+        //   `{{ bio|linebreaks }}`        escaped the filter's OWN tags, so
+        //                                 the page showed literal `<p>` text
+        //   `{{ bio|linebreaks|safe }}`   the only spelling that rendered --
+        //                                 and it emitted the content LIVE
+        //
+        // So on 1.1.0 the only working spelling was the vulnerable one, which
+        // makes this the most reachable of the `|safe`-preconditioned cells:
+        // any app rendering user-entered text with paragraph breaks is
+        // written that way. Escaping inside + reporting safe at the
+        // last-filter position (see `apply_filter_full_safe`) fixes both.
         "linebreaks" => {
             // linebreaks filter: converts newlines to <p> and <br> tags
             Ok(Value::String(linebreaks(&value.to_string())))
@@ -485,7 +531,17 @@ fn apply_builtin_filter(
             Ok(Value::String(escape_js(&value.to_string())))
         }
         "linenumbers" => {
-            // linenumbers filter: prepend line numbers to each line
+            // linenumbers filter: prepend line numbers to each line.
+            //
+            // #2291: each line is now ESCAPED before the number is prepended.
+            // The filter used to emit the raw line and lean on the render-time
+            // auto-escape, which `|safe` suppresses — so
+            // `{{ p|linenumbers|safe }}` emitted `1. <img src=x
+            // onerror=alert(1)>` live. Django's `linenumbers` is
+            // `needs_autoescape=True`: it escapes each line itself and
+            // `mark_safe`s the joined result. Reported safe at the LAST-filter
+            // position (see `apply_filter_full_safe`) so the plain
+            // `{{ p|linenumbers }}` spelling is not escaped twice.
             Ok(Value::String(add_linenumbers(&value.to_string())))
         }
         "get_digit" => {
@@ -506,8 +562,25 @@ fn apply_builtin_filter(
             Ok(Value::String(pprint_value(value)))
         }
         "safeseq" => {
-            // safeseq filter: marks each item in a sequence as safe (no-op at filter level)
-            Ok(value.clone())
+            // safeseq filter: marks each item in a SEQUENCE as safe (no-op at
+            // filter level; the renderer's name-based `SAFE_OUTPUT_FILTERS`
+            // list skips auto-escaping).
+            //
+            // #2283: a NON-sequence value must not inherit that grant. The
+            // name-based skip fires on the filter name alone, so returning a
+            // hostile string unchanged emitted it live —
+            // `{{ bio|safeseq }}` with `bio = "<img src=x onerror=alert(1)>"`
+            // rendered a real element, with no `|safe` and no `mark_safe`
+            // anywhere. Django applies `mark_safe` per ITEM, so a string is
+            // iterated into its characters and never emerges whole.
+            //
+            // Escaped rather than character-iterated: the fail-closed shape
+            // needs no new machinery, and no caller passes a scalar to a
+            // per-item filter on purpose. Over-escaping here, never a leak.
+            match value {
+                Value::List(_) => Ok(value.clone()),
+                _ => Ok(Value::String(html_escape(&value.to_string()))),
+            }
         }
         "escapeseq" => {
             // escapeseq filter: apply HTML escaping to each item in a sequence
@@ -532,10 +605,25 @@ fn apply_builtin_filter(
             Ok(Value::String(urlize(&value.to_string(), limit)))
         }
         "unordered_list" => {
-            // unordered_list filter: recursively render nested lists as <li>/<ul>
+            // unordered_list filter: recursively render nested lists as <li>/<ul>.
+            // The list arm escapes every item (see `unordered_list`), which is
+            // why the name sits in the renderer's `SAFE_OUTPUT_FILTERS` list.
+            //
+            // #2283: the NON-list arm used to return the value unchanged, and
+            // the name-based skip then emitted it verbatim —
+            // `{{ bio|unordered_list }}` with `bio = "<img src=x
+            // onerror=alert(1)>"` rendered a live element with no `|safe` and
+            // no `mark_safe` anywhere. Django iterates a string into its
+            // characters (`<li>&lt;</li><li>i</li>…`) and escapes each, so it
+            // never emits the payload whole either.
+            //
+            // Escaped rather than character-iterated, for the same reason as
+            // `safeseq` above: fail closed with no new machinery. The output
+            // differs from Django's for this input; it is inert, which is the
+            // property that matters.
             match value {
                 Value::List(items) => Ok(Value::String(unordered_list(items, 1))),
-                _ => Ok(value.clone()),
+                _ => Ok(Value::String(html_escape(&value.to_string()))),
             }
         }
         "truncatechars_html" => {
@@ -950,14 +1038,21 @@ fn slugify(s: &str) -> String {
 
 fn linebreaks(s: &str) -> String {
     // Convert double newlines to </p><p> and single newlines to <br>
-    // Similar to Django's linebreaks filter
+    // Similar to Django's linebreaks filter.
+    //
+    // #2284: each line is ESCAPED before the tags go around it, mirroring
+    // Django's `needs_autoescape=True` branch. See the dispatch arm.
     let paragraphs: Vec<&str> = s.split("\n\n").collect();
 
     let formatted_paragraphs: Vec<String> = paragraphs
         .iter()
         .filter(|p| !p.trim().is_empty())
         .map(|p| {
-            let lines_with_br = p.split('\n').collect::<Vec<_>>().join("<br>");
+            let lines_with_br = p
+                .split('\n')
+                .map(html_escape)
+                .collect::<Vec<_>>()
+                .join("<br>");
             format!("<p>{lines_with_br}</p>")
         })
         .collect();
@@ -966,8 +1061,12 @@ fn linebreaks(s: &str) -> String {
 }
 
 fn linebreaksbr(s: &str) -> String {
-    // Simply replace newlines with <br> tags
-    s.replace('\n', "<br>")
+    // Replace newlines with <br> tags, escaping each line (#2284) -- see
+    // `linebreaks` above.
+    s.split('\n')
+        .map(html_escape)
+        .collect::<Vec<_>>()
+        .join("<br>")
 }
 
 fn urlencode(s: &str) -> String {
@@ -1187,7 +1286,13 @@ fn add_linenumbers(s: &str) -> String {
     lines
         .iter()
         .enumerate()
-        .map(|(i, line)| format!("{:>width$}. {line}", i + 1))
+        .map(|(i, line)| {
+            // #2291: escape the line, mirroring Django's `needs_autoescape`
+            // branch. The caller reports the result safe, so this is the only
+            // escape the value gets.
+            let escaped = html_escape(line);
+            format!("{:>width$}. {escaped}", i + 1)
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -1581,11 +1686,21 @@ mod tests {
     }
 
     #[test]
-    fn test_escape_filter_is_noop() {
-        // |escape is a no-op at filter time; auto-escaping happens at render time
+    fn test_escape_filter_escapes() {
+        // INVERTED for #2281. This test used to assert `|escape` was a no-op
+        // at filter time, on the theory that render-time auto-escaping handles
+        // it -- which pinned the vulnerability: `|safe` SUPPRESSES that
+        // auto-escape, so `{{ p|escape|safe }}` escaped nothing at all and
+        // emitted a live element. Django's filter returns
+        // `conditional_escape(value)`; so does this one now. The renderer
+        // reports the result safe at the last-filter position, so the plain
+        // `{{ p|escape }}` spelling is still escaped exactly once.
         let value = Value::String("<script>alert('xss')</script>".to_string());
         let result = apply_filter("escape", &value, None).unwrap();
-        assert_eq!(result.to_string(), "<script>alert('xss')</script>");
+        assert_eq!(
+            result.to_string(),
+            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+        );
     }
 
     #[test]
