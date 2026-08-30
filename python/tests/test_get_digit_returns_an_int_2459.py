@@ -483,27 +483,29 @@ class TestTheTagOperandPositions:
         source = shape.replace("@ARG@", arg)
         assert dj(source, SUBJECT) == du(source, SUBJECT), source
 
-    def test_regroup_is_a_SEPARATE_pre_existing_divergence(self) -> None:
-        """``{% regroup %}`` still fails soft, and it is not this fix's cell.
+    def test_regroup_was_a_SEPARATE_divergence_and_is_now_CLOSED(self) -> None:
+        """``{% regroup %}`` refuses too, as of #2463.
 
-        Filed as #2463 and left alone here per #1079. The proof that it is not
-        ``get_digit``'s is the control: ``{% regroup p by k %}`` over a plain
-        ``int``, with NO filter in the template at all, already diverges the
-        same way. ``{% for %}`` — the parallel path — refuses correctly, which
-        is what makes this the #1646 shape: #2451 wired the type-named refusal
-        into the ``for`` arm and the ``regroup`` arm kept its old fail-soft.
+        This method was written to fail the day that happened, and it did.
+        It is flipped rather than deleted, because the three-link evidence
+        chain is what makes "#2463 is not ``get_digit``'s cell" checkable —
+        and that stays worth checking in the other direction.
 
-        Recorded rather than left as a silent skip, and asserted in the
-        DIVERGING direction so it closes itself: the day ``regroup`` refuses,
-        this test goes red and names the issue to close.
+        The control is still the proof: ``{% regroup p by k %}`` over a plain
+        ``int``, with NO filter in the template at all, diverged the same way,
+        which is how the two issues were told apart. ``{% for %}`` — the
+        parallel path — refused correctly the whole time, which is what made
+        it the #1646 shape: #2451 wired the type-named refusal into the ``for``
+        arm and the ``regroup`` handler kept its own older fail-soft until
+        #2463 deleted it. Covered in full by
+        ``python/tests/test_regroup_non_iterable_2463.py``.
         """
         control = "{% regroup p by k as g %}[{{ g|length }}]"
-        assert dj(control, 2) == "<<TypeError>>"
-        assert du(control, 2) == "[0]"
-        # …and `{% for %}`, the same question one tag over, agrees.
+        assert dj(control, 2) == du(control, 2) == "<<TypeError>>"
+        # …and `{% for %}`, the same question one tag over, always agreed.
         loop = "{% for x in p %}[{{ x }}]{% endfor %}"
         assert dj(loop, 2) == du(loop, 2) == "<<TypeError>>"
-        # The chained cell diverges for the control's reason, not for a
+        # The chained cell answers for the control's reason, not a
         # `get_digit` one: both answer the same thing.
         chained = '{% regroup p|get_digit:"1" by k as g %}[{{ g|length }}]'
         assert du(chained, SUBJECT) == du(control, 2)

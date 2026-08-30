@@ -38,10 +38,15 @@ Known limitations vs. Django:
 
 * The ``<expr>`` source must resolve to a JSON-encodable value
   (django-normalised context values always are).
-* A source Python cannot iterate — an ``int``, a ``bool``, a ``Decimal`` —
-  renders an empty region where Django raises ``TypeError``. Never more
-  permissive than Django; pinned in
-  ``python/tests/test_regroup_string_source_2385_2394.py``.
+
+A source Python cannot iterate — an ``int``, a ``bool``, a ``Decimal``, a bare
+``object()`` — RAISES, as Django does, since #2463. Only ``None`` (and an
+operand that does not resolve, which Django's ``ignore_failures=True`` turns
+into ``None``) answers "no groups". Before that fix this handler caught the
+``TypeError`` and rendered an empty region, silently — while ``{% for %}``,
+which asks the same question one tag over, already refused. See
+:meth:`RegroupTagHandler._decode_source` and
+``python/tests/test_regroup_non_iterable_2463.py``.
 
 Filter expressions on the source (``cities|dictsort:"country"``) ARE
 supported as of #2333 — the renderer's ``resolve_tag_operand`` resolves a
@@ -193,22 +198,38 @@ class RegroupTagHandler(AssignTagHandler):
         ``p.0``, ``p.a``, ``p|first``, ``p|upper``, ``p|slice:':2'`` and a
         quoted literal all landed here as text.
 
-        A value Python cannot iterate — ``None``, an ``int``, a ``Decimal`` —
-        stays ``[]``. Django's answer for ``None`` is also no groups (its
-        ``ignore_failures`` branch); for the others Django raises ``TypeError``
-        and djust renders an empty region instead. That divergence predates
-        this fix, is never MORE permissive than Django, and is deliberately
-        left alone (CLAUDE.md #1079).
+        ``None`` — and an operand that does not resolve, which Django's
+        ``ignore_failures=True`` turns into ``None`` — is the ONE value that
+        stays ``[]``. It is the only guard ``RegroupNode.render`` has::
+
+            obj_list = self.target.resolve(context, ignore_failures=True)
+            if obj_list is None:
+                context[self.var_name] = []
+                return ""
+            context[self.var_name] = [... for key, val in groupby(obj_list, ...)]
+
+        Every OTHER non-iterable reaches ``groupby``, which calls ``iter()``
+        with no guard, so Django raises ``TypeError: 'int' object is not
+        iterable``. This used to catch that ``TypeError`` and answer ``[]``,
+        which made ``{% regroup p by k as g %}`` over a bare ``int`` render an
+        empty region where Django refuses — while ``{% for %}``, asking the
+        same question one tag over, refused correctly (#2463, #1646).
+
+        The refusal is Python's own ``list()``, not a re-implemented
+        iterability check: this handler holds the real Python object, so the
+        sink Rust's ``python_iter`` / ``filters::iter_values`` MODELS is
+        directly available here, and its message is CPython's verbatim. The
+        one thing this must NOT do is grow a second answer to "can this be
+        iterated?" — there were two, and this deletes one.
         """
         try:
             decoded = json.loads(expr)
         except (ValueError, TypeError):
             decoded = cls._lookup(context, expr)
-        try:
-            return list(decoded)
-        except TypeError:
-            # Not iterable (None / int / bool / Decimal / a model instance).
+        if decoded is None:
+            # Django's `if obj_list is None` arm — no groups, no raise.
             return []
+        return list(decoded)
 
     @staticmethod
     def _lookup(item: Any, path: str) -> Any:

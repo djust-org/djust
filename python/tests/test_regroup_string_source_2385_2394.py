@@ -270,22 +270,25 @@ class TestTheAnswersThatMustNotMove:
         assert django_out == djust_out == "[a][b][c]"
 
 
-class TestTheDivergenceThatIsNotClosedHere:
-    """A non-iterable source: Django RAISES, djust renders an empty region.
+class TestTheDivergenceThatWasNotClosedHere:
+    """A non-iterable source: Django RAISES, and djust rendered an empty region.
 
-    Pinned rather than fixed (CLAUDE.md #1079 — fix what the issue cites).
-    Neither issue asks for it, and it is not in the direction the fix must not
-    move: djust renders LESS than Django, which errors. This test goes red the
-    day someone makes regroup raise, and names itself as the thing to move.
+    Pinned rather than fixed by #2385/#2394 (CLAUDE.md #1079 — fix what the
+    issue cites), in the DIVERGING direction, with the note that it *"goes red
+    the day someone makes regroup raise, and names itself as the thing to
+    move"*. #2463 is that day; the class is flipped rather than deleted so the
+    localisation stays checkable, and its coverage now lives in
+    ``python/tests/test_regroup_non_iterable_2463.py``.
     """
 
     @pytest.mark.parametrize("value", [5, True, 1.5])
-    def test_a_non_iterable_source_renders_nothing_where_django_raises(self, value: object) -> None:
+    def test_a_non_iterable_source_now_raises_on_BOTH_engines(self, value: object) -> None:
         tpl = SHAPE.replace("OPERAND", "p")
         with pytest.raises(TypeError, match="not iterable"):
             DjangoTemplate(tpl).render(DjangoContext({"p": value}))
         ctx = {"p": value}
-        assert _rust.render_template_with_dirs(tpl, ctx, [], None) == "[0]"
+        with pytest.raises(RuntimeError, match="not iterable"):
+            _rust.render_template_with_dirs(tpl, ctx, [], None)
 
 
 class TestBothMechanismsAreReachable:
@@ -390,9 +393,8 @@ class TestBothMechanismsAreReachable:
             ('"ab"', ["a", "b"]),  # a string iterates as characters
             ('{"a": 1, "b": 2}', ["a", "b"]),  # a dict iterates as keys
             ("[1, 2]", [1, 2]),  # a list is unchanged
-            ("null", []),  # None is not iterable
-            ("5", []),  # nor an int
-            ("nope", []),  # nor a name that resolves to nothing
+            ("null", []),  # Django's `if obj_list is None` arm
+            ("nope", []),  # …which an unresolved name reaches too
         ],
     )
     def test_the_handler_iterates_with_pythons_own_semantics(
@@ -400,6 +402,16 @@ class TestBothMechanismsAreReachable:
     ) -> None:
         """The handler half, called directly."""
         assert RegroupTagHandler._decode_source(expr, {}) == expected
+
+    def test_and_a_non_iterable_raises_pythons_own_TypeError(self) -> None:
+        """``"5"`` used to be a sixth row of the table above, answering ``[]``.
+
+        It answers a raise since #2463: ``None`` is the only value Django's
+        ``RegroupNode`` guards, and the handler now defers to ``list()``
+        instead of catching its ``TypeError``.
+        """
+        with pytest.raises(TypeError, match="'int' object is not iterable"):
+            RegroupTagHandler._decode_source("5", {})
 
 
 class TestTheWiringIsLoadBearing:
