@@ -24,14 +24,27 @@ class TestDjangoJSONEncoderTypes:
     """Test DjangoJSONEncoder handles all required types."""
 
     def test_datetime_serialization(self):
-        """datetime objects should serialize to ISO format strings."""
+        """datetime objects serialize the way `DjangoJSONEncoder` spells them.
+
+        Which is NOT `isoformat()`: microseconds truncate to milliseconds and a
+        trailing `+00:00` becomes `Z` (#2462). This assertion used to read
+        `"2024-06-15T14:30:45.123456"` — a value Django's own encoder never
+        writes.
+        """
+        import datetime as _dt
+
+        from django.core.serializers.json import DjangoJSONEncoder as RealEncoder
+
         from djust.live_view import DjangoJSONEncoder
 
         dt = datetime(2024, 6, 15, 14, 30, 45, 123456)
-        result = json.dumps({"created_at": dt}, cls=DjangoJSONEncoder)
-        data = json.loads(result)
+        data = json.loads(json.dumps({"created_at": dt}, cls=DjangoJSONEncoder))
+        assert data["created_at"] == "2024-06-15T14:30:45.123"
+        # ...and it is Django's answer rather than a second hand-written one.
+        assert data["created_at"] == json.loads(json.dumps(dt, cls=RealEncoder))
 
-        assert data["created_at"] == "2024-06-15T14:30:45.123456"
+        aware = datetime(2024, 6, 15, 14, 30, 45, tzinfo=_dt.timezone.utc)
+        assert json.loads(json.dumps(aware, cls=DjangoJSONEncoder)) == "2024-06-15T14:30:45Z"
 
     def test_date_serialization(self):
         """date objects should serialize to ISO format strings."""

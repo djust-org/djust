@@ -11,6 +11,8 @@ from uuid import UUID
 
 from django.db.models.fields.files import FieldFile
 
+from djust.serialization import django_json_datetime
+
 # JSON-compatible value the Rust engine accepts.
 JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
 
@@ -22,7 +24,7 @@ def serialize_value(
     Serialize a single value to a JSON-compatible type.
 
     Handles:
-    - datetime/date/time -> ISO format strings
+    - datetime/date/time -> ``DjangoJSONEncoder.default``'s spelling (#2462)
     - UUID -> string
     - Decimal -> float
     - FieldFile/ImageFieldFile -> URL string or None
@@ -39,9 +41,13 @@ def serialize_value(
     if value is None:
         return None
 
-    # Handle datetime types
+    # datetime / date / time -> the encoder's spelling, not ``isoformat()``
+    # (#2462). The THIRD sink of the same conversion: found by grepping for
+    # ``isoformat()`` rather than by listing the callers already known, which
+    # is the rule that keeps this kind of fix from landing on two of three
+    # paths (#1646).
     if isinstance(value, (datetime, date, time)):
-        return value.isoformat()
+        return django_json_datetime(value)
 
     # Handle UUID
     if isinstance(value, UUID):

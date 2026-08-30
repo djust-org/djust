@@ -421,16 +421,27 @@ class TestWhichPathThisFixIsOn:
 
     On the normalized path `json_script` was already mostly right before this
     fix, because the normalizer is a `DjangoJSONEncoder` pre-pass — but only
-    mostly, and the gap is the same two rules #2448 is about. Its own docstring
-    claims the identity
+    mostly, and the gap was the same two rules #2448 is about: it did not
+    truncate microseconds to milliseconds and did not rewrite a trailing
+    `+00:00` to `Z`, so the identity
 
         json.dumps(normalize_django_value(v), cls=Enc) == json.dumps(v, cls=Enc)
 
-    and that is FALSE for 4 of 10 datetime shapes, measured below: it does not
-    truncate microseconds to milliseconds and does not rewrite a trailing
-    `+00:00` to `Z`. Filed as #2462 rather than fixed here — it is
-    Python, a different file, a different path — and pinned so this file cannot
-    be read as claiming the LiveView path is closed.
+    was FALSE for 4 of 10 datetime shapes against DJANGO's encoder. Filed as
+    #2462 rather than fixed here — Python, a different file, a different path —
+    and **closed** there. The four rows below are kept and INVERTED rather than
+    deleted, so the file records which path each fix was on.
+
+    One thing #2462 established that this file's original wording missed:
+    `Enc` above has to be Django's encoder for the claim to be false at all.
+    Against djust's OWN `DjangoJSONEncoder` — which is what
+    `djust/serialization.py` means by that name, and which spelled a datetime
+    with a bare `isoformat()` too — the identity held for all four. The defect
+    was both of them disagreeing with Django, not the pre-pass disagreeing with
+    the encoder.
+
+    The LiveView path still FLATTENS, which is unchanged by either fix and is
+    pinned below: `Value::Encoded` is never constructed there.
     """
 
     #: The claim, run rather than read.
@@ -462,33 +473,49 @@ class TestWhichPathThisFixIsOn:
             "time microseconds",
         ],
     )
-    def test_the_normalized_path_still_diverges_on_these_four(self, name: str) -> None:
-        """The residue, named. Each is a `DjangoJSONEncoder` rule the Python
-        pre-pass does not apply."""
-        assert not self._identity_holds(FAMILY[name]), (
-            f"{name} now round-trips identically — the normalizer was fixed, so "
-            "move this row out of the residue rather than leaving a stale pin"
+    def test_the_normalized_path_agrees_on_these_four_since_2462(self, name: str) -> None:
+        """The residue, CLOSED (#2462) — inverted rather than deleted.
+
+        Each was a `DjangoJSONEncoder` rule the Python pre-pass did not apply.
+        All three sinks that spelled a datetime — djust's own encoder,
+        `normalize_django_value`, and `template/serialization.py::serialize_value`
+        — now call `django_json_datetime`, which calls Django's `default()`.
+        """
+        assert self._identity_holds(FAMILY[name]), (
+            f"{name} diverges again — #2462 closed it, so this going red means "
+            "a sink went back to `isoformat()`"
         )
 
-    @pytest.mark.parametrize(
-        "name",
-        ["datetime naive", "datetime offset", "date", "time", "timedelta seconds"],
-    )
-    def test_and_holds_for_the_rest_so_the_residue_is_four_not_ten(self, name: str) -> None:
-        """Non-vacuity: the identity is not simply broken everywhere, which
-        would make the four above unremarkable."""
-        assert self._identity_holds(FAMILY[name])
+    @pytest.mark.parametrize("name", sorted(FAMILY))
+    def test_and_holds_for_the_WHOLE_family_since_2462(self, name: str) -> None:
+        """The residue is now zero rather than four, so the sweep is the whole
+        family rather than the five that happened to agree."""
+        value = FAMILY[name]
+        if isinstance(value, datetime.time) and value.utcoffset() is not None:
+            pytest.skip("Django REFUSES an aware time; #2429's declined direction")
+        assert self._identity_holds(value)
 
-    def test_the_parity_test_that_should_have_caught_it_samples_no_such_value(self) -> None:
-        """Why it survived — and it is this file's own headline defect, one
-        layer up.
+    def test_the_parity_test_now_samples_the_values_AND_the_reference(self) -> None:
+        """Why it survived, and what closing it actually required (#2462).
 
         `tests/unit/test_normalize_django_value.py::TestParityWithJSONRoundtrip`
-        exists to pin exactly this identity. Every `datetime`/`time` in its
-        17-value list has `microsecond == 0` and no `tzinfo`, so it samples the
-        one band where the two encoders agree — the same
+        exists to pin this identity. Its original 17-value list gave every
+        `datetime`/`time` `microsecond == 0` and no `tzinfo` — the one band
+        where the two spellings agree — which is the
         coincidence-in-the-sampled-band that made #2448's own issue table mark
-        `time` as agreeing.
+        `time` as agreeing, one layer up.
+
+        But the sampling was NOT the load-bearing blindness, and asserting only
+        that it widened would pin the wrong thing. That test imported
+        `DjangoJSONEncoder` **from djust.serialization**, so it compared the
+        pre-pass against a copy of the same defect: measured, 3,923 randomized
+        values spanning every microsecond and every offset produce ZERO
+        failures of the same-encoder assertion. Widening the values alone would
+        have left it green.
+
+        So this pin asserts BOTH axes moved: the list samples microseconds and
+        tzinfo, and the class runs at least one assertion against Django's own
+        encoder.
         """
         source = (
             pathlib.Path(__file__).resolve().parents[2]
@@ -496,13 +523,23 @@ class TestWhichPathThisFixIsOn:
             / "unit"
             / "test_normalize_django_value.py"
         ).read_text(encoding="utf-8")
-        block = source.split("class TestParityWithJSONRoundtrip", 1)[1].split("def test_", 1)[0]
-        assert "datetime(" in block, "the parity list moved — update this pin"
-        # No microsecond argument (a 7th positional) and no tzinfo anywhere in
-        # the sampled datetimes/times.
-        assert "tzinfo" not in block, block
-        for call in re.findall(r"(?:datetime|time)\(([^)]*)\)", block):
-            assert len(call.split(",")) <= 6, f"a value now carries microseconds: {call}"
+        block = source.split("class TestParityWithJSONRoundtrip", 1)[1]
+        params = block.split("def test_scalar_parity", 1)[0]
+        assert "datetime(" in params, "the parity list moved — update this pin"
+        # The VALUE axis: at least one sampled datetime carries microseconds (a
+        # 7th positional) and at least one carries a tzinfo.
+        assert any(
+            len(call.split(",")) >= 7
+            for call in re.findall(r"(?:datetime|time)\(([^)]*)\)", params)
+        ), "no sampled datetime/time carries microseconds"
+        assert "tzinfo=" in params, "no sampled datetime carries a tzinfo"
+        # The REFERENCE axis, which is the one that matters.
+        assert "django.core.serializers.json" in source, (
+            "the parity class no longer compares against DJANGO's encoder — "
+            "which is the axis it was blind on, and the reason a widened value "
+            "set alone would still have been green"
+        )
+        assert "_encoded_by_django" in block
 
 
 class TestWhatThisDeliberatelyDoesNOTClose:
