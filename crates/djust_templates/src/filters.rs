@@ -1088,19 +1088,32 @@ fn apply_builtin_filter(
         // and it is why `{{ d|safe }}` on a `Decimal` under a German locale
         // stops emitting `0,000000001` (#2257 residue 1, for `safe`).
         "safe" => Ok(Value::String(value.to_string())),
-        "first" => match value {
-            Value::List(l) | Value::Tuple(l) => Ok(l.first().cloned().unwrap_or(Value::Missing)),
-            Value::String(s) => Ok(Value::String(
-                s.chars().next().map(|c| c.to_string()).unwrap_or_default(),
-            )),
-            _ => Ok(Value::Missing),
+        // Django is `value[0]` with ONLY `IndexError` caught, so a value CPython
+        // cannot subscript raises through the template (#2449). The catch-all
+        // below used to answer `Value::Missing` for every such shape — an int
+        // rendered `''`, which reads as "the list was empty".
+        "first" => match not_a_sequence_error(SequenceOp::Subscript, value) {
+            Some(err) => Err(err),
+            None => match value {
+                Value::List(l) | Value::Tuple(l) => {
+                    Ok(l.first().cloned().unwrap_or(Value::Missing))
+                }
+                Value::String(s) => Ok(Value::String(
+                    s.chars().next().map(|c| c.to_string()).unwrap_or_default(),
+                )),
+                _ => Ok(Value::Missing),
+            },
         },
-        "last" => match value {
-            Value::List(l) | Value::Tuple(l) => Ok(l.last().cloned().unwrap_or(Value::Missing)),
-            Value::String(s) => Ok(Value::String(
-                s.chars().last().map(|c| c.to_string()).unwrap_or_default(),
-            )),
-            _ => Ok(Value::Missing),
+        // `value[-1]`, same shape and the same refusal set (#2449).
+        "last" => match not_a_sequence_error(SequenceOp::Subscript, value) {
+            Some(err) => Err(err),
+            None => match value {
+                Value::List(l) | Value::Tuple(l) => Ok(l.last().cloned().unwrap_or(Value::Missing)),
+                Value::String(s) => Ok(Value::String(
+                    s.chars().last().map(|c| c.to_string()).unwrap_or_default(),
+                )),
+                _ => Ok(Value::Missing),
+            },
         },
         // Django, verbatim:
         //
@@ -1503,12 +1516,15 @@ fn apply_builtin_filter(
         // the whole string was not "a random pick of one element", it was the
         // sequence itself.
         "random" => {
-            // `random.choice(d.keys())` raises `TypeError` — a view is not
-            // subscriptable — and Django does not catch it. Measured against
-            // all three kinds; djust renders nothing rather than raising,
-            // which is never more permissive (#2340).
-            if matches!(value, Value::DictView { .. }) {
-                return Some(Ok(Value::Missing));
+            // `random.choice(seq)` is `seq[_randbelow(len(seq))]`, so the
+            // refusal splits on whether the value has a length (#2449):
+            // a `dict_keys` HAS one and dies on the subscript, a scalar dies on
+            // the `len()`. Both raise in Django and neither is caught. This
+            // arm used to answer `Value::Missing` for the view — documented
+            // then as "never more permissive", which was true and is now
+            // simply parity.
+            if let Some(err) = not_a_sequence_error(SequenceOp::Choice, value) {
+                return Some(Err(err));
             }
             match iter_values(value) {
                 Some(items) if !items.is_empty() => {
@@ -2050,17 +2066,22 @@ fn apply_builtin_filter(
         // it is still load-bearing: an int, a float, a bool or `None` still
         // reaches it, Python still raises `TypeError` there, and djust still
         // fails soft — so the value must be escaped rather than handed back.
-        "safeseq" => match iter_values(value) {
-            Some(items) => Ok(collapse_if_input_safe(
-                Value::List(
-                    items
-                        .iter()
-                        .map(|item| Value::String(item.py_str()))
-                        .collect(),
-                ),
-                input_safety.container,
-            )),
-            None => Ok(Value::String(html_escape(&value.to_string()))),
+        "safeseq" => match not_a_sequence_error(SequenceOp::Iterate, value) {
+            Some(err) => Err(err),
+            None => match iter_values(value) {
+                Some(items) => Ok(collapse_if_input_safe(
+                    Value::List(
+                        items
+                            .iter()
+                            .map(|item| Value::String(item.py_str()))
+                            .collect(),
+                    ),
+                    input_safety.container,
+                )),
+                // Unreachable since #2449 — see the `unordered_list` arm above
+                // for why the escape stays.
+                None => Ok(Value::String(html_escape(&value.to_string()))),
+            },
         },
         // `[conditional_escape(obj) for obj in value]` — same iteration, and
         // the escaped items are `SafeString`s, so `escapeseq` is item-safe too
@@ -2076,17 +2097,21 @@ fn apply_builtin_filter(
         // #2287 seed a view's `[mark_safe(x), …]` reaches it, and escaping
         // those a second time made `{{ p|escapeseq|join:", " }}` emit
         // `&amp;lt;b&amp;gt;` where Django emits `<b>`.
-        "escapeseq" => match iter_values(value) {
-            Some(items) => Ok(collapse_if_input_safe(
-                Value::List(
-                    items
-                        .iter()
-                        .map(|item| Value::String(conditional_escape(item, input_safety.items)))
-                        .collect(),
-                ),
-                input_safety.container,
-            )),
-            None => Ok(Value::String(html_escape(&value.to_string()))),
+        "escapeseq" => match not_a_sequence_error(SequenceOp::Iterate, value) {
+            Some(err) => Err(err),
+            None => match iter_values(value) {
+                Some(items) => Ok(collapse_if_input_safe(
+                    Value::List(
+                        items
+                            .iter()
+                            .map(|item| Value::String(conditional_escape(item, input_safety.items)))
+                            .collect(),
+                    ),
+                    input_safety.container,
+                )),
+                // Unreachable since #2449 — see the `unordered_list` arm above.
+                None => Ok(Value::String(html_escape(&value.to_string()))),
+            },
         },
         "urlize" => {
             // urlize filter: convert URLs and emails to clickable links.
@@ -2140,9 +2165,19 @@ fn apply_builtin_filter(
         // scalar shapes: `unordered_list` holds an unconditional grant in
         // `SAFE_OUTPUT_FILTERS`, earned by the per-item escape below, and a
         // value that produces no `<li>` at all must not ride that grant raw.
-        "unordered_list" => match iter_values(value) {
-            Some(items) => Ok(Value::String(unordered_list(&items, 1, input_safety.items))),
-            None => Ok(Value::String(html_escape(&value.to_string()))),
+        "unordered_list" => match not_a_sequence_error(SequenceOp::Iterate, value) {
+            Some(err) => Err(err),
+            None => match iter_values(value) {
+                Some(items) => Ok(Value::String(unordered_list(&items, 1, input_safety.items))),
+                // Unreachable since #2449 put the refusal above it: every shape
+                // `iter_values` declines is a scalar, and a scalar now raises.
+                // Kept because the #2274 escape is the safety property, not the
+                // fall-through — a future variant that lands here must not ride
+                // `unordered_list`'s unconditional `SAFE_OUTPUT_FILTERS` grant
+                // raw, and `every_non_iterable_variant_is_markup_free` is the
+                // test that says so.
+                None => Ok(Value::String(html_escape(&value.to_string()))),
+            },
         },
         "truncatechars_html" => {
             match int_arg!(
@@ -2184,6 +2219,125 @@ fn apply_builtin_filter(
         _ => return None,
     };
     Some(result)
+}
+
+/// Has this value NEITHER `__getitem__` nor `__iter__` nor `__len__` in Python?
+/// (#2449)
+///
+/// The six sequence filters — `first`, `last`, `random`, `unordered_list`,
+/// `safeseq`, `escapeseq` — all refuse exactly this set, differing only in
+/// WHICH `TypeError` CPython reaches first. See [`not_a_sequence_error`].
+///
+/// NO wildcard, deliberately: a new `Value` variant has to be classified here
+/// rather than silently inheriting "this is a sequence" and re-opening the
+/// permissive half of #2449 for its own shape.
+///
+/// `Missing` is on the sequence side and that is not a slip. Django substitutes
+/// `string_if_invalid` — a `str` — for an absent variable, so
+/// `{{ nope|first }}` renders `''` on both engines and `{{ nope|safeseq }}`
+/// renders `[]`. Measured; refusing there would be a NEW divergence wearing a
+/// fix's clothes.
+///
+/// `Object` is on the sequence side too, and that one IS a known remaining
+/// divergence rather than agreement: a dict is subscriptable, so Django gets
+/// past the `TypeError` and raises `KeyError: 0` from `d[0]` instead — a
+/// different exception class, reachable only by implementing the integer-key
+/// lookup, and filed rather than folded in.
+fn is_python_scalar(value: &Value) -> bool {
+    match value {
+        Value::Bool(_)
+        | Value::Integer(_)
+        | Value::BigInt(_)
+        | Value::Float(_)
+        | Value::Decimal(_)
+        | Value::None
+        | Value::Encoded(_) => true,
+        // `List` and `Tuple` share a LINE and not merely an arm: #2317's
+        // bare-`Value::List(` grep reads a line without `| Value::Tuple(` on it
+        // as a site where tuple-ness can be lost. Nothing is constructed here,
+        // so nothing could be lost — but a rustfmt-split arm would still trip
+        // that pin, and pairing them is cheaper and truer than an exclusion.
+        Value::List(_) | Value::Tuple(_) => false,
+        Value::Missing => false,
+        Value::String(_) => false,
+        Value::Object(_) => false,
+        Value::DictView { .. } => false,
+    }
+}
+
+/// Which `TypeError` a sequence filter reaches on a non-sequence (#2449).
+///
+/// Django's six sequence filters ask three different questions of the value, so
+/// CPython raises three different messages — measured against live Django and
+/// live CPython rather than transcribed, because the issue reporting this
+/// predicted two:
+///
+/// | filter                                | operation            | message                                    |
+/// |---------------------------------------|----------------------|--------------------------------------------|
+/// | `first` / `last`                      | `value[0]`           | `'int' object is not subscriptable`        |
+/// | `unordered_list` / `safeseq` / `escapeseq` | iterate         | `'int' object is not iterable`             |
+/// | `random`                              | `v[randbelow(len(v))]` | `object of type 'int' has no len()`      |
+///
+/// `random` is the one that needs both, and the one that does not always
+/// refuse a view. CPython's `random.choice` is
+///
+/// ```python
+/// if not len(seq):
+///     raise IndexError('Cannot choose from an empty sequence')
+/// return seq[self._randbelow(len(seq))]
+/// ```
+///
+/// so a scalar dies on the `len()`; a NON-EMPTY `dict_keys` — which has a
+/// length and no `__getitem__` — gets past it and dies on the subscript; and an
+/// EMPTY view raises `IndexError`, which Django's `random` filter CATCHES and
+/// turns into `""`. Three outcomes from one filter. A single message for
+/// `random`, or an unconditional refusal for a view, is wrong for one of them —
+/// which is how the empty-view row was caught, by `#2340`'s existing
+/// every-filter-over-every-view-kind table going red.
+///
+/// Returns `None` for a value Django accepts, so the caller's existing body
+/// runs unchanged.
+fn not_a_sequence_error(kind: SequenceOp, value: &Value) -> Option<DjangoRustError> {
+    let scalar = is_python_scalar(value);
+    let view = matches!(value, Value::DictView { .. });
+    let empty_view = matches!(value, Value::DictView { items, .. } if items.is_empty());
+    let name = value.python_type_name();
+    let message = match kind {
+        // A view is not subscriptable either — `d.keys()[0]` raises in Python
+        // and Django does not catch it. djust used to render nothing there,
+        // which `Value::DictView`'s own docs classified as "never more
+        // permissive"; it is the same `TypeError` this closes for a scalar, so
+        // it closes here too rather than staying the one accepted instance.
+        SequenceOp::Subscript if scalar || view => {
+            format!("'{name}' object is not subscriptable")
+        }
+        SequenceOp::Iterate if scalar => format!("'{name}' object is not iterable"),
+        // `len()` first, then the subscript — see the table above.
+        SequenceOp::Choice if scalar => format!("object of type '{name}' has no len()"),
+        // An EMPTY view never reaches the subscript: `random.choice` raises
+        // `IndexError` on the length check and Django catches that one.
+        SequenceOp::Choice if view && !empty_view => {
+            format!("'{name}' object is not subscriptable")
+        }
+        _ => return None,
+    };
+    // Crosses PyO3 as a `RuntimeError` rather than Django's `TypeError`, as
+    // every djust render error does (#2387, #2419, #2400). The property both
+    // engines then share is that neither puts a page up — which is the point:
+    // rendering `''` for `{{ p|first }}` over a scalar told the page author
+    // nothing, and told the reader that the list was empty.
+    Some(DjangoRustError::TemplateError(message))
+}
+
+/// Which of the three questions [`not_a_sequence_error`] answers.
+#[derive(Clone, Copy)]
+enum SequenceOp {
+    /// `value[0]` / `value[-1]` — `first`, `last`.
+    Subscript,
+    /// `for x in value` — `unordered_list`, `safeseq`, `escapeseq`.
+    Iterate,
+    /// `random.choice(value)`, which is `len()` and then a subscript.
+    Choice,
 }
 
 pub fn html_escape(s: &str) -> String {
@@ -4633,6 +4787,22 @@ fn value_to_json(value: &Value) -> String {
         Value::BigInt(d) => format!("\"{}\"", json_string_body(d)),
         Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
         Value::String(s) => format!("\"{}\"", json_string_body(s)),
+        // THE #2448 fix, and the only place in the engine that reads the
+        // encoder spelling. `DjangoJSONEncoder.default` is not `str()`: it is
+        // `isoformat()` with the microseconds truncated to milliseconds and a
+        // trailing `+00:00` rewritten to `Z` for a `datetime`, and
+        // `duration_iso_string` for a `timedelta`. This arm used to be the
+        // `String` one above, holding the TEMPLATE DISPLAY spelling, so
+        // `{{ p|json_script:"d" }}` put `"2020-01-01 03:04:05"` and `"0:01:30"`
+        // on the wire where Django puts `"2020-01-01T03:04:05"` and
+        // `"P0DT00H01M30S"` — not parseable by `Date.parse` and not an ISO-8601
+        // duration, so a live wire-format divergence rather than a cosmetic one.
+        //
+        // Through the SAME `json_string_body` as every other string arm: the
+        // payload is Django's, but a `Value::Encoded` can be deserialized
+        // holding an arbitrary string (its binary tag's payload is unvalidated),
+        // for exactly the reason the `Decimal` arm above documents.
+        Value::Encoded(e) => format!("\"{}\"", json_string_body(&e.json)),
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
         Value::List(items) | Value::Tuple(items) => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();
@@ -4785,23 +4955,25 @@ mod value_to_json_structure {
         n
     }
 
-    /// Four quoted-string sites — the `BigInt` fallback, `Decimal`, `String`, the
-    /// object key — one helper.
+    /// Five quoted-string sites — the `BigInt` fallback, `Decimal`, `String`,
+    /// `Encoded`, the object key — one helper.
     ///
     /// The partial chain #2241 fixed survived a convergence that had already NAMED
     /// the gap. A comment naming a gap does not close it; a count that goes red when
-    /// another chain appears does (#1646/#1859) — and it did exactly that when
-    /// #2260 added the `BigInt` arm, whose non-digit fallback is a quoted string
-    /// for the same unvalidated-tag-payload reason `Decimal`'s is.
+    /// another chain appears does (#1646/#1859) — and it did exactly that TWICE:
+    /// when #2260 added the `BigInt` arm, whose non-digit fallback is a quoted
+    /// string for the same unvalidated-tag-payload reason `Decimal`'s is, and
+    /// again when #2448 added the `Encoded` arm, whose payload is unvalidated for
+    /// that same reason.
     #[test]
     fn value_to_json_escapes_every_string_through_the_one_helper() {
         let body = body_tokens();
         let n = count_ident(&body, "json_string_body");
         assert_eq!(
-            n, 4,
-            "value_to_json should escape exactly its four quoted-string sites \
-             (the BigInt fallback, Decimal, String, the object key) through \
-             json_string_body; found {n}"
+            n, 5,
+            "value_to_json should escape exactly its five quoted-string sites \
+             (the BigInt fallback, Decimal, String, Encoded, the object key) \
+             through json_string_body; found {n}"
         );
     }
 
@@ -4845,7 +5017,7 @@ mod value_to_json_structure {
                 count_ident(&real, "json_string_body"),
                 count_ident(&real, "replace")
             ),
-            (4, 0),
+            (5, 0),
             "baseline drifted"
         );
 
@@ -4890,7 +5062,7 @@ mod value_to_json_structure {
         let real = body_tokens();
         assert_eq!(
             count_ident(&real, "json_string_body"),
-            4,
+            5,
             "baseline drifted"
         );
 
@@ -5785,7 +5957,14 @@ fn pluralize(value: &Value, arg: &str) -> String {
         Value::Object(map) => return pick(map.len() == 1),
         // `None` and an absent variable have neither a `float()` nor a
         // `len()`. Django's final `return ""`.
-        Value::None | Value::Missing => {}
+        //
+        // Nor does a `datetime` / `date` / `time` / `timedelta` (#2448):
+        // `float(o)` raises `TypeError`, so does `len(o)`, and Django's final
+        // `return ""` is reached. Same answer the `String` arm above gave when
+        // these values were `Value::String(str(o))` — none of the four `str()`
+        // forms parses as a float — so this arm is Django's reasoning, not a
+        // behaviour change.
+        Value::None | Value::Missing | Value::Encoded(_) => {}
     }
     String::new()
 }
@@ -6502,6 +6681,7 @@ mod tests {
             Value::DictView { .. } => "DictView",
             Value::Decimal(_) => "Decimal",
             Value::BigInt(_) => "BigInt",
+            Value::Encoded(_) => "Encoded",
         }
     }
 
@@ -6529,6 +6709,18 @@ mod tests {
             },
             Value::Decimal("1E-9".to_string()),
             Value::BigInt("9".repeat(40)),
+            // On the NON-iterating side (#2448) — and its `display` is the one
+            // an attacker could aim at #2285's fall-through escape, since the
+            // other two fields never reach `to_string()`. `str()` of any of the
+            // four datetime types is digits, `-`, `:`, `.`, `+` and spaces, so
+            // the escape is a no-op here too; the sample carries the real
+            // spelling rather than markup because that is what the variant can
+            // hold.
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "datetime.datetime".to_string(),
+                display: "2020-01-01 03:04:05".to_string(),
+                json: "2020-01-01T03:04:05".to_string(),
+            })),
         ];
         let mut iterating = 0;
         for v in &variants {
@@ -6558,7 +6750,7 @@ mod tests {
         let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
         assert_eq!(
             seen.len(),
-            12,
+            13,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }

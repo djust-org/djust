@@ -602,8 +602,12 @@ class TestTheProducerEnumerationIsComplete:
             ("safeseq", "Value::String(item.py_str())"),
             ("escapeseq", "Value::String(conditional_escape(item, input_safety.items))"),
         ):
-            start = src.index('"%s" => match iter_values(value)' % name)
-            body = src[start : start + 700]
+            # Both arms open with #2449's refusal check now and reach
+            # `iter_values` one level in, so the anchor is the ARM — which is
+            # what the pin was always about — and the window is wider to clear
+            # the added branch.
+            start = src.index('"%s" => match not_a_sequence_error(' % name)
+            body = src[start : start + 1100]
             assert builder in body, (
                 f"{name} no longer constructs Value::String elements — it can "
                 "hand mark_item a non-str, and #2337's deletion is unsafe"

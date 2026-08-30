@@ -2243,7 +2243,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 }
                 other => Err(DjangoRustError::TemplateError(format!(
                     "'{}' object is not iterable",
-                    python_type_name_for_iteration(&other)
+                    other.python_type_name()
                 ))),
             }
         }
@@ -3271,28 +3271,6 @@ fn get_prop(key: &str, props: &[(String, String)], context: &Context) -> Result<
 /// Applied to djust's own `{% if %}`-shaped inline conditional as well: two
 /// spellings of one construct answering differently is the drift this codebase
 /// keeps paying for (#1646).
-/// The Python type name CPython puts in `'X' object is not iterable` (#2382).
-///
-/// Every arm names the type the value HELD IN PYTHON, not the Rust variant:
-/// `Value::BigInt` is a Python `int` too large for an `i64`, and CPython's
-/// message for a `Decimal` is `'decimal.Decimal'` — the qualified name, since
-/// `decimal` is not a builtin.
-///
-/// The four shapes here are exactly the ones that reach `{% for %}`'s refusal
-/// arm: `String`, `Object`, `DictView`, `List` and `Tuple` are normalised or
-/// iterated above, and `Missing` / `None` take Django's empty branch. The
-/// catch-all is unreachable today and answers `object`, which is what CPython
-/// says for an instance of a class with neither `__len__` nor `__iter__`.
-fn python_type_name_for_iteration(value: &Value) -> &'static str {
-    match value {
-        Value::Bool(_) => "bool",
-        Value::Integer(_) | Value::BigInt(_) => "int",
-        Value::Float(_) => "float",
-        Value::Decimal(_) => "decimal.Decimal",
-        _ => "object",
-    }
-}
-
 fn evaluate_condition_for_if(condition: &str, context: &Context) -> Result<bool> {
     match evaluate_condition(condition, context) {
         Err(DjangoRustError::VariableDoesNotExist(_)) => Ok(false),

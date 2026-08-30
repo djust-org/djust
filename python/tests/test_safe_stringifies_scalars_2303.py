@@ -437,12 +437,27 @@ class TestTheStringifyIsComplete:
 
     def test_the_identity_probe_can_actually_fail(self) -> None:
         """Gate-off for the sweep above: WITHOUT ``|safe`` the two spellings do
-        diverge, so the assertion is discriminating and not trivially true."""
+        diverge, so the assertion is discriminating and not trivially true.
+
+        Since #2449 a bare scalar makes the six sequence filters RAISE — a
+        `42`/`'42'` distinction sharper than any string difference, and one this
+        probe has to be able to see rather than die on.  The outcome is captured
+        so a raise counts as a distinguishing answer; the sweep above is
+        unaffected because every one of its cells goes through ``|safe`` first,
+        which makes the value a string before any filter sees it.
+        """
+
+        def outcome(src: str, ctx: dict) -> str:
+            try:
+                return "OK " + djust_render(src, ctx)
+            except Exception as exc:  # noqa: BLE001
+                return f"RAISE {exc}"
+
         ctx = {"p": 42, "q": "42"}
         assert djust_render("{{ p|add:'1' }}", ctx) == djust_render("{{ q|add:'1' }}", ctx)
         differ = [
             tail
             for tail in TestTheBuiltInChainIsNotWorseOff._tails()
-            if djust_render("{{ p" + tail + " }}", ctx) != djust_render("{{ q" + tail + " }}", ctx)
+            if outcome("{{ p" + tail + " }}", ctx) != outcome("{{ q" + tail + " }}", ctx)
         ]
         assert differ, "no filter distinguishes 42 from '42' — the sweep proves nothing"

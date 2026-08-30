@@ -209,6 +209,14 @@ impl ObjectKey {
             crate::Value::Float(f) => ObjectKey::Float(*f),
             crate::Value::Decimal(d) => ObjectKey::Decimal(d.clone()),
             crate::Value::BigInt(d) => ObjectKey::BigInt(d.clone()),
+            // The DISPLAY string, which is exactly the `ObjectKey::Str` this
+            // needle was before `Value::Encoded` existed (#2448) — a datetime
+            // used to reach here as `Value::String(str(o))`. A real datetime
+            // KEY lands on `ObjectKey::Other` via `py_object_key`, so
+            // `{% if dt in d %}` missed then and misses now; carrying the
+            // display keeps a match against a genuine `str()` key working, and
+            // changing either side is #2429's typed-key question, not this one.
+            crate::Value::Encoded(e) => ObjectKey::Str(e.display.clone()),
             crate::Value::Tuple(items) => ObjectKey::Tuple(
                 items
                     .iter()

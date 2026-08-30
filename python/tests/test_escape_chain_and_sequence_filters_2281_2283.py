@@ -436,26 +436,54 @@ class TestNonIterableFallThrough:
     #2285 added ``html_escape`` there because ``safeseq``/``unordered_list``
     hold an unconditional safe-output grant and were handing a hostile STRING
     back raw under it.  #2283 moved every markup-carrying value onto the
-    ITERATING side, so the branch is now reachable only by numbers, booleans,
+    ITERATING side, so the branch was reachable only by numbers, booleans,
     ``None`` and ``Decimal`` — none of which contain a character the escape
     changes.
 
-    The escape is kept: it is a no-op for every value reachable TODAY, and
-    load-bearing again the moment a non-iterable markup-carrying value exists.
-    ``every_non_iterable_variant_is_markup_free`` in
-    ``crates/djust_templates/src/filters.rs`` is the enum-side pin; this is the
-    behavioural one.
+    #2449 then put a refusal in FRONT of the iteration for all four filters, so
+    the branch is not reachable from a template at all: every shape that used to
+    fall through now raises CPython's own ``TypeError`` text, which is what
+    Django does.  The escape stays — a future ``Value`` variant that lands on
+    the non-iterating side must not ride ``unordered_list``'s unconditional
+    safe-output grant raw — and its markup-free property is pinned on the enum
+    side by ``every_non_iterable_variant_is_markup_free`` in
+    ``crates/djust_templates/src/filters.rs``, which is compiler-checked and so
+    cannot go stale the way a value list can.
+
+    What is asserted here is therefore the REFUSAL, which is the behaviour a
+    page author sees.
     """
+
+    #: The CPython message each filter's operation reaches, by value type.
+    #: ``random`` is ``len()`` first, so it is the odd one out — measured
+    #: against live Django, not transcribed.
+    _TYPE_NAMES = {
+        42: "int",
+        -1: "int",
+        1.5: "float",
+        True: "bool",
+        False: "bool",
+        None: "NoneType",
+    }
 
     @pytest.mark.parametrize("value", [42, -1, 1.5, True, False, None])
     @pytest.mark.parametrize("name", ["safeseq", "unordered_list", "escapeseq", "random"])
-    def test_the_reachable_non_iterables_carry_no_markup(self, name: str, value) -> None:
-        out = _rust.render_template("{{ p|%s }}" % name, normalize_django_value({"p": value}))
-        assert capabilities(out) == set(), out
-        assert "<" not in out and "&" not in out, (
-            f"{name} on {value!r} produced {out!r} — a non-iterable value now "
-            f"carries markup, so #2285's escape is load-bearing again"
+    def test_the_reachable_non_iterables_now_refuse_as_django_does(self, name: str, value) -> None:
+        src = "{{ p|%s }}" % name
+        tname = self._TYPE_NAMES[value]
+        expected = (
+            "object of type '%s' has no len()" % tname
+            if name == "random"
+            else "'%s' object is not iterable" % tname
         )
+        # Django's own text, read from Django rather than trusted from here.
+        with pytest.raises(TypeError) as django_exc:
+            DjangoTemplate(src).render(DjangoContext({"p": value}))
+        assert expected in str(django_exc.value), str(django_exc.value)
+
+        with pytest.raises(RuntimeError) as djust_exc:
+            _rust.render_template(src, normalize_django_value({"p": value}))
+        assert expected in str(djust_exc.value), str(djust_exc.value)
 
     def test_join_returns_a_non_iterable_untouched_as_django_does(self) -> None:
         """Django's ``except TypeError: return value``.

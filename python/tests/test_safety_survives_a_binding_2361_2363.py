@@ -392,6 +392,25 @@ class TestTheBindPathGrantsNothingTheEmitPathDoesNot:
         keys = _collect_safe_keys(value, "p")
         return _rust.render_template_with_dirs(tpl, {"p": value}, [], keys or None)
 
+    def _render_or_refusal(self, tpl: str, value) -> str:
+        """``_render``, but a REFUSAL is an outcome rather than a crash.
+
+        Since #2449 three of the minting filters (``unordered_list``,
+        ``safeseq``, ``escapeseq``) raise CPython's ``TypeError`` text for a
+        scalar, as Django does, and this sweep feeds them scalars.  A refusal
+        puts no page up at all, so it carries no markup — which is what the
+        containment below is about — but it must not abort the sweep before the
+        cells that DO render are checked.
+
+        Deliberately NOT folded into ``_render``: the other tests in this class
+        assert on rendered text, and a sentinel there would let a refusal pass
+        for a render.
+        """
+        try:
+            return self._render(tpl, value)
+        except RuntimeError:
+            return "<<REFUSED>>"
+
     def test_no_bind_emits_live_markup_its_emit_twin_does_not(self):
         exprs = [f"p|{f}" for f in self.SAFE_MINTING]
         exprs += [f'p|add:"1"|{f}' for f in self.SAFE_MINTING]
@@ -402,8 +421,10 @@ class TestTheBindPathGrantsNothingTheEmitPathDoesNot:
         offenders = []
         for expr in exprs:
             for name, value in self.SHAPES.items():
-                emit = self._render("[{{ %s }}]" % expr, value)
-                bind = self._render("{%% with q=%s %%}[{{ q }}]{%% endwith %%}" % expr, value)
+                emit = self._render_or_refusal("[{{ %s }}]" % expr, value)
+                bind = self._render_or_refusal(
+                    "{%% with q=%s %%}[{{ q }}]{%% endwith %%}" % expr, value
+                )
                 checked += 1
                 if self._live(bind) and not self._live(emit):
                     offenders.append((expr, name, emit, bind))
