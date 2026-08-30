@@ -568,10 +568,22 @@ class TestTheUnificationChangedNoForMessage:
 class TestTheResidueThisDoesNotTouch:
     """What is left in the bucket after this change, each pinned to its own class.
 
-    12 widthratio cells and 17 `{{ }}` cells survive, and not one of them is a
-    sequence filter reading its own value. Recorded rather than left as a
-    hopeful silence, because a residue nobody wrote down is indistinguishable
-    from a fix that did not work.
+    12 widthratio cells and 17 `{{ }}` cells survived #2451, and not one of
+    them is a sequence filter reading its own value. Recorded rather than left
+    as a hopeful silence, because a residue nobody wrote down is
+    indistinguishable from a fix that did not work.
+
+    **Two of the four are now settled**, each by the issue this class filed
+    for it, and each method below says which:
+
+    * `get_digit`'s return TYPE is **fixed** (#2459) — the surviving cells
+      were the chokepoint being handed a `str`, not the chokepoint being
+      wrong;
+    * the `Decimal` specials are a **decided divergence** (#2460) — djust
+      stays permissive where Django's `numberformat.format` crashes.
+
+    The other two stand: the `datetime` extraction boundary, and #2429's
+    `json_script` decision.
     """
 
     def test_get_digit_over_a_datetime_is_still_the_extraction_BOUNDARY(self) -> None:
@@ -623,29 +635,36 @@ class TestTheResidueThisDoesNotTouch:
         # split rather than a fix that half-landed.
         assert _rust.render_template("{{ p|first }}", normalize_django_value({"p": value})) == "2"
 
-    def test_the_survivors_are_get_digits_RETURN_TYPE_not_a_sequence_filter(self) -> None:
-        """15 of the 17 survivors, and the reason they are a different issue.
+    def test_the_survivors_were_get_digits_RETURN_TYPE_and_are_CLOSED(self) -> None:
+        """**Inverted by #2459**, as this test's first version said it should be.
 
-        Django's `get_digit` is `return int(str(value)[-arg])` — an `int` — and
-        djust answers a one-character STRING. A string iterates and subscripts,
-        so `{{ p|get_digit:"1"|escapeseq }}` renders here and refuses there.
-        The divergence is in the SUBJECT's type, not in the filter that
-        consumes it: fix `get_digit`'s return and these close with it. Filed
-        as #2459.
+        It read: *"the divergence is in the SUBJECT's type, not in the filter
+        that consumes it: fix `get_digit`'s return and these close with it"*.
+        They did. Django's `get_digit` is `return int(str(value)[-arg])` — an
+        `int`, and its docstring says *"output is always an integer"* — and
+        djust answered a one-character STRING, which iterates and subscripts
+        where an `int` does neither.
+
+        Kept rather than deleted, because the pair below is the whole claim in
+        two lines: the chokepoint this file is about was ALWAYS right, and the
+        subject it was handed was wrong. The full sweep lives in
+        `python/tests/test_get_digit_returns_an_int_2459.py`.
         """
         assert (
             DjangoTemplate('{{ p|get_digit:"1"|pprint }}').render(DjangoContext({"p": 42})) == "2"
         )
         assert (
             _rust.render_template('{{ p|get_digit:"1"|pprint }}', normalize_django_value({"p": 42}))
-            == "&#x27;2&#x27;"
+            == "2"
         )
-        # And the consequence, on one of the five chains.
+        # And the consequence: this file's own chokepoint now fires, with no
+        # change to it — it was being given a `str`.
         with pytest.raises(TypeError):
             DjangoTemplate('{{ p|get_digit:"1"|escapeseq }}').render(DjangoContext({"p": 42}))
-        assert _rust.render_template(
-            '{{ p|get_digit:"1"|escapeseq }}', normalize_django_value({"p": 42})
-        )
+        with pytest.raises(RuntimeError, match="'int' object is not iterable"):
+            _rust.render_template(
+                '{{ p|get_digit:"1"|escapeseq }}', normalize_django_value({"p": 42})
+            )
 
     @pytest.mark.parametrize("name", ["default", "default_if_none", "join", "slice"])
     def test_the_decimal_special_cells_are_the_bare_RENDER_not_the_filter(self, name: str) -> None:
@@ -658,6 +677,15 @@ class TestTheResidueThisDoesNotTouch:
         `numberformat.format`. The filter merely passes the value through to a
         render that was already going to refuse. Filed as #2460, as a DECISION
         issue in the shape of #2429 rather than a fix.
+
+        **Decided in #2460: djust stays permissive**, because Django's
+        behaviour here is a crash rather than a considered refusal — it renders
+        the FLOAT forms of the same values happily, the line that raises is a
+        >200-digit performance guard, and `"{:f}".format(Decimal("Infinity"))`
+        (the arm one line below it) computes exactly the text djust emits. The
+        argument and its four measured facts live in
+        `python/tests/test_decimal_special_render_decision_2460.py`; this stays
+        as the premise it always was, and remains true.
         """
         from decimal import Decimal
 

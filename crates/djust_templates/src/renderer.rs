@@ -1100,6 +1100,43 @@ fn localize_if_number(value: &Value) -> String {
         // renders `12.345.678.901.234.567.890`. It reached here as a `Float`
         // before #2260 and so was already being grouped, just from the wrong
         // digits.
+        //
+        // A NON-FINITE `Decimal` renders here where Django 5.2 raises, and
+        // that is a DECIDED divergence (#2460), not an oversight. Django's
+        // `numberformat.format` reaches
+        //
+        //     _, digits, exponent = number.as_tuple()
+        //     if abs(exponent) + len(digits) > 200:      # <- raises
+        //
+        // and `Decimal("Infinity").as_tuple().exponent` is the STRING `'F'`
+        // (`'n'` for NaN, `'N'` for sNaN), so `abs('F')` is an unhandled
+        // `TypeError: bad operand type for abs(): 'str'` and a bare
+        // `{{ p }}` 500s the page. Four measurements say it is Django's bug
+        // and not its policy, and all four are asserted in
+        // `python/tests/test_decimal_special_render_decision_2460.py`:
+        //
+        //   1. `float("inf")` renders `inf` in Django perfectly happily — the
+        //      same mathematical value, refused only on the `Decimal` branch;
+        //   2. the line that raises is a >200-DIGIT scientific-notation
+        //      cutoff, a performance guard, not a validity check;
+        //   3. `"{:f}".format(Decimal("Infinity"))` is `"Infinity"` — the
+        //      answer Django's own `else` arm computes one line below the
+        //      guard, and byte-identical to what djust emits here. djust is
+        //      not inventing a rendering; it is producing Django's;
+        //   4. Django itself puts those characters on the page one filter
+        //      over: `floatformat`, `stringformat:"s"`, `safe`, `escape`,
+        //      `force_escape`, `title` and `linebreaks` all render `Infinity`
+        //      for the same value.
+        //
+        // Matching the refusal would turn a rendered page into a 500 for a
+        // value an ordinary `DecimalField` aggregate can hold, in exchange for
+        // parity with a crash. Decided the way #2429 decided `json_script` —
+        // and more easily, since `json.dumps`' refusal there is at least a
+        // documented contract, where `abs('F')` is documented nowhere.
+        //
+        // `localize_plain` already passes these through untouched: its
+        // digits-and-a-point guard rejects `Infinity`/`NaN`, so no locale can
+        // put a thousand separator inside one.
         Value::Integer(_) | Value::Float(_) | Value::Decimal(_) | Value::BigInt(_) => {
             djust_core::locale::localize_number(&value.to_string())
         }
