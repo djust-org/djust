@@ -71,6 +71,7 @@ they share one ``python_type_name`` — which the ``{% for %}`` refusal arm in
 from __future__ import annotations
 
 import ast
+import datetime
 import re
 from pathlib import Path
 
@@ -576,20 +577,51 @@ class TestTheResidueThisDoesNotTouch:
     def test_get_digit_over_a_datetime_is_still_the_extraction_BOUNDARY(self) -> None:
         """The issue's own explicit exclusion, re-run rather than trusted.
 
-        A `datetime` is already a `Value::String` by the time any filter sees
-        it (the PyO3 extraction boundary), so `int(value)` reads a string and
-        answers ValueError — the one exception `get_digit`'s `except` catches
-        — while Django, holding the real object, gets a TypeError. Nothing
-        below that boundary can tell those apart, and this change does not
-        move the boundary.
+        The CELL is unchanged and its stated MECHANISM was wrong in two
+        different ways, so the docstring is rewritten rather than left to read
+        as true.
+
+        It said: *"a `datetime` is already a `Value::String` by the time any
+        filter sees it (the PyO3 extraction boundary)"*.
+
+        1. On the path this test actually takes — through
+           `normalize_django_value`, as every `outcome()` cell does — the
+           flattening happens in **Python**, one layer before the PyO3
+           boundary: the normalizer converts a `datetime` to its ISO string.
+           That was true when #2451 shipped too; the named mechanism was simply
+           the wrong one.
+        2. On the RAW path (`render_template(tpl, {"p": dt})`, which
+           `djust/template/backend.py` takes) the boundary really was where the
+           type died — until #2448 gave the family `Value::Encoded`.
+
+        What survives on BOTH paths is the OUTCOME, and for the same reason:
+        `get_digit`'s `int(value)` has only display text to read either way —
+        `Value::Encoded` carries `str()` and the encoder's JSON, no integer —
+        so it answers `ValueError`, the one exception its `except` catches,
+        while Django, holding the real object, gets a `TypeError`.
+
+        Both halves are asserted below, on the raw path as well as the
+        normalized one, because the difference between them is the whole
+        correction.
         """
         import datetime
 
         value = datetime.datetime(2020, 1, 1, 12, 0, 0)
         with pytest.raises(TypeError):
             DjangoTemplate('{{ p|get_digit:"1" }}').render(DjangoContext({"p": value}))
-        # djust renders, because it sees the string.
+        # Both paths render: `int()` has only text on either one.
         assert _rust.render_template('{{ p|get_digit:"1" }}', normalize_django_value({"p": value}))
+        assert _rust.render_template('{{ p|get_digit:"1" }}', {"p": value})
+        # …and on the RAW path the boundary now carries the type, which is the
+        # half of the old docstring that #2448 falsified. Without this the
+        # rewritten reason is prose again: the same value, one filter over,
+        # names the real Python type.
+        with pytest.raises(RuntimeError) as exc:
+            _rust.render_template("{{ p|first }}", {"p": value})
+        assert "datetime.datetime" in str(exc.value), str(exc.value)
+        # And the normalized path does NOT, which is what makes it a PATH
+        # split rather than a fix that half-landed.
+        assert _rust.render_template("{{ p|first }}", normalize_django_value({"p": value})) == "2"
 
     def test_the_survivors_are_get_digits_RETURN_TYPE_not_a_sequence_filter(self) -> None:
         """15 of the 17 survivors, and the reason they are a different issue.
@@ -755,3 +787,182 @@ def test_every_filter_that_iterates_or_subscripts_is_in_one_of_the_three_lists()
     assert raising["phone2numeric"] == {"AttributeError"}
     for name in ITERATORS:
         assert raising[name] == {"TypeError"}, (name, raising[name])
+
+
+# ---------------------------------------------------------------------------
+# Two axes the differential's INPUTS corpus cannot reach (#2448 merge)
+# ---------------------------------------------------------------------------
+
+
+class TestTheDatetimeFamilyReachesTheChokepointWithItsRealTypeName:
+    """The seven, over the four `datetime` types — reachable only since #2448.
+
+    Before that variant these crossed the PyO3 boundary as
+    `Value::String(str(o))`, so every one of the seven treated a `datetime` as
+    a STRING: `{{ dt|first }}` answered `'2'` and `{{ dt|unordered_list }}`
+    emitted one `<li>` per character. The chokepoint was already correct; it
+    was being handed the wrong value.
+
+    **Which path, and why it matters.** djust has TWO ways into the renderer
+    and they hand it different things:
+
+    * `render_template(tpl, raw_dict)` — the raw PyO3 conversion, which is what
+      `djust/template/backend.py` (a plain Django view rendering through
+      `DjustTemplateBackend`) takes. The Python object crosses intact, and this
+      is the path `Value::Encoded` exists for.
+    * the LiveView path, which runs the context through
+      `djust.serialization.normalize_django_value` first — and that converts a
+      `datetime` to an ISO **string** in Python, so Rust never sees a datetime
+      at all.
+
+    These cases use the RAW dict deliberately. Routing them through
+    `outcome()`, which normalizes, silently tested the second path and reported
+    the first as broken — the reproduction-fidelity failure (#1650) caught by
+    28 red cells on the first run of this class. The normalized path's own
+    residue is pinned in `TestTheLiveViewPathNormalizesBeforeRustSeesIt`.
+
+    The corpus this file reads from `scripts/filter-parity-differential.py`
+    carries no `datetime` — `INPUTS` is about escaping shapes — so these cells
+    are invisible to `TestTheReferenceTableIsRunNotTranscribed` above.
+    """
+
+    FAMILY = {
+        "datetime": datetime.datetime(2020, 1, 1, 3, 4, 5),
+        "date": datetime.date(2020, 1, 1),
+        "time": datetime.time(3, 4, 5),
+        "timedelta": datetime.timedelta(seconds=90),
+    }
+
+    @staticmethod
+    def _raw_outcome(source: str, value) -> str:
+        """`outcome()`'s djust half, WITHOUT the normalizer — see the docstring."""
+        try:
+            return _rust.render_template(source, {"p": value})
+        except Exception as exc:  # noqa: BLE001 — the refusal IS the answer
+            found = re.search(r"raises (\w+Error)", str(exc))
+            return f"<<{found.group(1)}>>" if found else f"<<{type(exc).__name__}>>"
+
+    @pytest.mark.parametrize("shape", sorted(FAMILY))
+    @pytest.mark.parametrize("name", ALL_SEVEN)
+    def test_both_engines_refuse_with_the_same_exception_class(self, name: str, shape: str) -> None:
+        value = self.FAMILY[shape]
+        source = "{{ p|%s }}" % name
+        dj = outcome(source, value, "django")
+        du = self._raw_outcome(source, value)
+        assert dj.startswith("<<"), f"Django moved for {shape}/{name}: {dj!r}"
+        assert du == dj, f"{shape}/{name}: django={dj} djust={du}"
+
+    @pytest.mark.parametrize("shape", sorted(FAMILY))
+    def test_the_message_names_the_real_python_type(self, shape: str) -> None:
+        """Not merely "both refuse": CPython's own `tp_name`.
+
+        `datetime.datetime`, not `datetime` and not `str` — which is what it
+        said before #2448, because the value really was a string by then.
+        """
+        value = self.FAMILY[shape]
+        expected = "datetime.%s" % shape
+        with pytest.raises(TypeError) as django_exc:
+            DjangoTemplate("{{ p|first }}").render(DjangoContext({"p": value}))
+        assert expected in str(django_exc.value), str(django_exc.value)
+        with pytest.raises(RuntimeError) as djust_exc:
+            _rust.render_template("{{ p|first }}", {"p": value})
+        assert expected in str(djust_exc.value), str(djust_exc.value)
+
+    def test_the_string_that_looks_like_one_is_still_a_string(self) -> None:
+        """The non-vacuity half, and the reason the fix had to be at the
+        conversion rather than in a filter.
+
+        `"2020-01-01 03:04:05"` is a `str` and subscripts fine on both engines.
+        Nothing downstream of the boundary can tell it from a `datetime`'s
+        display text — which is exactly why the type has to survive the
+        crossing rather than be re-derived.
+        """
+        text = str(self.FAMILY["datetime"])
+        source = "{{ p|first }}"
+        assert outcome(source, text, "django") == self._raw_outcome(source, text) == "2"
+
+
+class TestTheLiveViewPathNormalizesBeforeRustSeesIt:
+    """The other path, pinned rather than left as a surprise (#2448 merge).
+
+    `normalize_django_value` converts a `datetime` to an ISO string in PYTHON,
+    so on the LiveView path the type is gone before `Value::Encoded` can carry
+    it and the seven filters see a `str` — which subscripts and iterates.
+
+    This is NOT closed by #2448 and is not claimed to be: the Rust variant
+    cannot see a value the Python pre-pass already flattened. Recorded here
+    because a residue nobody wrote down is indistinguishable from a fix that
+    did not work, and because the two paths disagreeing about the same template
+    is the shape worth knowing about.
+    """
+
+    VALUE = datetime.datetime(2020, 1, 1, 3, 4, 5)
+
+    def test_the_normalizer_flattens_the_type_in_python(self) -> None:
+        flattened = normalize_django_value({"p": self.VALUE})["p"]
+        assert isinstance(flattened, str), type(flattened)
+        assert flattened == "2020-01-01T03:04:05"
+
+    @pytest.mark.parametrize("name", SUBSCRIPTERS + ITERATORS)
+    def test_so_the_seven_see_a_string_and_do_not_refuse(self, name: str) -> None:
+        source = "{{ p|%s }}" % name
+        # Django, holding the real object, refuses.
+        assert outcome(source, self.VALUE, "django").startswith("<<")
+        # djust on the NORMALIZED path renders, because it has a string.
+        assert not outcome(source, self.VALUE, "djust").startswith("<<")
+
+    def test_and_the_raw_path_refuses_which_is_what_makes_this_a_PATH_split(
+        self,
+    ) -> None:
+        """Non-vacuity: the same value, same template, two answers.
+
+        Without this the class above reads as "djust does not refuse a
+        datetime", which is false of the path #2448 fixed.
+        """
+        source = "{{ p|first }}"
+        assert not outcome(source, self.VALUE, "djust").startswith("<<")
+        with pytest.raises(RuntimeError):
+            _rust.render_template(source, {"p": self.VALUE})
+
+
+class TestAnAbsentVariableIsStringIfInvalidOnEveryOneOfTheSeven:
+    """`{{ nope|first }}` — the shape a refusal-flavoured fix gets wrong.
+
+    Django substitutes `string_if_invalid`, which is `""`: a `str` with length
+    0 that subscripts to an `IndexError`. So all seven RENDER, and refusing on
+    any of them breaks templates Django serves.
+
+    `TestTheReferenceTableIsRunNotTranscribed` cannot see this: it binds a
+    value for `p` on every cell, and it skips `NONDET`. Both exclusions applied
+    to the same filter, which is how `{{ nope|random }}` came to refuse with
+    `'str' object is not subscriptable` — a message that is false of every
+    `str` — while every other cell agreed. The cause was `python_len`
+    answering `None` for a `Value::Missing` where `python_type_name` and
+    `python_getitem` both modelled `""`; see
+    `python_len_agrees_with_the_other_two_probes_about_missing` in
+    `crates/djust_templates/src/filters.rs` for the probe-level pin.
+
+    `random` is NOT skipped here — over an absent variable there is nothing to
+    draw from, so the answer is deterministic.
+    """
+
+    @pytest.mark.parametrize("name", ALL_SEVEN)
+    def test_it_renders_on_both_engines(self, name: str) -> None:
+        source = "{{ nope|%s }}" % name
+        django_out = DjangoTemplate(source).render(DjangoContext({}))
+        djust_out = _rust.render_template(source, {})
+        assert not django_out.startswith("<<"), django_out
+        assert djust_out == django_out, f"{name}: django={django_out!r} djust={djust_out!r}"
+
+    @pytest.mark.parametrize("name", ALL_SEVEN)
+    def test_it_answers_exactly_what_the_empty_string_answers(self, name: str) -> None:
+        """The claim stated as an equality rather than as a literal.
+
+        A `Missing` IS `""` to Django, so every one of the seven must give the
+        same answer for both. Pinning literals instead would let the two drift
+        apart while each stayed individually plausible.
+        """
+        source = "{{ p|%s }}" % name
+        absent = _rust.render_template("{{ nope|%s }}" % name, {})
+        empty = _rust.render_template(source, normalize_django_value({"p": ""}))
+        assert absent == empty, f"{name}: absent={absent!r} empty-string={empty!r}"

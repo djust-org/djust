@@ -1585,10 +1585,20 @@ ARG_SPELLINGS = [
     # reason it has reported clean over every other gap: it built no cell that
     # could reach it.
     #
-    # The `dt` row is the counter-example that makes the axis honest: a
-    # `datetime` is `Value::String` by the time any filter sees it, so it
-    # measures the EXTRACTION-boundary residue rather than the dispatch table,
-    # and it must keep diverging where the other three now agree.
+    # The `dt` row WAS the counter-example that made the axis honest: a
+    # `datetime` was `Value::String` by the time any filter saw it, so it
+    # measured the EXTRACTION-boundary residue rather than the dispatch table,
+    # and it kept diverging where the other three agreed.
+    #
+    # #2448 closed that residue for the datetime family — `Value::Encoded`
+    # carries the type across the conversion — so this row now REFUSES on both
+    # engines like the other three, and the 177 cells it owns are part of that
+    # fix's moved set. It is kept because a closed residue that leaves no cell
+    # behind is a residue nobody would notice reopening. The counter-example
+    # role now belongs to a `set`, which still crosses as its `str()`: see
+    # `STRINGIFIED_AT_EXTRACTION` in
+    # `python/tests/test_int_argument_type_2366.py`, which this row's
+    # membership must stay consistent with.
     "known_list",
     "known_tuple",
     "known_dict",

@@ -59,6 +59,29 @@ pub(crate) const BIGINT_TAG: &str = "__djust_bigint__";
 /// an array, and only the binary arm needs the tag.
 pub(crate) const TUPLE_TAG: &str = "__djust_tuple__";
 
+/// Marks a [`Value::Encoded`] in a BINARY encoding (#2448).
+///
+/// Fourth instance of the mechanism [`DECIMAL_TAG`] documents, and it exists for
+/// the same measured reason: `SerializableViewState.state` round-trips through
+/// msgpack on EVERY read of the default `InMemoryStateBackend`, so an untagged
+/// `Encoded` would come back as a `Value::String` holding the DISPLAY spelling
+/// and `{{ p|json_script:"d" }}` would emit `"2020-01-01 03:04:05"` again after
+/// one cache hit — the exact defect the variant closes, reopened by the state
+/// backend. The `Decimal` version of this was shipped once and caught by a
+/// gate-off (#2135); it is not being shipped twice.
+///
+/// The payload is a THREE-element list, not a string, which is also what keeps
+/// it from colliding with [`DECIMAL_TAG`] / [`BIGINT_TAG`] (string payloads)
+/// and [`TUPLE_TAG`] (a list, but under a different key).
+pub(crate) const ENCODED_TAG: &str = "__djust_encoded__";
+
+/// The [`ENCODED_TAG`] value, for tests outside the crate. `#[doc(hidden)]`, not
+/// API — same rationale as [`decimal_tag`].
+#[doc(hidden)]
+pub fn encoded_tag() -> &'static str {
+    ENCODED_TAG
+}
+
 /// The [`TUPLE_TAG`] value, for tests outside the crate. `#[doc(hidden)]`, not API.
 #[doc(hidden)]
 pub fn tuple_tag() -> &'static str {
@@ -224,6 +247,67 @@ pub enum Value {
     /// had when this value simply WAS a float. What changes is that the digits
     /// survive rendering and transport.
     BigInt(String),
+    /// A Python value whose `DjangoJSONEncoder` spelling is NOT its `str()`
+    /// (#2448) — today, the four `datetime` types.
+    ///
+    /// `django.utils.html.json_script` is `json.dumps(value, cls=DjangoJSONEncoder)`,
+    /// and that encoder's `default()` is not `str()`. Measured against live
+    /// Django rather than transcribed:
+    ///
+    /// | value                          | `str()`                  | encoder                 |
+    /// |--------------------------------|--------------------------|-------------------------|
+    /// | `datetime(2020,1,1,3,4,5)`     | `2020-01-01 03:04:05`    | `2020-01-01T03:04:05`   |
+    /// | `datetime(…, µs=123456)`       | `…03:04:05.123456`       | `…03:04:05.123`         |
+    /// | `datetime(…, tzinfo=utc)`      | `…03:04:05+00:00`        | `…03:04:05Z`            |
+    /// | `time(3,4,5,123456)`           | `03:04:05.123456`        | `03:04:05.123`          |
+    /// | `timedelta(seconds=90)`        | `0:01:30`                | `P0DT00H01M30S`         |
+    /// | `timedelta(seconds=-90)`       | `-1 day, 23:58:30`       | `-P0DT00H01M30S`        |
+    ///
+    /// The issue reporting this tabulated `time` as AGREEING. It agrees only at
+    /// `microsecond == 0`, which is the band the report sampled — the same
+    /// coincidence-in-the-sampled-band shape as #2425's float keys, one axis
+    /// over. `date` is the only member that agrees for every value, and it is
+    /// carried here anyway so the family is a type SET rather than a list of
+    /// the members that happened to diverge.
+    ///
+    /// **Why a variant and not a fix in the filter.** `FromPyObject for Value`
+    /// used to land a `datetime` on its final `Ok(Value::String(ob.str()?))`
+    /// fallback, so by the time `json_script` ran the value was a string
+    /// carrying the TEMPLATE DISPLAY spelling and the Python type was gone.
+    /// That erasure is what makes #2429's refusal question undecidable in the
+    /// value position — for every value `json.dumps` refuses, djust's output is
+    /// byte-identical to its output for a serialisable stand-in. It does NOT
+    /// block this one: the type is plainly visible at the conversion, which is
+    /// where the `Decimal` arm above already reads it, so the fix is to stop
+    /// discarding it rather than to reconstruct it downstream.
+    ///
+    /// **Both spellings, because both are needed.** `display` is `str(o)` and is
+    /// what `{{ p }}` renders — unchanged by this variant, deliberately: djust's
+    /// bare-render spelling of a datetime already diverges from Django's
+    /// (Django localizes, `Jan. 1, 2020, 3:04 a.m.`), and moving it here would
+    /// be a second, unrelated behaviour change riding a JSON fix.
+    ///
+    /// `type_name` is CPython's `tp_name` — what it writes into
+    /// `'X' object is not iterable` — measured, not derived: it is
+    /// `datetime.datetime` (a C type carries its dotted name) where
+    /// `type(o).__name__` would say `datetime` and `uuid.UUID`'s is the bare
+    /// `UUID`. It is what lets the refusal filters (#2449) name the type.
+    Encoded(Box<Encoded>),
+}
+
+/// The payload of [`Value::Encoded`] (#2448). Boxed there to keep `Value`'s
+/// size unchanged — a `Value` is cloned per context entry per render.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Encoded {
+    /// CPython's `tp_name` for the type, as it appears in a `TypeError`
+    /// message: `datetime.datetime`, `datetime.date`, `datetime.time`,
+    /// `datetime.timedelta`.
+    pub type_name: String,
+    /// `str(o)` — what `{{ p }}` renders, and what this value looked like
+    /// before the variant existed.
+    pub display: String,
+    /// `DjangoJSONEncoder.default(o)` — the string `json.dumps` writes.
+    pub json: String,
 }
 
 /// Untagged in human-readable formats, with ONE exception (#2214).
@@ -278,6 +362,26 @@ impl Serialize for Value {
                 m.serialize_entry(BIGINT_TAG, d)?;
                 m.end()
             }
+            // An `Encoded` takes the same two-format split, for the reason
+            // `ENCODED_TAG` documents: untagged, a state round trip through
+            // msgpack turns it back into the display string and reopens #2448.
+            // The payload is `[type_name, display, json]` — a LIST, which is
+            // what keeps the tag from colliding with the two string-payload
+            // tags above.
+            Value::Encoded(e) if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(
+                    ENCODED_TAG,
+                    &[e.type_name.as_str(), e.display.as_str(), e.json.as_str()],
+                )?;
+                m.end()
+            }
+            // The JSON half is the DISPLAY string, as `Decimal`'s is its digits:
+            // this arm is reached only through `serialization::to_json`, and a
+            // bare string is what `from_json` can read back without a tag. The
+            // client-facing JSON is `json_script`'s own `value_to_json`, which
+            // has its own `Encoded` arm and writes the ENCODER spelling there.
+            Value::Encoded(e) => serializer.serialize_str(&e.display),
             // Everything else is exactly the untagged derive it replaces.
             Value::Decimal(d) => serializer.serialize_str(d),
             Value::BigInt(d) => serializer.serialize_str(d),
@@ -422,6 +526,21 @@ impl<'de> Deserialize<'de> for Value {
                     if let Some(Value::List(items)) = obj.get(TUPLE_TAG) {
                         return Ok(Value::Tuple(items.clone()));
                     }
+                    // The binary-format `Encoded` tag (#2448). A list payload
+                    // like the tuple's, but of EXACTLY three strings — anything
+                    // else is a real dict and falls through, so a user dict
+                    // under this key cannot forge one.
+                    if let Some(Value::List(parts)) = obj.get(ENCODED_TAG) {
+                        if let [Value::String(type_name), Value::String(display), Value::String(json)] =
+                            parts.as_slice()
+                        {
+                            return Ok(Value::Encoded(Box::new(Encoded {
+                                type_name: type_name.clone(),
+                                display: display.clone(),
+                                json: json.clone(),
+                            })));
+                        }
+                    }
                 }
                 Ok(Value::Object(obj))
             }
@@ -458,6 +577,120 @@ pub fn is_decimal(ob: &Bound<'_, PyAny>) -> bool {
         return false;
     };
     ob.is_instance(cls.bind(py)).unwrap_or(false)
+}
+
+/// The four `datetime` types and a live `DjangoJSONEncoder`, resolved once per
+/// interpreter (#2448).
+struct JsonEncoderTypes {
+    /// `(datetime, date, time, timedelta)`, for ONE `isinstance` on the
+    /// negative path — which is the path almost every value takes.
+    any: Py<PyAny>,
+    datetime: Py<PyAny>,
+    date: Py<PyAny>,
+    time: Py<PyAny>,
+    timedelta: Py<PyAny>,
+    /// A `DjangoJSONEncoder()` INSTANCE. The encoder is called rather than
+    /// re-implemented: `default()` is the sink this defect is about, and a hand
+    /// port would have to reproduce the microsecond truncation, the `+00:00`
+    /// to `Z` rewrite and `duration_iso_string`'s negative-delta normalisation
+    /// — three transcriptions, each of which the issue's own table got at least
+    /// partly wrong.
+    encoder: Py<PyAny>,
+}
+
+/// `DjangoJSONEncoder`'s spelling of a `datetime` / `date` / `time` /
+/// `timedelta`, or `None` if this is not one of them (#2448).
+///
+/// Fails CLOSED, like [`is_decimal`] and [`big_int_digits`]: on any error the
+/// answer is `None` and the value takes its previous path — the final
+/// `Value::String(str(o))` fallback — so a missing or unconfigured Django, or
+/// an encoder that raises, restores the pre-#2448 behaviour exactly rather than
+/// breaking a render.
+///
+/// The one shape that reaches the raising case in practice is a TIMEZONE-AWARE
+/// `datetime.time`, for which `default()` raises
+/// `ValueError: JSON can't represent timezone-aware times.` — Django's
+/// `json_script` propagates that as a 500 and djust keeps emitting the `str()`.
+/// That is the refusal direction #2429 declined, unchanged here; it is NOT the
+/// emitting divergence this function closes.
+pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
+    static TYPES: pyo3::sync::PyOnceLock<Option<JsonEncoderTypes>> = pyo3::sync::PyOnceLock::new();
+    let py = ob.py();
+    let types = TYPES
+        .get_or_init(py, || {
+            let dt_mod = py.import("datetime").ok()?;
+            let datetime = dt_mod.getattr("datetime").ok()?;
+            let date = dt_mod.getattr("date").ok()?;
+            let time = dt_mod.getattr("time").ok()?;
+            let timedelta = dt_mod.getattr("timedelta").ok()?;
+            let any = pyo3::types::PyTuple::new(py, [&datetime, &date, &time, &timedelta]).ok()?;
+            let encoder = py
+                .import("django.core.serializers.json")
+                .ok()?
+                .getattr("DjangoJSONEncoder")
+                .ok()?
+                .call0()
+                .ok()?;
+            Some(JsonEncoderTypes {
+                any: any.into_any().unbind(),
+                datetime: datetime.unbind(),
+                date: date.unbind(),
+                time: time.unbind(),
+                timedelta: timedelta.unbind(),
+                encoder: encoder.unbind(),
+            })
+        })
+        .as_ref()?;
+
+    // The cheap negative: one `PyObject_IsInstance` against the 4-tuple.
+    if !ob.is_instance(types.any.bind(py)).unwrap_or(false) {
+        return None;
+    }
+
+    // `datetime` BEFORE `date`, because `datetime` IS a `date` subclass — the
+    // same ordering `DjangoJSONEncoder.default` itself uses, and getting it
+    // backwards would spell every datetime as a bare `2020-01-01`.
+    let (cls, tp_name) = [
+        (&types.datetime, "datetime.datetime"),
+        (&types.date, "datetime.date"),
+        (&types.time, "datetime.time"),
+        (&types.timedelta, "datetime.timedelta"),
+    ]
+    .into_iter()
+    .find(|(cls, _)| ob.is_instance(cls.bind(py)).unwrap_or(false))?;
+
+    let display = ob.str().ok()?.extract::<String>().ok()?;
+    let json = types
+        .encoder
+        .bind(py)
+        .call_method1("default", (ob,))
+        .ok()?
+        .extract::<String>()
+        .ok()?;
+
+    // CPython's `tp_name`, measured rather than derived (see [`Value::Encoded`]):
+    // a static C type carries its DOTTED name into a `TypeError`
+    // (`'datetime.datetime' object is not subscriptable`) while a Python-level
+    // SUBCLASS carries the bare `__name__` (`'MyDT' object is not …`). So the
+    // builtin names are literals reached by an identity check, and only a
+    // subclass asks Python.
+    //
+    // `__name__`, NOT `__qualname__`: a heap type's `tp_name` is the name it
+    // was created with, so a class defined inside a function is `MyDT` where
+    // its `__qualname__` is `outer.<locals>.MyDT`. Caught by running CPython
+    // against a nested subclass rather than by reading the docs.
+    let ty = ob.get_type();
+    let type_name = if ty.is(cls.bind(py)) {
+        tp_name.to_string()
+    } else {
+        ty.getattr("__name__").ok()?.extract::<String>().ok()?
+    };
+
+    Some(Encoded {
+        type_name,
+        display,
+        json,
+    })
 }
 
 /// The exact decimal digits of a Python `int`, or `None` if this is not one
@@ -621,6 +854,14 @@ impl Value {
             // gives `inf` for a 400-digit value.
             Value::BigInt(d) => d.bytes().any(|b| b.is_ascii_digit() && b != b'0'),
             Value::String(s) => !s.is_empty(),
+            // The DISPLAY string's emptiness — i.e. always true, since `str()`
+            // of any of the four datetime types is non-empty. Deliberately the
+            // pre-#2448 answer and not Python's: `bool(timedelta(0))` is False
+            // there, and it was True here when a `timedelta` was a
+            // `Value::String("0:00:00")`. Fixing that is a truthiness change
+            // this JSON-spelling fix has no business making silently; it is
+            // filed as #2458 rather than folded in.
+            Value::Encoded(e) => !e.display.is_empty(),
             Value::List(l) => !l.is_empty(),
             Value::Tuple(t) => !t.is_empty(),
             Value::Object(o) => !o.is_empty(),
@@ -963,6 +1204,11 @@ impl Value {
             Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
             Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
+            // The DISPLAY spelling on both display paths — an `Encoded` is
+            // exactly the `Value::String(str(o))` this used to be, plus the two
+            // fields nothing outside `json_script` and the refusal filters
+            // reads (#2448).
+            Value::Encoded(e) => write!(f, "{}", e.display),
             // A dict VIEW joins the `[List]` placeholder rather than naming
             // itself (#2340), and that is deliberate: this arm is the
             // pre-#2203 rendering, and before #2340 a view WAS a
@@ -1041,6 +1287,9 @@ impl fmt::Display for Value {
             // either rule, and its non-grouping path is `str(number)` (#2260).
             Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) => write!(f, "{s}"),
+            // See the `legacy_display` arm: the display spelling is `str(o)`
+            // on both paths, and only `json_script` reads the other one.
+            Value::Encoded(e) => write!(f, "{}", e.display),
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
                 write!(f, "[{}]", inner.join(", "))
@@ -1204,6 +1453,22 @@ impl<'py> FromPyObject<'_, 'py> for Value {
         }) {
             Ok(Value::Object(map))
         } else {
+            // #2448: one of the four `datetime` types, whose
+            // `DjangoJSONEncoder` spelling is not its `str()`.
+            //
+            // Placed HERE, in the fallback block, and not up with the `Decimal`
+            // arm — which is where it reads more naturally and would have cost
+            // every string in every context four `isinstance` calls. None of
+            // the four extracts as an `f64`, a `String`, a tuple, a list or a
+            // dict, so reaching this block loses nothing: before this arm
+            // existed they fell all the way through to the final
+            // `Ok(Value::String(ob.str()?))` at the bottom of it and arrived at
+            // `json_script` already spelled wrong. The same measurement that
+            // put `is_decimal` behind a cached type object (#2240 review) is
+            // why this one is a single tuple-`isinstance` on the negative path.
+            if let Some(encoded) = django_json_encoded(&ob.to_owned()) {
+                return Ok(Value::Encoded(Box::new(encoded)));
+            }
             // #1986: a djust sidecar proxy exposes `__djust_serialize__()`,
             // returning a DENYLIST-FILTERED dict (via the same eager serializer
             // the rest of djust uses). Route through it FIRST — otherwise the
@@ -1301,6 +1566,15 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::Integer(i) => Ok(i.into_pyobject(py)?.to_owned().into_any()),
             Value::Float(f) => Ok(f.into_pyobject(py)?.to_owned().into_any()),
             Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any()),
+            // Back as the DISPLAY string, NOT as a rebuilt `datetime` — which
+            // is what a `datetime` in view state has always come back as, since
+            // it used to BE a `Value::String(str(o))` (#2448). Rebuilding the
+            // object is what the `Decimal` and `BigInt` arms below do, and it is
+            // right there because a type change would break `isinstance`
+            // downstream; here there is no type to change back TO, because
+            // there was none before this variant either. Widening the round
+            // trip is a separate behaviour change, filed as #2458 rather than folded in.
+            Value::Encoded(e) => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
             // Back to a real `decimal.Decimal`, not a str: a value that made
             // the round-trip as a Decimal must come back as one, or handlers
             // reading it from the context see their type change under them.

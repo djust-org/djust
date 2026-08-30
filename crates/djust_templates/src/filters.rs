@@ -242,9 +242,26 @@ pub fn python_len(value: &Value) -> Option<usize> {
                 Some(o.len())
             }
         }
-        // `Missing` included: it is an ABSENT key, and `len()` of the thing
-        // that was not there is not a number. `|length` still answers 0 via its
-        // own fallback, as it did when this arm was `_ => 0`.
+        // `Missing` is `string_if_invalid`, which is `""` — so `len()` is 0.
+        //
+        // This arm answered `None` ("`len()` of the thing that was not there is
+        // not a number") until #2448's merge, and that reasoning is about
+        // ABSENCE where the other two probes are about the STRING Django
+        // substitutes: [`python_type_name`] answers `str` for a `Missing` and
+        // [`python_getitem`] answers `Ok(None)` because `""[0]` is an
+        // `IndexError`. Three probes, one question, and this one had a
+        // different model of what a `Missing` IS (#1646).
+        //
+        // Observable through `random`, the one caller that distinguishes
+        // `None` from `Some(0)`: `{{ nope|random }}` refused with
+        // `'str' object is not subscriptable` — a message that is false of
+        // every `str`, which is what a self-contradicting answer looks like
+        // from the outside — where Django renders `""`. Stricter than Django,
+        // on the most ordinary shape a template has.
+        //
+        // `|length` is unaffected: it answered 0 through its own
+        // `unwrap_or(0)` fallback and now answers 0 through this arm.
+        Value::Missing => Some(0),
         _ => None,
     }
 }
@@ -4667,6 +4684,22 @@ fn value_to_json(value: &Value) -> String {
         Value::BigInt(d) => format!("\"{}\"", json_string_body(d)),
         Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
         Value::String(s) => format!("\"{}\"", json_string_body(s)),
+        // THE #2448 fix, and the only place in the engine that reads the
+        // encoder spelling. `DjangoJSONEncoder.default` is not `str()`: it is
+        // `isoformat()` with the microseconds truncated to milliseconds and a
+        // trailing `+00:00` rewritten to `Z` for a `datetime`, and
+        // `duration_iso_string` for a `timedelta`. This arm used to be the
+        // `String` one above, holding the TEMPLATE DISPLAY spelling, so
+        // `{{ p|json_script:"d" }}` put `"2020-01-01 03:04:05"` and `"0:01:30"`
+        // on the wire where Django puts `"2020-01-01T03:04:05"` and
+        // `"P0DT00H01M30S"` — not parseable by `Date.parse` and not an ISO-8601
+        // duration, so a live wire-format divergence rather than a cosmetic one.
+        //
+        // Through the SAME `json_string_body` as every other string arm: the
+        // payload is Django's, but a `Value::Encoded` can be deserialized
+        // holding an arbitrary string (its binary tag's payload is unvalidated),
+        // for exactly the reason the `Decimal` arm above documents.
+        Value::Encoded(e) => format!("\"{}\"", json_string_body(&e.json)),
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
         Value::List(items) | Value::Tuple(items) => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();
@@ -4819,23 +4852,25 @@ mod value_to_json_structure {
         n
     }
 
-    /// Four quoted-string sites — the `BigInt` fallback, `Decimal`, `String`, the
-    /// object key — one helper.
+    /// Five quoted-string sites — the `BigInt` fallback, `Decimal`, `String`,
+    /// `Encoded`, the object key — one helper.
     ///
     /// The partial chain #2241 fixed survived a convergence that had already NAMED
     /// the gap. A comment naming a gap does not close it; a count that goes red when
-    /// another chain appears does (#1646/#1859) — and it did exactly that when
-    /// #2260 added the `BigInt` arm, whose non-digit fallback is a quoted string
-    /// for the same unvalidated-tag-payload reason `Decimal`'s is.
+    /// another chain appears does (#1646/#1859) — and it did exactly that TWICE:
+    /// when #2260 added the `BigInt` arm, whose non-digit fallback is a quoted
+    /// string for the same unvalidated-tag-payload reason `Decimal`'s is, and
+    /// again when #2448 added the `Encoded` arm, whose payload is unvalidated for
+    /// that same reason.
     #[test]
     fn value_to_json_escapes_every_string_through_the_one_helper() {
         let body = body_tokens();
         let n = count_ident(&body, "json_string_body");
         assert_eq!(
-            n, 4,
-            "value_to_json should escape exactly its four quoted-string sites \
-             (the BigInt fallback, Decimal, String, the object key) through \
-             json_string_body; found {n}"
+            n, 5,
+            "value_to_json should escape exactly its five quoted-string sites \
+             (the BigInt fallback, Decimal, String, Encoded, the object key) \
+             through json_string_body; found {n}"
         );
     }
 
@@ -4879,7 +4914,7 @@ mod value_to_json_structure {
                 count_ident(&real, "json_string_body"),
                 count_ident(&real, "replace")
             ),
-            (4, 0),
+            (5, 0),
             "baseline drifted"
         );
 
@@ -4924,7 +4959,7 @@ mod value_to_json_structure {
         let real = body_tokens();
         assert_eq!(
             count_ident(&real, "json_string_body"),
-            4,
+            5,
             "baseline drifted"
         );
 
@@ -5819,7 +5854,14 @@ fn pluralize(value: &Value, arg: &str) -> String {
         Value::Object(map) => return pick(map.len() == 1),
         // `None` and an absent variable have neither a `float()` nor a
         // `len()`. Django's final `return ""`.
-        Value::None | Value::Missing => {}
+        //
+        // Nor does a `datetime` / `date` / `time` / `timedelta` (#2448):
+        // `float(o)` raises `TypeError`, so does `len(o)`, and Django's final
+        // `return ""` is reached. Same answer the `String` arm above gave when
+        // these values were `Value::String(str(o))` — none of the four `str()`
+        // forms parses as a float — so this arm is Django's reasoning, not a
+        // behaviour change.
+        Value::None | Value::Missing | Value::Encoded(_) => {}
     }
     String::new()
 }
@@ -6022,6 +6064,19 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
             }
         }
         Value::DictView { kind, .. } => kind.container_name(),
+        // The name measured AT THE CONVERSION and carried across (#2448), not
+        // derived here — and it is the one arm of this function that could not
+        // be a literal. CPython's `tp_name` for a static C type is its DOTTED
+        // name (`datetime.datetime`) and for a Python-level SUBCLASS it is the
+        // bare `__name__` (`MyMoment`, even when its `__qualname__` says
+        // `outer.<locals>.MyMoment`), so the answer depends on the object and
+        // not on the variant. `django_json_encoded` reads it once, per value.
+        //
+        // Before that variant existed these four types reached the renderer as
+        // `Value::String(str(o))`, so this function answered `str` for them and
+        // `{% for x in dt %}` iterated the display text character by character
+        // rather than raising.
+        Value::Encoded(e) => &e.type_name,
     }
 }
 
@@ -6763,10 +6818,15 @@ mod tests {
 
     /// The two fallbacks are the call sites' own — `|length` says 0, the
     /// unpack arm says 1, and `python_len` says neither.
+    ///
+    /// `Value::Missing` LEFT this list in #2448's merge: it is
+    /// `string_if_invalid`, which is `""`, and `len("")` is 0 rather than a
+    /// raise. See the arm's own comment and
+    /// `python_len_agrees_with_the_other_two_probes_about_missing` below for
+    /// the divergence that made the old answer observable.
     #[test]
     fn python_len_answers_none_where_python_raises() {
         for value in [
-            Value::Missing,
             Value::None,
             Value::Bool(true),
             Value::Integer(7),
@@ -6783,6 +6843,36 @@ mod tests {
         }
         // Code points, not bytes (#2279): "中é" is 5 bytes.
         assert_eq!(python_len(&Value::String("中é".to_string())), Some(2));
+    }
+
+    /// The three probes must agree about what a `Value::Missing` IS.
+    ///
+    /// It is Django's `string_if_invalid` — `""` — so: it has type `str`, it
+    /// has length 0, and subscripting it is an `IndexError` rather than a
+    /// `TypeError`. Two of the three said so from the start; `python_len` said
+    /// "no length at all", and `random` is the caller that can tell the
+    /// difference, so `{{ nope|random }}` refused where Django renders.
+    ///
+    /// Asserted against `Value::String("")` rather than against literals: the
+    /// claim is that a `Missing` behaves as the EMPTY STRING, so the empty
+    /// string is the reference. A future arm that changes one probe without
+    /// the others fails here rather than in one filter's output.
+    #[test]
+    fn python_len_agrees_with_the_other_two_probes_about_missing() {
+        let empty = Value::String(String::new());
+        assert_eq!(python_type_name(&Value::Missing), python_type_name(&empty));
+        assert_eq!(python_len(&Value::Missing), python_len(&empty));
+        for index in [-1i64, 0, 1] {
+            assert_eq!(
+                python_getitem(&Value::Missing, index).map(|found| found.is_some()),
+                python_getitem(&empty, index).map(|found| found.is_some()),
+                "index {index}",
+            );
+        }
+        // The non-vacuity half: `""` really is the shape being claimed, so a
+        // reference that had drifted to "no length" would not read as green.
+        assert_eq!(python_len(&empty), Some(0));
+        assert_eq!(python_type_name(&empty), "str");
     }
 
     #[test]
@@ -6976,6 +7066,7 @@ mod tests {
             Value::DictView { .. } => "DictView",
             Value::Decimal(_) => "Decimal",
             Value::BigInt(_) => "BigInt",
+            Value::Encoded(_) => "Encoded",
         }
     }
 
@@ -7003,6 +7094,18 @@ mod tests {
             },
             Value::Decimal("1E-9".to_string()),
             Value::BigInt("9".repeat(40)),
+            // On the NON-iterating side (#2448) — and its `display` is the one
+            // an attacker could aim at #2285's fall-through escape, since the
+            // other two fields never reach `to_string()`. `str()` of any of the
+            // four datetime types is digits, `-`, `:`, `.`, `+` and spaces, so
+            // the escape is a no-op here too; the sample carries the real
+            // spelling rather than markup because that is what the variant can
+            // hold.
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "datetime.datetime".to_string(),
+                display: "2020-01-01 03:04:05".to_string(),
+                json: "2020-01-01T03:04:05".to_string(),
+            })),
         ];
         let mut iterating = 0;
         for v in &variants {
@@ -7032,7 +7135,7 @@ mod tests {
         let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
         assert_eq!(
             seen.len(),
-            12,
+            13,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }

@@ -93,6 +93,16 @@ fn flat_repr(value: &Value) -> String {
         // `repr(int)` is the digits, however many there are (#2260).
         Value::BigInt(d) => d.clone(),
         Value::String(s) => py_repr_string(s),
+        // The DISPLAY string's repr — `'2020-01-01 03:04:05'` — which is
+        // exactly what this printed when a datetime was a
+        // `Value::String(str(o))` (#2448). Python's real answer is the
+        // CONSTRUCTOR form, `datetime.datetime(2020, 1, 1, 3, 4, 5)`, the way
+        // the `Decimal` arm above spells `Decimal('…')`; that is out of reach
+        // here because `Encoded` carries `str()` and the encoder's JSON and not
+        // `repr()`, and adding a fourth field to fix `|pprint` is a divergence
+        // this JSON-spelling fix did not come to close. Filed as #2458's sibling
+        // question; not folded in.
+        Value::Encoded(e) => py_repr_string(&e.display),
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(flat_repr).collect();
             format!("[{}]", parts.join(", "))

@@ -622,6 +622,20 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             10u8.hash(hasher);
             d.hash(hasher);
         }
+        // Tag 11, distinct from String (#2448) — and the distinctness is the
+        // point, not bookkeeping. A `timedelta(seconds=90)` and the literal
+        // string `"0:01:30"` RENDER identically, so sharing the string tag
+        // would let a fragment cached from one be served for the other; they
+        // are different values to `json_script`, which spells the timedelta
+        // `"P0DT00H01M30S"`. All three fields are hashed for the same reason
+        // the cache-by-struct rule states (#247): pruning one later is a
+        // one-line change, adding one later is a cache-poisoning bug.
+        Value::Encoded(e) => {
+            11u8.hash(hasher);
+            e.type_name.hash(hasher);
+            e.display.hash(hasher);
+            e.json.hash(hasher);
+        }
         Value::Bool(b) => {
             1u8.hash(hasher);
             b.hash(hasher);
