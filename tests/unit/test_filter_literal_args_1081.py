@@ -487,19 +487,28 @@ def test_normalize_then_rust_update_state_no_quote_wrap():
     ctx = {"claim": {"filed_date": date(2026, 5, 3), "notes": ""}}
     json_ctx = normalize_django_value(ctx)
 
-    # After normalize, filed_date is a str — the exact precondition the
-    # reporter described as the bug trigger.
-    assert isinstance(json_ctx["claim"]["filed_date"], str)
-    assert json_ctx["claim"]["filed_date"] == "2026-05-03"
+    # Since #2467 the pre-pass CARRIES the date, so Rust builds
+    # ``Value::Encoded`` (#2448) instead of receiving a string.
+    assert json_ctx["claim"]["filed_date"] == date(2026, 5, 3)
 
-    rv = RustLiveView(template)
-    rv.update_state(json_ctx)
-    out = rv.render()
+    # The reporter's described trigger — a filed_date that is already a ``str``
+    # by the time ``|date`` sees it — is kept and swept alongside it rather
+    # than dropped with the precondition that used to produce it. It is still a
+    # live input: it is exactly what a session restore hands back, because the
+    # ``state_roundtrip=True`` boundary still writes the ISO string.
+    stored_ctx = normalize_django_value(ctx, state_roundtrip=True)
+    assert isinstance(stored_ctx["claim"]["filed_date"], str)
+    assert stored_ctx["claim"]["filed_date"] == "2026-05-03"
 
-    # Rust ``|date`` filter on the ISO string produces unquoted output.
-    assert "A: May 03, 2026" in out
-    assert "B: —" in out
-    assert "&quot;" not in out
+    for context in (json_ctx, stored_ctx):
+        rv = RustLiveView(template)
+        rv.update_state(context)
+        out = rv.render()
+
+        # Rust ``|date`` produces unquoted output for BOTH shapes.
+        assert "A: May 03, 2026" in out
+        assert "B: —" in out
+        assert "&quot;" not in out
     assert '"May 03, 2026"' not in out
     assert '"—"' not in out
 

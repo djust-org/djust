@@ -73,8 +73,15 @@ class TestFormCleanedDataTypes:
         assert result["count"] == 42
 
     def test_normalize_date(self):
-        """normalize_django_value should handle date."""
-        assert normalize_django_value(date(2024, 1, 15)) == "2024-01-15"
+        """normalize_django_value carries a date through exactly (#2467).
+
+        The same shape as the `Decimal` row below (#2239), and for the same
+        reason: the output goes into the template context, and Rust carries the
+        datetime family as `Value::Encoded` (#2448). The encoder's string is
+        what the `state_roundtrip=True` boundary writes.
+        """
+        assert normalize_django_value(date(2024, 1, 15)) == date(2024, 1, 15)
+        assert normalize_django_value(date(2024, 1, 15), state_roundtrip=True) == "2024-01-15"
 
     def test_normalize_decimal(self):
         """normalize_django_value carries a Decimal through exactly (#2239)."""
@@ -198,7 +205,12 @@ class TestDictRoundTrip:
         assert normalize_django_value({}) == {}
 
     def test_normalize_dict_with_complex_values(self):
-        """Dict with various value types should normalize correctly."""
+        """Dict with various value types should normalize correctly.
+
+        The nested `date` is carried through since #2467; the recursion is
+        what this case is about, so both forms are asserted — a carried value
+        alone cannot show the walk reached it.
+        """
         original = {
             "name": "test",
             "count": 0,
@@ -213,7 +225,9 @@ class TestDictRoundTrip:
         assert result["active"] is True
         assert result["tags"] == ["a", "b"]
         assert isinstance(result["meta"], dict)
-        assert result["meta"]["created"] == "2024-01-01"
+        assert result["meta"]["created"] == date(2024, 1, 1)
+        stored = normalize_django_value(original, state_roundtrip=True)
+        assert stored["meta"]["created"] == "2024-01-01"
 
     @pytest.mark.skipif(
         not _rust_available(),
