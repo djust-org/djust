@@ -905,6 +905,35 @@ pub fn is_string_filter(filter_name: &str) -> bool {
     STRING_FILTERS.contains(&filter_name)
 }
 
+/// Can this engine dispatch `name` at all — as a built-in, or as a
+/// project-registered custom filter? (#2419)
+///
+/// This is the question [`apply_filter_full_safe`]'s final
+/// `Err("Unknown filter: …")` answers, asked WITHOUT a value: the parser
+/// consults it while compiling a filter chain, which is Django's own timing
+/// (`FilterExpression.__init__` → `parser.find_filter`). See
+/// `parser::parse_filter_specs` for why the refusal has to happen there.
+///
+/// # Why the built-in half reads the ARITY table
+///
+/// The built-in half asks [`crate::filter_arity::builtin_arity`] rather than
+/// carrying a name list of its own, and that is the whole point: a second
+/// list of the 57 built-in names is exactly the parallel path this repo keeps
+/// retiring (#1646), and here it would be a list whose drift is SILENT — a
+/// built-in present in [`apply_builtin_filter`]'s match but absent from the
+/// list would be refused at parse time despite the engine implementing it.
+///
+/// The two sets are equal today, and that equality is PINNED mechanically
+/// rather than trusted: `python/tests/test_unknown_filter_parse_time_2419.py::
+/// TestTheOracleIsTheDispatchTable` extracts `apply_builtin_filter`'s
+/// top-level match arms from this file's source and asserts they are exactly
+/// the ARITY table's names. Adding an arm without an arity row (or the
+/// reverse) fails that test in the commit that does it.
+pub fn is_known_filter(name: &str) -> bool {
+    crate::filter_arity::builtin_arity(name).is_some()
+        || filter_registry::is_registered_custom_filter(name)
+}
+
 /// Dispatch table for all built-in filters. Returns ``None`` when
 /// ``filter_name`` is not a built-in, so the caller falls through to the
 /// custom-filter registry. Extracted from ``apply_filter_full`` so the

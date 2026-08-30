@@ -195,6 +195,32 @@ pub fn get_registered_custom_filters() -> PyResult<Vec<String>> {
 // Internal Rust API (called from filters.rs / renderer.rs)
 // ============================================================================
 
+/// Returns ``true`` if `name` is a project-registered custom filter.
+///
+/// The non-`PyResult` counterpart of the `#[pyfunction]`
+/// [`has_custom_filter`] above, for Rust callers that have no `Python<'_>`
+/// to raise into — [`crate::filters::is_known_filter`], which the PARSER
+/// consults while compiling a filter chain (#2419).
+///
+/// Lock poisoning answers ``false``, which is the same fail-soft
+/// [`is_custom_filter_safe`] takes. It is the conservative direction here
+/// too: a poisoned lock makes the parser fall through to the render-time
+/// ``Unknown filter`` path — djust's pre-#2419 behaviour — rather than
+/// refusing a template whose filter may well be registered.
+///
+/// Short-circuits on the [`ANY_CUSTOM_FILTERS_REGISTERED`] `AtomicBool` for
+/// the same reason [`is_custom_filter_safe`] does: a project with no custom
+/// filters pays one atomic load per filter spec rather than a lock acquire.
+pub fn is_registered_custom_filter(name: &str) -> bool {
+    if !ANY_CUSTOM_FILTERS_REGISTERED.load(Ordering::Acquire) {
+        return false;
+    }
+    FILTER_REGISTRY
+        .read()
+        .map(|reg| reg.contains_key(name))
+        .unwrap_or(false)
+}
+
 /// Returns ``true`` if a registered custom filter has ``is_safe=True``.
 ///
 /// The renderer consults this alongside the hardcoded built-in
