@@ -172,9 +172,47 @@ class TestEncoderMatchesRealDjango:
             "",
             "hello",
             __import__("uuid").UUID("12345678-1234-5678-1234-567812345678"),
+            # The datetime family, CROSSED (#2462).
+            #
+            # This class had the right REFERENCE — it compares against Django's
+            # own encoder — and the wrong VALUES: the three rows below used to
+            # be `datetime(2024,6,15,12,30,45)`, `date(...)` and `time(8,0,0)`,
+            # every one with `microsecond == 0` and no `tzinfo`, which is the
+            # one band where the two spellings agree. So it passed throughout
+            # while djust's encoder spelled a microsecond datetime `.123456`
+            # against Django's `.123` and a UTC one `+00:00` against `Z`.
+            #
+            # That is the same coincidence-in-the-sampled-band as
+            # `TestParityWithJSONRoundtrip`'s, one axis over and in the opposite
+            # direction: that class sampled the same narrow band AND compared
+            # against a copy of the defect, this one sampled the same narrow
+            # band while holding the correct reference. Each was blind on the
+            # axis the other covered.
             __import__("datetime").datetime(2024, 6, 15, 12, 30, 45),
+            __import__("datetime").datetime(2024, 6, 15, 12, 30, 45, 7),
+            __import__("datetime").datetime(2024, 6, 15, 12, 30, 45, 123456),
+            __import__("datetime").datetime(
+                2024, 6, 15, 12, 30, 45, tzinfo=__import__("datetime").timezone.utc
+            ),
+            __import__("datetime").datetime(
+                2024,
+                6,
+                15,
+                12,
+                30,
+                45,
+                123456,
+                tzinfo=__import__("datetime").timezone(
+                    __import__("datetime").timedelta(hours=5, minutes=30)
+                ),
+            ),
             __import__("datetime").date(2024, 6, 15),
             __import__("datetime").time(8, 0, 0),
+            __import__("datetime").time(8, 0, 0, 7),
+            __import__("datetime").time(8, 0, 0, 123456),
+            __import__("datetime").timedelta(0),
+            __import__("datetime").timedelta(days=1, seconds=90),
+            __import__("datetime").timedelta(seconds=-90),
         ],
         ids=[
             "None",
@@ -187,8 +225,17 @@ class TestEncoderMatchesRealDjango:
             "str",
             "UUID",
             "datetime",
+            "datetime_us_tiny",
+            "datetime_us",
+            "datetime_utc",
+            "datetime_us_offset",
             "date",
             "time",
+            "time_us_tiny",
+            "time_us",
+            "timedelta_zero",
+            "timedelta_pos",
+            "timedelta_neg",
         ],
     )
     def test_every_other_shared_type_still_matches_django(self, value: Any) -> None:
@@ -196,18 +243,20 @@ class TestEncoderMatchesRealDjango:
         that one."""
         assert json.dumps(value, cls=DjustEncoder) == json.dumps(value, cls=RealDjangoEncoder)
 
-    def test_timedelta_is_a_known_pre_existing_gap(self) -> None:
-        """Not in the sweep above, and stated rather than quietly omitted.
+    def test_the_timedelta_gap_is_CLOSED(self) -> None:
+        """The pre-existing gap this class named, closed by #2462 — inverted
+        rather than deleted.
 
-        Django's encoder handles `timedelta`; djust's does not (only
-        `normalize_django_value` does, as a documented enhancement). Predates
-        #2239 and is untouched by it — pinned so the omission above is a fact
-        about the code and not about the test's parameter list.
+        Django's encoder has always handled `timedelta`; djust's raised
+        `TypeError`, which is why `normalize_django_value` documented it as an
+        "enhancement beyond DjangoJSONEncoder" — a claim true of *djust's*
+        encoder and false of Django's. #2462 gave djust's the same
+        `duration_iso_string` branch, so it is in the sweep above now and this
+        is the row that says the omission was fixed rather than forgotten.
         """
         td = __import__("datetime").timedelta(days=1, seconds=90)
         assert json.dumps(td, cls=RealDjangoEncoder) == '"P1DT00H01M30S"'
-        with pytest.raises(TypeError):
-            json.dumps(td, cls=DjustEncoder)
+        assert json.dumps(td, cls=DjustEncoder) == '"P1DT00H01M30S"'
         assert normalize_django_value(td) == "P1DT00H01M30S"
 
     def test_the_differential_would_catch_a_regression(self) -> None:

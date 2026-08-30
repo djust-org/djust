@@ -9,9 +9,10 @@ import json
 import logging
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, FrozenSet, List, Optional, Union
+from typing import Any, Dict, FrozenSet, List, Optional, Union, cast
 from uuid import UUID
 
+from django.core.serializers.json import DjangoJSONEncoder as _DjangoJSONEncoder
 from django.db import models
 from django.utils.functional import Promise
 
@@ -276,6 +277,46 @@ def fast_json_loads(s: Union[str, bytes]) -> Any:
     return json.loads(s)
 
 
+#: Django's own encoder, instantiated once. ``default()`` is a pure function of
+#: its argument, so one shared instance is safe.
+_DJANGO_JSON_ENCODER = _DjangoJSONEncoder()
+
+
+def django_json_datetime(value: Union[datetime, date, time, timedelta]) -> str:
+    """The string Django's own ``DjangoJSONEncoder.default`` writes for *value*.
+
+    **Called, not re-implemented** — the reason #2448's Rust side gives
+    (``crates/djust_core/src/lib.rs::django_json_encoded`` calls the encoder
+    too, and that is what kept its spelling exact). The rules are short enough
+    to look transcribable and are not::
+
+        datetime:  r = o.isoformat()
+                   if o.microsecond:  r = r[:23] + r[26:]   # µs -> ms
+                   if r.endswith("+00:00"):  r = r[:-6] + "Z"
+        date:      o.isoformat()
+        time:      raise if aware; r = o.isoformat()
+                   if o.microsecond:  r = r[:12]            # a DIFFERENT slice
+        timedelta: duration_iso_string(o)
+
+    ``time``'s truncation is ``r[:12]``, not the ``datetime`` slice pair —
+    #2462's own issue body quoted the datetime rule for both, which is the kind
+    of transcription error calling the encoder cannot make.
+
+    **The one refusal djust does not adopt.** ``default()`` raises
+    ``ValueError: JSON can't represent timezone-aware times.`` for an aware
+    ``datetime.time``. That is the more-permissive direction djust deliberately
+    keeps for every unserialisable value (#2429, and the same choice
+    ``django_json_encoded`` makes by failing closed), so an aware ``time`` takes
+    its previous ``isoformat()`` spelling rather than 500-ing a render that
+    used to work. It is the ONLY branch here that is not Django's answer, and it
+    is a branch rather than a bare ``except`` so it cannot silently swallow a
+    different failure.
+    """
+    if isinstance(value, time) and value.utcoffset() is not None:
+        return value.isoformat()
+    return cast(str, _DJANGO_JSON_ENCODER.default(value))
+
+
 class DjangoJSONEncoder(json.JSONEncoder):
     """
     Custom JSON encoder that handles common Django and Python types.
@@ -340,9 +381,24 @@ class DjangoJSONEncoder(json.JSONEncoder):
                 # Elements aren't comparable (mixed types) — return unsorted
                 return list(obj)
 
-        # Handle datetime types
-        if isinstance(obj, (datetime, date, time)):
-            return obj.isoformat()
+        # datetime / date / time / timedelta -> Django's own spelling (#2462).
+        #
+        # This used to be a bare ``obj.isoformat()``, which is NOT what
+        # ``DjangoJSONEncoder.default`` writes: it truncates microseconds to
+        # milliseconds and rewrites a trailing ``+00:00`` to ``Z``. This encoder
+        # feeds JSON that LEAVES the process -- the WebSocket frame
+        # (``websocket.py``), the SSE stream (``sse.py``), the HTTP-API body
+        # (``api/dispatch.py``) -- so the divergence was visible to every client
+        # that parsed a timestamp out of a djust payload and compared it to one
+        # Django wrote.
+        #
+        # ``timedelta`` joins the branch: Django's encoder has handled it since
+        # forever (``duration_iso_string``) and this one raised ``TypeError``,
+        # which is also why ``normalize_django_value`` documented it as an
+        # "enhancement beyond DjangoJSONEncoder" -- a claim that was true of THIS
+        # encoder and false of Django's.
+        if isinstance(obj, (datetime, date, time, timedelta)):
+            return django_json_datetime(obj)
 
         # Handle UUID
         if isinstance(obj, UUID):
@@ -1199,12 +1255,16 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     either hands it to the Rust renderer / a djust encoder — both of which take
     a ``Decimal`` — or passes ``state_roundtrip=True``.
 
-    **Enhancements beyond DjangoJSONEncoder**: the following types would raise
-    ``TypeError`` under ``json.dumps(value, cls=DjangoJSONEncoder)`` but are
+    **Enhancements beyond DjangoJSONEncoder**: the following type would raise
+    ``TypeError`` under ``json.dumps(value, cls=DjangoJSONEncoder)`` but is
     handled here as a convenience:
 
-    - timedelta  -- ISO-8601 duration string (via ``django.utils.duration``)
     - Promise    -- str() (Django lazy translation strings)
+
+    ``timedelta`` used to be listed here too. It was never an enhancement over
+    *Django's* encoder, which has always spelled it with ``duration_iso_string``
+    -- only over djust's own, which raised. #2462 gave djust's encoder the same
+    branch, so the two agree and the identity above covers it.
 
     **Non-serializable values (issue #292)**: If a value cannot be serialized,
     this function logs a warning and falls back to str(value). Configure
@@ -1216,7 +1276,10 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     - Decimal                      -- carried through EXACTLY (see the branch, #2239);
                                       float() under ``state_roundtrip=True``
     - UUID                         -- str()
-    - datetime, date, time         -- .isoformat()
+    - datetime, date, time         -- ``DjangoJSONEncoder.default``'s spelling,
+                                      which is NOT ``.isoformat()``: microseconds
+                                      truncate to milliseconds and a trailing
+                                      ``+00:00`` becomes ``Z`` (#2462)
     - timedelta                    -- ISO-8601 duration string (via Django util)
     - Promise (lazy strings)       -- str()
     - dict                         -- recurse values
@@ -1312,22 +1375,20 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     if isinstance(value, UUID):
         return str(value)
 
-    # datetime/date/time -> isoformat
-    # Note: check datetime before date because datetime is a subclass of date
-    if isinstance(value, datetime):
-        return value.isoformat()
-
-    if isinstance(value, date):
-        return value.isoformat()
-
-    if isinstance(value, time):
-        return value.isoformat()
-
-    # timedelta -> ISO-8601 duration string (Django compat)
-    if isinstance(value, timedelta):
-        from django.utils.duration import duration_iso_string
-
-        return duration_iso_string(value)
+    # datetime / date / time / timedelta -> the encoder's own spelling (#2462).
+    #
+    # Four branches calling three different converters became one call to the
+    # encoder, because this function's documented contract IS the encoder:
+    #
+    #     json.dumps(normalize_django_value(v), cls=Enc)
+    #         == json.dumps(v, cls=Enc)
+    #
+    # and ``isoformat()`` is not what ``default()`` writes. The ordering comment
+    # this replaces (``datetime`` before ``date``, since ``datetime`` IS a
+    # ``date``) is still load-bearing -- it just lives inside
+    # ``DjangoJSONEncoder.default`` now, which is where Django keeps it.
+    if isinstance(value, (datetime, date, time, timedelta)):
+        return django_json_datetime(value)
 
     # Django Form / BoundField — must come before FieldFile check because
     # Form/BoundField objects don't have `.url` but duck-typing could match.

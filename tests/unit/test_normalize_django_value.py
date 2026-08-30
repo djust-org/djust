@@ -1,11 +1,13 @@
 """Tests for normalize_django_value() in djust.serialization."""
 
 import json
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
 import pytest
+
+from django.core.serializers.json import DjangoJSONEncoder as RealDjangoJSONEncoder
 
 from djust.serialization import normalize_django_value, DjangoJSONEncoder
 
@@ -324,13 +326,41 @@ class TestParityWithJSONRoundtrip:
     trip. It also still covers ``Decimal``, which a documented exception would
     have carved out.
 
-    timedelta and Promise are intentionally excluded -- they are enhancements
-    that DjangoJSONEncoder does not support (would raise TypeError).
+    **The reference encoder is an axis, and it was the blind one (#2462).**
+    ``DjangoJSONEncoder`` imported above is *djust's own* subclass, and until
+    #2462 it spelled a datetime with a bare ``isoformat()`` -- exactly what
+    ``normalize_django_value`` did. So this class compared the pre-pass against
+    a copy of the same defect, and stayed green while both disagreed with
+    *Django* about four datetime shapes.
+
+    The issue diagnosed that as a sampling problem: every ``datetime``/``time``
+    in the original 17-value list had ``microsecond == 0`` and no ``tzinfo``,
+    the one band where the two spellings agree. That is true and it is not the
+    load-bearing half -- measured, 3,923 randomized values spanning every
+    microsecond and every offset produce **zero** failures of the
+    same-encoder assertion. Widening the values alone would have left the class
+    exactly as reachable.
+
+    So both axes move: the value set below is the CROSS of microsecond
+    (zero / sub-millisecond / non-zero) with tzinfo (naive / UTC / positive /
+    negative offset), and ``_encoded_by_django`` runs every assertion against
+    ``django.core.serializers.json.DjangoJSONEncoder`` as well.
+
+    Promise is intentionally excluded -- it is an enhancement Django's encoder
+    reaches only via ``str()``. ``timedelta`` used to be excluded too, on the
+    grounds that ``DjangoJSONEncoder`` would raise ``TypeError``; that was true
+    of djust's encoder and false of Django's, and #2462 gave djust's the same
+    ``duration_iso_string`` branch, so it is covered here now.
     """
 
     @staticmethod
     def _encoded(value):
         return json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+
+    @staticmethod
+    def _encoded_by_django(value):
+        """The reference implementation -- the axis this class was blind on."""
+        return json.loads(json.dumps(value, cls=RealDjangoJSONEncoder))
 
     @pytest.mark.parametrize(
         "value",
@@ -348,10 +378,29 @@ class TestParityWithJSONRoundtrip:
             Decimal("0"),
             Decimal("-123.456"),
             UUID("12345678-1234-5678-1234-567812345678"),
+            # -- the datetime family, CROSSED rather than sampled (#2462).
+            # microsecond: zero / sub-millisecond (truncates to `.000`, which a
+            # "strip trailing zeroes" reading gets wrong) / ordinary non-zero.
+            # tzinfo: naive / UTC (rewritten to `Z`) / positive / negative
+            # offset (both kept verbatim).
             datetime(2024, 6, 15, 12, 30, 45),
+            datetime(2024, 6, 15, 12, 30, 45, 7),
+            datetime(2024, 6, 15, 12, 30, 45, 123456),
+            datetime(2024, 6, 15, 12, 30, 45, tzinfo=timezone.utc),
+            datetime(2024, 6, 15, 12, 30, 45, 123456, tzinfo=timezone.utc),
+            datetime(2024, 6, 15, 12, 30, 45, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+            datetime(2024, 6, 15, 12, 30, 45, 123456, tzinfo=timezone(timedelta(hours=-8))),
             date(2024, 6, 15),
             time(8, 0, 0),
             time(23, 59, 59),
+            time(8, 0, 0, 7),
+            time(23, 59, 59, 123456),
+            # timedelta: covered here since #2462 gave djust's encoder the
+            # `duration_iso_string` branch Django's always had.
+            timedelta(0),
+            timedelta(seconds=90),
+            timedelta(seconds=-90),
+            timedelta(days=3, microseconds=1),
         ],
         ids=[
             "None",
@@ -368,13 +417,68 @@ class TestParityWithJSONRoundtrip:
             "Decimal_neg",
             "UUID",
             "datetime",
+            "datetime_us_tiny",
+            "datetime_us",
+            "datetime_utc",
+            "datetime_utc_us",
+            "datetime_offset_plus",
+            "datetime_offset_minus_us",
             "date",
             "time_morning",
             "time_night",
+            "time_us_tiny",
+            "time_us",
+            "timedelta_zero",
+            "timedelta_pos",
+            "timedelta_neg",
+            "timedelta_days_us",
         ],
     )
     def test_scalar_parity(self, value):
         assert self._encoded(normalize_django_value(value)) == self._encoded(value)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            datetime(2024, 6, 15, 12, 30, 45),
+            datetime(2024, 6, 15, 12, 30, 45, 7),
+            datetime(2024, 6, 15, 12, 30, 45, 123456),
+            datetime(2024, 6, 15, 12, 30, 45, tzinfo=timezone.utc),
+            datetime(2024, 6, 15, 12, 30, 45, 123456, tzinfo=timezone.utc),
+            datetime(2024, 6, 15, 12, 30, 45, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+            datetime(2024, 6, 15, 12, 30, 45, 123456, tzinfo=timezone(timedelta(hours=-8))),
+            date(2024, 6, 15),
+            time(8, 0, 0),
+            time(8, 0, 0, 7),
+            time(23, 59, 59, 123456),
+            timedelta(0),
+            timedelta(seconds=-90),
+            Decimal("9.99"),
+            UUID("12345678-1234-5678-1234-567812345678"),
+        ],
+    )
+    def test_scalar_parity_against_DJANGOS_encoder(self, value):
+        """The axis this class was blind on (#2462).
+
+        Four of these rows passed `test_scalar_parity` throughout, because both
+        sides of that assertion carried the same defect. This one compares the
+        pre-pass's output to what Django itself writes.
+        """
+        assert self._encoded_by_django(normalize_django_value(value)) == self._encoded_by_django(
+            value
+        )
+
+    def test_djusts_encoder_agrees_with_djangos(self):
+        """And the reason the two assertions above are not redundant: the
+        pre-pass agreeing with djust's encoder is only worth something while
+        djust's encoder agrees with Django's."""
+        for value in (
+            datetime(2024, 6, 15, 12, 30, 45, 123456),
+            datetime(2024, 6, 15, 12, 30, 45, tzinfo=timezone.utc),
+            time(23, 59, 59, 123456),
+            timedelta(seconds=-90),
+        ):
+            assert self._encoded(value) == self._encoded_by_django(value), repr(value)
 
     def test_dict_parity(self):
         value = {"name": "test", "price": Decimal("19.95"), "active": True}
@@ -417,6 +521,23 @@ class TestParityWithJSONRoundtrip:
         """
         assert self._encoded(normalize_django_value(Decimal("1.1"))) != self._encoded(
             Decimal("1.2")
+        )
+
+    def test_the_reference_axis_would_catch_a_divergence(self):
+        """Gate-off for the NEW invariant, which needs its own (#1468/#2462).
+
+        The same-encoder assertion cannot distinguish a correct pre-pass from
+        one that reproduces the encoder's own divergence -- that is the whole
+        finding. So the Django-referenced assertion gets its own non-vacuity
+        check: feed it the pre-#2462 spelling and it must fail.
+        """
+        value = datetime(2024, 6, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+        pre_2462_spelling = value.isoformat()
+        assert pre_2462_spelling == "2024-06-15T12:30:45.123456+00:00"
+        assert self._encoded_by_django(pre_2462_spelling) != self._encoded_by_django(value)
+        # And the value the fix actually produces does match.
+        assert self._encoded_by_django(normalize_django_value(value)) == self._encoded_by_django(
+            value
         )
 
 
