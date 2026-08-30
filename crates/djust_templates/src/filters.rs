@@ -1229,7 +1229,14 @@ fn apply_builtin_filter(
             // now (#2344). The argument was discarded here until then, so
             // `{{ then|timesince:other }}` silently answered "since now"
             // whatever `other` was.
-            timesince_or_until(filter_name, value, arg, arg_was_quoted, false)
+            timesince_or_until(
+                filter_name,
+                value,
+                arg,
+                arg_was_quoted,
+                arg_type.is_falsy,
+                false,
+            )
         }
         "add" => {
             // Django's `add` is a three-branch chain (#2203):
@@ -1597,7 +1604,14 @@ fn apply_builtin_filter(
         "timeuntil" => {
             // The same computation as `timesince` with the operands swapped,
             // and the same ARGUMENT rule (#2344).
-            timesince_or_until(filter_name, value, arg, arg_was_quoted, true)
+            timesince_or_until(
+                filter_name,
+                value,
+                arg,
+                arg_was_quoted,
+                arg_type.is_falsy,
+                true,
+            )
         }
         "date" => {
             // date filter: formats datetime with format string
@@ -3141,61 +3155,28 @@ enum ComparisonInstant {
     Incomparable,
 }
 
-/// Is this argument FALSY in the sense Django's `if arg:` means (#2344)?
+/// The argument's Python truthiness is NOT re-derived here (#2458).
 ///
-/// The argument reaches the dispatch table as a STRING — a quoted literal
-/// verbatim, or a resolved context value through `Value`'s `Display` — so
-/// Python's truthiness has to be recovered from the text plus the quoting hint.
-/// A QUOTED argument is a `str`, and every non-empty `str` is truthy: that is
-/// why `{{ p|timesince:"0" }}` raises in Django while `{{ p|timesince:0 }}`
-/// measures from now, one character of template syntax apart. `arg_was_quoted`
-/// is the whole of that distinction, the same term `add` and `floatformat`
-/// carry.
+/// This filter used to carry `timesince_arg_is_falsy`, a private predicate that
+/// read Python's `if arg:` off the argument's `Display` TEXT plus the quoting
+/// hint — the empty string, `None`, `True`/`False` in both `Display` modes, the
+/// empty containers, the empty dict views, and any numeric-zero spelling. Every
+/// one of those answers is already computed, value-typed, one level up:
+/// `ArgType::is_falsy` (#2413) reads `Value::is_truthy` on the RESOLVED
+/// argument, which is the object Django actually tests.
 ///
-/// Unquoted, every falsy spelling `Display` can produce is here — and `Display`
-/// has TWO modes, which is easy to miss because only one of them is the
-/// default. `django_value_repr` (on by default, #2203) spells a bool
-/// `True`/`False`; `legacy_display` spells it Rust's `true`/`false` and renders
-/// `None` as the empty string. Both spellings are accepted, because a rule that
-/// only knew the default would answer differently under a flag whose whole
-/// point is rendering parity.
+/// Two mechanisms for one question is the #1646 shape, and the text one was the
+/// wrong half in both directions:
 ///
-/// So: the empty string (`Value::String("")`, `Value::Missing`, and legacy
-/// `None`), `None`, `False`/`false`, a numeric zero in any spelling, and the
-/// empty containers.
+/// * it answered FALSY for a resolved `str` — `{{ p|timesince:q }}` with
+///   `q = "0"` measured from now where Python's `bool("0")` is `True` and
+///   Django raises. Same for `"None"`, `"False"`, and a date-shaped string;
+/// * it could not answer TRUE for `timedelta(0)`, whose `Display` text
+///   `"0:00:00"` is shared with a truthy `str` — so teaching it that text would
+///   have traded one divergence for the other. That is the whole of why #2458
+///   needed the value-typed bit rather than a text edit, and
+///   `Value::Encoded::truthy` is where it now lives.
 ///
-/// What is NOT recoverable, in either mode, is a value whose `Display` text is
-/// shared by a truthy and a falsy object. `legacy_display` renders EVERY
-/// sequence as `[List]`, so an empty list is indistinguishable from a full one
-/// there — and both are non-dates, so Django raises for one and measures from
-/// now for the other. `TestTheFalsinessResidueIsNamed` states that rather than
-/// hoping it away, and pins the `Display` arm enumeration so a new variant has
-/// to be considered here.
-fn timesince_arg_is_falsy(arg: &str, arg_was_quoted: bool) -> bool {
-    if arg.is_empty() {
-        return true; // `""` is falsy whether it was quoted or not.
-    }
-    if arg_was_quoted {
-        return false; // Every other `str` is truthy to Python.
-    }
-    matches!(
-        arg,
-        "None"
-            | "False"
-            | "false"
-            | "[]"
-            | "{}"
-            | "()"
-            // An EMPTY dict VIEW (#2340). `bool({}.items())` is False, and
-            // `Display` spells the three views by name. Reached by
-            // `{{ then|timesince:d.items }}` on an empty dict, which is an
-            // ordinary template line.
-            | "dict_items([])"
-            | "dict_keys([])"
-            | "dict_values([])"
-    ) || python_float(arg).is_some_and(|f| f == 0.0)
-}
-
 /// The error a truthy non-date argument implies, worded once (#2344).
 ///
 /// Two call sites — the quoted short-circuit and the parse failure — and one
@@ -3213,13 +3194,17 @@ fn timesince_comparison_instant(
     filter_name: &str,
     arg: Option<&str>,
     arg_was_quoted: bool,
+    arg_is_falsy: bool,
     value_dt: DateTime<chrono::FixedOffset>,
     value_aware: bool,
 ) -> Result<ComparisonInstant> {
     let Some(raw) = arg else {
         return Ok(ComparisonInstant::Now);
     };
-    if timesince_arg_is_falsy(raw, arg_was_quoted) {
+    // `ArgType::is_falsy`, threaded from the dispatch table — Django's
+    // `if not now:` on the object rather than on its text (#2458). See the
+    // block above this function for what it replaced and why.
+    if arg_is_falsy {
         return Ok(ComparisonInstant::Now);
     }
     // A QUOTED argument is a `str`, and Django accepts NO string here — not
@@ -3273,6 +3258,7 @@ fn timesince_or_until(
     value: &Value,
     arg: Option<&str>,
     arg_was_quoted: bool,
+    arg_is_falsy: bool,
     reversed: bool,
 ) -> Result<Value> {
     // Django's first statement, and the only half of this function that is not
@@ -3321,20 +3307,26 @@ fn timesince_or_until(
              of its excepts catches)"
         )));
     };
-    let (then, now) =
-        match timesince_comparison_instant(filter_name, arg, arg_was_quoted, dt, aware)? {
-            ComparisonInstant::Now => now_and_then(dt, aware),
-            ComparisonInstant::At(instant) => (
-                if aware {
-                    dt.naive_local()
-                } else {
-                    dt.naive_utc()
-                },
-                instant,
-            ),
-            // Django's caught TypeError: the filter renders "".
-            ComparisonInstant::Incomparable => return Ok(Value::String(String::new())),
-        };
+    let (then, now) = match timesince_comparison_instant(
+        filter_name,
+        arg,
+        arg_was_quoted,
+        arg_is_falsy,
+        dt,
+        aware,
+    )? {
+        ComparisonInstant::Now => now_and_then(dt, aware),
+        ComparisonInstant::At(instant) => (
+            if aware {
+                dt.naive_local()
+            } else {
+                dt.naive_utc()
+            },
+            instant,
+        ),
+        // Django's caught TypeError: the filter renders "".
+        ComparisonInstant::Incomparable => return Ok(Value::String(String::new())),
+    };
     if !reversed {
         return Ok(Value::String(django_timesince(then, now)));
     }
@@ -7105,6 +7097,7 @@ mod tests {
                 type_name: "datetime.datetime".to_string(),
                 display: "2020-01-01 03:04:05".to_string(),
                 json: "2020-01-01T03:04:05".to_string(),
+                truthy: true,
             })),
         ];
         let mut iterating = 0;
