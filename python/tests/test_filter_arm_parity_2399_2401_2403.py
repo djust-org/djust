@@ -539,16 +539,33 @@ class TestTheResiduesThisPRDoesNotTouch:
         assert other_got != other_expected
         assert other_got == bare_got
 
-    @pytest.mark.parametrize("key", ["none", "list", "dict", BOUNDARY_RESIDUE])
-    def test_get_digit_over_a_value_int_refuses_is_still_a_TypeError_gap(self, key) -> None:
-        """Django's ``int(value)`` raises TypeError, which its ``except`` misses.
+    @pytest.mark.parametrize("key", ["none", "list", "dict"])
+    def test_get_digit_over_a_value_int_refuses_now_raises_too(self, key) -> None:
+        """CLOSED by #2435 — this pin read "is still a TypeError gap".
 
-        The #2366 rule — ``int()`` is a TypeError, not a ValueError, for a
-        non-string non-number — applied to the VALUE rather than to the
-        argument. Out of scope per CLAUDE.md #1079; this pins the shape so the
-        next reader sees a named gap instead of an unexplained diverging cell,
-        and it goes RED (as a stale pin) the day it is closed.
+        Django's ``int(value)`` raises TypeError, which its
+        ``except ValueError`` misses. The #2366 rule — ``int()`` is a TypeError,
+        not a ValueError, for a non-string non-number — applied to the VALUE
+        rather than to the argument. It was out of scope per CLAUDE.md #1079
+        and pinned so the next reader would see a named gap; the pin went RED
+        as a stale pin the day it was closed, which is what it was for.
         """
         expected, got = _both("{{ p|get_digit:1 }}", {"p": VALUES[key]})
+        assert expected.startswith("<<EXC TypeError:"), expected
+        assert _raised(got), got
+        assert "calls int() on its value" in got, got
+
+    def test_get_digit_over_a_datetime_is_still_the_extraction_BOUNDARY(self) -> None:
+        """The residue #2435 does NOT close, and it is a different mechanism.
+
+        A ``datetime`` is already a ``Value::String`` by the time any filter
+        sees it (the PyO3 extraction boundary, the same one
+        ``test_the_datetime_row_measures_the_extraction_BOUNDARY`` above
+        measures), so ``int(value)`` reads a STRING and answers ValueError —
+        the one exception ``get_digit``'s ``except`` catches. Django, holding
+        the real object, gets a TypeError instead. No amount of work below the
+        boundary can tell those apart, which is why this row stays.
+        """
+        expected, got = _both("{{ p|get_digit:1 }}", {"p": VALUES[BOUNDARY_RESIDUE]})
         assert expected.startswith("<<EXC TypeError:"), expected
         assert not _raised(got), got

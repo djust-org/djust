@@ -414,7 +414,19 @@ class TestFilteredOperandsRandomised:
         against djust's own ``{{ }}`` output isolates the channel from filter
         correctness entirely — this one needs no gate.
         """
-        unexplained, cells = [], 0
+
+        def resolve(src: str, value: object) -> str:
+            # A filter that REFUSES is an outcome the two channels must share
+            # too, and since #2435 several do (`divisibleby` and `get_digit`
+            # over a value `int()` rejects). Capturing the raise keeps those
+            # cells IN the sweep — dropping them would have quietly shrunk it
+            # by the very cells the refusal introduced.
+            try:
+                return djust_render(src, {"p": value})
+            except Exception as exc:  # noqa: BLE001
+                return f"<<{type(exc).__name__}: {exc}>>"
+
+        unexplained, cells, refused = [], 0, 0
         for name in sorted(django_filter_registry.filters):
             if name in self.NONDET:
                 continue
@@ -422,12 +434,12 @@ class TestFilteredOperandsRandomised:
             spec = f"{name}:{arg}" if arg else name
             for _key, value in self.INPUTS.items():
                 cells += 1
-                var = djust_render("{{ p|%s }}" % spec, {"p": value})
-                with_ = djust_render(
-                    "{%% with q=p|%s %%}{{ q }}{%% endwith %%}" % spec, {"p": value}
-                )
+                var = resolve("{{ p|%s }}" % spec, value)
+                with_ = resolve("{%% with q=p|%s %%}{{ q }}{%% endwith %%}" % spec, value)
+                refused += var.startswith("<<")
                 if with_ != var and with_ != django_escape(var):
                     unexplained.append((spec, var, with_))
+        assert refused, "no cell refused — the raise-capturing branch is dead code"
         assert cells > 400
         assert not unexplained, (
             "a {% with %} operand resolved to something other than what the "

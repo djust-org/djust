@@ -234,9 +234,8 @@ class TestDivisiblebyReadsTheValueNotTheType:
     ``{{ n|safe|divisibleby:"2" }}`` — ``True`` before the stringify and in
     Django — would have started answering ``False``.
 
-    Django RAISES on anything ``int()`` rejects; djust fails soft, so the
-    agreement rows stop at what ``int(str)`` accepts unambiguously and the
-    fail-soft rows are asserted as djust-only.
+    Django RAISES on anything ``int()`` rejects, and since #2435 so does djust
+    — the fail-soft rows below became refusal rows.
     """
 
     @pytest.mark.parametrize("value", [42, 0, -7, "42", "-42", "+42", "  42  ", 41, "41"])
@@ -249,13 +248,19 @@ class TestDivisiblebyReadsTheValueNotTheType:
         assert djust_render("{{ p|safe|divisibleby:'2' }}", {"p": 41}) == "False"
 
     @pytest.mark.parametrize("value", ["abc", "", "4.0", "0x2a", [1, 2], {"k": 1}])
-    def test_an_input_int_rejects_fails_soft_rather_than_raising(self, value) -> None:
+    def test_an_input_int_rejects_now_raises_as_django_does(self, value) -> None:
         """Django raises ``ValueError``/``TypeError`` here and 500s the page.
-        djust answers ``False`` — the pre-existing policy, pinned so the
-        widened parse above cannot quietly grow into a raise."""
+
+        djust answered ``False`` until #2435 routed the VALUE through the
+        ``int(value)`` chokepoint. The widened parse above is what makes this
+        non-vacuous: a rule that refused everything would fail
+        ``test_agrees_with_django_wherever_django_answers``, which still
+        includes ``"  42  "`` and ``"+42"``.
+        """
         with pytest.raises(Exception):
             django_render("{{ p|divisibleby:'2' }}", {"p": value})
-        assert djust_render("{{ p|divisibleby:'2' }}", {"p": value}) == "False"
+        with pytest.raises(RuntimeError, match="calls int\\(\\) on its value"):
+            djust_render("{{ p|divisibleby:'2' }}", {"p": value})
 
 
 class TestTheBuiltInChainIsNotWorseOff:
@@ -312,21 +317,25 @@ class TestTheBuiltInChainIsNotWorseOff:
             if n not in cls.NONDET
         ]
 
-    #: The filters that STILL disagree on a scalar behind ``|safe``, each for a
-    #: reason of its own that predates this fix and that the two-build
-    #: differential confirms is unchanged by it (0 regressions):
+    #: The filters that STILL disagree on a scalar behind ``|safe``. **Empty
+    #: since #2435**, and the two entries it held are why the pin is kept
+    #: rather than replaced by a blanket "everything agrees":
     #:
     #: * ``add`` — Django's fallback is ``value + arg``, i.e. STRING
-    #:   concatenation, so ``{{ 1.5|safe|add:"1" }}`` is ``1.51``; djust's is
-    #:   numeric and gives ``2``. Pre-existing on ``{{ 1.5|add:"1" }}`` too.
-    #: * ``divisibleby`` — only for a value past ``i64``; the widened parse
-    #:   below stops there and answers ``False``, as it did before.
+    #:   concatenation, so ``{{ 1.5|safe|add:"1" }}`` is ``1.51``; djust's was
+    #:   numeric and gave ``2``, because its VALUE-side ``int()`` allowed a
+    #:   float coercion Python's does not. Closed by the ``int(value)``
+    #:   chokepoint, which makes ``int("1.5")`` the ValueError it is.
+    #: * ``divisibleby`` — only for a value past ``i64``; the parse stopped
+    #:   there and answered ``False``. Closed by the same chokepoint, whose
+    #:   digits are arbitrary-precision.
     #:
     #: ``date``, ``time`` and ``pluralize`` were here until #2359 gave all
     #: three Django's failure answer; this pin is what reported them closed
     #: ("new residue [], closed ['date', 'pluralize', 'time']"), which is the
-    #: half of a characterization pin that usually goes unexercised.
-    KNOWN_RESIDUE = frozenset({"add", "divisibleby"})
+    #: half of a characterization pin that usually goes unexercised — and it
+    #: reported these two the same way.
+    KNOWN_RESIDUE: frozenset[str] = frozenset()
 
     def test_the_tail_set_covers_the_whole_live_registry(self) -> None:
         """Guards the sweep below against silently shrinking (#1859)."""
@@ -366,11 +375,21 @@ class TestTheBuiltInChainIsNotWorseOff:
             f"details { ({k: v[:2] for k, v in residue.items()}) }"
         )
 
-    def test_divisibleby_past_i64_is_the_only_divisibleby_residue(self) -> None:
-        """Names the one ``divisibleby`` cell the pin above tolerates, so the
-        set-level assertion cannot quietly cover a second one."""
-        assert django_render("{{ p|safe|divisibleby:'2' }}", {"p": 12345678901234567890}) == "True"
-        assert djust_render("{{ p|safe|divisibleby:'2' }}", {"p": 12345678901234567890}) == "False"
+    def test_divisibleby_past_i64_was_the_last_divisibleby_residue(self) -> None:
+        """The cell the set-level pin above used to tolerate, now closed.
+
+        ``12345678901234567890`` does not fit an ``i64``; djust answered
+        ``False`` for EVERY divisor because its ``parse::<i64>()`` simply
+        failed. #2435's chokepoint carries the digits, and the modulus is
+        streamed over them, so the answer is exact at any length — asserted
+        against BOTH parities so "always False" and "always True" are each
+        ruled out.
+        """
+        big = 12345678901234567890
+        assert_agrees("{{ p|safe|divisibleby:'2' }}", {"p": big})
+        assert djust_render("{{ p|safe|divisibleby:'2' }}", {"p": big}) == "True"
+        assert_agrees("{{ p|safe|divisibleby:'7' }}", {"p": big})
+        assert djust_render("{{ p|safe|divisibleby:'7' }}", {"p": big}) == "False"
         for value in SCALARS.values():
             if type(value) is int and abs(value) < 2**63:
                 assert_agrees("{{ p|safe|divisibleby:'2' }}", {"p": value})

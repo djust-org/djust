@@ -4337,7 +4337,7 @@ fn width_ratio(value: &str, max_value: &str, max_width: &str, context: &Context)
     if max_val == 0.0 {
         return Ok("0".to_string());
     }
-    Ok(py_round_to_string(val / max_val * max_w as f64).unwrap_or_default())
+    Ok(py_round_to_string(val / max_val * max_w).unwrap_or_default())
 }
 
 /// `int(v)` for the one operand Django applies it to, or `None` for a raise.
@@ -4347,18 +4347,24 @@ fn width_ratio(value: &str, max_value: &str, max_width: &str, context: &Context)
 /// `float("100.6")` is fine), and that difference is the whole reason Django
 /// treats this operand's failure as a syntax error rather than an empty
 /// render.
-fn py_int(value: &Value) -> Option<i64> {
-    match value {
-        Value::Integer(i) => Some(*i),
-        Value::Bool(b) => Some(i64::from(*b)),
-        // `int(float)` truncates toward zero; a non-finite float raises.
-        Value::Float(f) if f.is_finite() => Some(*f as i64),
-        Value::String(s) => s.trim().parse::<i64>().ok(),
-        Value::Decimal(_) | Value::BigInt(_) => {
-            value.as_f64().filter(|f| f.is_finite()).map(|f| f as i64)
-        }
-        _ => None,
-    }
+///
+/// Through the `int(value)` chokepoint since #2435. This was a FOURTH spelling
+/// of `int()` and had drifted from the other three in two measurable ways:
+/// `s.trim().parse::<i64>()` refused `"1_0"`, which Python reads as 10, and it
+/// carried the result in an `i64` — so `{% widthratio 10 2 p %}` on a 31-digit
+/// Python `int` rendered `46116860184273879040`, a number that appears nowhere
+/// in the calculation, where Django renders `4999999999999999817948147482624`.
+/// An `f64` is the honest carrier: Django's own `(value / max_value) *
+/// max_width` promotes this operand to a float anyway.
+///
+/// Django's `except (ValueError, TypeError)` around this `int()` does not name
+/// `OverflowError`, so `{% widthratio 10 2 inf %}` raises that instead of the
+/// syntax error. Both engines refuse the template; only the exception's name
+/// differs, and it is named here rather than modelled.
+fn py_int(value: &Value) -> Option<f64> {
+    crate::filters::python_int_value(value)
+        .ok()
+        .and_then(|digits| digits.parse::<f64>().ok())
 }
 
 /// `str(round(x))`, or `None` where Python's `round` raises.
@@ -4521,7 +4527,13 @@ impl ToF64 for Value {
             Value::Float(f) => Some(*f),
             // `.trim()` because Python's `float(" 5 ")` is 5.0 — and the one
             // caller is `width_ratio`, whose contract is Python's `float()`.
-            Value::String(s) => s.trim().parse::<f64>().ok(),
+            //
+            // The underscores go through the shared rule (#2435): `float()`
+            // accepts `_` between digits, so `{% widthratio "1_0" 2 100 %}` is
+            // 500 in Django, and a bare `parse::<f64>()` refused it and
+            // rendered nothing.
+            Value::String(s) => crate::filters::strip_python_underscores(s.trim())
+                .and_then(|cleaned| cleaned.parse::<f64>().ok()),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             // Delegates rather than re-parsing: `Value::as_f64` is the one
             // definition of what a Decimal is worth numerically (#1646).

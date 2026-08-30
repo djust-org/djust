@@ -705,22 +705,37 @@ class TestKnownRemainingDivergences:
         _, filtered = render_both("{{ p|linebreaks }}", (1, 2))
         assert filtered == "<p>[1, 2]</p>"
 
-    def test_filesizeformat_on_an_infinity_cannot_reproduce_djangos_500(self) -> None:
-        """Django RAISES here; a filter in this engine cannot.
+    def test_filesizeformat_on_an_infinity_now_refuses_as_django_does(self) -> None:
+        """CLOSED by #2435; this entry read "cannot reproduce Django's 500".
 
         ``int(float('inf'))`` is an ``OverflowError``, which is NOT in
-        ``filesizeformat``'s ``except`` tuple — so Django propagates it and the
-        page 500s. djust lands on the same `0 bytes` fallback as every other
-        uncoercible value. Recorded because it is a deliberate refusal to
-        reproduce a crash, not an oversight; before this change djust rendered
-        ``8192.0 PB`` for an infinity, which is worse than either.
+        ``filesizeformat``'s ``except (TypeError, ValueError,
+        UnicodeDecodeError)`` — so Django propagates it and the page 500s.
+        djust landed on the same ``0 bytes`` fallback as every other
+        uncoercible value, because nothing in the arm distinguished WHICH
+        exception ``int()`` raises. The ``int(value)`` chokepoint does, so both
+        engines now refuse.
+
+        The NaN is the control on the other side of that split: ``int(nan)`` is
+        a **ValueError**, which the ``except`` DOES catch, so it must keep
+        rendering ``0 bytes`` on both engines. Without it, "refuse a
+        non-finite" would pass just as well as the correct rule.
         """
         with pytest.raises(OverflowError):
             DjangoTemplate("{{ p|filesizeformat }}").render(DjangoContext({"p": float("inf")}))
-        out = _rust.render_template(
-            "{{ p|filesizeformat }}", normalize_django_value({"p": float("inf")})
+        with pytest.raises(RuntimeError, match="calls int\\(\\) on its value"):
+            _rust.render_template(
+                "{{ p|filesizeformat }}", normalize_django_value({"p": float("inf")})
+            )
+        nan = float("nan")
+        assert (
+            DjangoTemplate("{{ p|filesizeformat }}").render(DjangoContext({"p": nan}))
+            == f"0{NBSP}bytes"
         )
-        assert out == f"0{NBSP}bytes"
+        assert (
+            _rust.render_template("{{ p|filesizeformat }}", normalize_django_value({"p": nan}))
+            == f"0{NBSP}bytes"
+        )
 
     def test_a_float_nan_no_longer_spells_itself_differently(self) -> None:
         """CLOSED by #2258, hours after this entry was written.

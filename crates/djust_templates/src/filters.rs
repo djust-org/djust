@@ -518,8 +518,11 @@ fn get_digit_returns_input(value: &Value, arg: Option<&str>, arg_was_quoted: boo
         0,
         BadArg::ReturnInput,
     ) {
-        // `int(arg)` parsed; the input comes back only if `int(value)` raised.
-        Ok(Some(_)) => int_digits_of(value, false).is_none(),
+        // `int(arg)` parsed; the input comes back only if `int(value)` raised
+        // a **ValueError** — the one exception Django's `except` names. A
+        // TypeError or an OverflowError makes the dispatch arm return `Err`,
+        // and `Result::map` never reaches this (#2435).
+        Ok(Some(_)) => matches!(python_int_value(value), Err(IntValueError::Value)),
         // `int(arg)` raised before `value` was rebound.
         Ok(None) => true,
         Err(_) => false,
@@ -1273,10 +1276,26 @@ fn apply_builtin_filter(
             // agree with, and `i64::MAX` was a fabricated number where the
             // fail-soft below at least returns the value it was given.
             let arg_value = arg.map(|s| Value::String(s.to_string()));
-            // The VALUE is a real typed value, never a template literal, so its
-            // float coercion is always allowed. Only the ARGUMENT's quoting is
-            // in question.
-            let lhs = int_digits_of(value, true);
+            // The VALUE goes through the `int(value)` chokepoint (#2435), which
+            // is `int()` and nothing else. It used to pass `string_float_ok`
+            // here, so a `Value::String("100.6")` became 100 — but Django calls
+            // `int(value)` on the resolved object and `int("100.6")` is a
+            // ValueError, which drops it to the CONCATENATION branch:
+            // `{{ "100.6"|add:"1" }}` is `"100.61"`, not `101`. A Python float
+            // still truncates, because it arrives as `Value::Float` and never
+            // took that branch. Only the ARGUMENT's quoting decides whether a
+            // float SPELLING is a float, which is why the flag stays there.
+            //
+            // `OverflowError` — `int(±inf)` — escapes Django's
+            // `except (ValueError, TypeError)` and 500s the page; the other two
+            // fall through to the branches below exactly as before.
+            let lhs = match python_int_value(value) {
+                Ok(digits) => Some(digits),
+                Err(IntValueError::Overflow) => {
+                    return Some(Err(int_value_error(filter_name, IntValueError::Overflow)));
+                }
+                Err(_) => None,
+            };
             // A bare `True`/`False` first, through the ONE helper that states
             // that rule (#2347/#1646). `int_digits_of` is `int()` for a
             // NUMERIC spelling and answers `None` for the text `"True"` — which
@@ -1476,15 +1495,19 @@ fn apply_builtin_filter(
                      zero is a ZeroDivisionError — Django raises here too"
                 ))));
             }
-            let dividend = match value {
-                Value::Integer(n) => Some(*n),
-                Value::String(s) => s.trim().parse::<i64>().ok(),
-                _ => None,
+            // The VALUE half, closed in #2435. This arm read `Value::Integer`
+            // and a `parse::<i64>()` on a string and answered `False` for
+            // everything else — a FIFTH spelling of `int()` that got a float,
+            // a bool, a `Decimal`, a `BigInt` and `"1_0"` wrong on the answer
+            // AND swallowed all three exceptions Django's bare
+            // `int(value) % int(arg)` lets through. Now the chokepoint, whose
+            // digits are arbitrary-precision so a Python `int` past `i64`
+            // divides exactly rather than answering `False`.
+            let dividend = match python_int_value(value) {
+                Ok(digits) => digits,
+                Err(err) => return Some(Err(int_value_error(filter_name, err))),
             };
-            Ok(Value::Bool(match dividend {
-                Some(n) => n % divisor == 0,
-                None => false,
-            }))
+            Ok(Value::Bool(int_digits_divisible_by(&dividend, divisor)))
         }
         "floatformat" => {
             // Django's `floatformat` is decimal arithmetic, not float
@@ -1509,6 +1532,14 @@ fn apply_builtin_filter(
             // #2260's own arm here is superseded by that rewrite, which already
             // routes every variant through one `filesize_to_int` — so `BigInt`
             // belongs there, next to `Decimal`, and that is where it is.
+            //
+            // `except (TypeError, ValueError, UnicodeDecodeError)` does NOT
+            // name `OverflowError`, so `int(±inf)` 500s the page while
+            // `int(nan)` — a ValueError — is caught and renders `0 bytes`
+            // (#2435). This arm answered `0 bytes` for both.
+            if let Err(IntValueError::Overflow) = python_int_value(value) {
+                return Some(Err(int_value_error(filter_name, IntValueError::Overflow)));
+            }
             Ok(Value::String(format_filesize(value)))
         }
         // `random` is `lambda value: random.choice(value)` — it INDEXES, so a
@@ -1887,6 +1918,18 @@ fn apply_builtin_filter(
         "json_script" => {
             // `json.dumps(d.keys())` raises `TypeError`. Same treatment as
             // `random` above (#2340).
+            //
+            // This reaches only the ATTRIBUTE route — `{{ d.keys|json_script:"i" }}`,
+            // where the view is built inside Rust. A view bound in PYTHON
+            // (`ctx = {"p": d.keys()}`) never becomes a `DictView`: the PyO3
+            // conversion has no arm for it, so it arrives as
+            // `Value::String("dict_keys([…])")` and is emitted like any other
+            // string. Django raises for both routes; djust answers them
+            // differently, and that route-dependence is the same type erasure
+            // #2429 decided not to fight (see `value_to_json`). Pinned in
+            // `python/tests/test_json_script_refusal_decision_2429.py::`
+            // `TestTheValuePositionCannotSeeTheTypeAtAll::`
+            // `test_one_object_two_routes_two_values`.
             if matches!(value, Value::DictView { .. }) {
                 return Some(Ok(Value::Missing));
             }
@@ -2002,9 +2045,15 @@ fn apply_builtin_filter(
             ) else {
                 return Some(Ok(value.clone()));
             };
-            // `int(value)` raised: Django returns the value unchanged.
-            let Some(d) = int_digits_of(value, false) else {
-                return Some(Ok(value.clone()));
+            // `int(value)` raised — and WHICH exception decides the answer
+            // (#2435). Django's `except ValueError: return value` catches
+            // exactly one of the three: a `TypeError` (`None`, a list, a dict)
+            // and an `OverflowError` (`±inf`) both escape it and 500 the page.
+            // This returned the value for all three.
+            let d = match python_int_value(value) {
+                Ok(digits) => digits,
+                Err(IntValueError::Value) => return Some(Ok(value.clone())),
+                Err(err) => return Some(Err(int_value_error(filter_name, err))),
             };
             if n < 1 {
                 return Some(Ok(int_value_of(&d)));
@@ -2743,20 +2792,8 @@ fn python_float(raw: &str) -> Option<f64> {
     if lower.contains("inf") || lower.contains("nan") {
         return None;
     }
-    // `_` is legal only between digits, exactly as in `python_int`.
-    let bytes = t.as_bytes();
-    let mut cleaned = String::with_capacity(t.len());
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'_' {
-            let prev = i > 0 && bytes[i - 1].is_ascii_digit();
-            let next = bytes.get(i + 1).is_some_and(u8::is_ascii_digit);
-            if !prev || !next {
-                return None;
-            }
-        } else {
-            cleaned.push(b as char);
-        }
-    }
+    // `_` is legal only between digits — one spelling of that rule (#2435).
+    let cleaned = strip_python_underscores(t)?;
     // Django's own guard: `float("2.")` succeeds in Python but `Variable`
     // rejects a trailing `.`, so `{{ x|add:2. }}` is a lookup, not a literal.
     if cleaned.ends_with('.') {
@@ -2828,48 +2865,18 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
 /// filter's fail-silently path. Note a lone-space part is NOT empty and NOT an
 /// int, so `slice:"1: "` returns the input unchanged.
 fn python_int(s: &str) -> Option<isize> {
-    let t = s.trim();
-    let (negative, digits) = match t.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, t.strip_prefix('+').unwrap_or(t)),
-    };
-    if digits.is_empty() {
-        return None;
-    }
-    // `int()` allows `_` only between digits: `_1`, `1_` and `1__0` all raise.
-    let mut cleaned = String::with_capacity(digits.len());
-    let bytes = digits.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'_' {
-            let prev_digit = i > 0 && bytes[i - 1].is_ascii_digit();
-            let next_digit = bytes.get(i + 1).is_some_and(u8::is_ascii_digit);
-            if !prev_digit || !next_digit {
-                return None;
-            }
-        } else if b.is_ascii_digit() {
-            cleaned.push(b as char);
+    // Through the one spelling of `int(str)` (#2435); the SATURATION below is
+    // this caller's own policy and is what keeps it a separate function.
+    let digits = python_int_str(s)?;
+    Some(digits.parse::<isize>().unwrap_or({
+        // Saturate rather than fail: see the doc comment — a magnitude past
+        // `isize` is past every `len`, so the bound selects the same elements.
+        if digits.starts_with('-') {
+            isize::MIN
         } else {
-            return None;
+            isize::MAX
         }
-    }
-    // Saturate rather than fail: see the doc comment — a magnitude past `isize`
-    // is past every `len`, so the bound selects the same elements.
-    Some(match cleaned.parse::<isize>() {
-        Ok(n) => {
-            if negative {
-                -n
-            } else {
-                n
-            }
-        }
-        Err(_) => {
-            if negative {
-                isize::MIN
-            } else {
-                isize::MAX
-            }
-        }
-    })
+    }))
 }
 
 /// `str(arg).split(":")` into the three `slice()` arguments.
@@ -3574,10 +3581,13 @@ fn filesize_to_int(value: &Value) -> Option<i128> {
         // `int(True)` is 1. Django reaches this before any string handling.
         Value::Bool(b) => Some(i128::from(*b)),
         Value::Float(f) => {
-            // `int(float)` truncates toward zero; `int(nan)` raises ValueError
-            // and `int(inf)` raises OverflowError — which Django does NOT catch,
-            // so it propagates as a 500. A filter here cannot raise, so both
-            // land on the `0 bytes` fallback.
+            // `int(float)` truncates toward zero. `int(nan)` raises ValueError,
+            // which Django's `except (TypeError, ValueError, UnicodeDecodeError)`
+            // CATCHES, so a NaN lands on the `0 bytes` fallback below.
+            // `int(inf)` raises OverflowError, which it does not catch — and
+            // that raise is made at the dispatch arm before this is reached
+            // (#2435). An earlier version of this comment said both propagate;
+            // measured, only the infinity does.
             // The bound is `i128::MAX` as a double — the largest magnitude the
             // `as i128` below can carry without saturating. NaN fails the range
             // test on its own, so `is_finite` is not spelled separately.
@@ -3618,31 +3628,10 @@ fn filesize_to_int(value: &Value) -> Option<i128> {
 /// Rejects `"19.99"` — Python's `int()` does not parse a decimal point, which is
 /// why Django renders `0 bytes` for it and not `19 bytes`.
 fn python_int_from_str(raw: &str) -> Option<i128> {
-    let trimmed = raw.trim();
-    let (neg, digits) = match trimmed.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-    };
-    let mut cleaned = String::with_capacity(digits.len());
-    let mut prev_was_digit = false;
-    for ch in digits.chars() {
-        if ch.is_ascii_digit() {
-            cleaned.push(ch);
-            prev_was_digit = true;
-        } else if ch == '_' && prev_was_digit {
-            // A separator must sit BETWEEN digits: `int("_1")` and `int("1__2")`
-            // are both ValueError.
-            prev_was_digit = false;
-        } else {
-            return None;
-        }
-    }
-    // Also rejects an empty string and a bare sign — neither ends on a digit.
-    if !prev_was_digit {
-        return None;
-    }
-    let n = cleaned.parse::<i128>().ok()?;
-    Some(if neg { -n } else { n })
+    // Through the one spelling of `int(str)` (#2435). This had its own copy of
+    // the whitespace/sign/underscore loop, which is exactly the drift #2328
+    // fixed on the argument axis and this fixes on the value axis.
+    python_int_str(raw)?.parse::<i128>().ok()
 }
 
 /// Django's inner `filesize_number_format`:
@@ -4720,9 +4709,27 @@ fn json_float_body(f: f64) -> String {
 /// **VALUE** either: `{{ p|json_script:"d" }}` over `{"a": object()}` renders a
 /// document where Django raises the matching `TypeError: Object of type Obj is
 /// not JSON serializable`. Refusing keys alone would make the two positions
-/// disagree — a new inconsistency wearing a fix's clothes. Both positions want
-/// one decision, taken together; tracked at #2429 and pinned as still-divergent
-/// in `python/tests/test_json_script_typed_keys_2425.py::TestTheRefusalHalfIsNotClosedHere`.
+/// disagree — a new inconsistency wearing a fix's clothes.
+///
+/// **#2429 took that decision, and it is to stay permissive in BOTH.** The key
+/// position is decidable here — [`ObjectKey`] keeps the type (#2339) — and the
+/// value position is not: `FromPyObject for Value` converts an arbitrary object
+/// to its `__dict__` (an `Object`) or its `str()` (a `String`) at the boundary,
+/// so `{"a": Obj()}` and `{"a": "OBJ"}` produce byte-identical documents and a
+/// refusal would have to refuse the second. Recovering the type means a new
+/// `Value` variant threaded through every construction site, filter, renderer
+/// and serializer that matches on `Value` — an architectural change to the
+/// boundary that makes `{{ obj.name }}` work, in exchange for turning a
+/// rendering page into a 500 that only a djust-native template can reach
+/// (a template that ran under Django never carried these values).
+///
+/// Note Django is itself asymmetric here: `tuple` / `Decimal` / `date` /
+/// `datetime` / `time` / `timedelta` / `UUID` are refused as KEYS and accepted
+/// as VALUES, because `DjangoJSONEncoder.default` never sees a key.
+///
+/// Recorded in `python/tests/test_json_script_refusal_decision_2429.py`, and
+/// pinned as a decided limit in
+/// `python/tests/test_json_script_typed_keys_2425.py::TestTheRefusalHalfIsADecidedLimit`.
 fn json_key_body(key: &djust_core::ObjectKey) -> std::borrow::Cow<'_, str> {
     use djust_core::ObjectKey;
     match key {
@@ -4743,8 +4750,14 @@ fn value_to_json(value: &Value) -> String {
         // A dict view is NOT JSON-serializable: `json.dumps(d.keys())` raises
         // `TypeError`, and so does Django's `{{ d.keys|json_script:"i" }}`.
         // `null` is the closest honest answer — the `json_script` arm refuses
-        // the whole filter before reaching here, so this is only the nested
-        // case (#2340).
+        // the whole filter before reaching here, so this is only the NESTED
+        // case, and only for a view built by the ATTRIBUTE route (#2340).
+        //
+        // A view bound in Python is a `Value::String` by the time it arrives —
+        // the PyO3 conversion has no `DictView` arm — so `{"x": d.keys()}`
+        // emits the repr as a JSON string rather than reaching this. Corrected
+        // (#2429): the original wording said "the whole filter" without the
+        // route qualifier, and running it showed the two routes disagree.
         Value::DictView { .. } => "null".to_string(),
         Value::Bool(b) => {
             if *b {
@@ -5970,18 +5983,6 @@ fn pluralize(value: &Value, arg: &str) -> String {
 }
 
 fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
-    let from_digits = |s: &str| -> Option<String> {
-        let t = s.trim();
-        let body = t.strip_prefix(['-', '+']).unwrap_or(t);
-        if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        Some(if t.starts_with('-') {
-            format!("-{body}")
-        } else {
-            body.to_string()
-        })
-    };
     match value {
         Value::Integer(n) => Some(n.to_string()),
         // Exact, and truncating toward zero: `int(1.5)` is 1 and `int(1e300)`
@@ -5995,7 +5996,7 @@ fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
         Value::BigInt(d) => Some(d.clone()),
         // `int(True)` is 1 in Python.
         Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
-        Value::String(s) => from_digits(s).or_else(|| {
+        Value::String(s) => python_int_str(s).or_else(|| {
             string_float_ok
                 .then(|| s.trim().parse::<f64>().ok())
                 .flatten()
@@ -6004,6 +6005,217 @@ fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
         // `int(None)`, `int([1])`, `int({})` all raise.
         _ => None,
     }
+}
+
+/// `int(digits) % divisor == 0`, on a digit string of ANY length.
+///
+/// Streamed rather than parsed because a Python `int` has no ceiling and a
+/// `Value::BigInt` really can reach here: `{{ p|divisibleby:"2" }}` on a
+/// 31-digit id answered `False` for every divisor before #2435, because the
+/// `parse::<i64>()` it went through simply failed.
+///
+/// The sign is dropped: `%`'s result takes the DIVISOR's sign in Python, but
+/// the only question asked here is whether it is zero, and `(-n) % d == 0`
+/// exactly when `n % d == 0`.
+fn int_digits_divisible_by(digits: &str, divisor: i64) -> bool {
+    let magnitude = divisor.unsigned_abs() as u128;
+    let mut remainder: u128 = 0;
+    for c in digits.chars() {
+        let Some(d) = c.to_digit(10) else {
+            continue; // the leading `-`; `python_int_str` emits nothing else.
+        };
+        remainder = (remainder * 10 + u128::from(d)) % magnitude;
+    }
+    remainder == 0
+}
+
+/// Which exception Python's `int(x)` raises on a template VALUE (#2435).
+///
+/// Django's four value-side `int()` call sites each catch a DIFFERENT subset,
+/// so "did it raise" is not enough — WHICH one it raises is observable:
+///
+/// ```python
+/// def divisibleby(value, arg): return int(value) % int(arg) == 0   # nothing caught
+/// def get_digit(value, arg):
+///     try: arg = int(arg); value = int(value)
+///     except ValueError: return value                              # ValueError only
+/// def add(value, arg):
+///     try: return int(value) + int(arg)
+///     except (ValueError, TypeError): ...                          # not OverflowError
+/// def filesizeformat(bytes_):
+///     try: bytes_ = int(bytes_)
+///     except (TypeError, ValueError, UnicodeDecodeError): ...      # not OverflowError
+/// ```
+///
+/// Measured against CPython 3.12, not remembered — the `nan`/`inf` split is the
+/// one a reader gets backwards: `int(float("nan"))` is a **ValueError** and
+/// `int(float("inf"))` an **OverflowError**, and `filesizeformat` therefore
+/// renders `0 bytes` for a NaN and raises for an infinity.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum IntValueError {
+    /// `int("abc")`, `int("")`, `int(Decimal("NaN"))`, `int(float("nan"))`.
+    Value,
+    /// `int(None)`, `int([1])`, `int({}) `— "argument must be a string, a
+    /// bytes-like object or a real number".
+    Type,
+    /// `int(float("inf"))`, `int(Decimal("Infinity"))`.
+    Overflow,
+}
+
+impl IntValueError {
+    /// The Python exception name, so the raise a caller emits says which one
+    /// Django's own `try` failed to catch.
+    fn python_name(self) -> &'static str {
+        match self {
+            IntValueError::Value => "ValueError",
+            IntValueError::Type => "TypeError",
+            IntValueError::Overflow => "OverflowError",
+        }
+    }
+}
+
+/// **THE** `int(value)` chokepoint — the VALUE half of #2328's argument one.
+///
+/// #2328 routed every numeric filter ARGUMENT through one parser after finding
+/// four spellings that disagreed with Python and with each other. The VALUE
+/// half was left explicitly open — `divisibleby`'s arm said so in as many
+/// words — and had drifted the same way: FOUR readings of `int(x)` lived in
+/// this crate ([`int_digits_of`], [`python_int_from_str`], `divisibleby`'s own
+/// inline `parse::<i64>()`, and `renderer::py_int`), none of which said which
+/// exception Python raises. The cost was measured, not assumed: 3,120 of the
+/// 4,222 cells where Django refuses a `{% widthratio %}` template and djust
+/// renders one were `divisibleby` (2,132) and `get_digit` (988) failing soft
+/// where `int(value)` raises inside `WidthRatioNode.render`'s
+/// `except (ValueError, TypeError): raise TemplateSyntaxError`.
+///
+/// Answers `str(int(value))` — the exact digits, arbitrary precision — because
+/// `add` must carry a sum past `i64` (#2253/#2260) and `{% widthratio %}`'s
+/// third operand must carry a magnitude past it too.
+pub(crate) fn python_int_value(value: &Value) -> std::result::Result<String, IntValueError> {
+    match value {
+        // "int() argument must be a string, a bytes-like object or a real
+        // number". `Value::Missing` is NOT here: it is Django's
+        // `string_if_invalid`, so the value that reaches `int()` is `""` and
+        // the answer is a ValueError, which the fall-through below gives.
+        Value::None | Value::Object(_) | Value::DictView { .. } => Err(IntValueError::Type),
+        // A sequence, both shapes on ONE line, which is what
+        // `test_every_bare_list_site_is_one_of_the_documented_list_always_four`
+        // asks of every `Value::List` match (#2317/#2321): a bare `List` arm
+        // here would refuse a list and silently accept the tuple `int()`
+        // refuses just as loudly.
+        Value::List(_) | Value::Tuple(_) => Err(IntValueError::Type),
+        Value::Float(f) if f.is_nan() => Err(IntValueError::Value),
+        Value::Float(f) if f.is_infinite() => Err(IntValueError::Overflow),
+        // A `Decimal` carries its EXACT digit string (#2214), so its two
+        // specials are spelled rather than typed: `str(Decimal("NaN"))` is
+        // `"NaN"` and `str(Decimal("Infinity"))` is `"Infinity"`. Verified by
+        // rendering both through the real engine, not read off the docs.
+        Value::Decimal(d) => match decimal_special(d) {
+            Some(DecimalSpecial::Nan) => Err(IntValueError::Value),
+            Some(DecimalSpecial::Infinite) => Err(IntValueError::Overflow),
+            None => int_digits_of(value, false).ok_or(IntValueError::Value),
+        },
+        _ => int_digits_of(value, false).ok_or(IntValueError::Value),
+    }
+}
+
+/// The raise a filter emits for an `int(value)` its Django source does not
+/// catch. Names the Python exception so the message says WHICH `except` clause
+/// let it through.
+pub(crate) fn int_value_error(filter_name: &str, err: IntValueError) -> DjangoRustError {
+    DjangoRustError::TemplateError(format!(
+        "filter '{filter_name}' calls int() on its value, and that conversion \
+         is a {} Django does not catch — Django raises here too",
+        err.python_name()
+    ))
+}
+
+enum DecimalSpecial {
+    Nan,
+    Infinite,
+}
+
+/// `Decimal.is_nan()` / `is_infinite()` read off the digit string a
+/// [`Value::Decimal`] carries. `sNaN` is a NaN too, and the sign prefix is
+/// stripped first so `-Infinity` is recognised.
+fn decimal_special(raw: &str) -> Option<DecimalSpecial> {
+    let t = raw.trim();
+    let body = t.strip_prefix(['-', '+']).unwrap_or(t);
+    let lower = body.to_ascii_lowercase();
+    if lower == "nan" || lower == "snan" {
+        return Some(DecimalSpecial::Nan);
+    }
+    if lower == "inf" || lower == "infinity" {
+        return Some(DecimalSpecial::Infinite);
+    }
+    None
+}
+
+/// Python's `int(str)`, answering `str(int(raw))` — the CANONICAL digits.
+///
+/// One statement of the string half of `int()`, because there were three
+/// (#1646): surrounding whitespace, an optional `+`/`-`, then ASCII digits
+/// which may be separated by single underscores (`int("1_024")` is 1024).
+/// Rejects `"19.99"` — `int()` does not parse a decimal point — and `"0x10"`,
+/// `"inf"` and `"nan"`, none of which `int()` accepts either.
+///
+/// Canonical, so the result really is `str(int(raw))`: `"007"` answers `"7"`
+/// and `"-0"` answers `"0"`. Callers index into these digits (`get_digit`) or
+/// hand them back as a value, so a non-canonical spelling is observable.
+///
+/// **Not covered**: Python's `int()` also accepts non-ASCII decimal digits
+/// (`int("٥")` is 5). Rust's `char::to_digit` is ASCII-only and `char::
+/// is_numeric` is the WRONG predicate (it admits `½` and `①`, which `int()`
+/// refuses), so this needs a Unicode `Nd` table. Tracked separately rather
+/// than approximated.
+pub(crate) fn python_int_str(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let (neg, body) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    let digits = strip_python_underscores(body)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // `str(int("007"))` is `"7"`, and `str(int("-0"))` is `"0"`.
+    let stripped = digits.trim_start_matches('0');
+    if stripped.is_empty() {
+        return Some("0".to_string());
+    }
+    Some(if neg {
+        format!("-{stripped}")
+    } else {
+        stripped.to_string()
+    })
+}
+
+/// Remove `_` separators exactly where Python's numeric literals allow them —
+/// BETWEEN two digits — and answer `None` where Python raises. `int("_1")`,
+/// `int("1_")` and `int("1__2")` are all ValueError, as are the float
+/// spellings of the same shapes.
+///
+/// Shared by [`python_int_str`], [`python_float`] and the renderer's
+/// `{% widthratio %}` float coercion, which had three copies of this loop
+/// between them and only two of them agreed.
+pub(crate) fn strip_python_underscores(body: &str) -> Option<String> {
+    if !body.contains('_') {
+        return Some(body.to_string());
+    }
+    let chars: Vec<char> = body.chars().collect();
+    let mut out = String::with_capacity(body.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '_' {
+            let prev = i > 0 && chars[i - 1].is_ascii_digit();
+            let next = chars.get(i + 1).is_some_and(char::is_ascii_digit);
+            if !prev || !next {
+                return None;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
 }
 
 /// The `Value` a `str(int(x))` digit string denotes — Python's `int` object.
