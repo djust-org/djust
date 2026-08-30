@@ -644,53 +644,55 @@ class TestTheResidueThisDoesNotTouch:
     `json_script` decision.
     """
 
-    def test_get_digit_over_a_datetime_is_still_the_extraction_BOUNDARY(self) -> None:
-        """The issue's own explicit exclusion, re-run rather than trusted.
+    def test_get_digit_over_a_datetime_is_now_a_PATH_split_not_a_residue(self) -> None:
+        """**Half-closed by #2473**, and the surviving half is a different
+        thing from what this pin was originally about.
 
-        The CELL is unchanged and its stated MECHANISM was wrong in two
-        different ways, so the docstring is rewritten rather than left to read
-        as true.
+        The pin has now been rewritten twice, and the rewrites are the record:
 
-        It said: *"a `datetime` is already a `Value::String` by the time any
-        filter sees it (the PyO3 extraction boundary)"*.
+        1. #2451 said *"a `datetime` is already a `Value::String` by the time
+           any filter sees it (the PyO3 extraction boundary)"*. Wrong
+           mechanism: on the path this test takes the flattening happens in
+           **Python**, in `normalize_django_value`, one layer before PyO3.
+        2. The rewrite then said the OUTCOME survives on both paths because
+           *"`Value::Encoded` carries `str()` and the encoder's JSON, no
+           integer — so it answers `ValueError`"*. That was true of the
+           `Encoded` variant and NOT true of the question: `int(datetime)` is a
+           `TypeError` because of the value's TYPE, which `Encoded` carries.
+           #2473 gave `python_int_value` the arm, so the raw path now raises.
 
-        1. On the path this test actually takes — through
-           `normalize_django_value`, as every `outcome()` cell does — the
-           flattening happens in **Python**, one layer before the PyO3
-           boundary: the normalizer converts a `datetime` to its ISO string.
-           That was true when #2451 shipped too; the named mechanism was simply
-           the wrong one.
-        2. On the RAW path (`render_template(tpl, {"p": dt})`, which
-           `djust/template/backend.py` takes) the boundary really was where the
-           type died — until #2448 gave the family `Value::Encoded`.
+        What is left is a genuine PATH split, not a residue:
 
-        What survives on BOTH paths is the OUTCOME, and for the same reason:
-        `get_digit`'s `int(value)` has only display text to read either way —
-        `Value::Encoded` carries `str()` and the encoder's JSON, no integer —
-        so it answers `ValueError`, the one exception its `except` catches,
-        while Django, holding the real object, gets a `TypeError`.
+        * RAW (`render_template(tpl, {"p": dt})`, which
+          `djust/template/backend.py` takes) — the value is a `Value::Encoded`,
+          `int()` refuses with a TypeError, and djust raises as Django does.
+        * NORMALIZED (`normalize_django_value`, every `outcome()` cell here) —
+          the datetime was already spelled as its ISO string in Python, so the
+          engine sees a `str` and `int("2020-01-01T12:00:00")` really is a
+          ValueError, the one exception `get_digit`'s `except` catches. That is
+          #2467's question about what the LiveView path should carry, not this
+          filter's.
 
-        Both halves are asserted below, on the raw path as well as the
-        normalized one, because the difference between them is the whole
-        correction.
+        Both halves are asserted, because the difference between them is now
+        the whole content of the pin.
         """
         import datetime
 
         value = datetime.datetime(2020, 1, 1, 12, 0, 0)
         with pytest.raises(TypeError):
             DjangoTemplate('{{ p|get_digit:"1" }}').render(DjangoContext({"p": value}))
-        # Both paths render: `int()` has only text on either one.
+        # RAW: refuses, as Django does (#2473).
+        with pytest.raises(RuntimeError) as exc:
+            _rust.render_template('{{ p|get_digit:"1" }}', {"p": value})
+        assert "TypeError" in str(exc.value), str(exc.value)
+        # NORMALIZED: still renders, because the value really is a string there.
         assert _rust.render_template('{{ p|get_digit:"1" }}', normalize_django_value({"p": value}))
-        assert _rust.render_template('{{ p|get_digit:"1" }}', {"p": value})
-        # …and on the RAW path the boundary now carries the type, which is the
-        # half of the old docstring that #2448 falsified. Without this the
-        # rewritten reason is prose again: the same value, one filter over,
-        # names the real Python type.
+        # The same split, one filter over — the type is present on one path and
+        # absent on the other, which is what makes this a PATH split rather
+        # than a fix that half-landed.
         with pytest.raises(RuntimeError) as exc:
             _rust.render_template("{{ p|first }}", {"p": value})
         assert "datetime.datetime" in str(exc.value), str(exc.value)
-        # And the normalized path does NOT, which is what makes it a PATH
-        # split rather than a fix that half-landed.
         assert _rust.render_template("{{ p|first }}", normalize_django_value({"p": value})) == "2"
 
     def test_the_survivors_were_get_digits_RETURN_TYPE_and_are_CLOSED(self) -> None:
