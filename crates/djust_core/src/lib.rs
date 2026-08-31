@@ -83,6 +83,86 @@ pub(crate) const TUPLE_TAG: &str = "__djust_tuple__";
 /// guessing, which is exactly the value that entry had when it was written.
 pub(crate) const ENCODED_TAG: &str = "__djust_encoded__";
 
+/// Marks a [`Value::Missing`] in a BINARY encoding (#2484).
+///
+/// Fifth instance of the mechanism [`DECIMAL_TAG`] documents — and the only one
+/// that had to choose WHICH of two variants gets the new spelling, because
+/// unlike the four above it is not giving a name to a value that had none. It
+/// is separating two values that shared one.
+///
+/// # The defect
+///
+/// [`Value::Missing`] and [`Value::None`] are deliberately DISTINCT (#2203):
+/// `Missing` renders `""` as Django's `string_if_invalid` does, `None` renders
+/// `"None"` as `str(None)` does. Both serialized as msgpack `nil` and every
+/// `nil` read back as `Missing`, so a `None` anywhere in
+/// `SerializableViewState.state` — top level, in a dict, in a list, in an
+/// `Encoded`'s attribute map — rendered Django's `"None"` on the first render
+/// and the EMPTY STRING after one cache hit. Measured over Django's live
+/// `defaultfilters` registry: 35 of 58 `{{ p|f }}` cells with `p = None` agreed
+/// with Django before one round trip and stopped agreeing after it, including
+/// `{{ p|default_if_none:"D" }}` (`"D"` → `""`) and `{{ p|yesno:"y,n,m" }}`
+/// (`"m"` → `"n"`) — the two filters that exist to branch on exactly this.
+///
+/// # Why the tag is on `Missing` and not on `None`
+///
+/// This is the whole decision, and it is a compatibility one rather than an
+/// aesthetic one. A state blob outlives a deploy: `SerializableViewState` is
+/// what a Redis state backend holds, so during a rolling upgrade an OLD reader
+/// reads bytes a NEW writer wrote, and a NEW reader reads bytes an OLD writer
+/// wrote. Both directions have to be stated.
+///
+/// Tagging `None` — the obvious fifth application — changes the encoding of the
+/// most common value in any state blob, and an old reader would see a one-key
+/// `Value::Object` where it used to see `nil`: `{{ p }}` would render a dict
+/// spelling and `{% if p %}` would take the TRUE branch, because a one-key map
+/// is truthy. That is strictly worse than the defect it fixes.
+///
+/// Tagging `Missing` instead leaves `None` as the bare `nil` it already was:
+///
+/// * **new payload, OLD reader** — a `None` is still one `nil` byte, which an
+///   old reader still turns into `Missing` and still renders `""`. Exactly
+///   today's behaviour; the upgrade introduces no new failure. The one new
+///   spelling on the wire is a tagged `Missing`, which an old reader would
+///   render as a one-key dict — but see below: no real path can produce one.
+/// * **OLD payload, new reader** — a `nil` written by any pre-fix build reads
+///   as `Value::None` and renders `"None"`. That is not merely tolerated, it is
+///   CORRECT: `FromPyObject` maps Python `None` to `Value::None` and has no
+///   arm producing `Missing`, so Python `None` is the only thing that can have
+///   put a `nil` in a state blob. A stale blob is fixed by the upgrade rather
+///   than misread by it.
+///
+/// # Why a tag at all, rather than just reading `nil` as `None`
+///
+/// Because `Missing` cannot reach this serializer TODAY, not because it cannot
+/// ever. It is a render-time sentinel — `renderer.rs`'s
+/// `resolve(...)?.unwrap_or(Value::Missing)` — and `RustLiveView::state` is
+/// filled only through the `FromPyObject` conversion, which never yields one
+/// (`a_missing_cannot_enter_state_through_the_python_conversion` measures
+/// that rather than asserting it). Dropping the distinction on the wire would
+/// make the codec lossy in the other direction and silently reopen this defect
+/// with the opposite sign the first time a `Missing` did become reachable. The
+/// tag costs 21 bytes on a value no real path emits and makes the codec
+/// injective.
+///
+/// The payload is `nil` — which is what keeps it from colliding with
+/// [`DECIMAL_TAG`] / [`BIGINT_TAG`] (string payloads) and [`TUPLE_TAG`] /
+/// [`ENCODED_TAG`] (list payloads). Same deliberate ugliness as the four
+/// above: a user dict of exactly this one key with a `None` value would be
+/// misread, and the name is chosen to make that a thing you have to try to do.
+///
+/// JSON is unchanged and stays lossy, exactly as [`TUPLE_TAG`]'s arm does:
+/// `json.dumps` has one `null` too, so the human-readable spelling matching
+/// Django means both variants stay `null`.
+pub(crate) const MISSING_TAG: &str = "__djust_missing__";
+
+/// The [`MISSING_TAG`] value, for tests outside the crate. `#[doc(hidden)]`,
+/// not API — same rationale as [`decimal_tag`].
+#[doc(hidden)]
+pub fn missing_tag() -> &'static str {
+    MISSING_TAG
+}
+
 /// The [`ENCODED_TAG`] value, for tests outside the crate. `#[doc(hidden)]`, not
 /// API — same rationale as [`decimal_tag`].
 #[doc(hidden)]
@@ -145,8 +225,16 @@ pub enum Value {
     /// `CallOutcome::Empty` resolves to, so an `alters_data` refusal or a
     /// serialization-floor denial lands here: those must keep rendering
     /// nothing, never the literal text "None".
+    ///
+    /// In a BINARY encoding it is a one-key tagged map under `MISSING_TAG`,
+    /// not a `nil` — see that constant for why the tag went on THIS variant
+    /// and not on [`Value::None`] (#2484).
     Missing,
     /// Python `None`. Renders as `"None"`, as `str(None)` does (#2203).
+    ///
+    /// Encodes as a bare `nil` in every format, which is what it has always
+    /// encoded as — and keeping it that way is the whole of #2484's
+    /// rolling-deploy compatibility argument.
     None,
     Bool(bool),
     Integer(i64),
@@ -779,6 +867,24 @@ impl Serialize for Value {
             // Everything else is exactly the untagged derive it replaces.
             Value::Decimal(d) => serializer.serialize_str(d),
             Value::BigInt(d) => serializer.serialize_str(d),
+            // A `Missing` takes the same two-format split the four tags above
+            // take, and for the reason `MISSING_TAG` documents at length: the
+            // two variants are deliberately DISTINCT (#2203) and shared one
+            // `nil`, so every `None` in state came back a `Missing` and
+            // rendered `""` after one cache hit (#2484).
+            //
+            // The tag is on THIS variant rather than on `None` so that the
+            // common value's bytes do not change: a `None` stays the bare
+            // `nil` an older reader already understands, and only this
+            // sentinel — which no real path can put in a state blob — gets a
+            // new spelling.
+            Value::Missing if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(MISSING_TAG, &())?;
+                m.end()
+            }
+            // JSON keeps ONE `null` for both, as `json.dumps` does — the same
+            // deliberate human-readable asymmetry `TUPLE_TAG` documents.
             Value::Missing | Value::None => serializer.serialize_none(),
             Value::Bool(b) => serializer.serialize_bool(*b),
             Value::Integer(i) => serializer.serialize_i64(*i),
@@ -846,18 +952,25 @@ impl<'de> Deserialize<'de> for Value {
                 formatter.write_str("a JSON/MessagePack value")
             }
 
+            // A bare `nil` / JSON `null` is Python `None`, NOT the missing-key
+            // sentinel (#2484). It reads as `Missing` before this fix, which
+            // is what collapsed the two: `FromPyObject` has no arm producing a
+            // `Missing`, so Python `None` is the only thing that can have put a
+            // `nil` in a state blob — including one written by a pre-fix build,
+            // which this therefore FIXES rather than misreads. A `Missing`
+            // arrives through `MISSING_TAG` in `visit_map` instead.
             fn visit_unit<E>(self) -> std::result::Result<Value, E>
             where
                 E: de::Error,
             {
-                Ok(Value::Missing)
+                Ok(Value::None)
             }
 
             fn visit_none<E>(self) -> std::result::Result<Value, E>
             where
                 E: de::Error,
             {
-                Ok(Value::Missing)
+                Ok(Value::None)
             }
 
             fn visit_some<D>(self, deserializer: D) -> std::result::Result<Value, D::Error>
@@ -933,6 +1046,15 @@ impl<'de> Deserialize<'de> for Value {
                 if obj.len() == 1 {
                     if let Some(Value::String(d)) = obj.get(DECIMAL_TAG) {
                         return Ok(Value::Decimal(d.clone()));
+                    }
+                    // The binary-format missing-key tag (#2484). Same shape,
+                    // and the payload is `nil` — which reaches here as
+                    // `Value::None`, since `visit_unit` now reads a bare `nil`
+                    // as Python's `None`. That is what keeps this tag from
+                    // colliding with the string-payload and list-payload tags
+                    // around it.
+                    if let Some(Value::None) = obj.get(MISSING_TAG) {
+                        return Ok(Value::Missing);
                     }
                     // The binary-format big-int tag (#2260), same shape and the
                     // same "exactly one key, that key, a string payload"

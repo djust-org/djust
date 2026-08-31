@@ -316,21 +316,17 @@ class TestTheStateRoundTripKeepsTheAttributes:
         view.set_state("p", value)
         return RustLiveView.deserialize_msgpack(view.serialize_msgpack()).render()
 
-    @pytest.mark.parametrize(
-        ("value", "attr"),
-        [c for c in CLOSED if c.id not in ("datetime-tzinfo", "time-tzinfo")],
-    )
+    @pytest.mark.parametrize(("value", "attr"), CLOSED)
     def test_a_round_trip_preserves_the_attribute(self, value: object, attr: str) -> None:
         source = "{{ p.%s }}" % attr
         assert self._round_trip(source, value) == django_render(source, {"p": value})
 
-    # The two rows excluded above are the NAIVE `tzinfo`s, whose value is
-    # Python `None`. They are excluded because of a codec gap that is not this
-    # slot's and is not fixed here — pinned in
-    # `TestWhatThisDeliberatelyDoesNOTClose::test_a_None_attribute_is_lost_by_the_state_round_trip`
-    # and filed as #2484. Excluding them by ID rather than by predicate is
-    # deliberate: a third row acquiring a `None` value fails loudly here rather
-    # than being silently swept into the exemption.
+    # Two rows — the NAIVE `tzinfo`s, whose value is Python `None` — used to be
+    # excluded here, for a codec gap that was not this slot's: `Value::None`
+    # and `Value::Missing` shared one msgpack `nil` (#2484). #2484 closed it, so
+    # the exemption is REMOVED rather than left standing (#1859: a stale
+    # exemption is a pin that can no longer go red). The sweep is now the whole
+    # of `CLOSED`.
 
     def test_the_payload_is_what_carries_it(self) -> None:
         """Non-vacuity for the round trip: the blob names the tag AND the
@@ -429,34 +425,35 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         assert django_render(source, {"p": value}) != ""
         assert djust_render(source, {"p": value}) == ""
 
-    def test_a_None_attribute_is_lost_by_the_state_round_trip(self) -> None:
+    def test_a_None_attribute_survives_the_state_round_trip_since_2484(self) -> None:
         """`Value::None` and `Value::Missing` are deliberately DISTINCT (#2203)
         — `None` renders `"None"`, `Missing` renders `""` — and the msgpack
-        codec collapses them: both serialize as `nil` and `visit_unit` reads
-        every `nil` back as `Missing`.
+        codec used to collapse them: both serialized as `nil` and `visit_unit`
+        read every `nil` back as `Missing`.
 
-        So a naive datetime's `tzinfo` renders Django's `"None"` on the first
-        render and `""` after one cache hit. Filed as #2484, and pinned here in
-        the diverging direction so closing it reddens this test.
+        So a naive datetime's `tzinfo` rendered Django's `"None"` on the first
+        render and `""` after one cache hit. This was pinned in the DIVERGING
+        direction here, and #2484 closed it by tagging the RARE variant
+        (`MISSING_TAG` on `Missing`, `None` keeps the bare `nil`) — so the pin
+        is flipped rather than deleted.
 
-        The gap is the CODEC's, not the attribute map's, and the second half of
-        this test is what makes that a measurement: a PLAIN dict loses it too,
-        with no `Encoded` involved at all — `{{ d.a }}` on `{"a": None}` has
-        answered `"None"` then `""` since #2203.
+        The gap was the CODEC's, not the attribute map's, and the second half
+        of this test is what makes that a measurement: a PLAIN dict lost it
+        too, with no `Encoded` involved at all.
         """
         assert django_render("{{ p.tzinfo }}", {"p": DT}) == "None"
         # Before the round trip, #2481's map answers Django's spelling.
         assert djust_render("{{ p.tzinfo }}", {"p": DT}) == "None"
-        # After it, the codec gap.
-        assert self_round_trip("{{ p.tzinfo }}", DT) == ""
+        # And after it, since #2484.
+        assert self_round_trip("{{ p.tzinfo }}", DT) == "None"
 
-        # The same loss with no `Encoded` in reach.
+        # The same value with no `Encoded` in reach.
         from djust._rust import RustLiveView
 
         view = RustLiveView("{{ d.a }}")
         view.set_state("d", {"a": None})
         assert view.render() == django_render("{{ d.a }}", {"d": {"a": None}}) == "None"
-        assert RustLiveView.deserialize_msgpack(view.serialize_msgpack()).render() == ""
+        assert RustLiveView.deserialize_msgpack(view.serialize_msgpack()).render() == "None"
 
     def test_a_custom_tzinfo_with_attributes_still_diverges(self) -> None:
         """The one carried attribute whose VALUE can be an arbitrary object.
