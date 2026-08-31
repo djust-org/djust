@@ -5906,6 +5906,7 @@ mod tests {
                     hi: 737425,
                     lo: 11_045_000_000,
                 }),
+                attrs: Default::default(),
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
@@ -5918,6 +5919,7 @@ mod tests {
                 iterable: true,
                 repr: "set()".to_string(),
                 cmp_key: None,
+                attrs: Default::default(),
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
@@ -5931,6 +5933,7 @@ mod tests {
                 iterable: false,
                 repr: "<LenZero object>".to_string(),
                 cmp_key: None,
+                attrs: Default::default(),
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`
