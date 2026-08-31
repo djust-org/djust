@@ -569,6 +569,87 @@ pub struct Encoded {
     /// reaches [`filters::iter_values`] only from the empty-`len` claim, where
     /// `iterable` alone already answers it.
     pub items: Option<Vec<Value>>,
+    /// Which of Python's equality CONTRACTS this object obeys, measured at the
+    /// conversion (#2480). `None` is "no contract this crate can answer" —
+    /// never equal, which is the pre-fix answer for every value.
+    ///
+    /// # Why this is a fourth measured fact and not a rule over the others
+    ///
+    /// Nothing already carried decides it, in EITHER direction:
+    ///
+    /// * `set() == frozenset() == {}.keys() == {}.items()` is **True** in
+    ///   Python — ACROSS [`Encoded::type_name`]s;
+    /// * `LenZero() == LenZero()` on two DISTINCT instances is **False** —
+    ///   WITHIN one `type_name`, and True when it is the same object;
+    /// * `set() == {}.values()` is **False** while `set() == {}.keys()` is
+    ///   True, and both views carry the same (empty) [`Encoded::items`].
+    ///
+    /// So neither the type name nor the items nor any carried spelling decides
+    /// it. A NAME LIST would — `{set, frozenset, dict_keys, dict_items}` — and
+    /// is wrong in both directions: it misses every `collections.abc.Set`
+    /// registration a user writes, and it claims any user class that happens
+    /// to be called `set` (`type(o).__name__` is not qualified). The PROTOCOL
+    /// is the thing Python itself dispatches on, so it is the thing measured.
+    ///
+    /// # The four arms, each justified by a contract
+    ///
+    /// 1. [`EqClass::Set`] — `isinstance(o, collections.abc.Set)`. The ABC
+    ///    *defines* `__eq__` as `len(self) == len(other) and self <= other`
+    ///    and `__le__` as containment, so both the equality AND a real
+    ///    PARTIAL order fall out of [`Encoded::items`].
+    /// 2. [`EqClass::Number`] — `isinstance(o, numbers.Number)`, carrying
+    ///    `complex(o)`'s two components. Equality ONLY: `complex` refuses
+    ///    `<`, so this class must never grow an ordering.
+    /// 3. [`EqClass::Identity`] — `type(o).__eq__ is object.__eq__` AND
+    ///    `type(o).__repr__ is object.__repr__`. Identity semantics with an
+    ///    identity-bearing spelling, so the default repr
+    ///    (`<mod.X object at 0x…>`) IS a faithful token and
+    ///    [`Encoded::repr`] answers it with no new field. Equality only.
+    /// 4. `None` — every other object, including one that overrides `__eq__`
+    ///    (only Python can run it) and one with default `__eq__` but a CUSTOM
+    ///    `__repr__` (a `dict_values`: two distinct empty ones share the
+    ///    spelling `dict_values([])`, so the repr is not a token). Never
+    ///    equal, never ordered: exactly what a `cmp_key: None` already meant.
+    ///
+    /// **Arm 3 is a restoration, not a new hazard.** Before #2476 a
+    /// `LenZero()` crossed as `Value::String("<LenZero object at 0x…>")` and
+    /// compared by string through the `(String, String)` arm — this is the
+    /// same token, reached deliberately. Its one caveat is the same one:
+    /// CPython may reuse an address, so a value RESTORED from a state entry
+    /// could in principle match a fresh object allocated where the old one
+    /// died. Within a single render it cannot happen — every context object is
+    /// alive at once, so their addresses are distinct.
+    pub eq_class: Option<EqClass>,
+}
+
+/// Which of Python's equality contracts a [`Value::Encoded`] obeys (#2480).
+///
+/// Measured by [`equality_class`] at the conversion, because a render has no
+/// interpreter in reach and cannot call `__eq__`. See [`Encoded::eq_class`]
+/// for why each arm is a protocol rather than a type name, and
+/// `djust_templates::renderer::encoded_equal` for the one place it is read.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EqClass {
+    /// `isinstance(o, collections.abc.Set)`. Equality AND a subset PARTIAL
+    /// order, both computed over [`Encoded::items`] — the ABC defines both in
+    /// terms of containment, so one derivation answers all five operators.
+    Set,
+    /// `isinstance(o, numbers.Number)`, as `complex(o)`'s two components.
+    ///
+    /// EQUALITY ONLY. `complex(0) < complex(0)` RAISES in Python — Django
+    /// swallows it to False — so this class must never reach an ordering.
+    /// Two components rather than one because `complex(0, 1) == 0` is False
+    /// and a real part alone cannot say so.
+    Number {
+        /// `o.real` — or `float(o)` for a real number, which is the same.
+        real: f64,
+        /// `o.imag`, `0.0` for every real number.
+        imag: f64,
+    },
+    /// `type(o).__eq__ is object.__eq__` AND `type(o).__repr__ is
+    /// object.__repr__`: identity semantics, spelled by a repr that carries
+    /// the address. Equality only — `object()` does not order either.
+    Identity,
 }
 
 /// The attribute names carried on a [`Value::Encoded`] for each of the four
@@ -797,6 +878,14 @@ impl PartialEq for Encoded {
                 }
                 _ => false,
             }
+            // The equality CLASS is part of the value (#2480): an entry that
+            // came back off the wire without it answers `{% if a == b %}`
+            // differently, which is exactly what a round-trip pin is for.
+            // `EqClass` derives `PartialEq`, and its `f64`s compare as `f64`s
+            // — a NaN component would make a value structurally unequal to
+            // itself, which is the same note `values_structurally_equal`
+            // already carries for `Value::Float`.
+            && self.eq_class == other.eq_class
     }
 }
 
@@ -866,11 +955,21 @@ pub fn values_structurally_equal(a: &Value, b: &Value) -> bool {
 impl Encoded {
     /// Python's answer for `a <op> b`, or `None` where Python refuses (#2471).
     ///
-    /// **THE** comparison for this family, and the only one: `values_equal`,
-    /// `try_compare` and `dictsort`'s ordering all read it, so `==` and `<` can
-    /// never drift apart the way they did for `Bool` (#2244), `Float` (#2243)
-    /// and `List` (#2335) before their arms were written as a pair (#1646).
-    /// Equality is `Some(Equal)` rather than a second rule.
+    /// **THE** comparison for the CMP-KEY family, and the only one. Since
+    /// #2480 its three readers — `values_equal`, `try_compare` and
+    /// `dictsort`'s ordering — reach it through ONE wrapper,
+    /// `djust_templates::renderer::encoded_partial_cmp`, which adds the
+    /// [`EqClass::Set`] subset order and otherwise delegates here. That
+    /// wrapper is this method's only caller outside this crate, which is what
+    /// keeps `==` and `<` from drifting apart the way they did for `Bool`
+    /// (#2244), `Float` (#2243) and `List` (#2335) before their arms were
+    /// written as a pair (#1646). Equality is `Some(Equal)` rather than a
+    /// second rule.
+    ///
+    /// It stays HERE, keyed on [`Encoded::cmp_key`] alone, because the Set
+    /// order compares [`Encoded::items`] with Django's `==` — which is
+    /// `renderer::values_equal`, a function this crate deliberately does not
+    /// have (`Value` has no `PartialEq`; see [`values_structurally_equal`]).
     ///
     /// `None` — which every caller renders as Django's own answer for a pair
     /// Python cannot compare: `False` for all four ordering operators, and NOT
@@ -1029,6 +1128,44 @@ impl Serialize for Value {
                         // statement as an empty list, and the deserializer
                         // keeps them apart.
                         &e.items,
+                        // Slot 11, appended for the SIXTH time and for the
+                        // sixth identical reason (#2480): the equality CLASS
+                        // is measured from a live Python object that no longer
+                        // exists when a state entry comes back, so an entry
+                        // that dropped it would restore a value whose
+                        // `{% if a == b %}` answer is the pre-fix one after
+                        // one cache hit — the exact reopening `ENCODED_TAG`
+                        // exists to prevent.
+                        //
+                        // A MAP, and NEVER `nil` — an absent class is the
+                        // EMPTY map. That is the one structural decision in
+                        // this slot, and it is what keeps the interior-insert
+                        // canary airtight now that eleven is a real width.
+                        //
+                        // Before this slot existed, a ten-element payload with
+                        // one element inserted was eleven long and refused on
+                        // WIDTH alone. It is now a real width, so only a TYPE
+                        // can refuse it — and an insert anywhere in a
+                        // ten-element payload shifts slot 9 (the ITEMS: a list
+                        // or `nil`) into this position, or the intruder
+                        // itself. No slot below carries a MAP except `attrs`
+                        // at 8, which an insert can only push to 9. So
+                        // "this slot is always a map" is exactly the predicate
+                        // that refuses every shift, and writing `nil` for the
+                        // absent case would have surrendered it.
+                        //
+                        // It also makes a swap with `cmp_key` (a list or
+                        // `nil`, four slots up) a REFUSAL rather than a
+                        // silent double loss.
+                        //
+                        // The class itself is fail-to-absent INSIDE the map,
+                        // like every other optional slot — see
+                        // `decode_eq_class`. The GROW-`attrs` alternative was
+                        // rejected: that map is what `context::lookup_segment`
+                        // resolves `{{ p.x }}` against, so a synthetic key
+                        // there would be a template-visible attribute Django
+                        // does not have.
+                        &encode_eq_class(e.eq_class),
                     ),
                 )?;
                 m.end()
@@ -1107,6 +1244,80 @@ fn decode_cmp_key(key: &Value) -> Option<CmpKey> {
                 lo: *lo,
             })
         }
+        _ => None,
+    }
+}
+
+/// The wire tag for [`EqClass::Set`].
+pub const EQ_CLASS_SET: u8 = 1;
+/// The wire tag for [`EqClass::Number`]. Its two limbs carry `complex(o)`.
+pub const EQ_CLASS_NUMBER: u8 = 2;
+/// The wire tag for [`EqClass::Identity`].
+pub const EQ_CLASS_IDENTITY: u8 = 3;
+
+/// The key the [`EqClass`] triple sits under inside slot 10's map (#2480).
+///
+/// Short, and deliberately NOT one of the four `_TAG` constants: this map is
+/// nested inside the `ENCODED_TAG` payload and reads back through the same
+/// `visit_map` as any other, so a name collision with a tag would make a
+/// one-key map decode as a `Decimal` or a `Tuple` instead.
+pub const EQ_CLASS_KEY: &str = "eq";
+
+/// Slot 10's payload for one [`EqClass`] (#2480) — the ONE writer.
+///
+/// A map, always: EMPTY for `None`, one `EQ_CLASS_KEY` entry holding
+/// `[tag, real, imag]` otherwise. See the serializer's comment on the slot for
+/// why "always a map" is the structural property and not a preference.
+fn encode_eq_class(class: Option<EqClass>) -> IndexMap<ObjectKey, Value> {
+    let mut map = IndexMap::new();
+    let (tag, real, imag) = match class {
+        None => return map,
+        Some(EqClass::Set) => (EQ_CLASS_SET, 0.0, 0.0),
+        Some(EqClass::Number { real, imag }) => (EQ_CLASS_NUMBER, real, imag),
+        Some(EqClass::Identity) => (EQ_CLASS_IDENTITY, 0.0, 0.0),
+    };
+    map.insert(
+        ObjectKey::Str(EQ_CLASS_KEY.to_string()),
+        Value::List(vec![
+            Value::Integer(i64::from(tag)),
+            Value::Float(real),
+            Value::Float(imag),
+        ]),
+    );
+    map
+}
+
+/// One [`EqClass`] slot, read back off the wire (#2480) — the ONE reader.
+///
+/// The map WRAPPER is required by the deserializer's pattern (it is what
+/// refuses a shifted payload); the class INSIDE it is fail-to-absent like
+/// every other optional slot. An empty map, a missing key, a wrong shape or an
+/// unknown tag all read as ABSENT rather than being guessed at — a value with
+/// no class keeps the pre-#2480 comparison answer, which is the direction to
+/// fail in, and a class a future build invents must not be answered by this
+/// one.
+fn decode_eq_class(map: &IndexMap<ObjectKey, Value>) -> Option<EqClass> {
+    let (Value::List(limbs) | Value::Tuple(limbs)) = map.get(EQ_CLASS_KEY)? else {
+        return None;
+    };
+    let [Value::Integer(tag), real, imag] = limbs.as_slice() else {
+        return None;
+    };
+    // A float limb is what this crate writes; an integer is accepted because a
+    // hand-built fixture (and a JSON round trip) can land a whole number on
+    // `Value::Integer`. Neither is a guess — both name the same number.
+    let as_f64 = |v: &Value| match v {
+        Value::Float(f) => Some(*f),
+        Value::Integer(i) => Some(*i as f64),
+        _ => None,
+    };
+    match u8::try_from(*tag) {
+        Ok(EQ_CLASS_SET) => Some(EqClass::Set),
+        Ok(EQ_CLASS_NUMBER) => Some(EqClass::Number {
+            real: as_f64(real)?,
+            imag: as_f64(imag)?,
+        }),
+        Ok(EQ_CLASS_IDENTITY) => Some(EqClass::Identity),
         _ => None,
     }
 }
@@ -1249,10 +1460,60 @@ impl<'de> Deserialize<'de> for Value {
                     // anything else is a real dict and falls through, so a
                     // user dict under this key cannot forge one.
                     if let Some(Value::List(parts)) = obj.get(ENCODED_TAG) {
+                        // ELEVEN elements: the #2480 shape — the equality
+                        // CLASS appended after the items.
+                        //
+                        // Every slot below 10 keeps the FREE binding and the
+                        // fail-to-absent read the ten-arm gives it — a
+                        // malformed `len` / key / `attrs` / `items` still
+                        // restores as "absent" rather than refusing the whole
+                        // payload.
+                        //
+                        // Slot 10 is the exception, and it is the one that
+                        // makes the width safe. Eleven used to be a width no
+                        // build wrote, so
+                        // `an_interior_insert_is_refused_rather_than_silently_misread`
+                        // could rely on WIDTH to refuse a ten-element payload
+                        // with one element inserted. Eleven is real now, so
+                        // only a TYPE can refuse it — and every such insert
+                        // pushes the ITEMS (a list or `nil`) or the intruder
+                        // itself into this position, never a MAP. Requiring a
+                        // map here is therefore exactly the predicate that
+                        // refuses all eleven shifts, and it is why the writer
+                        // spells an absent class as an EMPTY map rather than
+                        // as `nil`.
+                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), len, Value::Bool(iterable), Value::String(repr), key, attrs, items, Value::Object(eq_class)] =
+                            parts.as_slice()
+                        {
+                            return Ok(Value::Encoded(Box::new(Encoded {
+                                type_name: type_name.clone(),
+                                display: display.clone(),
+                                json: json.clone(),
+                                truthy: *truthy,
+                                len: match len {
+                                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
+                                    _ => None,
+                                },
+                                iterable: *iterable,
+                                repr: repr.clone(),
+                                cmp_key: decode_cmp_key(key),
+                                attrs: match attrs {
+                                    Value::Object(map) => map.clone(),
+                                    _ => IndexMap::new(),
+                                },
+                                items: match items {
+                                    Value::List(v) => Some(v.clone()),
+                                    _ => None,
+                                },
+                                eq_class: decode_eq_class(eq_class),
+                            })));
+                        }
                         // TEN elements: the #2477/#2489 shape — slot 5
                         // widened from the #2466 boolean to `len(o)` itself,
                         // and the enumerated items appended after the
-                        // attribute map.
+                        // attribute map. The equality CLASS restores ABSENT,
+                        // which is the answer the entry was WRITTEN with:
+                        // never equal, never ordered (#2480).
                         //
                         // `len` reads back as a `Value::Integer` (msgpack
                         // writes a `u64` as an unsigned int, which the visitor
@@ -1288,6 +1549,7 @@ impl<'de> Deserialize<'de> for Value {
                                     Value::List(v) => Some(v.clone()),
                                     _ => None,
                                 },
+                                eq_class: None,
                             })));
                         }
                         // NINE elements: the #2481 shape, the attribute map
@@ -1325,6 +1587,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // See the four-line note in the shorter widths
                                 // below: this width predates the field.
                                 items: None,
+                                eq_class: None,
                             })));
                         }
                         // Eight elements: the #2471/#2472 shape, `repr` and
@@ -1364,6 +1627,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // was WRITTEN with — and `iter_values` reads
                                 // `iterable` for it exactly as it did.
                                 items: None,
+                                eq_class: None,
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -1401,6 +1665,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // was WRITTEN with — and `iter_values` reads
                                 // `iterable` for it exactly as it did.
                                 items: None,
+                                eq_class: None,
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -1429,6 +1694,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // was WRITTEN with — and `iter_values` reads
                                 // `iterable` for it exactly as it did.
                                 items: None,
+                                eq_class: None,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -1455,6 +1721,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // was WRITTEN with — and `iter_values` reads
                                 // `iterable` for it exactly as it did.
                                 items: None,
+                                eq_class: None,
                             })));
                         }
                     }
@@ -1663,6 +1930,7 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         cmp_key,
         attrs,
         items: None,
+        eq_class: None,
     })
 }
 
@@ -3227,7 +3495,103 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // no values.
         attrs: public_dict_attrs(ob).unwrap_or_default(),
         items,
+        // The equality CONTRACT, measured from the live object (#2480). The
+        // one producer that sets this: `django_json_encoded` leaves it `None`
+        // because its four types already carry a real `cmp_key`, and this arm
+        // is where `set()`, `complex(0)` and arbitrary user classes land.
+        //
+        // Fails to `None` on any probe error, like every other measurement
+        // here — which restores the pre-#2480 answer (never equal) rather than
+        // guessing one.
+        eq_class: equality_class(ob),
     })
+}
+
+/// The Python types [`equality_class`] dispatches on, resolved once per
+/// interpreter (#2480).
+struct EqProtocols {
+    /// `collections.abc.Set` — the ABC that DEFINES `__eq__` as
+    /// `len(self) == len(other) and self <= other`.
+    set_abc: Py<PyAny>,
+    /// `numbers.Number`.
+    number_abc: Py<PyAny>,
+    /// The builtin `complex`, called to read a Number's two components.
+    complex_cls: Py<PyAny>,
+    /// `object.__eq__` and `object.__repr__`, for the `is`-identity probes
+    /// that decide the identity arm.
+    object_eq: Py<PyAny>,
+    object_repr: Py<PyAny>,
+}
+
+/// Which of Python's equality contracts does this object obey? (#2480)
+///
+/// Measured, not derived — see [`Encoded::eq_class`] for why a type-name list
+/// is wrong in BOTH directions and what each arm's contract is.
+///
+/// Fails CLOSED at every step, like [`django_json_encoded`] and [`is_decimal`]:
+/// an unimportable `collections.abc`, an `isinstance` that raises through a
+/// hostile `__class__`, a `complex(o)` that raises — every one answers `None`,
+/// which is the pre-#2480 behaviour (never equal, never ordered) rather than a
+/// guess.
+fn equality_class(ob: &Bound<'_, PyAny>) -> Option<EqClass> {
+    static PROTOCOLS: pyo3::sync::PyOnceLock<Option<EqProtocols>> = pyo3::sync::PyOnceLock::new();
+    let py = ob.py();
+    let protocols = PROTOCOLS
+        .get_or_init(py, || {
+            let object_type = py.get_type::<pyo3::types::PyAny>();
+            Some(EqProtocols {
+                set_abc: py
+                    .import("collections.abc")
+                    .ok()?
+                    .getattr("Set")
+                    .ok()?
+                    .unbind(),
+                number_abc: py.import("numbers").ok()?.getattr("Number").ok()?.unbind(),
+                complex_cls: py.get_type::<pyo3::types::PyComplex>().into_any().unbind(),
+                object_eq: object_type.getattr("__eq__").ok()?.unbind(),
+                object_repr: object_type.getattr("__repr__").ok()?.unbind(),
+            })
+        })
+        .as_ref()?;
+
+    // Arm 1. A `set`, a `frozenset`, a `dict_keys`, a `dict_items` and every
+    // user registration of the ABC. FIRST, because a Set's `__eq__` is the
+    // ABC's and so can never be `object`'s — the arms are disjoint, and
+    // ordering them this way says which contract is the specific one.
+    if ob.is_instance(protocols.set_abc.bind(py)).unwrap_or(false) {
+        return Some(EqClass::Set);
+    }
+    // Arm 2. `complex(o)` rather than `o.real` / `o.imag`, because a
+    // `numbers.Number` registration is only required to be convertible — a
+    // `Fraction` has no `.imag` until `complex()` gives it one. A raising
+    // conversion declines the whole arm.
+    if ob
+        .is_instance(protocols.number_abc.bind(py))
+        .unwrap_or(false)
+    {
+        let as_complex = protocols.complex_cls.bind(py).call1((ob,)).ok()?;
+        let real = as_complex.getattr("real").ok()?.extract::<f64>().ok()?;
+        let imag = as_complex.getattr("imag").ok()?.extract::<f64>().ok()?;
+        return Some(EqClass::Number { real, imag });
+    }
+    // Arm 3. Default `__eq__` AND default `__repr__`. BOTH are load-bearing:
+    // a `dict_values` has the first and not the second, and two DISTINCT empty
+    // ones share the spelling `dict_values([])` — so `repr` would call them
+    // equal where Python says they are not. Measured, not reasoned about.
+    let ty = ob.get_type();
+    let eq_is_default = ty
+        .getattr("__eq__")
+        .is_ok_and(|f| f.is(protocols.object_eq.bind(py)));
+    let repr_is_default = ty
+        .getattr("__repr__")
+        .is_ok_and(|f| f.is(protocols.object_repr.bind(py)));
+    if eq_is_default && repr_is_default {
+        return Some(EqClass::Identity);
+    }
+    // Arm 4. Everything else — a class that overrides `__eq__` (only Python
+    // can run it), and one with a custom `__repr__` whose spelling is not a
+    // token. Never equal: the answer this carrier already gave.
+    None
 }
 
 /// Convert Value to Python object using the new IntoPyObject trait.

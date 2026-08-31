@@ -4203,9 +4203,10 @@ fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
             // catches the `TypeError` and returns `""` where this returns the
             // list unsorted, a divergence that predates this variant and is
             // not this fix's (#1079).
-            (Value::Encoded(a_enc), Value::Encoded(b_enc)) => a_enc
-                .python_partial_cmp(b_enc)
-                .unwrap_or(std::cmp::Ordering::Equal),
+            (Value::Encoded(a_enc), Value::Encoded(b_enc)) => {
+                crate::renderer::encoded_partial_cmp(a_enc, b_enc)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
             // Any pair that is numeric on BOTH sides. Two deltas, not one:
             // a Decimal column used to sort as all-Equal, i.e. not at all
             // (#2214) — and so did a MIXED int/float column, since the arms
@@ -6866,6 +6867,7 @@ mod tests {
                 }),
                 attrs: Default::default(),
                 items: None,
+                eq_class: None,
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
@@ -6878,6 +6880,7 @@ mod tests {
                 cmp_key: None,
                 attrs: Default::default(),
                 items: Some(vec![]),
+                eq_class: None,
             })),
             // The FOURTH shape, and the one #2477/#2489 added: a NON-EMPTY
             // carried collection. It is what makes the `python_len` ==
@@ -6897,6 +6900,7 @@ mod tests {
                     Value::String("a".to_string()),
                     Value::String("b".to_string()),
                 ]),
+                eq_class: Some(djust_core::EqClass::Set),
             })),
             // The FIFTH: a falsy `__iter__` class with NO `__len__`. Django's
             // `|length` answers 0 (its `except TypeError`) while `{% for %}`
@@ -6913,6 +6917,7 @@ mod tests {
                 cmp_key: None,
                 attrs: Default::default(),
                 items: Some(vec![Value::String("x".to_string())]),
+                eq_class: None,
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -6930,6 +6935,7 @@ mod tests {
                 cmp_key: None,
                 attrs: Default::default(),
                 items: None,
+                eq_class: None,
             })),
         ]
     }
@@ -6981,6 +6987,7 @@ mod tests {
             cmp_key: None,
             attrs: Default::default(),
             items: None,
+            eq_class: None,
         }));
         assert!(iter_values(&legacy).is_some_and(|items| items.is_empty()));
         assert_eq!(python_len(&legacy), Some(0));
@@ -7433,6 +7440,7 @@ mod tests {
                 }),
                 attrs: Default::default(),
                 items: None,
+                eq_class: None,
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -7459,6 +7467,7 @@ mod tests {
                 cmp_key: None,
                 attrs: Default::default(),
                 items: Some(vec![]),
+                eq_class: None,
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -7476,6 +7485,7 @@ mod tests {
             cmp_key: None,
             attrs: Default::default(),
             items: None,
+            eq_class: None,
         }));
         assert!(
             iter_values(&hostile).is_none(),

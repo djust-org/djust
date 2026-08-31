@@ -834,69 +834,73 @@ class TestThePredicateAgreesWithTheRealConversion:
         assert touched == [], touched
 
 
-class TestTheComparisonAxisThisWIDENS:
-    """The cost, measured — and it is a cost, not a spelling (#2480).
+class TestTheComparisonAxisThisWIDENED:
+    """The cost this fix paid, and the fix that PAID IT BACK (#2480).
 
-    An `Encoded` built by `opaque_value` carries NO comparison key, so
-    `python_partial_cmp` answers `None` for every pair either side of which
+    An `Encoded` built by `opaque_value` carried NO comparison key, so
+    `python_partial_cmp` answered `None` for every pair either side of which
     came from that arm: never equal, never ordered. As a `Value::String` these
     values compared by TEXT and got the right answer for the wrong reason —
     the same mechanism that made `{{ p|length }}` count the characters of a
-    repr, so the accident and the defect cannot be separated.
+    repr, so the accident and the defect could not be separated.
 
-    #2466 already did this to the falsy half (`set()`, `complex(0)`, an empty
-    `dict_keys`) and filed #2480. This widens it to the truthy members of the
-    same class. Sixteen consumers were swept in `TestBothPathsAnswerDjango` and
-    NONE of them is `{% if p == q %}` — a curated table samples one axis and
-    blinds you on the next (v1.1.1-2 rule 2), and this axis was found by a pin
-    in `test_encoded_value_position_2471_2472_2473.py` going red rather than by
-    the sweep. So it gets its own class, with the count, pinned in the
-    DIVERGING direction: closing #2480 reddens this rather than passing
-    silently.
+    #2466 did this to the falsy half (`set()`, `complex(0)`, an empty
+    `dict_keys`) and filed #2480; #2477/#2489 widened it to the truthy members
+    of the same class, which is why the honest count was **eight, four
+    already-wrong and four newly** rather than "introduced".
+
+    **#2480 closed all eight**, by measuring the object's equality CONTRACT at
+    the conversion instead of guessing from a carried spelling. The class is
+    FLIPPED rather than deleted — the same eight rows, the same two-half
+    accounting, now asserting `Y` — so the widening it recorded stays legible
+    and a regression on either half is one assertion away. The rule itself and
+    its cross-product live in `test_opaque_equality_2480.py`.
     """
 
-    #: The shapes whose `==` answer this fix moves from right to wrong, and the
-    #: ones it leaves alone. Exact in both directions.
+    #: The shapes #2477/#2489 moved from right-by-accident to wrong, and the
+    #: ones #2466 had already moved. Exact in both directions; both halves are
+    #: `Y` again.
     NEWLY_UNEQUAL = ("set-plain", "frozenset-plain", "dv-keys-plain", "complex-one")
     ALREADY_UNEQUAL = ("set-empty", "frozenset-empty", "dv-keys-empty", "complex-zero")
 
     EQ = "{% if p == q %}Y{% else %}N{% endif %}"
 
-    def test_every_carried_shape_compares_UNEQUAL_to_an_equal_twin(self) -> None:
-        """Django says `Y`; the carrier says `N`. Both halves, one rule."""
+    def test_every_carried_shape_compares_EQUAL_to_an_equal_twin(self) -> None:
+        """Django says `Y` and so does the carrier now. Both halves, one rule."""
         for key in self.NEWLY_UNEQUAL + self.ALREADY_UNEQUAL:
             a, b = _Members.build()[key], _Members.build()[key]
             assert a == b, f"{key}: the two fixtures are not Python-equal"
             ctx = {"p": a, "q": b}
             assert DjangoTemplate(self.EQ).render(DjangoContext(ctx)) == "Y", key
-            assert _rust.render_template(self.EQ, {"p": a, "q": b}) == "N", (
-                f"{key} now compares EQUAL — #2480 closed, so delete its row"
+            assert _rust.render_template(self.EQ, {"p": a, "q": b}) == "Y", (
+                f"{key} compares UNEQUAL again — #2480 regressed"
             )
 
     def test_the_two_halves_are_counted_and_disjoint(self) -> None:
-        """Which of them this fix moved, and which #2466 had already moved.
+        """Which of them #2477/#2489 moved, and which #2466 had already moved.
 
         The distinction is the whole of the accounting: four shapes were
-        already wrong here and four became wrong, so the honest statement is
-        "widened from four to eight" rather than "introduced".
+        already wrong and four became wrong, so the honest statement was
+        "widened from four to eight" rather than "introduced" — and #2480
+        closed the eight rather than the four.
         """
         assert not set(self.NEWLY_UNEQUAL) & set(self.ALREADY_UNEQUAL)
         assert len(self.NEWLY_UNEQUAL) == 4
         assert len(self.ALREADY_UNEQUAL) == 4
         # The already-wrong half is TRUTHY-independent: each is falsy, which is
-        # what `falsy_opaque` gated on before this fix widened it.
+        # what `falsy_opaque` gated on before #2477/#2489 widened it.
         for key in self.ALREADY_UNEQUAL:
             assert not _Members.build()[key], key
         for key in self.NEWLY_UNEQUAL:
             assert _Members.build()[key], key
 
     def test_a_value_python_calls_UNEQUAL_is_still_unequal(self) -> None:
-        """The direction that is right either way, so the rule is not "always N".
+        """The direction that is right either way, so the rule is not "always Y".
 
-        Two `LenZero()` instances are NOT equal in Python (no `__eq__`), and a
-        carrier with no comparison key cannot say they are. Without this the
-        class above would pass against an engine that answered `N` to
-        everything, which is a different bug wearing the same output.
+        Two `LenZero()` instances are NOT equal in Python (no `__eq__`), and
+        #2480's identity arm must not say they are. Without this the class
+        above would pass against an engine that answered `Y` to everything,
+        which is a different bug wearing the same output.
         """
         a = instance("LenZero", __len__=lambda self: 0)
         b = instance("LenZero", __len__=lambda self: 0)

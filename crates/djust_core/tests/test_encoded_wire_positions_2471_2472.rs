@@ -120,6 +120,12 @@ fn sample() -> Encoded {
         // fixture carrying one could not tell "slot 10 round-tripped" from
         // "slot 10 was dropped" (#2477/#2489).
         items: Some(vec![Value::String("a".to_string()), Value::Integer(2)]),
+        // NON-`None`, and a class whose wire tag DIFFERS from the
+        // sample's `cmp_key` domain, for the reason the attribute map
+        // is non-empty: slot 10 has the same three-element shape as
+        // slot 7, so only the VALUES can catch a swap of the two
+        // (#2480).
+        eq_class: Some(djust_core::EqClass::Identity),
     }
 }
 
@@ -183,18 +189,43 @@ fn parts_of(e: &Encoded) -> Vec<Value> {
         Some(items) => Value::List(items.clone()),
         None => Value::Missing,
     });
+    // Slot 10, the equality class (#2480). Always a MAP — EMPTY for an absent
+    // class, never `nil` — which is the property that refuses a shifted
+    // ten-element payload now that eleven is a real width.
+    let eq_limbs = |tag: u8, real: f64, imag: f64| {
+        Value::Object(
+            [(
+                djust_core::object_key::ObjectKey::Str(djust_core::EQ_CLASS_KEY.to_string()),
+                Value::List(vec![
+                    Value::Integer(i64::from(tag)),
+                    Value::Float(real),
+                    Value::Float(imag),
+                ]),
+            )]
+            .into_iter()
+            .collect(),
+        )
+    };
+    v.push(match e.eq_class {
+        Some(djust_core::EqClass::Set) => eq_limbs(djust_core::EQ_CLASS_SET, 0.0, 0.0),
+        Some(djust_core::EqClass::Number { real, imag }) => {
+            eq_limbs(djust_core::EQ_CLASS_NUMBER, real, imag)
+        }
+        Some(djust_core::EqClass::Identity) => eq_limbs(djust_core::EQ_CLASS_IDENTITY, 0.0, 0.0),
+        None => Value::Object(indexmap::IndexMap::new()),
+    });
     v
 }
 
 #[test]
-fn the_payload_is_ten_slots_in_the_documented_order() {
+fn the_payload_is_eleven_slots_in_the_documented_order() {
     let e = sample();
     // `Value` has no `PartialEq` (the renderer's own tests note it), so match
     // the variant and compare the `Encoded`, which does derive one.
-    assert_eq!(parts_of(&e).len(), 10, "the payload width moved");
+    assert_eq!(parts_of(&e).len(), 11, "the payload width moved");
     match decode_parts(parts_of(&e)) {
         Value::Encoded(back) => assert_eq!(*back, e),
-        other => panic!("the ten-slot payload did not read as an Encoded: {other:?}"),
+        other => panic!("the eleven-slot payload did not read as an Encoded: {other:?}"),
     }
 }
 
@@ -326,7 +357,7 @@ fn an_empty_attribute_map_is_written_and_read_as_empty() {
     };
     assert_eq!(
         parts_of(&e).len(),
-        10,
+        11,
         "an empty map must not drop its slot"
     );
     assert_eq!(round_trip(&e), e);
@@ -660,16 +691,21 @@ fn a_one_slot_shift_is_detectable() {
         "the sample stopped distinguishing the slots around `len`",
     );
     let mut shifted = parts_of(&e);
-    // Now NINE elements — a real width since #2481, so this case does not
+    // Now TEN elements — a real width since #2477/#2489, so this case does not
     // refuse on width alone. It refuses on TYPES: with slot 4 gone, `iterable`
-    // (a bool) sits where the nine-arm wants `sized_empty` — which it happens
-    // to accept — and `repr` (a string) sits where it wants a BOOL, which it
-    // does not.
+    // (a bool) sits where the ten-arm's free `len` binding accepts anything,
+    // and `repr` (a string) sits where it wants a BOOL, which it does not.
     shifted.remove(4);
-    assert_eq!(shifted.len(), 9, "the shifted payload must be a REAL width");
+    assert_eq!(
+        shifted.len(),
+        10,
+        "the shifted payload must be a REAL width"
+    );
     match decode_parts(shifted) {
         Value::Object(_) => {}
-        other => panic!("a type-misaligned 9-element payload must not forge an Encoded: {other:?}"),
+        other => {
+            panic!("a type-misaligned 10-element payload must not forge an Encoded: {other:?}")
+        }
     }
 
     // And the sharper case: keep the width at 10 but SWAP the two BOOLEAN
@@ -722,14 +758,14 @@ fn an_interior_insert_is_refused_rather_than_silently_misread() {
     // limitation.
     let e = sample();
     let full = parts_of(&e);
-    assert_eq!(full.len(), 10, "the payload width moved");
+    assert_eq!(full.len(), 11, "the payload width moved");
     let mut refused = 0;
     for at in 0..full.len() {
         let mut shifted = full.clone();
         // A STRING, which is a real type in this payload — so the refusal is
         // about the shape and not about an obviously-alien element.
         shifted.insert(at, Value::String("intruder".to_string()));
-        assert_eq!(shifted.len(), 11);
+        assert_eq!(shifted.len(), 12);
         match decode_parts(shifted) {
             Value::Object(_) => refused += 1,
             other => panic!(
@@ -738,7 +774,67 @@ fn an_interior_insert_is_refused_rather_than_silently_misread() {
             ),
         }
     }
-    assert_eq!(refused, 10, "every interior insert must be refused");
+    assert_eq!(refused, 11, "every interior insert must be refused");
+}
+
+#[test]
+fn an_insert_into_the_ten_slot_payload_is_refused_by_the_last_slots_type() {
+    // The case the test above does NOT cover, and the one #2480's slot exists
+    // to survive.
+    //
+    // Inserting into the CURRENT payload gives twelve, which is not a width
+    // any arm matches — so that canary is answered by WIDTH and would stay
+    // green however slot 10 were typed. The dangerous shape is one width down:
+    // a TEN-element payload (the #2477/#2489 shape, which real state entries
+    // carry) with one element inserted is ELEVEN, and eleven is now a REAL
+    // width. Only the TYPE of the last slot can refuse it.
+    //
+    // Every such insert pushes the ITEMS — a list, or `nil` — or the intruder
+    // itself into slot 10, and slot 10 is required to be a MAP. That is why
+    // the writer spells an absent class as an EMPTY map rather than as `nil`,
+    // and this test is the assertion that says so: drop the `Value::Object`
+    // pattern from the eleven-arm and several of these stop being refused.
+    //
+    // Run for BOTH item shapes, because they land different types in the slot.
+    for (label, e) in [
+        ("carried items", sample()),
+        (
+            "no items",
+            Encoded {
+                items: None,
+                ..sample()
+            },
+        ),
+    ] {
+        let eleven = parts_of(&e);
+        assert_eq!(eleven.len(), 11, "{label}: the payload width moved");
+        // The #2477/#2489 shape is this one without its last slot, and it must
+        // still read as an `Encoded` — otherwise the sweep below would be
+        // measuring a broken baseline rather than the insert.
+        let ten = eleven[..10].to_vec();
+        match decode_parts(ten.clone()) {
+            Value::Encoded(back) => assert!(
+                back.eq_class.is_none(),
+                "{label}: a ten-slot payload must restore with NO equality class",
+            ),
+            other => panic!("{label}: the ten-slot payload stopped reading: {other:?}"),
+        }
+
+        let mut refused = 0;
+        for at in 0..ten.len() {
+            let mut shifted = ten.clone();
+            shifted.insert(at, Value::String("intruder".to_string()));
+            assert_eq!(shifted.len(), 11, "{label}: the shifted width must be REAL");
+            match decode_parts(shifted) {
+                Value::Object(_) => refused += 1,
+                other => panic!(
+                    "{label}: an insert at slot {at} of a TEN-slot payload produced \
+                     an Encoded with shifted contents instead of being refused: {other:?}"
+                ),
+            }
+        }
+        assert_eq!(refused, 10, "{label}: every insert must be refused");
+    }
 }
 
 #[test]
@@ -760,7 +856,7 @@ fn the_slot_that_grew_inside_itself_did_not_take_a_position() {
         );
     }
     let parts = parts_of(&grown);
-    assert_eq!(parts.len(), 10, "growing the attribute map moved the width");
+    assert_eq!(parts.len(), 11, "growing the attribute map moved the width");
     // Slot 8 is still the map, and it carries every name.
     match &parts[8] {
         Value::Object(map) => {

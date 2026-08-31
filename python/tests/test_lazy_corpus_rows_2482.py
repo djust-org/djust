@@ -115,12 +115,20 @@ class TestTheRowThePreviousHarnessCouldNotHold:
         du = diff._rust.render_template(source, ctx)
         assert dj in {"Y", "N"}, dj
         assert du in {"Y", "N"}, du
-        # And they DISAGREE, which is the divergence the row exists to expose:
-        # Python compares two empty views as equal sets; djust does not.
+        # They AGREE since #2480, and the row is what makes that measurable:
+        # Python compares two empty views as equal sets, and so does djust now
+        # that `Encoded::eq_class` carries `collections.abc.Set`.
+        #
+        # This assertion was `dj != du` — the divergence the row existed to
+        # EXPOSE — and it is flipped rather than deleted, so the same cell that
+        # measured the gap now measures its closure. It is still the sharpest
+        # thing this row does: the `@cmp` axis needs a `q` that is a second,
+        # independent object, which is exactly what `fresh()` provides and what
+        # `copy.deepcopy` refused.
         assert dj == "Y", "Python compares two empty dict views EQUAL"
-        assert dj != du, (
-            "the empty dict-view `==` divergence is closed — delete this "
-            "assertion and the issue it tracks"
+        assert du == "Y", (
+            "the empty dict-view `==` answer regressed — #2480 gave a "
+            "`dict_keys` the `EqClass::Set` contract"
         )
 
     def test_the_cmp_axis_goes_through_the_chokepoint(self) -> None:
