@@ -689,24 +689,132 @@ class TestTheGateHasOneStatement:
         assert added != source
         assert self._call_sites(added, "crosses_as_encoded") == 2
 
-    def test_the_predicate_runs_the_conversion_rather_than_restating_it(self) -> None:
-        """The bug the first version had, pinned as a source property.
+    def test_the_predicate_asks_the_shared_gate_and_converts_nothing(self) -> None:
+        """Both mistakes this predicate has already made, pinned as source.
 
-        `crosses_as_encoded` must ask `extract::<Value>()` — the real
-        conversion — and must NOT name the fallback block's last two arms,
-        which is what made it claim a `bytes`. A behavioural sibling for this
-        is `test_every_earlier_arm_value_is_untouched_by_this_one`; this pin is
-        what names the mechanism, so the next author does not reach for the
-        transcription again.
+        The FIRST version transcribed the fallback block's last two arms, which
+        answers "would the fallback claim this IF it got there" — so a `bytes`
+        and a `deque`, claimed by PyO3's sequence extraction long before, were
+        said to cross as an `Encoded` and `{{ p }}` over `b"ab"` regressed to
+        `[97, 98]`. The SECOND ran the real conversion, which is exact and
+        segfaulted on a presenter's object graph.
+
+        What stands is neither: the shared `opaque_gate`, plus two SHALLOW
+        probes for the arms above. Behavioural siblings are
+        `test_every_earlier_arm_value_is_untouched_by_this_one` and the
+        conversion differential; this pin names the mechanism, so neither
+        mistake is reached for again.
         """
-        body = LIVE_RS.read_text(encoding="utf-8").split("fn crosses_as_encoded", 1)[1]
+        body = CORE_RS.read_text(encoding="utf-8").split("pub fn crosses_as_encoded(", 1)[1]
         body = body.split("\n}\n", 1)[0]
-        assert "extract::<djust_core::Value>()" in body
-        assert "opaque_value" not in body, (
-            "`crosses_as_encoded` names `opaque_value` again — that is the "
-            'transcription that regressed `{{ p }}` over `b"ab"` to `[97, 98]`'
+        # It asks the shared GATE, and it probes the two arms above the
+        # fallback block SHALLOWLY — `Vec<Bound<PyAny>>` collects references
+        # and converts nothing.
+        assert "opaque_gate(ob).is_some()" in body, body
+        assert "Vec<Bound<'_, PyAny>>" in body, body
+        # ...and it does NOT run the conversion, which is the shape that
+        # segfaulted on a presenter's object graph.
+        assert "extract::<Value>()" not in body, body
+        # The gate has exactly two consumers: this predicate and the payload
+        # build. A third is a third policy for one question (#1646).
+        source = CORE_RS.read_text(encoding="utf-8")
+        assert source.count("opaque_gate(ob)") == 2, source.count("opaque_gate(ob)")
+
+
+class TestThePredicateAgreesWithTheRealConversion:
+    """The anti-drift net a CHEAP probe needs (#1646).
+
+    `crosses_as_encoded` does not run the conversion. It cannot: the first
+    version did, and the normalizer's fallback is exactly where an ordinary
+    "presenter" object lands — converting one eagerly walks its `__dict__`
+    into a raw `QuerySet` and `Manager` and down through theirs, deep enough
+    to SEGFAULT, which is work the render path never does because it resolves
+    through the protected walk one segment at a time. So the probe asks the
+    shared gate plus two shallow arm-checks instead.
+
+    A cheap probe that restates a gate is a second statement of it, and the
+    only honest defence is a differential against the thing it stands in for.
+    `crosses_as_encoded_by_conversion` runs the real `extract::<Value>()`; the
+    two must agree on every shape here, including the ones the probe declines
+    for a reason the conversion reaches differently.
+    """
+
+    def _all_shapes(self) -> dict:
+        shapes = dict(_Members.build())
+        shapes.update({f"declined:{k}": v for k, v in declined_values().items()})
+        shapes.update({f"earlier:{k}": v for k, v in earlier_values().items()})
+        # Values the normalizer never sends here, swept anyway: the predicate
+        # is a general claim and a shape it gets wrong is a finding even where
+        # no caller can reach it.
+        shapes.update(
+            {
+                "scalar:none": None,
+                "scalar:bool": True,
+                "scalar:int": 7,
+                "scalar:float": 1.5,
+                "scalar:str": "ab",
+                "scalar:bytes-empty": b"",
+                "container:list": [1, PAYLOAD],
+                "container:tuple": (1, PAYLOAD),
+                "container:dict": {"a": PAYLOAD},
+                "container:empty-list": [],
+                "container:empty-dict": {},
+                "datetime:date": __import__("datetime").date(2020, 1, 2),
+                "datetime:datetime": __import__("datetime").datetime(2020, 1, 2, 3, 4),
+                "datetime:timedelta-zero": __import__("datetime").timedelta(0),
+                "decimal": __import__("decimal").Decimal("1.5"),
+                "uuid": __import__("uuid").UUID(int=1),
+            }
         )
-        assert "django_json_encoded" not in body
+        return shapes
+
+    def test_the_two_answer_the_same_bit_for_every_shape(self) -> None:
+        disagree = []
+        for key, value in self._all_shapes().items():
+            cheap = _rust.crosses_as_encoded(value)
+            real = _rust.crosses_as_encoded_by_conversion(value)
+            if cheap != real:
+                disagree.append((key, cheap, real))
+        assert not disagree, "the cheap probe and the real conversion disagree:\n" + "\n".join(
+            f"  {k}: crosses_as_encoded={c} by_conversion={r}" for k, c, r in disagree
+        )
+
+    def test_the_differential_is_not_vacuous(self) -> None:
+        """Both answers must appear, or the sweep proves nothing.
+
+        A comparison where every shape answers True — or every shape False —
+        would pass against a probe that returned a constant.
+        """
+        answers = {_rust.crosses_as_encoded(v) for v in self._all_shapes().values()}
+        assert answers == {True, False}, answers
+        reals = {_rust.crosses_as_encoded_by_conversion(v) for v in self._all_shapes().values()}
+        assert reals == {True, False}, reals
+
+    def test_the_probe_does_not_walk_a_presenters_object_graph(self) -> None:
+        """The reason production does not run the conversion, as a test.
+
+        A plain object whose attributes are expensive to convert must cost the
+        probe NOTHING beyond its `__dict__` keys — so an attribute whose
+        conversion would raise, recurse or hang is never touched. The witness
+        is an attribute that COUNTS its own conversions: the probe must leave
+        it at zero.
+        """
+        touched = []
+
+        class _Loud:
+            def __iter__(self):  # pragma: no cover - never called
+                touched.append("iter")
+                return iter(())
+
+        class _Presenter:
+            pass
+
+        presenter = _Presenter()
+        presenter.expensive = _Loud()
+        # Truthy, not iterable, has a public attribute -> the `__dict__` arm's
+        # cell, declined by the gate on the KEYS alone.
+        assert _rust.crosses_as_encoded(presenter) is False
+        assert touched == [], touched
 
 
 class TestTheCarrierCarriesMeasuredFactsNotCopiedOnes:

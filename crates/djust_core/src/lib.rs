@@ -1443,6 +1443,49 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     })
 }
 
+/// Is this `__dict__` key one a template can reach? (#2478)
+///
+/// The ONE statement of the `_`-prefix rule, with two callers by design:
+/// [`public_dict_attrs`], which BUILDS the map, and
+/// [`has_public_dict_attrs`], which only asks whether it would be empty. Two
+/// copies of a filter that decide the same question about the same keys is the
+/// #1646 shape; the same argument [`public_dict_attrs`]'s own doc makes about
+/// its two callers, one level down.
+///
+/// It is Django's `_resolve_lookup` convention (`Variable.__init__` refuses a
+/// path segment starting with `_`) and what keeps a user attribute from
+/// colliding with the four `_TAG` constants the codec reserves.
+fn is_public_attr_name(name: &str) -> bool {
+    !name.starts_with('_')
+}
+
+/// Does this object have at least one public `__dict__` attribute? (#2477)
+///
+/// The KEYS only. [`opaque_value`] needs this to decide one thing — whether an
+/// object belongs to the `__dict__` bulk-dump arm — and building the map to
+/// answer it would convert every attribute VALUE through
+/// `extract::<Value>()`, recursively, and then throw the result away for the
+/// arm below to build again. That is the ordinary case (a presenter, a service
+/// object, any plain instance in a template context), so paying for it twice
+/// per value per render is not a rounding error.
+///
+/// `false` for an object with no `__dict__` at all — a C type, or one with
+/// `__slots__` — which is what [`public_dict_attrs`] returns `None` for, and
+/// the two agree because the question they answer is the same one.
+fn has_public_dict_attrs(ob: &Bound<'_, PyAny>) -> bool {
+    let Ok(obj_dict) = ob.getattr("__dict__") else {
+        return false;
+    };
+    let Ok(items) = obj_dict.cast::<PyDict>() else {
+        return false;
+    };
+    items
+        .keys()
+        .iter()
+        .filter_map(|k| k.extract::<String>().ok())
+        .any(|k| is_public_attr_name(&k))
+}
+
 /// An object's PUBLIC `__dict__`, as a [`Value::Object`]'s map (#2478).
 ///
 /// The ONE statement of "which attributes does an ordinary Python object
@@ -1470,6 +1513,9 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
 fn public_dict_attrs(ob: &Bound<'_, PyAny>) -> Option<IndexMap<ObjectKey, Value>> {
     let obj_dict = ob.getattr("__dict__").ok()?;
     let items = obj_dict.cast::<PyDict>().ok()?;
+    // The `_`-prefix rule is [`is_public_attr_name`], so this builder and the
+    // key-only probe beside it cannot disagree about which names are public
+    // (#1646).
     // Attribute names, so the keys stay `ObjectKey::Str` — a `__dict__`
     // cannot have a non-string key.
     let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
@@ -1478,7 +1524,7 @@ fn public_dict_attrs(ob: &Bound<'_, PyAny>) -> Option<IndexMap<ObjectKey, Value>
             continue;
         };
         // Skip private/dunder attrs and Django's internal `_state`.
-        if k.starts_with('_') {
+        if !is_public_attr_name(&k) {
             continue;
         }
         if let Ok(val) = v.extract::<Value>() {
@@ -2534,6 +2580,182 @@ impl<'py> FromPyObject<'_, 'py> for Value {
 /// value, because it has stated its own bound and Django iterates all of it.
 pub const OPAQUE_ITEM_CAP: usize = 100_000;
 
+/// What [`opaque_gate`] measured from an object it CLAIMS (#2477/#2489).
+///
+/// Three facts, and none of them is an item: the gate answers "does this
+/// object belong to the carrier" without converting anything, which is what
+/// lets [`crosses_as_encoded`] ask the question cheaply and safely.
+pub struct OpaqueFacts {
+    /// `bool(o)` — Python's own answer.
+    pub truthy: bool,
+    /// `len(o)`, or `None` where it raises.
+    pub len: Option<usize>,
+    /// `iter(o)` succeeds.
+    pub iterable: bool,
+}
+
+/// Does [`opaque_value`] claim this object, and what did it measure?
+/// (#2477/#2489)
+///
+/// The GATE, split out from the payload build so there is exactly one
+/// statement of it with two consumers — [`opaque_value`], which goes on to
+/// convert the items and the attributes, and [`crosses_as_encoded`], which
+/// only needs the answer. Two copies of a gate that decide the same question
+/// about the same objects is the #1646 shape, and this one has four arms.
+///
+/// **Nothing here converts a value, and that is the whole reason it exists.**
+/// The first version of `crosses_as_encoded` ran the REAL conversion —
+/// `extract::<Value>()` — and asked whether a `Value::Encoded` came out. That
+/// is exact, and it SEGFAULTED: the normalizer's fallback is where an ordinary
+/// "presenter" object lands, and converting one eagerly walks its `__dict__`
+/// into a raw `QuerySet` and `Manager` and down through their own `__dict__`s,
+/// deep enough to overflow the stack — work the render path never does,
+/// because it resolves through the protected walk one segment at a time. The
+/// gate touches `bool(o)`, `iter(o)`, `len(o)` and the object's `__dict__`
+/// KEYS, and stops.
+///
+/// See [`opaque_value`]'s doc for what each decline is and why.
+fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
+    // Python's own answer, via `PyObject_IsTrue`, so a class overriding
+    // `__bool__` or `__len__` is answered by the object rather than by this
+    // function's idea of which types are containers.
+    let truthy = ob.is_truthy().ok()?;
+    // `PyObject_GetIter`, which builds an iterator and consumes nothing — a
+    // generator is not advanced by being asked.
+    let iterator = ob.try_iter().ok();
+    let iterable = iterator.is_some();
+    // `PyObject_Size`: `Ok` for anything with a `__len__`, `Err` otherwise.
+    let len = ob.len().ok();
+    if let Some(it) = iterator {
+        // `iter(o) is o` — a one-shot iterator. Reading it would consume the
+        // caller's object; declined outright, so the value keeps the string
+        // path it has today rather than becoming an empty collection (which
+        // would be a NEW wrong answer, not an unfixed one).
+        if it.as_any().is(ob) {
+            return None;
+        }
+        // An object that states a `__len__` has stated its own bound, and
+        // Django iterates all of it — so there is nothing to check and the
+        // walk is skipped, which is what keeps this gate O(1) for a `set` and
+        // a `dict_keys`. Without one, walk to the cap and DECLINE past it:
+        // a class whose `__iter__` returns `itertools.count()` is RE-iterable,
+        // so the one-shot guard above does not catch it and enumerating it
+        // would never return.
+        //
+        // Counted, not collected: the items are not converted here.
+        if len.is_none() {
+            let mut seen = 0usize;
+            for item in it {
+                if item.is_err() {
+                    return None;
+                }
+                seen += 1;
+                if seen > OPAQUE_ITEM_CAP {
+                    return None;
+                }
+            }
+        }
+    }
+    // The `__dict__` bulk-dump arm's cell, left to it. See the gate section of
+    // [`opaque_value`]'s doc for why both qualifiers are load-bearing.
+    //
+    // The KEY-ONLY probe, and that is a measurement rather than a style: this
+    // is the arm an ordinary truthy object with attributes takes, and building
+    // the full map to decline it would convert every attribute value only for
+    // the `__dict__` arm below to convert them again.
+    if truthy && !iterable && has_public_dict_attrs(ob) {
+        return None;
+    }
+    Some(OpaqueFacts {
+        truthy,
+        len,
+        iterable,
+    })
+}
+
+/// Does this object cross into the renderer as a [`Value::Encoded`]?
+/// (#2477/#2489)
+///
+/// The ONE statement of that question for `djust.serialization`, exported to
+/// Python as `_rust.crosses_as_encoded`. Its Python caller — the final
+/// fallback of `normalize_django_value` — used to stringify exactly the
+/// objects this carrier holds exactly, so the LiveView path and the raw
+/// `render_template` path answered differently for the same value.
+///
+/// **It asks the GATE, not the conversion.** The first version ran
+/// `extract::<Value>()` and matched on the result, which is exact and is what
+/// caught a `bytes` and a `deque` being claimed by PyO3's SEQUENCE extraction
+/// long before the fallback block — a transcription of the last two arms had
+/// said TRUE for both and regressed `{{ p }}` over `b"ab"` to `[97, 98]`. It
+/// also SEGFAULTED, for the reason [`opaque_gate`] records. So the sequence
+/// and mapping arms are probed SHALLOWLY here — `Vec<Bound<PyAny>>` collects
+/// references and converts nothing — and the fallback's own arm is asked
+/// through the gate.
+///
+/// EVERY pre-fallback arm is probed, in the impl's own order, and that is a
+/// correction rather than thoroughness. The first version probed only the
+/// sequence and mapping arms, on the argument that
+/// `normalize_django_value` — the one caller — has its own branch for the
+/// scalars far above the line that consults this. That is TRUE and it made the
+/// predicate wrong as a general claim: the conversion-differential below
+/// reported it answering `true` for `None`, `True`, `7`, `1.5`, `"ab"` and a
+/// `Decimal`, six shapes it can never be asked about but would answer wrongly
+/// if it were. A predicate whose correctness depends on which caller it has is
+/// one the next caller breaks.
+///
+/// `test_the_two_answer_the_same_bit_for_every_shape` sweeps this against
+/// `extract::<Value>()` itself, which is the anti-drift net a cheap probe
+/// needs — and is what found those six.
+pub fn crosses_as_encoded(ob: &Bound<'_, PyAny>) -> bool {
+    // The arms ABOVE the fallback block, in the impl's own order, each probed
+    // WITHOUT converting an element. The order matters here for the reason it
+    // matters there: `bool` before `i64` (a Python `bool` IS an `int`), the
+    // `i64` bound before `BigInt`, `Decimal` before `f64` (`extract::<f64>()`
+    // honours `Decimal.__float__`, #2214), and `PyTuple` before the sequence
+    // arm.
+    if ob.is_none()
+        || ob.extract::<bool>().is_ok()
+        || ob.extract::<i64>().is_ok()
+        || big_int_digits(ob).is_some()
+        || is_decimal(ob)
+        || ob.extract::<f64>().is_ok()
+        || ob.extract::<String>().is_ok()
+        || ob.cast::<pyo3::types::PyTuple>().is_ok()
+    {
+        return false;
+    }
+    // The datetime family, claimed inside the fallback block by
+    // `django_json_encoded` — a tuple `isinstance` over four cached types.
+    // BELOW the scalars, as it is in the impl.
+    if django_json_encoded(ob).is_some() {
+        return true;
+    }
+    // The last two arms above the fallback block: `Vec<Bound<PyAny>>` is every
+    // sequence (`bytes`, a `deque`, a `range`, a class with an integer
+    // `__getitem__`) and collects REFERENCES, converting nothing; `PyDict` is
+    // every real mapping.
+    if ob.extract::<Vec<Bound<'_, PyAny>>>().is_ok() {
+        return false;
+    }
+    if ob.cast::<PyDict>().is_ok() {
+        return false;
+    }
+    // Both serialization floors, which recurse rather than produce an
+    // `Encoded` (#1986 and its vector 7). Cheap, and asked in the block's own
+    // order.
+    if ob.getattr("__djust_serialize__").is_ok() {
+        return false;
+    }
+    if let Ok(models_mod) = ob.py().import("django.db.models") {
+        if let Ok(model_cls) = models_mod.getattr("Model") {
+            if ob.is_instance(&model_cls).unwrap_or(false) {
+                return false;
+            }
+        }
+    }
+    opaque_gate(ob).is_some()
+}
+
 /// A Python object that no [`Value`] variant models (#2466, #2477, #2489).
 ///
 /// This was `falsy_opaque` and claimed only Python-FALSY objects. `bool(set())`
@@ -2662,50 +2884,28 @@ pub const OPAQUE_ITEM_CAP: usize = 100_000;
 /// took five rounds over; moving the object to the right carrier answers all
 /// of them at once.
 pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
-    // Python's own answer, via `PyObject_IsTrue`, so a class overriding
-    // `__bool__` or `__len__` is answered by the object rather than by this
-    // function's idea of which types are containers.
-    let truthy = ob.is_truthy().ok()?;
-    // `PyObject_GetIter`, which builds an iterator and consumes nothing — a
-    // generator is not advanced by being asked.
-    let iterator = ob.try_iter().ok();
-    let iterable = iterator.is_some();
-    // `PyObject_Size`: `Ok` for anything with a `__len__`, `Err` otherwise.
-    let len = ob.len().ok();
-    let items = match iterator {
-        None => None,
-        Some(it) => {
-            // `iter(o) is o` — a one-shot iterator. Reading it would consume
-            // the caller's object; declined outright, so the value keeps the
-            // string path it has today rather than becoming an empty
-            // collection (which would be a NEW wrong answer, not an unfixed
-            // one).
-            if it.as_any().is(ob) {
-                return None;
-            }
-            // A stated `__len__` is the object's own bound, so enumerate in
-            // full; without one, stop at the cap and DECLINE rather than
-            // truncate.
-            let bound = len.unwrap_or(OPAQUE_ITEM_CAP);
-            let mut collected = Vec::with_capacity(bound.min(64));
-            for item in it {
-                // A raising `__next__` fails closed, like every other probe
-                // here: back to the string path, unchanged.
-                let item = item.ok()?;
-                if collected.len() == bound {
-                    return None;
-                }
-                collected.push(item.extract::<Value>().ok()?);
-            }
-            Some(collected)
+    let OpaqueFacts {
+        truthy,
+        len,
+        iterable,
+    } = opaque_gate(ob)?;
+    // The items, converted — the half `opaque_gate` deliberately does NOT do.
+    // `iter(o)` is asked again rather than carried across, because the gate
+    // may have walked the first one to check the cap; the object is
+    // RE-iterable by construction (that is the gate's own first decline), so a
+    // second `iter(o)` yields the same elements and consumes nothing.
+    let items = if iterable {
+        let it = ob.try_iter().ok()?;
+        let mut collected = Vec::with_capacity(len.unwrap_or(0).min(64));
+        for item in it {
+            // A raising `__next__` fails closed, like every other probe here:
+            // back to the string path, unchanged.
+            collected.push(item.ok()?.extract::<Value>().ok()?);
         }
+        Some(collected)
+    } else {
+        None
     };
-    // The `__dict__` bulk-dump arm's cell, left to it. See the gate section of
-    // the doc above for why the two qualifiers are both load-bearing.
-    let attrs = public_dict_attrs(ob).unwrap_or_default();
-    if truthy && !iterable && !attrs.is_empty() {
-        return None;
-    }
     // `__name__`, NOT `__qualname__`, and for the reason `django_json_encoded`
     // records: a heap type's `tp_name` is the name it was created with, so a
     // class defined inside a function is `LenZero` where its `__qualname__`
@@ -2759,7 +2959,11 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // Empty for an object with no `__dict__` (a C type: `set`,
         // `frozenset`, `complex`, a `dict_keys`) — which is every value this
         // arm claimed before #2478, so their behaviour is unchanged.
-        attrs,
+        //
+        // Built only on the CLAIMING path; the decline above asks
+        // `has_public_dict_attrs` instead, which reads the keys and converts
+        // no values.
+        attrs: public_dict_attrs(ob).unwrap_or_default(),
         items,
     })
 }

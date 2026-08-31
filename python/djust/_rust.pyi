@@ -246,6 +246,18 @@ def crosses_as_encoded(obj: object) -> bool:
     """
     ...
 
+def crosses_as_encoded_by_conversion(obj: object) -> bool:
+    """The same bit, decided by RUNNING the conversion (#2477/#2489).
+
+    The reference :func:`crosses_as_encoded` is checked against, and NOT what
+    production calls: converting an object eagerly walks its whole graph, which
+    is work the render path never does and which overflowed the stack when the
+    production predicate was written this way. Exposed so the differential in
+    ``python/tests/test_opaque_collections_2477_2489.py`` is a real comparison
+    rather than an assertion that the probe agrees with itself.
+    """
+    ...
+
 def set_virtual_keyed_ops(enabled: bool) -> None:
     """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
 
@@ -1095,6 +1107,7 @@ __all__ = [
     "extract_template_variables",
     "compute_template_hash",
     "crosses_as_encoded",
+    "crosses_as_encoded_by_conversion",
     "dj_model_fields_from_template",
     "serialize_queryset",
     "serialize_context",
