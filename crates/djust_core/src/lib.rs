@@ -225,8 +225,16 @@ pub enum Value {
     /// `CallOutcome::Empty` resolves to, so an `alters_data` refusal or a
     /// serialization-floor denial lands here: those must keep rendering
     /// nothing, never the literal text "None".
+    ///
+    /// In a BINARY encoding it is a one-key tagged map under `MISSING_TAG`,
+    /// not a `nil` — see that constant for why the tag went on THIS variant
+    /// and not on [`Value::None`] (#2484).
     Missing,
     /// Python `None`. Renders as `"None"`, as `str(None)` does (#2203).
+    ///
+    /// Encodes as a bare `nil` in every format, which is what it has always
+    /// encoded as — and keeping it that way is the whole of #2484's
+    /// rolling-deploy compatibility argument.
     None,
     Bool(bool),
     Integer(i64),
