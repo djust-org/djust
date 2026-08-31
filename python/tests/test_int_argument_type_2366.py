@@ -136,6 +136,11 @@ TYPED_REFUSALS = {
     "date": datetime.date(2020, 1, 1),
     "time": datetime.time(15, 30),
     "timedelta": datetime.timedelta(seconds=90),
+    # And the fifth, which moved out of STRINGIFIED_AT_EXTRACTION in
+    # #2477/#2489 for the same reason one class over: `opaque_value` carries a
+    # `set` at the conversion now, so `int(set)` is a `TypeError` djust can
+    # finally SEE rather than an `int("{1, 2}")` it never gets to try.
+    "set": {1, 2},
 }
 
 #: The same rule for an argument that is a dict VIEW — reached by a PATH
@@ -145,16 +150,19 @@ VIEW_PATHS = ["d.keys", "d.items", "d.values"]
 
 #: The same rule, for arguments whose type was already lost at extraction.
 #:
-#: This held `datetime`, `date` and `time` until #2448. The class's own
-#: assertion message named the condition under which they would leave — "if the
-#: extraction boundary learned the type, move this row into
-#: TestTheFourReturnInputFiltersNowRaise" — and that is exactly what happened:
-#: `Value::Encoded` carries the four datetime types across the conversion, so
-#: `{{ p|floatformat:q }}` with a `datetime` argument now raises as Django's
-#: `int()` does. A `set` is still stringified, so the class is not vacuous.
-STRINGIFIED_AT_EXTRACTION = {
-    "set": {1, 2},
-}
+#: EMPTY since #2477/#2489, and emptied the way #2448 emptied most of it: the
+#: class's own assertion message named the condition under which a row leaves —
+#: "if the extraction boundary learned the type, move this row into
+#: TestTheFourReturnInputFiltersNowRaise" — and that is twice now what
+#: happened. #2448 gave the four datetime types a `Value::Encoded`; #2477/#2489
+#: widened the same carrier past the falsy-only class, so a `set` crosses as
+#: one too and `{{ p|floatformat:q }}` raises as Django's `int()` does.
+#:
+#: The rows are not deleted: each is a TYPED_REFUSAL above, where it is
+#: asserted against Django. An emptied residue list whose rows went nowhere is
+#: a pin quietly narrowed, and `test_the_residue_is_empty_and_its_rows_moved`
+#: is what makes the emptiness a measurement.
+STRINGIFIED_AT_EXTRACTION: dict[str, object] = {}
 
 #: Arguments `int()` accepts, which must keep working.
 ACCEPTED = {
@@ -390,13 +398,57 @@ class TestOneMechanismNotTwo:
 
 
 class TestTheExtractionBoundaryResidueIsNamed:
-    """A `datetime` argument still diverges — and NOT at the dispatch table.
+    """The residue is EMPTY, and that is a run rather than a deletion.
 
-    The type is gone before `Context::resolve` ever sees it. The measurement
-    below is what locates the loss, and it is the reason the issue's proposed
-    remedy ("the dispatch table learns the argument's original type") could not
-    have closed its own headline case.
+    This class held the argument types whose divergence was NOT at the dispatch
+    table: the type was gone before `Context::resolve` ever saw it, which is
+    the reason the issue's proposed remedy ("the dispatch table learns the
+    argument's original type") could not have closed its own headline case.
+
+    #2448 moved four rows out of it and #2477/#2489 moved the last one, so
+    every parametrized case below is now empty and the class's content is the
+    pair of tests that assert the emptiness and the destination.
     """
+
+    def test_the_residue_is_empty_and_its_rows_moved(self) -> None:
+        """Both halves, because either alone can be satisfied by a deletion.
+
+        The list is empty AND every type it ever held is a TYPED_REFUSAL now —
+        where `TestTheFourReturnInputFiltersNowRaise` asserts it against
+        Django. A row that vanished without arriving there would pass the first
+        assertion and fail this one.
+        """
+        assert not STRINGIFIED_AT_EXTRACTION
+        for moved in ("datetime", "date", "time", "timedelta", "set"):
+            assert moved in TYPED_REFUSALS, moved
+
+    def test_a_set_argument_RAISES_on_both_engines_now(self) -> None:
+        """The row #2477/#2489 moved, asserted at the cell it was recorded at.
+
+        `{{ p|floatformat:q }}` with a `set` argument returned its INPUT here
+        and raised on Django, because the argument reached the dispatch table
+        as the text `"{1, 2}"`. The carrier keeps it a `set`, so `int()` refuses
+        on both.
+        """
+        for name in sorted(RETURN_INPUT):
+            src = "{{ p|%s:q }}" % name
+            ctx = {"p": RETURN_INPUT[name], "q": {1, 2}}
+            assert django_raises(src, ctx), f"Django no longer raises: {src}"
+            assert djust_raises(src, ctx), f"{src} with a set argument no longer raises"
+
+    def test_a_set_is_no_longer_a_string_at_the_boundary(self) -> None:
+        """Where the loss used to happen, measured the way it was measured.
+
+        The old assertion was that each residue row answered `|length` with the
+        LENGTH OF ITS RENDERING — six characters for `"{1, 2}"`. A `set`
+        answers its element count now, which is the same measurement inverted
+        and is what says the type survived rather than that some filter grew a
+        special case.
+        """
+        rendered = _rust.render_template("{{ q }}", {"q": {1, 2}})
+        length = _rust.render_template("{{ q|length }}", {"q": {1, 2}})
+        assert length == "2"
+        assert length != str(len(rendered)), rendered
 
     @pytest.mark.parametrize("name", sorted(RETURN_INPUT))
     @pytest.mark.parametrize("arg", sorted(STRINGIFIED_AT_EXTRACTION))
@@ -485,9 +537,14 @@ class TestARandomisedDifferentialOverTheArgumentAxis:
             f"only {raised} of {checked} pairs make Django raise — the sweep is "
             "not reaching the surface it claims to measure"
         )
-        assert residue >= 4, (
-            f"the extraction-boundary exclusion fired {residue} times — if it is "
-            "0 the sweep never builds the shape it excuses"
+        # One since #2477/#2489: `STRINGIFIED_AT_EXTRACTION` is empty, so every
+        # excused pair now comes from `OTHER_MECHANISM`, whose rows are each
+        # asserted to still diverge by
+        # `test_every_other_mechanism_row_is_still_divergent`. The floor is
+        # what keeps the exclusion from being a shape the sweep never builds.
+        assert residue >= 1, (
+            f"the residue exclusion fired {residue} times — if it is 0 the "
+            "sweep never builds the shape it excuses"
         )
         assert not mismatches, f"{len(mismatches)} of {checked} pairs disagree:\n" + "\n".join(
             mismatches[:10]
