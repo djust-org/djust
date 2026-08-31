@@ -64,12 +64,20 @@ pub fn template_builtin(name: &str) -> Option<Value> {
 /// runs first. Reversing these two arms passes every single-key test and
 /// fails that one.
 ///
-/// **Step 2 has no counterpart here and needs none.** A [`Value`] is inert
-/// data with no attributes; the attribute step belongs to the raw-Python
-/// sidecar walk in [`Context::resolve`], which has done all three in this
-/// order since #1997. That walk is this one's parallel path (CLAUDE.md
-/// #1646) — one had Django's rule and its twin did not, which is the drift
-/// this helper exists to end. State it once, call it from both spellings.
+/// **Step 2 reaches exactly one variant, and used to reach none** (#2481).
+/// A [`Value`] is inert data with no attributes — except a
+/// [`Value::Encoded`], which exists precisely because a Python object could
+/// not cross, and which since #2481 carries the object's attributes by name
+/// alongside its `display` / `json` / `truthy` spellings. So
+/// `{{ dt.year }}` resolves here rather than only on the paths that happen to
+/// have a raw-Python sidecar.
+///
+/// That sidecar walk in [`Context::resolve`] is this one's parallel path
+/// (CLAUDE.md #1646) — it has done all three steps in this order since #1997,
+/// and it is attached only when a top-level context key holds a raw Python
+/// object, which no `DjustTemplateBackend` render does. One walk had Django's
+/// attribute step and its twin did not; that is the drift #2481 closes, in
+/// the same helper #2371 wrote to close the SPELLING half of it.
 ///
 /// A [`Value::DictView`] is deliberately absent from step 3: Python's
 /// `dict_items` is not subscriptable, Django's `current[int(bit)]` raises on
@@ -94,7 +102,28 @@ fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a Value> {
         }
     }
 
-    // (2) attribute access — see the note above; a `Value` has none.
+    // (2) attribute access. ONE variant carries attributes — a
+    //     `Value::Encoded`, which holds a Python object by the spellings
+    //     measured at the PyO3 boundary and, since #2481, by its attribute map
+    //     as well. `{{ post.published.year }}` is an ordinary Django idiom and
+    //     rendered the EMPTY STRING on every path with no raw-Python sidecar,
+    //     which is every `DjustTemplateBackend` render.
+    //
+    //     This is the ONE reader of `Encoded::attrs`. Every other variant is
+    //     inert data with no attributes, so the step is genuinely absent for
+    //     them rather than unimplemented — a `Value::Object` answers the same
+    //     names through step 1 above, which is Django's own order.
+    //
+    //     BEFORE step 3, which is Django's order: `_resolve_lookup` tries
+    //     `getattr` before `current[int(bit)]`. Unobservable for an `Encoded`
+    //     today (it has no index arm below, and none of the carried names
+    //     parses as an integer) and correct anyway, so the two cannot come
+    //     apart if either set grows.
+    if let Value::Encoded(encoded) = current {
+        if let Some(found) = encoded.attrs.get(part) {
+            return Some(found);
+        }
+    }
 
     // (3) integer index. `int(bit)`, so `"007"` is the index 7, and a segment
     //     that is not an integer at all stops the walk here as Django's

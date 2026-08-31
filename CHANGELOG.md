@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`{{ post.published.year }}` renders `2026` instead of nothing — a `Value::Encoded` carries its attributes (#2481).** Django's `Variable._resolve_lookup` tries three things at every dotted segment: mapping item access, then `getattr`, then an integer index. `context::lookup_segment` implemented steps 1 and 3, and said so in as many words — *"attribute access — see the note above; a `Value` has none"*. So every dotted lookup on a `datetime` / `date` / `time` / `timedelta` resolved to **nothing**, on every path with no raw-Python sidecar — which is every `DjustTemplateBackend` render:
+
+  ```
+  {{ p.year }}    datetime(2026, 3, 4, 5, 6, 7)   django 2026   djust ''
+  {{ p.days }}    timedelta(days=3)               django 3      djust ''
+  ```
+
+  It predates the variant: before #2448 a `datetime` was `Value::String(str(o))`, which has no attributes either. The LiveView path had a partial escape — `crates/djust_live/src/lib.rs` attaches a `raw_py_objects` sidecar, so `{{ dt.year }}` could resolve through `getattr` *there* — and a fallback on one path is not the rule (#1646), which is why the fix is at the carrier rather than at one caller and why `TestBothPathsAgree` asserts the two now answer the same.
+
+  **21 cells, measured against live Django**, through BOTH entry points `python/djust/template/backend.py` binds. `lookup_segment` is the ONE reader of the map, pinned as an equality in both directions so a second dotted-path walker that does not consult it reddens as loudly as a deleted arm (#1125/#1646); `lookup_segment` itself has exactly one caller, pinned the same way. Over the swept attribute surface the mismatch count goes **64 → 41**, and nothing moves into `djust REFUSES & Django RENDERS`.
+
+  **What the map carries is a rule, not a list.** It holds what Python answers WITHOUT a call and WITHOUT recursing. `min` / `max` / `resolution` look like they belong and cannot: their values are values of the same family, and `datetime.min.min is datetime.min` — measured, in `test_the_class_attributes_would_not_terminate` — so a collector that carried them would not terminate. `test_the_name_list_is_the_whole_of_the_policy` fails if they ever enter the table. The nullary methods (`isoformat`, `weekday`, `ctime`, `total_seconds`, `date`, `time`, …) are absent because Django reaches them through its auto-call (ADR-024), which turns a LOOKUP into an EVALUATION — eager at conversion time, paid whether or not a template asks, and inheriting whatever the call raises. Both families are pinned in the DIVERGING direction and filed as #2485; `Decimal` is `Value::Decimal`, a different carrier with no attribute slot, and is filed as #2486.
+
+  **Wire.** The `ENCODED_TAG` payload grows to a **ninth** positional slot, appended, written unconditionally as a map — an empty one costs a byte and the slots stay aligned, which is the choice `cmp_key` makes one slot over and for the same reason (#1541). The reader accepts 9 / 8 / 6 / 4 / 3, and an older width restores NO attributes: the answer that entry was written with. Carrying it is what makes the fix survive a cache hit — `SerializableViewState.state` round-trips through msgpack on every read of the default `InMemoryStateBackend`, so without the slot `{{ dt.year }}` would answer once and go empty afterwards, the reopening `ENCODED_TAG` has now prevented four times. `crates/djust_core/tests/test_encoded_wire_positions_2471_2472.rs` grows the slot-9 pins: a 13-shape sweep of what the map can hold, order, the empty map, a malformed slot, and a key↔attrs SWAP — which neither changes the payload's width nor trips any type check, so only the values can catch it.
+
+  **`Encoded`'s derived `PartialEq` becomes a hand-written one.** The map holds `Value`s and `Value` deliberately has no `PartialEq`: Django's `==` for a template value is `renderer::values_equal`, which equates `1` with `1.0` and asks `python_partial_cmp` for this family. Deriving a second `==` onto `Value` would put a structural answer one keystroke from every site that wants the Django one — two mechanisms for one question (#1646) — so the structural comparison is reachable by NAME only, as `values_structurally_equal`, with `test_every_variant_is_structurally_equal_to_its_own_clone` so a new variant cannot land on its wildcard unnoticed.
+
+  **Surfaced rather than folded in (#1079).** `Value::None` and `Value::Missing` are deliberately distinct (#2203) and share ONE msgpack `nil`, so every `None` in state comes back as `Missing` and renders `''` after one cache hit. Pre-existing and general — pinned with a plain `Value::Object` losing it too, which is what makes "pre-existing" a measurement — and filed as #2484.
+
+  Regression coverage: 143 cases in `python/tests/test_encoded_attributes_2481.py`; new cases in `test_encoded_wire_positions_2471_2472.rs`. Gate-off verified against four independent reverts (the reader, the producer, the wire write, the wire read), each asserting the mutation matched exactly once, the source changed, the `.so` mtime advanced and `__pycache__` was cleared, and counting collection errors apart from failures.
 
 
 ### Changed

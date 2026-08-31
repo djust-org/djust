@@ -6852,6 +6852,7 @@ mod tests {
                     hi: 737425,
                     lo: 11_045_000_000,
                 }),
+                attrs: Default::default(),
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
@@ -6862,6 +6863,7 @@ mod tests {
                 iterable: true,
                 repr: "set()".to_string(),
                 cmp_key: None,
+                attrs: Default::default(),
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -6877,6 +6879,7 @@ mod tests {
                 iterable: false,
                 repr: "<LenZero object>".to_string(),
                 cmp_key: None,
+                attrs: Default::default(),
             })),
         ]
     }
@@ -7308,6 +7311,7 @@ mod tests {
                     hi: 737425,
                     lo: 11_045_000_000,
                 }),
+                attrs: Default::default(),
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -7332,6 +7336,7 @@ mod tests {
                 // No key: `python_partial_cmp` must answer `None` for every
                 // pair either side of which came from `falsy_opaque` (#2471).
                 cmp_key: None,
+                attrs: Default::default(),
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -7347,6 +7352,7 @@ mod tests {
             iterable: false,
             repr: "<script>alert(1)</script>".to_string(),
             cmp_key: None,
+            attrs: Default::default(),
         }));
         assert!(
             iter_values(&hostile).is_none(),
