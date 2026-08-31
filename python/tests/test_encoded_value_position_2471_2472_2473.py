@@ -1104,3 +1104,31 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
         # And nested, which is `py_repr`'s own path.
         dj, du = both("{{ p }}", {"p": [v]})
         assert du == dj == f"[{v!r}]"
+
+    def test_that_one_test_is_the_COMPLETE_set_of_distinguishers(self) -> None:
+        """Why gating the measurement off reddens exactly ONE test, and why
+        that is completeness rather than thin coverage.
+
+        The gate-off mutation that replaces ``falsy_opaque``'s ``repr()`` call
+        with ``display.clone()`` fails
+        :func:`test_its_repr_is_MEASURED_and_not_a_copy_of_display` and nothing
+        else — confirmed by a crossed run, which named that test and no other.
+        A count of one is normally a question (equivalent mutation? shadowed by
+        a second mechanism? missing coverage?), so this answers it: for EVERY
+        builtin the widening carries, ``str(o)`` and ``repr(o)`` are the same
+        string, so no cell built from them can distinguish the two
+        implementations. The set of values that CAN is exactly "a user class
+        defining both", and the test above is it.
+
+        Asserted rather than asserted-in-prose, so a future builtin joining the
+        carrier whose spellings DIFFER reddens here and gets its own case.
+        """
+        builtins_carried = [set(), frozenset(), complex(0), self.LenZero()]
+        for v in builtins_carried:
+            assert str(v) == repr(v), (
+                f"{type(v).__name__} now spells str() and repr() differently — it "
+                f"can distinguish the two implementations, so it belongs in "
+                f"test_its_repr_is_MEASURED_and_not_a_copy_of_display"
+            )
+        # And the one shape that CAN tell them apart is in the class above.
+        assert str(self.BoolFalse()) != repr(self.BoolFalse())
