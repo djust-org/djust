@@ -472,6 +472,10 @@ class RenderSlotTagHandler:
             if isinstance(parsed, (list, dict)):
                 return self._render_value(parsed)
         except (ValueError, TypeError):
+            # Not JSON. That is the ORDINARY case, not an error: every template
+            # spelling of this operand arrives as a dotted path, which the arm
+            # below resolves. Only the legacy caller noted above sends JSON, so
+            # a parse failure here means "try the path", never "something broke".
             pass
 
         # The operand as a dotted path, resolved HERE. A miss is the empty
