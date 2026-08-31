@@ -60,6 +60,13 @@ EXPECTED = {
     # `int`, so an `i64`-first arm order would swallow `True` and
     # `{{ {True: 1} }}` would print `{1: 1}`.
     ("crates/djust_core/src/lib.rs", "py_object_key"),
+    # The `Value::Encoded` predicate (#2477/#2489). It probes every arm of
+    # `impl FromPyObject for Value` in that impl's own order, so the same
+    # bool-before-i64 rule applies to it for the same reason: a Python `bool`
+    # IS an `int`, and an `i64`-first probe would answer "not a scalar" for
+    # `True` and let the normalizer carry it. Flagged here the moment it
+    # landed, which is the net working.
+    ("crates/djust_core/src/lib.rs", "crosses_as_encoded"),
     ("crates/djust_live/src/lib.rs", "python_to_json_value"),
     ("crates/djust_live/src/lib.rs", "python_to_value"),
     ("crates/djust_live/src/lib.rs", "serialize_python_value"),

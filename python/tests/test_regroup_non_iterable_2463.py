@@ -145,9 +145,7 @@ def du(source: str, ctx: dict) -> str:
     """
     djust_ctx = dict(ctx)
     try:
-        return _rust.render_template_with_dirs(
-            source, djust_ctx, [], _safe_keys(djust_ctx) or None
-        )
+        return _rust.render_template_with_dirs(source, djust_ctx, [], _safe_keys(djust_ctx) or None)
     except Exception:  # noqa: BLE001
         return "<<REFUSED>>"
 
@@ -211,7 +209,9 @@ class TestRegroupRefusesWhatDjangoRefuses:
     def test_every_operand_spelling_that_resolves_to_an_int(self, operand: str) -> None:
         """#2394's lesson: the defect is the VALUE, not one operand channel."""
         source = REGROUP.replace("p by", f"{operand} by")
-        ctx = {"p": {"a": 2}} if operand == "p.a" else {"p": [2]} if "|first" in operand else {"p": 2}
+        ctx = (
+            {"p": {"a": 2}} if operand == "p.a" else {"p": [2]} if "|first" in operand else {"p": 2}
+        )
         assert dj(source, ctx) == du(source, ctx) == "<<REFUSED>>", (source, ctx)
 
 
@@ -252,7 +252,7 @@ class TestEveryIterableSourceIsUnchanged:
         rows = [{"k": "a"}, {"k": "a"}, {"k": "b"}]
         source = (
             "{% regroup p by k as g %}"
-            '{% for x in g %}({{ x.grouper }}:{{ x.list|length }}){% endfor %}'
+            "{% for x in g %}({{ x.grouper }}:{{ x.list|length }}){% endfor %}"
         )
         assert du(source, {"p": rows}) == dj(source, {"p": rows}) == "(a:2)(b:1)"
 
@@ -339,9 +339,7 @@ class TestNoSecondIterabilityCheckWasAdded:
 
     def test_the_handler_swallows_no_iteration_TypeError(self) -> None:
         source = REGROUP_PY.read_text(encoding="utf-8")
-        code = "\n".join(
-            line for line in source.splitlines() if not line.lstrip().startswith("#")
-        )
+        code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
         assert "except TypeError" not in code, (
             "the regroup handler must defer to Python's own list(); catching "
             "TypeError here is the second answer #2463 deleted"
@@ -381,7 +379,7 @@ class TestNoSecondIterabilityCheckWasAdded:
         by_file = {name: text for name, text in found}
         assert by_file["renderer.rs"] == "\"'{}' object is not iterable\","
         assert by_file["filters.rs"] == (
-            'ValueOpError::NotIterable => format!("\'{ty}\' object is not iterable"),'
+            "ValueOpError::NotIterable => format!(\"'{ty}' object is not iterable\"),"
         )
 
     def test_the_handlers_only_iteration_sink_is_pythons_own_list(self) -> None:
@@ -406,28 +404,44 @@ class TestNoSecondIterabilityCheckWasAdded:
 class TestWhatThisDeliberatelyDoesNOTClose:
     """Asserted in the DIVERGING direction, so closing it reddens this.
 
-    A bare ``object()`` still renders where Django refuses — but NOT for this
-    issue's reason. It never reaches the handler as an object: ``Value``'s
-    conversion has no variant for it, so it arrives at the value channel as
-    ``Value::String(str(o))`` and the handler correctly iterates a string. The
-    same conversion gap #2466 is about, one tag over; fixing it inside
-    ``regroup`` would be a guard at the consumer for a defect at the source.
+    A bare ``object()`` still renders where Django refuses. The REASON moved at
+    #2477/#2489 and the divergence did not, which is the whole point of keeping
+    these two tests rather than editing the number.
+
+    It used to arrive at the value channel as ``Value::String(str(o))`` —
+    ``Value``'s conversion had no variant for it — so the handler correctly
+    iterated a STRING and produced one group. ``opaque_value`` carries it now,
+    so ``{% for %}`` refuses exactly as Django does; the value reaching the
+    regroup HANDLER is no longer a string and it yields ZERO groups instead of
+    one. Django refuses either way, so the cell is still divergent — but the
+    two tags no longer agree with each other, and that is the signature of a
+    defect in the tag rather than below it. Re-diagnosed rather than
+    re-numbered; still not this issue's business.
     """
 
-    def test_a_bare_object_still_renders_one_group(self) -> None:
+    def test_a_bare_object_still_renders_where_django_refuses(self) -> None:
         value = object()
         assert dj(REGROUP, {"p": value}) == "<<REFUSED>>"
-        assert du(REGROUP, {"p": value}) == "[1]"
+        # ONE group until #2477/#2489, zero now — the handler stopped being
+        # handed a string. Still a render where Django refuses.
+        assert du(REGROUP, {"p": value}) == "[0]"
 
-    def test_and_the_reason_is_that_it_arrives_as_a_string(self) -> None:
-        """The evidence, not the assertion: ``{% for %}`` iterates its repr.
+    def test_and_the_reason_is_no_longer_that_it_arrives_as_a_string(self) -> None:
+        """The evidence, not the assertion — and it is the OTHER way round now.
 
-        Both tags agree with each other and both disagree with Django, which
-        is the signature of a defect BELOW them.
+        ``{% for %}`` iterated the object's repr, character by character, and
+        both tags then agreed with each other while disagreeing with Django:
+        the signature of a defect BELOW them. ``{% for %}`` refuses now, with
+        CPython's own message, so the two tags disagree with each other and the
+        remaining regroup divergence is the tag's.
         """
         value = object()
-        assert du(FOR, {"p": value}).startswith("[&lt;][o][b][j]")
         assert dj(FOR, {"p": value}) == "<<REFUSED>>"
+        assert du(FOR, {"p": value}) == "<<REFUSED>>"
+        assert not du(FOR, {"p": value}).startswith("[&lt;][o][b][j]"), (
+            "the repr is being iterated again — the carrier stopped claiming a "
+            "bare object, which is #2477/#2489 regressing"
+        )
 
     def test_a_Decimal_refuses_but_names_the_wrong_type(self) -> None:
         """Same conversion boundary, benign direction.

@@ -672,9 +672,17 @@ class TestTheSinkHasExactlyTheCallersItClaims:
 
     def test_the_conversion_calls_the_helper_exactly_once(self) -> None:
         src = self._production(CORE_RS.read_text(encoding="utf-8"))
-        # The definition plus the one call site.
-        assert self._call_count(src, "django_json_encoded") == 2, src.count("django_json_encoded")
+        # The definition, the CONVERSION's one call site, and — since
+        # #2477/#2489 — `crosses_as_encoded`, which has to ask the same
+        # question about the same objects because it stands in for the whole
+        # block. That predicate is the ONLY other caller, and asking the helper
+        # rather than re-stating which types it claims is exactly why it can be.
+        assert self._call_count(src, "django_json_encoded") == 3, src.count("django_json_encoded")
         assert "if let Some(encoded) = django_json_encoded(&ob.to_owned())" in src
+        # ...and it is one call each, in two functions, not two in one.
+        for fn in ("fn extract(", "pub fn crosses_as_encoded("):
+            body = src.split(fn, 1)[1].split("\n}\n", 1)[0]
+            assert self._call_count(body, "django_json_encoded") == 1, (fn, body)
 
     def test_the_counter_goes_red_in_BOTH_directions(self) -> None:
         """The canary #2129/#2135 asks for: a pin nobody has watched fail is a
@@ -685,7 +693,7 @@ class TestTheSinkHasExactlyTheCallersItClaims:
         """
         src = self._production(CORE_RS.read_text(encoding="utf-8"))
         baseline = self._call_count(src, "django_json_encoded")
-        assert baseline == 2, baseline
+        assert baseline == 3, baseline
 
         added = src.replace(
             "if let Some(encoded) = django_json_encoded(&ob.to_owned())",

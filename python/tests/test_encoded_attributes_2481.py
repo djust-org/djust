@@ -348,7 +348,7 @@ class TestTheStateRoundTripKeepsTheAttributes:
         payload = msgpack.unpackb(blob, raw=False, strict_map_key=False)[1]["p"][
             "__djust_encoded__"
         ]
-        assert len(payload) == 9, payload
+        assert len(payload) == 10, payload  # nine until #2477/#2489 grew it
         assert payload[8] == {"days": 3, "seconds": 90, "microseconds": 5}
 
     def test_an_EIGHT_element_payload_still_reads_with_no_attributes(self) -> None:
@@ -368,7 +368,14 @@ class TestTheStateRoundTripKeepsTheAttributes:
         view.set_state("p", datetime.timedelta(days=3))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 9, payload
+        assert len(payload) == 10, payload
+        # A LEGACY payload is not a truncation of the current one (#2477/#2489):
+        # slot 4 widened from #2466's `sized_empty` boolean to `len(o)` itself,
+        # so every width below 10 carries a `Bool` there while a 10-element one
+        # carries an int or `None`. Put the boolean back before truncating, or
+        # the test measures that mismatch rather than the fallback it is named
+        # for.
+        payload[4] = False
         decoded[1]["p"]["__djust_encoded__"] = payload[:8]
         legacy = msgpack.packb(decoded, use_bin_type=True)
 

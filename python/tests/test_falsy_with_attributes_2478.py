@@ -1311,11 +1311,29 @@ class TestTheSerializationFloorsStayAbove:
         """One `public_dict_attrs`, two callers — the `__dict__` arm and
         `opaque_value`. Two copies of the `_`-prefix filter is the #1646 shape,
         one arm growing a rule the other does not, and THIS arm's copy is the
-        one that would leak."""
+        one that would leak.
+
+        #2477/#2489 added a THIRD reader of the same question and did NOT add a
+        third copy of the rule: `has_public_dict_attrs` asks whether the map
+        would be empty, over the KEYS, because building it to answer that would
+        convert every attribute value for the arm below to convert again. The
+        `_`-prefix rule moved into `is_public_attr_name`, which both call — so
+        the count below is of the RULE, not of the map builder, and it is still
+        one.
+        """
         src = CORE_RS.read_text(encoding="utf-8")
         assert src.count("fn public_dict_attrs(") == 1
-        calls = re.findall(r"(?<!fn )public_dict_attrs\(", src)
+        assert src.count("fn has_public_dict_attrs(") == 1
+        # The map BUILDER's callers: the `__dict__` arm and `opaque_value`.
+        # `has_public_dict_attrs` is matched out by name so the two questions
+        # stay countable apart.
+        calls = re.findall(r"(?<!fn )(?<!has_)public_dict_attrs\(", src)
         assert len(calls) == 2, f"the caller set moved: {len(calls)}"
-        assert src.count("if k.starts_with('_') {") == 1, (
+        # The RULE, stated once and read by both.
+        assert src.count("fn is_public_attr_name(") == 1
+        assert src.count("name.starts_with('_')") == 1, (
             "a second copy of the `_`-prefix filter appeared — state it once"
+        )
+        assert src.count("if k.starts_with('_') {") == 0, (
+            "the map builder grew its own copy of the rule back"
         )

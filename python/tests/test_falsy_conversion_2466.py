@@ -640,17 +640,22 @@ class TestTheFalsinessRuleStillHasONEDefinition:
         question.
         """
         source = self._production(CORE_RS)
+        # The bit is ASKED in `opaque_gate`, which is where the whole gate
+        # moved at #2477/#2489 — one statement, two consumers (the payload
+        # build and `crosses_as_encoded`). It was the literal `truthy: false,`
+        # in `opaque_value` until the gate widened past the falsy-only class;
+        # the assertion moved with it rather than being dropped, because "the
+        # bit is asked, not derived" is the claim and not its address.
+        start = source.index("fn opaque_gate(")
+        gate = source[start : source.index("\n}\n", start)]
+        assert "let truthy = ob.is_truthy().ok()?;" in gate, gate
+        # ...and CARRIED verbatim onto the struct by the build.
         start = source.index("pub fn opaque_value(")
         body = source[start : source.index("\n}\n", start)]
-        assert "ob.is_truthy()" in body, body
-        # `truthy` is the bit Python answered, carried verbatim. It was the
-        # literal `truthy: false,` until #2477/#2489 widened the gate past the
-        # falsy-only class; the assertion moved with it rather than being
-        # dropped, because "the bit is asked, not derived" is the claim.
-        assert "let truthy = ob.is_truthy().ok()?;" in body, body
+        assert "opaque_gate(ob)?" in body, body
         assert "truthy," in body, body
         for never in ("display.is_empty()", 'display == "', "type_name =="):
-            assert never not in body, (never, body)
+            assert never not in gate + body, (never, gate + body)
 
     def test_both_iterability_probes_name_the_carrier(self) -> None:
         """`iter_values` and `python_len` must move together (#1646).

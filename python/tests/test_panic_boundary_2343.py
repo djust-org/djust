@@ -174,6 +174,13 @@ class TestGuardCoversTheRenderSurface:
             "extract_template_variables_py",
             "dj_model_fields_from_template",
             "compute_template_hash",
+            # Both #2477/#2489 predicates. They CONVERT A USER VALUE — the
+            # shallow one runs every `FromPyObject` arm probe and the gate; the
+            # reference one runs the conversion outright — so a `__bool__`,
+            # `__len__`, `__iter__` or `__repr__` that panics through PyO3
+            # reaches the same 25k lines as a render.
+            "crosses_as_encoded",
+            "crosses_as_encoded_by_conversion",
             "render",
             "render_with_diff",
             "render_binary_diff",
