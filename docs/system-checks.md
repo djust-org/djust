@@ -28,6 +28,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount |
+| V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -275,6 +276,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **False positives**: none expected on ordinary user mixins. Ancestors in `django.*` (e.g. `django.views.generic.base.View`, and `django.contrib.auth.mixins.{AccessMixin,LoginRequiredMixin,PermissionRequiredMixin,UserPassesTestMixin}` — already enforced on the WS/SSE mount path via `isinstance()` in `djust.auth.core._check_django_access_mixins`) and `djust.*` (djust's own mixins, e.g. `djust.tenants.mixin.TenantMixin`, which is independently reconciled with the WS path via `run_pre_mount_auth`'s `_ensure_tenant()` hook) are excluded.
 - **Suppression**: `abstract = True` on the LiveView class, `DJUST_CONFIG = {'suppress_checks': ['V013']}`, or `SILENCED_SYSTEM_CHECKS = ["djust.V013"]`
 - Added in v1.1.0 (#2059)
+
+### V014 — Time-travel-enabled view exposes PII-looking fields
+- **Severity**: Warning
+- **Method**: Runtime (walks every registered `LiveView` that sets `time_travel_enabled = True`)
+- **What it detects**: The view records `state_before` / `state_after` for every event, and `encode_view_state()` turns those snapshots into a **shareable** `djbug1.` blob — a bug capture exists to leave the machine it was captured on. If the view's model or form declares a field whose name looks like PII (`password`, `passwd`, `ssn`, `credit_card`, `tax_id`, `email`, `phone`) and that name is not in `time_travel_excluded_fields`, a password or an SSN is one paste away from a bug tracker.
+- **Fix**: declare the sensitive keys — `time_travel_excluded_fields = ["password", "ssn"]`. `encode_view_state()` applies them before any caller-supplied `scrub`, so the redaction does not depend on every call site remembering one. The names are matched against **top-level public-state keys**, so list the attribute names the view assigns (often the same as the field names, but not necessarily).
+- **False positives**: three gates keep this quiet, in order of how much work each does. (1) **`time_travel_enabled`** — a deliberate dev-only opt-in almost no view sets, so a project not using the feature never sees V014 at all; the demo project declares several PII-carrying forms and V014 is silent on it as shipped. (2) **Token matching, not substring matching** — `telephone_pole` does not contain the *token* `phone`. (3) **Field type** — `email` is on almost every user model, and so is `email_verified`; a `BooleanField`/`DateField`/`DateTimeField`/relation/auto-pk field is skipped whatever it is called, which is what keeps `email_notifications`, `phone_confirmed_at` and `password_changed_at` quiet.
+- **Not `DEBUG`-gated**: the runtime surfaces (`BugCapture.encode`, the replay route) are, because they *do* something. A system check only tells you something, and `manage.py check --deploy` on the way to production is exactly when you want to hear that a shipped view records a password field.
+- **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['V014']}` or `SILENCED_SYSTEM_CHECKS = ["djust.V014"]`
+- Added in the unreleased line (#1561)
 
 ---
 

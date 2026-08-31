@@ -313,10 +313,6 @@ djust replay "$BLOB"
 
 **The blob argument is validated before anything is opened.** A blob reaches you by paste, so "run `djust replay <this thing I sent you>`" is a real way to get a URL opened on your machine. The argument must resolve to something starting with `djbug1.` or the command refuses; the URL handed to your browser is always one the command built itself. `--base-url` is restricted to `http`/`https` for the same reason.
 
-## What's coming in iter C
-
-- A framework-level `LiveView.time_travel_excluded_fields` class attribute that auto-scrubs sensitive fields without requiring per-encode `scrub_fields()` calls, plus a system check that warns when `time_travel_enabled = True` and view fields match common-PII patterns without being excluded. Tracked in [#1561](https://github.com/djust-org/djust/issues/1561).
-
 ## Strategy connection
 
 This feature lands as part of the v1.1.0 milestone after promotion from "Path D killer demo" status to load-bearing v1.1 capability. The promotion was triggered by the [#1552 reporter's data point](https://github.com/djust-org/djust/issues/1552) about upstream-bug-velocity friction — the reporter's own words: *"the gap between 'I see it broken' and 'you can see it broken' is the full source tree."* The [v1.1 readiness session](../../strategy-sessions/2026-05-19-v1.1-readiness.md) recommended Path E (defer the headline-path decision until launch-soak data exists, with the hedge *"refuse to commit before data exists"*); the #1552 filing supplied that data.
