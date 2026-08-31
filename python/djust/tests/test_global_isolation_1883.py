@@ -53,6 +53,24 @@ def test_reset_clears_channel_layer_backends():
     )
 
 
+def test_reset_clears_bug_capture_store_cache():
+    """``bug_capture_store._STORE_CACHE`` is dropped (#1561).
+
+    A store installed as a config *instance* can't be invalidated by the
+    cache's config-value comparison, so without the reset it would outlive its
+    test — and for a Redis store that means a live socket in the worker.
+    """
+    from djust import bug_capture_store
+    from djust.test_isolation import reset_djust_globals
+
+    bug_capture_store._STORE_CACHE = ("sentinel-config", bug_capture_store.InMemorySnapshotStore())
+    reset_djust_globals()
+    assert bug_capture_store._STORE_CACHE is None, (
+        "reset_djust_globals must clear the bug-capture snapshot-store cache "
+        "so a store installed by one test cannot outlive it (#1561)"
+    )
+
+
 def test_reset_resets_view_id_counter():
     """``mixins.sticky._view_id_counter`` is reset to a fresh ``count(1)``."""
     from djust.mixins import sticky
