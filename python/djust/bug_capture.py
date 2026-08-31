@@ -49,10 +49,19 @@ Wire format
 
 ::
 
-    djbug1.<base64-urlsafe of compact-JSON>
+    djbug1.<base64-urlsafe of compact-JSON>     (inline — the default)
+    djbug1.store.<opaque-id>                    (indirect — iter C, opt-in)
 
 The ``djbug1.`` prefix is versioned; the decoder rejects unknown
-versions. The JSON shape is::
+versions. The second form appears only when a snapshot store is
+configured AND the payload exceeds the inline limit — see
+``djust.bug_capture_store``, whose module docstring carries the security
+model for the opaque id (it is a bearer capability bounded only by its
+TTL). With no store configured — the default — encoding and decoding
+behave exactly as they did in iter A, and nothing in that module is
+constructed.
+
+The JSON shape is::
 
     {
         "v": "djbug1",
@@ -71,6 +80,17 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
+
+from djust.bug_capture_store import (  # noqa: F401  (re-exported, see __all__)
+    STORE_MARKER,
+    InMemorySnapshotStore,
+    RedisSnapshotStore,
+    SnapshotStore,
+    UnauthenticatedRedisError,
+    get_store,
+    inline_limit,
+    is_valid_snapshot_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +148,12 @@ class BugCapture:
                 ready-made implementation.
 
         Returns:
-            A URL-safe string of the form ``djbug1.<base64url>``.
+            A URL-safe string of the form ``djbug1.<base64url>`` — or,
+            when a snapshot store is configured AND the payload exceeds
+            ``LIVEVIEW_CONFIG['bug_capture_inline_limit']``,
+            ``djbug1.store.<opaque-id>`` with the payload written to the
+            store instead. With no store configured (the default) the
+            result is always the inline form, however large.
 
         Raises:
             RuntimeError: when ``settings.DEBUG`` is falsy and
@@ -145,6 +170,25 @@ class BugCapture:
         # Compact JSON: no whitespace, sorted keys for byte-stable output.
         payload = json.dumps(wire, separators=(",", ":"), sort_keys=True).encode("utf-8")
         b64 = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+
+        # Under the limit, this branch never touches the store module's
+        # config at all — the common case stays exactly as cheap as it
+        # was before iter C.
+        if len(b64) > inline_limit():
+            store = get_store()
+            if store is not None:
+                snapshot_id = store.put(b64)
+                return f"{WIRE_VERSION}.{STORE_MARKER}{snapshot_id}"
+            logger.info(
+                "BugCapture: encoded payload is %d base64 characters, over the "
+                "inline limit of %d, and no LIVEVIEW_CONFIG['bug_capture_store'] "
+                "is configured — emitting the full inline blob. Long blobs get "
+                "truncated by browsers, proxies and issue trackers; configure a "
+                "snapshot store (see djust.bug_capture_store) to emit a short "
+                "djbug1.store.<id> reference instead.",
+                len(b64),
+                inline_limit(),
+            )
         return f"{WIRE_VERSION}.{b64}"
 
     @classmethod
@@ -156,13 +200,22 @@ class BugCapture:
         but never an uncaught exception or a partially-constructed
         object.
 
+        Also accepts the indirect ``djbug1.store.<opaque-id>`` form
+        (iter C), resolving the id through the configured snapshot
+        store. The id is validated against the exact
+        ``secrets.token_urlsafe(16)`` shape BEFORE it reaches the store,
+        so a hostile blob can never address a key outside this
+        feature's namespace — see ``djust.bug_capture_store``.
+
         Args:
             blob: The encoded string produced by :meth:`encode`.
 
         Raises:
             ValueError: on non-string input, unknown version prefix,
                 malformed base64, malformed JSON, version-envelope
-                mismatch, or missing required fields.
+                mismatch, missing required fields, a malformed snapshot
+                id, an unresolvable snapshot id (expired or unknown), or
+                an indirect blob with no store configured.
         """
         if not isinstance(blob, str):
             raise ValueError("encoded BugCapture must be a string, got %s" % type(blob).__name__)
@@ -176,6 +229,11 @@ class BugCapture:
                 "unsupported BugCapture version %r (this build understands %r)"
                 % (version, WIRE_VERSION)
             )
+
+        if b64.startswith(STORE_MARKER):
+            # `.` is not in the base64url alphabet, so an inline payload
+            # can never reach this branch by accident.
+            b64 = _resolve_stored_payload(b64[len(STORE_MARKER) :])
 
         pad = "=" * ((4 - len(b64) % 4) % 4)
         # validate=True rejects bytes outside the (urlsafe) base64 alphabet.
@@ -426,6 +484,41 @@ def _enforce_prod_gate() -> None:
     )
 
 
+def _resolve_stored_payload(snapshot_id: str) -> str:
+    """Resolve a ``djbug1.store.<id>`` reference to its base64 payload.
+
+    The id is validated BEFORE the store is even consulted. That order
+    is the security-relevant part: the replay viewer hands this function
+    a path segment straight from a URL, and an unvalidated id would let
+    a crafted ``djbug1.store.<anything>`` read arbitrary keys from
+    whatever backend the store sits on. A 22-character base64url id
+    cannot name a key outside the store's own prefix.
+    """
+    if not is_valid_snapshot_id(snapshot_id):
+        raise ValueError(
+            "malformed snapshot id in BugCapture blob: expected 22 base64url characters"
+        )
+
+    store: Optional[SnapshotStore] = get_store()
+    if store is None:
+        raise ValueError(
+            "BugCapture blob references a snapshot store, but no store is "
+            "configured. Set LIVEVIEW_CONFIG['bug_capture_store'] to the same "
+            "store the blob was encoded against."
+        )
+
+    payload = store.get(snapshot_id)
+    if payload is None:
+        # "expired" and "never existed" are deliberately one message —
+        # distinguishing them would let a caller confirm that a guessed
+        # id was once valid.
+        raise ValueError(
+            "BugCapture snapshot is not available: the id is unknown or its "
+            "TTL has expired. Ask for a freshly captured blob."
+        )
+    return payload
+
+
 def _coerce_patches(patches: Any) -> List[Dict[str, Any]]:
     """Normalize caller-supplied *patches* to a list of dicts.
 
@@ -449,7 +542,13 @@ def _coerce_patches(patches: Any) -> List[Dict[str, Any]]:
 
 __all__ = [
     "WIRE_VERSION",
+    "STORE_MARKER",
     "BugCapture",
+    "InMemorySnapshotStore",
+    "RedisSnapshotStore",
+    "SnapshotStore",
+    "UnauthenticatedRedisError",
     "encode_view_state",
+    "get_store",
     "scrub_fields",
 ]
