@@ -137,11 +137,13 @@ class BugCapture:
 
 ### `BugCapture.encode(scrub=None) -> str`
 
-Encode into a `djbug1.<base64url>` string. See the security model above.
+Encode into a `djbug1.<base64url>` string. See the security model above. When a snapshot store is configured AND the payload exceeds the inline limit, returns `djbug1.store.<opaque-id>` instead — see [Snapshot store for large captures](#snapshot-store-for-large-captures-iter-c). With no store configured (the default) the result is always the inline form, however large.
 
 ### `BugCapture.decode(blob: str) -> BugCapture`
 
 Decode a `djbug1.<base64url>` string. Raises `ValueError` on any malformed input (non-string, missing version prefix, unknown version, bad base64, bad JSON, missing required fields, wrong field types).
+
+Also accepts `djbug1.store.<opaque-id>`, resolving the id through the configured store. Raises `ValueError` for a malformed id (checked *before* the store is consulted), an id the store cannot resolve, or an indirect blob when no store is configured.
 
 ### `encode_view_state(view, patches, event_name="", scrub=None) -> str`
 
@@ -216,9 +218,65 @@ LIVEVIEW_CONFIG = {
 
 The Share button is dev-only plumbing on top of the same `encode_view_state()` documented above — it doesn't widen what can be captured or bypass the DEBUG / prod-opt-in gate on `BugCapture.encode()`.
 
+## Snapshot store for large captures (iter C)
+
+A capture of a busy view does not fit in a URL. Browsers, proxies and issue trackers all start truncating somewhere in the low kilobytes, and the failure is silent — the recipient gets a `ValueError` about malformed base64 and no idea why.
+
+Configure a **snapshot store** and any payload over the inline limit travels by reference instead:
+
+```
+djbug1.store.hK3n-Qz8Xr2pLm4Ba9CdEf
+```
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    "bug_capture_store": {
+        "backend": "redis",
+        "url": "redis://:s3cret@redis.internal:6379/3",
+        "ttl": 3600,          # seconds; the ONLY bound on a leaked id
+    },
+}
+```
+
+| `bug_capture_store` | Behaviour |
+|---|---|
+| absent / `None` (**default**) | No store. Every blob is inline, exactly as in iter A/B. Nothing in `djust.bug_capture_store` is constructed. |
+| `"memory"` | `InMemorySnapshotStore`. Process-local — **not shareable**, and gone on reload. Dev and tests only. |
+| `{"backend": "redis", "url": ..., "ttl": ..., "key_prefix": ..., "require_auth": ...}` | `RedisSnapshotStore`. The shareable one. |
+| a `SnapshotStore` instance, or a dotted path to one | Your own backend. |
+
+`LIVEVIEW_CONFIG['bug_capture_inline_limit']` (default `1536`) is the base64 length above which a payload goes to the store.
+
+**Why the default is no store rather than in-memory.** An indirect blob is only as shareable as the store behind it. Defaulting to a process-local store would silently turn a blob you *could* paste to a teammate into a reference only your own dev server can resolve — a worse failure than a long URL, because it looks like it worked. A store is a deployment decision, so it is opt-in. A misconfigured store raises rather than falling back to an inline blob, for the same reason: if you asked for Redis, you should not quietly get process-local URLs.
+
+### The opaque id is a bearer capability
+
+`<opaque-id>` is `secrets.token_urlsafe(16)` — 128 bits, not guessable. But **anyone who obtains one can fetch the snapshot in full**, from any client that can reach the store. There is no per-recipient authorization, no revocation, and no audit trail. That is what makes the blob shareable by paste, and it means:
+
+- The **TTL is the only bound on exposure.** A leaked id — from browser history, a proxy log, a screenshot, a `Referer` header, a chat backlog — is live until it expires. Pick the shortest TTL your workflow tolerates; an hour is a default, not a recommendation.
+- The store changes **where** PII lives, never **whether** it is PII. Keep using `scrub` / `time_travel_excluded_fields`, and keep the production opt-in off unless you mean it.
+- Ids are validated against the exact 22-character base64url shape *before* the store is consulted, so a crafted `djbug1.store.djust:session:abc` cannot turn the replay viewer into a reader for other keys in the same Redis. Key prefixing is a second, independent bound.
+- "Unknown id" and "expired id" produce one identical error, so a probe cannot confirm that a guessed id was ever valid.
+
+### Redis must actually require authentication
+
+`RedisSnapshotStore` refuses by default to attach to a Redis that accepts unauthenticated clients:
+
+```
+UnauthenticatedRedisError: RedisSnapshotStore refuses to attach to
+redis://<redacted>@10.0.0.4:6379/0: the server answered a PING from a
+connection carrying NO credentials, so anyone who can route to it can read
+every captured snapshot — which may contain user PII.
+```
+
+The check is not a config flag taken on trust, and it does not read the URL. It opens a **second, credential-stripped connection to the same server** and tries to run a command. A password in your URL proves only that *you* authenticated; it says nothing about whether the server demands credentials from anyone else — and `redis://:@host`, `redis://host?password=x` and `redis://u:p%40ss@host` can all point at a server with no `requirepass` at all. The only question that matters is what the server does with a client presenting nothing, so that is the question it asks. An inconclusive probe (host unreachable, timeout) refuses too — it fails closed.
+
+If your connection is authenticated by a mechanism Redis itself cannot see — mutual TLS, a unix socket bounded by filesystem permissions — pass `require_auth=False`. It logs a warning naming the server every time. Do not reach for it merely because the URL has a password in it.
+
 ## What's coming in iter C (v1.1.0)
 
-- **Iter C** ([#1561](https://github.com/djust-org/djust/issues/1561)) — Redis-backed snapshot store for payloads too large to fit in a URL fragment (~2 KB inline limit); a `djust replay` CLI for terminal-first workflows; a framework-level `LiveView.time_travel_excluded_fields` class attribute that auto-scrubs sensitive fields without requiring per-encode `scrub_fields()` calls; a new `djust check` V012 system check that warns when `time_travel_enabled = True` and view fields match common-PII patterns without being excluded.
+- A `djust replay` CLI for terminal-first workflows, and a framework-level `LiveView.time_travel_excluded_fields` class attribute that auto-scrubs sensitive fields without requiring per-encode `scrub_fields()` calls. Tracked in [#1561](https://github.com/djust-org/djust/issues/1561).
 
 ## Strategy connection
 
