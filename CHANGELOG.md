@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`LiveView.time_travel_excluded_fields` — a declarative PII scrub, plus the `djust.V014` check that notices you haven't declared one (#1561).** Names the top-level public-state keys that must never leave a view inside a shared bug capture. `encode_view_state()` applies them BEFORE any caller-supplied `scrub`, so the redaction stops depending on every call site remembering to pass one — the debug panel's Share button routes through the same function and inherits it, pinned by a structural test so the next capture surface can't quietly build a twin (#1646). Composition reuses the existing `scrub_fields()`, which already handles absent keys and already carries forward `scrubbed_fields` — which is what makes names from both sources land on the wire together. Any iterable of names is accepted (#1108); a bare string is treated as one name rather than iterating as eight characters and silently scrubbing nothing.
+
+  **Registered as `V014`, not the `V012` the issue names** — that ID has been taken since #1803 (sticky child declares its own `dj-view`), and V001–V013 are all in use.
+
+  V014 warns when a view sets `time_travel_enabled = True` and its model or form declares a field whose name looks like PII (`password`, `passwd`, `ssn`, `credit_card`, `tax_id`, `email`, `phone`) that is not declared excluded. The design problem is false positives — `email` is on almost every user model, and a check that fires on every project teaches people to ignore it (#1060). Three gates: `time_travel_enabled` is a deliberate dev-only opt-in almost no view sets, which does the heavy lifting; token matching rather than substring matching, so `telephone_pole` does not contain the *token* `phone`; and field TYPE, so `email_verified` (Boolean) and `phone_confirmed_at` (DateTime) are skipped whatever they are called. Field discovery scans class attributes for values that are models/forms/querysets rather than enumerating the attribute names a view is expected to use — djust has no framework-level `model` attribute, so an enumerate-the-names scan would be reliably one short. Not `DEBUG`-gated: `manage.py check --deploy` is exactly when you want to hear that a shipped view records a password field.
+
+  Dogfooded against the demo project and `examples/`: **0 messages** across 57 LiveViews, because none opts into time travel. Forcing the flag on every one produces 10 messages naming 14 fields, all true positives. New cases in `TestExcludedFields`, `TestNoParallelSink`, `TestV014Firing`, `TestV014StaysQuiet` and `TestTokenMatching`; the ordering assertion is made from inside the caller's scrub callable, because asserting on the final output cannot distinguish "excluded ran first" from "excluded ran second".
+
 ### Fixed
 
 - **Two opaque `Value::Encoded` values compare by Python's CONTRACT, so `{% if p == q %}` on two `set()`s answers `Y` (#2480).** `opaque_value` set `cmp_key: None`, so `Encoded::python_partial_cmp` answered `None` for every pair either side of which came from that arm — never equal, never ordered:

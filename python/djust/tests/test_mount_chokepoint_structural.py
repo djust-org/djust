@@ -235,9 +235,15 @@ _SETATTR_WHITELIST = {
     # before it is assigned — re-verified sanctioned: still the same two
     # DynamicLiveView developer-dict setattr lines, and the #2252 restore
     # itself uses ``setattr`` on a PRIVATE key set already filtered by
-    # ``_framework_attrs`` (not a view-like target this walker flags).
-    ("live_view.py", 1326),
-    ("live_view.py", 1328),
+    # ``_framework_attrs`` (not a view-like target this walker flags);
+    # shifted +17 (1326/1328 -> 1343/1345) by #1561: the
+    # ``time_travel_excluded_fields`` class attribute + its comment block were
+    # added next to ``time_travel_enabled``, far above these lines --
+    # re-verified sanctioned: still the same two DynamicLiveView
+    # developer-dict setattr lines (class at 1328, ``result = func(request,
+    # ...)`` at 1339), not a new client-controlled setattr.
+    ("live_view.py", 1343),
+    ("live_view.py", 1345),
 }
 
 

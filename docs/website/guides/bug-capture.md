@@ -68,6 +68,22 @@ Or open the blob directly in a browser — see [Browser-based replay](#browser-b
 
 `state_before` and `state_after` are the view's *public* state at the moment of an event. That includes anything the developer assigned to public attributes: form values, model field contents, user IDs, search queries, multi-tenant context. The encoded blob is the same data, URL-safely transcoded. Treat the URL fragment as sensitive data. Don't paste it into shared bug trackers, Slack channels, or email without reviewing what's inside.
 
+### Declare the sensitive fields on the view
+
+`LiveView.time_travel_excluded_fields` is the default safety net — the list of top-level public-state keys that must never leave this view inside a shared capture:
+
+```python
+class ClaimWizardView(LiveView):
+    time_travel_enabled = True
+    time_travel_excluded_fields = ["password", "ssn", "credit_card"]
+```
+
+`encode_view_state()` applies these **before** any caller-supplied `scrub`, so the redaction does not depend on every call site remembering to pass one — including the debug panel's Share button, which routes through the same function. The `scrub` argument stays available on top for arbitrary policies; names from both sources end up in the wire-visible `scrubbed_fields` list, so a reviewer sees the full set that was held back.
+
+Scope matches `scrub_fields`: **top-level keys only**. A nested `self.profile["ssn"]` is not reached by naming `"ssn"` — pass your own `scrub` callable for that.
+
+`djust check` warns (`V014`) when a view sets `time_travel_enabled = True` and its model or form declares a field whose name looks like PII that is not in this list. See [system-checks.md](../../system-checks.md#v014--time-travel-enabled-view-exposes-pii-looking-fields) for why it does not fire on every project that happens to have an `email` field.
+
 ### Always use the `scrub` hook for known-sensitive fields
 
 ```python
@@ -143,9 +159,15 @@ Encode into a `djbug1.<base64url>` string. See the security model above.
 
 Decode a `djbug1.<base64url>` string. Raises `ValueError` on any malformed input (non-string, missing version prefix, unknown version, bad base64, bad JSON, missing required fields, wrong field types).
 
+### `LiveView.time_travel_excluded_fields: list[str]`
+
+Top-level public-state keys `encode_view_state()` removes before any caller-supplied `scrub`. Any iterable of names works (list, tuple, set, frozenset); a bare string is treated as one name rather than iterating as characters. Enforced by the `V014` system check.
+
 ### `encode_view_state(view, patches, event_name="", scrub=None) -> str`
 
 Convenience: pulls the most recent `EventSnapshot` from a view's time-travel buffer + the caller-supplied `patches`, builds a `BugCapture`, encodes it. Requires the view to have `time_travel_enabled = True` and at least one event captured.
+
+Applies `view.time_travel_excluded_fields` first, then `scrub`. A custom `scrub` callable should preserve `capture.scrubbed_fields` so names from both sources stay wire-visible; the built-in `scrub_fields` already does.
 
 `patches` is required and must be either the JSON string `render_with_diff()` returns or an already-decoded list of patch dicts. **Why caller-supplied:** iter A intentionally does not couple to the render pipeline — djust's `render_with_diff()` returns patches into the WebSocket / SSE / runtime frame paths without stashing them on the view, so there's no framework attribute to introspect. Iter B's debug-panel Share button (below) calls `render_with_diff()` + this function in one click.
 
@@ -216,9 +238,9 @@ LIVEVIEW_CONFIG = {
 
 The Share button is dev-only plumbing on top of the same `encode_view_state()` documented above — it doesn't widen what can be captured or bypass the DEBUG / prod-opt-in gate on `BugCapture.encode()`.
 
-## What's coming in iter C (v1.1.0)
+## Still to come in iter C
 
-- **Iter C** ([#1561](https://github.com/djust-org/djust/issues/1561)) — Redis-backed snapshot store for payloads too large to fit in a URL fragment (~2 KB inline limit); a `djust replay` CLI for terminal-first workflows; a framework-level `LiveView.time_travel_excluded_fields` class attribute that auto-scrubs sensitive fields without requiring per-encode `scrub_fields()` calls; a new `djust check` V012 system check that warns when `time_travel_enabled = True` and view fields match common-PII patterns without being excluded.
+- A Redis-backed snapshot store for payloads too large to fit in a URL fragment, and a `djust replay` CLI for terminal-first workflows. Both tracked in [#1561](https://github.com/djust-org/djust/issues/1561).
 
 ## Strategy connection
 
