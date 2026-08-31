@@ -38,15 +38,42 @@ def record_traceback(
             {
                 "timestamp_ms": int(time.time() * 1000),
                 "exception_type": type(exception).__name__,
-                "exception_module": type(exception).__module__,
+                # `getattr` with a default (#2488): an exception class built by
+                # `type()` in a namespace with no `__name__` has no
+                # `__module__`, and an unguarded read would raise INSIDE the
+                # exception recorder — the one place a second exception has
+                # nowhere to go.
+                "exception_module": getattr(type(exception), "__module__", "<unknown>"),
                 "message": str(exception),
                 "error_type": error_type,
                 "event_name": event_name,
                 "view_class": view_class,
                 "session_id": session_id,
-                "traceback": "".join(traceback.format_exception(exception)),
+                "traceback": _format(exception),
             }
         )
+
+
+def _format(exception: BaseException) -> str:
+    """``traceback.format_exception``, fail-soft (#2488).
+
+    Guarding this module's OWN ``__module__`` read is not enough, and the
+    regression test is what proved it: CPython's ``traceback`` makes the same
+    unguarded read one frame further in —
+    ``TracebackException.format_exception_only`` does ``smod =
+    self.exc_type.__module__`` — so an exception class with no ``__module__``
+    raises from inside the formatter as well. (It is loud: it takes pytest's own
+    reporter down with it.)
+
+    A recorder that raises loses the exception it was called to record AND
+    replaces it with a less useful one, so this fails soft to the two spellings
+    that cannot raise. Deliberately narrow: only the formatting call is
+    wrapped, so a genuine bug in this module is not swallowed with it.
+    """
+    try:
+        return "".join(traceback.format_exception(exception))
+    except Exception:  # noqa: BLE001 — the recorder must not raise
+        return f"{type(exception).__name__}: {exception}\n"
 
 
 def get_recent_tracebacks(n: int = 1) -> List[Dict[str, Any]]:

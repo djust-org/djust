@@ -662,7 +662,12 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 current = ws_app
                 for _ in range(10):  # bounded walk
                     cls_name = type(current).__name__
-                    mod_name = type(current).__module__ or ""
+                    # `getattr` with a default (#2488). The `or ""` already
+                    # covered a `__module__` that is `None`; it does not cover
+                    # one that is ABSENT, which is what a `type()`-built ASGI
+                    # wrapper has — and this walk runs during `manage.py check`,
+                    # so the raise would be a startup crash.
+                    mod_name = getattr(type(current), "__module__", None) or ""
                     # #659 A001 — check for OriginValidator (any flavor)
                     if "originvalidator" in cls_name.lower():
                         has_origin_validator = True
