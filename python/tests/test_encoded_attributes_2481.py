@@ -360,7 +360,7 @@ class TestTheStateRoundTripKeepsTheAttributes:
         # items. Both assertions below are kept, so a change that moved the
         # map's contents into a POSITION of their own fails here rather than
         # arriving as a plausible width.
-        assert len(payload) == 10, payload  # nine until #2477/#2489 grew it
+        assert len(payload) == 11, payload  # ten until #2480 appended the class
         # The three DATA attributes, then the one AUTO-CALLED result (#2485) —
         # both producers write this ONE map, in table order, and the order is
         # what `values_structurally_equal`'s zipped compare reads.
@@ -391,7 +391,7 @@ class TestTheStateRoundTripKeepsTheAttributes:
         view.set_state("p", datetime.timedelta(days=3))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 10, payload
+        assert len(payload) == 11, payload
         # A LEGACY payload is not a truncation of the current one (#2477/#2489):
         # slot 4 widened from #2466's `sized_empty` boolean to `len(o)` itself,
         # so every width below 10 carries a `Bool` there while a 10-element one

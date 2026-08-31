@@ -290,6 +290,11 @@ class TestTheStateRoundTripKeepsTheAnswer:
             # statement from an empty list, which is why the codec keeps them
             # apart.
             None,
+            # #2480's equality CLASS, appended last. A `timedelta` has none —
+            # it compares by its `cmp_key` — and the absent case is an EMPTY
+            # MAP rather than a nil, which is what refuses a shifted
+            # ten-element payload now that eleven is a real width.
+            {},
         ]
         assert payload[3] is False, "the truthiness bit moved off element 3"
 
@@ -313,7 +318,7 @@ class TestTheStateRoundTripKeepsTheAnswer:
         view.set_state("p", datetime.timedelta(0))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 10, payload  # nine until #2477/#2489 grew it
+        assert len(payload) == 11, payload  # ten until #2480 appended the class
         # A LEGACY payload is not a truncation of the current one (#2477/#2489):
         # slot 4 widened from #2466's `sized_empty` boolean to `len(o)` itself,
         # so every width below 10 carries a `Bool` there while a 10-element one
@@ -349,7 +354,7 @@ class TestTheStateRoundTripKeepsTheAnswer:
         view.set_state("p", datetime.timedelta(0))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 10, payload
+        assert len(payload) == 11, payload
         # A LEGACY payload is not a truncation of the current one (#2477/#2489):
         # slot 4 widened from #2466's `sized_empty` boolean to `len(o)` itself,
         # so every width below 10 carries a `Bool` there while a 10-element one
@@ -476,18 +481,19 @@ class TestTheSinkHasExactlyTheCallersItClaims:
         may fall back to `!display.is_empty()`, and it is the three-element
         one.
 
-        SIX widths since #2477/#2489 widened slot 4 and appended the items —
-        ten (current), nine (#2481-era), eight (#2471/#2472-era), six
-        (#2466-era), four (#2458-era) and three (#2448-era) — so exactly FIVE
-        arms carry the bit verbatim from the payload and exactly ONE derives
-        it. The count is an equality rather than a floor so a DELETED
-        compatibility arm reddens it as loudly as an added derivation:
-        dropping the four-element read would silently turn every state entry
-        written by a 1.1.x process into a plain dict after a rolling deploy.
+        SEVEN widths since #2480 appended the equality class — eleven
+        (current), ten (#2477/#2489-era), nine (#2481-era), eight
+        (#2471/#2472-era), six (#2466-era), four (#2458-era) and three
+        (#2448-era) — so exactly SIX arms carry the bit verbatim from the
+        payload and exactly ONE derives it. The count is an equality rather
+        than a floor so a DELETED compatibility arm reddens it as loudly as an
+        added derivation: dropping the four-element read would silently turn
+        every state entry written by a 1.1.x process into a plain dict after a
+        rolling deploy.
         """
         src = self._production(CORE_RS.read_text(encoding="utf-8"))
         assert self._count(src, "truthy: !display.is_empty(),") == 1
-        assert self._count(src, "truthy: *truthy,") == 5
+        assert self._count(src, "truthy: *truthy,") == 6
 
     def test_the_counter_goes_red_in_BOTH_directions(self) -> None:
         """The canary. Each mutation asserts it APPLIED before its count is

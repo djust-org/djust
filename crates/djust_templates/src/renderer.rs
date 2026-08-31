@@ -5,7 +5,7 @@ use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
 use crate::registry::TagArg;
 use djust_components::Component;
-use djust_core::{Context, DjangoRustError, Result, Value};
+use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashSet;
@@ -4212,14 +4212,28 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // shape #2335 fixed for lists, one variant later; `Value::Encoded`
         // arrived in #2448 and got neither this arm nor `try_compare`'s.
         //
-        // Through `python_partial_cmp`, so equality is `Some(Equal)` and not a
-        // second rule that could drift from the ordering one — the failure
-        // #2244/#2243/#2335 each had. A pair Python refuses (a `date` against a
-        // `datetime`, a naive against an aware) answers `None` there and so
-        // stays `false` here, which is what Django answers and what this
-        // wildcard already answered before the arm existed.
-        (Value::Encoded(a), Value::Encoded(b)) => {
-            a.python_partial_cmp(b) == Some(std::cmp::Ordering::Equal)
+        // Through `encoded_equal`, which reaches the ordering for every class
+        // that HAS one — so equality is `Some(Equal)` and not a second rule
+        // that could drift from the ordering one, the failure #2244/#2243/#2335
+        // each had. A pair Python refuses (a `date` against a `datetime`, a
+        // naive against an aware, a `set` against a `complex`) answers `None`
+        // there and so stays `false` here, which is what Django answers and
+        // what this wildcard already answered before the arm existed.
+        (Value::Encoded(a), Value::Encoded(b)) => encoded_equal(a, b),
+        // An opaque NUMBER against a real one (#2480). `complex(0) == 0` is
+        // True in Python and Django, and no `(Encoded, Encoded)` arm reaches
+        // it. A `Bool` has already become an `Integer` at the top of this
+        // function, so `{% if p == True %}` on a `complex(1)` lands here too.
+        //
+        // Deliberately NOT extended to `Decimal` or `BigInt`: both are exact
+        // types whose Python comparison against a `complex` is exact as well,
+        // and an `f64` cannot answer it. Those cells stay open and are pinned
+        // as declined rather than answered approximately.
+        (Value::Encoded(e), Value::Integer(i)) | (Value::Integer(i), Value::Encoded(e)) => {
+            encoded_equals_integer(e, *i)
+        }
+        (Value::Encoded(e), Value::Float(f)) | (Value::Float(f), Value::Encoded(e)) => {
+            matches!(e.eq_class, Some(EqClass::Number { real, imag }) if imag == 0.0 && real == *f)
         }
         // Pairs involving a DECIMAL, and only those. Without this
         // `{% if p == 19.99 %}` went false the moment a Decimal stopped being a
@@ -4244,6 +4258,149 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // `(Float, Integer)`, which has had its own exact arms since #2243.
         _ => false,
     }
+}
+
+/// Python's ordering for two [`Encoded`]s, or `None` where Python refuses
+/// (#2480).
+///
+/// **The ONE reader of `Encoded::python_partial_cmp`**, and the one place the
+/// `Encoded` half of `==` / `<` / `<=` / `>` / `>=` is decided. Its three
+/// callers — [`values_equal`] (through [`encoded_equal`]), [`try_compare`] and
+/// `filters::compare_sort_values` — reach every class through here, so an
+/// operator cannot drift from its neighbours (#1646). That is the same
+/// property `python_partial_cmp` had before this wrapper existed; the wrapper
+/// exists because the [`EqClass::Set`] order compares carried ITEMS with
+/// Django's `==`, which is [`values_equal`] — a function `djust_core` does not
+/// have and deliberately will not grow (`Value` has no `PartialEq`).
+///
+/// # The classes that order, and the ones that must not
+///
+/// | class | `==` | `<` `<=` `>` `>=` |
+/// |---|---|---|
+/// | `EqClass::Set` | items, both ways | SUBSET, a real partial order |
+/// | `EqClass::Number` | components | **never** — `complex(0) < complex(0)` RAISES |
+/// | `EqClass::Identity` | the repr token | **never** — `object() < object()` RAISES |
+/// | `None` (the datetime family) | `cmp_key` | `cmp_key` |
+///
+/// So the Number and Identity classes answer `None` HERE and are answered by
+/// [`encoded_equal`] instead. Giving them a key to reach equality — the
+/// obvious one-line version of this fix — would turn
+/// `{% if p <= q %}` on a `complex(0)` from Django's `N` into `Y`, trading
+/// eight closed cells for a new divergence.
+///
+/// A cross-class pair is `None`, which is right: `set() < complex(0)` raises
+/// in Python and `set() == complex(0)` is False.
+pub(crate) fn encoded_partial_cmp(a: &Encoded, b: &Encoded) -> Option<std::cmp::Ordering> {
+    match (a.eq_class, b.eq_class) {
+        (Some(EqClass::Set), Some(EqClass::Set)) => set_partial_cmp(a, b),
+        // Either side carrying a class that does not order — including a Set
+        // against a datetime — answers `None`, the pre-#2480 answer.
+        (Some(_), _) | (_, Some(_)) => None,
+        // The datetime family, unchanged: `Encoded::python_partial_cmp` is
+        // still the whole of it.
+        (None, None) => a.python_partial_cmp(b),
+    }
+}
+
+/// Python's `==` for two [`Encoded`]s (#2480).
+///
+/// Equality goes through [`encoded_partial_cmp`] for every class that HAS an
+/// ordering, so those two can never disagree; the two equality-only classes
+/// are the arms here, and they are the reason this is a separate function
+/// rather than a `== Some(Equal)` at the call site.
+fn encoded_equal(a: &Encoded, b: &Encoded) -> bool {
+    match (a.eq_class, b.eq_class) {
+        // Two numbers: the components, exactly. `f64`'s own `==` is Python's
+        // — `0.0 == -0.0` is true on both, and a NaN component is equal to
+        // nothing, which is also Python's answer.
+        (
+            Some(EqClass::Number { real: ra, imag: ia }),
+            Some(EqClass::Number { real: rb, imag: ib }),
+        ) => ra == rb && ia == ib,
+        // Two identity-semantics objects: the default `repr` carries the
+        // address, so the token IS the identity. See `Encoded::eq_class` for
+        // the address-reuse caveat and why it cannot bite within one render.
+        (Some(EqClass::Identity), Some(EqClass::Identity)) => a.repr == b.repr,
+        // Everything else — two Sets, two datetimes, and every CROSS-class
+        // pair (which answers `None` there, i.e. false, exactly as Python
+        // says `set() != complex(0)`).
+        _ => encoded_partial_cmp(a, b) == Some(std::cmp::Ordering::Equal),
+    }
+}
+
+/// The most items either side may carry before [`set_partial_cmp`] DECLINES.
+///
+/// Containment without a hash is quadratic, and a `set` states its own length
+/// so `opaque_value` enumerates it in full however large it is — a template
+/// comparing two 100k-element sets would otherwise do 10^10 [`values_equal`]
+/// calls inside a render. Past this the answer is `None`: the pre-#2480
+/// behaviour (never equal, never ordered), which is a cell left open rather
+/// than a wrong answer.
+///
+/// A hash-based version is not available here: the items are [`Value`]s, whose
+/// equality is [`values_equal`] — which equates `1` with `1.0` and so is not a
+/// hash-compatible relation without a canonicalisation this fix does not need.
+const SET_COMPARE_CAP: usize = 1_000;
+
+/// Python's `set` ordering — CONTAINMENT, which is partial (#2480).
+///
+/// `collections.abc.Set` defines `__le__` as "every element of self is in
+/// other" and `__eq__` as `len(self) == len(other) and self <= other`, so both
+/// directions of containment answer all five operators at once:
+///
+/// ```text
+/// a ⊆ b and b ⊆ a  ->  Equal      {'a'} == {'a'},  set() == frozenset()
+/// a ⊆ b only       ->  Less       set() < {'a'}
+/// b ⊆ a only       ->  Greater
+/// neither          ->  None       {1} vs {2}: all four operators False
+/// ```
+///
+/// `None` for the incomparable case is exactly Python's answer, and is why the
+/// partial order can live in an `Option<Ordering>` at all — every caller
+/// already renders `None` as "false for all four ordering operators", which is
+/// what `{% if {1} < {2} %}` must do.
+///
+/// Element equality is [`values_equal`] and not a structural compare, because
+/// Python's is: `{1} == {1.0}` is True.
+fn set_partial_cmp(a: &Encoded, b: &Encoded) -> Option<std::cmp::Ordering> {
+    // A Set is iterable by construction, so `items` is `Some` for every value
+    // this crate builds. It can be `None` for one restored from a wire width
+    // that predates the field — which also predates `eq_class`, so this is
+    // unreachable today and is a decline rather than a panic.
+    let (Some(a_items), Some(b_items)) = (&a.items, &b.items) else {
+        return None;
+    };
+    if a_items.len() > SET_COMPARE_CAP || b_items.len() > SET_COMPARE_CAP {
+        return None;
+    }
+    let contains = |hay: &[Value], needle: &Value| hay.iter().any(|x| values_equal(x, needle));
+    let a_in_b = a_items.iter().all(|x| contains(b_items, x));
+    let b_in_a = b_items.iter().all(|x| contains(a_items, x));
+    match (a_in_b, b_in_a) {
+        (true, true) => Some(std::cmp::Ordering::Equal),
+        (true, false) => Some(std::cmp::Ordering::Less),
+        (false, true) => Some(std::cmp::Ordering::Greater),
+        (false, false) => None,
+    }
+}
+
+/// Does this opaque NUMBER equal a Python `int`? (#2480)
+///
+/// EXACTLY, which is what Python does: `complex(2**53) == 2**53 + 1` is
+/// **False** even though `float(2**53 + 1)` rounds to the value the complex
+/// holds. So the comparison runs in the integer domain — the carried `f64` is
+/// converted back to an `i64` and must round-trip — rather than casting the
+/// `i64` to an `f64`, which would answer True for that pair.
+fn encoded_equals_integer(e: &Encoded, i: i64) -> bool {
+    let Some(EqClass::Number { real, imag }) = e.eq_class else {
+        return false;
+    };
+    // Through [`int_eq_float`] rather than a second spelling of it. That
+    // function already IS "Python's exact int-against-float", including the two
+    // traps a hand-rolled version gets wrong — the `2**53 + 1` rounding and the
+    // saturating `as i64` at `1e300` — and a belt-and-braces copy beside it is
+    // one fix plus one decoration that no test can separate (v1.1.1-2 rule 3).
+    imag == 0.0 && int_eq_float(i, real)
 }
 
 /// Django identity comparison for the `is` / `is not` template operators.
@@ -4451,7 +4608,7 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
         // `<` and `>` were both false and the template silently took the wrong
         // branch. A pair Python cannot order stays `None`, which is Django's
         // own answer (`smart_if` swallows the `TypeError` to False).
-        (Value::Encoded(a), Value::Encoded(b)) => a.python_partial_cmp(b).map(|ord| ord as i32),
+        (Value::Encoded(a), Value::Encoded(b)) => encoded_partial_cmp(a, b).map(|ord| ord as i32),
         // No `(Missing, Missing) => 0` arm, and its absence is deliberate
         // (#2338): Python's `None < None` RAISES, so Django answers False for
         // all four operators, and the 0 this used to return made `>=` and `<=`
@@ -5975,6 +6132,7 @@ mod tests {
                 }),
                 attrs: Default::default(),
                 items: None,
+                eq_class: None,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
@@ -5989,6 +6147,7 @@ mod tests {
                 cmp_key: None,
                 attrs: Default::default(),
                 items: Some(vec![]),
+                eq_class: None,
             })),
             // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
             // Without it every `Encoded` sample here is EMPTY, and the sweep
@@ -6005,6 +6164,7 @@ mod tests {
                 cmp_key: None,
                 attrs: Default::default(),
                 items: Some(vec![Value::String("a".to_string())]),
+                eq_class: None,
             })),
             // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
             // has no length to read, so it `list()`s the object and renders
@@ -6021,6 +6181,7 @@ mod tests {
                 cmp_key: None,
                 attrs: Default::default(),
                 items: Some(vec![Value::String("x".to_string())]),
+                eq_class: None,
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
@@ -6036,6 +6197,7 @@ mod tests {
                 cmp_key: None,
                 attrs: Default::default(),
                 items: None,
+                eq_class: None,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`

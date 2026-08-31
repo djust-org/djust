@@ -819,8 +819,20 @@ class TestOneComparisonChokepoint:
     #: file -> number of CALLS (the definition is excluded). Deriving the
     #: expected set from the source would make the test compare the source to
     #: itself; these are written down.
+    #: ONE caller since #2480: `renderer::encoded_partial_cmp`, the wrapper
+    #: that adds the `EqClass::Set` subset order and delegates the datetime
+    #: family here. The three SINKS are unchanged and are pinned by
+    #: `EXPECTED_WRAPPER_CALLERS` below — the chokepoint moved out one level
+    #: rather than dissolving, which is what keeps `==` and `<` together.
     EXPECTED_CALLERS = {
-        "crates/djust_templates/src/renderer.rs": 2,  # values_equal, try_compare
+        "crates/djust_templates/src/renderer.rs": 1,  # encoded_partial_cmp
+    }
+
+    #: file -> CALLS of the wrapper, definition excluded. The three sinks:
+    #: `values_equal` (through `encoded_equal`), `try_compare`, and
+    #: `compare_sort_values`.
+    EXPECTED_WRAPPER_CALLERS = {
+        "crates/djust_templates/src/renderer.rs": 2,  # encoded_equal, try_compare
         "crates/djust_templates/src/filters.rs": 1,  # compare_sort_values
     }
 
@@ -835,11 +847,29 @@ class TestOneComparisonChokepoint:
                 found[str(path.relative_to(REPO))] = n
         return found
 
+    def _wrapper_calls(self) -> dict[str, int]:
+        found: dict[str, int] = {}
+        for path in sorted(REPO.glob("crates/*/src/**/*.rs")):
+            src = path.read_text(encoding="utf-8")
+            # Calls only: the definition is `pub(crate) fn encoded_partial_cmp(`.
+            # The lookbehind already excludes the definition
+            # (`pub(crate) fn encoded_partial_cmp(`), so nothing is subtracted.
+            n = len(re.findall(r"(?<!fn )encoded_partial_cmp\(", src))
+            if n:
+                found[str(path.relative_to(REPO))] = n
+        return found
+
     def test_the_caller_set_is_exactly_the_three_comparison_sinks(self) -> None:
         assert self._calls() == self.EXPECTED_CALLERS, (
-            "the set of `python_partial_cmp` callers changed. A NEW caller must be "
-            "added to EXPECTED_CALLERS with a test; a REMOVED one means a comparison "
-            "sink went back to answering an Encoded from a wildcard (#2471)."
+            "the set of `python_partial_cmp` callers changed. Since #2480 the ONLY "
+            "caller is `encoded_partial_cmp`; a second one would let the Set order "
+            "and the datetime order answer the same operator differently (#1646)."
+        )
+        assert self._wrapper_calls() == self.EXPECTED_WRAPPER_CALLERS, (
+            "the set of `encoded_partial_cmp` callers changed. A NEW caller must be "
+            "added to EXPECTED_WRAPPER_CALLERS with a test; a REMOVED one means a "
+            "comparison sink went back to answering an Encoded from a wildcard "
+            "(#2471/#2480)."
         )
 
     def test_the_definition_is_the_only_one(self) -> None:
@@ -978,6 +1008,11 @@ class TestTheStateRoundTripKeepsTheAnswers:
             # `timedelta`, which is not iterable — and `None` is a DIFFERENT
             # statement from an empty list.
             None,
+            # #2480's equality CLASS, appended last. A `timedelta` has none —
+            # it compares by its `cmp_key` two slots up — and the absent case
+            # is an EMPTY MAP rather than a nil, which is what refuses a
+            # shifted ten-element payload now that eleven is a real width.
+            {},
         ]
 
     def test_a_shorter_payload_still_reads_without_fabricating_the_answers(self) -> None:
@@ -1005,7 +1040,7 @@ class TestTheStateRoundTripKeepsTheAnswers:
             view.set_state("p", datetime.timedelta(0))
             view.set_state("q", datetime.timedelta(0))
             decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
-            assert len(decoded[1]["p"]["__djust_encoded__"]) == 10
+            assert len(decoded[1]["p"]["__djust_encoded__"]) == 11
             for key in ("p", "q"):
                 parts = decoded[1][key]["__djust_encoded__"]
                 # A LEGACY payload is not a truncation of the current one
@@ -1084,23 +1119,19 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
     ``complex(0)`` and any falsy user object — so the comparison arm this PR
     adds is REACHED for values whose Python ordering it cannot know.
 
-    It answers ``None`` for every such pair, because ``opaque_value`` sets no
-    ``cmp_key``: never equal, never ordered. Pinned here for two reasons.
+    It answered ``None`` for every such pair — never equal, never ordered —
+    until **#2480 closed it** by measuring the object's equality CONTRACT at
+    the conversion (``Encoded::eq_class``: the ``collections.abc.Set`` ABC, a
+    ``numbers.Number``, or default ``__eq__`` + default ``__repr__``).
 
-    **It is not this PR's regression, and the pin says whose it is.** Before
-    #2476 a ``set()`` was a ``Value::String("set()")`` and two of them compared
-    EQUAL through the ``(String, String)`` arm, which is Django's answer.
-    #2476 made it an ``Encoded``, which fell to ``_ => false``. This PR's arm
-    answers the same ``false`` — measured, not argued: the gate-off mutation
-    that reverts ``values_equal``'s arm to ``false`` (M1) leaves every
-    assertion in this class green, which is the same-answer proof.
-
-    **No derivable rule exists, which is why it is filed rather than fixed
-    (#1079).** ``set() == frozenset()`` is True in Python ACROSS type names,
-    and ``LenZero() == LenZero()`` on two distinct instances is False WITHIN
-    one — so neither ``type_name`` nor any carried spelling separates them.
-    Answering it needs the object's ``__eq__``, i.e. a token the conversion
-    would have to invent. Filed as #2480.
+    This class is FLIPPED rather than deleted, so the same rows that measured
+    the gap now measure its closure — and the one member that is still
+    declined stays visible next to the four that are not.  ``BoolFalse`` has a
+    custom ``__repr__``, so its spelling is not an identity token and using it
+    would call two DISTINCT instances equal; that is a new wrong answer rather
+    than an unfixed cell, and it is the shape ``dict_values`` has too.  The
+    whole rule and its cross-product live in
+    ``test_opaque_equality_2480.py``.
     """
 
     class LenZero:
@@ -1119,6 +1150,10 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
 
     FALSY_OPAQUE = ("set()", "frozenset()", "complex(0)", "LenZero()", "BoolFalse()")
 
+    #: The one member #2480 does not answer, and why.  Its ``__eq__`` is
+    #: ``object``'s but its ``__repr__`` is not, so there is no token.
+    STILL_DECLINED = ("BoolFalse()",)
+
     def _values(self) -> dict:
         return {
             "set()": set(),
@@ -1129,13 +1164,21 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
         }
 
     @pytest.mark.parametrize("name", FALSY_OPAQUE)
-    def test_it_is_never_equal_even_to_itself_which_diverges_from_django(self, name: str) -> None:
-        """The divergence, stated as a measurement so it cannot be mistaken for
-        an intended answer. Django renders ``Y``; this renders ``N``."""
+    def test_it_is_equal_to_itself_as_django_says_since_2480(self, name: str) -> None:
+        """Closed by #2480 for four of the five, still open for the fifth —
+        and the split is asserted in BOTH directions, so neither half can
+        drift silently."""
         v = self._values()[name]
         dj, du = branch("==", v, v)
         assert dj == "Y", "Django stopped answering equal — the pin needs revisiting"
-        assert du == "N", f"{name} gained a comparison key — #2480 may be closed"
+        if name in self.STILL_DECLINED:
+            assert du == "N", (
+                f"{name} now compares EQUAL — the decline closed, so move it out of "
+                "STILL_DECLINED (its `__repr__` is custom, so the token is not an "
+                "identity)"
+            )
+        else:
+            assert du == "Y", f"{name} lost its equality class — #2480 regressed"
 
     @pytest.mark.parametrize("name", FALSY_OPAQUE)
     @pytest.mark.parametrize("op", ["<", ">"])
