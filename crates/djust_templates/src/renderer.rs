@@ -1034,6 +1034,38 @@ fn value_channel_arg_string(v: &Value) -> String {
         Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| s.clone()),
         // JSON `true` / `false`, not Python's `True` / `False` (#2463).
         Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        // A carried COLLECTION, as its ITEMS (#2477/#2489).
+        //
+        // `{% regroup tags by k %}` over a `set` hands its source through
+        // here, and a `Value::Encoded` fell to `value_to_arg_string`'s `_` arm
+        // — so the handler received the text `{'a'}`, which is neither JSON
+        // nor a variable name. `_decode_source` looked it up, missed, and
+        // built ZERO groups where Django builds one. Django's `RegroupNode`
+        // runs `groupby` over whatever the operand resolved to, which for a
+        // set is its ELEMENTS.
+        //
+        // It only became reachable when the conversion learned to carry a
+        // truthy collection: before that a `set` crossed as a `Value::String`
+        // and took the arm above, so the handler decoded a string and iterated
+        // its CHARACTERS — agreeing with Django by accident, on the same
+        // mechanism that made `{{ p|length }}` count repr characters.
+        //
+        // HERE and not in `value_to_arg_string`, and that placement is the
+        // whole of it: the two encoders have opposite consumers. This channel
+        // is reached only for a position a handler DECLARED, which by
+        // construction is one it wants as a VALUE and will decode. The general
+        // encoder feeds a custom tag that renders its argument, and there the
+        // display is what Django shows — `{% ct_ident tags %}` prints
+        // `{'a'}`, not `["a"]`. Putting the arm in the general encoder moved
+        // twenty-one `@ctag` cells the wrong way, which is how the split was
+        // found.
+        //
+        // An `Encoded` with no items (a `datetime`, a `complex(0)`, a
+        // zero-`__len__` class) falls through: there is nothing to encode, and
+        // that cell is #2448's, unchanged here.
+        Value::Encoded(e) if e.items.is_some() => {
+            serde_json::to_string(&e.items).unwrap_or_else(|_| v.to_string())
+        }
         _ => value_to_arg_string(v),
     }
 }
@@ -3514,6 +3546,23 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                 Value::DictView { items, .. } => {
                     Ok(items.iter().any(|item| values_equal(&needle, item)))
                 }
+                // A CARRIED collection, by the same element comparison
+                // (#2477/#2489). `{% if tag in tags %}` over a `set` is
+                // ordinary Django, and it worked here by ACCIDENT before the
+                // carrier existed: a truthy set crossed as
+                // `Value::String("{'a'}")` and fell to the `Value::String`
+                // arm, which is a SUBSTRING match — so `{% if 'a' in tags %}`
+                // was true for `{'ab'}` too, and for the characters of the
+                // repr's punctuation. The element comparison is Python's.
+                //
+                // An `Encoded` with no items (a `datetime`, a `complex(0)`,
+                // a zero-`__len__` class) falls through to `_ => false`, which
+                // is what `x in dt` does in Python: `TypeError`, and djust's
+                // `if` fails soft rather than raising.
+                Value::Encoded(ref e) if e.items.is_some() => Ok(e
+                    .items
+                    .as_ref()
+                    .is_some_and(|items| items.iter().any(|item| values_equal(&needle, item)))),
                 Value::String(s) => {
                     if let Value::String(n) = &needle {
                         Ok(s.contains(n.as_str()))

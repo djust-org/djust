@@ -607,20 +607,37 @@ class TestTheNormalizerCarriesExactlyTheModelledClass:
         assert got == {"k": "dict_keys([])"}
         json.dumps(got)
 
-    def test_a_carried_collection_returns_to_python_as_its_items(self) -> None:
-        """`into_pyobject`, which is what keeps this from regressing state.
+    def test_a_carried_collection_returns_to_python_as_its_DISPLAY(self) -> None:
+        """`into_pyobject`, and the widening this fix made and then unmade.
 
-        A `set` used to become a sorted LIST here, so a `set` written into view
-        state came back out of the codec as a list. Coming back as the STRING
-        `"{'a'}"` would hand a handler a string where it wrote a collection.
+        Handing the ITEMS back looked conservative — `normalize_django_value`
+        used to turn a `set` into a sorted list, so returning the display
+        string seemed
+        to hand a handler a string where it wrote a collection. Measured
+        against `main`, the premise was false: a TRUTHY set was declined by the
+        pre-#2477 gate and crossed as `Value::String(str(o))`, so this path
+        already returned the display, and the LiveView path never reached it
+        because the normalizer flattened first.
+
+        What the items DID change is the channel that hands a value to Python
+        and renders the result — `{{ p|custom_filter }}` returning its input
+        rendered a list repr where Django renders a set repr. Twenty cells,
+        reported by the two-build differential. Widening the round trip is
+        #2458's filed
+        decision; this asserts the arm is UNCHANGED so the next reader does not
+        take it again by accident.
         """
         view = _rust.RustLiveView("{{ tags|join:',' }}")
-        view.set_state("tags", {"a", "b"})
-        assert sorted(view.get_state()["tags"]) == ["a", "b"]
-        # ...and it survives the msgpack round trip the state backend does on
-        # every read, which is the reopening `ENCODED_TAG` exists to prevent.
+        view.set_state("tags", {"a"})
+        assert view.get_state()["tags"] == "{'a'}"
+        # ...and the RENDER still reads the items, which is the whole fix: the
+        # display is what comes BACK to Python, not what the renderer uses.
+        assert view.render() == "a"
+        # And it survives the msgpack round trip the state backend does on every
+        # read, which is the reopening `ENCODED_TAG` exists to prevent.
         back = _rust.RustLiveView.deserialize_msgpack(view.serialize_msgpack())
-        assert sorted(back.get_state()["tags"]) == ["a", "b"]
+        assert back.render() == "a"
+        assert back.get_state()["tags"] == "{'a'}"
 
 
 class TestTheGateHasOneStatement:

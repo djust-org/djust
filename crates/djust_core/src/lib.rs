@@ -3114,21 +3114,28 @@ impl<'py> IntoPyObject<'py> for Value {
             // there was none before this variant either. Widening the round
             // trip is a separate behaviour change, filed as #2458 rather than folded in.
             //
-            // A CARRIED COLLECTION is the exception, and it is not a widening
-            // of that decision — it is what keeps #2477 from being a
-            // regression (#2477/#2489). `normalize_django_value` used to turn
-            // a `set` into a sorted LIST, so a `set` written into view state
-            // came back out of the codec as a list; now it crosses as an
-            // `Encoded`, and coming back as `"{'a'}"` would hand a handler a
-            // STRING where it wrote a collection. The items are the same
-            // answer the pre-#2477 path gave, which is what makes this the
-            // conservative arm rather than a new one. `Value::DictView` — the
-            // other collection with no Python counterpart — already resolves
-            // exactly this way, two arms down.
-            Value::Encoded(e) => match e.items {
-                Some(items) => Value::List(items).into_pyobject(py),
-                None => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
-            },
+            // A CARRIED COLLECTION takes the SAME arm, and that is a
+            // decision #2477/#2489 made and then unmade (#1079).
+            //
+            // It looked like the conservative choice to hand the items back:
+            // `normalize_django_value` used to turn a `set` into a sorted
+            // LIST, so a `set` in view state came back a list, and returning
+            // `"{'a'}"` hands a handler a STRING where it wrote a collection.
+            // Measured against `main`, that premise was false — a TRUTHY set
+            // was declined by the pre-#2477 gate and crossed as
+            // `Value::String(str(o))`, so the Rust state path already returned
+            // the display string, and the LiveView path never reached it
+            // because the normalizer flattened first.
+            //
+            // What the items DID change is the channel that hands a value to
+            // Python and renders the result: `{{ p|custom_filter }}` returning
+            // its input rendered `['a']` where Django renders `{'a'}`, and
+            // `{% regroup %}`'s operand the same way — twenty cells across the
+            // custom-filter axis, reported by the two-build differential.
+            // Widening this round trip is #2458's filed decision, not this
+            // fix's, and taking it here would have paid for a regression with
+            // a premise nobody had run.
+            Value::Encoded(e) => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
             // Back to a real `decimal.Decimal`, not a str: a value that made
             // the round-trip as a Decimal must come back as one, or handlers
             // reading it from the context see their type change under them.
