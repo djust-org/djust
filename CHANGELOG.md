@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`{{ dt.isoformat }}` renders — a `Value::Encoded` carries the auto-called half of Django's lookup (#2485).** Django's `Variable._resolve_lookup` AUTO-CALLS a callable attribute (ADR-024), so `{{ p.isoformat }}` is an EVALUATION where `{{ p.year }}` is a lookup. #2481 gave `Value::Encoded` a map of the lookup half and left the call half open:
+
+  ```
+  {{ p.isoformat }}      datetime    django '2026-03-04T05:06:07.000008'   djust ''
+  {{ p.total_seconds }}  timedelta   django '259290.000005'                djust ''
+  {{ p.utcoffset }}      aware dt    django '0:00:00'                      djust ''
+  ```
+
+  `<time datetime="{{ obj.created.isoformat }}">` is an ordinary Django idiom and it rendered nothing.
+
+  A SECOND table (`ENCODED_CALL_NAMES`) read by a SECOND producer (`collect_called_attrs`), writing into the SAME map — so `context::lookup_segment` stays the ONE reader of `Encoded::attrs`. A second resolution path for "the names a dotted lookup reaches" is the #1646 shape this map exists to avoid; a second *table* is right, because the auto-call is a different mechanism from a `getattr` and its membership rule is a different rule.
+
+  **The membership rule is a measurement, and the issue's own list was wrong in both directions.** A name is carried when carrying its result makes djust render what **Django** renders — narrower than "nullary and cheap". Sweeping `dir(o)` on live objects and comparing three columns per name (Django's answer for `{{ p.<name> }}`, djust's, and djust's for the call's RESULT) says the issue's twelve-name list **omits** `isoweekday` and **includes** three names carrying them would not close:
+
+  | name | Django renders | the result renders as | |
+  |---|---|---|---|
+  | `isoformat` | `2026-03-04T05:06:07.000008` | the same | CARRIED |
+  | `date` | `March 4, 2026` | `2026-03-04` | DROPPED |
+  | `timetuple` | `time.struct_time(tm_year=…)` | `(2026, 3, 4, …)` | DROPPED |
+
+  Every dropped name is dropped for that one reason: its result is itself a `date` / `time` / `datetime` / `struct_time` / `IsoCalendarDate`, whose BARE djust render already differs from Django's LOCALIZED one, so carrying it would move the cell without closing it. Six more the issue never named fall the same way (`timetz`, `astimezone`, `replace`, `isocalendar`, `utctimetuple`, plus `now` / `today` / `utcnow`, which are dropped for a second reason on top — their value is the CURRENT time, so carrying them would do nondeterministic work at every conversion). A method that requires ARGUMENTS (`strftime`, `combine`, `fromisoformat`) needs neither an entry nor an exclusion: Django's auto-call catches the `TypeError` and renders `string_if_invalid`, which is the empty string djust already renders, so those cells agree today.
+
+  **The calls fail soft, per name.** A `getattr` that misses, a call that RAISES, or a result that will not convert is SKIPPED rather than stored, leaving `lookup_segment` answering `None` — the pre-#2485 empty cell. That matters more here than for a plain attribute read, because a call runs code the framework does not own: a `tzinfo` subclass decides what `utcoffset()` / `tzname()` / `dst()` do, and `timestamp()` on a naive value is platform-dependent. So a raising call cannot make any cell WORSE than it was, and the skipped cell is one Django itself 500s on — more permissive than Django, which is the direction to fail in.
+
+  **What it costs, measured rather than argued.** The eagerness objection in the issue is real and the number is this: converting a datetime goes from **4.09 µs to 8.78 µs** (naive) and **6.31 µs to 15.36 µs** (aware), so a render whose context holds 200 datetimes the template never asks about goes from 1.31 ms to 2.23 ms (naive) / 1.76 ms to 3.55 ms (aware). The calls themselves are only ~1.3 µs of that (`isoformat` 0.4 µs, `ctime` 0.35 µs, `weekday` / `toordinal` / `utcoffset` / `tzname` / `dst` ~0.02–0.1 µs each); the rest is the nine extra map entries. `utcoffset` in particular costs **nothing** new — `comparison_key` has called it on every `datetime` and every `time` since #2471 to build the `CmpKey`. The complete correct set ships and can be pruned later on evidence, which is the direction #1447 prefers: pruning a name is a one-line change with a regression test, while a name that was never there is a cell nobody notices.
+
+  **`min` / `max` / `resolution` stay open**, and are pinned as still-divergent. They are DATA attributes whose values are values of the same family (`datetime.min.min is datetime.min`), so collecting them does not terminate; closing them needs a depth bound, which is a design decision rather than three more strings. Worth recording for whoever takes it: the sweep says `resolution` (a `timedelta`) and `timedelta`'s own `min` / `max` WOULD agree if a depth bound existed, while `datetime`/`date`/`time`'s `min`/`max` would not — Django localizes those too.
+
+  Regression coverage: new cases in `python/tests/test_nullary_autocall_2485.py` — every carried name through BOTH `render_template` entry points and through a msgpack state round trip, the aware and `ZoneInfo` subjects where the tz calls answer a real value, an overriding subclass, and the fail-soft cases. #2481's exemption is FLIPPED rather than deleted (#1859): `METHODS_RESULT_SPELLS_DIFFERENTLY` is what is genuinely still exempt and it GREW by the six names the sweep found, each with a companion test that MEASURES the reason (render the call's result; it differs from Django's answer) rather than asserting it. Gate-off verified against five independent mutations with a rebuild between each and the `.so` mtime asserted to advance, `__pycache__` cleared, and `cargo test --no-fail-fast` for the Rust side: neutering the producer (122 red), making the merge find nothing (122), removing `isoformat` from the datetime row (16), removing `total_seconds` from the timedelta row (5), and the CROSSED mutation that ADDS `date` to the call table (1 red — the exemption pin, proving it is load-bearing rather than decorative). A sixth mutation was reported INVALID by the harness because it did not compile, and was replaced rather than counted.
+
+  Two-build filter differential over 380,484 cells: **0 moved**, 0 regressions, `django REFUSES & djust RENDERS` 4992 → 4992 and `djust REFUSES & Django RENDERS` 39253 → 39253 (both +0), live-payload leaks 65 → 65, with the two build hashes differing so this is not a stale baseline. That zero is the corpus's blind spot rather than a claim about the fix: its `path` axis (3,392 cells) is the dict-view path axis from #2334 and builds no `datetime × method-name` cell, which is exactly the case the differential's own NOTE describes.
 - **A class with no `__module__` no longer crashes the branch that names it (#2488).** `normalize_django_value`'s final fallback built its warning message with an unguarded `type(value).__module__`. `__module__` is not guaranteed: `type(name, bases, ns)` fills it from the CALLING FRAME's `__name__`, so a class built in a namespace that has none — which is exactly what `eval(compile(...), {})` gives you — has no `__module__` at all and the attribute lookup RAISES.
 
   ```python

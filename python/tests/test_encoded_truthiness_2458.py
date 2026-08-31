@@ -276,8 +276,10 @@ class TestTheStateRoundTripKeepsTheAnswer:
             [1, 0, 0],
             # #2481's attribute map, appended last for the reason every
             # widening before it was: a positional payload only stays readable
-            # if nothing moves (#1541). `{{ p.days }}` resolves off this.
-            {"days": 0, "seconds": 0, "microseconds": 0},
+            # if nothing moves (#1541). `{{ p.days }}` resolves off this, and
+            # `{{ p.total_seconds }}` since #2485 — the SLOT is unchanged, only
+            # the map inside it grew.
+            {"days": 0, "seconds": 0, "microseconds": 0, "total_seconds": 0.0},
         ]
         assert payload[3] is False, "the truthiness bit moved off element 3"
 

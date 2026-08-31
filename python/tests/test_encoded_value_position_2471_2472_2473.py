@@ -925,7 +925,14 @@ class TestTheStateRoundTripKeepsTheAnswers:
             # #2481's attribute map, appended last for the reason every
             # widening before it was: a positional payload only stays readable
             # if nothing moves (#1541). `{{ p.days }}` resolves off this.
-            {"days": 0, "seconds": 0, "microseconds": 0},
+            #
+            # It gained `total_seconds` in #2485: the map holds Django's whole
+            # lookup step 2 — the DATA attributes and the AUTO-CALLED ones —
+            # written by two producers into ONE map, in table order. The SLOT
+            # is unchanged, which is the compatibility statement; only the map
+            # inside it grew, and a reader that does not know the name simply
+            # does not ask for it.
+            {"days": 0, "seconds": 0, "microseconds": 0, "total_seconds": 0.0},
         ]
 
     def test_a_shorter_payload_still_reads_without_fabricating_the_answers(self) -> None:

@@ -40,13 +40,13 @@ direction rather than quietly widened:
   themselves ``datetime``s, and ``datetime.min.min is datetime.min`` — so
   collecting them would not terminate. Measured, in
   ``test_the_class_attributes_would_not_terminate``.
-* **nullary methods** ``isoformat`` / ``weekday`` / ``ctime`` /
-  ``total_seconds`` / ``date`` / ``time`` / ``utcoffset`` / ``tzname`` /
-  ``dst`` / ``toordinal`` / ``timetuple`` / ``timestamp``. Django reaches these
-  through its auto-call (ADR-024), which turns a lookup into an EVALUATION.
-  Putting a call's result in the map makes the whole family eager at conversion
-  time, pays for it whether or not a template asks, and inherits whatever the
-  call raises. A different mechanism, so a different decision.
+* **nullary methods** — CLOSED by #2485, which added a second table and a
+  second producer writing into this same map. What is still exempt here is the
+  subset whose RESULT spells differently (``date`` / ``time`` / ``timetuple``
+  and five more the #2485 issue never named): Django LOCALIZES a ``date``, so
+  carrying the call's result would swap one divergence for another rather than
+  close a cell. See ``METHODS_RESULT_SPELLS_DIFFERENTLY`` below and
+  ``python/tests/test_nullary_autocall_2485.py``.
 
 ``Decimal`` is a different CARRIER (``Value::Decimal``, not ``Encoded``), so
 ``{{ d.real }}`` is untouched here and pinned as still-divergent.
@@ -155,30 +155,39 @@ CLASS_ATTRS = (
     + [pytest.param(TD, a, id=f"timedelta-{a}") for a in ("min", "max", "resolution")]
 )
 
-#: Nullary methods. Django AUTO-CALLS them; the map holds lookups, not calls.
-METHODS = [
+#: Nullary methods Django AUTO-CALLS whose RESULT still spells differently here.
+#:
+#: This list was the whole nullary-method family until #2485, which closed every
+#: member whose result djust renders the way Django renders it (`isoformat`,
+#: `weekday`, `ctime`, `toordinal`, `total_seconds`, `timestamp`, `utcoffset`,
+#: `tzname`, `dst`, `isoweekday` — measured, and asserted in
+#: `python/tests/test_nullary_autocall_2485.py`). The exemption is FLIPPED
+#: rather than deleted (#1859): what stays is what is genuinely still exempt,
+#: and it grew — the members below that the #2485 issue never listed
+#: (`isoweekday` aside, it named `date`/`time`/`timetuple` and stopped) were
+#: found by sweeping `dir(o)` rather than by reading the report.
+#:
+#: The reason they stay is one reason, and it is not the auto-call: their result
+#: is itself a `date` / `time` / `datetime` / `struct_time` / `IsoCalendarDate`,
+#: and djust's BARE render of those already differs from Django's — Django
+#: LOCALIZES (`March 4, 2026` against `2026-03-04`). Carrying them would swap
+#: one divergence for another rather than close a cell.
+METHODS_RESULT_SPELLS_DIFFERENTLY = [
     *[
         pytest.param(DT, a, id=f"datetime-{a}")
         for a in (
             "date",
             "time",
-            "weekday",
-            "isoformat",
-            "toordinal",
-            "ctime",
+            "timetz",
             "timetuple",
-            "utcoffset",
-            "tzname",
-            "dst",
-            "timestamp",
+            "utctimetuple",
+            "isocalendar",
+            "replace",
+            "astimezone",
         )
     ],
-    *[
-        pytest.param(DATE, a, id=f"date-{a}")
-        for a in ("weekday", "isoformat", "toordinal", "ctime", "timetuple")
-    ],
-    *[pytest.param(TIME, a, id=f"time-{a}") for a in ("isoformat", "utcoffset", "tzname", "dst")],
-    *[pytest.param(TD, a, id=f"timedelta-{a}") for a in ("total_seconds",)],
+    *[pytest.param(DATE, a, id=f"date-{a}") for a in ("timetuple", "isocalendar", "replace")],
+    *[pytest.param(TIME, a, id=f"time-{a}") for a in ("replace",)],
 ]
 
 
@@ -345,7 +354,16 @@ class TestTheStateRoundTripKeepsTheAttributes:
             "__djust_encoded__"
         ]
         assert len(payload) == 9, payload
-        assert payload[8] == {"days": 3, "seconds": 90, "microseconds": 5}
+        # The three DATA attributes, then the one AUTO-CALLED result (#2485) —
+        # both producers write this ONE map, in table order, and the order is
+        # what `values_structurally_equal`'s zipped compare reads.
+        assert payload[8] == {
+            "days": 3,
+            "seconds": 90,
+            "microseconds": 5,
+            "total_seconds": 259290.000005,
+        }
+        assert list(payload[8]) == ["days", "seconds", "microseconds", "total_seconds"]
 
     def test_an_EIGHT_element_payload_still_reads_with_no_attributes(self) -> None:
         """A pre-#2481 process's state outlives it: a Redis backend hands back
@@ -408,13 +426,33 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         assert datetime.date.max.max is datetime.date.max
         assert datetime.timedelta.resolution.resolution is datetime.timedelta.resolution
 
-    @pytest.mark.parametrize(("value", "attr"), METHODS)
-    def test_a_nullary_method_still_renders_empty(self, value: object, attr: str) -> None:
-        """Django AUTO-CALLS these (ADR-024); the map holds lookups, not
-        calls."""
+    @pytest.mark.parametrize(("value", "attr"), METHODS_RESULT_SPELLS_DIFFERENTLY)
+    def test_a_nullary_method_whose_RESULT_spells_differently_renders_empty(
+        self, value: object, attr: str
+    ) -> None:
+        """#2485 closed the auto-call for every name whose result djust spells
+        the way Django spells it. These are the remainder, and the reason is
+        the RESULT's own rendering, not the call: Django localizes a `date` /
+        `time` / `datetime` and prints a `struct_time` as a namedtuple."""
         source = "{{ p.%s }}" % attr
         assert django_render(source, {"p": value}) != ""
         assert djust_render(source, {"p": value}) == ""
+
+    @pytest.mark.parametrize(("value", "attr"), METHODS_RESULT_SPELLS_DIFFERENTLY)
+    def test_carrying_the_result_would_swap_one_divergence_for_another(
+        self, value: object, attr: str
+    ) -> None:
+        """The REASON, measured rather than asserted — the same shape as
+        `test_the_class_attributes_would_not_terminate`.
+
+        Render the call's RESULT through djust and compare it with what Django
+        renders for the lookup. They differ, which is why the name is not in
+        `ENCODED_CALL_NAMES`: carrying it would move the cell without closing
+        it."""
+        result = getattr(value, attr)()
+        assert djust_render("{{ r }}", {"r": result}) != django_render(
+            "{{ p.%s }}" % attr, {"p": value}
+        )
 
     @pytest.mark.parametrize("attr", ["real", "imag", "as_tuple", "is_finite", "adjusted"])
     def test_a_decimals_attributes_are_a_DIFFERENT_carrier(self, attr: str) -> None:
@@ -570,3 +608,72 @@ class TestTheSinkHasExactlyTheReadersItClaims:
             )
         # The collector is the only producer, and it is called once per type.
         assert src.count("fn collect_named_attrs(") == 1
+
+    def test_the_CALL_list_is_the_whole_of_the_OTHER_half_of_the_policy(self) -> None:
+        """The auto-call half (#2485) is a SECOND table with a SECOND producer,
+        and it carries the same two structural guards as the first."""
+        src = self._production(CORE_RS.read_text(encoding="utf-8"))
+        assert src.count("pub const ENCODED_CALL_NAMES") == 1
+        table = src.split("pub const ENCODED_CALL_NAMES", 1)[1].split("];", 1)[0]
+        for tp in ("datetime.datetime", "datetime.date", "datetime.time", "datetime.timedelta"):
+            assert f'"{tp}"' in table, tp
+        for banned in ('"min"', '"max"', '"resolution"'):
+            assert banned not in table, (
+                f"{banned} entered the CALL table — it is a data attribute of the "
+                "same family, so the collection would not terminate"
+            )
+        for banned in ('"now"', '"today"', '"utcnow"'):
+            assert banned not in table, (
+                f"{banned} entered the CALL table — its value is the CURRENT "
+                "time, so the conversion would do nondeterministic work"
+            )
+        assert src.count("fn collect_called_attrs(") == 1
+
+    def test_the_two_tables_are_disjoint(self) -> None:
+        """Both producers write the SAME map, so a name in both would have the
+        call's result overwrite the attribute's — a silent precedence rule
+        nobody stated. Measured against live Python rather than read off the
+        source: no name is both a data attribute and a callable here."""
+        for value, data_names, call_names in (
+            (
+                DT,
+                (
+                    "year",
+                    "month",
+                    "day",
+                    "hour",
+                    "minute",
+                    "second",
+                    "microsecond",
+                    "fold",
+                    "tzinfo",
+                ),
+                (
+                    "isoformat",
+                    "ctime",
+                    "weekday",
+                    "isoweekday",
+                    "toordinal",
+                    "timestamp",
+                    "utcoffset",
+                    "tzname",
+                    "dst",
+                ),
+            ),
+            (
+                DATE,
+                ("year", "month", "day"),
+                ("isoformat", "ctime", "weekday", "isoweekday", "toordinal"),
+            ),
+            (
+                TIME,
+                ("hour", "minute", "second", "microsecond", "fold", "tzinfo"),
+                ("isoformat", "utcoffset", "tzname", "dst"),
+            ),
+            (TD, ("days", "seconds", "microseconds"), ("total_seconds",)),
+        ):
+            assert not set(data_names) & set(call_names), type(value)
+            for n in data_names:
+                assert not callable(getattr(value, n)), f"{type(value)}.{n} is callable"
+            for n in call_names:
+                assert callable(getattr(value, n)), f"{type(value)}.{n} is not callable"
