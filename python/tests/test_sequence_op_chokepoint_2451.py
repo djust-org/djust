@@ -222,73 +222,29 @@ def corpus() -> dict:
 
 CORPUS = corpus()
 
-#: Cells that render on the LiveView path where Django refuses, because
-#: `normalize_django_value` FLATTENS the value before djust's own conversion
-#: ever sees it (#2477). Recorded, not allowed: the sweep below subtracts this
-#: table and then asserts it is exhausted in the other direction too, so a
-#: recorded cell that stops diverging must be deleted rather than left behind
-#: as cover for the next one.
-#:
-#: A `set` normalises to a sorted LIST, which IS subscriptable — so `first` and
-#: `last`, the two deterministic members of the `value[i]` group, render the
-#: element (or `''` for the empty set) where Django's `set[0]` raises
-#: `TypeError`. The iterators are unaffected: a set is iterable in Django too.
-#: `phone2numeric` is not here because it refuses on BOTH paths — a list has no
-#: `.lower()` either.
-#:
-#: The set is only the mildest member of the class. `complex(0)`, an empty
-#: `dict_keys`, a zero-`__len__` class and a `__bool__`-False class all reach
-#: the normalizer's `str()` fallback instead, so on the LiveView path they are
-#: their own repr — `{% if p %}` is `T` where Python and Django say `F`, and
-#: `{{ p|length }}` counts the characters of the repr. #2477 carries the full
-#: account; #2482 put the first two of them in the corpus, and the three
-#: `dv-keys-empty` rows below are that prediction coming true, measured.
-#:
-#: `dv-keys-empty` is the sharper shape than a `set`, and the difference is why
-#: it gets its own rows rather than being folded into the prose: a `set`
-#: normalises to a sorted LIST, so `first` renders an ELEMENT; an empty
-#: `dict_keys` normalises to the STRING `"dict_keys([])"`, so `first` renders
-#: the character `d`, `last` renders `)`, and `phone2numeric` — which refuses
-#: for a set, because a list has no `.lower()` — mangles the repr into
-#: `3428_5397([])`. Same table, one type over, one degree worse.
-NORMALIZER_FLATTENED = {
-    ("first", "set-empty"),
-    ("first", "set-plain"),
-    ("last", "set-empty"),
-    ("last", "set-plain"),
-    ("first", "dv-keys-empty"),
-    ("last", "dv-keys-empty"),
-    ("phone2numeric", "dv-keys-empty"),
-}
-
-#: The SECOND way a cell can render where Django refuses, and the reason it is
-#: a separate table rather than more rows in the one above (#2482): here the
-#: value is stringified by the **conversion** — `impl FromPyObject for Value`'s
-#: terminal `Ok(Value::String(ob.str()?))` — so the RAW entry point answers
-#: exactly what the LiveView path answers, and `normalize_django_value` is
-#: innocent. Recording them together would encode a diagnosis that is false for
-#: half the rows, which is the mistake the `NORMALIZER_FLATTENED` docstring
-#: talks itself out of making for `set-plain`.
-#:
-#: Both keys are values #2466 declined to carry: `dv-keys-plain` is TRUTHY, so
-#: `falsy_opaque`'s own gate turns it away, and `o-falsy-iter` is falsy WITH
-#: `__iter__` and no `__len__`, the shape that arm's doc-comment names as
-#: DECLINED because the carrier cannot produce the items without running the
-#: object. Both therefore arrive as their own `str()`, and every filter that
-#: subscripts or lower-cases reads the REPR: `{{ p|first }}` is `d` / `F`,
-#: `{{ p|last }}` is `)`, and `phone2numeric` dials the repr's letters.
-#:
-#: Not fixed here. #2482 is a harness change, and its terms are that the
-#: divergences the new rows surface get FILED (#1079) — this table is the
-#: measurement, and it is exact in both directions like the one above.
-STRINGIFIED_AT_CONVERSION = {
-    ("first", "dv-keys-plain"),
-    ("first", "o-falsy-iter"),
-    ("last", "dv-keys-plain"),
-    ("last", "o-falsy-iter"),
-    ("phone2numeric", "dv-keys-plain"),
-    ("phone2numeric", "o-falsy-iter"),
-}
+# Two tables lived here — `NORMALIZER_FLATTENED` (#2477) and
+# `STRINGIFIED_AT_CONVERSION` (#2482) — recording thirteen cells that RENDERED
+# where Django refuses, split by which of djust's two paths was responsible.
+# Both were written with the same terms: *deleted when the fix lands, rather
+# than left behind as cover for the next one*.
+#
+# #2477/#2489 landed and all thirteen agree, so both tables are gone, along
+# with the two non-vacuity tests that read them
+# (`test_2477_the_recorded_four_are_the_NORMALIZERS_doing` and
+# `test_2482_the_recorded_six_are_the_CONVERSIONS_doing`). What replaced them
+# is not a smaller table: `test_no_cell_renders_where_django_refuses` below now
+# subtracts NOTHING, which is a stronger statement than any exemption list, and
+# the per-path account those two tests carried moved to
+# `python/tests/test_opaque_collections_2477_2489.py`, where it is asserted
+# over nineteen members and sixteen consumers rather than seven filters.
+#
+# The diagnosis they encoded is worth keeping in prose, because it is what made
+# the two halves separable: a `set` was flattened to a sorted LIST by
+# `normalize_django_value` (so `first` rendered an ELEMENT on the LiveView path
+# and the raw path refused), while a non-empty `dict_keys` was stringified by
+# the CONVERSION (so both paths rendered the character `d`). One symptom, two
+# mechanisms, and a single table would have recorded a diagnosis that was false
+# for half its rows.
 
 
 class TestTheReferenceTableIsRunNotTranscribed:
@@ -318,11 +274,12 @@ class TestTheReferenceTableIsRunNotTranscribed:
         it, per its own terms.
 
         #2477 added the `set` pair and four cells appeared the SAME way, for
-        the same reason one type over: `normalize_django_value` has no arm for
+        the same reason one type over: `normalize_django_value` had no arm for
         the class #2466 closed at the conversion, so on the LiveView path a
-        `set` is a sorted LIST — subscriptable, where a set is not. They are
-        recorded in `NORMALIZER_FLATTENED` rather than silently allowed, and
-        that pin is deleted when #2477 lands, per its own terms.
+        `set` was a sorted LIST — subscriptable, where a set is not. #2482 then
+        made a `dict_keys` representable and nine more appeared. All thirteen
+        were recorded rather than allowed, and #2477/#2489 closed every one, so
+        this assertion subtracts NOTHING — see the block comment above.
         """
         offenders = []
         for name in ALL_SEVEN:
@@ -334,92 +291,9 @@ class TestTheReferenceTableIsRunNotTranscribed:
                 du = outcome(source, value, "djust")
                 if dj.startswith("<<") and not du.startswith("<<"):
                     offenders.append((name, key, dj, du))
-        recorded = NORMALIZER_FLATTENED | STRINGIFIED_AT_CONVERSION
-        unrecorded = [o for o in offenders if (o[0], o[1]) not in recorded]
-        assert not unrecorded, (
-            f"{len(unrecorded)} cells render where Django refuses:\n"
-            + "\n".join(f"  {n} <{k}>: django={a} djust={b!r}" for n, k, a, b in unrecorded[:15])
+        assert not offenders, f"{len(offenders)} cells render where Django refuses:\n" + "\n".join(
+            f"  {n} <{k}>: django={a} djust={b!r}" for n, k, a, b in offenders[:15]
         )
-        # The pin is EXACT in both directions: a recorded cell that stopped
-        # diverging must be deleted from the table, not left as a licence for
-        # the next one to hide behind (#1859).
-        stale = recorded - {(o[0], o[1]) for o in offenders}
-        assert not stale, f"{sorted(stale)} no longer diverge — delete their rows"
-
-    def test_2477_the_recorded_four_are_the_NORMALIZERS_doing(self) -> None:
-        """Non-vacuity for `NORMALIZER_FLATTENED`, and its diagnosis.
-
-        Seven cells since #2482, not four — the name is kept because the
-        ISSUE it belongs to has not moved, and the table it iterates is the
-        thing that grew. The three additions are `first` / `last` /
-        `phone2numeric` over `dv-keys-empty`, which are #2477's class one type
-        over: a `set` normalises to a sorted LIST and a dict view to a STRING.
-
-        The allowance above is only honest if the cells are the
-        NORMALIZER's doing rather than a hole in this chokepoint — the same
-        distinction #2467 turned on, and the reason that one was diagnosed in
-        an afternoon. Asserted directly: the identical value through the RAW
-        entry point answers DIFFERENTLY, so the flattening is what moved it.
-
-        Not "the raw path refuses". It does for `set-empty` — Python-falsy, so
-        `falsy_opaque` carries it and `python_getitem` refuses correctly — and
-        it does NOT for `set-plain`, which is TRUTHY, is declined by that arm's
-        gate, and crosses as its own `str()`: `{{ p|first }}` is the literal
-        `{` of `"{'<img …>'}"`. Both are wrong and neither is this file's
-        chokepoint; asserting the weaker, TRUE property is what keeps the pin
-        from encoding a diagnosis that holds for only half its rows.
-        """
-        for name, key in sorted(NORMALIZER_FLATTENED):
-            source = "{{ p|%s }}" % name
-            try:
-                raw = _rust.render_template(source, {"p": CORPUS[key]})
-            except Exception as exc:  # noqa: BLE001 — a refusal IS the answer
-                raw = f"<<{type(exc).__name__}>>"
-            live = outcome(source, CORPUS[key], "djust")
-            assert raw != live, (
-                f"{name} <{key}> now answers the same through the normalizer as "
-                f"through the raw path — #2477 landed, so delete its "
-                f"NORMALIZER_FLATTENED row and this test"
-            )
-            # ...and the LiveView answer is the RENDER, which is the divergence
-            # the table records. A pin whose rows had started refusing would
-            # otherwise pass on the inequality alone.
-            assert not live.startswith("<<"), f"{name} <{key}> refuses on the LiveView path now"
-
-    def test_2482_the_recorded_six_are_the_CONVERSIONS_doing(self) -> None:
-        """The mirror of the test above, and its opposite claim (#2482).
-
-        `NORMALIZER_FLATTENED`'s rows are honest only if the normalizer moved
-        them; `STRINGIFIED_AT_CONVERSION`'s are honest only if it did NOT. So
-        this asserts the RAW entry point — no `normalize_django_value` anywhere
-        — answers exactly what the LiveView path answers, and that both RENDER.
-        A row that started refusing, or that began to depend on the normalizer,
-        fails here rather than sitting in the wrong table.
-
-        The two tables are also asserted DISJOINT: a cell in both would be
-        excused twice and neither non-vacuity test would notice, which is the
-        two-mechanisms-shadowing-each-other shape (#2233).
-        """
-        assert not (NORMALIZER_FLATTENED & STRINGIFIED_AT_CONVERSION), (
-            "a cell recorded in both tables is excused twice; put it in the one "
-            "whose diagnosis is true for it"
-        )
-        for name, key in sorted(STRINGIFIED_AT_CONVERSION):
-            source = "{{ p|%s }}" % name
-            try:
-                raw = _rust.render_template(source, {"p": CORPUS[key]})
-            except Exception as exc:  # noqa: BLE001 — a refusal IS the answer
-                raw = f"<<{type(exc).__name__}>>"
-            live = outcome(source, CORPUS[key], "djust")
-            assert not raw.startswith("<<"), (
-                f"{name} <{key}> now REFUSES on the raw path — it is no longer the "
-                f"conversion's `str()` fallback; re-diagnose before moving the row"
-            )
-            assert raw == live, (
-                f"{name} <{key}> answers differently through the normalizer "
-                f"({live!r}) than through the raw path ({raw!r}) — it belongs in "
-                f"NORMALIZER_FLATTENED, not here"
-            )
 
     def test_2467_a_timedelta_refuses_on_BOTH_paths_now(self) -> None:
         """Non-vacuity for the twelve cells the sweep above stopped reporting.

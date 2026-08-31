@@ -618,15 +618,15 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
 
     #: What the extended axis reports over a corpus with those rows removed.
     GAP_2477 = {
-        "value:falsy_opaque:falsy",
+        "value:opaque_value:falsy",
         "value:str-fallback:truthy",
-        "arg:falsy_opaque:falsy",
+        "arg:opaque_value:falsy",
         "arg:str-fallback:truthy",
     }
 
     #: The two `INPUTS_LAZY` dict-view rows (#2482). They land on the SAME two
     #: value-channel arms the `set` pair does — `dv-keys-empty` on
-    #: `falsy_opaque` and `dv-keys-plain` on the terminal `str()` — so the
+    #: `opaque_value` and `dv-keys-plain` on the terminal `str()` — so the
     #: #2477 canary below has to remove them TOO, or the gap it is built to
     #: reproduce is filled by a row from a later issue and the canary silently
     #: stops reproducing anything. Found by running it: leaving them in turned
@@ -721,7 +721,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
     ROWS_2482_ARG_CONTEXT = '    "known_falsy_iter": INPUTS_LAZY["o-falsy-iter"](),\n'
     ROWS_2482_ARG_SPELLINGS = '    "known_falsy_iter",\n'
     #: The one bit that decides which arm the row lands on. Flipping it makes
-    #: the object TRUTHY, so `falsy_opaque`'s gate is irrelevant and the
+    #: the object TRUTHY, so `opaque_value`'s gate is irrelevant and the
     #: terminal `str()` arm is reached in the OTHER answer — a mutation that
     #: leaves the row, the corpus and the script intact and moves exactly the
     #: member under test. Both channels move together because `ARG_CONTEXT`
@@ -1301,7 +1301,7 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
         ),
         "known_set_empty": (
             "#2477 — a resolved argument NO `Value` variant models, on the "
-            "falsy side. It reaches `falsy_opaque` and crosses as a "
+            "falsy side. It reaches `opaque_value` and crosses as a "
             "`Value::Encoded`; before this row the argument channel had no "
             "inhabitant of that conversion arm at all, and the whole of #2466 "
             "was invisible to every axis"
@@ -1310,14 +1310,14 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
             "#2482 — the FALSY inhabitant of the terminal "
             "`Value::String(ob.str()?)` arm, in the argument channel. "
             "`known_set` is truthy and `known_set_empty` reaches "
-            "`falsy_opaque`, so between them the channel had a truthy "
+            "`opaque_value`, so between them the channel had a truthy "
             "`str-fallback` and no falsy one — the member the axis was "
             "EXEMPTING, on the grounds that a class instance could not be a "
             "corpus row. It could; the exemption was wrong rather than stale"
         ),
         "known_set": (
             "#2477 — the TRUTHY partner, which lands on a DIFFERENT arm: "
-            "`falsy_opaque`'s own gate declines it, so it falls to the "
+            "`opaque_value`'s own gate declines it, so it falls to the "
             "terminal `Value::String(ob.str()?)` and its type is lost at the "
             "conversion. That residue is what `STRINGIFIED_AT_EXTRACTION` in "
             "`test_int_argument_type_2366.py` names, and no cell reached it"

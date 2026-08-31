@@ -1523,44 +1523,6 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
         )
         return None
 
-    # An object the CONVERSION models -- carried through, not stringified
-    # (#2477/#2489).
-    #
-    # Everything below this point is the "we could not serialize it" path, and
-    # for one class of object that premise is false: `impl FromPyObject for
-    # Value` carries a `dict_keys`, a `complex`, a zero-`__len__` class and a
-    # falsy `__iter__` class EXACTLY, as a `Value::Encoded` holding `str(o)`,
-    # `bool(o)`, `len(o)`, `repr(o)`, its attributes and its items. Reaching
-    # this branch meant the LiveView path handed the renderer `str(o)` while
-    # `render_template` handed it the object, so `{% if p %}` was `T` here and
-    # `F` there for an empty `dict_keys`, and `{{ p|length }}` counted the
-    # thirteen characters of `"dict_keys([])"`.
-    #
-    # `_rust.crosses_as_encoded` RUNS the conversion and asks what came out,
-    # rather than re-stating its gate: a Python copy would be a second statement
-    # of one question and would drift on the first widening (#1646). It answers
-    # FALSE for the `__dict__` bulk-dump arm and for every EARLIER arm — a
-    # `bytes` and a `deque` are claimed by PyO3's sequence extraction and cross
-    # as a `Value::List`, so they keep the `str()` below and `{{ p }}` still
-    # renders `b'ab'` rather than `[97, 98]`.
-    #
-    # `state_roundtrip=True` is the one boundary that cannot take the live
-    # object, for the reason the `Decimal` / `datetime` / `set` branches above
-    # record: its output is written to the Django session by an encoder-less
-    # serializer.
-    if not state_roundtrip:
-        try:
-            from . import _rust
-
-            if _rust.crosses_as_encoded(value):
-                return value
-        except (ImportError, AttributeError):
-            # No compiled extension (a pure-Python install, or a build that
-            # predates the export): fall through to the historical `str()`.
-            # Failing SOFT here matters because this is the fallback branch —
-            # raising would turn "we could not serialize it" into a 500.
-            pass
-
     # Final fallback - warn before str() conversion
     from .config import config
 
@@ -1580,6 +1542,53 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     # In strict mode, raise instead of falling back
     if config.get("strict_serialization", False):
         raise TypeError(msg)
+
+    # An object the CONVERSION models -- carried through, not stringified
+    # (#2477/#2489).
+    #
+    # Placed AFTER the warning and the strict-mode raise, deliberately, and the
+    # ordering is the whole of the DX decision here. #292's warning is about
+    # LiveView STATE, and its text stays true of the boundary it names: the
+    # state paths pass `state_roundtrip=True`, which never reaches this line,
+    # and a value that survives to the RENDERER as a `Value::Encoded` still
+    # comes back off a msgpack round trip as its display string. So the signal
+    # a project gets about putting a service object in public state is
+    # unchanged, in volume and in wording, and only the value the RENDERER sees
+    # moves.
+    #
+    # What moves: `impl FromPyObject for Value` carries a `dict_keys`, a
+    # `complex`, a zero-`__len__` class and a falsy `__iter__` class EXACTLY,
+    # as a `Value::Encoded` holding `str(o)`, `bool(o)`, `len(o)`, `repr(o)`,
+    # its attributes and its items. Stringifying here meant the LiveView path
+    # handed the renderer `str(o)` while `render_template` handed it the
+    # object, so `{% if p %}` was `T` here and `F` there for an empty
+    # `dict_keys`, and `{{ p|length }}` counted the thirteen characters of
+    # `"dict_keys([])"`.
+    #
+    # `_rust.crosses_as_encoded` RUNS the conversion and asks what came out,
+    # rather than re-stating its gate: a Python copy would be a second
+    # statement of one question and would drift on the first widening (#1646).
+    # It answers FALSE for the `__dict__` bulk-dump arm and for every EARLIER
+    # arm — a `bytes` and a `deque` are claimed by PyO3's sequence extraction
+    # and cross as a `Value::List`, so they keep the `str()` below and
+    # `{{ p }}` still renders `b'ab'` rather than `[97, 98]`.
+    #
+    # `state_roundtrip=True` is the one boundary that cannot take the live
+    # object, for the reason the `Decimal` / `datetime` / `set` branches above
+    # record: its output is written to the Django session by an encoder-less
+    # serializer.
+    if not state_roundtrip:
+        try:
+            from . import _rust
+
+            if _rust.crosses_as_encoded(value):
+                return value
+        except (ImportError, AttributeError):
+            # No compiled extension (a pure-Python install, or a build that
+            # predates the export): fall through to the historical `str()`.
+            # Failing SOFT here matters because this is the fallback branch —
+            # raising would turn "we could not serialize it" into a 500.
+            pass
 
     return str(value)
 

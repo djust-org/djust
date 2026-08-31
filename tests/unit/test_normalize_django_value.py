@@ -294,17 +294,43 @@ class TestCallable:
         assert normalize_django_value(len) is None
 
 
+class MyCustom:
+    """A plain object: truthy, no `__len__`, no `__iter__`, no attributes."""
+
+    def __str__(self):
+        return "custom_value"
+
+
 class TestUnknownType:
     """Unknown types -> str()."""
 
-    def test_custom_object_to_str(self):
-        class MyCustom:
-            def __str__(self):
-                return "custom_value"
+    def test_custom_object_is_carried_and_still_RENDERS_as_its_str(self):
+        """#2477/#2489: the object crosses, and `{{ p }}` is unchanged.
 
-        result = normalize_django_value(MyCustom())
-        assert result == "custom_value"
-        assert isinstance(result, str)
+        This asserted `result == "custom_value"` until the conversion learned to
+        carry an object no `Value` variant models. The rendered output is the
+        same string — `Value::Encoded` holds `str(o)` — and the cells that
+        changed are the ones that were reading the TEXT: `{{ p|length }}` was
+        12, the characters of `"custom_value"`, where Django answers 0.
+        """
+        from djust import _rust
+
+        value = MyCustom()
+        assert normalize_django_value(value) is value
+        assert _rust.render_template("{{ p }}", normalize_django_value({"p": value})) == (
+            "custom_value"
+        )
+        assert _rust.render_template("{{ p|length }}", normalize_django_value({"p": value})) == "0"
+
+    def test_a_value_the_conversion_does_NOT_model_is_still_stringified(self):
+        """The other half, so the change above is bounded.
+
+        A `bytes` is claimed by PyO3's SEQUENCE extraction long before the
+        fallback arm that carries an opaque object, so `crosses_as_encoded` is
+        False for it and the historical `str()` stands — which is what keeps
+        `{{ p }}` rendering `b'hello'` rather than `[104, 101, ...]`.
+        """
+        assert normalize_django_value(b"hello") == "b'hello'"
 
     def test_bytes_to_str(self):
         # bytes is not JSON-native, falls through to str()
@@ -622,7 +648,12 @@ class TestStrictSerializationMode:
         with caplog.at_level(logging.WARNING):
             result = normalize_django_value(NonSerializable())
 
-        assert isinstance(result, str)
+        # The WARNING is the contract, not the return value. #2477/#2489 made
+        # the renderer carry an object like this rather than stringify it, and
+        # the warning deliberately did NOT move: it is about LiveView STATE,
+        # and a value that survives to the renderer as a `Value::Encoded` still
+        # comes back off a state round trip as its display string.
+        assert result is not None
         assert any("non-serializable value" in rec.message.lower() for rec in caplog.records)
 
     def test_strict_mode_raises_type_error(self):

@@ -252,7 +252,7 @@ class TestTheFalsyIterableRowIsTheShape2466Declined:
         with pytest.raises(TypeError, match="has no len"):
             len(value)  # type: ignore[arg-type]
         # No public attribute, so the `__dict__` bulk-dump arm ABOVE
-        # `falsy_opaque` does not claim it — that would make it a
+        # `opaque_value` does not claim it — that would make it a
         # `Value::Object` and a different question (#2478).
         assert not [k for k in vars(value) if not k.startswith("_")]
 

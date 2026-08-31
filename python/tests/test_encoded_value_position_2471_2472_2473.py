@@ -1021,7 +1021,7 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
     ``complex(0)`` and any falsy user object — so the comparison arm this PR
     adds is REACHED for values whose Python ordering it cannot know.
 
-    It answers ``None`` for every such pair, because ``falsy_opaque`` sets no
+    It answers ``None`` for every such pair, because ``opaque_value`` sets no
     ``cmp_key``: never equal, never ordered. Pinned here for two reasons.
 
     **It is not this PR's regression, and the pin says whose it is.** Before
@@ -1085,7 +1085,7 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
         dj, du = branch(op, v, v)
         assert du == dj
 
-    def test_a_falsy_opaque_against_a_datetime_is_not_comparable_on_either_engine(self) -> None:
+    def test_a_opaque_value_against_a_datetime_is_not_comparable_on_either_engine(self) -> None:
         """The mixed pair the merge made reachable — one operand with a key and
         one without. ``python_partial_cmp``'s ``?`` short-circuits on the
         missing key before the domain check, so this is the same ``None``, and
@@ -1096,11 +1096,11 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
 
     def test_its_repr_is_MEASURED_and_not_a_copy_of_display(self) -> None:
         """The bug the merge would otherwise have shipped, and the reason
-        ``falsy_opaque`` calls ``repr()`` rather than cloning ``display`` the
+        ``opaque_value`` calls ``repr()`` rather than cloning ``display`` the
         way it clones it into ``json``.
 
         For ``set()``, ``frozenset()`` and ``complex(0)`` the two spellings
-        coincide — so every builtin ``falsy_opaque`` was written for would have
+        coincide — so every builtin ``opaque_value`` was written for would have
         passed a ``display``-copying implementation. A user class defines them
         independently, and ``{{ p|pprint }}`` renders whichever field is
         carried.
@@ -1119,7 +1119,7 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
         """Why gating the measurement off reddens exactly ONE test, and why
         that is completeness rather than thin coverage.
 
-        The gate-off mutation that replaces ``falsy_opaque``'s ``repr()`` call
+        The gate-off mutation that replaces ``opaque_value``'s ``repr()`` call
         with ``display.clone()`` fails
         :func:`test_its_repr_is_MEASURED_and_not_a_copy_of_display` and nothing
         else — confirmed by a crossed run, which named that test and no other.
