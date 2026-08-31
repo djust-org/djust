@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`djust replay` — open, inspect, or diff a bug capture from the terminal (#1561).** `djust replay <blob>` opens the replay URL via `webbrowser.open()`; `--inspect` prints the decoded capture as ONE JSON document (`event_name`, `scrubbed_fields`, `state_before`, `state_after`, `vdom_patches`) so it pipes straight into `jq`; `--diff` prints a unified diff of `state_before` against `state_after`. Identical states write **nothing** to stdout and say so on stderr, so `djust replay --diff … > patch` still produces a valid empty patch rather than a file with prose in it.
+
+  The blob argument accepts a bare `djbug1.` blob or a whole replay URL, because a teammate is as likely to paste one as the other. Two guards, because a blob arrives by paste and "run `djust replay <this thing I sent you>`" is a real way to get a URL opened on someone's machine: the argument must resolve to something starting with `djbug1.` (so `djust replay https://phishing.example/` never reaches `webbrowser.open`, and the URL handed to the browser is always one the command built itself), and `--base-url` is restricted to `http`/`https` since its scheme reaches the browser directly.
+
+  The replay path comes from `reverse("djust:bug_capture_replay")` when a URLconf is available, so a project mounting `djust.urls` under a prefix gets the right link; it falls back to the literal route when the CLI runs outside a project. Host: `--base-url`, else `$DJUST_REPLAY_BASE_URL`, else `http://127.0.0.1:8000`.
+
+  New cases in `TestExtractBlob`, `TestReplayUrl`, `TestInspectMode`, `TestDiffMode`, `TestBrowserMode`, `TestErrorPaths` and `TestSubparserWiring` — driving the real `main()` argv path, so the subparser and dispatch-table wiring are exercised rather than assumed.
+
 ### Fixed
 
 - **Two opaque `Value::Encoded` values compare by Python's CONTRACT, so `{% if p == q %}` on two `set()`s answers `Y` (#2480).** `opaque_value` set `cmp_key: None`, so `Encoded::python_partial_cmp` answered `None` for every pair either side of which came from that arm — never equal, never ordered:
