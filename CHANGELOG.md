@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`{% if p %}` is `False` for a falsy object WITH attributes — it reaches the carrier instead of the `__dict__` bulk dump (#2478).** #2466 closed the falsiness class that lands on `FromPyObject for Value`'s final `Ok(Value::String(ob.str()?))` — a `set`, a `frozenset`, `complex(0)`, a bare zero-`__len__` class. One member never got there: an object with a non-empty `__dict__` was claimed by the bulk-dump arm ABOVE the fallback and became a **non-empty `Value::Object`**, whose truthiness is the mapping rule.
+
+  ```
+  class LenZeroWithAttrs:
+      def __init__(self): self.a = 1
+      def __len__(self):  return 0
+
+  {% if p %}T{% else %}F{% endif %}       python False   django F    djust T
+  {{ p|length }}                                         django 0    djust 1
+  {% for x in p %}[{{ x }}]{% endfor %}                  django ''   djust '[a]'
+  {{ p }}                          django '<LenZeroWithAttrs object …>'   djust "{'a': 1}"
+  ```
+
+  **The fix is a REORDER plus one field, and that is only possible because #2481 landed first.** `falsy_opaque` was placed after the `__dict__` arm deliberately: routing an attribute-carrying object through the `Encoded` carrier would have fixed `{% if %}` and broken `{{ obj.a }}`, because an `Encoded` had no attributes. #2481 gave it an attribute map, so the objection is answered rather than worked around — `falsy_opaque` moves ABOVE the `__dict__` arm and carries the object's public `__dict__` on the carrier. `test_falsy_conversion_2466.py`'s pinned decline is kept and flipped to the CLOSING case: it now asserts BOTH that the divergence is gone AND that `{{ p.a }}` still resolves, which is the one cell this fix had to keep.
+
+  **Six independent facts, not the four the issue names — and the extra two decide the fix's SHAPE.** Swept over 45 cells × 8 object shapes against live Django: truthiness (`{% if %}`, `not`, `and`/`or`, `{% with %}`, `{% firstof %}`, `|yesno`, `|default`, membership of a list), length (`|length`), iteration (`{% for %}`, `{% for k,v %}`, `|join`, `|safeseq`, `|escapeseq`, `|unordered_list`, `.items`, `.keys`), display (`{{ p }}`, `|default_if_none`, `|stringformat:"s"`, `|linebreaks`, `|lower`, `|striptags`, `{% cycle %}`, `|make_list`, `|slice`), repr (`|pprint`, `|stringformat:"r"`) and attributes (`{{ p.a }}`, `{{ d.p.a }}`). **The issue's own suggested remedy — a truthiness override on `Value::Object` — reaches the first of those and nothing else**: length, iteration and display read the MAPPING, and the `__dict__` arm's whole claim is that the object IS a mapping of its attributes. Patching one answer of a wrong carrier value-by-value is the non-converging shape #2129 took five rounds over; moving the object to the right carrier answers all six from spellings the struct already has. `TestTheIssuesOwnRemedyWouldNotHaveReached` measures the split rather than asserting it.
+
+  **Corpus movement**, two builds of the same corpus (`scratch/sweep_2478.py`, 360 cells): byte-equal agreement **131 → 252**, refusal-collapsed **164 → 295**, `django REFUSES & djust RENDERS` **22 → 12**, `djust REFUSES & django RENDERS` **3 → 0** — it SHRANK, and the three were `{% for k, v in p %}`, which djust refused where Django renders the empty branch. **0 cells regressed out of agreement**, and only the four shapes the gate ADMITS moved: the declined shapes (falsy with a non-zero `__len__`; iterable with no `__len__`) and the three controls (truthy, no attributes, private attributes only) answer byte-for-byte what they answered on the previous build, pinned against a table captured by reverting the change and rebuilding.
+
+  **The gate is #2466's, unchanged**, and both serialization floors stay above the arm: `__djust_serialize__` and the raw-`Model` arm (#1986, and its vector 7) are ordered BEFORE `falsy_opaque`, so a Django model cannot reach it and cannot have its denylisted fields collected into the attribute map. Asserted by source ORDER with a canary that proves the check can go red, because the ordering IS the enforcement. The `_`-prefix filter is stated ONCE, in a shared `public_dict_attrs` with exactly two callers — two copies of that filter is the #1646 shape, and this arm's copy would be the one that leaks.
+
+  Two cells stay divergent and are pinned exactly in both directions: `|json_script`, which Django refuses over any non-JSON-serializable object (#2429's recorded refusal direction — though djust now emits `str(o)` rather than a JSON object of the attribute VALUES, so strictly less of the object reaches the page), and `|dictsort` over an empty iterable, which is unrelated to the carrier.
+
+  Regression coverage: 383 cases in `python/tests/test_falsy_with_attributes_2478.py`; new cases in `test_falsy_conversion_2466.py::TestWhatThisDeliberatelyDoesNOTClose`.
+
 - **`{{ post.published.year }}` renders `2026` instead of nothing — a `Value::Encoded` carries its attributes (#2481).** Django's `Variable._resolve_lookup` tries three things at every dotted segment: mapping item access, then `getattr`, then an integer index. `context::lookup_segment` implemented steps 1 and 3, and said so in as many words — *"attribute access — see the note above; a `Value` has none"*. So every dotted lookup on a `datetime` / `date` / `time` / `timedelta` resolved to **nothing**, on every path with no raw-Python sidecar — which is every `DjustTemplateBackend` render:
 
   ```
