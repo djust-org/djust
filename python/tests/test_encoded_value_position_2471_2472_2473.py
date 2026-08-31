@@ -922,6 +922,10 @@ class TestTheStateRoundTripKeepsTheAnswers:
             False,
             "datetime.timedelta(0)",
             [1, 0, 0],
+            # #2481's attribute map, appended last for the reason every
+            # widening before it was: a positional payload only stays readable
+            # if nothing moves (#1541). `{{ p.days }}` resolves off this.
+            {"days": 0, "seconds": 0, "microseconds": 0},
         ]
 
     def test_a_shorter_payload_still_reads_without_fabricating_the_answers(self) -> None:
@@ -938,7 +942,7 @@ class TestTheStateRoundTripKeepsTheAnswers:
         recorded repr from a restored one, so the field carries the only
         spelling that entry has.
 
-        Built by TRUNCATING a real eight-element blob, so the test cannot
+        Built by TRUNCATING a real nine-element blob, so the test cannot
         drift from the shape the serializer actually writes."""
         msgpack = pytest.importorskip("msgpack")
 
@@ -949,7 +953,7 @@ class TestTheStateRoundTripKeepsTheAnswers:
             view.set_state("p", datetime.timedelta(0))
             view.set_state("q", datetime.timedelta(0))
             decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
-            assert len(decoded[1]["p"]["__djust_encoded__"]) == 8
+            assert len(decoded[1]["p"]["__djust_encoded__"]) == 9
             for key in ("p", "q"):
                 decoded[1][key]["__djust_encoded__"] = decoded[1][key]["__djust_encoded__"][:n]
             packed = msgpack.packb(decoded, use_bin_type=True)
@@ -958,7 +962,13 @@ class TestTheStateRoundTripKeepsTheAnswers:
         for n in (3, 4, 6):
             assert truncated(self.EQ, n) == "N", f"{n}-element payload gained a key"
             assert truncated(self.REPR, n) == "0:00:00", f"{n}-element payload gained a repr"
-        # And the EIGHT-element payload for the same value answers both the new
+        # EIGHT is the #2471/#2472 shape and carries both of these; it is the
+        # ATTRIBUTE MAP it lacks, which #2481's own suite pins.
+        assert truncated(self.EQ, 8) == "Y", "an 8-element payload lost its key"
+        assert truncated(self.REPR, 8) == "datetime.timedelta(0)", (
+            "an 8-element payload lost its repr"
+        )
+        # And the NINE-element payload for the same value answers both the new
         # way, which is what makes the arms above a compatibility read rather
         # than the bug.
         assert self._round_trip(self.EQ, datetime.timedelta(0)) == "Y"

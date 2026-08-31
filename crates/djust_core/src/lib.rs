@@ -317,7 +317,7 @@ pub enum Value {
 
 /// The payload of [`Value::Encoded`] (#2448). Boxed there to keep `Value`'s
 /// size unchanged — a `Value` is cloned per context entry per render.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Encoded {
     /// CPython's `tp_name` for the type, as it appears in a `TypeError`
     /// message: `datetime.datetime`, `datetime.date`, `datetime.time`,
@@ -393,7 +393,78 @@ pub struct Encoded {
     /// (#2471). `None` only where Python could not be asked — see
     /// [`Encoded::python_partial_cmp`], which is the ONE place this is read.
     pub cmp_key: Option<CmpKey>,
+    /// The object's ATTRIBUTES, by name, measured at the conversion (#2481).
+    ///
+    /// Django's `Variable._resolve_lookup` tries mapping access, then
+    /// `getattr`, then an integer index at every dotted segment. A `Value` is
+    /// inert data with no attributes, so djust's `context::lookup_segment` had
+    /// no step 2 at all and `{{ post.published.year }}` — an ordinary Django
+    /// idiom — rendered the EMPTY STRING on every path with no raw-Python
+    /// sidecar, which is every `DjustTemplateBackend` render. This map is that
+    /// step's answer: `lookup_segment` reads it, and it is the ONE reader.
+    ///
+    /// **Collected by NAME, not by bulk dump.** A `datetime` is a C type: it
+    /// has no `__dict__`, so the `__dict__` arm of `FromPyObject` never reached
+    /// `.year` and never could. [`ENCODED_ATTR_NAMES`] states the per-type list
+    /// and is the whole of the policy.
+    ///
+    /// **`min` / `max` / `resolution` are deliberately absent, and the reason
+    /// is not taste.** They are class attributes whose values are themselves
+    /// `datetime`s, so collecting them would convert a `datetime` whose own
+    /// `min` is a `datetime` — `datetime.min.min is datetime.min` is `True` —
+    /// and the conversion would not terminate. Measured, not reasoned about.
+    /// So `{{ p.max }}` stays empty where Django renders it; that cell is
+    /// unchanged by this field rather than closed by it, and is recorded as
+    /// such rather than quietly widened.
+    ///
+    /// **Nullary METHODS are absent too** — `isoformat`, `weekday`, `ctime`,
+    /// `total_seconds`, `date`, `time`. Django reaches them through its
+    /// auto-call (ADR-024), which turns a lookup into an EVALUATION; putting a
+    /// call's result in this map would make the whole family eager at
+    /// conversion time, pay for it on every render whether or not a template
+    /// asks, and inherit whatever the call raises. A different mechanism, so a
+    /// different decision — filed rather than folded in.
+    ///
+    /// Keyed by [`ObjectKey`] rather than `String` so the map IS a
+    /// [`Value::Object`]'s map: the same `get(part)` `lookup_segment` already
+    /// makes for step 1, and the same thing on the wire.
+    pub attrs: IndexMap<ObjectKey, Value>,
 }
+
+/// The attribute names carried on a [`Value::Encoded`] for each of the four
+/// `DjangoJSONEncoder` types (#2481).
+///
+/// The per-type lists Python answers WITHOUT being called and WITHOUT
+/// recursing — see the [`Encoded::attrs`] doc for why `min` / `max` /
+/// `resolution` and the nullary methods are not here. Keyed by the `tp_name`
+/// [`django_json_encoded`] has already resolved, so the lookup is one string
+/// compare over four entries rather than a second `isinstance` sweep.
+///
+/// `datetime.datetime` is a `datetime.date` SUBCLASS and gets the longer list,
+/// because [`django_json_encoded`] matches `datetime` first — the same
+/// ordering, in the same order, for the same reason.
+pub const ENCODED_ATTR_NAMES: &[(&str, &[&str])] = &[
+    (
+        "datetime.datetime",
+        &[
+            "year",
+            "month",
+            "day",
+            "hour",
+            "minute",
+            "second",
+            "microsecond",
+            "fold",
+            "tzinfo",
+        ],
+    ),
+    ("datetime.date", &["year", "month", "day"]),
+    (
+        "datetime.time",
+        &["hour", "minute", "second", "microsecond", "fold", "tzinfo"],
+    ),
+    ("datetime.timedelta", &["days", "seconds", "microseconds"]),
+];
 
 /// A [`Encoded`] value's position in Python's ordering (#2471).
 ///
@@ -459,6 +530,102 @@ pub const CMP_DOMAIN_DATETIME_AWARE: u8 = 4;
 /// A `time` whose `utcoffset()` is `None`. There is deliberately no aware-time
 /// domain — see the `datetime.time` arm of [`comparison_key`].
 pub const CMP_DOMAIN_TIME_NAIVE: u8 = 5;
+
+/// STRUCTURAL equality for two [`Encoded`]s — every carried spelling, plus the
+/// attribute map (#2481).
+///
+/// Hand-written rather than derived because [`Encoded::attrs`] holds `Value`s
+/// and [`Value`] deliberately has NO `PartialEq`: Django's `==` for a template
+/// value is `renderer::values_equal`, which equates `1` with `1.0` and asks
+/// [`Encoded::python_partial_cmp`] for this family. Deriving a second `==` onto
+/// `Value` would put a structural answer one keystroke away from every site
+/// that wants the Django one — two mechanisms for one question, which is the
+/// #1646 shape. So the structural comparison is reachable by NAME only, through
+/// [`values_structurally_equal`], and this impl is its one caller.
+///
+/// What this is for: pinning that a value survived a round trip unchanged. It
+/// is NOT `{% if a == b %}`.
+impl PartialEq for Encoded {
+    fn eq(&self, other: &Self) -> bool {
+        self.type_name == other.type_name
+            && self.display == other.display
+            && self.json == other.json
+            && self.truthy == other.truthy
+            && self.sized_empty == other.sized_empty
+            && self.iterable == other.iterable
+            && self.repr == other.repr
+            && self.cmp_key == other.cmp_key
+            && self.attrs.len() == other.attrs.len()
+            && self
+                .attrs
+                .iter()
+                .zip(other.attrs.iter())
+                .all(|((ka, va), (kb, vb))| ka == kb && values_structurally_equal(va, vb))
+    }
+}
+
+/// Are these two [`Value`]s the SAME VALUE — same variant, same payload?
+///
+/// **Not Django's `==`.** `renderer::values_equal` is that, and it deliberately
+/// answers differently: `1 == 1.0` is true there and false here, a `Decimal`
+/// compares against an `Integer` there and not here, and two `Encoded`s go
+/// through Python's own ordering. This function answers the round-trip
+/// question instead — "did anything change on the way through the codec" — and
+/// exists because [`Encoded`] carries a map of `Value`s that a wire pin has to
+/// compare.
+///
+/// Every pair is spelled explicitly and the wildcard is LAST, so the distinct
+/// pairs stay distinct: `Missing` is not `None` (#2203), a `List` is not a
+/// `Tuple` (#2276), and a `DictView` is not the `List` of its items (#2340). A
+/// new `Value` variant lands on the wildcard and compares unequal to itself —
+/// which `test_every_variant_is_structurally_equal_to_its_own_clone` turns into
+/// a failure rather than a silent wrong answer.
+///
+/// Float NaN is not equal to itself, as `f64`'s own `==` says. No `Encoded`
+/// attribute is a NaN today; the note is here so the answer is not a surprise.
+pub fn values_structurally_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Missing, Value::Missing) => true,
+        (Value::None, Value::None) => true,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Integer(a), Value::Integer(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::String(a), Value::String(b)) => a == b,
+        (Value::Decimal(a), Value::Decimal(b)) => a == b,
+        (Value::BigInt(a), Value::BigInt(b)) => a == b,
+        (Value::List(a), Value::List(b)) | (Value::Tuple(a), Value::Tuple(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|(x, y)| values_structurally_equal(x, y))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|((ka, va), (kb, vb))| ka == kb && values_structurally_equal(va, vb))
+        }
+        (
+            Value::DictView {
+                kind: ka,
+                items: ia,
+            },
+            Value::DictView {
+                kind: kb,
+                items: ib,
+            },
+        ) => {
+            ka == kb
+                && ia.len() == ib.len()
+                && ia
+                    .iter()
+                    .zip(ib.iter())
+                    .all(|(x, y)| values_structurally_equal(x, y))
+        }
+        (Value::Encoded(a), Value::Encoded(b)) => a == b,
+        _ => false,
+    }
+}
 
 impl Encoded {
     /// Python's answer for `a <op> b`, or `None` where Python refuses (#2471).
@@ -586,6 +753,19 @@ impl Serialize for Value {
                         e.iterable,
                         e.repr.as_str(),
                         e.cmp_key.map(|k| (k.domain, k.hi, k.lo)),
+                        // Slot 9, appended (#2481). A MAP, written
+                        // unconditionally — an empty one costs a byte and the
+                        // slots stay aligned, which is the same choice
+                        // `cmp_key` makes one slot over and for the same
+                        // reason. Carried rather than rebuilt on read because
+                        // `SerializableViewState.state` round-trips through
+                        // msgpack on EVERY read of the state backend and there
+                        // is no interpreter there to re-ask the object: without
+                        // this, `{{ dt.year }}` would answer on the first
+                        // render and go empty again after one cache hit. That
+                        // is the exact reopening `ENCODED_TAG` exists to
+                        // prevent, now for the fourth time.
+                        &e.attrs,
                     ),
                 )?;
                 m.end()
@@ -621,6 +801,32 @@ impl Serialize for Value {
             // encoding to mirror (#2340).
             Value::DictView { items, .. } => items.serialize(serializer),
         }
+    }
+}
+
+/// One [`CmpKey`] slot, read back off the wire (#2471).
+///
+/// `nil` or a three-integer array; anything else is not a payload this crate
+/// wrote, so it reads as ABSENT rather than being guessed at — a value with no
+/// key keeps the pre-#2471 comparison answer, which is the direction to fail
+/// in.
+///
+/// Extracted when #2481 added the ninth slot, so the eight- and nine-element
+/// arms cannot drift apart on how a key is read (#1646). Two copies of this
+/// `match` is the shape where one arm gains a case and the other does not.
+fn decode_cmp_key(key: &Value) -> Option<CmpKey> {
+    let (Value::List(limbs) | Value::Tuple(limbs)) = key else {
+        return None;
+    };
+    match limbs.as_slice() {
+        [Value::Integer(domain), Value::Integer(hi), Value::Integer(lo)] => {
+            u8::try_from(*domain).ok().map(|domain| CmpKey {
+                domain,
+                hi: *hi,
+                lo: *lo,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -746,29 +952,19 @@ impl<'de> Deserialize<'de> for Value {
                     // anything else is a real dict and falls through, so a
                     // user dict under this key cannot forge one.
                     if let Some(Value::List(parts)) = obj.get(ENCODED_TAG) {
-                        // Eight elements: the #2471/#2472 shape, `repr` and
-                        // the comparison key carried after #2466's two bits.
-                        // The key is `nil` or a three-integer array; anything
-                        // else is not one this crate wrote, so it reads as
-                        // absent rather than being guessed at.
-                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), Value::Bool(sized_empty), Value::Bool(iterable), Value::String(repr), key] =
+                        // NINE elements: the #2481 shape, the attribute map
+                        // appended after the comparison key. The map is a real
+                        // msgpack map, so it reads back as a `Value::Object`;
+                        // anything else in that slot reads as NO attributes
+                        // rather than as a guess, which is the same
+                        // fail-to-absent `cmp_key` takes one slot over.
+                        //
+                        // A user dict cannot forge one through this arm: the
+                        // four `_TAG` constants all start with `_`, and every
+                        // producer of this map skips `_`-prefixed names.
+                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), Value::Bool(sized_empty), Value::Bool(iterable), Value::String(repr), key, attrs] =
                             parts.as_slice()
                         {
-                            let cmp_key = match key {
-                                Value::List(limbs) | Value::Tuple(limbs) => {
-                                    match limbs.as_slice() {
-                                        [Value::Integer(domain), Value::Integer(hi), Value::Integer(lo)] => {
-                                            u8::try_from(*domain).ok().map(|domain| CmpKey {
-                                                domain,
-                                                hi: *hi,
-                                                lo: *lo,
-                                            })
-                                        }
-                                        _ => None,
-                                    }
-                                }
-                                _ => None,
-                            };
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
                                 display: display.clone(),
@@ -777,7 +973,37 @@ impl<'de> Deserialize<'de> for Value {
                                 sized_empty: *sized_empty,
                                 iterable: *iterable,
                                 repr: repr.clone(),
-                                cmp_key,
+                                cmp_key: decode_cmp_key(key),
+                                attrs: match attrs {
+                                    Value::Object(map) => map.clone(),
+                                    _ => IndexMap::new(),
+                                },
+                            })));
+                        }
+                        // Eight elements: the #2471/#2472 shape, `repr` and
+                        // the comparison key carried after #2466's two bits.
+                        // The key is `nil` or a three-integer array; anything
+                        // else is not one this crate wrote, so it reads as
+                        // absent rather than being guessed at.
+                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), Value::Bool(sized_empty), Value::Bool(iterable), Value::String(repr), key] =
+                            parts.as_slice()
+                        {
+                            return Ok(Value::Encoded(Box::new(Encoded {
+                                type_name: type_name.clone(),
+                                display: display.clone(),
+                                json: json.clone(),
+                                truthy: *truthy,
+                                sized_empty: *sized_empty,
+                                iterable: *iterable,
+                                repr: repr.clone(),
+                                cmp_key: decode_cmp_key(key),
+                                // The field THIS width does not carry restores
+                                // to the answer the entry was WRITTEN with: no
+                                // attributes, which is what `{{ dt.year }}`
+                                // resolved to before #2481. A stale entry
+                                // behaves exactly as it did rather than
+                                // half-way between.
+                                attrs: IndexMap::new(),
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -801,6 +1027,7 @@ impl<'de> Deserialize<'de> for Value {
                                 // half-way between.
                                 repr: display.clone(),
                                 cmp_key: None,
+                                attrs: IndexMap::new(),
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -821,6 +1048,7 @@ impl<'de> Deserialize<'de> for Value {
                                 iterable: false,
                                 repr: display.clone(),
                                 cmp_key: None,
+                                attrs: IndexMap::new(),
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -839,6 +1067,7 @@ impl<'de> Deserialize<'de> for Value {
                                 iterable: false,
                                 repr: display.clone(),
                                 cmp_key: None,
+                                attrs: IndexMap::new(),
                             })));
                         }
                     }
@@ -1003,6 +1232,20 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // where a value with no `display` would have nothing to render.
     let cmp_key = comparison_key(ob, tp_name);
 
+    // The attributes Django's lookup step 2 reaches (#2481). Keyed off the
+    // `tp_name` already resolved above rather than a second `isinstance`
+    // sweep — the same value, one string compare over four entries.
+    //
+    // NOT the `type_name` computed just above: that is the SUBCLASS's
+    // `__name__` for a Python-level subclass (`MyDT`), which is right for a
+    // `TypeError` message and wrong as a lookup key here. A `datetime`
+    // subclass has a `datetime`'s attributes.
+    let attrs = ENCODED_ATTR_NAMES
+        .iter()
+        .find(|(name, _)| *name == tp_name)
+        .map(|(_, names)| collect_named_attrs(ob, names))
+        .unwrap_or_default();
+
     Some(Encoded {
         type_name,
         display,
@@ -1015,7 +1258,42 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         iterable: false,
         repr,
         cmp_key,
+        attrs,
     })
+}
+
+/// `getattr(o, name)` for each `name`, as a [`Value::Object`]'s map (#2481).
+///
+/// The ONE producer of [`Encoded::attrs`]. A name the object does not have, or
+/// whose value will not convert, is SKIPPED rather than stored as `Missing` —
+/// an absent key is what makes `lookup_segment` answer `None` and the render
+/// fall through to the raw-Python sidecar (where there is one) exactly as it
+/// did before this map existed.
+///
+/// Every value is MEASURED off the live object. Not one of these is derivable
+/// from the strings `Encoded` already carries — `str(timedelta(days=3,
+/// seconds=90))` is `"3 days, 0:01:30"` and parsing `.days` back out of it
+/// would be a transcription with a per-value branch, which is the shape #2472
+/// nearly shipped by cloning `display` into `repr`.
+///
+/// The caller decides the names, and that is the whole of the recursion
+/// argument: [`ENCODED_ATTR_NAMES`] lists no attribute whose value is another
+/// object of the same family, so `v.extract::<Value>()` below cannot re-enter
+/// [`django_json_encoded`] on a value that would ask for the same names again.
+/// `datetime.min.min is datetime.min`, so a list containing `min` would not
+/// terminate.
+fn collect_named_attrs(ob: &Bound<'_, PyAny>, names: &[&str]) -> IndexMap<ObjectKey, Value> {
+    let mut map = IndexMap::with_capacity(names.len());
+    for name in names {
+        let Ok(attr) = ob.getattr(*name) else {
+            continue;
+        };
+        let Ok(value) = attr.extract::<Value>() else {
+            continue;
+        };
+        map.insert(ObjectKey::Str((*name).to_string()), value);
+    }
+    map
 }
 
 /// `(days, microseconds-within-the-day)` for a `datetime.timedelta`.
@@ -2147,6 +2425,14 @@ pub fn falsy_opaque(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // names and `LenZero() == LenZero()` is False WITHIN one — so no
         // carried spelling decides it. Filed as #2480.
         cmp_key: None,
+        // EMPTY, and that is this arm's gate rather than an omission (#2481).
+        // The values that reach here are the ones the `__dict__` bulk-dump arm
+        // above declined — an object WITH attributes keeps its `Value::Object`,
+        // because moving it to this carrier would take `{{ obj.a }}` with it.
+        // Now that `Encoded` HAS an attribute map that objection is answerable,
+        // and answering it is #2478 — a different decision about a different
+        // set of objects, filed rather than folded in.
+        attrs: IndexMap::new(),
     })
 }
 
