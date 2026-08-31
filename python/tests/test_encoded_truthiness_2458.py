@@ -280,9 +280,12 @@ class TestTheStateRoundTripKeepsTheAnswer:
             [1, 0, 0],
             # #2481's attribute map, appended last for the reason every
             # widening before it was: a positional payload only stays readable
-            # if nothing moves (#1541). `{{ p.days }}` resolves off this.
-            {"days": 0, "seconds": 0, "microseconds": 0},
-            # #2477/#2489's enumerated items, appended after it. `None` for a
+            # if nothing moves (#1541). `{{ p.days }}` resolves off this, and
+            # `{{ p.total_seconds }}` since #2485 — that fix grew the MAP and
+            # not the payload, which is why it lands inside slot 8 here and
+            # adds no position of its own.
+            {"days": 0, "seconds": 0, "microseconds": 0, "total_seconds": 0.0},
+            # #2477/#2489's enumerated items, appended AFTER it. `None` for a
             # `timedelta`, which is not iterable — and `None` is a DIFFERENT
             # statement from an empty list, which is why the codec keeps them
             # apart.

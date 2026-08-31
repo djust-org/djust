@@ -702,6 +702,84 @@ fn a_one_slot_shift_is_detectable() {
 }
 
 #[test]
+fn an_interior_insert_is_refused_rather_than_silently_misread() {
+    // The shape a widening takes when it adds a POSITION instead of growing
+    // something inside one — and the case the remove-and-swap canary above
+    // does not cover, because a removal shifts DOWN and an insert shifts UP.
+    //
+    // It is not hypothetical: #2485 and #2477/#2489 landed in the same window
+    // and both widen this payload. #2485 grew the attribute MAP at slot 8 and
+    // added no position; #2477/#2489 widened slot 4 to a count and appended
+    // slot 9. Those compose to TEN. Had #2485 taken a position of its own the
+    // arithmetic would still have said eleven and every slot after the insert
+    // would have shifted — a reader that trusted the width alone would have
+    // decoded `attrs` as `repr` and `items` as `cmp_key`, silently.
+    //
+    // So: insert a plausible element at every interior position and require
+    // the payload to be REFUSED (read back as a plain dict), never read as an
+    // Encoded with shifted contents. Eleven is not a width this crate writes,
+    // which is what makes the refusal the correct answer rather than a
+    // limitation.
+    let e = sample();
+    let full = parts_of(&e);
+    assert_eq!(full.len(), 10, "the payload width moved");
+    let mut refused = 0;
+    for at in 0..full.len() {
+        let mut shifted = full.clone();
+        // A STRING, which is a real type in this payload — so the refusal is
+        // about the shape and not about an obviously-alien element.
+        shifted.insert(at, Value::String("intruder".to_string()));
+        assert_eq!(shifted.len(), 11);
+        match decode_parts(shifted) {
+            Value::Object(_) => refused += 1,
+            other => panic!(
+                "an insert at slot {at} produced an Encoded with shifted \
+                 contents instead of being refused: {other:?}"
+            ),
+        }
+    }
+    assert_eq!(refused, 10, "every interior insert must be refused");
+}
+
+#[test]
+fn the_slot_that_grew_inside_itself_did_not_take_a_position() {
+    // #2485's compatibility claim, checked rather than quoted: it grew the
+    // attribute MAP and left the payload's width alone. The map is slot 8 and
+    // holds an arbitrary number of names; adding one must not move slot 9.
+    //
+    // Asserted by GROWING the map here and re-reading the width and the
+    // trailing slot. If a future fix moves an attribute out of the map and
+    // into a position of its own, this goes red at the same time as the
+    // width pin — which is what keeps "the slot is unchanged" from being a
+    // sentence nobody re-checks.
+    let mut grown = sample();
+    for extra in ["total_seconds", "isoformat", "ctime", "weekday"] {
+        grown.attrs.insert(
+            djust_core::object_key::ObjectKey::Str(extra.to_string()),
+            Value::String(format!("<{extra}>")),
+        );
+    }
+    let parts = parts_of(&grown);
+    assert_eq!(parts.len(), 10, "growing the attribute map moved the width");
+    // Slot 8 is still the map, and it carries every name.
+    match &parts[8] {
+        Value::Object(map) => {
+            assert_eq!(map.len(), grown.attrs.len());
+            assert!(map.get("total_seconds").is_some());
+            assert!(map.get("days").is_some());
+        }
+        other => panic!("slot 8 is no longer the attribute map: {other:?}"),
+    }
+    // ...and slot 9 is still the items.
+    assert!(
+        matches!(&parts[9], Value::List(_)),
+        "slot 9 is no longer the items: {:?}",
+        parts[9],
+    );
+    assert_eq!(round_trip(&grown), grown);
+}
+
+#[test]
 fn the_older_widths_still_read_with_the_documented_fallbacks() {
     let e = sample();
     let full = parts_of(&e);

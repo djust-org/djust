@@ -960,8 +960,21 @@ class TestTheStateRoundTripKeepsTheAnswers:
             # #2481's attribute map, appended for the reason every widening
             # before it was: a positional payload only stays readable if
             # nothing moves (#1541). `{{ p.days }}` resolves off this.
-            {"days": 0, "seconds": 0, "microseconds": 0},
-            # #2477/#2489's enumerated items, appended after it. `None` for a
+            #
+            # It gained `total_seconds` in #2485: the map holds Django's whole
+            # lookup step 2 — the DATA attributes and the AUTO-CALLED ones —
+            # written by two producers into ONE map, in table order. The SLOT
+            # is unchanged, which is the compatibility statement; only the map
+            # inside it grew, and a reader that does not know the name simply
+            # does not ask for it.
+            #
+            # The two widenings compose exactly because they are of different
+            # KINDS: #2485 grew this map and added no position, #2477/#2489
+            # added a position and left the map alone. That is what makes the
+            # width below 10 and not 11 — arithmetic that the round trip and
+            # the shift canary check rather than take on trust.
+            {"days": 0, "seconds": 0, "microseconds": 0, "total_seconds": 0.0},
+            # #2477/#2489's enumerated items, appended AFTER it. `None` for a
             # `timedelta`, which is not iterable — and `None` is a DIFFERENT
             # statement from an empty list.
             None,
