@@ -752,10 +752,28 @@ class TestTheCorpusGapsThatHidTheseFromTheDifferential:
             )
 
     def test_the_corpus_builds_a_two_operand_comparison_cell(self) -> None:
+        """The second operand exists AND is a different object.
+
+        The spelling moved in #2482 — from `copy.deepcopy(INPUTS[kb])` to
+        `fresh(kb)` — because a `dict_keys` cannot be deep-copied at all, so
+        the copy was what kept the whole dict-view half of #2466's class out
+        of the corpus. What this pin is about did not move: `q` must be built
+        rather than aliased, or Python's `==` answers True on identity alone
+        for a list and the axis measures nothing.
+
+        Pinned as "goes through `fresh`" plus "`fresh` builds something that
+        is not the corpus row", rather than as one literal spelling — a pin on
+        the spelling is what made this test fail on a change that strengthened
+        the property it guards.
+        """
         src = self.SCRIPT.read_text()
-        assert "CMP_OPS" in src and '"q": copy.deepcopy(' in src, (
+        assert "CMP_OPS" in src and '"q": fresh(' in src, (
             "the differential binds no second operand, so values_equal and "
             "try_compare are unmeasured — which is how #2335 shipped"
+        )
+        assert "def fresh(" in src and "copy.deepcopy(INPUTS[key])" in src, (
+            "`fresh` no longer copies the rows that admit a copy, so `p` and "
+            "`q` can be the same object again"
         )
         for op in ("==", "!=", "<", ">", "<=", ">=", "in"):
             assert f'"{op}"' in src, f"the comparison axis is missing {op!r}"

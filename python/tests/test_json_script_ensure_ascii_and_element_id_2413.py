@@ -45,7 +45,6 @@ compares bytes.
 
 from __future__ import annotations
 
-import copy
 import importlib.util
 import json
 import pathlib
@@ -474,20 +473,27 @@ class TestTheDivergenceTheUnMaskingRevealed:
         """
         module = _load_differential()
         diverging = {}
-        for name, value in module.INPUTS.items():
+        for name in module.INPUTS:
             try:
                 dj = DjangoTemplate("{{ p|json_script }}").render(
-                    DjangoContext({"p": copy.deepcopy(value)})
+                    DjangoContext({"p": module.fresh(name)})
                 )
             except Exception:  # noqa: BLE001 — a raise is a comparable outcome
                 dj = "<<EXC>>"
             try:
-                du = _rust.render_template("{{ p|json_script }}", {"p": copy.deepcopy(value)})
+                du = _rust.render_template("{{ p|json_script }}", {"p": module.fresh(name)})
             except Exception:  # noqa: BLE001
                 du = "<<EXC>>"
             if dj != du:
                 diverging[name] = (dj, du)
-        assert set(diverging) == {"d-typed-key", "set-empty", "set-plain"}, sorted(diverging)
+        assert set(diverging) == {
+            "d-typed-key",
+            "set-empty",
+            "set-plain",
+            "dv-keys-empty",
+            "dv-keys-plain",
+            "o-falsy-iter",
+        }, sorted(diverging)
         # ...and every one is the SAME class: Django's encoder refuses, djust
         # renders. A cell that flipped to a body divergence would keep its
         # membership and fail here instead of passing quietly.

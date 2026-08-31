@@ -155,13 +155,31 @@ def outcome(source: str, value, engine: str) -> str:
 def corpus() -> dict:
     source = (REPO / "scripts" / "filter-parity-differential.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    node = next(
-        n.value
-        for n in tree.body
-        if isinstance(n, ast.Assign)
-        and isinstance(n.targets[0], ast.Name)
-        and n.targets[0].id == "INPUTS"
-    )
+
+    def literal(name: str) -> ast.Dict:
+        # `ast.AnnAssign` as well as `ast.Assign`: `INPUTS_LAZY` carries a type
+        # annotation, and an `Assign`-only reader finds nothing for it — which
+        # is a `StopIteration` at import, not a silent miss, and is how this
+        # arm was written.
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if (
+                isinstance(targets[0], ast.Name)
+                and targets[0].id == name
+                and isinstance(value, ast.Dict)
+            ):
+                return value
+        raise AssertionError(
+            f"the differential no longer assigns a dict literal to `{name}`. The "
+            f"corpus this chokepoint sweeps is read from that file; fix the reader "
+            f"in the same commit rather than letting it sweep a subset."
+        )
+
     # `Decimal(...)` / `mark_safe(...)` / `datetime.timedelta(...)` are calls,
     # so `literal_eval` cannot take the dict whole; each value is evaluated in a
     # namespace holding exactly the names the corpus uses. `datetime` arrived
@@ -170,12 +188,36 @@ def corpus() -> dict:
     from decimal import Decimal
 
     env = {"Decimal": Decimal, "mark_safe": mark_safe, "datetime": datetime}
-    return {
-        ast.literal_eval(k): eval(  # noqa: S307 — a repo file's own literals
-            compile(ast.Expression(v), "<corpus>", "eval"), env
+
+    def value(node: ast.expr):
+        return eval(  # noqa: S307 — a repo file's own literals
+            compile(ast.Expression(node), "<corpus>", "eval"), env
         )
-        for k, v in zip(node.keys, node.values, strict=True)
+
+    built = {
+        ast.literal_eval(k): value(v)
+        for k, v in zip(literal("INPUTS").keys, literal("INPUTS").values, strict=True)
     }
+    # `INPUTS_LAZY` is the SAME corpus, spelled as zero-argument factories for
+    # the rows the eager mapping cannot hold (#2482) — a `dict_keys` cannot be
+    # deep-copied, which is what the differential's own `@cmp` axis does to a
+    # second operand. Read here too, and CALLED: reading only the eager literal
+    # would leave this chokepoint sweeping a strict subset of the corpus the
+    # differential sweeps, which is the parallel-path drift (#1646) the "read it
+    # from the script rather than re-type it" rule exists to prevent — one level
+    # up, and invisible, because a missing row cannot fail anything.
+    #
+    # Each factory is self-contained over builtins plus the three names above,
+    # which is the constraint the script's own comment on `INPUTS_LAZY` records.
+    # `eval` injects `__builtins__` into a globals mapping that has none, so a
+    # `type("C", (), {...})()` spelling evaluates here perfectly well.
+    built.update(
+        {
+            ast.literal_eval(k): value(v)()
+            for k, v in zip(literal("INPUTS_LAZY").keys, literal("INPUTS_LAZY").values, strict=True)
+        }
+    )
+    return built
 
 
 CORPUS = corpus()
@@ -198,13 +240,54 @@ CORPUS = corpus()
 #: `dict_keys`, a zero-`__len__` class and a `__bool__`-False class all reach
 #: the normalizer's `str()` fallback instead, so on the LiveView path they are
 #: their own repr — `{% if p %}` is `T` where Python and Django say `F`, and
-#: `{{ p|length }}` counts the characters of the repr. None of those is a
-#: corpus row here, so none is in this table; #2477 carries the full account.
+#: `{{ p|length }}` counts the characters of the repr. #2477 carries the full
+#: account; #2482 put the first two of them in the corpus, and the three
+#: `dv-keys-empty` rows below are that prediction coming true, measured.
+#:
+#: `dv-keys-empty` is the sharper shape than a `set`, and the difference is why
+#: it gets its own rows rather than being folded into the prose: a `set`
+#: normalises to a sorted LIST, so `first` renders an ELEMENT; an empty
+#: `dict_keys` normalises to the STRING `"dict_keys([])"`, so `first` renders
+#: the character `d`, `last` renders `)`, and `phone2numeric` — which refuses
+#: for a set, because a list has no `.lower()` — mangles the repr into
+#: `3428_5397([])`. Same table, one type over, one degree worse.
 NORMALIZER_FLATTENED = {
     ("first", "set-empty"),
     ("first", "set-plain"),
     ("last", "set-empty"),
     ("last", "set-plain"),
+    ("first", "dv-keys-empty"),
+    ("last", "dv-keys-empty"),
+    ("phone2numeric", "dv-keys-empty"),
+}
+
+#: The SECOND way a cell can render where Django refuses, and the reason it is
+#: a separate table rather than more rows in the one above (#2482): here the
+#: value is stringified by the **conversion** — `impl FromPyObject for Value`'s
+#: terminal `Ok(Value::String(ob.str()?))` — so the RAW entry point answers
+#: exactly what the LiveView path answers, and `normalize_django_value` is
+#: innocent. Recording them together would encode a diagnosis that is false for
+#: half the rows, which is the mistake the `NORMALIZER_FLATTENED` docstring
+#: talks itself out of making for `set-plain`.
+#:
+#: Both keys are values #2466 declined to carry: `dv-keys-plain` is TRUTHY, so
+#: `falsy_opaque`'s own gate turns it away, and `o-falsy-iter` is falsy WITH
+#: `__iter__` and no `__len__`, the shape that arm's doc-comment names as
+#: DECLINED because the carrier cannot produce the items without running the
+#: object. Both therefore arrive as their own `str()`, and every filter that
+#: subscripts or lower-cases reads the REPR: `{{ p|first }}` is `d` / `F`,
+#: `{{ p|last }}` is `)`, and `phone2numeric` dials the repr's letters.
+#:
+#: Not fixed here. #2482 is a harness change, and its terms are that the
+#: divergences the new rows surface get FILED (#1079) — this table is the
+#: measurement, and it is exact in both directions like the one above.
+STRINGIFIED_AT_CONVERSION = {
+    ("first", "dv-keys-plain"),
+    ("first", "o-falsy-iter"),
+    ("last", "dv-keys-plain"),
+    ("last", "o-falsy-iter"),
+    ("phone2numeric", "dv-keys-plain"),
+    ("phone2numeric", "o-falsy-iter"),
 }
 
 
@@ -251,7 +334,8 @@ class TestTheReferenceTableIsRunNotTranscribed:
                 du = outcome(source, value, "djust")
                 if dj.startswith("<<") and not du.startswith("<<"):
                     offenders.append((name, key, dj, du))
-        unrecorded = [o for o in offenders if (o[0], o[1]) not in NORMALIZER_FLATTENED]
+        recorded = NORMALIZER_FLATTENED | STRINGIFIED_AT_CONVERSION
+        unrecorded = [o for o in offenders if (o[0], o[1]) not in recorded]
         assert not unrecorded, (
             f"{len(unrecorded)} cells render where Django refuses:\n"
             + "\n".join(f"  {n} <{k}>: django={a} djust={b!r}" for n, k, a, b in unrecorded[:15])
@@ -259,13 +343,19 @@ class TestTheReferenceTableIsRunNotTranscribed:
         # The pin is EXACT in both directions: a recorded cell that stopped
         # diverging must be deleted from the table, not left as a licence for
         # the next one to hide behind (#1859).
-        stale = NORMALIZER_FLATTENED - {(o[0], o[1]) for o in offenders}
+        stale = recorded - {(o[0], o[1]) for o in offenders}
         assert not stale, f"{sorted(stale)} no longer diverge — delete their rows"
 
     def test_2477_the_recorded_four_are_the_NORMALIZERS_doing(self) -> None:
         """Non-vacuity for `NORMALIZER_FLATTENED`, and its diagnosis.
 
-        The allowance above is only honest if the four cells are the
+        Seven cells since #2482, not four — the name is kept because the
+        ISSUE it belongs to has not moved, and the table it iterates is the
+        thing that grew. The three additions are `first` / `last` /
+        `phone2numeric` over `dv-keys-empty`, which are #2477's class one type
+        over: a `set` normalises to a sorted LIST and a dict view to a STRING.
+
+        The allowance above is only honest if the cells are the
         NORMALIZER's doing rather than a hole in this chokepoint — the same
         distinction #2467 turned on, and the reason that one was diagnosed in
         an afternoon. Asserted directly: the identical value through the RAW
@@ -295,6 +385,41 @@ class TestTheReferenceTableIsRunNotTranscribed:
             # the table records. A pin whose rows had started refusing would
             # otherwise pass on the inequality alone.
             assert not live.startswith("<<"), f"{name} <{key}> refuses on the LiveView path now"
+
+    def test_2482_the_recorded_six_are_the_CONVERSIONS_doing(self) -> None:
+        """The mirror of the test above, and its opposite claim (#2482).
+
+        `NORMALIZER_FLATTENED`'s rows are honest only if the normalizer moved
+        them; `STRINGIFIED_AT_CONVERSION`'s are honest only if it did NOT. So
+        this asserts the RAW entry point — no `normalize_django_value` anywhere
+        — answers exactly what the LiveView path answers, and that both RENDER.
+        A row that started refusing, or that began to depend on the normalizer,
+        fails here rather than sitting in the wrong table.
+
+        The two tables are also asserted DISJOINT: a cell in both would be
+        excused twice and neither non-vacuity test would notice, which is the
+        two-mechanisms-shadowing-each-other shape (#2233).
+        """
+        assert not (NORMALIZER_FLATTENED & STRINGIFIED_AT_CONVERSION), (
+            "a cell recorded in both tables is excused twice; put it in the one "
+            "whose diagnosis is true for it"
+        )
+        for name, key in sorted(STRINGIFIED_AT_CONVERSION):
+            source = "{{ p|%s }}" % name
+            try:
+                raw = _rust.render_template(source, {"p": CORPUS[key]})
+            except Exception as exc:  # noqa: BLE001 — a refusal IS the answer
+                raw = f"<<{type(exc).__name__}>>"
+            live = outcome(source, CORPUS[key], "djust")
+            assert not raw.startswith("<<"), (
+                f"{name} <{key}> now REFUSES on the raw path — it is no longer the "
+                f"conversion's `str()` fallback; re-diagnose before moving the row"
+            )
+            assert raw == live, (
+                f"{name} <{key}> answers differently through the normalizer "
+                f"({live!r}) than through the raw path ({raw!r}) — it belongs in "
+                f"NORMALIZER_FLATTENED, not here"
+            )
 
     def test_2467_a_timedelta_refuses_on_BOTH_paths_now(self) -> None:
         """Non-vacuity for the twelve cells the sweep above stopped reporting.
@@ -380,6 +505,11 @@ class TestTheReferenceTableIsRunNotTranscribed:
         so the three iterators are unmoved; it is not subscriptable and has no
         `.lower()`, so `first` / `last` / `phone2numeric` each gain both rows.
 
+        Was 141 of 288 before #2482 added the three factory rows — two dict
+        views and a falsy iterable. All three are iterable, so the three
+        iterators are unmoved again; none is subscriptable and none has a
+        `.lower()`, so `first` / `last` / `phone2numeric` each gain all three.
+
         `random` is excluded on purpose rather than rounded off: over a mapping
         `random.choice` draws an index and THEN looks it up, so whether Django
         raises at all depends on the draw — its own count flaps between 17 and
@@ -399,11 +529,11 @@ class TestTheReferenceTableIsRunNotTranscribed:
             "escapeseq": 17,
             "safeseq": 17,
             "unordered_list": 17,
-            "first": 24,
-            "last": 27,
-            "phone2numeric": 39,
+            "first": 27,
+            "last": 30,
+            "phone2numeric": 42,
         }, per_filter
-        assert sum(per_filter.values()) == 141
+        assert sum(per_filter.values()) == 150
 
 
 class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
