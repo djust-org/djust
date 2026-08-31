@@ -439,6 +439,23 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # :mod:`djust.time_travel` for the recording machinery.
     time_travel_enabled: bool = False
 
+    # Top-level public-state keys that must NEVER leave this view inside a
+    # shared bug capture (#1561). ``encode_view_state()`` applies these
+    # BEFORE any caller-supplied ``scrub`` callable, so the redaction does
+    # not depend on every call site remembering to pass one — the per-call
+    # ``scrub`` argument stays available for arbitrary policies, and this
+    # is the default safety net underneath it.
+    #
+    # Declarative rather than behavioural on purpose: it is a list a
+    # reviewer can read, and the ``djust.V014`` system check reads it too,
+    # warning when a time-travel-enabled view has model or form fields whose
+    # names look like PII and are not named here.
+    #
+    # Scope matches ``scrub_fields``: TOP-LEVEL public-state keys only. A
+    # nested ``self.profile["ssn"]`` is not reached by naming ``"ssn"``;
+    # pass your own ``scrub`` callable for that.
+    time_travel_excluded_fields: List[str] = []
+
     # ============================================================================
     # AS_VIEW DISPATCH (PR-B for v0.9.0 streaming, ADR-015)
     # ============================================================================

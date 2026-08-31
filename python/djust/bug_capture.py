@@ -68,8 +68,11 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 #: Wire format identifier. Bump when changing the JSON shape on the wire.
 WIRE_VERSION = "djbug1"
@@ -267,7 +270,19 @@ def encode_view_state(
         event_name: If provided, locates the most recent snapshot for
             that event name. Default is the latest snapshot regardless
             of event.
-        scrub: Forwarded to :meth:`BugCapture.encode`.
+        scrub: Forwarded to :meth:`BugCapture.encode`. Runs AFTER the
+            view's own ``time_travel_excluded_fields`` (below), so a
+            caller can add to the redaction but a missing ``scrub``
+            argument can never *remove* the view's declared safety net.
+
+    **Declarative exclusions.** Before *scrub* runs, this applies
+    ``scrub_fields(*view.time_travel_excluded_fields)`` — the view's own
+    list of top-level public-state keys that must never leave it inside a
+    shared capture. Names from BOTH sources land in the wire-visible
+    ``scrubbed_fields`` list (``scrub_fields`` carries forward whatever it
+    is handed), so a reviewer sees the full set that was held back. A
+    custom *scrub* callable should preserve ``capture.scrubbed_fields``
+    for the same reason; the built-in :func:`scrub_fields` already does.
 
     Raises:
         RuntimeError: see :meth:`BugCapture.encode`.
@@ -302,7 +317,45 @@ def encode_view_state(
         vdom_patches=parsed_patches,
         event_name=snapshot.get("event_name", "") or "",
     )
+
+    # The view's declared exclusions run FIRST, so the safety net does not
+    # depend on the caller remembering to pass a `scrub`. Reuse
+    # `scrub_fields` rather than reimplementing the removal: it already
+    # handles absent keys and already CARRIES FORWARD `scrubbed_fields`,
+    # which is what lets names from both sources end up on the wire
+    # together (#1646 — one implementation of "remove these keys").
+    excluded = _declared_excluded_fields(view)
+    if excluded:
+        capture = scrub_fields(*excluded)(capture)
+
     return capture.encode(scrub=scrub)
+
+
+def _declared_excluded_fields(view: Any) -> List[str]:
+    """Return ``view.time_travel_excluded_fields`` as a clean list of names.
+
+    Tolerant of the shapes a class attribute actually takes in the wild: a
+    tuple, a set, a frozenset (the contract is "an iterable of names", per
+    the filter-shape rule #1108), or a bare string. A bare string is the
+    interesting one — ``time_travel_excluded_fields = "password"`` iterates
+    as six characters, silently scrubbing nothing, so it is treated as a
+    single name instead of being quietly wrong.
+    """
+    declared = getattr(view, "time_travel_excluded_fields", None)
+    if not declared:
+        return []
+    if isinstance(declared, str):
+        return [declared]
+    try:
+        return [str(name) for name in declared]
+    except TypeError:
+        logger.warning(
+            "time_travel_excluded_fields on %s is not iterable (%s); ignoring it. "
+            "Captured state will NOT be scrubbed by the class attribute.",
+            type(view).__name__,
+            type(declared).__name__,
+        )
+        return []
 
 
 def scrub_fields(*field_names: str) -> Callable[[BugCapture], BugCapture]:

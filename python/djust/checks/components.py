@@ -952,6 +952,272 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
     return errors
 
 
+# ---------------------------------------------------------------------------
+# V014 — PII fields on a time-travel-enabled view (#1561)
+# ---------------------------------------------------------------------------
+
+#: Field-name patterns V014 treats as naming a piece of PII, each as a tuple
+#: of snake_case tokens that must appear CONSECUTIVELY in the field name.
+#:
+#: Token matching, not substring matching, is the first false-positive
+#: control: ``telephone_pole`` tokenizes to ``("telephone", "pole")`` and does
+#: NOT contain the token ``phone``, where a substring scan would have flagged
+#: it. ``passwords`` / ``password1`` still match — trailing digits and a
+#: trailing plural ``s`` are normalized off each token.
+_PII_FIELD_PATTERNS: tuple[tuple[str, ...], ...] = (
+    ("password",),
+    ("passwd",),
+    ("ssn",),
+    ("credit", "card"),
+    ("tax", "id"),
+    ("email",),
+    ("phone",),
+)
+
+#: Field classes whose NAME may look like PII but whose VALUE cannot be.
+#: This is the second — and much more load-bearing — false-positive control:
+#: ``email_verified`` (BooleanField), ``phone_confirmed_at`` (DateTimeField)
+#: and ``email_notifications`` (BooleanField) all match a pattern above and
+#: none of them carries an email address or a phone number. Matched by class
+#: NAME up the MRO so third-party field subclasses are covered without
+#: importing anything, and so this stays one list rather than a
+#: model-vs-form fork.
+_NON_PII_FIELD_TYPE_NAMES = frozenset(
+    {
+        "BooleanField",
+        "NullBooleanField",
+        "DateField",
+        "DateTimeField",
+        "TimeField",
+        "DurationField",
+        "AutoField",
+        "BigAutoField",
+        "SmallAutoField",
+        "ForeignKey",
+        "OneToOneField",
+        "ManyToManyField",
+        "ManyToOneRel",
+        "ManyToManyRel",
+        "OneToOneRel",
+    }
+)
+
+
+def _pii_tokens(field_name: str) -> tuple[str, ...]:
+    """Normalize *field_name* to comparable snake_case tokens.
+
+    Each token is lowercased with trailing digits and a trailing plural
+    ``s`` stripped, so ``Password1`` / ``passwords`` / ``PASSWORD`` all
+    reduce to ``password``. camelCase is split too, because a form declared
+    against a JS-flavoured schema can carry ``creditCard``.
+    """
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", field_name)
+    tokens = []
+    for raw in spaced.replace("-", "_").split("_"):
+        token = re.sub(r"\d+$", "", raw.lower())
+        if token.endswith("s") and len(token) > 3:
+            token = token[:-1]
+        if token:
+            tokens.append(token)
+    return tuple(tokens)
+
+
+def _matched_pii_pattern(field_name: str) -> Optional[str]:
+    """Return the PII pattern *field_name* matches, or None."""
+    tokens = _pii_tokens(field_name)
+    for pattern in _PII_FIELD_PATTERNS:
+        width = len(pattern)
+        for start in range(len(tokens) - width + 1):
+            if tuple(tokens[start : start + width]) == pattern:
+                return "_".join(pattern)
+    return None
+
+
+def _field_type_names(field: Any) -> Iterator[str]:
+    """Yield the class names up *field*'s MRO (so subclasses are covered)."""
+    for klass in type(field).__mro__:
+        yield klass.__name__
+
+
+def _iter_declared_fields(cls: type) -> Iterator[tuple[str, Any]]:
+    """Yield ``(field_name, field)`` for every model/form a view class holds.
+
+    Deliberately scans the view's class attributes for VALUES that are
+    Django models, forms, or querysets, rather than enumerating the
+    attribute names a view is expected to use (``model``, ``form_class``,
+    ``queryset``, …). djust has no framework-level ``model`` attribute —
+    it is a project convention, and the conventions differ — so an
+    enumerate-the-names scan would be reliably one short (the
+    grep-for-the-sink rule, v1.1.1-2 retro).
+    """
+    try:
+        from django.db.models import Model, QuerySet
+        from django.forms import BaseForm
+    except Exception:  # pragma: no cover - Django always available in djust
+        return
+
+    seen: set[int] = set()
+    for klass in reversed(getattr(cls, "__mro__", (cls,))):
+        for value in vars(klass).values():
+            if isinstance(value, QuerySet):
+                value = value.model
+            if not isinstance(value, type):
+                continue
+            if id(value) in seen:
+                continue
+            seen.add(id(value))
+            if issubclass(value, Model):
+                try:
+                    fields = value._meta.get_fields()  # type: ignore[attr-defined]
+                except Exception:  # pragma: no cover - abstract / unready model
+                    continue
+                for field in fields:
+                    name = getattr(field, "name", None)
+                    if name:
+                        yield name, field
+            elif issubclass(value, BaseForm):
+                for name, field in getattr(value, "base_fields", {}).items():
+                    yield name, field
+
+
+@register("djust")
+def check_time_travel_pii_fields(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V014 (Warning): a time-travel-enabled view exposes a PII-looking field
+    that is not in ``time_travel_excluded_fields`` (#1561).
+
+    A view with ``time_travel_enabled = True`` records ``state_before`` /
+    ``state_after`` for every event, and those snapshots are what
+    ``encode_view_state()`` turns into a *shareable* ``djbug1.`` blob. The
+    whole point of a bug capture is that it leaves the machine it was
+    captured on, so a password or an SSN sitting in that view's public state
+    is one paste away from a bug tracker. ``time_travel_excluded_fields``
+    is the declarative fix; V014 is what notices you haven't declared one.
+
+    **Why this doesn't fire on every project.** Three gates, in order of how
+    much work each does:
+
+    1. **``time_travel_enabled = True``.** Time travel is a deliberate,
+       dev-only opt-in that almost no view sets, so the check is silent on a
+       project that isn't using the feature at all. This does the heavy
+       lifting — a clean project stays clean because the check never looks.
+    2. **Token matching, not substring matching.** ``telephone_pole`` does
+       not contain the *token* ``phone``.
+    3. **Field TYPE.** ``email`` is on almost every user model, and so is
+       ``email_verified`` — but a ``BooleanField`` named ``email_verified``
+       cannot hold an email address. Boolean / date / time / relation /
+       auto-pk fields are skipped whatever they are called, which is what
+       keeps ``email_notifications``, ``phone_confirmed_at`` and
+       ``password_changed_at`` quiet.
+
+    A field name that survives all three is genuinely a text field, on a
+    view that genuinely opted into recording state, genuinely named after a
+    kind of PII, and genuinely not declared. That is worth one line.
+
+    Suppress with ``DJUST_CONFIG = {'suppress_checks': ['V014']}``.
+
+    NOT gated on ``DEBUG``. The runtime surfaces (``BugCapture.encode``, the
+    replay route) are, because they *do* something; a system check only
+    tells you something, and ``manage.py check --deploy`` on the way to
+    production is exactly when you want to hear that a shipped view records
+    a password field.
+    """
+    errors: list[CheckMessage] = []
+
+    if _is_check_suppressed("djust.V014"):
+        return errors
+
+    try:
+        from djust.live_view import LiveView
+    except ImportError:
+        return errors
+
+    for cls in sorted(
+        _walk_subclasses(LiveView),
+        key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
+    ):
+        if not getattr(cls, "time_travel_enabled", False):
+            continue
+
+        module = getattr(cls, "__module__", "") or ""
+        if module.startswith("djust.") or module.startswith("djust_"):
+            if "test" not in module and "example" not in module:
+                continue
+
+        declared = getattr(cls, "time_travel_excluded_fields", None) or []
+        if isinstance(declared, str):
+            declared = [declared]
+        try:
+            excluded = {str(name) for name in declared}
+        except TypeError:
+            excluded = set()
+
+        offenders: list[tuple[str, str]] = []
+        seen_names: set[str] = set()
+        for field_name, field in _iter_declared_fields(cls):
+            if field_name in seen_names or field_name in excluded:
+                continue
+            if _NON_PII_FIELD_TYPE_NAMES.intersection(_field_type_names(field)):
+                continue
+            pattern = _matched_pii_pattern(field_name)
+            if pattern is None:
+                continue
+            seen_names.add(field_name)
+            offenders.append((field_name, pattern))
+
+        if not offenders:
+            continue
+
+        cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        cls_file = ""
+        cls_line = None
+        try:
+            cls_file = inspect.getfile(cls)
+            cls_line = inspect.getsourcelines(cls)[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for some classes.
+
+        named = ", ".join(sorted(name for name, _ in offenders))
+        errors.append(
+            DjustWarning(
+                "%s: time_travel_enabled = True, and its model/form declares "
+                "field(s) whose names look like PII and are not in "
+                "time_travel_excluded_fields: %s." % (cls_label, named),
+                hint=(
+                    "Time travel records state_before/state_after for every event, "
+                    "and encode_view_state() turns those snapshots into a SHAREABLE "
+                    "djbug1. blob — a bug capture exists to leave the machine it was "
+                    "captured on. Declare the sensitive keys so they are scrubbed by "
+                    "default, without every call site having to remember a scrub "
+                    "argument:\n\n"
+                    "    class %s(LiveView):\n"
+                    "        time_travel_enabled = True\n"
+                    "        time_travel_excluded_fields = [%s]\n\n"
+                    "The names are matched against TOP-LEVEL public-state keys, so "
+                    "list the attribute names this view actually assigns (they often "
+                    "match the field names above, but need not). Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['V014']} if these fields "
+                    "never reach this view's public state."
+                    % (
+                        cls.__qualname__,
+                        ", ".join('"%s"' % name for name, _ in sorted(offenders)),
+                    )
+                ),
+                id="djust.V014",
+                fix_hint=(
+                    "Add `time_travel_excluded_fields = [%s]` to `%s`."
+                    % (
+                        ", ".join('"%s"' % name for name, _ in sorted(offenders)),
+                        cls.__qualname__,
+                    )
+                ),
+                file_path=cls_file,
+                line_number=cls_line,
+            )
+        )
+
+    return errors
+
+
 def _check_service_instances_in_mount(errors: list[CheckMessage]) -> None:
     """V006 (Warning): Detect service/client/session instantiation in mount() methods via AST.
 
