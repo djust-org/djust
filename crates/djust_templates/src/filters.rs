@@ -4179,6 +4179,21 @@ fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
                 .partial_cmp(b_float)
                 .unwrap_or(std::cmp::Ordering::Equal),
             (Value::Bool(a_bool), Value::Bool(b_bool)) => a_bool.cmp(b_bool),
+            // Two members of the datetime family, through the same
+            // `python_partial_cmp` `{% if a < b %}` reads (#2471). A
+            // `dictsort` over a DateTimeField column is an ordinary idiom and
+            // sorted as all-Equal — i.e. not at all — because no arm here
+            // admitted an `Encoded` and the `as_f64` wildcard below answers
+            // `None` for one.
+            //
+            // A pair Python REFUSES stays Equal, which is the wildcard's
+            // pre-existing answer for every mixed column: Django's `dictsort`
+            // catches the `TypeError` and returns `""` where this returns the
+            // list unsorted, a divergence that predates this variant and is
+            // not this fix's (#1079).
+            (Value::Encoded(a_enc), Value::Encoded(b_enc)) => a_enc
+                .python_partial_cmp(b_enc)
+                .unwrap_or(std::cmp::Ordering::Equal),
             // Any pair that is numeric on BOTH sides. Two deltas, not one:
             // a Decimal column used to sort as all-Equal, i.e. not at all
             // (#2214) — and so did a MIXED int/float column, since the arms
@@ -6015,6 +6030,24 @@ pub(crate) fn python_int_value(value: &Value) -> std::result::Result<String, Int
         // `string_if_invalid`, so the value that reaches `int()` is `""` and
         // the answer is a ValueError, which the fall-through below gives.
         Value::None | Value::Object(_) | Value::DictView { .. } => Err(IntValueError::Type),
+        // A datetime, date, time or timedelta — the VALUE half of #2366, which
+        // established the same rule for the ARGUMENT position (#2473).
+        // `int(timedelta(0))` is a **TypeError**, and the `except ValueError`
+        // in `get_digit`'s body does not catch it, so Django raises.
+        //
+        // Without this arm an `Encoded` fell to the wildcard below, which
+        // answers `ValueError` — the ONE exception those bodies do catch — so
+        // `{{ p|get_digit:"1" }}` took the return-the-input branch and echoed
+        // the datetime's display spelling onto the page (the echo-on-failure
+        // class of #2359, and `get_digit`'s echo arm carries a per-call safety
+        // grant, #2403). `divisibleby` refused for the same reason but named
+        // the wrong exception in its message.
+        //
+        // Here rather than at each caller because this is THE `int(value)`
+        // chokepoint: `get_digit`, `divisibleby` and `{% widthratio %}`'s
+        // operands all read it, and a per-filter arm would be three copies of
+        // one rule (#1646).
+        Value::Encoded(_) => Err(IntValueError::Type),
         // A sequence, both shapes on ONE line, which is what
         // `test_every_bare_list_site_is_one_of_the_documented_list_always_four`
         // asks of every `Value::List` match (#2317/#2321): a bare `List` arm
@@ -6813,6 +6846,12 @@ mod tests {
                 truthy: true,
                 sized_empty: false,
                 iterable: false,
+                repr: "datetime.datetime(2020, 1, 1, 3, 4, 5)".to_string(),
+                cmp_key: Some(djust_core::CmpKey {
+                    domain: djust_core::CMP_DOMAIN_DATETIME_NAIVE,
+                    hi: 737425,
+                    lo: 11_045_000_000,
+                }),
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
@@ -6821,6 +6860,8 @@ mod tests {
                 truthy: false,
                 sized_empty: true,
                 iterable: true,
+                repr: "set()".to_string(),
+                cmp_key: None,
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -6834,6 +6875,8 @@ mod tests {
                 truthy: false,
                 sized_empty: true,
                 iterable: false,
+                repr: "<LenZero object>".to_string(),
+                cmp_key: None,
             })),
         ]
     }
@@ -7259,6 +7302,12 @@ mod tests {
                 truthy: true,
                 sized_empty: false,
                 iterable: false,
+                repr: "datetime.datetime(2020, 1, 1, 3, 4, 5)".to_string(),
+                cmp_key: Some(djust_core::CmpKey {
+                    domain: djust_core::CMP_DOMAIN_DATETIME_NAIVE,
+                    hi: 737425,
+                    lo: 11_045_000_000,
+                }),
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -7276,6 +7325,13 @@ mod tests {
                 truthy: false,
                 sized_empty: true,
                 iterable: true,
+                // A `falsy_opaque` sample, so `repr` is MEASURED from the
+                // object rather than copied from `display` — for a user class
+                // the two differ, and the hostile spelling belongs in both.
+                repr: "EmptyThing()".to_string(),
+                // No key: `python_partial_cmp` must answer `None` for every
+                // pair either side of which came from `falsy_opaque` (#2471).
+                cmp_key: None,
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -7289,6 +7345,8 @@ mod tests {
             truthy: false,
             sized_empty: false,
             iterable: false,
+            repr: "<script>alert(1)</script>".to_string(),
+            cmp_key: None,
         }));
         assert!(
             iter_values(&hostile).is_none(),

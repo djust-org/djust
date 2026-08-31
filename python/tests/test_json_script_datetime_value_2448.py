@@ -620,14 +620,24 @@ class TestWhatThisDeliberatelyDoesNOTClose:
             assert django_render(src, {"p": value}) == "T", repr(value)
             assert djust_render(src, {"p": value}) == "T", repr(value)
 
-    def test_pprint_still_shows_the_str_and_not_the_constructor(self) -> None:
-        """`pprint.pformat(datetime(...))` is the CONSTRUCTOR form in Python,
-        the way `Decimal('1')` is — and `Value::Encoded` carries `str()` and the
-        encoder's JSON, not `repr()`.  Divergent before and after; naming it
-        here keeps it from reading as closed."""
+    def test_pprint_shows_the_constructor_form_since_2472(self) -> None:
+        """CLOSED by #2472, and kept here inverted rather than deleted.
+
+        This class pinned `|pprint` as a divergence #2448 did not come to fix,
+        on the reasoning that `Value::Encoded` carries `str()` and the
+        encoder's JSON *and not* `repr()`. #2472 answered that by putting
+        `repr(o)` on the variant, so the reasoning's premise moved and the
+        divergence went with it. Asserting the NEW answer here is what keeps
+        this file's "deliberately not closed" list honest — a stale pin on a
+        closed divergence is worse than no pin.
+
+        Full coverage lives in
+        `python/tests/test_encoded_value_position_2471_2472_2473.py`.
+        """
         value = datetime.datetime(2020, 1, 1, 3, 4, 5)
-        assert djust_render("{{ p|pprint }}", {"p": value}) == "&#x27;2020-01-01 03:04:05&#x27;"
         assert repr(value) == "datetime.datetime(2020, 1, 1, 3, 4, 5)"
+        assert djust_render("{{ p|pprint }}", {"p": value}) == repr(value)
+        assert django_render("{{ p|pprint }}", {"p": value}) == repr(value)
 
 
 class TestTheSinkHasExactlyTheCallersItClaims:

@@ -555,17 +555,27 @@ class TestTheResiduesThisPRDoesNotTouch:
         assert _raised(got), got
         assert "calls int() on its value" in got, got
 
-    def test_get_digit_over_a_datetime_is_still_the_extraction_BOUNDARY(self) -> None:
-        """The residue #2435 does NOT close, and it is a different mechanism.
+    def test_get_digit_over_a_datetime_now_raises_too(self) -> None:
+        """**CLOSED by #2473**, and this pin read "is still the extraction
+        BOUNDARY".
 
-        A ``datetime`` is already a ``Value::String`` by the time any filter
-        sees it (the PyO3 extraction boundary, the same one
-        ``test_the_datetime_row_measures_the_extraction_BOUNDARY`` above
-        measures), so ``int(value)`` reads a STRING and answers ValueError —
-        the one exception ``get_digit``'s ``except`` catches. Django, holding
-        the real object, gets a TypeError instead. No amount of work below the
-        boundary can tell those apart, which is why this row stays.
+        It said: *"a `datetime` is already a `Value::String` by the time any
+        filter sees it (the PyO3 extraction boundary) … no amount of work below
+        the boundary can tell those apart, which is why this row stays."* That
+        stopped being true when #2448 gave the family `Value::Encoded`; the row
+        stayed only because `python_int_value` had no arm for it, which #2473
+        wrote. The pin went RED as a stale pin the day it was closed, which is
+        what it was for — the same shape as
+        `test_get_digit_over_a_value_int_refuses_now_raises_too` above.
+
+        The `BOUNDARY_RESIDUE` exclusion itself is NOT closed and stays: the
+        return-the-input branches of `yesno` / `default` still hand back
+        djust's `str(o)` where Django hands back its LOCALIZED spelling, which
+        is a rendering divergence rather than a typing one
+        (`test_the_datetime_row_measures_the_extraction_BOUNDARY` above).
         """
         expected, got = _both("{{ p|get_digit:1 }}", {"p": VALUES[BOUNDARY_RESIDUE]})
         assert expected.startswith("<<EXC TypeError:"), expected
-        assert not _raised(got), got
+        assert _raised(got), got
+        assert "calls int() on its value" in got, got
+        assert "TypeError" in got, got

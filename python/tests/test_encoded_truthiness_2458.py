@@ -254,10 +254,16 @@ class TestTheStateRoundTripKeepsTheAnswer:
         payload = msgpack.unpackb(blob, raw=False, strict_map_key=False)[1]["p"][
             "__djust_encoded__"
         ]
-        # Six elements since #2466 appended `sized_empty` and `iterable` —
-        # the fourth is still this issue's bit, and its POSITION is what
+        # EIGHT elements: #2466 appended `sized_empty` and `iterable`, then
+        # #2471/#2472 appended `repr(o)` and the comparison key — each for the
+        # reason this bit was appended, that a state entry dropping it restores
+        # a value answering with the pre-fix rule after one cache hit.
+        #
+        # The fourth is still this issue's bit and its POSITION is what
         # matters: every optional is TRAILING, the safe slot in a positional
-        # msgpack payload (#1541).
+        # msgpack payload (#1541). The whole tail is spelled out so a silent
+        # reshuffle cannot pass, and element 3 is asserted separately so the
+        # claim survives a future append re-flowing the literal.
         assert payload == [
             "datetime.timedelta",
             "0:00:00",
@@ -265,7 +271,10 @@ class TestTheStateRoundTripKeepsTheAnswer:
             False,
             False,
             False,
+            "datetime.timedelta(0)",
+            [1, 0, 0],
         ]
+        assert payload[3] is False, "the truthiness bit moved off element 3"
 
     def test_a_three_element_payload_still_reads(self) -> None:
         """A #2448-era process's state outlives it: a Redis backend hands back
@@ -287,7 +296,7 @@ class TestTheStateRoundTripKeepsTheAnswer:
         view.set_state("p", datetime.timedelta(0))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 6, payload
+        assert len(payload) == 8, payload  # six until #2471/#2472 grew it
         decoded[1]["p"]["__djust_encoded__"] = payload[:3]
         legacy = msgpack.packb(decoded, use_bin_type=True)
 
@@ -297,14 +306,16 @@ class TestTheStateRoundTripKeepsTheAnswer:
         assert self._round_trip(datetime.timedelta(0)) == "F"
 
     def test_a_FOUR_element_payload_still_reads(self) -> None:
-        """The #2458-era shape, which #2466 widened to five.
+        """The #2458-era shape, which #2466 widened to six and #2471/#2472 to
+        eight.
 
-        Same argument as the three-element arm one method up, one release
+        Same argument as the three-element arm one method up, two releases
         later: a Redis backend hands back a four-element payload on the first
         request after a rolling deploy. It restores `truthy` from the payload
-        (so `timedelta(0)` stays `F`) and `sized_empty` as `false` — correct
-        for every value that shape could have held, since all four were
-        datetimes and none has a `__len__`.
+        (so `timedelta(0)` stays `F`), `sized_empty` / `iterable` as `false` —
+        correct for every value that shape could have held, since all four were
+        datetimes and none has a `__len__` — and `repr` / `cmp_key` as the
+        pre-#2472 answers, which is the honest restore rather than a guess.
         """
         import msgpack
 
@@ -314,7 +325,7 @@ class TestTheStateRoundTripKeepsTheAnswer:
         view.set_state("p", datetime.timedelta(0))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 6, payload
+        assert len(payload) == 8, payload
         decoded[1]["p"]["__djust_encoded__"] = payload[:4]
         legacy = msgpack.packb(decoded, use_bin_type=True)
         assert RustLiveView.deserialize_msgpack(legacy).render() == "F"
@@ -434,16 +445,18 @@ class TestTheSinkHasExactlyTheCallersItClaims:
         may fall back to `!display.is_empty()`, and it is the three-element
         one.
 
-        Three widths since #2466 appended `sized_empty` — five (current), four
-        (#2458-era) and three (#2448-era) — so exactly TWO arms carry the bit
-        from the payload. The count is an equality rather than a floor so a
-        DELETED compatibility arm reddens it as loudly as an added derivation:
-        dropping the four-element read would silently turn every state entry
-        written by a 1.1.x process into a plain dict after a rolling deploy.
+        FOUR widths since #2471/#2472 appended `repr` and the comparison key
+        — eight (current), six (#2466-era), four (#2458-era) and three
+        (#2448-era) — so exactly THREE arms carry the bit verbatim from the
+        payload and exactly ONE derives it. The count is an equality rather
+        than a floor so a DELETED compatibility arm reddens it as loudly as an
+        added derivation: dropping the four-element read would silently turn
+        every state entry written by a 1.1.x process into a plain dict after a
+        rolling deploy.
         """
         src = self._production(CORE_RS.read_text(encoding="utf-8"))
         assert self._count(src, "truthy: !display.is_empty(),") == 1
-        assert self._count(src, "truthy: *truthy,") == 2
+        assert self._count(src, "truthy: *truthy,") == 3
 
     def test_the_counter_goes_red_in_BOTH_directions(self) -> None:
         """The canary. Each mutation asserts it APPLIED before its count is

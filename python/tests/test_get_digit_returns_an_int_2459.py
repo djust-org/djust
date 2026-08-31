@@ -159,6 +159,15 @@ def dj(source: str, value) -> str:
 #: two engines that both refuse.
 _CLASS_FROM_MESSAGE = (
     (re.compile(r"raises (\w+Error)"), lambda m: m.group(1)),
+    # `int_value_error`'s shape — `filter 'F' calls int() on its value, and
+    # that conversion is a TypeError Django does not catch`. A DIFFERENT
+    # sentence from the `value_op_error` one above, and this table could not
+    # read it: every cell that reaches it answered `<<RuntimeError>>` and so
+    # read as a disagreement with Django's `<<TypeError>>` even though both
+    # engines refuse. Unreachable until #2473 gave `python_int_value` its
+    # `Encoded` arm — before that no `int(value)` refusal had a subject this
+    # file sweeps.
+    (re.compile(r"conversion is an? (\w+Error)"), lambda m: m.group(1)),
     (re.compile(r"object is not (iterable|subscriptable)"), lambda m: "TypeError"),
     (re.compile(r"object of type '[^']+' has no len"), lambda m: "TypeError"),
     (re.compile(r"object has no attribute"), lambda m: "AttributeError"),
@@ -546,19 +555,49 @@ class TestTheInputExitsAreUntouched:
             assert dj(source, -42) == expected
             assert du(source, -42) == expected
 
-    def test_the_datetime_residue_is_STILL_the_extraction_boundary(self) -> None:
-        """#2451's explicit exclusion, re-run rather than trusted.
+    def test_the_datetime_residue_is_CLOSED_and_now_refuses(self) -> None:
+        """**CLOSED by #2473**, and this pin read "is STILL the extraction
+        boundary".
 
-        ``int(value)`` has only display text to read for a datetime, so djust
-        answers a ``ValueError`` — the one exception the ``except`` catches —
-        and hands the value back, while Django, holding the real object, gets a
-        ``TypeError``. Unfixable above the boundary and unchanged here.
+        It said: *"``int(value)`` has only display text to read for a datetime,
+        so djust answers a ``ValueError`` … unfixable above the boundary and
+        unchanged here."* The premise was false from #2448 onward —
+        ``Value::Encoded`` carries the TYPE, and ``int(datetime)`` is a
+        ``TypeError`` because of the type, not because of the text. The row
+        survived only because ``python_int_value`` had no ``Encoded`` arm,
+        which #2473 wrote.
+
+        Kept and inverted rather than deleted: this class is about
+        ``get_digit``'s INPUT EXITS, and "the datetime exit is now a refusal
+        rather than an echo" is exactly what belongs in it.
         """
         value = datetime.datetime(2020, 1, 1, 12, 0, 0)
-        assert dj('{{ p|get_digit:"1" }}', value) == "<<TypeError>>"
         rendered = du('{{ p|get_digit:"1" }}', value)
-        assert not rendered.startswith("<<"), rendered
-        assert rendered.startswith("2020-01-01"), rendered
+        assert dj('{{ p|get_digit:"1" }}', value) == "<<TypeError>>"
+        assert rendered == "<<TypeError>>", rendered
+        # The echo is what it stopped doing, and that is the security-relevant
+        # half: `get_digit`'s return-the-input arm carries a per-call safety
+        # grant (#2403), so the datetime reached the page live.
+        assert not rendered.startswith("2020-01-01"), rendered
+
+    def test_the_class_extractor_can_read_the_int_value_refusal(self) -> None:
+        """Non-vacuity for the row above.
+
+        `du` compares the exception CLASS rather than the message, and its
+        table had no entry for `int_value_error`'s sentence — so before this
+        the row above would have answered `<<RuntimeError>>` and read as a
+        disagreement between two engines that both refuse. Asserted directly,
+        because the row above passing is also what a table that silently
+        stopped matching would look like if the message ever changed to one
+        the FIRST pattern happens to catch.
+        """
+        message = (
+            "Template error: filter 'get_digit' calls int() on its value, and "
+            "that conversion is a TypeError Django does not catch — Django "
+            "raises here too"
+        )
+        matched = [name(m) for pattern, name in _CLASS_FROM_MESSAGE if (m := pattern.search(message))]
+        assert matched[:1] == ["TypeError"], matched
 
 
 class TestNoSecondMechanismWasAdded:
