@@ -213,19 +213,23 @@ fn the_attribute_map_carries_every_value_shape_it_can_hold() {
         ("float", Value::Float(1.5)),
         ("bool", Value::Bool(true)),
         ("str", Value::String("UTC".to_string())),
-        // `Value::None` is deliberately NOT here — see
-        // `a_none_attribute_comes_back_as_missing_a_pre_existing_codec_gap`.
+        // `None` joined this sweep when #2484 closed the codec gap that used
+        // to keep it out — the two variants no longer share one `nil`, so
+        // both belong here and both must survive.
+        ("none", Value::None),
         ("missing", Value::Missing),
         ("decimal", Value::Decimal("1.50".to_string())),
         (
             "bigint",
             Value::BigInt("123456789012345678901234567890".to_string()),
         ),
-        // The nested elements avoid `Value::None` for the reason
-        // `a_none_attribute_comes_back_as_missing_a_pre_existing_codec_gap`
-        // records — the gap is the CODEC's, not this slot's, and pinning it
-        // once is enough.
-        ("list", Value::List(vec![Value::Integer(1), Value::Missing])),
+        // The nested elements carry BOTH sentinels since #2484: a list is a
+        // second door onto the same codec arm, and the pair has to stay
+        // distinct through it too.
+        (
+            "list",
+            Value::List(vec![Value::Integer(1), Value::Missing, Value::None]),
+        ),
         (
             "tuple",
             Value::Tuple(vec![Value::Integer(1), Value::Bool(false)]),
@@ -247,7 +251,7 @@ fn the_attribute_map_carries_every_value_shape_it_can_hold() {
         assert_eq!(round_trip(&e), e, "the {name} attribute did not survive");
         checked += 1;
     }
-    assert_eq!(checked, 13, "the shape sweep shrank");
+    assert_eq!(checked, 14, "the shape sweep shrank");
 
     // And all of them at once, so ORDER is pinned too — the map is an
     // `IndexMap` because Python's attribute order is what a caller sees, and a
@@ -271,43 +275,41 @@ fn the_attribute_map_carries_every_value_shape_it_can_hold() {
 }
 
 #[test]
-fn a_none_attribute_comes_back_as_missing_a_pre_existing_codec_gap() {
-    // Pinned in the DIVERGING direction, because it is not this slot's bug and
-    // is not fixed here.
+fn a_none_attribute_survives_the_round_trip_as_a_none_2484() {
+    // This test was pinned in the DIVERGING direction until #2484, because the
+    // gap was the CODEC's rather than this slot's: `impl Serialize for Value`
+    // wrote `Missing | None` as ONE msgpack `nil` and `visit_unit` read every
+    // `nil` back as `Missing`. The two variants are deliberately DISTINCT
+    // (#2203) — `None` renders `"None"` and `Missing` renders `""` — so a
+    // `None` anywhere in a value that round-tripped through the state backend
+    // came back rendering the empty string.
     //
-    // `impl Serialize for Value` writes `Missing | None` as ONE msgpack `nil`
-    // and `visit_unit` reads every `nil` back as `Missing`. The two variants
-    // are deliberately DISTINCT (#2203) — `None` renders `"None"` and `Missing`
-    // renders `""` — so a `None` anywhere in a value that round-trips through
-    // the state backend comes back rendering the empty string.
-    //
-    // It predates the attribute map and is not reached through it alone: the
-    // second half of this test shows a PLAIN `Value::Object` losing it too, so
-    // `{{ d.a }}` on `{"a": None}` has always answered `None` on the first
-    // render and `""` after one cache hit. #2481 adds one more reachable
-    // instance (`{{ dt.tzinfo }}` on a NAIVE datetime) and improves the
-    // pre-round-trip answer there from `""` to Django's `"None"`; it neither
-    // causes nor worsens the round-trip half. Filed separately.
+    // #2484 closed it by tagging the RARE variant: `Missing` gets
+    // `MISSING_TAG` in binary formats and `None` keeps the bare `nil`, so the
+    // common value's bytes are unchanged and an old reader still sees exactly
+    // what it saw. Flipped here rather than deleted, so the same two halves
+    // that measured the gap now measure its closure.
     let e = Encoded {
         attrs: attrs_of(&[("tzinfo", Value::None)]),
         ..sample()
     };
     let back = round_trip(&e);
     assert!(
-        matches!(back.attrs.get("tzinfo"), Some(Value::Missing)),
-        "the codec gap moved — a None attribute now reads as {:?}",
+        matches!(back.attrs.get("tzinfo"), Some(Value::None)),
+        "a None attribute came back as {:?}",
         back.attrs.get("tzinfo"),
     );
 
-    // The same loss, with no `Encoded` involved at all — which is what makes
-    // "pre-existing" a measurement rather than a claim.
+    // The same value with no `Encoded` involved at all — which is what made
+    // "pre-existing" a measurement rather than a claim, and now makes
+    // "closed for the whole codec" one.
     let plain = Value::Object(attrs_of(&[("a", Value::None)]));
     let bytes = rmp_serde::to_vec(&plain).expect("encode");
     match rmp_serde::from_slice::<Value>(&bytes).expect("decode") {
         Value::Object(map) => assert!(
-            matches!(map.get("a"), Some(Value::Missing)),
-            "a plain Object's None survived — the gap this pins is closed, so \
-             the `none` case belongs back in the shape sweep above",
+            matches!(map.get("a"), Some(Value::None)),
+            "a plain Object's None came back as {:?}",
+            map.get("a"),
         ),
         other => panic!("expected an Object: {other:?}"),
     }
