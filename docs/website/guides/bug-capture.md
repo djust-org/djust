@@ -274,9 +274,48 @@ The check is not a config flag taken on trust, and it does not read the URL. It 
 
 If your connection is authenticated by a mechanism Redis itself cannot see — mutual TLS, a unix socket bounded by filesystem permissions — pass `require_auth=False`. It logs a warning naming the server every time. Do not reach for it merely because the URL has a password in it.
 
-## What's coming in iter C (v1.1.0)
+## `djust replay` — the terminal path (iter C)
 
-- A `djust replay` CLI for terminal-first workflows, and a framework-level `LiveView.time_travel_excluded_fields` class attribute that auto-scrubs sensitive fields without requiring per-encode `scrub_fields()` calls. Tracked in [#1561](https://github.com/djust-org/djust/issues/1561).
+Not every capture is worth a browser. `djust replay` takes a `djbug1.` blob — or the whole replay URL a teammate pasted at you — and does one of three things:
+
+```bash
+# Open it in the local browser.
+djust replay djbug1.eyJ2IjoiZGpidWcxIi...
+
+# Print the decoded capture as ONE JSON document. Pipe it anywhere.
+djust replay --inspect "$BLOB" | jq '.state_after.claimant_id'
+djust replay --inspect "$BLOB" | jq '.vdom_patches | length'
+
+# See what the transition actually changed.
+djust replay --diff "$BLOB"
+```
+
+```diff
+--- state_before
++++ state_after
+@@ -1,5 +1,4 @@
+ {
+-  "count": 0,
+-  "gone": 1,
++  "count": 1,
+   "user": "ada"
+ }
+```
+
+`--inspect` emits a single JSON object (`event_name`, `scrubbed_fields`, `state_before`, `state_after`, `vdom_patches`), not three separate ones, so `jq` can consume it directly. `--diff` writes a unified diff to stdout; when the two states are identical it writes **nothing** to stdout and says so on stderr, so `djust replay --diff "$BLOB" > patch` still gives you a valid empty patch rather than a file with prose in it.
+
+**Where the URL points.** `--base-url`, else `$DJUST_REPLAY_BASE_URL`, else `http://127.0.0.1:8000`. The path comes from your URLconf when one is available, so a project that mounts `djust.urls` under a prefix gets the right link:
+
+```bash
+export DJUST_REPLAY_BASE_URL=http://localhost:8002
+djust replay "$BLOB"
+```
+
+**The blob argument is validated before anything is opened.** A blob reaches you by paste, so "run `djust replay <this thing I sent you>`" is a real way to get a URL opened on your machine. The argument must resolve to something starting with `djbug1.` or the command refuses; the URL handed to your browser is always one the command built itself. `--base-url` is restricted to `http`/`https` for the same reason.
+
+## What's coming in iter C
+
+- A framework-level `LiveView.time_travel_excluded_fields` class attribute that auto-scrubs sensitive fields without requiring per-encode `scrub_fields()` calls, plus a system check that warns when `time_travel_enabled = True` and view fields match common-PII patterns without being excluded. Tracked in [#1561](https://github.com/djust-org/djust/issues/1561).
 
 ## Strategy connection
 

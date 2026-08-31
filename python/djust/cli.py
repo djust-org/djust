@@ -18,6 +18,10 @@ Usage:
     python -m djust.cli analyze <path>    Analyze LiveView templates
     python -m djust.cli clear             Clear state backend caches
 
+    djust replay <blob>                    Open a bug capture in the browser
+    djust replay --inspect <blob>          Print the decoded capture as JSON
+    djust replay --diff <blob>             Diff state_before against state_after
+
 Examples:
     python -m djust new myapp
     python -m djust new myapp --with-auth --with-db
@@ -660,6 +664,162 @@ def cmd_clear(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+#: Default host the replay URL is built against. Overridable per-invocation
+#: with ``--base-url`` and per-shell with ``DJUST_REPLAY_BASE_URL``.
+REPLAY_DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+
+#: Only these schemes may be opened in the user's browser. A blob arrives by
+#: paste from a colleague, so the CLI must never be a way to talk someone into
+#: running ``djust replay`` against an arbitrary URI — see ``_replay_url``.
+REPLAY_ALLOWED_SCHEMES = ("http", "https")
+
+
+def _extract_blob(raw: str) -> str:
+    """Return the ``djbug1.`` blob from *raw*, which may be a full replay URL.
+
+    A teammate is as likely to paste the whole
+    ``http://localhost:8000/__djust__/replay/djbug1.…`` URL as the bare blob,
+    so accept both. The extracted value MUST still start with ``djbug1.`` —
+    that check is what stops ``djust replay https://somewhere.example/`` from
+    turning this command into "open an arbitrary URL a stranger sent me".
+    """
+    from djust.bug_capture import WIRE_VERSION
+
+    candidate = raw.strip()
+    if "/" in candidate:
+        candidate = candidate.rstrip("/").rsplit("/", 1)[-1]
+    # A pasted URL may carry a query string or fragment the route ignores.
+    for separator in ("?", "#"):
+        candidate = candidate.split(separator, 1)[0]
+
+    if not candidate.startswith(WIRE_VERSION + "."):
+        raise ValueError(
+            "not a bug-capture blob: expected something starting with %r "
+            "(or a replay URL ending in one), got %r" % (WIRE_VERSION + ".", raw)
+        )
+    return candidate
+
+
+def _replay_url(blob: str, base_url: str) -> str:
+    """Build the replay URL for *blob* under *base_url*.
+
+    The path comes from Django's URLconf when one is available, so a project
+    that mounts ``djust.urls`` under a prefix gets the right link; otherwise it
+    falls back to the literal route ``djust.urls`` registers. The scheme of
+    *base_url* is checked against :data:`REPLAY_ALLOWED_SCHEMES` because the
+    result is handed to ``webbrowser.open``.
+    """
+    from urllib.parse import quote, urlsplit
+
+    parts = urlsplit(base_url)
+    if parts.scheme not in REPLAY_ALLOWED_SCHEMES:
+        raise ValueError(
+            "--base-url must be http:// or https:// (got %r); the URL is opened "
+            "in your browser, so other schemes are refused" % (base_url,)
+        )
+
+    path = None
+    try:
+        from django.urls import reverse
+
+        path = reverse("djust:bug_capture_replay", args=[blob])
+    except Exception:
+        # No Django settings, no URLconf, or the route isn't included — all
+        # normal when running the CLI outside a project. Fall back to the
+        # literal route djust.urls registers.
+        path = "/__djust__/replay/" + quote(blob, safe="")
+
+    return base_url.rstrip("/") + path
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    """Open, inspect, or diff a ``djbug1.`` bug-capture blob."""
+    import json
+
+    # Decoding an inline blob needs no Django at all. A ``djbug1.store.<id>``
+    # blob does (the store is read from LIVEVIEW_CONFIG), and so does the
+    # URLconf lookup in _replay_url — so try to configure Django, quietly,
+    # and let the specific failure surface from the operation that needs it.
+    try:
+        import django
+        from django.conf import settings
+
+        if not settings.configured:
+            django.setup()
+    except Exception:
+        pass
+
+    from djust.bug_capture import BugCapture
+
+    try:
+        blob = _extract_blob(args.blob)
+        capture = BugCapture.decode(blob)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    if args.inspect:
+        # ONE JSON document, so the output pipes straight into jq.
+        json.dump(
+            {
+                "event_name": capture.event_name,
+                "scrubbed_fields": capture.scrubbed_fields,
+                "state_before": capture.state_before,
+                "state_after": capture.state_after,
+                "vdom_patches": capture.vdom_patches,
+            },
+            sys.stdout,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+        sys.stdout.write("\n")
+        return 0
+
+    if args.diff:
+        import difflib
+
+        def _lines(state: object) -> list[str]:
+            return json.dumps(state, indent=2, sort_keys=True, default=str).splitlines(
+                keepends=True
+            )
+
+        diff = difflib.unified_diff(
+            _lines(capture.state_before),
+            _lines(capture.state_after),
+            fromfile="state_before",
+            tofile="state_after",
+            n=3,
+        )
+        wrote = False
+        for line in diff:
+            sys.stdout.write(line)
+            wrote = True
+        if not wrote:
+            # An empty unified diff is silence, which reads like a broken
+            # command rather than a real answer. Say it on stderr so a
+            # `djust replay --diff … > patch` still produces an empty file.
+            print("state_before and state_after are identical.", file=sys.stderr)
+        elif not line.endswith("\n"):
+            sys.stdout.write("\n")
+        return 0
+
+    base_url = args.base_url or os.environ.get("DJUST_REPLAY_BASE_URL") or (REPLAY_DEFAULT_BASE_URL)
+    try:
+        url = _replay_url(blob, base_url)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    print(f"Opening {url}")
+    import webbrowser
+
+    if not webbrowser.open(url):
+        print("Could not open a browser. Paste the URL above instead.")
+        return 1
+    return 0
+
+
 DEPLOY_HELP = """\
 Usage: djust deploy [<slug>] [--from-git] [--dir DIR]
        djust deploy login | logout
@@ -854,6 +1014,35 @@ def main() -> None:
         add_help=False,
     )
 
+    # replay command (B7 iter C, #1561)
+    replay_parser = subparsers.add_parser(
+        "replay", help="Open, inspect, or diff a djbug1. bug-capture blob"
+    )
+    replay_parser.add_argument(
+        "blob",
+        help="A djbug1.<base64> / djbug1.store.<id> blob, or a full replay URL",
+    )
+    replay_mode = replay_parser.add_mutually_exclusive_group()
+    replay_mode.add_argument(
+        "--inspect",
+        action="store_true",
+        help="Print the decoded capture as one JSON document (pipe to jq)",
+    )
+    replay_mode.add_argument(
+        "--diff",
+        action="store_true",
+        help="Print a unified diff of state_before against state_after",
+    )
+    replay_parser.add_argument(
+        "--base-url",
+        dest="base_url",
+        metavar="URL",
+        help=(
+            "Host to build the replay URL against "
+            f"(default: $DJUST_REPLAY_BASE_URL, else {REPLAY_DEFAULT_BASE_URL})"
+        ),
+    )
+
     # clear command
     clear_parser = subparsers.add_parser("clear", help="Clear state backend caches")
     clear_parser.add_argument("-f", "--force", action="store_true", help="Skip confirmation prompt")
@@ -877,6 +1066,7 @@ def main() -> None:
         "profile": cmd_profile,
         "analyze": cmd_analyze,
         "mcp": cmd_mcp,
+        "replay": cmd_replay,
         "clear": cmd_clear,
     }
 
