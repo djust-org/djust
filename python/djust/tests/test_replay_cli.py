@@ -125,22 +125,69 @@ class TestReplayUrl:
             _replay_url(blob, scheme_url)
 
     def test_uses_the_urlconf_when_the_route_is_mounted(self, blob, settings):
-        """A project that mounts ``djust.urls`` under a prefix gets its prefix."""
-        settings.DEBUG = True
-        from django.urls import path, include, clear_url_caches
+        """A project that mounts the replay route under a prefix gets its prefix.
+
+        Registers the named route DIRECTLY rather than ``include("djust.urls")``.
+        ``djust.urls`` computes ``urlpatterns`` at import time from
+        ``settings.DEBUG``, and Django's test runner forces ``DEBUG = False``, so
+        under pytest that module is usually EMPTY — an ``include`` of it would
+        mount nothing, ``reverse`` would fail, and this test would silently
+        measure the fallback branch instead. (It did: the first version passed
+        locally only because ``djust.urls`` happened to have been imported
+        before the runner set the flag, and went red in CI once
+        ``test_bug_capture_urls.py`` — which reloads that module — ran first.)
+        What ``_replay_url`` actually needs is a resolvable
+        ``djust:bug_capture_replay``, so that is what the fixture provides.
+        """
         import types
 
-        module = types.ModuleType("_replay_cli_urlconf")
-        module.urlpatterns = [path("tools/", include("djust.urls"))]
-        sys.modules["_replay_cli_urlconf"] = module
+        from django.urls import clear_url_caches, include, path
+
+        from djust.bug_capture_views import replay_view
+
+        inner = types.ModuleType("_replay_cli_inner_urlconf")
+        inner.urlpatterns = [
+            path("__djust__/replay/<str:blob>", replay_view, name="bug_capture_replay")
+        ]
+        inner.app_name = "djust"
+        outer = types.ModuleType("_replay_cli_urlconf")
+        outer.urlpatterns = [path("tools/", include(inner))]
+
+        sys.modules["_replay_cli_inner_urlconf"] = inner
+        sys.modules["_replay_cli_urlconf"] = outer
         try:
             settings.ROOT_URLCONF = "_replay_cli_urlconf"
             clear_url_caches()
             url = _replay_url(blob, "http://h:9000")
         finally:
+            del sys.modules["_replay_cli_inner_urlconf"]
             del sys.modules["_replay_cli_urlconf"]
             clear_url_caches()
-        assert "/tools/__djust__/replay/" in url
+        assert url == "http://h:9000/tools/__djust__/replay/" + blob
+
+    def test_falls_back_to_the_literal_route_when_nothing_is_mounted(self, blob, settings):
+        """The other branch: no route, no Django project — still a usable URL.
+
+        This is the branch that actually runs when the CLI is invoked outside a
+        project, and (because the test runner forces ``DEBUG = False``) the one
+        most tests hit. Pinned explicitly so it can't rot behind the
+        mounted-route case above.
+        """
+        import types
+
+        from django.urls import clear_url_caches
+
+        empty = types.ModuleType("_replay_cli_empty_urlconf")
+        empty.urlpatterns = []
+        sys.modules["_replay_cli_empty_urlconf"] = empty
+        try:
+            settings.ROOT_URLCONF = "_replay_cli_empty_urlconf"
+            clear_url_caches()
+            url = _replay_url(blob, "http://h:9000")
+        finally:
+            del sys.modules["_replay_cli_empty_urlconf"]
+            clear_url_caches()
+        assert url == "http://h:9000/__djust__/replay/" + blob
 
 
 # ---------------------------------------------------------------------------
