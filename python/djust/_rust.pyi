@@ -222,6 +222,30 @@ def compute_template_hash(source: str) -> str:
     """
     ...
 
+def crosses_as_encoded(obj: object) -> bool:
+    """Does *obj* cross into the renderer as a ``Value::Encoded``? (#2477/#2489)
+
+    ``Value::Encoded`` is the carrier that holds a Python object by facts
+    MEASURED from it — ``str(o)``, ``repr(o)``, ``bool(o)``, ``len(o)``, its
+    attributes and its items — rather than by its ``str()``. A ``set``, a
+    ``dict_keys``, a ``complex`` and a ``__bool__``-False class all cross that
+    way; a ``bytes``, a ``deque`` and anything with an integer ``__getitem__``
+    are claimed by PyO3's sequence extraction first and cross as a
+    ``Value::List``.
+
+    Consulted by ``djust.serialization.normalize_django_value`` at its final
+    fallback, so the LiveView path stops flattening what the conversion carries
+    exactly. It RUNS the conversion rather than re-stating its gate, which is
+    what keeps the two from drifting (#1646).
+
+    Args:
+        obj: Any Python object.
+
+    Returns:
+        True only if the conversion produces a ``Value::Encoded``.
+    """
+    ...
+
 def set_virtual_keyed_ops(enabled: bool) -> None:
     """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
 
@@ -1070,6 +1094,7 @@ __all__ = [
     "fast_json_dumps",
     "extract_template_variables",
     "compute_template_hash",
+    "crosses_as_encoded",
     "dj_model_fields_from_template",
     "serialize_queryset",
     "serialize_context",

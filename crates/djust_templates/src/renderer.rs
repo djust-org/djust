@@ -1752,27 +1752,45 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     let grants = dict_view_item_grants(iterable, kind, &items, context);
                     (Value::List(items), true, grants)
                 }
-                // A Python-falsy container with no `Value` variant — `set()`,
-                // `frozenset()`, an empty `dict_keys`, a class whose
-                // `__len__` is 0 — iterates to NOTHING (#2466). Django's
-                // `ForNode` reads `len` when the object has one, so it renders
-                // the `{% empty %}` block for every one of these rather than
-                // raising, and `Encoded::sized_empty` is that `len(o) == 0`
-                // asked at the conversion.
+                // A container with no `Value` variant — `set()`, `{'a'}`, a
+                // `dict_keys`, a class whose `__len__` is 0, a falsy
+                // `__iter__` class (#2466, #2477/#2489). This arm is Django's
+                // `ForNode` transcribed:
                 //
-                // An `Encoded` that is NOT `sized_empty` falls through to
-                // `other` and reaches the refusal arm below, which is right
-                // for both the members that reach it: a `datetime` has no
-                // `__len__` and `list(dt)` raises, and so does `complex(0)`
-                // and a class whose `__bool__` is `False` with no `__len__`.
-                // The message names `e.type_name`, so it is CPython's own.
+                // ```python
+                // if not hasattr(values, "__len__"):
+                //     values = list(values)
+                // if len(values) < 1:
+                //     -> the {% empty %} block
+                // ```
                 //
-                // The set of shapes normalised here MUST equal the set
-                // `filters::iter_values` answers `Some` for, or the two
-                // probes disagree about what a value IS (#1646). Pinned by
-                // `for_iterability_agrees_with_iter_values`.
-                Value::Encoded(ref e) if e.sized_empty => {
+                // — so `len(o) == 0` renders `{% empty %}` WITHOUT asking
+                // whether the object is iterable at all (a class with only a
+                // zero `__len__` renders empty on Django too), and anything
+                // else iterates the ITEMS the conversion enumerated.
+                //
+                // An `Encoded` with neither falls through to `other` and
+                // reaches the refusal arm below, which is right for every
+                // member that reaches it: a `datetime`, a `complex(0)`, a
+                // `__bool__`-False class with no `__len__` — `list(o)` raises
+                // for all of them. The message names `e.type_name`, so it is
+                // CPython's own.
+                //
+                // The set of shapes normalised here is a SUPERSET of the set
+                // `filters::iter_values` answers `Some` for, by exactly the
+                // zero-`__len__`-and-not-iterable shape — the two questions
+                // Django asks in two places (#2466). Pinned, with that one
+                // exemption named, by `for_iterability_agrees_with_iter_values`.
+                Value::Encoded(ref e) if e.len == Some(0) => {
                     (Value::List(Vec::new()), true, Vec::new())
+                }
+                Value::Encoded(ref e) if e.items.is_some() => {
+                    // No safety grant on any item, exactly as the `Object`
+                    // arm above: these came from an arbitrary Python object
+                    // through `extract::<Value>()` and carry no mark, so
+                    // over-escaping is the direction to fail in.
+                    let items = e.items.clone().unwrap_or_default();
+                    (Value::List(items), true, Vec::new())
                 }
                 other => (other, false, Vec::new()),
             };
@@ -5898,7 +5916,7 @@ mod tests {
                 display: "2020-01-01 03:04:05".to_string(),
                 json: "2020-01-01T03:04:05".to_string(),
                 truthy: true,
-                sized_empty: false,
+                len: None,
                 iterable: false,
                 repr: "datetime.datetime(2020, 1, 1, 3, 4, 5)".to_string(),
                 cmp_key: Some(djust_core::CmpKey {
@@ -5907,6 +5925,7 @@ mod tests {
                     lo: 11_045_000_000,
                 }),
                 attrs: Default::default(),
+                items: None,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
@@ -5915,11 +5934,44 @@ mod tests {
                 display: "set()".to_string(),
                 json: "set()".to_string(),
                 truthy: false,
-                sized_empty: true,
+                len: Some(0),
                 iterable: true,
                 repr: "set()".to_string(),
                 cmp_key: None,
                 attrs: Default::default(),
+                items: Some(vec![]),
+            })),
+            // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
+            // Without it every `Encoded` sample here is EMPTY, and the sweep
+            // could not tell "the for-arm reads the items" from "the for-arm
+            // always renders nothing".
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "set".to_string(),
+                display: "{'a'}".to_string(),
+                json: "{'a'}".to_string(),
+                truthy: true,
+                len: Some(1),
+                iterable: true,
+                repr: "{'a'}".to_string(),
+                cmp_key: None,
+                attrs: Default::default(),
+                items: Some(vec![Value::String("a".to_string())]),
+            })),
+            // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
+            // has no length to read, so it `list()`s the object and renders
+            // the item. `len` is `None` here and the for-arm must still
+            // iterate — which is why that arm reads `items`, not `len`.
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "FalsyIterable".to_string(),
+                display: "FalsyIterable()".to_string(),
+                json: "FalsyIterable()".to_string(),
+                truthy: false,
+                len: None,
+                iterable: true,
+                repr: "FalsyIterable()".to_string(),
+                cmp_key: None,
+                attrs: Default::default(),
+                items: Some(vec![Value::String("x".to_string())]),
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
@@ -5929,11 +5981,12 @@ mod tests {
                 display: "<LenZero object>".to_string(),
                 json: "<LenZero object>".to_string(),
                 truthy: false,
-                sized_empty: true,
+                len: Some(0),
                 iterable: false,
                 repr: "<LenZero object>".to_string(),
                 cmp_key: None,
                 attrs: Default::default(),
+                items: None,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`
@@ -5959,7 +6012,7 @@ mod tests {
             let refuses = rendered.is_err();
             let for_iterable = filters::iter_values(value).is_some()
                 || matches!(value, Value::None)
-                || matches!(value, Value::Encoded(e) if e.sized_empty);
+                || matches!(value, Value::Encoded(e) if e.len == Some(0) || e.items.is_some());
             let expected = !for_iterable;
             assert_eq!(
                 refuses, expected,
@@ -5975,17 +6028,30 @@ mod tests {
         // refuse — or nothing — cannot pass by making the equality trivially
         // true.
         assert_eq!(refusing, 6, "expected exactly six refusing samples");
-        assert_eq!(samples.len(), 17);
-        // Non-vacuity for the extra term: the `sized_empty && !iterable`
+        assert_eq!(samples.len(), 19);
+        // Non-vacuity for the extra term: the zero-`len`-and-not-iterable
         // sample must be one the two probes DISAGREE about, or the relation
         // above is indistinguishable from a plain equality.
         let split = samples
             .iter()
-            .filter(|v| matches!(v, Value::Encoded(e) if e.sized_empty && !e.iterable))
+            .filter(|v| {
+                matches!(v, Value::Encoded(e) if e.len == Some(0) && e.items.is_none() && !e.iterable)
+            })
             .count();
         assert_eq!(
             split, 1,
             "the asymmetric sample is what makes this test able to fail"
+        );
+        // And non-vacuity for the ITEMS half (#2477/#2489): at least one
+        // sample must carry items, or the for-arm's second clause is dead and
+        // a mutation deleting it would go unnoticed.
+        let carrying = samples
+            .iter()
+            .filter(|v| matches!(v, Value::Encoded(e) if e.items.as_ref().is_some_and(|i| !i.is_empty())))
+            .count();
+        assert_eq!(
+            carrying, 2,
+            "the item-carrying samples are what pin the for-arm"
         );
     }
 

@@ -3708,6 +3708,51 @@ fn compute_template_hash(source: &str) -> PyResult<String> {
     })
 }
 
+/// Does this object cross into the renderer as a `Value::Encoded` — the
+/// carrier that holds a Python object BY MEASURED FACTS rather than by its
+/// `str()`? (#2477/#2489)
+///
+/// The ONE statement of that question, and it exists so that
+/// `djust.serialization.normalize_django_value` does not have to carry a
+/// second one. The normalizer runs BEFORE the conversion on the LiveView path,
+/// and its terminal `str(value)` fallback was flattening exactly the objects
+/// `opaque_value` carries — so a `dict_keys` reached the renderer as
+/// `"dict_keys([])"` there and as a real collection through `render_template`,
+/// and the two djust paths answered differently for the same value.
+///
+/// **It RUNS the conversion rather than re-stating its gate**, and that is the
+/// whole design. The first version asked
+/// `django_json_encoded(o).is_some() || opaque_value(o).is_some()` — a
+/// transcription, and wrong in a way inspection did not show: those two are
+/// the LAST arms of the fallback block, so asking them answers "would the
+/// fallback claim this IF it got there", not "does the conversion model it".
+/// A `bytes` and a `collections.deque` are claimed by PyO3's SEQUENCE
+/// extraction long before the fallback and cross as a `Value::List`, but both
+/// satisfy `opaque_value`'s gate in isolation — so the transcription said
+/// TRUE, the normalizer stopped stringifying them, and `{{ p }}` over
+/// `b"ab"` went from Django's `b'ab'` to `[97, 98]`. Measured on the
+/// before/after sweep, six regressed cells across two types. Running the real
+/// conversion cannot make that mistake, and cannot drift from it later
+/// (#1646).
+///
+/// FALSE for the `__dict__` bulk-dump arm, for every earlier arm, and for the
+/// terminal `str()` — so a `False` means "the normalizer's existing behaviour
+/// stands", which is what makes this safe to consult at the very end of that
+/// function.
+///
+/// Costs one conversion of the object it is asked about, which the caller then
+/// repeats. It is called only from the normalizer's final fallback — the
+/// branch that already builds a warning message and calls `str()`.
+#[pyfunction]
+fn crosses_as_encoded(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
+    guard_panic("crosses_as_encoded", move || {
+        Ok(matches!(
+            obj.extract::<djust_core::Value>(),
+            Ok(djust_core::Value::Encoded(_))
+        ))
+    })
+}
+
 // Declared free-threaded-safe (#1432). A full thread-safety audit of every
 // global (`static`/`Lazy`/`OnceLock`), `#[pyclass]`, cross-thread
 // `Py<T>`/`Py<PyAny>`, the Tokio actor system, the template registries, and
@@ -3729,6 +3774,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(crosses_as_encoded, m)?)?;
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;

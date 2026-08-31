@@ -331,29 +331,38 @@ pub struct Encoded {
     /// `bool(o)` — Python's own truthiness for the object (#2458). See the
     /// [`Value::Encoded`] doc for why this is carried rather than derived.
     pub truthy: bool,
-    /// `hasattr(o, "__len__") and len(o) == 0` — asked at the conversion
-    /// (#2466). `false` for every datetime member: `len(timedelta(0))` raises.
+    /// `len(o)`, or `None` where Python RAISES — asked at the conversion
+    /// (#2466, widened to a count in #2477/#2489). `None` for every datetime
+    /// member: `len(timedelta(0))` raises.
     ///
-    /// One BIT and not a carried `Vec`, because one bit is all that is
-    /// decidable here and all that is needed. Django's `ForNode` reads `len`
-    /// when the object has one and calls `list()` only when it does not:
+    /// It was a `sized_empty: bool` until #2477/#2489, and one bit really was
+    /// all that was decidable then: [`opaque_value`]'s predecessor declined
+    /// every object whose `len` was non-zero, so `Some(0)` and `None` were the
+    /// only reachable answers. Enumerating the items made `Some(n)` reachable,
+    /// and a bit cannot carry it — the two questions
+    ///
+    /// ```text
+    /// {{ p|length }}   over a non-empty set        Django 1   (len(o))
+    /// {{ p|length }}   over a falsy __iter__ class Django 0   (len RAISES,
+    ///                                                          and Django's
+    ///                                                          `length` filter
+    ///                                                          catches it)
+    /// ```
+    ///
+    /// have the same `!sized_empty` answer and different `len` answers. Both
+    /// carried objects are iterable with one item, so [`Encoded::items`]
+    /// cannot decide it either: "has a `__len__`" is a fact of its own.
+    ///
+    /// Django's `ForNode` reads `len` when the object has one and calls
+    /// `list()` only when it does not:
     ///
     /// ```text
     /// {% for x in set() %}      len 0        -> the {% empty %} branch
     /// {% for x in complex(0) %} no __len__   -> TypeError, not iterable
     /// ```
-    ///
-    /// So an `Encoded` that is `sized_empty` iterates to NOTHING and has
-    /// length 0, and one that is not is not iterable at all. The path that
-    /// builds an `Encoded` outside [`django_json_encoded`] is gated on the
-    /// object being Python-FALSY with a zero-or-absent `len`, which is what
-    /// makes that exhaustive — and what makes this field safe: it never has to
-    /// call `list(o)`, so it cannot consume a generator or hang on
-    /// `itertools.count()`. Enumerating a TRUTHY unmodelled object would need
-    /// a real `Vec`, and is a separate decision deliberately not taken here.
-    pub sized_empty: bool,
+    pub len: Option<usize>,
     /// `iter(o)` succeeds — asked at the conversion, and a DIFFERENT question
-    /// from [`Encoded::sized_empty`] (#2466).
+    /// from [`Encoded::len`] (#2466).
     ///
     /// Django asks both, in different places, and gets different answers for
     /// the same object:
@@ -365,13 +374,14 @@ pub struct Encoded {
     ///   comprehensions, so they call `iter()` on the same object and RAISE.
     ///
     /// One bit answering both would have to be wrong for one of them. This is
-    /// the filters' half — `filters::iter_values` reads it — and `sized_empty`
+    /// the filters' half — `filters::iter_values` reads it — and [`Encoded::len`]
     /// is `{% for %}`'s.
     ///
     /// `iter(o)` is safe to ask: it builds an iterator and consumes nothing,
-    /// so a generator is not advanced by the question. Enumerating one WOULD
-    /// consume it, which is why the gate in [`falsy_opaque`] declines any
-    /// object that is iterable without being empty.
+    /// so a generator is not advanced by the question. Enumerating one MAY
+    /// consume it, which is why [`opaque_value`] enumerates only a RE-iterable
+    /// object (`iter(o) is not o`) and declines the one-shot case outright —
+    /// see [`Encoded::items`].
     pub iterable: bool,
     /// `repr(o)` — Python's own constructor spelling (#2472).
     ///
@@ -429,6 +439,44 @@ pub struct Encoded {
     /// [`Value::Object`]'s map: the same `get(part)` `lookup_segment` already
     /// makes for step 1, and the same thing on the wire.
     pub attrs: IndexMap<ObjectKey, Value>,
+    /// `list(o)` — the object's ITEMS, enumerated at the conversion
+    /// (#2477/#2489). `None` means "not enumerated", which is a DIFFERENT
+    /// statement from `Some(vec![])`.
+    ///
+    /// **Why this is a field and not a separate `Value` variant.** A `set`, a
+    /// `dict_keys` and a falsy `__iter__` class are the same thing this struct
+    /// already exists to be — a Python object no variant models, held by facts
+    /// MEASURED from it because the object itself cannot cross — with one more
+    /// measurable fact. Every other fact a collection needs is already here and
+    /// is not derivable from a list of items:
+    ///
+    /// * `{{ p }}` renders `{'a'}` for a set and `['a']` for a list, so the
+    ///   container spelling must be [`Encoded::display`], not reconstructed;
+    /// * `{{ p|first }}` RAISES for a set and answers for a list, so the
+    ///   refusal needs [`Encoded::type_name`] to name `'set'`;
+    /// * `{% if p %}` is `False` for a `__bool__`-False collection with two
+    ///   items, so truthiness must be [`Encoded::truthy`];
+    /// * `{{ p|length }}` is `0` for an iterable with no `__len__`, so the
+    ///   count must be [`Encoded::len`] and not `items.len()`;
+    /// * `{{ p|pprint }}` wants [`Encoded::repr`], `{{ p.a }}` wants
+    ///   [`Encoded::attrs`].
+    ///
+    /// A new variant would carry seven of those all over again, and would have
+    /// to be classified at every wildcard `match` arm in the workspace (#1646);
+    /// [`Value::DictView`] — the one existing variant with this shape — is
+    /// documented as built ONLY by `Context::dict_view` during a render, has no
+    /// wire format, and derives its truthiness from `!items.is_empty()`, which
+    /// is false for two of the objects this carries. Splitting the class by
+    /// emptiness, so that `set()` took one carrier and `{'a'}` another, is the
+    /// drift shape (#1646) rather than a design.
+    ///
+    /// **`None` is a real answer, not a default.** [`opaque_value`] declines to
+    /// enumerate a ONE-SHOT iterator (`iter(o) is o` — a generator, a `zip`, a
+    /// `map`): reading it would consume the caller's object. Such a value keeps
+    /// the terminal `Value::String(str(o))` path entirely, so a `None` here
+    /// reaches [`filters::iter_values`] only from the empty-`len` claim, where
+    /// `iterable` alone already answers it.
+    pub items: Option<Vec<Value>>,
 }
 
 /// The attribute names carried on a [`Value::Encoded`] for each of the four
@@ -551,7 +599,7 @@ impl PartialEq for Encoded {
             && self.display == other.display
             && self.json == other.json
             && self.truthy == other.truthy
-            && self.sized_empty == other.sized_empty
+            && self.len == other.len
             && self.iterable == other.iterable
             && self.repr == other.repr
             && self.cmp_key == other.cmp_key
@@ -561,6 +609,20 @@ impl PartialEq for Encoded {
                 .iter()
                 .zip(other.attrs.iter())
                 .all(|((ka, va), (kb, vb))| ka == kb && values_structurally_equal(va, vb))
+            // `None` is not `Some(vec![])` — "not enumerated" against "no
+            // items" — so the option shapes are compared before the elements
+            // (#2477). `zip` alone would call two differently-shaped values
+            // equal, which is exactly the round-trip regression this impl pins.
+            && match (&self.items, &other.items) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .all(|(x, y)| values_structurally_equal(x, y))
+                }
+                _ => false,
+            }
     }
 }
 
@@ -740,6 +802,15 @@ impl Serialize for Value {
             //
             // The key is written as its three limbs rather than as a struct so
             // the payload stays a flat msgpack array; `Option` writes `nil`.
+            //
+            // #2477/#2489 grew it to ELEVEN, appended for the fifth time and
+            // for the fifth identical reason: slot 10 is `len(o)` as an
+            // `Option` (slot 5's boolean cannot carry a COUNT, and the objects
+            // this now carries have one) and slot 11 is the enumerated ITEMS.
+            // Without them a `{'a'}` in state comes back after one cache hit
+            // unable to answer `{% for %}`, `|join` or `|length` — the exact
+            // reopening `ENCODED_TAG` exists to prevent, now for the fifth
+            // time.
             Value::Encoded(e) if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
                 m.serialize_entry(
@@ -749,7 +820,20 @@ impl Serialize for Value {
                         e.display.as_str(),
                         e.json.as_str(),
                         e.truthy,
-                        e.sized_empty,
+                        // Slot 5 WIDENED from #2466's `sized_empty` boolean to
+                        // `len(o)` itself (#2477/#2489) — `Option<u64>`, so
+                        // `nil` is "no `__len__`". It is the one slot whose
+                        // TYPE changes, and it is safe here for the reason the
+                        // #1541 canon is actually about: that canon forbids a
+                        // conditionally-SKIPPED serde field, which shifts every
+                        // later slot within one width. This payload is
+                        // dispatched on WIDTH, and
+                        // no build ever wrote a 10-element one, so the 9- / 8-
+                        // / 6-element arms below keep reading a `Bool` here and
+                        // are untouched. Carrying the boolean as well would be
+                        // two wire sources for one question (#1646), which is
+                        // the drift this repo keeps paying for.
+                        e.len.map(|n| n as u64),
                         e.iterable,
                         e.repr.as_str(),
                         e.cmp_key.map(|k| (k.domain, k.hi, k.lo)),
@@ -766,6 +850,11 @@ impl Serialize for Value {
                         // is the exact reopening `ENCODED_TAG` exists to
                         // prevent, now for the fourth time.
                         &e.attrs,
+                        // Slot 10, appended (#2477/#2489). An `Option`, so
+                        // `nil` stays "not enumerated" — which is NOT the same
+                        // statement as an empty list, and the deserializer
+                        // keeps them apart.
+                        &e.items,
                     ),
                 )?;
                 m.end()
@@ -952,6 +1041,47 @@ impl<'de> Deserialize<'de> for Value {
                     // anything else is a real dict and falls through, so a
                     // user dict under this key cannot forge one.
                     if let Some(Value::List(parts)) = obj.get(ENCODED_TAG) {
+                        // TEN elements: the #2477/#2489 shape — slot 5
+                        // widened from the #2466 boolean to `len(o)` itself,
+                        // and the enumerated items appended after the
+                        // attribute map.
+                        //
+                        // `len` reads back as a `Value::Integer` (msgpack
+                        // writes a `u64` as an unsigned int, which the visitor
+                        // above lands on `Integer`) or `Missing` (every `nil`
+                        // reads back as `Missing`); anything else in that slot
+                        // reads as "no `__len__`", the same fail-to-absent
+                        // every optional slot takes. `items` reads back as a
+                        // `List` or not at all, and the two are NOT the same
+                        // answer — absent is "never enumerated".
+                        //
+                        // This arm is tried FIRST, and the widths below are
+                        // disjoint from it, so ordering is not load-bearing.
+                        if let [Value::String(type_name), Value::String(display), Value::String(json), Value::Bool(truthy), len, Value::Bool(iterable), Value::String(repr), key, attrs, items] =
+                            parts.as_slice()
+                        {
+                            return Ok(Value::Encoded(Box::new(Encoded {
+                                type_name: type_name.clone(),
+                                display: display.clone(),
+                                json: json.clone(),
+                                truthy: *truthy,
+                                len: match len {
+                                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
+                                    _ => None,
+                                },
+                                iterable: *iterable,
+                                repr: repr.clone(),
+                                cmp_key: decode_cmp_key(key),
+                                attrs: match attrs {
+                                    Value::Object(map) => map.clone(),
+                                    _ => IndexMap::new(),
+                                },
+                                items: match items {
+                                    Value::List(v) => Some(v.clone()),
+                                    _ => None,
+                                },
+                            })));
+                        }
                         // NINE elements: the #2481 shape, the attribute map
                         // appended after the comparison key. The map is a real
                         // msgpack map, so it reads back as a `Value::Object`;
@@ -970,7 +1100,13 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: *truthy,
-                                sized_empty: *sized_empty,
+                                // Slot 5 is a BOOLEAN in this width, and every
+                                // value ever written in it was declined by
+                                // `falsy_opaque` unless its `len` was exactly
+                                // 0 — so `true` restores as `Some(0)` and
+                                // `false` as "no `__len__`", which is the
+                                // answer the entry was written with.
+                                len: if *sized_empty { Some(0) } else { None },
                                 iterable: *iterable,
                                 repr: repr.clone(),
                                 cmp_key: decode_cmp_key(key),
@@ -978,6 +1114,9 @@ impl<'de> Deserialize<'de> for Value {
                                     Value::Object(map) => map.clone(),
                                     _ => IndexMap::new(),
                                 },
+                                // See the four-line note in the shorter widths
+                                // below: this width predates the field.
+                                items: None,
                             })));
                         }
                         // Eight elements: the #2471/#2472 shape, `repr` and
@@ -993,7 +1132,13 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: *truthy,
-                                sized_empty: *sized_empty,
+                                // Slot 5 is a BOOLEAN in this width, and every
+                                // value ever written in it was declined by
+                                // `falsy_opaque` unless its `len` was exactly
+                                // 0 — so `true` restores as `Some(0)` and
+                                // `false` as "no `__len__`", which is the
+                                // answer the entry was written with.
+                                len: if *sized_empty { Some(0) } else { None },
                                 iterable: *iterable,
                                 repr: repr.clone(),
                                 cmp_key: decode_cmp_key(key),
@@ -1004,6 +1149,13 @@ impl<'de> Deserialize<'de> for Value {
                                 // behaves exactly as it did rather than
                                 // half-way between.
                                 attrs: IndexMap::new(),
+                                // No items: this width predates the field, and
+                                // every value written in it was declined by
+                                // the enumeration gate or had none. `None` is
+                                // "never enumerated" — the answer the entry
+                                // was WRITTEN with — and `iter_values` reads
+                                // `iterable` for it exactly as it did.
+                                items: None,
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -1016,7 +1168,13 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: *truthy,
-                                sized_empty: *sized_empty,
+                                // Slot 5 is a BOOLEAN in this width, and every
+                                // value ever written in it was declined by
+                                // `falsy_opaque` unless its `len` was exactly
+                                // 0 — so `true` restores as `Some(0)` and
+                                // `false` as "no `__len__`", which is the
+                                // answer the entry was written with.
+                                len: if *sized_empty { Some(0) } else { None },
                                 iterable: *iterable,
                                 // The two fields THIS shape does not carry
                                 // restore to the answers that entry was WRITTEN
@@ -1028,6 +1186,13 @@ impl<'de> Deserialize<'de> for Value {
                                 repr: display.clone(),
                                 cmp_key: None,
                                 attrs: IndexMap::new(),
+                                // No items: this width predates the field, and
+                                // every value written in it was declined by
+                                // the enumeration gate or had none. `None` is
+                                // "never enumerated" — the answer the entry
+                                // was WRITTEN with — and `iter_values` reads
+                                // `iterable` for it exactly as it did.
+                                items: None,
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -1044,11 +1209,18 @@ impl<'de> Deserialize<'de> for Value {
                                 // Every value written in the #2458 shape was a
                                 // datetime, and none of the four has a
                                 // `__len__` or an `__iter__`.
-                                sized_empty: false,
+                                len: None,
                                 iterable: false,
                                 repr: display.clone(),
                                 cmp_key: None,
                                 attrs: IndexMap::new(),
+                                // No items: this width predates the field, and
+                                // every value written in it was declined by
+                                // the enumeration gate or had none. `None` is
+                                // "never enumerated" — the answer the entry
+                                // was WRITTEN with — and `iter_values` reads
+                                // `iterable` for it exactly as it did.
+                                items: None,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -1063,11 +1235,18 @@ impl<'de> Deserialize<'de> for Value {
                                 display: display.clone(),
                                 json: json.clone(),
                                 truthy: !display.is_empty(),
-                                sized_empty: false,
+                                len: None,
                                 iterable: false,
                                 repr: display.clone(),
                                 cmp_key: None,
                                 attrs: IndexMap::new(),
+                                // No items: this width predates the field, and
+                                // every value written in it was declined by
+                                // the enumeration gate or had none. `None` is
+                                // "never enumerated" — the answer the entry
+                                // was WRITTEN with — and `iter_values` reads
+                                // `iterable` for it exactly as it did.
+                                items: None,
                             })));
                         }
                     }
@@ -1251,14 +1430,16 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         display,
         json,
         truthy,
-        // A `datetime` / `date` / `time` / `timedelta` has no `__len__` and is
+        // A `datetime` / `date` / `time` / `timedelta` has no `__len__`, is
         // NOT iterable in Python, and `{% for %}` over one raises on both
-        // engines today (#2466). `false` on both is what keeps that true.
-        sized_empty: false,
+        // engines today (#2466). `None` / `false` / `None` on the three is
+        // what keeps that true.
+        len: None,
         iterable: false,
         repr,
         cmp_key,
         attrs,
+        items: None,
     })
 }
 
@@ -1267,7 +1448,7 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
 /// The ONE statement of "which attributes does an ordinary Python object
 /// expose to a template", and it has TWO callers by design: the `__dict__`
 /// bulk-dump arm of [`FromPyObject`], which turns the map into a
-/// `Value::Object`, and [`falsy_opaque`], which carries it on the `Encoded`.
+/// `Value::Object`, and [`opaque_value`], which carries it on the `Encoded`.
 /// Those two arms decide the same question about the same objects and are
 /// selected between by the object's TRUTHINESS — so a second copy of this
 /// filter is the #1646 shape, one arm growing a rule the other does not. It
@@ -2299,24 +2480,27 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                     }
                 }
             }
-            // #2466: an object Python calls FALSY that no variant above
-            // models.
+            // #2466/#2477/#2489: an object that no variant above models —
+            // carried by the facts MEASURED from it, including its items.
             //
             // Placed BEFORE the `__dict__` bulk-dump arm since #2478, which is
             // the whole of that fix. It used to come AFTER, because routing an
             // attribute-carrying object through this carrier would have taken
             // `{{ obj.a }}` with it — an `Encoded` had no attributes. #2481
             // gave it some, so the objection is answered and the order can be
-            // the one the SEMANTICS want: an object Python calls falsy is not
-            // a mapping of its attributes, and the `__dict__` arm asserts that
-            // it is.
+            // the one the SEMANTICS want: an object Python calls falsy — or
+            // one that has an `__iter__` — is not a mapping of its attributes,
+            // and the `__dict__` arm asserts that it is. `opaque_value` itself
+            // declines the one shape that arm is genuinely right about (a
+            // TRUTHY, NON-iterable object with public attributes), so the
+            // ordering here does not decide it.
             //
             // Both serialization floors stay ABOVE this: `__djust_serialize__`
             // (#1986) and the raw-`Model` arm (#1986 vector 7) have already
             // claimed anything the denylist governs, so a model cannot reach
             // this arm and cannot have its floor fields dumped by it. That
             // ordering is asserted structurally rather than left to reading.
-            if let Some(encoded) = falsy_opaque(&ob.to_owned()) {
+            if let Some(encoded) = opaque_value(&ob.to_owned()) {
                 return Ok(Value::Encoded(Box::new(encoded)));
             }
             // For arbitrary Python objects (e.g. Django model instances), try to
@@ -2324,12 +2508,10 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // like `{{ obj.name }}` or `{{ obj.path }}` work without requiring
             // callers to manually convert to dicts.
             //
-            // Reached now by the TRUTHY objects and by the falsy ones
-            // `falsy_opaque` declines — a non-zero `__len__` with a `__bool__`
-            // of `False`, or an `__iter__` with no `__len__` — whose items
-            // Django renders and which this carrier cannot produce without
-            // RUNNING the object. Those keep their `Value::Object` exactly as
-            // before.
+            // Reached now by exactly the shape `opaque_value` hands back: a
+            // TRUTHY, NON-iterable object with public attributes. Those keep
+            // their `Value::Object` exactly as before — retiring this arm is a
+            // separate, much larger decision than #2477/#2489.
             if let Some(map) = public_dict_attrs(&ob.to_owned()) {
                 if !map.is_empty() {
                     return Ok(Value::Object(map));
@@ -2340,25 +2522,54 @@ impl<'py> FromPyObject<'_, 'py> for Value {
     }
 }
 
-/// A Python object that is FALSY and that no [`Value`] variant models (#2466).
+/// The most items [`opaque_value`] will read out of an object that states no
+/// `__len__` before DECLINING it (#2477/#2489).
 ///
-/// `bool(set())` is `False` in Python and was `True` here, because a `set` has
-/// no variant: the conversion landed it on its final
-/// `Ok(Value::String(ob.str()?))` and it arrived as the non-empty string
-/// `"set()"`, whose `is_truthy` is `!s.is_empty()`. The same was true of
-/// `frozenset()`, `complex(0)`, an empty `dict_keys` / `dict_values` /
-/// `dict_items`, and any user class with a `__len__` returning 0 or a
-/// `__bool__` returning `False` — an OPEN set, which is why this is answered
-/// by carrying `bool(o)` rather than by giving `set` a variant. A one-type fix
-/// is the shape #2129 took five rounds over.
+/// A ceiling and not a truncation point: an object that yields more than this
+/// keeps the terminal `Value::String(str(o))` path it already had, so the cap
+/// can never produce a short collection. It exists because a class whose
+/// `__iter__` returns `itertools.count()` is RE-iterable — the one-shot guard
+/// above it does not catch that shape — and enumerating it would hang the
+/// render. An object WITH a `__len__` is enumerated in full regardless of this
+/// value, because it has stated its own bound and Django iterates all of it.
+pub const OPAQUE_ITEM_CAP: usize = 100_000;
+
+/// A Python object that no [`Value`] variant models (#2466, #2477, #2489).
+///
+/// This was `falsy_opaque` and claimed only Python-FALSY objects. `bool(set())`
+/// is `False` in Python and was `True` here, because a `set` has no variant:
+/// the conversion landed it on its final `Ok(Value::String(ob.str()?))` and it
+/// arrived as the non-empty string `"set()"`, whose `is_truthy` is
+/// `!s.is_empty()`. The same was true of `frozenset()`, `complex(0)`, an empty
+/// `dict_keys` / `dict_values` / `dict_items`, and any user class with a
+/// `__len__` returning 0 or a `__bool__` returning `False` — an OPEN set, which
+/// is why this is answered by carrying `bool(o)` rather than by giving `set` a
+/// variant. A one-type fix is the shape #2129 took five rounds over.
+///
+/// #2477/#2489 widened it, and the reason is that the truthiness split was
+/// never a property of the CLASS — it was a property of what the carrier could
+/// then answer. A `{'a'}` is the same kind of object as a `set()`; it was
+/// declined only because the carrier had no way to say what it contains. Now it
+/// does ([`Encoded::items`]), so the gate is about what is MEASURABLE rather
+/// than about the sign of `bool(o)`:
+///
+/// ```text
+/// {{ p|length }}   over {'a'}        Django 1   djust 32   (the repr's chars)
+/// {% for x in p %} over {}.keys()    Django ''  djust one iteration per char
+/// {{ p|length }}   over a falsy      Django 0   djust 15
+///                  __iter__ class
+/// ```
 ///
 /// **Why `Encoded` and not a new variant.** `Encoded` already IS this carrier:
 /// a Python object held by its `type_name` / `display` / `json` / `truthy`
 /// spellings because the object itself cannot cross. #2448 built it for the
-/// four `DjangoJSONEncoder` types and #2458 added the truthiness bit; this
-/// widens the set of objects that use it and adds no mechanism. A new variant
-/// would be a second carrier for one question (#1646), and would have to be
-/// classified at every wildcard `match` arm in the workspace.
+/// four `DjangoJSONEncoder` types, #2458 added the truthiness bit, #2481 the
+/// attributes and #2477/#2489 the length and the items; each widens the set of
+/// objects that use it and adds no mechanism. A new variant would be a second
+/// carrier for one question (#1646), and would have to be classified at every
+/// wildcard `match` arm in the workspace. [`Encoded::items`] carries the longer
+/// form of the argument, including why [`Value::DictView`] — the one existing
+/// variant with a collection's shape — is not it.
 ///
 /// **`json` is `str(o)`, and that is not a lie by omission.** For an object
 /// `DjangoJSONEncoder` cannot spell there is no encoder spelling to carry, and
@@ -2368,38 +2579,56 @@ impl<'py> FromPyObject<'_, 'py> for Value {
 /// serializable`); that divergence is #2429's declined refusal direction,
 /// unchanged here rather than grown.
 ///
-/// **The gate is "falsy AND every consumer is answerable without RUNNING the
-/// object", and each arm of it is load-bearing.** Two bits come back, because
-/// Django asks two different questions (see [`Encoded::iterable`]):
+/// # The gate, and what each arm of it declines
 ///
-/// * `len(o) == 0` — `{% for %}` renders the empty branch and `|length` is 0,
-///   while the iterating filters do whatever `iter(o)` does. Claimed, with
-///   both bits measured independently. A `set()`, a `frozenset()`, an empty
-///   `dict_keys` and a zero-`__len__` class all land here, and the last of
-///   those is `sized_empty` WITHOUT being `iterable` — `{% for %}` renders
-///   empty for it while `|safeseq` raises, on Django too.
-/// * `len(o)` raises AND `iter(o)` raises — nothing can iterate it, so every
-///   consumer refuses with `'X' object is not iterable`. Claimed, both bits
-///   false. `complex(0)` and a `__bool__`-False class land here.
-/// * `len(o)` raises but `iter(o)` SUCCEEDS — a falsy object with `__iter__`
-///   and no `__len__`. Django's `ForNode` calls `list(values)` and renders
-///   whatever comes out; this carrier cannot produce those items without
-///   RUNNING the object, and running it would consume a generator. DECLINED:
-///   the value keeps its previous `Value::String` path, so it stays
-///   permissively wrong rather than becoming STRICTER than Django.
-/// * `len(o) > 0` on a falsy object — `__bool__` returning `False` with a
-///   non-zero `__len__`. `{% for %}` renders its N items; same reasoning,
-///   same decline.
+/// Every fact this struct carries must be measurable WITHOUT destroying the
+/// caller's object and without running unbounded work. Three shapes fail that
+/// and are declined, each keeping the terminal `Value::String(ob.str()?)` path
+/// it has today — so a decline is never a REGRESSION, only an unfixed cell:
 ///
-/// The two declines are why this fix moves nothing into the
-/// `djust REFUSES & Django RENDERS` column. Recorded rather than guessed.
+/// * **A one-shot iterator** — `iter(o) is o`. A generator, a `zip`, a `map`,
+///   an `enumerate`. Enumerating it consumes the caller's object, so the
+///   template would iterate items the view can never see again. This is the
+///   decline #2466's doc-comment already named; it stands, and it is now the
+///   ONLY reason iteration is declined.
+/// * **An unsized iterable longer than [`OPAQUE_ITEM_CAP`]** — an object with
+///   no `__len__` whose iterator keeps yielding. `itertools.count()` is an
+///   iterator and is declined by the arm above, but a class whose `__iter__`
+///   RETURNS one is re-iterable and would hang here. Declined at the cap rather
+///   than truncated: a truncated collection is a silently wrong answer, and a
+///   decline is the answer this value already had. An object that states a
+///   `__len__` is enumerated in full — it has told us the bound, and Django
+///   iterates all of it.
+/// * **A TRUTHY, NON-iterable object that IS a mapping of its attributes** —
+///   the cell the `__dict__` bulk-dump arm below this one claims. Retiring that
+///   arm is a much larger decision than this one (every service object,
+///   presenter and plain instance in a template context goes through it), so it
+///   is left exactly where it is. Note the two qualifiers: a FALSY such object
+///   is claimed here, which is the whole of #2478, and an ITERABLE one is
+///   claimed here too, because an object with `__iter__` is not a mapping of
+///   its attributes — Django's `{% for %}` runs its `__iter__`, not its
+///   `__dict__` — and [`Encoded::attrs`] keeps `{{ obj.a }}` resolving either
+///   way.
+///
+/// A truthy, non-iterable, attribute-LESS object — `complex(1)`, a `__slots__`
+/// instance — IS claimed, and that is a widening beyond either issue's measured
+/// table. It is the same terminal `str()` arm and the same defect: `{{ p|length }}`
+/// over `complex(1)` was `6`, the characters of `"(1+0j)"`, where Django says
+/// `0`; `{{ p|escapeseq }}` rendered the six characters where Django raises.
+/// Splitting the class by truthiness once was already the mistake this widening
+/// corrects; splitting it by "does it happen to have a `__dict__`" would be the
+/// same mistake one axis over, and the `__dict__` arm is declined above only
+/// because retiring it is a genuinely different, larger change.
 ///
 /// Fails CLOSED with [`django_json_encoded`] and [`is_decimal`]: a raising
-/// `__bool__` or `__len__` takes the value back to the string path exactly as
-/// before.
+/// `__bool__`, `__len__` or `__iter__` takes the value back to the string path
+/// exactly as before.
 ///
 /// Reached only in the fallback block, after every extraction has already
-/// failed, so it costs a string / int / list / dict / model nothing.
+/// failed, so it costs a string / int / list / dict / model nothing. A `list`,
+/// a `tuple`, a `dict` and anything with an integer `__getitem__` are extracted
+/// by PyO3 well before this, which is why a `range` / `bytes` / `deque` never
+/// arrives here.
 ///
 /// # An object WITH attributes (#2478)
 ///
@@ -2432,26 +2661,51 @@ impl<'py> FromPyObject<'_, 'py> for Value {
 /// attributes. Overriding one answer of a wrong carrier is the shape #2129
 /// took five rounds over; moving the object to the right carrier answers all
 /// of them at once.
-pub fn falsy_opaque(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
+pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // Python's own answer, via `PyObject_IsTrue`, so a class overriding
     // `__bool__` or `__len__` is answered by the object rather than by this
     // function's idea of which types are containers.
-    if ob.is_truthy().ok()? {
-        return None;
-    }
+    let truthy = ob.is_truthy().ok()?;
     // `PyObject_GetIter`, which builds an iterator and consumes nothing — a
     // generator is not advanced by being asked.
-    let iterable = ob.try_iter().is_ok();
+    let iterator = ob.try_iter().ok();
+    let iterable = iterator.is_some();
     // `PyObject_Size`: `Ok` for anything with a `__len__`, `Err` otherwise.
-    let sized_empty = match ob.len() {
-        Ok(0) => true,
-        // Falsy with a non-zero length — see the doc above. Declined.
-        Ok(_) => return None,
-        // Iterable with no `__len__`: Django would `list()` it and render the
-        // items. Declined rather than claimed as empty.
-        Err(_) if iterable => return None,
-        Err(_) => false,
+    let len = ob.len().ok();
+    let items = match iterator {
+        None => None,
+        Some(it) => {
+            // `iter(o) is o` — a one-shot iterator. Reading it would consume
+            // the caller's object; declined outright, so the value keeps the
+            // string path it has today rather than becoming an empty
+            // collection (which would be a NEW wrong answer, not an unfixed
+            // one).
+            if it.as_any().is(ob) {
+                return None;
+            }
+            // A stated `__len__` is the object's own bound, so enumerate in
+            // full; without one, stop at the cap and DECLINE rather than
+            // truncate.
+            let bound = len.unwrap_or(OPAQUE_ITEM_CAP);
+            let mut collected = Vec::with_capacity(bound.min(64));
+            for item in it {
+                // A raising `__next__` fails closed, like every other probe
+                // here: back to the string path, unchanged.
+                let item = item.ok()?;
+                if collected.len() == bound {
+                    return None;
+                }
+                collected.push(item.extract::<Value>().ok()?);
+            }
+            Some(collected)
+        }
     };
+    // The `__dict__` bulk-dump arm's cell, left to it. See the gate section of
+    // the doc above for why the two qualifiers are both load-bearing.
+    let attrs = public_dict_attrs(ob).unwrap_or_default();
+    if truthy && !iterable && !attrs.is_empty() {
+        return None;
+    }
     // `__name__`, NOT `__qualname__`, and for the reason `django_json_encoded`
     // records: a heap type's `tp_name` is the name it was created with, so a
     // class defined inside a function is `LenZero` where its `__qualname__`
@@ -2478,8 +2732,8 @@ pub fn falsy_opaque(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // `Value::String` path this replaces already wrote.
         json: display.clone(),
         display,
-        truthy: false,
-        sized_empty,
+        truthy,
+        len,
         iterable,
         repr,
         // No comparison key, and this is the ONE arm where that matters as a
@@ -2505,7 +2759,8 @@ pub fn falsy_opaque(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // Empty for an object with no `__dict__` (a C type: `set`,
         // `frozenset`, `complex`, a `dict_keys`) — which is every value this
         // arm claimed before #2478, so their behaviour is unchanged.
-        attrs: public_dict_attrs(ob).unwrap_or_default(),
+        attrs,
+        items,
     })
 }
 
@@ -2532,7 +2787,22 @@ impl<'py> IntoPyObject<'py> for Value {
             // downstream; here there is no type to change back TO, because
             // there was none before this variant either. Widening the round
             // trip is a separate behaviour change, filed as #2458 rather than folded in.
-            Value::Encoded(e) => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
+            //
+            // A CARRIED COLLECTION is the exception, and it is not a widening
+            // of that decision — it is what keeps #2477 from being a
+            // regression (#2477/#2489). `normalize_django_value` used to turn
+            // a `set` into a sorted LIST, so a `set` written into view state
+            // came back out of the codec as a list; now it crosses as an
+            // `Encoded`, and coming back as `"{'a'}"` would hand a handler a
+            // STRING where it wrote a collection. The items are the same
+            // answer the pre-#2477 path gave, which is what makes this the
+            // conservative arm rather than a new one. `Value::DictView` — the
+            // other collection with no Python counterpart — already resolves
+            // exactly this way, two arms down.
+            Value::Encoded(e) => match e.items {
+                Some(items) => Value::List(items).into_pyobject(py),
+                None => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
+            },
             // Back to a real `decimal.Decimal`, not a str: a value that made
             // the round-trip as a Decimal must come back as one, or handlers
             // reading it from the context see their type change under them.
