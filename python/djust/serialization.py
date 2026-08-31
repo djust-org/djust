@@ -1527,7 +1527,16 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     from .config import config
 
     value_type = type(value).__name__
-    value_module = type(value).__module__
+    # `getattr` with a default, NOT a bare read (#2488). `__module__` is not
+    # guaranteed: `type(name, bases, ns)` fills it from the CALLING FRAME's
+    # `__name__`, so a class built in a namespace that has none — which is
+    # exactly what `eval(compile(...), {})` gives you — has no `__module__` at
+    # all and the attribute lookup RAISES. This is the render path (every
+    # WebSocket event normalizes the context), and the value that reaches this
+    # branch is already the "we cannot serialize this" case, so an unguarded
+    # read turns a helpful warning into a 500 — a crash inside the error
+    # handling, which is the branch least likely to be exercised.
+    value_module = getattr(type(value), "__module__", "<unknown>")
     msg = (
         f"LiveView state contains non-serializable value: {value_type} "
         f"(from {value_module}). This will be converted to a string, "
