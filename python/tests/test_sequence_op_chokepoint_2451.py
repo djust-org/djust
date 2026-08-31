@@ -349,7 +349,13 @@ class TestTheReferenceTableIsRunNotTranscribed:
     def test_2477_the_recorded_four_are_the_NORMALIZERS_doing(self) -> None:
         """Non-vacuity for `NORMALIZER_FLATTENED`, and its diagnosis.
 
-        The allowance above is only honest if the four cells are the
+        Seven cells since #2482, not four — the name is kept because the
+        ISSUE it belongs to has not moved, and the table it iterates is the
+        thing that grew. The three additions are `first` / `last` /
+        `phone2numeric` over `dv-keys-empty`, which are #2477's class one type
+        over: a `set` normalises to a sorted LIST and a dict view to a STRING.
+
+        The allowance above is only honest if the cells are the
         NORMALIZER's doing rather than a hole in this chokepoint — the same
         distinction #2467 turned on, and the reason that one was diagnosed in
         an afternoon. Asserted directly: the identical value through the RAW
