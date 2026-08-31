@@ -455,10 +455,10 @@ _rust.register_tag_handler("ct_ident", _RustTagProbe(_ct_ident, "tag"))
 _rust.register_tag_handler("ct_safe", _RustTagProbe(_ct_safe, "tag"))
 _rust.register_tag_handler("ct_cond", _RustTagProbe(_ct_cond, "tag"))
 _rust.register_block_tag_handler(
-    "cb_ident", "endcb_ident", _RustTagProbe(lambda content: _cb_ident(content), "block")
+    "cb_ident", "endcb_ident", _RustTagProbe(_cb_ident, "block")
 )
 _rust.register_block_tag_handler(
-    "cb_plain", "endcb_plain", _RustTagProbe(lambda content: _cb_plain(content), "block")
+    "cb_plain", "endcb_plain", _RustTagProbe(_cb_plain, "block")
 )
 _rust.register_assign_tag_handler("ca_ident", _RustTagProbe(_ca_ident, "assign"))
 
@@ -3982,7 +3982,8 @@ META_PREFIX = "@@"
 def load(path: str) -> dict[str, list[str]]:
     # Collapse the nondeterministic marker: `random` picks a different element
     # each run, so its LENGTH is not comparable between two runs either.
-    raw = json.load(open(path))
+    with open(path) as fh:
+        raw = json.load(fh)
     # The metadata filter has to come BEFORE the unpack, not after: a `for k,
     # (a, b) in ...` target destructures every row the comprehension iterates,
     # including the ones the `if` would have dropped, so a metadata value that
@@ -3996,7 +3997,8 @@ def load(path: str) -> dict[str, list[str]]:
 
 def load_meta(path: str) -> dict:
     """The metadata rows, or `{}` for a results file written before #2345."""
-    raw = json.load(open(path))
+    with open(path) as fh:
+        raw = json.load(fh)
     return {k[len(META_PREFIX) :]: v for k, v in raw.items() if k.startswith(META_PREFIX)}
 
 

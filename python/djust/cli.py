@@ -32,10 +32,13 @@ Examples:
 """
 
 import argparse
+import logging
 import os
 import re
 import sys
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def setup_django() -> bool:
@@ -746,8 +749,19 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
         if not settings.configured:
             django.setup()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # Deliberately broad and deliberately quiet. `django.setup()` runs every
+        # installed app's `ready()`, so it can raise essentially anything, and
+        # this CLI is documented to work OUTSIDE a project — `--inspect` on an
+        # inline blob needs no Django at all. Narrowing to ImportError /
+        # ImproperlyConfigured would let an unrelated app's `ready()` crash a
+        # command that never needed Django, which is worse than the swallow.
+        #
+        # Not silent, though: the specific failure surfaces from whichever
+        # operation actually required Django (the store read, or the URLconf
+        # lookup in `_replay_url`), and the cause is logged here for anyone
+        # who turns logging up to find out why.
+        logger.debug("django.setup() skipped for `djust replay`: %s", exc)
 
     from djust.bug_capture import BugCapture
 
