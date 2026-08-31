@@ -6934,6 +6934,58 @@ mod tests {
         ]
     }
 
+    /// An `Encoded` that claims `iterable` and carries NO items is EMPTY, and
+    /// [`iter_values`]'s second arm depends on it (#2477/#2489).
+    ///
+    /// That arm answers `Some(vec![])` for such a value. It is right only
+    /// because the producer cannot make any other kind: `opaque_value`
+    /// enumerates every object it claims as iterable, so `items` is `Some`
+    /// whenever `iterable` is — and the pair can only come apart on a value
+    /// read back off a pre-#2477 wire payload, which carried nothing but the
+    /// zero-`len` shape. `django_json_encoded`'s four are not iterable at all.
+    ///
+    /// Asserted over the fixture set rather than argued, because the arm is
+    /// silent when it is wrong: a non-empty collection whose items went
+    /// missing would iterate to NOTHING and render the `{% empty %}` branch,
+    /// which looks like a correct answer for an empty collection.
+    #[test]
+    fn an_iterable_encoded_without_items_is_empty() {
+        let mut checked = 0;
+        for value in every_variant() {
+            let Value::Encoded(ref e) = value else {
+                continue;
+            };
+            if e.iterable && e.items.is_none() {
+                assert_eq!(
+                    e.len,
+                    Some(0),
+                    "an iterable Encoded with no items must be EMPTY: {value:?}"
+                );
+                assert!(iter_values(&value).is_some_and(|items| items.is_empty()));
+                checked += 1;
+            }
+        }
+        // The fixture set carries none of that shape today — every iterable
+        // sample enumerates — so the loop is vacuous BY CONSTRUCTION and the
+        // count says so rather than the test passing quietly. Building one by
+        // hand is what makes the assertion reachable.
+        assert_eq!(checked, 0, "a live fixture now has the wire-only shape");
+        let legacy = Value::Encoded(Box::new(djust_core::Encoded {
+            type_name: "set".to_string(),
+            display: "set()".to_string(),
+            json: "set()".to_string(),
+            truthy: false,
+            len: Some(0),
+            iterable: true,
+            repr: "set()".to_string(),
+            cmp_key: None,
+            attrs: Default::default(),
+            items: None,
+        }));
+        assert!(iter_values(&legacy).is_some_and(|items| items.is_empty()));
+        assert_eq!(python_len(&legacy), Some(0));
+    }
+
     /// [`python_len`] and [`iter_values`] read DIFFERENT bits off an
     /// `Encoded`, and each reads the one Django's corresponding consumer asks
     /// for (#2466).
