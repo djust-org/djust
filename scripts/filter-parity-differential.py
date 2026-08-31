@@ -809,6 +809,130 @@ INPUTS = {
     },
 }
 
+#: Corpus rows spelled as a zero-argument FACTORY rather than as a value (#2482).
+#:
+#: `INPUTS` above is read by two consumers that each impose a constraint on what
+#: a row may BE, and between them they made two shapes of #2466's class
+#: unrepresentable — not "hard to add", but structurally impossible:
+#:
+#: 1. **`measure`'s `@cmp` axis deep-copies the second operand.** Two
+#:    structurally-equal operands that are NOT the same object is the whole of
+#:    what `values_equal` / `try_compare` needed (#2335) — a list compared to
+#:    itself answers True on identity alone and measures nothing. But a dict
+#:    VIEW cannot survive a `deepcopy`: all three of `dict_keys`, `dict_values`
+#:    and `dict_items` raise `TypeError: cannot pickle 'dict_keys' object`. So
+#:    the dict-view half of #2466 — the class whose empty members are FALSY and
+#:    were crossing as the truthy string `"dict_keys([])"` — had no row at all,
+#:    and was swept nowhere: not on the `@cmp` axis it breaks, and not on the
+#:    twenty-odd axes it would have been fine on.
+#: 2. **`test_sequence_op_chokepoint_2451.corpus()` re-evaluates each value from
+#:    the AST**, compiling the value node in a small namespace.
+#:
+#: A factory answers (1) exactly: `p` and `q` become two independently
+#: constructed objects BY CONSTRUCTION, which is the property the deep copy
+#: exists to provide, and it holds for a `dict_keys` where copying does not.
+#: `fresh()` below is the single chokepoint — a row with a factory is built, a
+#: row without one is still deep-copied, and no caller decides which.
+#:
+#: (2) turned out to be NARROWER than #2482 states, and the difference is worth
+#: recording because a stale exemption rested on it: `eval` injects
+#: `__builtins__` into a globals mapping that has none, so the AST reader can
+#: evaluate ANY self-contained expression — `type("C", (), {...})()` included.
+#: What it cannot evaluate is a reference to a name the SCRIPT defines (a
+#: `class` statement, a module-level helper). So a user-defined class instance
+#: was already spellable as a literal row, and `{value,arg}:str-fallback:falsy`
+#: was exempt from `value-truthiness` for a reason that did not hold. Both new
+#: rows go here regardless: one mechanism for "a row that is not a plain
+#: literal" rather than two that can disagree (#2233).
+#:
+#: Every factory must therefore be SELF-CONTAINED over builtins plus the three
+#: names the AST readers bind (`Decimal`, `mark_safe`, `datetime`). The
+#: `lambda cls=type(...)` spelling is what keeps ONE class per factory — a
+#: default is evaluated when the lambda is created, so every call returns a
+#: fresh instance of the SAME class rather than a fresh class.
+INPUTS_LAZY: dict[str, typing.Callable[[], object]] = {
+    # The empty dict VIEW (#2466 / #2482). Falsy in Python, `len() == 0`, and
+    # unpicklable — the shape the deep copy above rules out. It reaches
+    # `falsy_opaque` and crosses as a `Value::Encoded`, the same arm `set-empty`
+    # reaches, so it adds no `value-truthiness` member; what it adds is the
+    # dict-view TYPE on the twenty-odd axes that were blind to it.
+    "dv-keys-empty": lambda: {}.keys(),
+    # The truthy sibling, carrying a payload. Declined by `falsy_opaque`'s own
+    # gate, so it falls to the terminal `Value::String(ob.str()?)` and crosses
+    # as the text `dict_keys(['<img src=x onerror=alert(1)>'])` — where Django
+    # ITERATES the view. Without it the empty row alone cannot separate "the
+    # view crossed" from "an empty thing crossed".
+    "dv-keys-plain": lambda: {"<img src=x onerror=alert(1)>": 1}.keys(),
+    # A user-defined class instance: FALSY, with `__iter__` and NO `__len__`.
+    # That is one of the two shapes #2466 explicitly DECLINED (the carrier
+    # cannot produce the items without RUNNING the object), so it is the only
+    # shape that reaches the terminal `Value::String(ob.str()?)` while being
+    # Python-falsy — the `str-fallback:falsy` member `value-truthiness` was
+    # exempting rather than sweeping. No builtin type has it.
+    #
+    # `__str__` and `__repr__` are pinned, and that is load-bearing rather than
+    # tidiness: the default `object.__repr__` carries a MEMORY ADDRESS, so every
+    # cell rendering this row would differ between two runs of the same build
+    # and `--compare` would report a corpus-wide regression it caused itself.
+    # The spelling has no leading `<` for the same reason `UNESCAPED_TAG` reads
+    # one: a repr shaped like a tag would report itself as a live fragment.
+    #
+    # The instance carries no public attribute, so the `__dict__` bulk-dump arm
+    # above `falsy_opaque` does not claim it — a falsy object WITH attributes is
+    # a `Value::Object` and a different question (#2478).
+    # `__module__` is set EXPLICITLY, and that is not decoration. `type()` fills
+    # it from the calling frame's `__name__`, and the AST readers evaluate this
+    # expression in a namespace that has none — so the class they build has NO
+    # `__module__` at all while the one the script builds has `"__main__"`. A
+    # corpus row whose behaviour depends on which reader constructed it is not a
+    # row, and this one did: `djust.serialization.normalize_django_value` reads
+    # `type(value).__module__` unguarded and raised `AttributeError: __module__`
+    # for the reader-built instance while rendering the script-built one. Filed
+    # separately as its own defect rather than left as the corpus's problem.
+    #
+    # The factory here is the CLASS ITSELF, not a lambda wrapping it: calling a
+    # class is already "construct a fresh instance", so `type(...)` satisfies
+    # the zero-argument-callable contract directly. That also keeps ONE class
+    # per reader rather than one per call — two instances that compare unequal
+    # because they are different objects, not because they are different types
+    # — and it formats as an ordinary multi-line call, where a
+    # `lambda cls=type(…): cls()` collapses onto one 250-column line the
+    # formatter will not break.
+    "o-falsy-iter": type(
+        "FalsyIterable",
+        (),
+        {
+            "__module__": "djust_differential_corpus",
+            "__bool__": lambda self: False,
+            "__iter__": lambda self: iter(("<img src=x onerror=alert(1)>",)),
+            "__repr__": lambda self: "FalsyIterable()",
+            "__str__": lambda self: "FalsyIterable()",
+        },
+    ),
+}
+
+#: The eager view every existing consumer reads. Written as an `update` rather
+#: than as a derivation so the `INPUTS` assignment above stays a DICT LITERAL:
+#: `test_escape_chain_and_sequence_filters_2281_2283._differential_literal` and
+#: `test_sequence_op_chokepoint_2451.corpus()` both read it out of the AST, and
+#: turning it into a comprehension would break both readers rather than
+#: extending them.
+INPUTS.update({key: make() for key, make in INPUTS_LAZY.items()})
+
+
+def fresh(key: str) -> object:
+    """A SECOND, independently constructed object for corpus row *key* (#2482).
+
+    The one chokepoint for "I need an operand that is EQUAL to `INPUTS[key]`
+    and is not the same object". A factory row is built again; every other row
+    is deep-copied, which is what the `@cmp` axis has always done and what
+    #2335 needs. Not a per-row opt-out from copying: a caller that had to
+    choose is a second mechanism, and the two would drift.
+    """
+    make = INPUTS_LAZY.get(key)
+    return make() if make is not None else copy.deepcopy(INPUTS[key])
+
+
 #: Inputs whose SAFETY the context declares. Rendered through
 #: `render_template_with_dirs`, the only Python entry point that takes
 #: `safe_keys`; everything else goes through `render_template` unchanged.
@@ -831,6 +955,13 @@ LIVE_FRAGMENTS = {
     "l-scalars": ["<img", "onerror="],
     "l-dict": ["<v>"],
     "d-plain": ["<v>"],
+    # The two payload-carrying factory rows (#2482). Neither value is marked,
+    # so anything of them that reaches the page unescaped is a leak on the same
+    # terms as `s-img`. `dv-keys-plain` puts the payload in a dict KEY that
+    # Django iterates and djust reads out of a repr; `o-falsy-iter` puts it
+    # behind an `__iter__` that only a `{% for %}` or an iterating filter runs.
+    "dv-keys-plain": ["<img", "onerror="],
+    "o-falsy-iter": ["<img", "onerror="],
     # `l-marked` / `s-marked` carry markup Django ITSELF emits live, so a
     # fragment entry for them would report every correct cell as a leak. The
     # permissiveness check is always djust-vs-DJANGO (`_leaks` subtracts
@@ -1702,6 +1833,13 @@ ARG_SPELLINGS = [
     # residue `STRINGIFIED_AT_EXTRACTION` names and which no cell reached.
     "known_set_empty",
     "known_set",
+    # The FALSY half of the terminal `Value::String(ob.str()?)` arm (#2482).
+    # `known_set` above is truthy and `known_set_empty` reaches `falsy_opaque`,
+    # so between them the argument channel had a truthy `str-fallback` and no
+    # falsy one — the member the axis was EXEMPTING with a reason that turned
+    # out not to hold. Same object shape as `o-falsy-iter` in `INPUTS`, built
+    # from the same factory rather than respelled.
+    "known_falsy_iter",
     # The counter-example, and the one row that distinguishes a VALUE-typed
     # falsiness rule from a TEXT-shaped one: a resolved argument holding the
     # string `"0"` is TRUTHY in Python and has no `.year`, so Django's
@@ -1782,6 +1920,10 @@ ARG_CONTEXT = {
     # channel.
     "known_set_empty": set(),
     "known_set": {"<img src=x onerror=alert(1)>"},
+    # The falsy inhabitant of the terminal `str()` arm (#2482), built from the
+    # `INPUTS_LAZY` factory so the two channels carry the same object shape and
+    # a change to it cannot move one without the other.
+    "known_falsy_iter": INPUTS_LAZY["o-falsy-iter"](),
     # TRUTHY, and a string: `bool("0")` is True and `"0"` has no `.year`, so
     # every filter that reads its argument as a date REFUSES this where a
     # text-shaped rule read the falsy number it spells.
@@ -2951,15 +3093,15 @@ VALUE_TRUTHINESS_ONE_ANSWER = {
         "`falsy_opaque` opens with `if ob.is_truthy().ok()? { return None }`, so no "
         "truthy object can reach this carrier — the arm's own gate, not a corpus gap"
     ),
-    ("str-fallback", "falsy"): (
-        "a falsy object reaches the terminal `Value::String(ob.str()?)` only through "
-        "the two shapes #2466 declined — falsy WITH `__iter__` and no `__len__`, or "
-        "falsy with a NON-ZERO `__len__` — and no builtin type has either, so the "
-        "inhabitant would have to be a user-defined class. `INPUTS` is read back by "
-        "`test_sequence_op_chokepoint_2451.corpus()` as literals evaluated in a "
-        "three-name namespace, so a class instance cannot be a row here at all. Same "
-        "harness limit the unpicklable `dict_keys` row hits (#2477)"
-    ),
+    # `("str-fallback", "falsy")` was exempt here until #2482, and the exemption
+    # was WRONG rather than stale: it claimed a class instance "cannot be a row
+    # here at all" because `test_sequence_op_chokepoint_2451.corpus()` evaluates
+    # each value in a three-name namespace. `eval` injects `__builtins__` into a
+    # globals mapping that has none, so that reader evaluates `type("C", (), …)()`
+    # perfectly well — the shape was spellable the whole time. `o-falsy-iter` /
+    # `known_falsy_iter` now inhabit it in both channels, so it is REQUIRED and
+    # SWEPT rather than excused. An exemption is a claim about the world and gets
+    # checked like one (#1867).
 }
 
 
@@ -3650,10 +3792,14 @@ def measure(out_path: str) -> None:
         result[cid] = [dj, du]
 
     # The sequence-COMPARISON axis (#2335). Four fields: the second operand's
-    # key is the last. `q` is a DEEP COPY so the two operands are never the
-    # same object — Python's `==` would answer True on identity alone for a
+    # key is the last. `q` is built by `fresh()` so the two operands are never
+    # the same object — Python's `==` would answer True on identity alone for a
     # list, and a corpus that could only compare a value to itself would not
     # be able to tell a structural comparison from an identity one.
+    #
+    # `fresh()` and not `copy.deepcopy` (#2482): a `dict_keys` cannot be
+    # deep-copied at all, so the copy — correct for every row that admits it —
+    # was what kept the whole dict-view half of #2466's class out of the corpus.
     #
     # No `safe_keys`: every cell's output is `Y` or `N`, so the escaping axis
     # has nothing to say here, and passing them would mean two entry points
@@ -3664,7 +3810,7 @@ def measure(out_path: str) -> None:
             continue
         dj, du = render_both(
             "{%% if p %s q %%}Y{%% else %%}N{%% endif %%}" % op,
-            {"p": INPUTS[ka], "q": copy.deepcopy(INPUTS[kb])},
+            {"p": INPUTS[ka], "q": fresh(kb)},
         )
         result[cid] = [dj, du]
 
