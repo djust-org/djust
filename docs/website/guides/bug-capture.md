@@ -11,7 +11,7 @@ description: "Encode state_before + state_after + vdom_patches into a URL fragme
 
 `djust.bug_capture` lets a developer encode the minimum information needed to reproduce a broken event transition — `state_before`, `state_after`, and the `vdom_patches` djust generated — into a single URL-safe string. A teammate (or a maintainer) decodes the string and sees exactly what the framework did with what state. No need to clone your repo; no template files to ship.
 
-> **v1.1 status.** Iter A (this page) ships the data shape, encoder/decoder, and PII-scrub hook. Iter B ([#1562](https://github.com/djust-org/djust/issues/1562), shipped below) adds the read-only replay viewer at `/__djust__/replay/<blob>` and the debug panel's Share button. Iter C ([#1561](https://github.com/djust-org/djust/issues/1561)) adds the snapshot store for large payloads and the framework-level `time_travel_excluded_fields` class attribute (both below); the `djust replay` CLI is still in flight.
+> **v1.1 status.** Iter A (this page) ships the data shape, encoder/decoder, and PII-scrub hook. Iter B ([#1562](https://github.com/djust-org/djust/issues/1562), shipped below) adds the read-only replay viewer at `/__djust__/replay/<blob>` and the debug panel's Share button. Iter C ([#1561](https://github.com/djust-org/djust/issues/1561)) will add a Redis store for large payloads, a `djust replay` CLI, and a framework-level `time_travel_excluded_fields` class attribute.
 
 ## When to use this
 
@@ -67,22 +67,6 @@ Or open the blob directly in a browser — see [Browser-based replay](#browser-b
 ### Captured state may contain user PII
 
 `state_before` and `state_after` are the view's *public* state at the moment of an event. That includes anything the developer assigned to public attributes: form values, model field contents, user IDs, search queries, multi-tenant context. The encoded blob is the same data, URL-safely transcoded. Treat the URL fragment as sensitive data. Don't paste it into shared bug trackers, Slack channels, or email without reviewing what's inside.
-
-### Declare the sensitive fields on the view
-
-`LiveView.time_travel_excluded_fields` is the default safety net — the list of top-level public-state keys that must never leave this view inside a shared capture:
-
-```python
-class ClaimWizardView(LiveView):
-    time_travel_enabled = True
-    time_travel_excluded_fields = ["password", "ssn", "credit_card"]
-```
-
-`encode_view_state()` applies these **before** any caller-supplied `scrub`, so the redaction does not depend on every call site remembering to pass one — including the debug panel's Share button, which routes through the same function. The `scrub` argument stays available on top for arbitrary policies; names from both sources end up in the wire-visible `scrubbed_fields` list, so a reviewer sees the full set that was held back.
-
-Scope matches `scrub_fields`: **top-level keys only**. A nested `self.profile["ssn"]` is not reached by naming `"ssn"` — pass your own `scrub` callable for that.
-
-`djust check` warns (`V014`) when a view sets `time_travel_enabled = True` and its model or form declares a field whose name looks like PII that is not in this list. See [system-checks.md](../../system-checks.md#v014--time-travel-enabled-view-exposes-pii-looking-fields) for why it does not fire on every project that happens to have an `email` field.
 
 ### Always use the `scrub` hook for known-sensitive fields
 
@@ -161,15 +145,9 @@ Decode a `djbug1.<base64url>` string. Raises `ValueError` on any malformed input
 
 Also accepts `djbug1.store.<opaque-id>`, resolving the id through the configured store. Raises `ValueError` for a malformed id (checked *before* the store is consulted), an id the store cannot resolve, or an indirect blob when no store is configured.
 
-### `LiveView.time_travel_excluded_fields: list[str]`
-
-Top-level public-state keys `encode_view_state()` removes before any caller-supplied `scrub`. Any iterable of names works (list, tuple, set, frozenset); a bare string is treated as one name rather than iterating as characters. Enforced by the `V014` system check.
-
 ### `encode_view_state(view, patches, event_name="", scrub=None) -> str`
 
 Convenience: pulls the most recent `EventSnapshot` from a view's time-travel buffer + the caller-supplied `patches`, builds a `BugCapture`, encodes it. Requires the view to have `time_travel_enabled = True` and at least one event captured.
-
-Applies `view.time_travel_excluded_fields` first, then `scrub`. A custom `scrub` callable should preserve `capture.scrubbed_fields` so names from both sources stay wire-visible; the built-in `scrub_fields` already does.
 
 `patches` is required and must be either the JSON string `render_with_diff()` returns or an already-decoded list of patch dicts. **Why caller-supplied:** iter A intentionally does not couple to the render pipeline — djust's `render_with_diff()` returns patches into the WebSocket / SSE / runtime frame paths without stashing them on the view, so there's no framework attribute to introspect. Iter B's debug-panel Share button (below) calls `render_with_diff()` + this function in one click.
 
@@ -296,9 +274,44 @@ The check is not a config flag taken on trust, and it does not read the URL. It 
 
 If your connection is authenticated by a mechanism Redis itself cannot see — mutual TLS, a unix socket bounded by filesystem permissions — pass `require_auth=False`. It logs a warning naming the server every time. Do not reach for it merely because the URL has a password in it.
 
-## What's coming in iter C
+## `djust replay` — the terminal path (iter C)
 
-- A `djust replay` CLI for terminal-first workflows. Tracked in [#1561](https://github.com/djust-org/djust/issues/1561).
+Not every capture is worth a browser. `djust replay` takes a `djbug1.` blob — or the whole replay URL a teammate pasted at you — and does one of three things:
+
+```bash
+# Open it in the local browser.
+djust replay djbug1.eyJ2IjoiZGpidWcxIi...
+
+# Print the decoded capture as ONE JSON document. Pipe it anywhere.
+djust replay --inspect "$BLOB" | jq '.state_after.claimant_id'
+djust replay --inspect "$BLOB" | jq '.vdom_patches | length'
+
+# See what the transition actually changed.
+djust replay --diff "$BLOB"
+```
+
+```diff
+--- state_before
++++ state_after
+@@ -1,5 +1,4 @@
+ {
+-  "count": 0,
+-  "gone": 1,
++  "count": 1,
+   "user": "ada"
+ }
+```
+
+`--inspect` emits a single JSON object (`event_name`, `scrubbed_fields`, `state_before`, `state_after`, `vdom_patches`), not three separate ones, so `jq` can consume it directly. `--diff` writes a unified diff to stdout; when the two states are identical it writes **nothing** to stdout and says so on stderr, so `djust replay --diff "$BLOB" > patch` still gives you a valid empty patch rather than a file with prose in it.
+
+**Where the URL points.** `--base-url`, else `$DJUST_REPLAY_BASE_URL`, else `http://127.0.0.1:8000`. The path comes from your URLconf when one is available, so a project that mounts `djust.urls` under a prefix gets the right link:
+
+```bash
+export DJUST_REPLAY_BASE_URL=http://localhost:8002
+djust replay "$BLOB"
+```
+
+**The blob argument is validated before anything is opened.** A blob reaches you by paste, so "run `djust replay <this thing I sent you>`" is a real way to get a URL opened on your machine. The argument must resolve to something starting with `djbug1.` or the command refuses; the URL handed to your browser is always one the command built itself. `--base-url` is restricted to `http`/`https` for the same reason.
 
 ## Strategy connection
 
