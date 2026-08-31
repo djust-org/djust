@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two opaque `Value::Encoded` values compare by Python's CONTRACT, so `{% if p == q %}` on two `set()`s answers `Y` (#2480).** `opaque_value` set `cmp_key: None`, so `Encoded::python_partial_cmp` answered `None` for every pair either side of which came from that arm — never equal, never ordered:
+
+  ```
+                       p, q                          django    djust
+  {% if p == q %}      the SAME set()                Y         N
+  {% if p == q %}      two equal {'a'}s              Y         N
+  {% if p <= q %}      the SAME set()                Y         N
+  {% if p == q %}      the SAME complex(0)           Y         N
+  {% if p == q %}      complex(0) and 0              Y         N
+  ```
+
+  **Eight shapes, and "widened from four to eight" is the honest count.** Before #2476 a `set()` had no variant and landed on the terminal `Ok(Value::String(ob.str()?))`, where two of them compared **equal by TEXT** through the `(String, String)` arm — Django's answer, reached by the same accident that made `{{ p|length }}` count the characters of a repr, so the accident and the defect could not be separated. #2476 moved the FALSY half onto the carrier (`set()`, `frozenset()`, `{}.keys()`, `complex(0)`) and #2477/#2489 moved the TRUTHY half (`{'a'}`, `frozenset({'a'})`, `{'a': 1}.keys()`, `complex(1)`), pinning the cost in `TestTheComparisonAxisThisWIDENS` in the diverging direction. This closes all eight and FLIPS that class rather than deleting it, so the widening it recorded stays legible.
+
+  **No carried field decides it, in either direction — and that is a measurement, not an argument.** `set() == frozenset() == {}.keys() == {}.items()` is True **across** `type_name`s; `LenZero() == LenZero()` on two distinct instances is False **within** one; and `set() == {}.keys()` is True while `set() == {}.values()` is False, even though both views carry the same (empty) `items`. So neither the type name nor the items nor any carried spelling separates them. A NAME LIST — `{set, frozenset, dict_keys, dict_items}` — is wrong in **both** directions: it misses every `collections.abc.Set` registration a user writes, and it claims any user class merely *named* `set`, because `type(o).__name__` is unqualified. Both halves are run in `test_a_name_list_would_have_been_wrong_in_both_directions`.
+
+  So a fourth fact is MEASURED at the conversion — `Encoded::eq_class`, the PROTOCOL Python itself dispatches on, with four arms each justified by a contract:
+
+  | arm | measured | equality | ordering |
+  |---|---|---|---|
+  | `EqClass::Set` | `isinstance(o, collections.abc.Set)` | the carried `items`, both containments | a real SUBSET partial order |
+  | `EqClass::Number` | `isinstance(o, numbers.Number)`, as `complex(o)` | the two components | **none** |
+  | `EqClass::Identity` | default `__eq__` **and** default `__repr__` | the `repr` token | **none** |
+  | `None` | everything else | never equal | never ordered |
+
+  Arm 1 is the one that answers the hard direction: the ABC *defines* `__eq__` as `len(self) == len(other) and self <= other` and `__le__` as containment, so `set() == frozenset() == {}.keys() == {}.items()` falls out ACROSS type names and `set() != {}.values()` falls out for free — a `dict_values` is not a `Set`. Arm 3 is a **restoration** rather than a new hazard: before #2476 a `LenZero()` crossed as `Value::String("<LenZero object at 0x…>")` and compared by exactly that string, so the address-reuse caveat is the one it already had — and within a single render it cannot bite, because every context object is alive at once and their addresses are therefore distinct.
+
+  **The ordering trap, which is why this is not a one-line `cmp_key`.** Python's two operators come apart INSIDE this family: `set() <= set()` is `Y` (subset order) while `complex(0) <= complex(0)` is `N` (`<` RAISES, and Django's `smart_if` swallows it to False). An implementation that reaches equality by handing these values a comparison key gets the first right and **flips the second from `N` to `Y`** — eight cells bought, a new divergence sold. So `renderer::encoded_partial_cmp` is the ONE wrapper all three comparison sinks read (`values_equal` via `encoded_equal`, `try_compare`, `dictsort`'s `compare_sort_values`); it carries the Set order and answers `None` for the two equality-only classes, and `Encoded::python_partial_cmp` keeps the datetime family unchanged with **exactly one caller**. The Set order lives in an `Option<Ordering>` because Python's *is* partial — `{1}` and `{2}` are incomparable, and `None` is already rendered as "false for all four operators", which is Django's answer.
+
+  **Cross-carrier, closed too.** `complex(0) == 0` is True in Python and `Y` in Django, and no `(Encoded, Encoded)` arm reaches it. The new `(Encoded, Integer)` / `(Encoded, Float)` arms compare in the INTEGER domain because Python's comparison is exact: `complex(2**53) == 2**53 + 1` is **False** even though the float cast rounds, and `complex(1e300) == 2**63 - 1` is False even though `as i64` saturates onto that bound. Both guards are load-bearing and each has its own case.
+
+  **Four things are DECLINED, and each is pinned in the DIVERGING direction so widening one is a decision.** A class overriding `__eq__` — only Python can run it, and its answer is arbitrary. A class with default `__eq__` and a **custom `__repr__`**: a `dict_values` is the builtin case, and two DISTINCT empty ones share the spelling `dict_values([])`, so using the token would call them equal where Python says they are not — a NEW wrong answer rather than an unfixed cell. A `Decimal` or a big `int` against a complex, both exact types an `f64` cannot answer. And two sets past `SET_COMPARE_CAP` (1,000 items a side): containment without a hash is quadratic and a `set` states its own length, so `opaque_value` enumerates it in full — past the cap the answer is the pre-fix one rather than a render that does 10^10 comparisons.
+
+  **Wire.** Slot 11, appended for the sixth time and for the sixth identical reason: the class is measured from a live Python object that no longer exists when a state entry comes back, so an entry that dropped it would answer `{% if a == b %}` with the pre-fix rule after one cache hit — the reopening `ENCODED_TAG` exists to prevent. It is a **MAP, never `nil`** — an absent class is the EMPTY map — and that is the one structural decision here rather than a preference: eleven used to be a width no build wrote, so `an_interior_insert_is_refused_rather_than_silently_misread` could rely on WIDTH to refuse a ten-element payload with one element inserted; now that eleven is real, only a TYPE can, and every such insert pushes the ITEMS (a list or `nil`) or the intruder itself into this position, never a map. Writing `nil` for the absent case would have surrendered that — and the EXISTING canary could not say so, which is the sharper half of this. `an_interior_insert_is_refused_rather_than_silently_misread` inserts into the CURRENT payload, so it produces TWELVE elements, a width no arm matches however slot 10 is typed: it is answered by width and would stay green under the very mutation it looks like it guards. A gate-off found that (the mutation SURVIVED), so a second canary was added that inserts into a **ten**-element payload — the shape real state entries carry — and requires all ten refused, for both item shapes. Under a mutation that drops the `Value::Object` pattern, an insert at slot 6 decodes as an `Encoded` with `repr: "intruder"` and the last three slots silently emptied, and the new canary is the only test that reddens. Every narrower width (10 / 9 / 8 / 6 / 4 / 3) restores `eq_class: None`, which is the answer that entry was written with; each keeps its existing fail-to-absent read for every slot below 11. Growing the `attrs` map instead was rejected: that map is what `context::lookup_segment` resolves `{{ p.x }}` against, so a synthetic key there would be a template-visible attribute Django does not have.
+
+  **Corpus movement**, two builds of `scripts/filter-parity-differential.py` over **380,484 cells** — `origin/main` at `e5d499a0` against this branch, `--compare`d, and the build hashes confirm they are genuinely two builds:
+
+  ```
+  agree BEFORE : 277729   (refusal-collapsed: 324951)
+  agree AFTER  : 277777   (refusal-collapsed: 324999)
+  django REFUSES & djust RENDERS: 4722 -> 4722   (+0)
+  djust REFUSES & Django RENDERS: 39253 -> 39253   (+0)
+  cmp             48 moved  of  19663      (every other axis: 0 moved)
+  newly AGREEING: 48   no longer agreeing: 0   REGRESSIONS: 0
+  panics 0 -> 0     live-payload leaks 60 -> 60 (0 introduced)
+  ```
+
+  The raw headline is blind to refusal-class movement, so both refusal columns are reported: neither grew by a single cell. Of the 19,663 `@cmp` cells the corpus reaches, **48 disagreed with Django before and 0 disagree after** — `>=` 12, `<=` 12, `==` 8, `!=` 8, `>` 4, `<` 4 — which includes the 10 the #2477/#2489 compare counted as regressions.
+
+  And the full cross-product reproduction, every shape against every shape over all six operators on both djust paths, with Django CALLED as the oracle: same-object divergences **48 → 8**, two distinct instances **38 → 2**, cross-shape **196 → 60**, cross-carrier **9 → 6**. Every survivor involves one of the declined classes and nothing else — the 60 cross-shape cells are all the custom-`__eq__` class against something.
+
+  Regression coverage: 28 cases in `python/tests/test_opaque_equality_2480.py` (the cross-product sweep, the protocol facts asserted in both directions, the ordering trap on both halves, the cross-carrier boundaries, the state round trip and the chokepoint pins); new cases in `test_encoded_wire_positions_2471_2472.rs` (including `an_insert_into_the_ten_slot_payload_is_refused_by_the_last_slots_type`, the one a gate-off proved was missing); and `TestTheComparisonAxisThisWIDENS` (now `…WIDENED`), `TestAFalsyOpaqueEncodedIsNotComparable` and the `@cmp` corpus row in `test_lazy_corpus_rows_2482.py` are FLIPPED rather than deleted, so the same rows that measured the gap now measure its closure.
 - **A Python collection reaches the renderer as its ITEMS, not as its repr (#2477, #2489).** `impl FromPyObject for Value`'s fallback block ends in `Ok(Value::String(ob.str()?))`, so an object no variant models arrived as a plain string — and every consumer that iterates, sizes, subscripts or slices then read the **repr, one character at a time**, while Django read the object:
 
   ```
