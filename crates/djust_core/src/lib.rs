@@ -505,13 +505,17 @@ pub struct Encoded {
     /// unchanged by this field rather than closed by it, and is recorded as
     /// such rather than quietly widened.
     ///
-    /// **Nullary METHODS are absent too** — `isoformat`, `weekday`, `ctime`,
-    /// `total_seconds`, `date`, `time`. Django reaches them through its
-    /// auto-call (ADR-024), which turns a lookup into an EVALUATION; putting a
-    /// call's result in this map would make the whole family eager at
-    /// conversion time, pay for it on every render whether or not a template
-    /// asks, and inherit whatever the call raises. A different mechanism, so a
-    /// different decision — filed rather than folded in.
+    /// **Nullary METHODS are in this map too since #2485**, put there by the
+    /// SECOND producer [`collect_called_attrs`] from its own table
+    /// [`ENCODED_CALL_NAMES`]. Django reaches them through its auto-call
+    /// (ADR-024), which turns a lookup into an EVALUATION — a different
+    /// mechanism, which is why it is a second table rather than more strings in
+    /// the first, and why the names it holds were chosen by MEASUREMENT rather
+    /// than by listing what a `datetime` can do (see that table).
+    ///
+    /// They land in the SAME map, so `context::lookup_segment` stays the ONE
+    /// reader: a second resolution path for "the names a dotted lookup reaches"
+    /// is the #1646 shape this map exists to avoid.
     ///
     /// Keyed by [`ObjectKey`] rather than `String` so the map IS a
     /// [`Value::Object`]'s map: the same `get(part)` `lookup_segment` already
@@ -552,6 +556,88 @@ pub const ENCODED_ATTR_NAMES: &[(&str, &[&str])] = &[
         &["hour", "minute", "second", "microsecond", "fold", "tzinfo"],
     ),
     ("datetime.timedelta", &["days", "seconds", "microseconds"]),
+];
+
+/// The nullary METHODS whose result is carried on a [`Value::Encoded`] (#2485).
+///
+/// Django's `Variable._resolve_lookup` AUTO-CALLS a callable attribute
+/// (ADR-024), so `{{ p.isoformat }}` is an EVALUATION where `{{ p.year }}` is a
+/// lookup. That is a different mechanism from [`ENCODED_ATTR_NAMES`]'s, which
+/// is why it is a second table read by a second producer rather than more
+/// strings in the first.
+///
+/// # The membership rule, which is a measurement and not a name list
+///
+/// A name is here when carrying its result makes djust render what **Django
+/// renders**. That is narrower than "the method exists and takes no
+/// arguments", and the difference is the whole of the table: for a method whose
+/// result is itself a `date` / `time` / `datetime` / `struct_time`, carrying it
+/// swaps one divergence for another, because djust's BARE render of those
+/// already differs from Django's (Django LOCALIZES — `{{ dt.date }}` is
+/// `March 4, 2026` there and `2026-03-04` here; `{{ dt.timetuple }}` is
+/// `time.struct_time(tm_year=…)` there and a plain tuple here). Every name was
+/// decided by sweeping `dir(o)` on live objects and comparing the three
+/// columns — what Django renders for `{{ p.<name> }}`, what djust renders
+/// today, and what djust would render for the RESULT — and keeping only the
+/// rows where the third equals the first:
+///
+/// ```text
+/// isoformat    django '2026-03-04T05:06:07.000008'  result '2026-03-04T05:06:07.000008'  KEPT
+/// weekday      django '2'                           result '2'                           KEPT
+/// date         django 'March 4, 2026'               result '2026-03-04'                  DROPPED
+/// timetuple    django 'time.struct_time(tm_year=…)' result '(2026, 3, 4, …)'             DROPPED
+/// ```
+///
+/// So `date`, `time`, `timetz`, `astimezone`, `replace`, `isocalendar`,
+/// `timetuple` and `utctimetuple` are DELIBERATELY absent, and the reason is
+/// measured rather than architectural. `now`, `today` and `utcnow` are absent
+/// for a second reason on top of that one: their value is the CURRENT time, so
+/// carrying them would do nondeterministic work at every conversion.
+///
+/// A method that requires ARGUMENTS (`strftime`, `combine`, `fromisoformat`)
+/// needs no entry and no exclusion: Django's auto-call catches the `TypeError`
+/// and renders `string_if_invalid`, which is the empty string djust already
+/// renders for a name it does not carry. Those cells agree today.
+///
+/// # Cost, and why `utcoffset` is free
+///
+/// These are C-level calls on the value being converted, made once per
+/// `Encoded` rather than once per template that asks. `utcoffset` in
+/// particular costs NOTHING new: [`comparison_key`] already calls it on every
+/// `datetime` and every `time` to build the [`CmpKey`], so the tzinfo code
+/// path was already being run at the conversion before this table existed.
+///
+/// # Not `min` / `max` / `resolution`
+///
+/// Those are DATA attributes and belong to the other table's question, where
+/// they cannot go: their values are values of the same family and
+/// `datetime.min.min is datetime.min`, so collecting them would not terminate.
+/// Unchanged by this table and pinned as still-divergent — see
+/// [`Encoded::attrs`].
+pub const ENCODED_CALL_NAMES: &[(&str, &[&str])] = &[
+    (
+        "datetime.datetime",
+        &[
+            "isoformat",
+            "ctime",
+            "weekday",
+            "isoweekday",
+            "toordinal",
+            "timestamp",
+            "utcoffset",
+            "tzname",
+            "dst",
+        ],
+    ),
+    (
+        "datetime.date",
+        &["isoformat", "ctime", "weekday", "isoweekday", "toordinal"],
+    ),
+    (
+        "datetime.time",
+        &["isoformat", "utcoffset", "tzname", "dst"],
+    ),
+    ("datetime.timedelta", &["total_seconds"]),
 ];
 
 /// A [`Encoded`] value's position in Python's ordering (#2471).
@@ -1362,11 +1448,26 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // `__name__` for a Python-level subclass (`MyDT`), which is right for a
     // `TypeError` message and wrong as a lookup key here. A `datetime`
     // subclass has a `datetime`'s attributes.
-    let attrs = ENCODED_ATTR_NAMES
+    let mut attrs = ENCODED_ATTR_NAMES
         .iter()
         .find(|(name, _)| *name == tp_name)
         .map(|(_, names)| collect_named_attrs(ob, names))
         .unwrap_or_default();
+
+    // The names Django's auto-call reaches (#2485), keyed off the same
+    // `tp_name` and merged into the SAME map — so `lookup_segment` keeps one
+    // reader for both halves of Django's step 2. The two tables share no name
+    // (a `datetime` has no attribute that is both data and callable), which
+    // `test_the_two_tables_are_disjoint` asserts rather than assumes; the
+    // `extend` order is fixed and deterministic either way, which is what
+    // `values_structurally_equal`'s zipped compare needs.
+    attrs.extend(
+        ENCODED_CALL_NAMES
+            .iter()
+            .find(|(name, _)| *name == tp_name)
+            .map(|(_, names)| collect_called_attrs(ob, names))
+            .unwrap_or_default(),
+    );
 
     Some(Encoded {
         type_name,
@@ -1456,6 +1557,45 @@ fn collect_named_attrs(ob: &Bound<'_, PyAny>, names: &[&str]) -> IndexMap<Object
             continue;
         };
         let Ok(value) = attr.extract::<Value>() else {
+            continue;
+        };
+        map.insert(ObjectKey::Str((*name).to_string()), value);
+    }
+    map
+}
+
+/// `o.name()` for each `name`, into the same map (#2485).
+///
+/// The SECOND producer of [`Encoded::attrs`], and the auto-call half of
+/// Django's lookup: `_resolve_lookup` CALLS a callable attribute, so
+/// `{{ p.isoformat }}` renders `o.isoformat()`. The names come from
+/// [`ENCODED_CALL_NAMES`], which states the whole of that policy.
+///
+/// Fails SOFT, per name, exactly as [`collect_named_attrs`] does: a `getattr`
+/// that misses, a call that RAISES, or a result that will not convert is
+/// SKIPPED rather than stored. That matters more here than for a plain
+/// attribute read, because a call runs code the framework does not own — a
+/// `tzinfo` subclass decides what `utcoffset()` / `tzname()` / `dst()` do, and
+/// `timestamp()` on a naive value is platform-dependent and can raise. A
+/// skipped name leaves `lookup_segment` answering `None`, which renders the
+/// empty string — the pre-#2485 answer for that cell, so a raising call cannot
+/// make any cell WORSE than it was.
+///
+/// The recursion argument is [`ENCODED_CALL_NAMES`]'s, and it is the same shape
+/// as the other table's: no name here returns a value of this family whose own
+/// tables ask for names that return back to it. `utcoffset` and `dst` return a
+/// `timedelta`, whose only entry is `total_seconds` (a `float`); everything
+/// else returns a `str`, an `int`, a `float` or `None`.
+fn collect_called_attrs(ob: &Bound<'_, PyAny>, names: &[&str]) -> IndexMap<ObjectKey, Value> {
+    let mut map = IndexMap::with_capacity(names.len());
+    for name in names {
+        let Ok(method) = ob.getattr(*name) else {
+            continue;
+        };
+        let Ok(result) = method.call0() else {
+            continue;
+        };
+        let Ok(value) = result.extract::<Value>() else {
             continue;
         };
         map.insert(ObjectKey::Str((*name).to_string()), value);
