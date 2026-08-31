@@ -60,6 +60,14 @@ Globals reset (and why):
 - **djust route-map cache** (``_reset_route_map_cache()``) — the URLconf-derived
   route map djust caches for ``dj-navigate`` resolution; #1862-adjacent. Lazily
   re-derived from the current URLconf.
+- **Bug-capture snapshot-store cache** (``bug_capture_store._STORE_CACHE``)
+  — the resolved store is memoized so an encode doesn't rebuild (and, for
+  Redis, re-handshake) per capture. It self-invalidates when the config value
+  changes, so ``override_settings`` is already safe; the reset covers the two
+  cases the config key can't see — a test that installs a store *instance*
+  directly, and a test asserting "no store is configured" that would otherwise
+  inherit a live store (and a live Redis socket) from an earlier test in the
+  worker. Lazily rebuilt on the next ``get_store()``.
 - **Child-view id counter** (``mixins.sticky._view_id_counter``) and
   **tooltip id counter** (``components.templatetags.djust_components._tooltip_id_counter``)
   — module-level ``itertools.count`` singletons. Resetting to a fresh
@@ -172,6 +180,26 @@ def _reset_route_map_cache() -> None:
         return
     try:
         _reset()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _reset_bug_capture_store_cache() -> None:
+    """Drop the cached bug-capture snapshot store (#1561).
+
+    ``djust.bug_capture_store`` memoizes the resolved store so an encode
+    doesn't rebuild (and, for Redis, re-handshake) per capture. The cache is
+    keyed on the config value that built it, so it self-invalidates under
+    ``override_settings`` — but a test that installs a store *instance*
+    directly, or one that asserts "no store is configured", must not inherit a
+    live store (or a live Redis socket) from a previous test in the worker.
+    """
+    try:
+        from djust.bug_capture_store import reset_store_cache
+    except Exception:  # noqa: BLE001 — module shape may change; stay defensive.
+        return
+    try:
+        reset_store_cache()
     except Exception:  # noqa: BLE001
         pass
 
@@ -325,6 +353,7 @@ def reset_djust_globals() -> None:
     _reset_channel_layer()
     _reset_urlconf_caches()
     _reset_route_map_cache()
+    _reset_bug_capture_store_cache()
     _reset_id_counters()
     _reset_rust_tag_handlers()
     _reset_builtin_template_tags()
