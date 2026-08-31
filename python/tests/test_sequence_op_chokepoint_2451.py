@@ -180,6 +180,33 @@ def corpus() -> dict:
 
 CORPUS = corpus()
 
+#: Cells that render on the LiveView path where Django refuses, because
+#: `normalize_django_value` FLATTENS the value before djust's own conversion
+#: ever sees it (#2477). Recorded, not allowed: the sweep below subtracts this
+#: table and then asserts it is exhausted in the other direction too, so a
+#: recorded cell that stops diverging must be deleted rather than left behind
+#: as cover for the next one.
+#:
+#: A `set` normalises to a sorted LIST, which IS subscriptable — so `first` and
+#: `last`, the two deterministic members of the `value[i]` group, render the
+#: element (or `''` for the empty set) where Django's `set[0]` raises
+#: `TypeError`. The iterators are unaffected: a set is iterable in Django too.
+#: `phone2numeric` is not here because it refuses on BOTH paths — a list has no
+#: `.lower()` either.
+#:
+#: The set is only the mildest member of the class. `complex(0)`, an empty
+#: `dict_keys`, a zero-`__len__` class and a `__bool__`-False class all reach
+#: the normalizer's `str()` fallback instead, so on the LiveView path they are
+#: their own repr — `{% if p %}` is `T` where Python and Django say `F`, and
+#: `{{ p|length }}` counts the characters of the repr. None of those is a
+#: corpus row here, so none is in this table; #2477 carries the full account.
+NORMALIZER_FLATTENED = {
+    ("first", "set-empty"),
+    ("first", "set-plain"),
+    ("last", "set-empty"),
+    ("last", "set-plain"),
+}
+
 
 class TestTheReferenceTableIsRunNotTranscribed:
     """The differential itself: every one of the seven, over every corpus value.
@@ -206,6 +233,13 @@ class TestTheReferenceTableIsRunNotTranscribed:
         the flattening rather than a hole in this chokepoint. #2467 stopped the
         flattening; the exact-set pin that recorded the twelve is deleted with
         it, per its own terms.
+
+        #2477 added the `set` pair and four cells appeared the SAME way, for
+        the same reason one type over: `normalize_django_value` has no arm for
+        the class #2466 closed at the conversion, so on the LiveView path a
+        `set` is a sorted LIST — subscriptable, where a set is not. They are
+        recorded in `NORMALIZER_FLATTENED` rather than silently allowed, and
+        that pin is deleted when #2477 lands, per its own terms.
         """
         offenders = []
         for name in ALL_SEVEN:
@@ -217,9 +251,50 @@ class TestTheReferenceTableIsRunNotTranscribed:
                 du = outcome(source, value, "djust")
                 if dj.startswith("<<") and not du.startswith("<<"):
                     offenders.append((name, key, dj, du))
-        assert not offenders, f"{len(offenders)} cells render where Django refuses:\n" + "\n".join(
-            f"  {n} <{k}>: django={a} djust={b!r}" for n, k, a, b in offenders[:15]
+        unrecorded = [o for o in offenders if (o[0], o[1]) not in NORMALIZER_FLATTENED]
+        assert not unrecorded, (
+            f"{len(unrecorded)} cells render where Django refuses:\n"
+            + "\n".join(f"  {n} <{k}>: django={a} djust={b!r}" for n, k, a, b in unrecorded[:15])
         )
+        # The pin is EXACT in both directions: a recorded cell that stopped
+        # diverging must be deleted from the table, not left as a licence for
+        # the next one to hide behind (#1859).
+        stale = NORMALIZER_FLATTENED - {(o[0], o[1]) for o in offenders}
+        assert not stale, f"{sorted(stale)} no longer diverge — delete their rows"
+
+    def test_2477_the_recorded_four_are_the_NORMALIZERS_doing(self) -> None:
+        """Non-vacuity for `NORMALIZER_FLATTENED`, and its diagnosis.
+
+        The allowance above is only honest if the four cells are the
+        NORMALIZER's doing rather than a hole in this chokepoint — the same
+        distinction #2467 turned on, and the reason that one was diagnosed in
+        an afternoon. Asserted directly: the identical value through the RAW
+        entry point answers DIFFERENTLY, so the flattening is what moved it.
+
+        Not "the raw path refuses". It does for `set-empty` — Python-falsy, so
+        `falsy_opaque` carries it and `python_getitem` refuses correctly — and
+        it does NOT for `set-plain`, which is TRUTHY, is declined by that arm's
+        gate, and crosses as its own `str()`: `{{ p|first }}` is the literal
+        `{` of `"{'<img …>'}"`. Both are wrong and neither is this file's
+        chokepoint; asserting the weaker, TRUE property is what keeps the pin
+        from encoding a diagnosis that holds for only half its rows.
+        """
+        for name, key in sorted(NORMALIZER_FLATTENED):
+            source = "{{ p|%s }}" % name
+            try:
+                raw = _rust.render_template(source, {"p": CORPUS[key]})
+            except Exception as exc:  # noqa: BLE001 — a refusal IS the answer
+                raw = f"<<{type(exc).__name__}>>"
+            live = outcome(source, CORPUS[key], "djust")
+            assert raw != live, (
+                f"{name} <{key}> now answers the same through the normalizer as "
+                f"through the raw path — #2477 landed, so delete its "
+                f"NORMALIZER_FLATTENED row and this test"
+            )
+            # ...and the LiveView answer is the RENDER, which is the divergence
+            # the table records. A pin whose rows had started refusing would
+            # otherwise pass on the inequality alone.
+            assert not live.startswith("<<"), f"{name} <{key}> refuses on the LiveView path now"
 
     def test_2467_a_timedelta_refuses_on_BOTH_paths_now(self) -> None:
         """Non-vacuity for the twelve cells the sweep above stopped reporting.
@@ -301,6 +376,10 @@ class TestTheReferenceTableIsRunNotTranscribed:
         except the empty container pair, so the counts move by more than the
         cell count does.
 
+        Was 129 of 276 before #2477 added the `set` pair. A `set` IS iterable,
+        so the three iterators are unmoved; it is not subscriptable and has no
+        `.lower()`, so `first` / `last` / `phone2numeric` each gain both rows.
+
         `random` is excluded on purpose rather than rounded off: over a mapping
         `random.choice` draws an index and THEN looks it up, so whether Django
         raises at all depends on the draw — its own count flaps between 17 and
@@ -320,11 +399,11 @@ class TestTheReferenceTableIsRunNotTranscribed:
             "escapeseq": 17,
             "safeseq": 17,
             "unordered_list": 17,
-            "first": 22,
-            "last": 25,
-            "phone2numeric": 37,
+            "first": 24,
+            "last": 27,
+            "phone2numeric": 39,
         }, per_filter
-        assert sum(per_filter.values()) == 135
+        assert sum(per_filter.values()) == 141
 
 
 class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
