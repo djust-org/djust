@@ -3708,6 +3708,47 @@ fn compute_template_hash(source: &str) -> PyResult<String> {
     })
 }
 
+/// `_rust.crosses_as_encoded` — the Python export of
+/// [`djust_core::crosses_as_encoded`] (#2477/#2489).
+///
+/// A thin wrapper by design: the question is "does this object cross into the
+/// renderer as a `Value::Encoded`", and it is answered next to the arms that
+/// decide it. `djust.serialization.normalize_django_value` consults it at its
+/// FINAL fallback, so the LiveView path stops stringifying the objects the
+/// conversion carries exactly.
+///
+/// A test-only sibling, `crosses_as_encoded_by_conversion`, runs the REAL
+/// conversion and reports the same bit — the differential between the two is
+/// what keeps the cheap probe from drifting (#1646), and is swept over the
+/// whole shape corpus by
+/// `python/tests/test_opaque_collections_2477_2489.py`.
+#[pyfunction]
+fn crosses_as_encoded(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
+    guard_panic("crosses_as_encoded", move || {
+        Ok(djust_core::crosses_as_encoded(obj))
+    })
+}
+
+/// The same bit, decided by RUNNING `impl FromPyObject for Value` (#2477/#2489).
+///
+/// The reference [`crosses_as_encoded`] is checked against, and NOT what
+/// production calls: converting an object eagerly walks its whole graph —
+/// through a presenter's `__dict__` into a raw `QuerySet` and `Manager` and
+/// down through theirs — which is work the render path never does and which
+/// overflowed the stack when the production predicate was written this way.
+/// Exposed so the differential is a real comparison rather than an assertion
+/// that the probe agrees with itself, and documented so the next author does
+/// not "simplify" production onto it.
+#[pyfunction]
+fn crosses_as_encoded_by_conversion(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
+    guard_panic("crosses_as_encoded_by_conversion", move || {
+        Ok(matches!(
+            obj.extract::<djust_core::Value>(),
+            Ok(djust_core::Value::Encoded(_))
+        ))
+    })
+}
+
 // Declared free-threaded-safe (#1432). A full thread-safety audit of every
 // global (`static`/`Lazy`/`OnceLock`), `#[pyclass]`, cross-thread
 // `Py<T>`/`Py<PyAny>`, the Tokio actor system, the template registries, and
@@ -3729,6 +3770,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(crosses_as_encoded, m)?)?;
+    m.add_function(wrap_pyfunction!(crosses_as_encoded_by_conversion, m)?)?;
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;

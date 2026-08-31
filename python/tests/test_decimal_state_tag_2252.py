@@ -336,11 +336,31 @@ class TestTheCollisionHazard:
 #: the flag CANNOT be a no-op here. ``test_the_flag_DOES_move_a_carried_through_value``
 #: and ``test_the_carry_through_types_are_exactly_the_ones_the_boundary_must_convert``
 #: below assert both halves rather than exempting them.
+#: Each row carries the STORED spelling the flag converts it to, because
+#: there is no longer one converter: #2467's four take
+#: `django_json_datetime` and #2477's `set` takes the sorted list #626 gave
+#: it. Pairing the value with its spelling keeps the assertion exact for both
+#: rather than weakening it to "some string".
 _CARRIED_THROUGH = [
-    pytest.param(date(2024, 6, 15), id="date"),
-    pytest.param(datetime(2024, 6, 15, 12, 30, 45), id="datetime"),
-    pytest.param(time(12, 30, 45), id="time"),
-    pytest.param(timedelta(days=2, hours=3), id="timedelta"),
+    pytest.param(date(2024, 6, 15), django_json_datetime(date(2024, 6, 15)), id="date"),
+    pytest.param(
+        datetime(2024, 6, 15, 12, 30, 45),
+        django_json_datetime(datetime(2024, 6, 15, 12, 30, 45)),
+        id="datetime",
+    ),
+    pytest.param(time(12, 30, 45), django_json_datetime(time(12, 30, 45)), id="time"),
+    pytest.param(
+        timedelta(days=2, hours=3),
+        django_json_datetime(timedelta(days=2, hours=3)),
+        id="timedelta",
+    ),
+    # #2477/#2489. A `set` was in `_UNTOUCHED` until the conversion learned to
+    # carry one: `normalize_django_value` handed the renderer a sorted LIST,
+    # which is subscriptable where a set is not, so `{{ tags|first }}` rendered
+    # an element where Django raises. It takes the same treatment `Decimal` and
+    # the datetime family take — carried through for the renderer, converted at
+    # THIS boundary, because `json.dumps` refuses a set.
+    pytest.param({1, 2, 3}, [1, 2, 3], id="set"),
 ]
 
 #: The types the flag does not touch — the set the no-op claim still holds for.
@@ -353,7 +373,6 @@ _UNTOUCHED = [
     pytest.param(uuid.UUID("12345678-1234-5678-1234-567812345678"), id="uuid"),
     pytest.param([1, "two", None, {"three": 3}], id="nested-list"),
     pytest.param({"a": {"b": [1, 2, {"c": "d"}]}}, id="nested-dict"),
-    pytest.param({1, 2, 3}, id="set"),
     pytest.param((1, "two"), id="tuple"),
 ]
 
@@ -361,7 +380,7 @@ _UNTOUCHED = [
 #: decode is the identity, and the real session serializer round-trips it —
 #: keep sweeping it, because #2467 changed which types the flag converts and
 #: not whether the stored form survives.
-_OTHER_TYPES = _UNTOUCHED + _CARRIED_THROUGH
+_OTHER_TYPES = _UNTOUCHED + [pytest.param(row.values[0], id=row.id) for row in _CARRIED_THROUGH]
 
 
 class TestEveryOtherTypeIsUntouched:
@@ -388,25 +407,24 @@ class TestEveryOtherTypeIsUntouched:
         """
         assert normalize_django_value(value, state_roundtrip=True) == normalize_django_value(value)
 
-    @pytest.mark.parametrize("value", _CARRIED_THROUGH)
-    def test_the_flag_DOES_move_a_carried_through_value(self, value) -> None:
+    @pytest.mark.parametrize("value,expected", _CARRIED_THROUGH)
+    def test_the_flag_DOES_move_a_carried_through_value(self, value, expected) -> None:
         """Non-vacuity for the narrowing above (#1468/#1859).
 
-        Without this, moving four ids out of one parametrisation reads as an
+        Without this, moving ids out of one parametrisation reads as an
         exemption — and an exemption nobody can distinguish from a bug is the
         failure mode this file's own `RAISE_BIT_NOT_CLOSED` rule is about. So
-        the four are asserted POSITIVELY: unflagged is the object, flagged is
-        the encoder's string, and they differ.
+        each is asserted POSITIVELY: unflagged is the object, flagged is the
+        boundary's own spelling, and they differ.
         """
         assert normalize_django_value(value) is value
         stored = normalize_django_value(value, state_roundtrip=True)
-        assert isinstance(stored, str)
-        assert stored == django_json_datetime(value)
+        assert stored == expected
         assert stored != normalize_django_value(value)
 
-    @pytest.mark.parametrize("value", _CARRIED_THROUGH)
+    @pytest.mark.parametrize("value,expected", _CARRIED_THROUGH)
     def test_the_carry_through_types_are_exactly_the_ones_the_boundary_must_convert(
-        self, value
+        self, value, expected
     ) -> None:
         """WHY the flag is not a no-op for these, run rather than asserted.
 

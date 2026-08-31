@@ -721,7 +721,7 @@ INPUTS = {
     # these values in a three-name namespace), which is why it is this pair and
     # not `complex(0)` or a `__len__`-zero class. The two answers land on
     # DIFFERENT arms and that is the point of carrying both: the empty one is
-    # Python-falsy and reaches `falsy_opaque`, while the payload-carrying one
+    # Python-falsy and reaches `opaque_value`, while the payload-carrying one
     # is TRUTHY, is declined by that arm's own gate, and falls to the terminal
     # `Value::String(ob.str()?)` — where `{{ p|length }}` counts the 32
     # characters of `"{'<img src=x onerror=alert(1)>'}"` and `{{ p|first }}` is
@@ -853,11 +853,11 @@ INPUTS = {
 INPUTS_LAZY: dict[str, typing.Callable[[], object]] = {
     # The empty dict VIEW (#2466 / #2482). Falsy in Python, `len() == 0`, and
     # unpicklable — the shape the deep copy above rules out. It reaches
-    # `falsy_opaque` and crosses as a `Value::Encoded`, the same arm `set-empty`
+    # `opaque_value` and crosses as a `Value::Encoded`, the same arm `set-empty`
     # reaches, so it adds no `value-truthiness` member; what it adds is the
     # dict-view TYPE on the twenty-odd axes that were blind to it.
     "dv-keys-empty": lambda: {}.keys(),
-    # The truthy sibling, carrying a payload. Declined by `falsy_opaque`'s own
+    # The truthy sibling, carrying a payload. Declined by `opaque_value`'s own
     # gate, so it falls to the terminal `Value::String(ob.str()?)` and crosses
     # as the text `dict_keys(['<img src=x onerror=alert(1)>'])` — where Django
     # ITERATES the view. Without it the empty row alone cannot separate "the
@@ -878,7 +878,7 @@ INPUTS_LAZY: dict[str, typing.Callable[[], object]] = {
     # one: a repr shaped like a tag would report itself as a live fragment.
     #
     # The instance carries no public attribute, so the `__dict__` bulk-dump arm
-    # above `falsy_opaque` does not claim it — a falsy object WITH attributes is
+    # above `opaque_value` does not claim it — a falsy object WITH attributes is
     # a `Value::Object` and a different question (#2478).
     # `__module__` is set EXPLICITLY, and that is not decoration. `type()` fills
     # it from the calling frame's `__name__`, and the AST readers evaluate this
@@ -1828,13 +1828,13 @@ ARG_SPELLINGS = [
     "known_td_zero",
     # The NO-VARIANT pair (#2477): an argument whose Python object no `Value`
     # variant models, in both truthiness answers. The falsy one reaches
-    # `falsy_opaque` and crosses as a `Value::Encoded`; the truthy one is
+    # `opaque_value` and crosses as a `Value::Encoded`; the truthy one is
     # declined by that arm's gate and crosses as its own `str()`, which is the
     # residue `STRINGIFIED_AT_EXTRACTION` names and which no cell reached.
     "known_set_empty",
     "known_set",
     # The FALSY half of the terminal `Value::String(ob.str()?)` arm (#2482).
-    # `known_set` above is truthy and `known_set_empty` reaches `falsy_opaque`,
+    # `known_set` above is truthy and `known_set_empty` reaches `opaque_value`,
     # so between them the argument channel had a truthy `str-fallback` and no
     # falsy one — the member the axis was EXEMPTING with a reason that turned
     # out not to hold. Same object shape as `o-falsy-iter` in `INPUTS`, built
@@ -2984,7 +2984,7 @@ _FALLBACK_ARM_PATTERN = re.compile(
 #: `extract::<Value>()` and so have no outcome of their own). The subset
 #: assertion in `_no_variant_outcomes` is what makes a rename loud, and the
 #: arm-count check in `_fallback_arms` is what makes a NEW arm loud.
-_NO_VARIANT_ARMS = ("falsy_opaque", "str-fallback")
+_NO_VARIANT_ARMS = ("opaque_value", "str-fallback")
 
 
 def _fallback_block() -> str:
@@ -3049,34 +3049,28 @@ def _no_variant_outcomes() -> tuple[str, ...]:
 def _no_variant_outcome(obj: object) -> str | None:
     """Which no-variant arm carries *obj* — or `None` if an earlier arm does.
 
-    A TRANSCRIPTION of `falsy_opaque`'s gate and of the `__dict__` arm that
-    sits above it, for the same reason `_value_variant` is one: there is no
-    introspection hook that answers it, and inferring the arm from a rendering
-    would be reading `Display` rather than the conversion.
+    The `opaque_value` half is ASKED, not transcribed (#2477/#2489):
+    `_rust.crosses_as_encoded` runs the real conversion and reports whether a
+    `Value::Encoded` came out. This function used to transcribe that gate, and
+    the transcription was already a liability — the gate widened twice (#2478,
+    then #2477/#2489) and each widening needed this copy edited in step. The
+    same transcription, written into `djust.serialization`, is what regressed
+    `{{ p }}` over `b"ab"` before the predicate replaced it.
 
-    Returns `None` for an object the `__dict__` bulk-dump claims — a falsy
-    object WITH attributes is a `Value::Object` whose truthiness is the mapping
-    rule, which is #2478 and a different carrier. `_value_variant` then RAISES
-    on it, so a corpus row of that shape fails the manifest loudly rather than
-    registering `Object:falsy` and claiming coverage of a slot that is in fact
-    the divergence.
+    The `__dict__` half stays a transcription, because there is nothing to ask:
+    the arm produces a `Value::Object`, which is indistinguishable at the
+    Python boundary from a dict that arrived as one. Returning `None` for it
+    makes `_value_variant` RAISE, so a corpus row of that shape fails the
+    manifest loudly rather than registering `Object:falsy` and claiming
+    coverage of a slot that is in fact the divergence (#2478).
     """
+    from djust import _rust
+
+    if _rust.crosses_as_encoded(obj):
+        return "opaque_value"
     attrs = getattr(obj, "__dict__", None)
     if isinstance(attrs, dict) and any(not k.startswith("_") for k in attrs):
         return None
-    if not obj:
-        try:
-            length = len(obj)  # type: ignore[arg-type]
-        except TypeError:
-            # No `__len__`. Iterable-and-falsy is the shape #2466 DECLINED, so
-            # it keeps the terminal `Value::String(str(o))` path.
-            try:
-                iter(obj)  # type: ignore[call-overload]
-            except TypeError:
-                return "falsy_opaque"
-            return "str-fallback"
-        # Falsy with a non-zero `__len__` is the other #2466 decline.
-        return "falsy_opaque" if length == 0 else "str-fallback"
     return "str-fallback"
 
 
@@ -3085,14 +3079,42 @@ def _no_variant_outcome(obj: object) -> str | None:
 VALUE_TRUTHINESS_NOT_INHABITABLE = {
     "Missing": "an ABSENT key, which reaches the resolver as `Option::None` and never this conversion",
     "DictView": "built only by `Context::dict_view` DURING a render; it never arrives from Python",
+    # #2477/#2489 emptied this arm of everything a corpus can hold. It used to
+    # carry a truthy `dict_keys` and a falsy `__iter__` class; `opaque_value`
+    # claims both now, and each of the three shapes still reaching the terminal
+    # `Value::String(ob.str()?)` is one this harness structurally cannot sweep:
+    #
+    # * a ONE-SHOT iterator (`iter(o) is o`) — a corpus row is ONE instance
+    #   shared across every cell, so the first `{% for %}` empties it and every
+    #   later cell measures an exhausted object. `--compare` would report a
+    #   corpus-wide regression it caused itself, which is the same hazard the
+    #   `o-falsy-iter` row's pinned `__repr__` exists for;
+    # * an unbounded re-iterable, declined at `OPAQUE_ITEM_CAP` — the decline
+    #   costs 100_000 iterations per conversion, and a row is converted once
+    #   per cell across ~350,000 cells;
+    # * an object whose `__bool__` or `__repr__` RAISES, which `opaque_value`
+    #   fails closed on — the harness itself calls both when it prints a row.
+    #
+    # An exemption is a claim about the world and gets checked like one
+    # (#1867): if a corpus row ever DOES land here, the manifest reports this
+    # exemption STALE and it must be deleted rather than kept as cover.
+    "str-fallback": (
+        "every shape still reaching it is one a corpus row cannot be: a one-shot "
+        "iterator is consumed by its first cell, an unbounded re-iterable costs "
+        "the cap per conversion, and a raising `__bool__`/`__repr__` breaks the "
+        "harness's own printing (#2477/#2489)"
+    ),
 }
 VALUE_TRUTHINESS_ONE_ANSWER = {
     ("None", "truthy"): "`Value::None` has exactly one inhabitant, `None`, and it is falsy",
     ("BigInt", "falsy"): "a magnitude past `i64` is never zero — the variant's own invariant",
-    ("falsy_opaque", "truthy"): (
-        "`falsy_opaque` opens with `if ob.is_truthy().ok()? { return None }`, so no "
-        "truthy object can reach this carrier — the arm's own gate, not a corpus gap"
-    ),
+    # `("opaque_value", "truthy")` was exempt until #2477/#2489, and the
+    # exemption's stated reason — the arm's opening
+    # `if ob.is_truthy().ok()? { return None }` — was TRUE of the code and was
+    # the defect. The truthiness split was never a property of the class, only
+    # of what the carrier could answer once it got there; a `{'a'}` is the same
+    # kind of object as a `set()`. `set-plain` and `dv-keys-plain` inhabit the
+    # slot now, so it is REQUIRED and SWEPT rather than excused.
     # `("str-fallback", "falsy")` was exempt here until #2482, and the exemption
     # was WRONG rather than stale: it claimed a class instance "cannot be a row
     # here at all" because `test_sequence_op_chokepoint_2451.corpus()` evaluates

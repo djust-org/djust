@@ -53,7 +53,7 @@ Where the fix lives, and the mechanism it does NOT add
 `Encoded` already IS the carrier this needs: a Python object held by its
 `type_name` / `display` / `json` / `truthy` spellings, because the object
 itself cannot cross. #2448 built it for the four `DjangoJSONEncoder` types and
-#2458 added the truthiness bit. `falsy_opaque` widens the set of objects that
+#2458 added the truthiness bit. `opaque_value` widens the set of objects that
 use it and adds no new carrier — a new `Value` variant would be a second one
 for a single question (#1646), and would have to be classified at every
 wildcard `match` arm in the workspace.
@@ -478,14 +478,21 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         assert djust_render("{{ p.a }}", {"p": value}) == "1"
         assert django_render("{{ p.a }}", {"p": value}) == "1"
 
-    def test_a_falsy_object_with_a_NONZERO_len_is_still_truthy(self) -> None:
-        """`__bool__` False and `__len__` 5 — declined, not guessed.
+    def test_a_falsy_object_with_a_NONZERO_len_was_truthy_and_is_now_CLOSED(
+        self,
+    ) -> None:
+        """`__bool__` False and `__len__` 5 — declined at #2466, closed at #2477.
 
-        Django's `for` renders its five items. This carrier cannot produce them
-        without RUNNING the object, so the value keeps its previous
-        `Value::String` path unchanged rather than being claimed and answered
-        wrong. Nothing becomes stricter than Django, which is the property that
-        matters.
+        The decline's stated reason was "this carrier cannot produce the items
+        without RUNNING the object". `Encoded::items` produces them, for any
+        object that is RE-iterable (`iter(o) is not o`), so the reason is
+        answered rather than argued away. Kept as the CLOSING case, with the
+        assertion inverted, because it names the exact cell the decline cost.
+
+        `{% for %}` over this shape RAISES on Django — the object states a
+        length of 5 and has no `__iter__`, so `ForNode` gets past its length
+        check and then cannot iterate — and djust refuses too, which is the
+        half a naive "claim it and call it empty" fix would have got wrong.
         """
 
         class FalsyButFull:
@@ -498,19 +505,26 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         value = FalsyButFull()
         assert bool(value) is False
         assert django_render(IF, {"p": value}) == "F"
-        assert djust_render(IF, {"p": value}) == "T"
+        assert djust_render(IF, {"p": value}) == "F"
+        assert djust_render(LENGTH, {"p": value}) == django_render(LENGTH, {"p": value}) == "5"
+        assert django_render(FOR, {"p": value}) == "<<REFUSED>>"
+        assert djust_render(FOR, {"p": value}) == "<<REFUSED>>"
 
-    def test_a_falsy_object_that_is_ITERABLE_with_no_len_is_still_truthy(self) -> None:
-        """`__bool__` False, `__iter__` yielding items, no `__len__` — declined.
+    def test_a_falsy_ITERABLE_with_no_len_was_truthy_and_is_now_CLOSED(self) -> None:
+        """`__bool__` False, `__iter__` yielding items, no `__len__`.
 
-        Django's `ForNode` calls `list(values)` for it and renders the items.
-        This carrier cannot produce them without RUNNING the object, and
-        running an arbitrary iterable at the CONVERSION would consume a
-        generator — so the value keeps its previous `Value::String` path.
+        #2466's second decline, and #2489's headline row. The stated worry —
+        "running an arbitrary iterable at the CONVERSION would consume a
+        generator" — is exactly right, and is why the gate is now `iter(o) is
+        not o` rather than "do not enumerate at all": a generator IS its own
+        iterator and is still declined, while a class whose `__iter__` returns
+        a fresh iterator is not consumed by being read.
 
-        The decline is the reason this fix moves nothing into the
-        `djust REFUSES & Django RENDERS` column: claiming it would have made
-        `{% for %}` refuse where Django renders two items.
+        Kept as the CLOSING case with its assertions inverted, and extended
+        with the cell #2489 named: `|length` is Django's 0, because `len(o)`
+        raises and Django's filter catches it — while `{% for %}` renders the
+        two items. Those two answers are why `Encoded` carries `len` and
+        `items` separately.
         """
 
         class FalsyIterable:
@@ -523,30 +537,72 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         value = FalsyIterable()
         assert bool(value) is False
         assert django_render(IF, {"p": value}) == "F"
-        assert djust_render(IF, {"p": value}) == "T"
-        # …and the property that matters: djust did NOT become stricter.
+        assert djust_render(IF, {"p": value}) == "F"
+        assert django_render(LENGTH, {"p": value}) == djust_render(LENGTH, {"p": value}) == "0"
         assert django_render(FOR, {"p": value}) == "[a][b]"
-        assert djust_render(FOR, {"p": value}) != "<<REFUSED>>"
+        assert djust_render(FOR, {"p": value}) == "[a][b]"
+
+    def test_a_ONE_SHOT_iterator_is_still_declined_and_is_not_consumed(self) -> None:
+        """What #2477/#2489 does NOT close, and the reason.
+
+        `iter(g) is g` for a generator, so enumerating it at the conversion
+        would empty the caller's object — the template would iterate items the
+        view can never see again. Declined outright: the value keeps its
+        `Value::String` path, so djust reads the repr where Django reads the
+        items. Asserted in the DIVERGING direction, and paired with the
+        assertion that actually justifies it.
+        """
+
+        def gen():
+            yield "a"
+            yield "b"
+
+        value = gen()
+        assert djust_render(LENGTH, {"p": value}) != django_render(LENGTH, {"p": gen()})
+        # The justification: nothing consumed it.
+        assert list(value) == ["a", "b"]
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(iter([]), id="list_iterator"),
+        ],
+    )
+    def test_a_TRUTHY_no_variant_ITERATOR_still_claims_to_be_a_str(self, value) -> None:
+        """What is LEFT of "a truthy no-variant object is a string" (#2477/#2489).
+
+        This test used to carry three values. Two of them — a non-empty `set`
+        and a plain user instance — were closed: the prediction below was that
+        closing them "needs an ENUMERATION, and enumerating an arbitrary object
+        means calling `list(o)` at the conversion: that consumes a generator
+        and hangs on `itertools.count()`", and both halves of that were right
+        and are what the gate is built out of. A generator is declined because
+        `iter(o) is o`; an unbounded re-iterable is declined at
+        `OPAQUE_ITEM_CAP`. Everything in between is enumerated.
+
+        A list ITERATOR is the shape both objections apply to at once, so it is
+        the one still here, asserted in the DIVERGING direction.
+        """
+        assert djust_render(IF, {"p": value}) == django_render(IF, {"p": value})
+        assert djust_render(LENGTH, {"p": value}) != django_render(LENGTH, {"p": value})
 
     @pytest.mark.parametrize(
         "value",
         [
             pytest.param({1}, id="set-nonempty"),
             pytest.param(Truthy(), id="user-plain"),
-            pytest.param(iter([]), id="list_iterator"),
         ],
     )
-    def test_a_TRUTHY_no_variant_object_still_claims_to_be_a_str(self, value) -> None:
-        """`|length` counts repr characters and `{% for %}` iterates them.
+    def test_the_two_that_moved_off_that_pin_now_agree(self, value) -> None:
+        """The other half, so the deletion above is a MEASUREMENT.
 
-        Not a truthiness defect — `{% if %}` agrees for all three. Closing it
-        needs an ENUMERATION, and enumerating an arbitrary object means calling
-        `list(o)` at the conversion: that consumes a generator and hangs on
-        `itertools.count()`. A safe-to-enumerate decision per type is a
-        different fix.
+        A pin whose rows are removed without asserting they stopped diverging
+        is a pin quietly narrowed. `{1}` is enumerated; `Truthy()` has no
+        `__len__` and no `__iter__`, so Django's `|length` catches the
+        TypeError and answers 0, and so does the carrier.
         """
         assert djust_render(IF, {"p": value}) == django_render(IF, {"p": value})
-        assert djust_render(LENGTH, {"p": value}) != django_render(LENGTH, {"p": value})
+        assert djust_render(LENGTH, {"p": value}) == django_render(LENGTH, {"p": value})
 
 
 class TestTheFalsinessRuleStillHasONEDefinition:
@@ -555,7 +611,7 @@ class TestTheFalsinessRuleStillHasONEDefinition:
     Both assertions are EQUALITIES over an extracted set rather than floors. A
     floor cannot see an arm being REMOVED, and removal is the direction this
     class fails in — #2448 added `Value::Encoded` and neither iterability probe
-    named it for two releases, which is the gap `falsy_opaque` had to close.
+    named it for two releases, which is the gap `opaque_value` had to close.
     """
 
     def _production(self, path: pathlib.Path) -> str:
@@ -575,7 +631,7 @@ class TestTheFalsinessRuleStillHasONEDefinition:
         source = self._production(CORE_RS)
         assert source.count("pub fn is_truthy(&self) -> bool {") == 1
 
-    def test_falsy_opaque_reads_pythons_bool_and_does_not_re_derive_it(self) -> None:
+    def test_opaque_value_reads_pythons_bool_and_does_not_re_derive_it(self) -> None:
         """The bit is asked of the object, not computed from the display.
 
         The derivation this rejects is the one #2458 rejected one level down:
@@ -584,12 +640,22 @@ class TestTheFalsinessRuleStillHasONEDefinition:
         question.
         """
         source = self._production(CORE_RS)
-        start = source.index("pub fn falsy_opaque(")
+        # The bit is ASKED in `opaque_gate`, which is where the whole gate
+        # moved at #2477/#2489 — one statement, two consumers (the payload
+        # build and `crosses_as_encoded`). It was the literal `truthy: false,`
+        # in `opaque_value` until the gate widened past the falsy-only class;
+        # the assertion moved with it rather than being dropped, because "the
+        # bit is asked, not derived" is the claim and not its address.
+        start = source.index("fn opaque_gate(")
+        gate = source[start : source.index("\n}\n", start)]
+        assert "let truthy = ob.is_truthy().ok()?;" in gate, gate
+        # ...and CARRIED verbatim onto the struct by the build.
+        start = source.index("pub fn opaque_value(")
         body = source[start : source.index("\n}\n", start)]
-        assert "ob.is_truthy()" in body, body
-        assert "truthy: false," in body, body
+        assert "opaque_gate(ob)?" in body, body
+        assert "truthy," in body, body
         for never in ("display.is_empty()", 'display == "', "type_name =="):
-            assert never not in body, (never, body)
+            assert never not in gate + body, (never, gate + body)
 
     def test_both_iterability_probes_name_the_carrier(self) -> None:
         """`iter_values` and `python_len` must move together (#1646).
@@ -599,14 +665,19 @@ class TestTheFalsinessRuleStillHasONEDefinition:
         to one alone is the drift this reddens.
         """
         source = self._production(FILTERS_RS)
-        for probe, bit in (
-            ("pub fn iter_values(", "iterable"),
-            ("pub fn python_len(", "sized_empty"),
+        for probe, expected in (
+            # `iter_values` reads the ITEMS, then falls back to the `iterable`
+            # bit for the empty-by-construction case (#2477/#2489).
+            ("pub fn iter_values(", ("e.items.is_some()", "e.iterable")),
+            # `python_len` IS the carried `len`, which is what widened from
+            # #2466's `sized_empty` bit — a bit cannot say `Some(3)`.
+            ("pub fn python_len(", ("Value::Encoded(e) => e.len,",)),
         ):
             start = source.index(probe)
             body = source[start : source.index("\n}\n", start)]
-            assert f"Value::Encoded(e) if e.{bit}" in body, (probe, body)
-        # …and they must read DIFFERENT bits, which is the whole point: one
+            for needle in expected:
+                assert needle in body, (probe, needle, body)
+        # …and they must read DIFFERENT facts, which is the whole point: one
         # bit for both was the first version of this fix and it made
         # `{{ LenZero()|safeseq }}` render where Django raises.
         iter_body = source[
@@ -614,7 +685,7 @@ class TestTheFalsinessRuleStillHasONEDefinition:
                 "\n}\n", source.index("pub fn iter_values(")
             )
         ]
-        assert "e.sized_empty" not in iter_body, iter_body
+        assert "e.len" not in iter_body, iter_body
 
     def test_the_for_arm_names_it_too_and_the_rust_pin_exists(self) -> None:
         """The THIRD implementation of the same question, and its pin.
@@ -625,7 +696,8 @@ class TestTheFalsinessRuleStillHasONEDefinition:
         deleted, because a Python test cannot see a Rust test being removed.
         """
         source = self._production(RENDERER_RS)
-        assert "Value::Encoded(ref e) if e.sized_empty" in source
+        assert "Value::Encoded(ref e) if e.len == Some(0)" in source
+        assert "Value::Encoded(ref e) if e.items.is_some()" in source
         assert "fn for_iterability_agrees_with_iter_values()" in RENDERER_RS.read_text(
             encoding="utf-8"
         )

@@ -228,12 +228,45 @@ class TestTheExemptionsStatedReasonWasFalse:
         # ...because `eval` supplies builtins to a globals mapping without them.
         assert "__builtins__" in env
 
-    def test_the_exemption_is_gone_and_the_member_is_required(self, diff) -> None:
+    def test_the_exemption_came_BACK_for_a_different_reason(self, diff) -> None:
+        """#2482 deleted the exemption; #2477/#2489 restored it, and the two
+        reasons are not the same claim.
+
+        #2482's finding stands: a user-defined class instance CAN be a corpus
+        row, and the deleted exemption said otherwise. What changed is the ARM
+        — `opaque_value` claims a falsy `__iter__` class now, so the row that
+        inhabited `str-fallback:falsy` inhabits `opaque_value:falsy`, and the
+        member is uninhabited again because every remaining shape on that arm
+        is one a corpus row cannot BE.
+
+        Asserted as the pair it is: the old (false) reason is still absent from
+        `VALUE_TRUTHINESS_ONE_ANSWER`, and the new one is a whole-arm exemption
+        with a reason, which the manifest checks for staleness on every run.
+        """
         assert ("str-fallback", "falsy") not in diff.VALUE_TRUTHINESS_ONE_ANSWER
+        assert "str-fallback" in diff.VALUE_TRUTHINESS_NOT_INHABITABLE
+        reason = diff.VALUE_TRUTHINESS_NOT_INHABITABLE["str-fallback"]
+        assert "one-shot" in reason and "cap" in reason, reason
+        # `_required_value_truthiness` still LISTS the member — the exemption
+        # is subtracted downstream, which is what makes a stale one reportable
+        # rather than invisible. So the assertion is on the exempt set.
         for member in ("value:str-fallback:falsy", "arg:str-fallback:falsy"):
-            assert member not in diff.VALUE_TRUTHINESS_EXEMPT
-            assert member in diff._required_value_truthiness()
-            assert member in diff._swept_value_truthiness()
+            assert member in diff.VALUE_TRUTHINESS_EXEMPT
+            assert member not in diff._swept_value_truthiness()
+
+    def test_the_row_still_inhabits_a_member_and_it_is_the_new_one(self, diff) -> None:
+        """The half that keeps the row from becoming decorative.
+
+        A row whose member is exempt covers nothing, and a corpus row that
+        covers nothing is one nobody would notice deleting. This one is not:
+        it lands on `opaque_value`, is falsy, and is what the `#2477` canary in
+        `test_differential_reachability_manifest_2345.py` had to account for
+        when its gap shrank from four members to two.
+        """
+        value = diff.INPUTS["o-falsy-iter"]
+        assert diff._no_variant_outcome(value) == "opaque_value"
+        assert not value
+        assert "value:opaque_value:falsy" in diff._swept_value_truthiness()
 
 
 class TestTheFalsyIterableRowIsTheShape2466Declined:
@@ -252,7 +285,7 @@ class TestTheFalsyIterableRowIsTheShape2466Declined:
         with pytest.raises(TypeError, match="has no len"):
             len(value)  # type: ignore[arg-type]
         # No public attribute, so the `__dict__` bulk-dump arm ABOVE
-        # `falsy_opaque` does not claim it — that would make it a
+        # `opaque_value` does not claim it — that would make it a
         # `Value::Object` and a different question (#2478).
         assert not [k for k in vars(value) if not k.startswith("_")]
 

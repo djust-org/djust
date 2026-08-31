@@ -281,9 +281,14 @@ class TestTheWireResidueIsNamed:
     #: docstring predicted the shape of that day ("rewrite them as parity
     #: assertions"), and `test_the_datetime_family_now_refuses_with_CPythons_own_message`
     #: below is the rewrite.
-    RESIDUE: dict[str, object] = {
-        "object()": object(),
-    }
+    #: EMPTY since #2477/#2489, which widened the carrier past the falsy-only
+    #: class it had at #2466. A bare `object()` is truthy, not iterable and
+    #: attribute-less, so it crosses as a `Value::Encoded` holding CPython's
+    #: `tp_name` — and `{% for x in p %}` refuses with `'object' object is not
+    #: iterable`, which is Django's own message. The residue this class was
+    #: named for is gone; the class is kept for the parity rows below, which
+    #: are what would notice it reopening.
+    RESIDUE: dict[str, object] = {}
 
     #: The four that moved, kept here as PARITY rows rather than deleted: a
     #: closed residue that leaves no test behind is a residue nobody would
@@ -295,38 +300,74 @@ class TestTheWireResidueIsNamed:
         "timedelta": datetime.timedelta(days=1),
     }
 
-    #: And the other direction of the SAME mechanism, which a residue list of
-    #: refusals alone would have missed: a `set` IS iterable in Django, so it
-    #: renders its elements — and djust renders the characters of `"{1}"`.
-    #: The wire loses the type either way; only which side is wrong changes.
-    ITERABLE_RESIDUE: dict[str, object] = {"set": {1}}
+    #: The fifth shape, which moved at #2477/#2489 rather than #2448 — so its
+    #: refusal message names `object` rather than a dotted `datetime.X`, and it
+    #: gets its own row instead of being folded into the four above.
+    WAS_RESIDUE_NOW_PARITY_PLAIN: dict[str, object] = {"object()": object()}
 
-    @pytest.mark.parametrize("name", sorted(RESIDUE))
-    def test_django_refuses_and_djust_iterates_the_string(self, name: str) -> None:
-        value = self.RESIDUE[name]
+    #: EMPTY since #2477/#2489, and this half is the sharper closure: a `set`
+    #: IS iterable in Django, so it rendered its elements while djust rendered
+    #: the characters of `"{1}"`. The carrier enumerates it now, so both
+    #: iterate the same one element. Kept as a name with a parity row rather
+    #: than deleted, for the reason the four above are.
+    ITERABLE_RESIDUE: dict[str, object] = {}
+
+    WAS_ITERABLE_RESIDUE_NOW_PARITY: dict[str, object] = {"set": {1}}
+
+    def test_both_residue_lists_are_empty_and_that_is_the_measurement(self) -> None:
+        """Both lists emptied, and neither may be emptied by hand.
+
+        A residue list that shrinks without its rows moving to a PARITY list is
+        a pin quietly narrowed. Every name that left is below, asserted against
+        Django, so "the residue is closed" is a run rather than a deletion.
+        """
+        assert not self.RESIDUE and not self.ITERABLE_RESIDUE
+        assert set(self.WAS_RESIDUE_NOW_PARITY) == {"date", "datetime", "time", "timedelta"}
+        assert set(self.WAS_RESIDUE_NOW_PARITY_PLAIN) == {"object()"}
+        assert set(self.WAS_ITERABLE_RESIDUE_NOW_PARITY) == {"set"}
+
+    @pytest.mark.parametrize("name", sorted(WAS_RESIDUE_NOW_PARITY_PLAIN))
+    def test_a_bare_object_now_refuses_with_CPythons_own_message(self, name: str) -> None:
+        """#2477/#2489's half of the rewrite this class's docstring asked for.
+
+        `object()` is truthy, has no `__len__` and no `__iter__`, so the
+        carrier claims it and `python_type_name` reads the `tp_name` it
+        measured. The message is Django's, which is what says the boundary
+        carries the real type rather than `str`.
+        """
+        value = self.WAS_RESIDUE_NOW_PARITY_PLAIN[name]
         assert django_refuses(value), f"Django moved for {name}"
         out = djust_out({"p": value})
-        assert not out.startswith("<<EXC "), f"{name}: djust now refuses — close this pin"
-        assert out.startswith("["), out
+        assert out.startswith("<<EXC "), f"{name}: djust no longer refuses — {out!r}"
+        assert "'object' object is not iterable" in out, out
+        assert "'object' object is not iterable" in django_out({"p": value})
 
-    @pytest.mark.parametrize("name", sorted(ITERABLE_RESIDUE))
-    def test_django_iterates_the_value_and_djust_the_string(self, name: str) -> None:
-        value = self.ITERABLE_RESIDUE[name]
-        assert not django_refuses(value), f"Django moved for {name}"
-        assert djust_out({"p": value}) != django_out({"p": value})
-        assert djust_out({"p": value}) == djust_out({"p": str(value)})
+    @pytest.mark.parametrize("name", sorted(WAS_ITERABLE_RESIDUE_NOW_PARITY))
+    def test_an_iterable_no_variant_value_now_renders_its_ELEMENTS(self, name: str) -> None:
+        """The permissive direction, closed (#2477/#2489).
 
-    def test_it_is_the_STRING_that_is_iterated_and_not_something_else(self) -> None:
-        """The mechanism, stated so the next reader does not re-derive it: the
-        rendered output is exactly what the same loop over `str(value)`
-        renders.
-
-        The witness was a `date` until #2448 gave the datetime family a typed
-        variant; it is a bare `object()` now, which is the shape still on the
-        `str()` path.
+        A `set` rendered the characters of `"{1}"` — three cells where Django
+        renders one. The carrier enumerates it, so the two agree; asserted
+        against Django rather than against a literal, and paired with the
+        statement that it is no longer the STRING being iterated.
         """
-        value = object()
-        assert djust_out({"p": value}) == djust_out({"p": str(value)})
+        value = self.WAS_ITERABLE_RESIDUE_NOW_PARITY[name]
+        assert not django_refuses(value), f"Django moved for {name}"
+        assert djust_out({"p": value}) == django_out({"p": value})
+        assert djust_out({"p": value}) != djust_out({"p": str(value)})
+
+    def test_it_is_no_longer_the_STRING_that_is_iterated(self) -> None:
+        """The mechanism, inverted.
+
+        This asserted that the rendered output was exactly what the same loop
+        over `str(value)` renders — the witness being a `date` until #2448, and
+        a bare `object()` after it. Neither is on the `str()` path now, so the
+        assertion is the other way round and the witness is the one shape that
+        still iterates: a value whose items the carrier enumerated.
+        """
+        value = {1}
+        assert djust_out({"p": value}) != djust_out({"p": str(value)})
+        assert djust_out({"p": value}) == django_out({"p": value})
 
     @pytest.mark.parametrize("name", sorted(WAS_RESIDUE_NOW_PARITY))
     def test_the_datetime_family_now_refuses_with_CPythons_own_message(self, name: str) -> None:

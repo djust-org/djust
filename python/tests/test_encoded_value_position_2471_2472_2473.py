@@ -728,18 +728,22 @@ class TestTheOtherEncodedSinksWereDecidedNotForgotten:
         assert du == dj
 
 
-class TestAnAwareTimeIsNotAnEncodedAtAll:
-    """The one member of the family that never reaches this variant.
+class TestAnAwareTimeHasNoCOMPARISONDomain:
+    """The one member of the family ``django_json_encoded`` never claims.
 
     ``DjangoJSONEncoder.default`` RAISES for a timezone-aware ``time``
-    (``ValueError: JSON can't represent timezone-aware times.``), so
-    ``django_json_encoded`` fails closed and the value stays the
-    ``Value::String(str(o))`` it was before #2448. That is the refusal
-    direction #2429 declined; this fix does not change it.
+    (``ValueError: JSON can't represent timezone-aware times.``), so that arm
+    fails closed. Pinned because it is the reason ``comparison_key`` has FIVE
+    domains and not six, and the reason ``GENERATORS`` above has five entries —
+    an aware-``time`` domain would be an arm no test could reach (#1859).
 
-    Pinned because it is the reason ``comparison_key`` has FIVE domains and not
-    six, and the reason ``GENERATORS`` above has five entries — an
-    aware-``time`` domain would be an arm no test could reach (#1859).
+    The class was ``TestAnAwareTimeIsNotAnEncodedAtAll`` until #2477/#2489.
+    The value now DOES reach ``Value::Encoded``, by the other arm in the same
+    block: it is truthy, not iterable, has no ``__dict__``, so ``opaque_value``
+    claims it and carries ``str(o)``, ``repr(o)``, ``bool(o)`` and no
+    comparison key. What did not change is the thing this class pins — the
+    domain count — because that is ``django_json_encoded``'s list, not the
+    carrier's.
     """
 
     AWARE_TIME = datetime.time(3, 4, 5, tzinfo=UTC)
@@ -751,26 +755,54 @@ class TestAnAwareTimeIsNotAnEncodedAtAll:
         with pytest.raises(ValueError, match="timezone-aware times"):
             DjangoJSONEncoder().default(self.AWARE_TIME)
 
-    def test_it_still_renders_and_compares_as_a_string(self) -> None:
-        """Consequences, stated as measurements: it renders its ``str``
-        (which for a `time` Django localizes, so `{{ p }}` diverges as above),
-        it is EQUAL to itself (two equal strings), and ``|pprint`` gives the
-        quoted display rather than the constructor form."""
+    def test_it_reaches_the_carrier_by_the_OTHER_arm(self) -> None:
+        """Which arm claims it, asked rather than inferred from a rendering."""
+        assert _rust.crosses_as_encoded(self.AWARE_TIME)
+
+    def test_pprint_gained_the_constructor_form_and_equality_LOST_its_answer(
+        self,
+    ) -> None:
+        """Both directions of the move, measured (#2477/#2489).
+
+        This test asserted that the value "renders and compares as a STRING":
+        equal to itself because two equal strings are equal, and ``|pprint``
+        giving the quoted display because that is what a ``Value::String``
+        gives. One of those got better and one got worse, and neither is worth
+        hiding.
+
+        BETTER — ``|pprint`` now gives ``repr(o)``, the constructor form, which
+        is what Django spells. That cell was a divergence and is not one.
+
+        WORSE — ``{% if p == p %}`` is ``N`` where Django says ``Y``. An
+        ``Encoded`` built by ``opaque_value`` carries NO comparison key, so
+        ``python_partial_cmp`` answers ``None`` for every pair either side of
+        which came from that arm: never equal, never ordered. As a
+        ``Value::String`` this value compared by TEXT and got the right answer
+        for the wrong reason — the same mechanism that made ``{{ p|length }}``
+        count the characters of a repr.
+
+        That is #2480, widened rather than introduced: #2466 already did this
+        to ``set()``, ``complex(0)`` and an empty ``dict_keys``, and
+        #2477/#2489 adds the truthy members of the same class. Pinned in the
+        DIVERGING direction so closing #2480 reddens it rather than passing
+        silently, and counted in
+        ``python/tests/test_opaque_collections_2477_2489.py``.
+        """
         v = self.AWARE_TIME
-        assert branch("==", v, v) == ("Y", "Y")
         assert _rust.render_template("{{ p }}", {"p": v}) == str(v)
-        # `|pprint` escapes its output, so the quotes arrive as entities; the
-        # content is the DISPLAY string's repr, which is what a `Value::String`
-        # gives and what an `Encoded` would NOT.
-        assert _rust.render_template("{{ p|pprint }}", {"p": v}) == "&#x27;03:04:05+00:00&#x27;"
-        # Django spells the constructor form, so `|pprint` is a divergence —
-        # NOT this fix's, and it survives it.
+        # The cell that improved.
+        assert _rust.render_template("{{ p|pprint }}", {"p": v}) == repr(v).replace(
+            "'", "&#x27;"
+        ).replace("<", "&lt;").replace(">", "&gt;")
+        assert "datetime.time(" in _rust.render_template("{{ p|pprint }}", {"p": v})
         assert "datetime.time(" in DjangoTemplate("{{ p|pprint }}").render(DjangoContext({"p": v}))
+        # The cell that regressed, asserted against Django so the pin names the
+        # right answer rather than the current one.
+        assert branch("==", v, v) == ("Y", "N")
 
     def test_an_aware_time_is_not_equal_to_a_naive_one_on_either_engine(self) -> None:
-        """The one answer that still has to be right through the string path:
-        the two spellings differ, so the string compare says not-equal, which
-        is what Python says."""
+        """The answer that is right either way: the two are not equal in
+        Python, and a carrier with no comparison key cannot say they are."""
         assert branch("==", self.AWARE_TIME, datetime.time(3, 4, 5)) == ("N", "N")
 
 
@@ -917,14 +949,17 @@ class TestTheStateRoundTripKeepsTheAnswers:
             False,
             # #2466's two bits, which sit BEFORE these two because they were
             # appended first — a positional payload only stays readable if
-            # every widening appends at the end (#1541).
-            False,
+            # every widening appends at the end (#1541). The FIRST of them is
+            # no longer a bit: #2477/#2489 widened it to `len(o)` itself,
+            # because the objects the carrier claims now have counts and a
+            # boolean cannot say `Some(3)`. `None` for a `timedelta`.
+            None,
             False,
             "datetime.timedelta(0)",
             [1, 0, 0],
-            # #2481's attribute map, appended last for the reason every
-            # widening before it was: a positional payload only stays readable
-            # if nothing moves (#1541). `{{ p.days }}` resolves off this.
+            # #2481's attribute map, appended for the reason every widening
+            # before it was: a positional payload only stays readable if
+            # nothing moves (#1541). `{{ p.days }}` resolves off this.
             #
             # It gained `total_seconds` in #2485: the map holds Django's whole
             # lookup step 2 — the DATA attributes and the AUTO-CALLED ones —
@@ -932,7 +967,17 @@ class TestTheStateRoundTripKeepsTheAnswers:
             # is unchanged, which is the compatibility statement; only the map
             # inside it grew, and a reader that does not know the name simply
             # does not ask for it.
+            #
+            # The two widenings compose exactly because they are of different
+            # KINDS: #2485 grew this map and added no position, #2477/#2489
+            # added a position and left the map alone. That is what makes the
+            # width below 10 and not 11 — arithmetic that the round trip and
+            # the shift canary check rather than take on trust.
             {"days": 0, "seconds": 0, "microseconds": 0, "total_seconds": 0.0},
+            # #2477/#2489's enumerated items, appended AFTER it. `None` for a
+            # `timedelta`, which is not iterable — and `None` is a DIFFERENT
+            # statement from an empty list.
+            None,
         ]
 
     def test_a_shorter_payload_still_reads_without_fabricating_the_answers(self) -> None:
@@ -960,9 +1005,17 @@ class TestTheStateRoundTripKeepsTheAnswers:
             view.set_state("p", datetime.timedelta(0))
             view.set_state("q", datetime.timedelta(0))
             decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
-            assert len(decoded[1]["p"]["__djust_encoded__"]) == 9
+            assert len(decoded[1]["p"]["__djust_encoded__"]) == 10
             for key in ("p", "q"):
-                decoded[1][key]["__djust_encoded__"] = decoded[1][key]["__djust_encoded__"][:n]
+                parts = decoded[1][key]["__djust_encoded__"]
+                # A LEGACY payload is not a truncation of the current one
+                # (#2477/#2489): slot 4 widened from #2466's `sized_empty`
+                # boolean to `len(o)`, so every width below 10 carries a `Bool`
+                # there. Put it back before truncating, or the arms below
+                # refuse on the TYPE and the test measures that instead of the
+                # fallback it is named for.
+                parts[4] = False
+                decoded[1][key]["__djust_encoded__"] = parts[:n]
             packed = msgpack.packb(decoded, use_bin_type=True)
             return RustLiveView.deserialize_msgpack(packed).render()
 
@@ -975,7 +1028,10 @@ class TestTheStateRoundTripKeepsTheAnswers:
         assert truncated(self.REPR, 8) == "datetime.timedelta(0)", (
             "an 8-element payload lost its repr"
         )
-        # And the NINE-element payload for the same value answers both the new
+        # NINE is the #2481 shape and carries both too — it is the ITEMS it
+        # lacks, which is `None` for a `timedelta` either way.
+        assert truncated(self.EQ, 9) == "Y", "a 9-element payload lost its key"
+        # And the TEN-element payload for the same value answers both the new
         # way, which is what makes the arms above a compatibility read rather
         # than the bug.
         assert self._round_trip(self.EQ, datetime.timedelta(0)) == "Y"
@@ -1028,7 +1084,7 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
     ``complex(0)`` and any falsy user object — so the comparison arm this PR
     adds is REACHED for values whose Python ordering it cannot know.
 
-    It answers ``None`` for every such pair, because ``falsy_opaque`` sets no
+    It answers ``None`` for every such pair, because ``opaque_value`` sets no
     ``cmp_key``: never equal, never ordered. Pinned here for two reasons.
 
     **It is not this PR's regression, and the pin says whose it is.** Before
@@ -1092,7 +1148,7 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
         dj, du = branch(op, v, v)
         assert du == dj
 
-    def test_a_falsy_opaque_against_a_datetime_is_not_comparable_on_either_engine(self) -> None:
+    def test_a_opaque_value_against_a_datetime_is_not_comparable_on_either_engine(self) -> None:
         """The mixed pair the merge made reachable — one operand with a key and
         one without. ``python_partial_cmp``'s ``?`` short-circuits on the
         missing key before the domain check, so this is the same ``None``, and
@@ -1103,11 +1159,11 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
 
     def test_its_repr_is_MEASURED_and_not_a_copy_of_display(self) -> None:
         """The bug the merge would otherwise have shipped, and the reason
-        ``falsy_opaque`` calls ``repr()`` rather than cloning ``display`` the
+        ``opaque_value`` calls ``repr()`` rather than cloning ``display`` the
         way it clones it into ``json``.
 
         For ``set()``, ``frozenset()`` and ``complex(0)`` the two spellings
-        coincide — so every builtin ``falsy_opaque`` was written for would have
+        coincide — so every builtin ``opaque_value`` was written for would have
         passed a ``display``-copying implementation. A user class defines them
         independently, and ``{{ p|pprint }}`` renders whichever field is
         carried.
@@ -1126,7 +1182,7 @@ class TestAFalsyOpaqueEncodedIsNotComparable:
         """Why gating the measurement off reddens exactly ONE test, and why
         that is completeness rather than thin coverage.
 
-        The gate-off mutation that replaces ``falsy_opaque``'s ``repr()`` call
+        The gate-off mutation that replaces ``opaque_value``'s ``repr()`` call
         with ``display.clone()`` fails
         :func:`test_its_repr_is_MEASURED_and_not_a_copy_of_display` and nothing
         else — confirmed by a crossed run, which named that test and no other.

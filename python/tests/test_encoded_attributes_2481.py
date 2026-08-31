@@ -353,7 +353,14 @@ class TestTheStateRoundTripKeepsTheAttributes:
         payload = msgpack.unpackb(blob, raw=False, strict_map_key=False)[1]["p"][
             "__djust_encoded__"
         ]
-        assert len(payload) == 9, payload
+        # TEN, and the two widenings that got it there are of different KINDS
+        # — which is the whole of why they compose without either re-numbering
+        # the other. #2485 grew the MAP at slot 8 and added no position;
+        # #2477/#2489 widened slot 4 to a count and appended slot 9 for the
+        # items. Both assertions below are kept, so a change that moved the
+        # map's contents into a POSITION of their own fails here rather than
+        # arriving as a plausible width.
+        assert len(payload) == 10, payload  # nine until #2477/#2489 grew it
         # The three DATA attributes, then the one AUTO-CALLED result (#2485) —
         # both producers write this ONE map, in table order, and the order is
         # what `values_structurally_equal`'s zipped compare reads.
@@ -364,6 +371,8 @@ class TestTheStateRoundTripKeepsTheAttributes:
             "total_seconds": 259290.000005,
         }
         assert list(payload[8]) == ["days", "seconds", "microseconds", "total_seconds"]
+        # ...and the appended slot is the ITEMS, `None` for a `timedelta`.
+        assert payload[9] is None
 
     def test_an_EIGHT_element_payload_still_reads_with_no_attributes(self) -> None:
         """A pre-#2481 process's state outlives it: a Redis backend hands back
@@ -382,7 +391,14 @@ class TestTheStateRoundTripKeepsTheAttributes:
         view.set_state("p", datetime.timedelta(days=3))
         decoded = msgpack.unpackb(view.serialize_msgpack(), raw=False, strict_map_key=False)
         payload = decoded[1]["p"]["__djust_encoded__"]
-        assert len(payload) == 9, payload
+        assert len(payload) == 10, payload
+        # A LEGACY payload is not a truncation of the current one (#2477/#2489):
+        # slot 4 widened from #2466's `sized_empty` boolean to `len(o)` itself,
+        # so every width below 10 carries a `Bool` there while a 10-element one
+        # carries an int or `None`. Put the boolean back before truncating, or
+        # the test measures that mismatch rather than the fallback it is named
+        # for.
+        payload[4] = False
         decoded[1]["p"]["__djust_encoded__"] = payload[:8]
         legacy = msgpack.packb(decoded, use_bin_type=True)
 

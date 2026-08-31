@@ -21,14 +21,14 @@ a **non-empty** ``Value::Object``, whose truthiness is the mapping rule.
 
 Why #2466 could not close it, and what changed
 -----------------------------------------------
-``falsy_opaque`` was placed AFTER the ``__dict__`` arm deliberately: routing an
+``opaque_value`` was placed AFTER the ``__dict__`` arm deliberately: routing an
 attribute-carrying object through the ``Encoded`` carrier would have fixed
 ``{% if %}`` and broken ``{{ obj.a }}``, because an ``Encoded`` had no
 attributes. That reasoning was correct, and it is still asserted — as the
 CLOSING case — in ``test_falsy_conversion_2466.py``.
 
 #2481 gave ``Encoded`` an attribute map. So #2478 is a REORDER plus one field:
-``falsy_opaque`` moves ABOVE the ``__dict__`` arm and carries the object's
+``opaque_value`` moves ABOVE the ``__dict__`` arm and carries the object's
 public ``__dict__`` on the carrier. Every cell is then answered by a spelling
 the struct already has.
 
@@ -66,7 +66,7 @@ asserting it.
 
 The gate is #2466's, unchanged
 -------------------------------
-``falsy_opaque`` still declines a falsy object with a NON-ZERO ``__len__`` and
+``opaque_value`` still declines a falsy object with a NON-ZERO ``__len__`` and
 one that is ITERABLE with no ``__len__`` — Django renders their items, and this
 carrier cannot produce them without RUNNING the object. They keep their
 ``Value::Object``, which is what ``TestTheGateIsUNCHANGED`` measures: only the
@@ -76,7 +76,7 @@ it answered on the build before this change.
 Both serialization floors stay above this arm
 ----------------------------------------------
 ``__djust_serialize__`` (#1986) and the raw-``Model`` arm (#1986 vector 7) are
-ordered BEFORE ``falsy_opaque``, so a Django model cannot reach it and cannot
+ordered BEFORE ``opaque_value``, so a Django model cannot reach it and cannot
 have its denylisted fields collected into the attribute map. Asserted by source
 ORDER rather than left to reading, because the ordering IS the enforcement.
 
@@ -211,8 +211,15 @@ class DunderStrWithAttrs:
 
 
 class LenTwoBoolFalseWithAttrs:
-    """DECLINED by the gate: falsy with a NON-ZERO `__len__`. Django renders
-    its two items; this carrier cannot produce them without running it."""
+    """DECLINED by #2466's gate: falsy with a NON-ZERO `__len__`.
+
+    CLAIMED since #2477/#2489, which is why this shape moved lists. The
+    decline's reason — "the carrier cannot produce the items without running
+    the object" — was answered rather than argued away: `opaque_value` now
+    enumerates a RE-iterable object (`iter(o) is not o`, which this is), so
+    `{% for %}` renders `[10][20]` on both engines. Only a ONE-SHOT iterator
+    is still declined, because reading one consumes the caller's object.
+    """
 
     def __init__(self) -> None:
         self.a = 1
@@ -236,7 +243,7 @@ class LenZeroNoAttrs:
 
 class TruthyWithAttrs:
     """The control on the other side of the gate — Python calls it TRUE, so
-    `falsy_opaque` declines it and it keeps the `__dict__` arm."""
+    `opaque_value` declines it and it keeps the `__dict__` arm."""
 
     def __init__(self) -> None:
         self.a = 1
@@ -244,7 +251,7 @@ class TruthyWithAttrs:
 
 class LenZeroPrivateOnly:
     """Falsy with only a `_`-prefixed attribute. The `__dict__` filter skips
-    it, so this reached `falsy_opaque` BEFORE #2478 too — the control that
+    it, so this reached `opaque_value` BEFORE #2478 too — the control that
     proves the reorder did not change the empty-map path."""
 
     def __init__(self) -> None:
@@ -268,16 +275,25 @@ SHAPES = {
     )
 }
 
-#: The shapes the gate ADMITS — the ones #2478 moves.
+#: The shapes the gate ADMITS — the ones #2478 moved, plus the one
+#: #2477/#2489 added.
+#:
+#: `LenTwoBoolFalseWithAttrs` was in `UNCHANGED` until #2477/#2489. It is falsy
+#: with a non-zero `__len__` and a re-iterable `__iter__`, and #2466 declined it
+#: because the carrier could not produce its items; `Encoded::items` can, so it
+#: is claimed and every one of its cells now agrees with Django except the two
+#: on `STILL_DIVERGENT`. Its `PRE_FIX` rows stay in the table and are what
+#: `TestPreFixIsNotTheCurrentBuild` reads to prove the move happened.
 CLAIMED = [
     "LenZeroWithAttrs",
     "BoolFalseWithAttrs",
     "LenZeroWithAttrsAndIter",
     "DunderStrWithAttrs",
+    "LenTwoBoolFalseWithAttrs",
 ]
 
-#: The shape the gate DECLINES, and the three it never saw. None may move.
-UNCHANGED = ["LenTwoBoolFalseWithAttrs", "LenZeroNoAttrs", "TruthyWithAttrs", "LenZeroPrivateOnly"]
+#: The shapes no gate here admits. None may move.
+UNCHANGED = ["LenZeroNoAttrs", "TruthyWithAttrs", "LenZeroPrivateOnly"]
 
 #: Every cell, one per consumer of the six facts above. Kept in the order
 #: `scratch/sweep_2478.py` emits, so the recorded table below lines up.
@@ -1002,7 +1018,7 @@ class TestTheAttributeStillResolves:
 
 
 class TestTheGateIsUNCHANGED:
-    """Only the objects `falsy_opaque`'s gate ADMITS moved.
+    """Only the objects `opaque_value`'s gate ADMITS moved.
 
     Every cell of every other shape is compared against `PRE_FIX` — djust's own
     answer on the build immediately BEFORE this change — rather than against
@@ -1019,14 +1035,21 @@ class TestTheGateIsUNCHANGED:
             pytest.skip("address-shredding cell — see PRE_FIX_UNASSERTABLE")
         assert djust_render(source, _ctx(shape)) == PRE_FIX[(shape, source)]
 
-    def test_a_declined_shape_still_keeps_its_mapping(self) -> None:
-        """The sharp end: a falsy object with a NON-ZERO `__len__` still
-        arrives as a `Value::Object`, so `{% for %}` over it still iterates the
-        ATTRIBUTES. That is a divergence — Django renders `10` and `20` — and
-        it is #2466's recorded decline, neither introduced nor closed here."""
+    def test_the_len_two_shape_that_used_to_iterate_its_ATTRIBUTES_now_agrees(
+        self,
+    ) -> None:
+        """This test recorded #2466's decline; #2477/#2489 closed it.
+
+        A falsy object with a NON-ZERO `__len__` arrived as a `Value::Object`,
+        so `{% for %}` over it iterated the ATTRIBUTES — `[a]` where Django
+        renders `[10][20]`. Kept, with its assertion INVERTED, rather than
+        deleted: the pin's value is that it names the exact cell the decline
+        cost, and a regression would put `[a]` back.
+        """
         ctx = _ctx("LenTwoBoolFalseWithAttrs")
         assert django_render("{% for x in p %}[{{ x }}]{% endfor %}", ctx) == "[10][20]"
-        assert djust_render("{% for x in p %}[{{ x }}]{% endfor %}", ctx) == "[a]"
+        assert djust_render("{% for x in p %}[{{ x }}]{% endfor %}", ctx) == "[10][20]"
+        assert djust_render("{{ p|length }}", ctx) == django_render("{{ p|length }}", ctx) == "2"
 
     def test_the_2466_family_is_untouched(self) -> None:
         """#2466's own objects took this arm before #2478 and must be
@@ -1163,7 +1186,10 @@ class TestThePreFixTableIsNOTVacuous:
                 "answers — either the fix regressed or PRE_FIX is recording "
                 "the CURRENT build"
             )
-        assert sum(len(v) for v in moved.values()) == 131, (
+        # 131 for the four shapes #2478 claimed, plus 32 for the fifth that
+        # #2477/#2489 added — `LenTwoBoolFalseWithAttrs`, which moved off the
+        # `Value::Object` of its attributes and onto the carrier.
+        assert sum(len(v) for v in moved.values()) == 163, (
             "the total cell movement changed; re-measure with "
             "`scratch/sweep_2478.py` before editing this number"
         )
@@ -1190,7 +1216,7 @@ class TestThePreFixTableIsNOTVacuous:
 
 
 class TestTheSerializationFloorsStayAbove:
-    """`falsy_opaque` now dumps a `__dict__`, so its ORDER relative to the two
+    """`opaque_value` now dumps a `__dict__`, so its ORDER relative to the two
     denylist arms is a security boundary rather than a style choice: a Django
     model reaching it would have its floor fields (`password`, …) collected
     into the attribute map by the same bulk dump #1986 routed models around.
@@ -1206,17 +1232,17 @@ class TestTheSerializationFloorsStayAbove:
         block = self._conversion_block()
         serialize_at = block.index('ob.getattr("__djust_serialize__")')
         model_at = block.index('models_mod.getattr("Model")')
-        falsy_at = block.index("if let Some(encoded) = falsy_opaque(")
+        falsy_at = block.index("if let Some(encoded) = opaque_value(")
         dict_at = block.index("if let Some(map) = public_dict_attrs(")
         assert serialize_at < falsy_at, (
-            "the `__djust_serialize__` denylist arm moved BELOW `falsy_opaque` — "
+            "the `__djust_serialize__` denylist arm moved BELOW `opaque_value` — "
             "a proxied model's floor fields would be dumped into the attribute map"
         )
         assert model_at < falsy_at, (
-            "the raw-`Model` denylist arm moved BELOW `falsy_opaque` — #1986 vector 7"
+            "the raw-`Model` denylist arm moved BELOW `opaque_value` — #1986 vector 7"
         )
         assert falsy_at < dict_at, (
-            "`falsy_opaque` moved back below the `__dict__` bulk dump — that is "
+            "`opaque_value` moved back below the `__dict__` bulk dump — that is "
             "the pre-#2478 order and reopens the issue"
         )
 
@@ -1224,24 +1250,24 @@ class TestTheSerializationFloorsStayAbove:
         """The canary. A source-order assertion that has never been watched
         fail is a pin with an unknown failure mode (#2129/#2135)."""
         block = self._conversion_block()
-        swapped = block.replace("if let Some(encoded) = falsy_opaque(", "@@FALSY@@", 1).replace(
-            "if let Some(map) = public_dict_attrs(", "if let Some(encoded) = falsy_opaque(", 1
+        swapped = block.replace("if let Some(encoded) = opaque_value(", "@@FALSY@@", 1).replace(
+            "if let Some(map) = public_dict_attrs(", "if let Some(encoded) = opaque_value(", 1
         )
         swapped = swapped.replace("@@FALSY@@", "if let Some(map) = public_dict_attrs(", 1)
         assert swapped != block, "the ORDER mutation did not apply"
         assert swapped.index("if let Some(map) = public_dict_attrs(") < swapped.index(
-            "if let Some(encoded) = falsy_opaque("
+            "if let Some(encoded) = opaque_value("
         ), "the mutation did not actually reverse the order"
 
     def test_the_underscore_filter_is_observable_on_the_dict_arm(self) -> None:
         """Where the `_`-prefix filter can actually be SEEN, and why it is
-        asserted here rather than through `falsy_opaque`'s arm.
+        asserted here rather than through `opaque_value`'s arm.
 
         On the `__dict__` arm the map becomes a `Value::Object`, and `{{ p }}`
         prints it — so a private attribute leaking into the map puts its VALUE
         on the page. That is reachable, so it is tested.
 
-        On `falsy_opaque`'s arm the map is `Encoded::attrs`, whose ONLY reader
+        On `opaque_value`'s arm the map is `Encoded::attrs`, whose ONLY reader
         is `context::lookup_segment`, and djust refuses a `_`-leading path
         segment before the lookup happens (as Django does, at parse time). So
         the filter there is defence-in-depth for a FUTURE reader of `attrs`
@@ -1274,7 +1300,7 @@ class TestTheSerializationFloorsStayAbove:
         # ...and Django shows neither, so djust is not merely quieter.
         assert "hunter2" not in django_render("{{ p }}", {"p": truthy})
 
-        # `falsy_opaque`'s arm: the display is `str(o)`, which carries no
+        # `opaque_value`'s arm: the display is `str(o)`, which carries no
         # attribute at all, and the path segment is refused before the map is
         # consulted.
         assert "hunter2" not in djust_render("{{ p }}", {"p": falsy})
@@ -1283,13 +1309,31 @@ class TestTheSerializationFloorsStayAbove:
 
     def test_the_collection_is_stated_once(self) -> None:
         """One `public_dict_attrs`, two callers — the `__dict__` arm and
-        `falsy_opaque`. Two copies of the `_`-prefix filter is the #1646 shape,
+        `opaque_value`. Two copies of the `_`-prefix filter is the #1646 shape,
         one arm growing a rule the other does not, and THIS arm's copy is the
-        one that would leak."""
+        one that would leak.
+
+        #2477/#2489 added a THIRD reader of the same question and did NOT add a
+        third copy of the rule: `has_public_dict_attrs` asks whether the map
+        would be empty, over the KEYS, because building it to answer that would
+        convert every attribute value for the arm below to convert again. The
+        `_`-prefix rule moved into `is_public_attr_name`, which both call — so
+        the count below is of the RULE, not of the map builder, and it is still
+        one.
+        """
         src = CORE_RS.read_text(encoding="utf-8")
         assert src.count("fn public_dict_attrs(") == 1
-        calls = re.findall(r"(?<!fn )public_dict_attrs\(", src)
+        assert src.count("fn has_public_dict_attrs(") == 1
+        # The map BUILDER's callers: the `__dict__` arm and `opaque_value`.
+        # `has_public_dict_attrs` is matched out by name so the two questions
+        # stay countable apart.
+        calls = re.findall(r"(?<!fn )(?<!has_)public_dict_attrs\(", src)
         assert len(calls) == 2, f"the caller set moved: {len(calls)}"
-        assert src.count("if k.starts_with('_') {") == 1, (
+        # The RULE, stated once and read by both.
+        assert src.count("fn is_public_attr_name(") == 1
+        assert src.count("name.starts_with('_')") == 1, (
             "a second copy of the `_`-prefix filter appeared — state it once"
+        )
+        assert src.count("if k.starts_with('_') {") == 0, (
+            "the map builder grew its own copy of the rule back"
         )

@@ -95,7 +95,11 @@ fn sample() -> Encoded {
         display: "0:01:30".to_string(),
         json: "P0DT00H01M30S".to_string(),
         truthy: true,
-        sized_empty: false,
+        // `None` — no `__len__`, which is what a `timedelta` answers. Slot 5
+        // is an OPTION since #2477, not a boolean, so the "three consecutive
+        // booleans" hazard is now a bool / option / bool sandwich; the shift
+        // tests below are written against that.
+        len: None,
         iterable: true,
         repr: "datetime.timedelta(seconds=90)".to_string(),
         cmp_key: Some(djust_core::CmpKey {
@@ -111,6 +115,11 @@ fn sample() -> Encoded {
             ("seconds", Value::Integer(90)),
             ("microseconds", Value::Integer(0)),
         ]),
+        // NON-`None`, and non-empty, for the reason the attribute map is: an
+        // absent slot is the default every older width restores to, so a
+        // fixture carrying one could not tell "slot 10 round-tripped" from
+        // "slot 10 was dropped" (#2477/#2489).
+        items: Some(vec![Value::String("a".to_string()), Value::Integer(2)]),
     }
 }
 
@@ -152,7 +161,12 @@ fn parts_of(e: &Encoded) -> Vec<Value> {
         Value::String(e.display.clone()),
         Value::String(e.json.clone()),
         Value::Bool(e.truthy),
-        Value::Bool(e.sized_empty),
+        match e.len {
+            Some(n) => Value::Integer(n as i64),
+            // A `nil` reads back as `Missing`, which is what the reader's own
+            // catch-all arm treats as "no `__len__`".
+            None => Value::Missing,
+        },
         Value::Bool(e.iterable),
         Value::String(e.repr.clone()),
     ];
@@ -165,18 +179,22 @@ fn parts_of(e: &Encoded) -> Vec<Value> {
         None => Value::None,
     });
     v.push(Value::Object(e.attrs.clone()));
+    v.push(match &e.items {
+        Some(items) => Value::List(items.clone()),
+        None => Value::Missing,
+    });
     v
 }
 
 #[test]
-fn the_payload_is_nine_slots_in_the_documented_order() {
+fn the_payload_is_ten_slots_in_the_documented_order() {
     let e = sample();
     // `Value` has no `PartialEq` (the renderer's own tests note it), so match
     // the variant and compare the `Encoded`, which does derive one.
-    assert_eq!(parts_of(&e).len(), 9, "the payload width moved");
+    assert_eq!(parts_of(&e).len(), 10, "the payload width moved");
     match decode_parts(parts_of(&e)) {
         Value::Encoded(back) => assert_eq!(*back, e),
-        other => panic!("the nine-slot payload did not read as an Encoded: {other:?}"),
+        other => panic!("the ten-slot payload did not read as an Encoded: {other:?}"),
     }
 }
 
@@ -299,14 +317,18 @@ fn a_none_attribute_survives_the_round_trip_as_a_none_2484() {
 
 #[test]
 fn an_empty_attribute_map_is_written_and_read_as_empty() {
-    // The `falsy_opaque` shape: no attributes, still nine slots. Written
+    // The `opaque_value` shape: no attributes, still ten slots. Written
     // unconditionally rather than skipped, which is what keeps the slots
     // aligned (#1541).
     let e = Encoded {
         attrs: attrs_of(&[]),
         ..sample()
     };
-    assert_eq!(parts_of(&e).len(), 9, "an empty map must not drop its slot");
+    assert_eq!(
+        parts_of(&e).len(),
+        10,
+        "an empty map must not drop its slot"
+    );
     assert_eq!(round_trip(&e), e);
     assert!(round_trip(&e).attrs.is_empty());
 }
@@ -341,7 +363,8 @@ fn a_swap_of_the_key_and_attribute_slots_is_detectable() {
     // Non-vacuity for slots 7 and 8. Neither is a string or a bool, so a swap
     // survives every type check the reader makes and the width is unchanged —
     // the VALUES are the only thing that can catch it. Both are therefore
-    // non-default in `sample()`, and both must come back wrong.
+    // non-default in `sample()`, and both must come back wrong. (Slot 9, the
+    // items, is in the same class and gets its own swap test below.)
     let e = sample();
     assert!(
         e.cmp_key.is_some() && !e.attrs.is_empty(),
@@ -431,36 +454,150 @@ fn every_variant_is_structurally_equal_to_its_own_clone() {
 }
 
 #[test]
-fn every_permutation_of_the_three_bits_and_the_key_round_trips() {
-    // 2^3 bit combinations x {no key, key}. The bits are what a one-slot shift
-    // would scramble, so sweeping them is what makes the pin mechanical rather
-    // than a single sample.
+fn every_permutation_of_the_bits_len_items_and_key_round_trips() {
+    // 2 truthy x 3 len x 2 iterable x 3 items x 2 key. The small slots are
+    // what a one-slot shift would scramble, so sweeping them is what makes the
+    // pin mechanical rather than a single sample.
+    //
+    // `len` gets THREE values, not two, because `Some(0)` and `Some(n)` are
+    // different answers to `{{ p|length }}` and `None` is a third — the
+    // widening #2477 made. `items` likewise: `None` ("never enumerated") and
+    // `Some(vec![])` ("no items") are different statements and a codec that
+    // collapsed them would answer `{% for %}` wrong for one of them.
     let mut checked = 0;
     for truthy in [false, true] {
-        for sized_empty in [false, true] {
+        for len in [None, Some(0usize), Some(3usize)] {
             for iterable in [false, true] {
-                for key in [
+                for items in [
                     None,
-                    Some(djust_core::CmpKey {
-                        domain: djust_core::CMP_DOMAIN_DATETIME_AWARE,
-                        hi: 737_425,
-                        lo: 11_045_000_000,
-                    }),
+                    Some(vec![]),
+                    Some(vec![Value::String("<b>".to_string()), Value::Integer(1)]),
                 ] {
-                    let e = Encoded {
-                        truthy,
-                        sized_empty,
-                        iterable,
-                        cmp_key: key,
-                        ..sample()
-                    };
-                    assert_eq!(round_trip(&e), e, "round trip lost a field: {e:?}");
-                    checked += 1;
+                    for key in [
+                        None,
+                        Some(djust_core::CmpKey {
+                            domain: djust_core::CMP_DOMAIN_DATETIME_AWARE,
+                            hi: 737_425,
+                            lo: 11_045_000_000,
+                        }),
+                    ] {
+                        let e = Encoded {
+                            truthy,
+                            len,
+                            iterable,
+                            items: items.clone(),
+                            cmp_key: key,
+                            ..sample()
+                        };
+                        assert_eq!(round_trip(&e), e, "round trip lost a field: {e:?}");
+                        checked += 1;
+                    }
                 }
             }
         }
     }
-    assert_eq!(checked, 16, "the permutation sweep shrank");
+    assert_eq!(checked, 72, "the permutation sweep shrank");
+}
+
+#[test]
+fn an_absent_item_list_and_an_empty_one_do_not_collapse() {
+    // The sharpest thing the sweep above asserts, spelled on its own because
+    // it is the fact `iter_values` branches on (#2477/#2489): `None` means the
+    // conversion never enumerated the object and `Some(vec![])` means it did
+    // and there was nothing. `{% for %}` renders the `{% empty %}` block for
+    // the second; the first falls through to the `iterable` bit.
+    let absent = Encoded {
+        items: None,
+        ..sample()
+    };
+    let empty = Encoded {
+        items: Some(vec![]),
+        ..sample()
+    };
+    assert_ne!(absent, empty, "the two must not be equal to begin with");
+    assert!(round_trip(&absent).items.is_none());
+    assert!(round_trip(&empty).items.is_some_and(|i| i.is_empty()));
+    assert_ne!(
+        round_trip(&absent),
+        round_trip(&empty),
+        "the codec collapsed `None` and `Some(vec![])` into one answer",
+    );
+}
+
+#[test]
+fn a_swap_of_the_attribute_and_item_slots_is_detectable() {
+    // Non-vacuity for slot 9, on the same argument as slots 7 and 8: a map and
+    // a list both survive the reader's `match`, so only the VALUES catch a
+    // swap. Both are non-default in `sample()`.
+    let e = sample();
+    assert!(
+        !e.attrs.is_empty() && e.items.as_ref().is_some_and(|i| !i.is_empty()),
+        "the sample stopped distinguishing the attribute and item slots",
+    );
+    let mut swapped = parts_of(&e);
+    swapped.swap(8, 9);
+    match decode_parts(swapped) {
+        Value::Encoded(back) => {
+            assert_ne!(
+                *back, e,
+                "a swap of the attribute and item slots was invisible"
+            );
+            assert!(
+                back.attrs.is_empty(),
+                "a list must not read as an attribute map"
+            );
+            assert!(back.items.is_none(), "a map must not read as items");
+        }
+        other => panic!("expected an Encoded with both slots lost: {other:?}"),
+    }
+}
+
+#[test]
+fn a_malformed_item_slot_reads_as_absent_rather_than_guessed() {
+    // Same fail-to-absent the key and attribute slots take.
+    let e = sample();
+    for bad in [
+        Value::Missing,
+        Value::None,
+        Value::String("['a']".to_string()),
+        Value::Integer(3),
+        Value::Bool(true),
+        Value::Object(attrs_of(&[("a", Value::Integer(1))])),
+    ] {
+        let mut parts = parts_of(&e);
+        parts[9] = bad.clone();
+        match decode_parts(parts) {
+            Value::Encoded(back) => assert!(
+                back.items.is_none(),
+                "a malformed item slot must read as absent, not as a guess: {bad:?}",
+            ),
+            other => panic!("expected an Encoded: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_malformed_len_slot_reads_as_absent_rather_than_guessed() {
+    let e = sample();
+    for bad in [
+        Value::Missing,
+        Value::None,
+        Value::String("3".to_string()),
+        Value::Bool(true),
+        Value::Float(3.0),
+        Value::Integer(-1),
+        Value::List(vec![Value::Integer(3)]),
+    ] {
+        let mut parts = parts_of(&e);
+        parts[4] = bad.clone();
+        match decode_parts(parts) {
+            Value::Encoded(back) => assert_eq!(
+                back.len, None,
+                "a malformed len slot must read as absent, not as a guess: {bad:?}",
+            ),
+            other => panic!("expected an Encoded: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -514,52 +651,184 @@ fn every_domain_constant_round_trips() {
 
 #[test]
 fn a_one_slot_shift_is_detectable() {
-    // Non-vacuity for every assertion above. Slots 3/4/5 are three consecutive
-    // booleans; if the fixtures gave them the same value a shift would be
-    // invisible. Drop slot 4 to shift 5 into it and prove the answers change.
+    // Non-vacuity for every assertion above. Drop slot 4 (`len`) to shift
+    // every later slot down one and prove the payload is refused rather than
+    // silently misread.
     let e = sample();
     assert!(
-        e.truthy && !e.sized_empty && e.iterable,
-        "the sample stopped distinguishing the three boolean slots",
+        e.truthy && e.len.is_none() && e.iterable,
+        "the sample stopped distinguishing the slots around `len`",
     );
     let mut shifted = parts_of(&e);
-    // Now EIGHT elements — which since #2471/#2472 is a real width, so this
-    // case no longer refuses on width alone. It refuses on TYPES: with slot 4
-    // gone, `iterable` (a bool) sits where `sized_empty` belongs and `repr` (a
-    // string) sits where `iterable` belongs, and the eight-arm's pattern wants
-    // a bool there. That is a stronger statement than the width check it was,
-    // and it is why the assertion is spelled as "not an Encoded" rather than
-    // "wrong width".
+    // Now NINE elements — a real width since #2481, so this case does not
+    // refuse on width alone. It refuses on TYPES: with slot 4 gone, `iterable`
+    // (a bool) sits where the nine-arm wants `sized_empty` — which it happens
+    // to accept — and `repr` (a string) sits where it wants a BOOL, which it
+    // does not.
     shifted.remove(4);
-    assert_eq!(shifted.len(), 8, "the shifted payload must be a REAL width");
+    assert_eq!(shifted.len(), 9, "the shifted payload must be a REAL width");
     match decode_parts(shifted) {
         Value::Object(_) => {}
-        other => panic!("a type-misaligned 8-element payload must not forge an Encoded: {other:?}"),
+        other => panic!("a type-misaligned 9-element payload must not forge an Encoded: {other:?}"),
     }
 
-    // And the sharper case: keep the width at 9 but SWAP two boolean slots.
-    // Every type still matches, so only the VALUES can catch it.
-    let mut swapped = parts_of(&e);
-    swapped.swap(4, 5);
+    // And the sharper case: keep the width at 10 but SWAP the two BOOLEAN
+    // slots that a widened `len` left adjacent-but-one — `truthy` (3) and
+    // `iterable` (5). Every type still matches, so only the VALUES can catch
+    // it, and the sample gives them different values for exactly that reason.
+    let distinct = Encoded {
+        truthy: true,
+        iterable: false,
+        ..sample()
+    };
+    let mut swapped = parts_of(&distinct);
+    swapped.swap(3, 5);
     match decode_parts(swapped) {
         Value::Encoded(back) => {
-            assert_ne!(*back, e, "a swap of two boolean slots was invisible");
-            assert!(back.sized_empty && !back.iterable);
+            assert_ne!(*back, distinct, "a swap of two boolean slots was invisible");
+            assert!(!back.truthy && back.iterable);
         }
         other => panic!("expected an Encoded with swapped bits: {other:?}"),
     }
+
+    // And a swap of `len` with the `repr` STRING two slots over, which the
+    // ten-arm must refuse on type rather than read as a length.
+    let mut typed = parts_of(&e);
+    typed.swap(4, 6);
+    match decode_parts(typed) {
+        Value::Object(_) => {}
+        other => panic!("a string in the len slot must not forge an Encoded: {other:?}"),
+    }
+}
+
+#[test]
+fn an_interior_insert_is_refused_rather_than_silently_misread() {
+    // The shape a widening takes when it adds a POSITION instead of growing
+    // something inside one — and the case the remove-and-swap canary above
+    // does not cover, because a removal shifts DOWN and an insert shifts UP.
+    //
+    // It is not hypothetical: #2485 and #2477/#2489 landed in the same window
+    // and both widen this payload. #2485 grew the attribute MAP at slot 8 and
+    // added no position; #2477/#2489 widened slot 4 to a count and appended
+    // slot 9. Those compose to TEN. Had #2485 taken a position of its own the
+    // arithmetic would still have said eleven and every slot after the insert
+    // would have shifted — a reader that trusted the width alone would have
+    // decoded `attrs` as `repr` and `items` as `cmp_key`, silently.
+    //
+    // So: insert a plausible element at every interior position and require
+    // the payload to be REFUSED (read back as a plain dict), never read as an
+    // Encoded with shifted contents. Eleven is not a width this crate writes,
+    // which is what makes the refusal the correct answer rather than a
+    // limitation.
+    let e = sample();
+    let full = parts_of(&e);
+    assert_eq!(full.len(), 10, "the payload width moved");
+    let mut refused = 0;
+    for at in 0..full.len() {
+        let mut shifted = full.clone();
+        // A STRING, which is a real type in this payload — so the refusal is
+        // about the shape and not about an obviously-alien element.
+        shifted.insert(at, Value::String("intruder".to_string()));
+        assert_eq!(shifted.len(), 11);
+        match decode_parts(shifted) {
+            Value::Object(_) => refused += 1,
+            other => panic!(
+                "an insert at slot {at} produced an Encoded with shifted \
+                 contents instead of being refused: {other:?}"
+            ),
+        }
+    }
+    assert_eq!(refused, 10, "every interior insert must be refused");
+}
+
+#[test]
+fn the_slot_that_grew_inside_itself_did_not_take_a_position() {
+    // #2485's compatibility claim, checked rather than quoted: it grew the
+    // attribute MAP and left the payload's width alone. The map is slot 8 and
+    // holds an arbitrary number of names; adding one must not move slot 9.
+    //
+    // Asserted by GROWING the map here and re-reading the width and the
+    // trailing slot. If a future fix moves an attribute out of the map and
+    // into a position of its own, this goes red at the same time as the
+    // width pin — which is what keeps "the slot is unchanged" from being a
+    // sentence nobody re-checks.
+    let mut grown = sample();
+    for extra in ["total_seconds", "isoformat", "ctime", "weekday"] {
+        grown.attrs.insert(
+            djust_core::object_key::ObjectKey::Str(extra.to_string()),
+            Value::String(format!("<{extra}>")),
+        );
+    }
+    let parts = parts_of(&grown);
+    assert_eq!(parts.len(), 10, "growing the attribute map moved the width");
+    // Slot 8 is still the map, and it carries every name.
+    match &parts[8] {
+        Value::Object(map) => {
+            assert_eq!(map.len(), grown.attrs.len());
+            assert!(map.get("total_seconds").is_some());
+            assert!(map.get("days").is_some());
+        }
+        other => panic!("slot 8 is no longer the attribute map: {other:?}"),
+    }
+    // ...and slot 9 is still the items.
+    assert!(
+        matches!(&parts[9], Value::List(_)),
+        "slot 9 is no longer the items: {:?}",
+        parts[9],
+    );
+    assert_eq!(round_trip(&grown), grown);
 }
 
 #[test]
 fn the_older_widths_still_read_with_the_documented_fallbacks() {
     let e = sample();
     let full = parts_of(&e);
+    // A LEGACY payload is not a truncation of the current one: slot 4 widened
+    // from the #2466 boolean to `len(o)` in #2477/#2489, so every width below
+    // 10 has a `Bool` there. Truncating `parts_of` would put a `Missing` in a
+    // slot the older arms type-check as a bool, and the test would then be
+    // measuring that mismatch rather than the fallbacks it is named for.
+    let legacy = |n: usize, sized_empty: bool| {
+        let mut v = full[..n].to_vec();
+        if n > 4 {
+            v[4] = Value::Bool(sized_empty);
+        }
+        v
+    };
+
+    // NINE — the #2481 shape: everything but the enumerated items, which
+    // restore ABSENT, and `len` read off the BOOLEAN slot 4 carried. An entry
+    // written by that build could only ever have been `len == Some(0)` or no
+    // `__len__` at all, because the pre-#2477 gate declined everything else —
+    // so the boolean restores EXACTLY, not half-way.
+    for (sized_empty, expect) in [(false, None), (true, Some(0usize))] {
+        match decode_parts(legacy(9, sized_empty)) {
+            Value::Encoded(back) => {
+                assert_eq!(
+                    back.len, expect,
+                    "a 9-element read must restore len from the bool"
+                );
+                assert!(
+                    back.items.is_none(),
+                    "a 9-element read must not invent items"
+                );
+                assert!(
+                    djust_core::values_structurally_equal(
+                        &Value::Object(back.attrs.clone()),
+                        &Value::Object(e.attrs.clone()),
+                    ),
+                    "a 9-element read must keep the attributes",
+                );
+            }
+            other => panic!("9 elements must read: {other:?}"),
+        }
+    }
 
     // EIGHT — the #2471/#2472 shape: everything but the attribute map, which
     // restores EMPTY. `{{ dt.year }}` resolved to nothing before #2481, so an
     // entry written by that build keeps answering exactly what it answered
     // rather than half-way between.
-    match decode_parts(full[..8].to_vec()) {
+    match decode_parts(legacy(8, false)) {
         Value::Encoded(back) => {
             assert_eq!(back.repr, e.repr);
             assert_eq!(
@@ -575,10 +844,10 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
     }
 
     // SIX — the #2466 shape: `repr` falls back to `display`, no key.
-    match decode_parts(full[..6].to_vec()) {
+    match decode_parts(legacy(6, false)) {
         Value::Encoded(back) => {
             assert_eq!(back.truthy, e.truthy);
-            assert_eq!(back.sized_empty, e.sized_empty);
+            assert_eq!(back.len, None, "the 6-element bool slot 4 is `false`");
             assert_eq!(back.iterable, e.iterable);
             assert_eq!(
                 back.repr, e.display,
@@ -591,10 +860,10 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
     }
 
     // FOUR — the #2458 shape: the two #2466 bits are false, same fallbacks.
-    match decode_parts(full[..4].to_vec()) {
+    match decode_parts(legacy(4, false)) {
         Value::Encoded(back) => {
             assert_eq!(back.truthy, e.truthy);
-            assert!(!back.sized_empty && !back.iterable);
+            assert!(back.len.is_none() && !back.iterable);
             assert_eq!(back.repr, e.display);
             assert_eq!(back.cmp_key, None);
             assert!(back.attrs.is_empty());
@@ -603,7 +872,7 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
     }
 
     // THREE — the #2448 shape: truthiness derived from the display.
-    match decode_parts(full[..3].to_vec()) {
+    match decode_parts(legacy(3, false)) {
         Value::Encoded(back) => {
             assert_eq!(back.truthy, !e.display.is_empty());
             assert_eq!(back.repr, e.display);
@@ -619,7 +888,7 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
     // two and zero are covered by the same rule and are not spelled out; the
     // interesting widths are the ones ADJACENT to a real shape.)
     for n in [5usize, 7] {
-        match decode_parts(full[..n].to_vec()) {
+        match decode_parts(legacy(n, false)) {
             Value::Object(_) => {}
             other => panic!("{n} elements must NOT forge an Encoded: {other:?}"),
         }

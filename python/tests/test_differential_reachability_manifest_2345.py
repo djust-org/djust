@@ -617,16 +617,28 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
     AXIS_PRE_2477 = "    return list(_rust_value_variants())"
 
     #: What the extended axis reports over a corpus with those rows removed.
+    #:
+    #: TWO members since #2477/#2489, and both halves of the shrink are
+    #: findings rather than a narrowing:
+    #:
+    #: * the `str-fallback` pair is EXEMPT now — `opaque_value` claims every
+    #:   shape a corpus row can be, and the three that still reach the terminal
+    #:   `str()` are ones this harness structurally cannot hold (see
+    #:   `VALUE_TRUTHINESS_NOT_INHABITABLE` for the checked reasons);
+    #: * `opaque_value:falsy` stays COVERED after the removal, because
+    #:   `o-falsy-iter` — a row #2482 added for a different member entirely —
+    #:   moved onto this arm when the gate widened. That is exactly the hazard
+    #:   the `ROWS_2482_LAZY_*` note below records, one issue further on: a
+    #:   canary's gap can be filled by a row from a later issue, and the only
+    #:   way to know is to run it.
     GAP_2477 = {
-        "value:falsy_opaque:falsy",
-        "value:str-fallback:truthy",
-        "arg:falsy_opaque:falsy",
-        "arg:str-fallback:truthy",
+        "value:opaque_value:truthy",
+        "arg:opaque_value:truthy",
     }
 
     #: The two `INPUTS_LAZY` dict-view rows (#2482). They land on the SAME two
     #: value-channel arms the `set` pair does — `dv-keys-empty` on
-    #: `falsy_opaque` and `dv-keys-plain` on the terminal `str()` — so the
+    #: `opaque_value` and `dv-keys-plain` on the terminal `str()` — so the
     #: #2477 canary below has to remove them TOO, or the gap it is built to
     #: reproduce is filled by a row from a later issue and the canary silently
     #: stops reproducing anything. Found by running it: leaving them in turned
@@ -721,7 +733,7 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
     ROWS_2482_ARG_CONTEXT = '    "known_falsy_iter": INPUTS_LAZY["o-falsy-iter"](),\n'
     ROWS_2482_ARG_SPELLINGS = '    "known_falsy_iter",\n'
     #: The one bit that decides which arm the row lands on. Flipping it makes
-    #: the object TRUTHY, so `falsy_opaque`'s gate is irrelevant and the
+    #: the object TRUTHY, so `opaque_value`'s gate is irrelevant and the
     #: terminal `str()` arm is reached in the OTHER answer — a mutation that
     #: leaves the row, the corpus and the script intact and moves exactly the
     #: member under test. Both channels move together because `ARG_CONTEXT`
@@ -729,91 +741,80 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
     ROW_2482_FALSY_BIT = '"__bool__": lambda self: False,'
     ROW_2482_TRUTHY_BIT = '"__bool__": lambda self: True,'
 
-    #: What the axis reports over a corpus whose falsy-iterable row is no
-    #: longer falsy — the member the exemption #2482 deleted used to cover.
-    GAP_2482 = {"value:str-fallback:falsy", "arg:str-fallback:falsy"}
-
-    def test_2482_the_falsy_str_fallback_member_needs_the_factory_rows(
+    def test_2482_the_falsy_row_MOVED_ARMS_and_str_fallback_is_exempt_again(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """The empirical canary for #2482 (#1459), and the gate-off for the
-        deleted exemption (#1468).
+        """What #2477/#2489 did to #2482's canary, recorded rather than deleted.
 
-        `("str-fallback", "falsy")` was an EXEMPTION until #2482 — the axis
-        declared the member uninhabitable and moved on. It was not: a falsy
-        object with `__iter__` and no `__len__` reaches the terminal
-        `Value::String(ob.str()?)`, and #2466's own doc-comment names that
-        shape as one it DECLINED. Removing the two rows that inhabit it must
-        put the member back in `missing`, in both channels — which is the same
-        run that proves the rows are what covers it, rather than something
-        else in the corpus happening to.
+        `("str-fallback", "falsy")` was an EXEMPTION until #2482, which deleted
+        it after falsification-testing its stated reason and finding it false.
+        The member is exempt AGAIN — and the reason is a different one, which
+        is why this is a rewrite rather than a revert: `opaque_value` now
+        claims a falsy `__iter__` class, so the row that used to inhabit
+        `str-fallback:falsy` inhabits `opaque_value:falsy`, and the three
+        shapes still reaching the terminal `str()` are ones a corpus row
+        cannot be (a one-shot iterator is consumed by its first cell; an
+        unbounded re-iterable costs `OPAQUE_ITEM_CAP` per conversion; a raising
+        `__bool__`/`__repr__` breaks the harness's own printing).
 
-        The exemption's stated reason was also false, and that is the finding
-        rather than a footnote: it said a class instance "cannot be a row here
-        at all" because `test_sequence_op_chokepoint_2451.corpus()` evaluates
-        values in a three-name namespace. `eval` injects `__builtins__` into a
-        globals mapping that has none, so `type("C", (), {...})()` evaluates
-        there perfectly well.
+        Asserted on the LIVE manifest, because the claim is about `main`, and
+        the exemption is asserted NOT STALE — which is the machinery that will
+        delete it again if a workable row ever lands there.
         """
-        script = mutated_script(tmp_path, (self.ROW_2482_FALSY_BIT, self.ROW_2482_TRUTHY_BIT))
-        row = rows(run_manifest(script))["value-truthiness"]
-        assert set(row["missing"]) == self.GAP_2482, row["missing"]
-        # Each names the fallback BLOCK as its source, not the enum: no `Value`
-        # variant models the object, which is the whole of why #2477 had to
-        # stop enumerating variants.
-        for member in row["missing"]:
-            assert "fallback block" in row["required"][member], row["required"][member]
+        import importlib.util
 
-    def test_2482_the_mutation_is_a_corpus_edit_and_not_a_broken_script(
+        spec = importlib.util.spec_from_file_location("_fpd_2477", SCRIPT)
+        diff = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(diff)
+
+        # The row moved ARM, which is the fact the rewrite turns on.
+        assert diff._no_variant_outcome(diff.INPUTS["o-falsy-iter"]) == "opaque_value"
+        assert not diff.INPUTS["o-falsy-iter"]
+
+        row = rows(run_manifest())["value-truthiness"]
+        assert not row["stale_exemptions"], row["stale_exemptions"]
+        for member in ("value:str-fallback:falsy", "arg:str-fallback:falsy"):
+            assert member in row["exempt"], sorted(row["exempt"])
+            assert member not in row["missing"]
+
+    def test_2482_the_row_is_no_longer_the_SOLE_inhabitant_of_its_member(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """Non-vacuity for the canary above (#2129/#2135).
+        """The consequence, stated as a property rather than left implicit.
 
-        A mutation that broke the script — or that made some OTHER axis go red
-        — would produce a report the assertion above could be read as
-        satisfying. So: the axis is still declared, `value-truthiness` is the
-        ONLY axis with a gap, and the two missing members are a strict subset
-        of a required set that did not shrink.
+        #2482's third canary removed only the `ARG_CONTEXT` binding and
+        asserted `arg:str-fallback:falsy` went missing — which proved the
+        argument channel had its OWN row rather than shadowing the value one.
+        That test cannot be red any more: the member is exempt, and the arm
+        the row moved to already has `known_set_empty` on it.
 
-        The corpus is also asserted INTACT: the mutation flips one bit of one
-        row rather than removing anything, so all three factory rows must
-        still be swept on `input-shape`. A mutation that had deleted the
-        mapping would report the same `missing` set for a different reason.
+        So the property is asserted directly instead: BOTH argument rows land
+        on `opaque_value` and both are falsy, which is what makes the removal
+        harmless — and the run that shows the corpus is still whole is the
+        mutation below, which flips the row's one deciding bit and produces NO
+        gap on any axis.
         """
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("_fpd_2477", SCRIPT)
+        diff = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(diff)
+
+        inhabitants = [
+            name
+            for name, value in diff.ARG_CONTEXT.items()
+            if diff._value_variant(value) == "opaque_value" and not value
+        ]
+        assert {"known_set_empty", "known_falsy_iter"} <= set(inhabitants), inhabitants
+
         script = mutated_script(tmp_path, (self.ROW_2482_FALSY_BIT, self.ROW_2482_TRUTHY_BIT))
         data = rows(run_manifest(script))
         assert "value-truthiness" in data, "the mutation deleted the axis, not the corpus"
         broken = {a: r["missing"] for a, r in data.items() if r.get("missing")}
-        assert set(broken) == {"value-truthiness"}, broken
-        row = data["value-truthiness"]
-        assert set(row["missing"]) < set(row["required"])
-        assert not row["stale_exemptions"], row["stale_exemptions"]
+        assert not broken, broken
+        assert not data["value-truthiness"]["stale_exemptions"]
         shapes = set(data["input-shape"]["swept"])
         assert {"dv-keys-empty", "dv-keys-plain", "o-falsy-iter"} <= shapes, sorted(shapes)
-
-    def test_2482_the_argument_channel_is_covered_by_its_OWN_row(
-        self, tmp_path: pathlib.Path
-    ) -> None:
-        """Two rows, two mechanisms, two independently-red tests (#2129).
-
-        The canary above moves BOTH channels with one edit, because both
-        inhabitants come from one factory — which is the right coupling for
-        the object's SHAPE and the wrong evidence for "does the argument
-        channel have its own row". So this removes only the `ARG_CONTEXT`
-        binding and its spelling: exactly `arg:str-fallback:falsy` must go
-        missing, and the value channel must stay covered.
-
-        Without this, deleting `known_falsy_iter` entirely would leave the
-        suite green — the value row would cover for it, which is the
-        two-mechanisms-shadowing-each-other shape.
-        """
-        script = mutated_script(
-            tmp_path,
-            (self.ROWS_2482_ARG_CONTEXT, ""),
-            (self.ROWS_2482_ARG_SPELLINGS, ""),
-        )
-        row = rows(run_manifest(script))["value-truthiness"]
-        assert set(row["missing"]) == {"arg:str-fallback:falsy"}, row["missing"]
 
     def test_2482_the_unpicklable_row_is_swept_and_not_merely_present(self) -> None:
         """The dict-view half of #2466's class, which had no row at all.
@@ -1301,7 +1302,7 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
         ),
         "known_set_empty": (
             "#2477 — a resolved argument NO `Value` variant models, on the "
-            "falsy side. It reaches `falsy_opaque` and crosses as a "
+            "falsy side. It reaches `opaque_value` and crosses as a "
             "`Value::Encoded`; before this row the argument channel had no "
             "inhabitant of that conversion arm at all, and the whole of #2466 "
             "was invisible to every axis"
@@ -1310,14 +1311,14 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
             "#2482 — the FALSY inhabitant of the terminal "
             "`Value::String(ob.str()?)` arm, in the argument channel. "
             "`known_set` is truthy and `known_set_empty` reaches "
-            "`falsy_opaque`, so between them the channel had a truthy "
+            "`opaque_value`, so between them the channel had a truthy "
             "`str-fallback` and no falsy one — the member the axis was "
             "EXEMPTING, on the grounds that a class instance could not be a "
             "corpus row. It could; the exemption was wrong rather than stale"
         ),
         "known_set": (
             "#2477 — the TRUTHY partner, which lands on a DIFFERENT arm: "
-            "`falsy_opaque`'s own gate declines it, so it falls to the "
+            "`opaque_value`'s own gate declines it, so it falls to the "
             "terminal `Value::String(ob.str()?)` and its type is lost at the "
             "conversion. That residue is what `STRINGIFIED_AT_EXTRACTION` in "
             "`test_int_argument_type_2366.py` names, and no cell reached it"

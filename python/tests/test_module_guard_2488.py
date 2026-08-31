@@ -90,13 +90,30 @@ class TestThePremiseIsMeasured:
 
 
 class TestTheWarningBranchNoLongerCrashes:
-    def test_normalize_django_value_answers_a_string(self) -> None:
+    def test_normalize_django_value_ANSWERS_instead_of_raising(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """The issue's own reproducer. It raised ``AttributeError: __module__``
-        before the guard; it answers a string now."""
+        before the guard; it answers now.
+
+        The assertion was ``isinstance(out["p"], str)`` until #2477/#2489, and
+        the RETURN is no longer this test's subject. That fix carries an object
+        the conversion models — a falsy, attribute-less class is one — past the
+        warning instead of stringifying it, so the branch under test still runs
+        and still builds its message, and the value that comes back is the
+        object.
+
+        What #2488 is about is that the branch does not CRASH while naming a
+        type with no ``__module__``, so that is what is asserted: it returns
+        without raising, and it warns. The module placeholder has its own test
+        one method down.
+        """
         obj = _module_less('type("C", (), {"__bool__": lambda self: False})()')
-        out = normalize_django_value({"p": obj})
+        with caplog.at_level("WARNING", logger="djust.serialization"):
+            out = normalize_django_value({"p": obj})
         assert isinstance(out, dict)
-        assert isinstance(out["p"], str)
+        assert out["p"] is obj
+        assert any("non-serializable value" in r.getMessage() for r in caplog.records)
 
     def test_the_warning_still_names_the_type_and_marks_the_module(
         self, caplog: pytest.LogCaptureFixture
@@ -110,14 +127,24 @@ class TestTheWarningBranchNoLongerCrashes:
         assert "Widget" in text
         assert "<unknown>" in text
 
-    def test_a_class_WITH_a_module_still_names_it(self) -> None:
-        """The placeholder is reached only by the absent case."""
+    def test_a_class_WITH_a_module_still_names_it(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The placeholder is reached only by the absent case.
+
+        Named for what it checks rather than for the return type, for the
+        reason the reproducer above records: #2477/#2489 carries an object the
+        conversion models past the warning, so the message — not the value —
+        is where the placeholder is visible.
+        """
 
         class Ordinary:
             pass
 
-        out = normalize_django_value({"p": Ordinary()})
-        assert isinstance(out["p"], str)
+        with caplog.at_level("WARNING", logger="djust.serialization"):
+            normalize_django_value({"p": Ordinary()})
+        text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "Ordinary" in text
+        assert __name__ in text
+        assert "<unknown>" not in text
 
     def test_strict_serialization_still_raises_TypeError_not_AttributeError(
         self, monkeypatch: pytest.MonkeyPatch

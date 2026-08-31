@@ -126,17 +126,36 @@ class TestSetSerialization:
         assert result["selected_ids"] == [10, 20, 30]
         assert result["name"] == "test"
 
-    def test_normalize_set(self):
+    # `normalize_django_value` stopped flattening a set at #2477. The sorted
+    # list is now the STATE-ROUNDTRIP answer only, so every assertion below
+    # that reads it passes `state_roundtrip=True` — which is the boundary #626
+    # was actually about: `json.dumps` with Django's session serializer refuses
+    # a set, and that is what these tests exist to prevent.
+    #
+    # The render path carries the set itself, because a list is SUBSCRIPTABLE
+    # where a set is not: `{{ tags|first }}` rendered an element on the
+    # LiveView path where Django raises `TypeError: 'set' object is not
+    # subscriptable`, and `{{ tags }}` rendered `['a']` where Django writes
+    # `{'a'}`. Both halves are asserted here rather than only the one that
+    # moved.
+
+    def test_normalize_set_for_state_is_a_sorted_list(self):
         """normalize_django_value should handle set → sorted list."""
-        assert normalize_django_value({3, 1, 2}) == [1, 2, 3]
+        assert normalize_django_value({3, 1, 2}, state_roundtrip=True) == [1, 2, 3]
 
-    def test_normalize_frozenset(self):
+    def test_normalize_frozenset_for_state_is_a_sorted_list(self):
         """normalize_django_value should handle frozenset → sorted list."""
-        assert normalize_django_value(frozenset({3, 1, 2})) == [1, 2, 3]
+        assert normalize_django_value(frozenset({3, 1, 2}), state_roundtrip=True) == [1, 2, 3]
 
-    def test_normalize_empty_set(self):
+    def test_normalize_empty_set_for_state_is_an_empty_list(self):
         """normalize_django_value should handle empty set."""
-        assert normalize_django_value(set()) == []
+        assert normalize_django_value(set(), state_roundtrip=True) == []
+
+    def test_normalize_set_for_the_renderer_is_the_SET(self):
+        """#2477: the render path gets the object, so Rust can carry it."""
+        value = {3, 1, 2}
+        assert normalize_django_value(value) is value
+        assert normalize_django_value({"tags": value})["tags"] is value
 
     def test_normalize_set_with_unsortable_elements(self):
         """set with mixed types that can't be sorted should still serialize."""
@@ -144,7 +163,7 @@ class TestSetSerialization:
         # We can't easily create a set with unsortable elements that's also
         # deterministic, so test that the result is a list with same elements
         s = {1, "a"}  # int and str can't be sorted together in Python 3
-        result = normalize_django_value(s)
+        result = normalize_django_value(s, state_roundtrip=True)
         assert isinstance(result, list)
         assert set(result) == {1, "a"}
 
@@ -158,9 +177,12 @@ class TestSetSerialization:
     def test_normalize_nested_set_in_dict(self):
         """normalize_django_value should handle set nested in dict."""
         data = {"tags": {"python", "django"}, "count": 2}
-        result = normalize_django_value(data)
+        result = normalize_django_value(data, state_roundtrip=True)
         assert result["tags"] == ["django", "python"]
         assert result["count"] == 2
+        # ...and the state answer stays `json.dumps`-able, which is the whole
+        # of why the boundary keeps the list (#626).
+        json.dumps(result)
 
 
 def _rust_available():
