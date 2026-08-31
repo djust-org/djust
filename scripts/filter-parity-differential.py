@@ -708,6 +708,26 @@ INPUTS = {
     "d-empty": {},
     "td-zero": datetime.timedelta(0),
     "td-plain": datetime.timedelta(seconds=90),
+    # An object NO `Value` variant models (#2477), in both truthiness answers.
+    # The `value-truthiness` axis above read the VARIANTS out of the enum, so
+    # every value #2466 is about — a `set`, a `frozenset`, `complex(0)`, an
+    # empty dict view, a zero-`__len__` class — was invisible to it: the
+    # absence of a variant IS the defect, and an axis keyed on variants cannot
+    # name a gap that has no variant to be missing from. `td-zero` supplied
+    # `Encoded:falsy` and the axis called the whole class covered.
+    #
+    # A `set` is the only member of the class that is a builtin AND spellable
+    # as a corpus literal (`corpus()` in the #2451 chokepoint test evaluates
+    # these values in a three-name namespace), which is why it is this pair and
+    # not `complex(0)` or a `__len__`-zero class. The two answers land on
+    # DIFFERENT arms and that is the point of carrying both: the empty one is
+    # Python-falsy and reaches `falsy_opaque`, while the payload-carrying one
+    # is TRUTHY, is declined by that arm's own gate, and falls to the terminal
+    # `Value::String(ob.str()?)` — where `{{ p|length }}` counts the 32
+    # characters of `"{'<img src=x onerror=alert(1)>'}"` and `{{ p|first }}` is
+    # `{`. Neither cell existed before.
+    "set-empty": set(),
+    "set-plain": {"<img src=x onerror=alert(1)>"},
     "l-empty": [],
     # Context ITEM safety (#2287). `mark_safe` on the ELEMENTS and never on the
     # list, which is what `safeseq` produces and what a view returning a list of
@@ -1675,6 +1695,13 @@ ARG_SPELLINGS = [
     "known_empty_dict",
     "known_td",
     "known_td_zero",
+    # The NO-VARIANT pair (#2477): an argument whose Python object no `Value`
+    # variant models, in both truthiness answers. The falsy one reaches
+    # `falsy_opaque` and crosses as a `Value::Encoded`; the truthy one is
+    # declined by that arm's gate and crosses as its own `str()`, which is the
+    # residue `STRINGIFIED_AT_EXTRACTION` names and which no cell reached.
+    "known_set_empty",
+    "known_set",
     # The counter-example, and the one row that distinguishes a VALUE-typed
     # falsiness rule from a TEXT-shaped one: a resolved argument holding the
     # string `"0"` is TRUTHY in Python and has no `.year`, so Django's
@@ -1746,6 +1773,15 @@ ARG_CONTEXT = {
     "known_empty_dict": {},
     "known_td": datetime.timedelta(seconds=90),
     "known_td_zero": datetime.timedelta(0),
+    # The same NO-VARIANT pair `INPUTS` carries (#2477), in the ARGUMENT
+    # channel. Two channels because they are two code paths — the same reason
+    # #2469 had to add both halves — and because `STRINGIFIED_AT_EXTRACTION` in
+    # `test_int_argument_type_2366.py` names a `set` argument as the one
+    # remaining counter-example whose type is LOST at the conversion. That
+    # claim was untested by any cell: the corpus bound no set in either
+    # channel.
+    "known_set_empty": set(),
+    "known_set": {"<img src=x onerror=alert(1)>"},
     # TRUTHY, and a string: `bool("0")` is True and `"0"` has no `.year`, so
     # every filter that reads its argument as a date REFUSES this where a
     # text-shaped rule read the falsy number it spells.
@@ -2750,11 +2786,156 @@ def _value_variant(obj: object) -> str:
         return "Object"
     if isinstance(obj, (datetime.datetime, datetime.date, datetime.time, datetime.timedelta)):
         return "Encoded"
+    # No `Value` variant models this object, so it is carried by one of the
+    # fallback block's NO-VARIANT arms and the outcome is named by the ARM
+    # (#2477). `None` here means the `__dict__` bulk-dump claimed it first,
+    # which is a `Value::Object` this axis deliberately does not classify —
+    # see `_no_variant_outcome`.
+    outcome = _no_variant_outcome(obj)
+    if outcome is not None:
+        return outcome
     raise AssertionError(
         f"{obj!r} ({type(obj).__name__}) has no arm in this transcription of "
         f"`impl FromPyObject for Value`. Add one, in the SAME position the "
         f"Rust arm sits at, or the axis is measuring a set it cannot classify."
     )
+
+
+# ---------------------------------------------------------------------------
+# The NO-VARIANT half of the conversion (#2477)
+# ---------------------------------------------------------------------------
+#
+# `value-truthiness` read the `Value` VARIANTS out of the enum and required a
+# falsy and a truthy inhabitant of each. That is the wrong enumeration for the
+# question it was built to answer, and #2466 is the proof: every value that
+# issue is about — `set()`, `frozenset()`, `complex(0)`, an empty `dict_keys`,
+# a zero-`__len__` class — has NO variant, and the absence IS the defect. So
+# the axis reported `0 MISSING` while being structurally unable to construct a
+# single cell reaching any of them.
+#
+# The question is "which Python objects reach the conversion, and what does
+# each answer", which is not "which variants exist": a variant can be produced
+# by more than one ARM, and two arms of the fallback block produce a value for
+# an object no variant models at all. Those two are named here, so a corpus
+# with no inhabitant of either is REPORTED rather than silently covered by the
+# `Encoded` a `timedelta` already supplies.
+_FALLBACK_BLOCK_SOURCE = (
+    "crates/djust_core/src/lib.rs `impl FromPyObject for Value`, its fallback block"
+)
+
+#: Every arm of that block, in source order. Read rather than transcribed, so a
+#: NEW arm is reported by `_fallback_arms`' own count check instead of being
+#: silently folded into whichever of the two below happens to match.
+_FALLBACK_ARM_PATTERN = re.compile(
+    r"if let Some\(\w+\) = (?P<pred>\w+)\(&ob\.to_owned\(\)\)"
+    r'|ob\.getattr\("(?P<dunder>__\w+__)"\)'
+    r"|ob\.is_instance\(&(?P<model>model_cls)\)"
+    r"|Ok\(Value::String\(ob\.str\(\)\?"
+)
+
+#: The two arms of that block that carry an object NO `Value` variant models.
+#:
+#: A TRANSCRIPTION, and named as one — nothing in the Rust source says which
+#: arms are the no-variant ones (`django_json_encoded` carries the datetime
+#: family, which `Value::Encoded` does model; `__dict__` produces a real
+#: mapping; the `__djust_serialize__` and `Model` arms both recurse through
+#: `extract::<Value>()` and so have no outcome of their own). The subset
+#: assertion in `_no_variant_outcomes` is what makes a rename loud, and the
+#: arm-count check in `_fallback_arms` is what makes a NEW arm loud.
+_NO_VARIANT_ARMS = ("falsy_opaque", "str-fallback")
+
+
+def _fallback_block() -> str:
+    """The `else { … }` block of `impl FromPyObject for Value`, CODE only.
+
+    Comment lines are dropped, and that is load-bearing rather than tidiness:
+    the block's own prose quotes the terminal `Ok(Value::String(ob.str()?))`
+    while explaining why the `Decimal` arm sits where it does, so a scan over
+    the raw text finds seven arms for six exits — which the count check below
+    correctly refuses. Same reason `_rust_value_variants` strips `///`.
+    """
+    src = _crate_source("djust_core", "lib")
+    impl = src.split("impl<'py> FromPyObject<'_, 'py> for Value {", 1)[1]
+    # The impl's own closing brace is the only `}` at column 0 in the body.
+    block = impl.split("\n}\n", 1)[0].rsplit("} else {", 1)[1]
+    return "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("//"))
+
+
+def _fallback_arms() -> list[str]:
+    """The arm names, in source order, with a count check against the returns.
+
+    The count is the drift alarm, and it is the reason this reads the block
+    rather than listing the arms: every arm but the last ends in a
+    `return Ok(…)`, so `len(arms)` must be `block.count("return Ok(") + 1`. An
+    arm added without a pattern here — or a pattern that stopped matching —
+    fails HERE, at the manifest, rather than quietly leaving the new arm's
+    objects classified as whichever existing outcome they happen to fall into.
+    """
+    block = _fallback_block()
+    arms: list[str] = []
+    for match in _FALLBACK_ARM_PATTERN.finditer(block):
+        arms.append(
+            match.group("pred")
+            or match.group("dunder")
+            or ("Model" if match.group("model") else "str-fallback")
+        )
+    expected = block.count("return Ok(") + 1
+    if len(arms) != expected:
+        raise AssertionError(
+            f"_FALLBACK_ARM_PATTERN matched {len(arms)} arms ({arms}) in "
+            f"{_FALLBACK_BLOCK_SOURCE}, which has {expected} exits. Either an "
+            f"arm was added without a pattern for it — decide whether it is a "
+            f"no-variant arm and add it to `_NO_VARIANT_ARMS` if so — or a "
+            f"pattern stopped matching. Fix the reader, not the assertion."
+        )
+    return arms
+
+
+def _no_variant_outcomes() -> tuple[str, ...]:
+    """`_NO_VARIANT_ARMS`, checked against the arms the source actually has."""
+    arms = set(_fallback_arms())
+    missing = [a for a in _NO_VARIANT_ARMS if a not in arms]
+    if missing:
+        raise AssertionError(
+            f"{missing} is named as a no-variant arm but no longer appears in "
+            f"{_FALLBACK_BLOCK_SOURCE} ({sorted(arms)}). It was renamed or "
+            f"removed; update `_NO_VARIANT_ARMS` in the same commit."
+        )
+    return _NO_VARIANT_ARMS
+
+
+def _no_variant_outcome(obj: object) -> str | None:
+    """Which no-variant arm carries *obj* — or `None` if an earlier arm does.
+
+    A TRANSCRIPTION of `falsy_opaque`'s gate and of the `__dict__` arm that
+    sits above it, for the same reason `_value_variant` is one: there is no
+    introspection hook that answers it, and inferring the arm from a rendering
+    would be reading `Display` rather than the conversion.
+
+    Returns `None` for an object the `__dict__` bulk-dump claims — a falsy
+    object WITH attributes is a `Value::Object` whose truthiness is the mapping
+    rule, which is #2478 and a different carrier. `_value_variant` then RAISES
+    on it, so a corpus row of that shape fails the manifest loudly rather than
+    registering `Object:falsy` and claiming coverage of a slot that is in fact
+    the divergence.
+    """
+    attrs = getattr(obj, "__dict__", None)
+    if isinstance(attrs, dict) and any(not k.startswith("_") for k in attrs):
+        return None
+    if not obj:
+        try:
+            length = len(obj)  # type: ignore[arg-type]
+        except TypeError:
+            # No `__len__`. Iterable-and-falsy is the shape #2466 DECLINED, so
+            # it keeps the terminal `Value::String(str(o))` path.
+            try:
+                iter(obj)  # type: ignore[call-overload]
+            except TypeError:
+                return "falsy_opaque"
+            return "str-fallback"
+        # Falsy with a non-zero `__len__` is the other #2466 decline.
+        return "falsy_opaque" if length == 0 else "str-fallback"
+    return "str-fallback"
 
 
 #: Combinations no Python value can inhabit, each with the reason. An exemption
@@ -2766,6 +2947,19 @@ VALUE_TRUTHINESS_NOT_INHABITABLE = {
 VALUE_TRUTHINESS_ONE_ANSWER = {
     ("None", "truthy"): "`Value::None` has exactly one inhabitant, `None`, and it is falsy",
     ("BigInt", "falsy"): "a magnitude past `i64` is never zero — the variant's own invariant",
+    ("falsy_opaque", "truthy"): (
+        "`falsy_opaque` opens with `if ob.is_truthy().ok()? { return None }`, so no "
+        "truthy object can reach this carrier — the arm's own gate, not a corpus gap"
+    ),
+    ("str-fallback", "falsy"): (
+        "a falsy object reaches the terminal `Value::String(ob.str()?)` only through "
+        "the two shapes #2466 declined — falsy WITH `__iter__` and no `__len__`, or "
+        "falsy with a NON-ZERO `__len__` — and no builtin type has either, so the "
+        "inhabitant would have to be a user-defined class. `INPUTS` is read back by "
+        "`test_sequence_op_chokepoint_2451.corpus()` as literals evaluated in a "
+        "three-name namespace, so a class instance cannot be a row here at all. Same "
+        "harness limit the unpicklable `dict_keys` row hits (#2477)"
+    ),
 }
 
 
@@ -2783,12 +2977,23 @@ def _value_truthiness_channels() -> dict[str, dict[str, object]]:
     }
 
 
+def _value_truthiness_outcomes() -> list[str]:
+    """Every conversion OUTCOME: the `Value` variants, plus the no-variant arms.
+
+    Not the variants alone (#2477). A variant names what the renderer holds; an
+    outcome names what the CONVERSION did with a Python object, and the two
+    differ exactly where no variant models the object — which is the case the
+    axis was built for and the one it could not see.
+    """
+    return [*_rust_value_variants(), *_no_variant_outcomes()]
+
+
 def _value_truthiness_members() -> list[tuple[str, str, str]]:
-    """`(channel, variant, answer)` for every combination the enum admits."""
+    """`(channel, outcome, answer)` for every combination the conversion admits."""
     return [
-        (channel, variant, answer)
+        (channel, outcome, answer)
         for channel in _value_truthiness_channels()
-        for variant in _rust_value_variants()
+        for outcome in _value_truthiness_outcomes()
         for answer in ("falsy", "truthy")
     ]
 
@@ -2801,22 +3006,25 @@ def _required_value_truthiness() -> dict[str, str]:
     an exemption that quietly stopped applying is the same silence this whole
     file exists to remove.
     """
+    no_variant = set(_no_variant_outcomes())
     return {
-        f"{channel}:{variant}:{answer}": _VALUE_ENUM_SOURCE
-        for channel, variant, answer in _value_truthiness_members()
+        f"{channel}:{outcome}:{answer}": (
+            _FALLBACK_BLOCK_SOURCE if outcome in no_variant else _VALUE_ENUM_SOURCE
+        )
+        for channel, outcome, answer in _value_truthiness_members()
     }
 
 
 #: Keyed by MEMBER, built from the two reason tables above so a variant added
 #: to the enum inherits nothing by accident.
 VALUE_TRUTHINESS_EXEMPT = {
-    f"{channel}:{variant}:{answer}": (
-        VALUE_TRUTHINESS_NOT_INHABITABLE.get(variant)
-        or VALUE_TRUTHINESS_ONE_ANSWER[(variant, answer)]
+    f"{channel}:{outcome}:{answer}": (
+        VALUE_TRUTHINESS_NOT_INHABITABLE.get(outcome)
+        or VALUE_TRUTHINESS_ONE_ANSWER[(outcome, answer)]
     )
-    for channel, variant, answer in _value_truthiness_members()
-    if variant in VALUE_TRUTHINESS_NOT_INHABITABLE
-    or (variant, answer) in VALUE_TRUTHINESS_ONE_ANSWER
+    for channel, outcome, answer in _value_truthiness_members()
+    if outcome in VALUE_TRUTHINESS_NOT_INHABITABLE
+    or (outcome, answer) in VALUE_TRUTHINESS_ONE_ANSWER
 }
 
 
@@ -3252,7 +3460,11 @@ AXES = [
     ),
     Axis(
         name="value-truthiness",
-        what="a falsy AND a truthy inhabitant of every `Value` variant, in both channels",
+        what=(
+            "a falsy AND a truthy inhabitant of every conversion OUTCOME — the "
+            "`Value` variants and the two fallback arms that carry an object no "
+            "variant models — in both channels"
+        ),
         swept=_swept_value_truthiness,
         required=_required_value_truthiness,
         exempt=VALUE_TRUTHINESS_EXEMPT,

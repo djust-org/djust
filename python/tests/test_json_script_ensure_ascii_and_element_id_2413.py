@@ -442,19 +442,30 @@ class TestTheDivergenceTheUnMaskingRevealed:
         du = _rust.render_template('{{ p|json_script:"d" }}', {"p": {key: "v"}})
         assert du.startswith("<script"), du
 
-    def test_it_is_the_ONLY_json_script_cell_left_on_the_un_masked_surface(self) -> None:
+    def test_the_only_json_script_cells_left_are_the_refusal_half(self) -> None:
         """The scope claim, run rather than asserted from the sweep log.
 
         Every value shape the differential carries, through the argument-less
-        spelling this fix un-masked. Exactly one must still diverge, and it
-        must be the typed-key one — so a NEW body divergence cannot hide here.
+        spelling this fix un-masked. Every cell that still diverges must be a
+        member of ONE known class — Django's encoder REFUSES the value and
+        djust renders it (#2429) — so a NEW body divergence cannot hide here.
+        The direction is asserted per cell below rather than left to the
+        names, because an exact-set pin over names alone would let a cell
+        change class without changing membership.
 
         `d-typed-key` is
         `{0: "a", True: "b", None: "c", 1.5: "d", (1, "t"): "e"}`, one key of
         each kind. #2425 closed the `True` / `None` spellings; the `(1, "t")`
-        key is the still-open refusal half (#2429), where Django RAISES and
-        djust renders — so the cell stays divergent and this claim stays true
-        across that fix. Closing #2429 is what empties the set.
+        key is the still-open refusal half, where Django RAISES and djust
+        renders — so the cell stays divergent and this claim stays true across
+        that fix.
+
+        `set-empty` / `set-plain` arrived with #2477 and are the same class one
+        type over: `json.dumps` refuses a `set` outright
+        (`Object of type set is not JSON serializable`), and djust writes the
+        value's `str()`, which is what the `Value::String` path it replaced
+        already wrote — #2466 records that this axis does not move. Closing
+        #2429 is what empties the set.
 
         This is a claim about the CORPUS, not about the key-type axis: the
         differential carries no non-finite-float key, so it was silent about the
@@ -462,7 +473,7 @@ class TestTheDivergenceTheUnMaskingRevealed:
         The axis itself is swept in `test_json_script_typed_keys_2425.py`.
         """
         module = _load_differential()
-        diverging = set()
+        diverging = {}
         for name, value in module.INPUTS.items():
             try:
                 dj = DjangoTemplate("{{ p|json_script }}").render(
@@ -475,8 +486,14 @@ class TestTheDivergenceTheUnMaskingRevealed:
             except Exception:  # noqa: BLE001
                 du = "<<EXC>>"
             if dj != du:
-                diverging.add(name)
-        assert diverging == {"d-typed-key"}, diverging
+                diverging[name] = (dj, du)
+        assert set(diverging) == {"d-typed-key", "set-empty", "set-plain"}, sorted(diverging)
+        # ...and every one is the SAME class: Django's encoder refuses, djust
+        # renders. A cell that flipped to a body divergence would keep its
+        # membership and fail here instead of passing quietly.
+        for name, (dj, du) in sorted(diverging.items()):
+            assert dj == "<<EXC>>", f"{name}: Django no longer refuses ({dj!r})"
+            assert du.startswith("<script"), f"{name}: djust no longer renders ({du!r})"
 
 
 def _load_differential():

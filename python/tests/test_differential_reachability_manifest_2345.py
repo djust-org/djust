@@ -601,6 +601,135 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         broken = {a: r["missing"] for a, r in data.items() if r.get("missing")}
         assert set(broken) == {"value-truthiness"}, broken
 
+    #: The corpus rows #2477 added, and the ONE line that lets the axis name
+    #: them. Held apart so the canary below can run the SAME corpus through
+    #: both the extended axis and the one that shipped with #2469.
+    ROWS_2477_INPUTS = """    "set-empty": set(),
+    "set-plain": {"<img src=x onerror=alert(1)>"},
+"""
+    ROWS_2477_ARG_CONTEXT = """    "known_set_empty": set(),
+    "known_set": {"<img src=x onerror=alert(1)>"},
+"""
+    ROWS_2477_ARG_SPELLINGS = """    "known_set_empty",
+    "known_set",
+"""
+    AXIS_2477 = "    return [*_rust_value_variants(), *_no_variant_outcomes()]"
+    AXIS_PRE_2477 = "    return list(_rust_value_variants())"
+
+    #: What the extended axis reports over a corpus with those rows removed.
+    GAP_2477 = {
+        "value:falsy_opaque:falsy",
+        "value:str-fallback:truthy",
+        "arg:falsy_opaque:falsy",
+        "arg:str-fallback:truthy",
+    }
+
+    def _without_the_2477_rows(self, tmp_path: pathlib.Path, *extra: tuple[str, str]):
+        return mutated_script(
+            tmp_path,
+            (self.ROWS_2477_INPUTS, ""),
+            (self.ROWS_2477_ARG_CONTEXT, ""),
+            (self.ROWS_2477_ARG_SPELLINGS, ""),
+            *extra,
+        )
+
+    def test_2477_the_variant_only_axis_reports_the_no_variant_class_COVERED(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The ninth blind spot, and the first the axis itself was the cause of.
+
+        #2469 built ``value-truthiness`` to stop a falsiness gap going
+        unmeasured a seventh time, and it enumerated the ``Value`` VARIANTS.
+        That is the wrong enumeration for the question, and #2466 is the
+        proof: every value that issue is about — ``set()``, ``frozenset()``,
+        ``complex(0)``, an empty ``dict_keys``, a zero-``__len__`` class — has
+        no variant, and the ABSENCE is the defect. ``td-zero`` supplied
+        ``Encoded:falsy``, so the axis said ``0 MISSING`` about a class it
+        could not construct a single cell for.
+
+        Run rather than argued: this is the pre-#2477 axis over the same
+        corpus the canary below uses, and it reports nothing missing.
+        """
+        script = self._without_the_2477_rows(tmp_path, (self.AXIS_2477, self.AXIS_PRE_2477))
+        row = rows(run_manifest(script))["value-truthiness"]
+        assert row["missing"] == [], row["missing"]
+        # ...and it is the VARIANT enumeration that is doing it: none of the
+        # four members the extended axis names is even in its required set.
+        assert not (self.GAP_2477 & set(row["required"])), sorted(
+            self.GAP_2477 & set(row["required"])
+        )
+
+    def test_2477_the_outcome_axis_names_the_gap_the_variant_axis_could_not(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The same corpus, through the extended axis: four members MISSING.
+
+        The pair is the empirical canary the tooling-PR rule asks for (#1459):
+        one run of the tool reporting a gap that the version it replaces
+        reports as covered, over an identical corpus.
+        """
+        script = self._without_the_2477_rows(tmp_path)
+        data = rows(run_manifest(script))
+        row = data["value-truthiness"]
+        assert set(row["missing"]) == self.GAP_2477, row["missing"]
+        # The requirement is read out of the Rust source, so the report names
+        # WHERE each member came from — the fallback block, not the enum.
+        for member in row["missing"]:
+            assert "fallback block" in row["required"][member], row["required"][member]
+
+    def test_2477_the_mutation_is_a_corpus_edit_and_not_a_broken_script(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Non-vacuity for both halves above (#1468/#2135).
+
+        A mutation that broke the script, or that deleted the axis, would also
+        produce a report the assertions above could be read as satisfying. So:
+        the axis is still declared, every OTHER axis is still clean, and the
+        four missing members are a strict subset of a required set that did
+        not shrink.
+        """
+        data = rows(run_manifest(self._without_the_2477_rows(tmp_path)))
+        assert "value-truthiness" in data, "the mutation deleted the axis, not the corpus"
+        broken = {a: r["missing"] for a, r in data.items() if r.get("missing")}
+        assert set(broken) == {"value-truthiness"}, broken
+        row = data["value-truthiness"]
+        assert set(row["missing"]) < set(row["required"])
+        # The truthy partners the corpus already had are still swept, so the
+        # report names the gap rather than blaming the whole axis.
+        for still_covered in ("value:Encoded:falsy", "arg:Encoded:truthy", "value:Object:falsy"):
+            assert still_covered not in row["missing"], still_covered
+
+    def test_2477_the_arm_reader_refuses_a_pattern_that_stopped_matching(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The drift alarm, exercised rather than trusted.
+
+        The no-variant outcomes are named by ARM, and the arm list is read out
+        of `impl FromPyObject for Value`'s fallback block. What makes that
+        honest is the count check: every arm but the last ends in a
+        `return Ok(…)`, so a pattern that stopped matching — or an arm added
+        without one — is a mismatch rather than a silent reclassification.
+
+        Mutating one alternative of the pattern must make the manifest FAIL
+        loudly. A reader that shrugged would leave the next conversion arm
+        folded into whichever existing outcome its objects happened to hit,
+        which is the whole failure mode this axis exists to end.
+        """
+        script = mutated_script(
+            tmp_path,
+            (r'|ob\.getattr\("(?P<dunder>__\w+__)"\)', r'|ob\.getattr\("(?P<dunder>NOPE)"\)'),
+        )
+        proc = subprocess.run(  # noqa: S603 — a repo file, argv list, no shell
+            [sys.executable, str(script), "--manifest", "--json"],
+            capture_output=True,
+            text=True,
+            env=_env(),
+            cwd=str(REPO),
+            check=False,
+        )
+        assert proc.returncode != 0, "the reader accepted a pattern that matches nothing"
+        assert "_FALLBACK_ARM_PATTERN matched" in proc.stderr, proc.stderr[-2000:]
+
 
 class TestTheLimitTheManifestDoesNotClose:
     """#2334's two halves, and why neither is caught — pinned, not hoped for.
@@ -1040,6 +1169,20 @@ class TestTheManifestAbsorbedRatherThanReplacedWhatLandedFirst:
             "TRUTHY in Python and has no `.year`, so Django's `timesince` "
             "raises. A text-shaped falsiness rule read the number it spells "
             "and measured from now; only this row separates the two"
+        ),
+        "known_set_empty": (
+            "#2477 — a resolved argument NO `Value` variant models, on the "
+            "falsy side. It reaches `falsy_opaque` and crosses as a "
+            "`Value::Encoded`; before this row the argument channel had no "
+            "inhabitant of that conversion arm at all, and the whole of #2466 "
+            "was invisible to every axis"
+        ),
+        "known_set": (
+            "#2477 — the TRUTHY partner, which lands on a DIFFERENT arm: "
+            "`falsy_opaque`'s own gate declines it, so it falls to the "
+            "terminal `Value::String(ob.str()?)` and its type is lost at the "
+            "conversion. That residue is what `STRINGIFIED_AT_EXTRACTION` in "
+            "`test_int_argument_type_2366.py` names, and no cell reached it"
         ),
     }
 
