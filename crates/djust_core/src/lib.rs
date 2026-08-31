@@ -1262,6 +1262,51 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     })
 }
 
+/// An object's PUBLIC `__dict__`, as a [`Value::Object`]'s map (#2478).
+///
+/// The ONE statement of "which attributes does an ordinary Python object
+/// expose to a template", and it has TWO callers by design: the `__dict__`
+/// bulk-dump arm of [`FromPyObject`], which turns the map into a
+/// `Value::Object`, and [`falsy_opaque`], which carries it on the `Encoded`.
+/// Those two arms decide the same question about the same objects and are
+/// selected between by the object's TRUTHINESS — so a second copy of this
+/// filter is the #1646 shape, one arm growing a rule the other does not. It
+/// was two copies for exactly as long as it took to write the second.
+///
+/// **Iterated as a `PyDict`**, not through `extract::<HashMap<..>>()` (#2203
+/// review): a std `HashMap` randomises iteration order PER INSTANCE and a
+/// fresh one is built on every conversion, so extracting through one made
+/// `{{ obj }}` reorder on every render rather than merely between restarts.
+///
+/// **`_`-prefixed names are skipped**, which is both Django's `_resolve_lookup`
+/// convention (`Variable.__init__` refuses a path segment starting with `_`)
+/// and what keeps a user attribute from colliding with the four `_TAG`
+/// constants the codec reserves.
+///
+/// Returns `None` when the object has no `__dict__` at all — a C type, or one
+/// with `__slots__` — which is DIFFERENT from an empty one and is what lets
+/// the caller tell "no attributes" from "not that kind of object".
+fn public_dict_attrs(ob: &Bound<'_, PyAny>) -> Option<IndexMap<ObjectKey, Value>> {
+    let obj_dict = ob.getattr("__dict__").ok()?;
+    let items = obj_dict.cast::<PyDict>().ok()?;
+    // Attribute names, so the keys stay `ObjectKey::Str` — a `__dict__`
+    // cannot have a non-string key.
+    let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
+    for (k, v) in items.iter() {
+        let Ok(k) = k.extract::<String>() else {
+            continue;
+        };
+        // Skip private/dunder attrs and Django's internal `_state`.
+        if k.starts_with('_') {
+            continue;
+        }
+        if let Ok(val) = v.extract::<Value>() {
+            map.insert(ObjectKey::Str(k), val);
+        }
+    }
+    Some(map)
+}
+
 /// `getattr(o, name)` for each `name`, as a [`Value::Object`]'s map (#2481).
 ///
 /// The ONE producer of [`Encoded::attrs`]. A name the object does not have, or
@@ -2254,47 +2299,41 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                     }
                 }
             }
+            // #2466: an object Python calls FALSY that no variant above
+            // models.
+            //
+            // Placed BEFORE the `__dict__` bulk-dump arm since #2478, which is
+            // the whole of that fix. It used to come AFTER, because routing an
+            // attribute-carrying object through this carrier would have taken
+            // `{{ obj.a }}` with it — an `Encoded` had no attributes. #2481
+            // gave it some, so the objection is answered and the order can be
+            // the one the SEMANTICS want: an object Python calls falsy is not
+            // a mapping of its attributes, and the `__dict__` arm asserts that
+            // it is.
+            //
+            // Both serialization floors stay ABOVE this: `__djust_serialize__`
+            // (#1986) and the raw-`Model` arm (#1986 vector 7) have already
+            // claimed anything the denylist governs, so a model cannot reach
+            // this arm and cannot have its floor fields dumped by it. That
+            // ordering is asserted structurally rather than left to reading.
+            if let Some(encoded) = falsy_opaque(&ob.to_owned()) {
+                return Ok(Value::Encoded(Box::new(encoded)));
+            }
             // For arbitrary Python objects (e.g. Django model instances), try to
             // extract public attributes from __dict__ so that template expressions
             // like `{{ obj.name }}` or `{{ obj.path }}` work without requiring
             // callers to manually convert to dicts.
-            if let Ok(obj_dict) = ob.getattr("__dict__") {
-                // Iterated as a PyDict, NOT via `extract::<HashMap<..>>()`
-                // (#2203 review). A std `HashMap` randomises iteration order
-                // PER INSTANCE, and a fresh one is built on every conversion —
-                // so extracting through one made `{{ obj }}` reorder on every
-                // render, not merely between restarts. That is the exact
-                // non-determinism the PyDict arm above exists to avoid, and a
-                // first pass reintroduced it sixty lines later.
-                if let Ok(items) = obj_dict.cast::<PyDict>() {
-                    // Attribute names, so the keys stay `ObjectKey::Str` —
-                    // a `__dict__` cannot have a non-string key.
-                    let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
-                    for (k, v) in items.iter() {
-                        let Ok(k) = k.extract::<String>() else {
-                            continue;
-                        };
-                        // Skip private/dunder attrs and Django's internal _state
-                        if k.starts_with('_') {
-                            continue;
-                        }
-                        if let Ok(val) = v.extract::<Value>() {
-                            map.insert(ObjectKey::Str(k), val);
-                        }
-                    }
-                    if !map.is_empty() {
-                        return Ok(Value::Object(map));
-                    }
+            //
+            // Reached now by the TRUTHY objects and by the falsy ones
+            // `falsy_opaque` declines — a non-zero `__len__` with a `__bool__`
+            // of `False`, or an `__iter__` with no `__len__` — whose items
+            // Django renders and which this carrier cannot produce without
+            // RUNNING the object. Those keep their `Value::Object` exactly as
+            // before.
+            if let Some(map) = public_dict_attrs(&ob.to_owned()) {
+                if !map.is_empty() {
+                    return Ok(Value::Object(map));
                 }
-            }
-            // #2466: an object Python calls FALSY that no variant above
-            // models. Placed HERE — after the `__dict__` arm — deliberately:
-            // an object WITH attributes keeps its `Value::Object`, because
-            // routing it through this carrier would take `{{ obj.a }}` with
-            // it. So this reaches exactly the values that were about to
-            // become `Value::String(str(o))`.
-            if let Some(encoded) = falsy_opaque(&ob.to_owned()) {
-                return Ok(Value::Encoded(Box::new(encoded)));
             }
             Ok(Value::String(ob.str()?.to_string()))
         }
@@ -2361,6 +2400,38 @@ impl<'py> FromPyObject<'_, 'py> for Value {
 ///
 /// Reached only in the fallback block, after every extraction has already
 /// failed, so it costs a string / int / list / dict / model nothing.
+///
+/// # An object WITH attributes (#2478)
+///
+/// Until #2478 this arm was placed AFTER the `__dict__` bulk-dump, so a falsy
+/// object carrying attributes became a NON-EMPTY `Value::Object` and answered
+/// with the mapping rule:
+///
+/// ```text
+/// class LenZeroWithAttrs:
+///     def __init__(self): self.a = 1
+///     def __len__(self):  return 0
+///
+/// {% if p %}              python False   django F   djust T
+/// {{ p|length }}                         django 0   djust 1
+/// {% for x in p %}                       django ''  djust '[a]'
+/// {{ p }}                    django '<LenZeroWithAttrs object …>'   djust "{'a': 1}"
+/// ```
+///
+/// The placement was deliberate and the reason was correct at the time: this
+/// carrier had no attributes, so claiming the object would have taken
+/// `{{ obj.a }}` with it. #2481 gave it an attribute map, which is why #2478
+/// is a REORDER plus one field rather than a new rule — every cell above is
+/// answered by a spelling this struct already carries, and `{{ obj.a }}` is
+/// answered by the new one.
+///
+/// Note which cells the issue's own suggested remedy — a truthiness override
+/// on `Value::Object` — would have reached: the FIRST only. `|length` and
+/// `{% for %}` and `{{ p }}` read the MAPPING, not its truthiness, and the
+/// `__dict__` arm's whole claim is that the object IS a mapping of its
+/// attributes. Overriding one answer of a wrong carrier is the shape #2129
+/// took five rounds over; moving the object to the right carrier answers all
+/// of them at once.
 pub fn falsy_opaque(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // Python's own answer, via `PyObject_IsTrue`, so a class overriding
     // `__bool__` or `__len__` is answered by the object rather than by this
@@ -2425,14 +2496,16 @@ pub fn falsy_opaque(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // names and `LenZero() == LenZero()` is False WITHIN one — so no
         // carried spelling decides it. Filed as #2480.
         cmp_key: None,
-        // EMPTY, and that is this arm's gate rather than an omission (#2481).
-        // The values that reach here are the ones the `__dict__` bulk-dump arm
-        // above declined — an object WITH attributes keeps its `Value::Object`,
-        // because moving it to this carrier would take `{{ obj.a }}` with it.
-        // Now that `Encoded` HAS an attribute map that objection is answerable,
-        // and answering it is #2478 — a different decision about a different
-        // set of objects, filed rather than folded in.
-        attrs: IndexMap::new(),
+        // The object's PUBLIC `__dict__` (#2478) — the same map, built by the
+        // same function, that the `__dict__` bulk-dump arm below would have
+        // built. That IS the fix: this arm now claims a falsy object WITH
+        // attributes, and it can only do so without regressing `{{ obj.a }}`
+        // because #2481 gave `Encoded` somewhere to put them.
+        //
+        // Empty for an object with no `__dict__` (a C type: `set`,
+        // `frozenset`, `complex`, a `dict_keys`) — which is every value this
+        // arm claimed before #2478, so their behaviour is unchanged.
+        attrs: public_dict_attrs(ob).unwrap_or_default(),
     })
 }
 

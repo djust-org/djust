@@ -35,6 +35,8 @@ shape                        why it was truthy here
 ``__bool__`` → ``False``     the ``str()`` fallback
 ``__len__`` → 0 WITH attrs   the ``__dict__`` bulk-dump arm — NOT the
                              ``str()`` fallback, and NOT closed here
+                             (filed as #2478 and closed there, once
+                             #2481 gave the carrier an attribute map)
 ===========================  ==========================================
 
 The last two rows are user classes, so the set cannot be enumerated: that is
@@ -445,22 +447,36 @@ class TestTheTwoIterabilityQuestionsAreTwoQuestions:
 class TestWhatThisDeliberatelyDoesNOTClose:
     """Asserted in the DIVERGING direction, so closing one reddens this."""
 
-    def test_a_falsy_object_WITH_attributes_is_still_truthy(self) -> None:
-        """The `__dict__` bulk-dump arm, not the `str()` fallback.
+    def test_a_falsy_object_WITH_attributes_was_still_truthy_and_is_now_CLOSED(
+        self,
+    ) -> None:
+        """Filed as #2478 and closed there — kept as the CLOSING case.
 
-        An object carrying attributes becomes a NON-EMPTY `Value::Object`, and
-        `Object`'s truthiness is the mapping rule. Routing it through this
-        carrier would take `{{ obj.a }}` with it — a `Value::Encoded` has no
-        attributes — so closing it needs a truthiness override on `Object`,
-        which is a different carrier. Filed rather than folded in (#1079).
+        The `__dict__` bulk-dump arm, not the `str()` fallback: an object
+        carrying attributes became a NON-EMPTY `Value::Object`, whose
+        truthiness is the mapping rule. This test was written in the DIVERGING
+        direction and asserted the reason it could not be closed HERE — routing
+        the object through the `Encoded` carrier would have taken `{{ obj.a }}`
+        with it, because a `Value::Encoded` had no attributes.
+
+        #2481 gave it some. #2478 then moved the object onto that carrier and
+        the objection is answered rather than worked around: the divergence is
+        gone AND `{{ p.a }}` still resolves — the second assertion is the whole
+        point of keeping this test rather than deleting it.
+
+        The issue's own suggested remedy, a truthiness override on
+        `Value::Object`, would have closed the first assertion and NOT
+        `{{ p|length }}` / `{% for %}` / `{{ p }}`, which read the MAPPING and
+        not its truthiness. See `python/tests/test_falsy_with_attributes_2478.py`.
         """
         value = LenZeroWithAttrs()
         assert bool(value) is False
         assert django_render(IF, {"p": value}) == "F"
-        assert djust_render(IF, {"p": value}) == "T"
-        # …and the reason, so a future reader does not "simplify" it away:
-        # the attribute IS reachable here and would stop being.
+        assert djust_render(IF, {"p": value}) == "F"
+        # The reason this could not be closed at #2466, now the thing that
+        # proves the fix did not pay for it.
         assert djust_render("{{ p.a }}", {"p": value}) == "1"
+        assert django_render("{{ p.a }}", {"p": value}) == "1"
 
     def test_a_falsy_object_with_a_NONZERO_len_is_still_truthy(self) -> None:
         """`__bool__` False and `__len__` 5 — declined, not guessed.
