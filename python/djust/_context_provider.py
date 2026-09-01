@@ -6,6 +6,7 @@ shared location that doesn't depend on the other).
 """
 
 from typing import Any
+from djust._template_guards import alters_data
 
 
 class ContextProviderMixin:
@@ -44,6 +45,7 @@ class ContextProviderMixin:
             node = getattr(node, "_djust_context_parent", None)
         return default
 
+    @alters_data
     def clear_context_providers(self) -> None:
         """Reset all context providers — called at the start of each render."""
         providers = self.__dict__.get("_djust_context_providers")

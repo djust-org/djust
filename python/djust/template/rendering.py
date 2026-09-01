@@ -66,6 +66,36 @@ class _TemplateSourceWrapper:
         self.source = source
 
 
+#: Exceptions that mean "the project's own code raised", not "the template
+#: engine failed" — so they must cross a render boundary unwrapped (#2508).
+#:
+#: This is EXACTLY the set `django.core.handlers.exception.response_for_exception`
+#: dispatches on, read from that function rather than recalled: `Http404` -> 404,
+#: `PermissionDenied` -> 403, `MultiPartParserError` -> 400, `BadRequest` -> 400,
+#: `SuspiciousOperation` -> 400. Wrapping any of them costs a status code, which
+#: no template-location hint is worth.
+#:
+#: The first version of this list had three of the five. `BadRequest` and
+#: `MultiPartParserError` are SIBLINGS of `SuspiciousOperation`, not subclasses,
+#: so the `isinstance` did not reach them and both still rendered 500 — the same
+#: defect this function exists to close, left half-closed (#2508 re-review). If
+#: Django's dispatch set changes, this list is what has to change with it.
+#:
+#: `ObjectDoesNotExist` is deliberately ABSENT: Django assigns it no status, and
+#: it is silent at the lookup layer (rendered empty long before it reaches here),
+#: so listing it only cost the hint. `ImproperlyConfigured` is absent for the
+#: same reason — a setup failure, where the hint is genuinely useful.
+def _is_user_raised(exc: BaseException) -> bool:
+    from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
+    from django.http import Http404
+    from django.http.multipartparser import MultiPartParserError
+
+    return isinstance(
+        exc,
+        (Http404, PermissionDenied, MultiPartParserError, BadRequest, SuspiciousOperation),
+    )
+
+
 class DjustTemplate:
     """
     Wrapper for a template rendered with djust's Rust engine.
@@ -814,11 +844,22 @@ class DjustTemplate:
 
             _ensure_custom_filters_bridged()
             template_dirs = [str(d) for d in self.backend.template_dirs]
+            # ADR-024 auto-call kill-switch. The Rust entry point defaults it
+            # ON (Django's behaviour) for a caller that reaches it directly;
+            # this path is a project's render, so the project's
+            # `LIVEVIEW_CONFIG['template_auto_call']` governs it — the same
+            # flag `_apply_template_auto_call_flag` wires on the LiveView path
+            # (#2501). One shared reader, called by all three framework render
+            # paths (#2508 review).
+            from ..config import template_auto_call_enabled
+
+            auto_call = template_auto_call_enabled()
             html = self.backend._render_fn_with_dirs(
                 resolved_template,
                 context_dict,
                 template_dirs,
                 safe_keys or None,
+                auto_call,
             )
 
             # In DEBUG mode, inject data-dj-src attributes for template source mapping.
@@ -834,6 +875,16 @@ class DjustTemplate:
 
             return SafeString(html)
         except Exception as e:
+            # An exception RAISED BY THE PROJECT'S OWN CODE during a lookup
+            # (a property, a nullary method) crosses back whole so Django's
+            # handler chain can dispatch on its type — `PermissionDenied` to
+            # 403, `Http404` to 404 (#2508). Re-wrapping it as a bare
+            # `Exception` made both a 500, and the template-location hint
+            # below is worth nothing next to losing the status code. A real
+            # ENGINE failure (unsupported tag, parse error) still gets the
+            # hint, which is what it was written for.
+            if _is_user_raised(e):
+                raise
             # Provide helpful error message with template location
             origin_info = f" (from {self.origin.name})" if self.origin else ""
 

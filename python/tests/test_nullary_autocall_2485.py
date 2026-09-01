@@ -98,6 +98,23 @@ def djust_render_with_dirs(source: str, context: dict) -> str:
         return "<<REFUSED>>"
 
 
+def liveview_render(source: str, context: dict) -> str:
+    """The LiveView path — `RustLiveView` with the raw-Python sidecar attached.
+
+    The FOURTH render path. It has had `Context::resolve`'s lazy `getattr`
+    walk since ADR-024, so it answered several of the cells this file pins as
+    empty all along; #2501 attached the same sidecar to the three entry points
+    measured here. Used below to state that convergence as a measurement
+    rather than as a claim (#1646).
+    """
+    try:
+        view = _rust.RustLiveView(source, [])
+        view.set_raw_py_values(dict(context))
+        return view.render()
+    except Exception:  # noqa: BLE001
+        return "<<REFUSED>>"
+
+
 def round_trip(source: str, value: object) -> str:
     """Render after a msgpack state round trip — what the default
     `InMemoryStateBackend` does on every read."""
@@ -215,14 +232,30 @@ class TestTheMembershipRuleIsMeasured:
 
     def test_the_nondeterministic_classmethods_are_not_carried(self) -> None:
         """`now` / `today` / `utcnow` answer the CURRENT time. Django renders
-        them; carrying them would do nondeterministic work at every conversion
-        AND still spell the result differently. Pinned in the diverging
-        direction so a future widening reddens this rather than passing
-        silently."""
+        them; carrying them in the MAP would do nondeterministic work at every
+        conversion — for every value, whether or not any template spells the
+        name — AND still spell the result differently. That exclusion is
+        unchanged, and this is its pin.
+
+        It was pinned in the DIVERGING direction ("djust renders empty") until
+        #2501, and went red there — the pin working (#1859). The cell is now
+        answered by the sidecar walk, which is LAZY: the nondeterministic call
+        runs only for a template that actually spells `{{ p.now }}`, which is
+        precisely the objection the map could not escape. Django calls it too,
+        so this is parity on WHETHER; the result's spelling is the remaining
+        divergence and is measured in `test_encoded_attributes_2481.py`.
+        """
         for attr in ("now", "today", "utcnow"):
             source = "{{ p.%s }}" % attr
             assert django_render(source, {"p": DT}) != ""
-            assert djust_render(source, {"p": DT}) == ""
+            # The name is still NOT in the map: a value that has been through
+            # the state round trip has no live object to walk, so the cell is
+            # empty there. That is what shows the render below comes from the
+            # sidecar rather than from a widened table.
+            assert round_trip(source, DT) == ""
+            # And with the live object in reach, the call runs.
+            assert djust_render(source, {"p": DT}) != ""
+            assert liveview_render(source, {"p": DT}) != ""
 
 
 class TestTheCallsFailSoft:
@@ -259,9 +292,21 @@ class TestTheCallsFailSoft:
 
     def test_a_raising_call_is_skipped_and_the_rest_of_the_value_answers(self) -> None:
         value = self._partly_hostile()
-        # The two raising calls are SKIPPED, so the cell stays where it was.
-        assert djust_render("{{ p.tzname }}", {"p": value}) == ""
-        assert djust_render("{{ p.dst }}", {"p": value}) == ""
+        # The two raising calls are SKIPPED by the map's collector, so the
+        # cell it produces stays where it was — measured after the state round
+        # trip, where the map is the only thing in reach.
+        assert round_trip("{{ p.tzname }}", value) == ""
+        assert round_trip("{{ p.dst }}", value) == ""
+        # With the live object in reach, the sidecar walk calls it and the
+        # exception propagates — which is `Context::maybe_call`'s documented
+        # rule ("any other exception raised by the method propagates as a
+        # render error, matching Django") and is what Django does here too:
+        # `test_the_skipped_cell_is_one_django_500s_on` below measures that.
+        # Pinned as a REFUSAL on both engines rather than as a djust-only one
+        # (#2501 moved this cell; before it, djust was more permissive).
+        assert djust_render("{{ p.tzname }}", {"p": value}) == "<<REFUSED>>"
+        assert djust_render("{{ p.dst }}", {"p": value}) == "<<REFUSED>>"
+        assert liveview_render("{{ p.tzname }}", {"p": value}) == "<<REFUSED>>"
         # Everything else about the value still answers — the failure is
         # per-name, not per-value.
         assert djust_render("{{ p.isoformat }}", {"p": value}) == "2026-03-04T05:06:07+00:00"
@@ -325,9 +370,18 @@ class TestTheCallsFailSoft:
         (#2481) renders empty for the same reason, which is what makes this the
         conversion's decision rather than this table's omission."""
         assert djust_render("{{ p }}", {"p": ZONED_TIME}) == "05:06:07-05:00"
-        assert djust_render("{{ p.hour }}", {"p": ZONED_TIME}) == ""  # the #2481 half
-        assert djust_render("{{ p.isoformat }}", {"p": ZONED_TIME}) == ""  # this half
+        # Neither table answers this value — measured after the state round
+        # trip, where no live object is left to fall back to.
+        assert round_trip("{{ p.hour }}", ZONED_TIME) == ""  # the #2481 half
+        assert round_trip("{{ p.isoformat }}", ZONED_TIME) == ""  # this half
+        # #2501: with the live object in reach the sidecar answers both, in
+        # Django's spelling, WITHOUT either table gaining an entry — the
+        # argument for resolving lazily against the object rather than by
+        # widening a carrier.
         assert django_render("{{ p.isoformat }}", {"p": ZONED_TIME}) == "05:06:07-05:00"
+        assert djust_render("{{ p.isoformat }}", {"p": ZONED_TIME}) == "05:06:07-05:00"
+        assert djust_render("{{ p.hour }}", {"p": ZONED_TIME}) == "5"
+        assert liveview_render("{{ p.isoformat }}", {"p": ZONED_TIME}) == "05:06:07-05:00"
 
     def test_a_subclass_gets_the_builtins_names(self) -> None:
         """`django_json_encoded` keys the tables off the `tp_name` it already

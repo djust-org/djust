@@ -41,13 +41,32 @@ pub enum DjangoRustError {
     #[error("Python error: {0}")]
     PythonError(String),
 
+    /// A Python exception raised by user code during a template lookup,
+    /// carried WHOLE rather than stringified (#2508 review).
+    ///
+    /// `From<PyErr>` below flattens to `PythonError(String)`, which is fine
+    /// for an internal failure but destroys the type — and Django's handler
+    /// chain dispatches on exactly that: `PermissionDenied` is a 403 and
+    /// `Http404` is a 404, both of which arrived as an unhandled
+    /// `RuntimeError` (a 500) before this variant existed. The attribute walk
+    /// uses this variant so a property raising `PermissionDenied` still
+    /// renders as 403.
+    #[error("{0}")]
+    PythonException(PyErr),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }
 
 impl From<DjangoRustError> for PyErr {
     fn from(err: DjangoRustError) -> PyErr {
-        PyRuntimeError::new_err(err.to_string())
+        match err {
+            // Hand the caller back the exception user code actually raised,
+            // so Django's handler chain still sees `PermissionDenied` /
+            // `Http404` / a custom exception and dispatches on its type.
+            DjangoRustError::PythonException(e) => e,
+            other => PyRuntimeError::new_err(other.to_string()),
+        }
     }
 }
 

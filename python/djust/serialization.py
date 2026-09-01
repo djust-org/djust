@@ -1002,6 +1002,261 @@ class StateRoundtripJSONEncoder(DjangoJSONEncoder):
 _encoder = DjangoJSONEncoder()
 
 
+#: Values a dotted lookup has no reason to reach through the raw-Python
+#: sidecar. ``None`` carries nothing; the scalars are the shapes djust's own
+#: value stack already owns end to end (``Context::get`` for the value itself,
+#: ``string_index`` for Django's step-3 index over a ``str``). Keeping them out
+#: confines the sidecar to the objects #2501 is about and leaves every scalar
+#: cell rendering exactly what it renders today (#1079).
+#:
+#: Containers are deliberately NOT here, unlike the LiveView-path builder in
+#: ``mixins/rust_bridge.py``: the objects this sidecar exists for routinely
+#: arrive inside a list or a dict (``{{ rows.0.cls_attr }}``,
+#: ``{{ d.x.cls_attr }}``), and the walk reaches them through its own
+#: item-access and integer-index arms.
+#:
+#: Admitting a container is NOT free, and an earlier version of this comment
+#: claimed it was (#2508 review). The lookup WALK is lazy — no property getter
+#: or nullary method is evaluated until a template names it, which is the
+#: design's load-bearing constraint — but the floor ADMISSION eagerly
+#: traverses and rebuilds every admitted container once per render, whether or
+#: not the template touches it. Measured: ~1 ms for a list of 1000 dicts, ~5 ms
+#: for 5000. That is the price of the floor holding transitively; it is worth
+#: knowing rather than mis-stating.
+_SIDECAR_SKIP_TYPES = (bool, int, float, str, bytes)
+
+
+def build_render_sidecar(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the raw-Python sidecar for a standalone template render (#2501).
+
+    ``Context::resolve``'s sidecar walk is the ONE implementation of Django's
+    ``Variable._resolve_lookup`` in this codebase — mapping item access,
+    ``getattr`` (which is what reaches a class attribute, a property or a
+    descriptor), the auto-call with its ``do_not_call_in_templates`` /
+    ``alters_data`` guards, then the integer index. Until #2501 only the
+    LiveView path attached it, so the same ``{{ obj.cls_attr }}`` resolved
+    there and rendered empty through ``render_template`` /
+    ``render_template_with_dirs`` / ``DjustTemplateBackend``.
+
+    Called from Rust at those entry points with the render context, so the
+    caller does not have to know the sidecar exists — the three paths get it
+    from the dict they already pass.
+
+    Every value is routed through :func:`_protect_sidecar_tree` here, at the
+    point of entry, rather than left to the walk. The walk protects what IT
+    resolves, but the sidecar has a second sink: the custom-tag bridge
+    (``djust_templates::registry``, three injection sites) sets these objects
+    straight into the Python context a ``{% tag %}`` handler receives,
+    OVERWRITING the serialized entry. That sink never touches the walk, so a
+    build-time pass is the only thing standing between a handler and a raw
+    model.
+
+    **The pass descends into containers**, and that is not an embellishment —
+    it is the difference between a floor and a decoration. This builder
+    deliberately admits ``list`` / ``dict`` (see :data:`_SIDECAR_SKIP_TYPES`),
+    unlike the LiveView-path builder in ``mixins/rust_bridge.py`` which
+    excludes them, so a top-level-only pass left a model one level down
+    completely unprotected:
+
+    ===========================  ==========================================
+    context                      ``password`` a tag handler could read
+    ===========================  ==========================================
+    ``{"user": u}``              filtered — ``AttributeError``
+    ``{"users": [u]}``           **LEAKED** before this descent
+    ``{"d": {"u": u}}``          **LEAKED** before this descent
+    ``{"deep": {"a": [u]}}``     **LEAKED** before this descent
+    ===========================  ==========================================
+
+    **What this pass does NOT reach, stated because measuring it is the only
+    way to know** (#1867 — a prose invariant has to be falsification-tested,
+    not written until it sounds true). A model held as an ATTRIBUTE of a plain
+    object is not reached: ``build_render_sidecar({"p": Presenter(user=u)})``
+    hands a tag handler a raw ``p``, and ``p.user.password`` is readable. That
+    is NOT a regression from this diff and NOT something the descent could fix
+    — ``_protect_sidecar_value`` returns a non-model unchanged, so the
+    LiveView-path builder has always had the identical exposure, and reaching
+    it would mean rewriting arbitrary user objects. The two sinks differ here
+    and the difference is real:
+
+    * the TEMPLATE sink is covered regardless of shape, because
+      ``Context::protect_sidecar`` re-protects after every segment —
+      ``{{ p.user.password }}`` renders ``''`` and ``{{ p.user.username }}``
+      renders ``alice``;
+    * the CUSTOM-TAG sink is covered for models reached through containers
+      (the table above) and not through arbitrary objects.
+
+    So the honest claim is *"the build-time pass restores container parity
+    with the LiveView path; the walk is what makes the template sink total"* —
+    not *"one floor governs both sinks"*, which is what this docstring said
+    while the container leak was live. Pinned by
+    ``TestTheSerializationFloorStillHolds`` in
+    ``python/tests/test_sidecar_on_all_render_paths_2501.py``.
+
+    All three were filtered before #2501 admitted containers at all, so the
+    leak was introduced by admitting them. The two-level row is why the fix is
+    a full descent rather than one level: fixing only the depths a reviewer
+    happened to cite leaves the next depth open, which is the shape of the
+    defect rather than an instance of it.
+    """
+    sidecar: Dict[str, Any] = {}
+    # ONE memo for the whole context, not one per key: two top-level names
+    # commonly point at the same list (a queryset materialized once and bound
+    # twice), and a per-key memo re-walks it per binding and hands out a
+    # different proxy for each. Sharing it makes the walk linear across the
+    # whole sidecar and keeps object identity, which a template comparing two
+    # names can observe.
+    memo: Dict[Any, Any] = {}
+    for key, value in context.items():
+        if value is None or isinstance(value, _SIDECAR_SKIP_TYPES):
+            continue
+        sidecar[key] = _protect_sidecar_tree(value, 0, memo, set())
+    return sidecar
+
+
+#: Depth bound for :func:`_protect_sidecar_tree`. A context nested deeper than
+#: this is not a shape a template reaches by hand, and an unbounded walk over
+#: an adversarial structure is a render-time DoS. Reaching the bound returns
+#: the value UNPROTECTED, which is the pre-#2501 exposure for that depth and
+#: not a new one — but it is logged, because a silent floor is the failure
+#: mode this whole function exists to close.
+_SIDECAR_MAX_DEPTH = 12
+
+
+def _protect_sidecar_tree(
+    value: Any,
+    _depth: int = 0,
+    _memo: Optional[dict] = None,
+    _active: Optional[set] = None,
+) -> Any:
+    """:func:`_protect_sidecar_value`, applied at every depth of a container.
+
+    Returns a NEW container rather than mutating in place: the values here are
+    the caller's own live objects, and rewriting a user's list during a render
+    would be a side effect of looking at it.
+
+    A ``Manager`` / ``QuerySet`` is wrapped by :func:`_protect_sidecar_value`
+    and is NOT descended into — it is not a ``list``/``dict``, so the isinstance
+    checks below decline it, and descending would execute the query at
+    build time on every render. ``_SidecarQuerySetProxy`` protects the models
+    it yields when something actually iterates it.
+
+    Cycles are answered by identity (``_active``), so a self-referential
+    context returns the already-visited container unchanged rather than
+    recursing forever — at the cycle, not 12 rebuilt levels later.
+
+    The identity table is a MEMO, not a path-scoped visited-set (#2508 review).
+    A discard-on-exit set answers true cycles but not a DAG: a container
+    referenced from N places was re-traversed N times, so width compounded
+    with depth and 48 shared objects took 1.8 seconds to walk — per render,
+    on a structure with no cycle in it at all. Retaining each result makes
+    that linear, and gives a shared model ONE proxy instead of N.
+
+    The key carries the depth because a result is depth-dependent: a subtree
+    first reached at depth 10 is truncated by the cap below, and returning
+    that truncated result for the same object reached at depth 2 would
+    under-protect it. Keying on `(id, depth)` bounds the work at
+    `objects x _SIDECAR_MAX_DEPTH` while keeping every result honest.
+    """
+    protected = _protect_sidecar_value(value)
+    # A proxy is terminal: it enforces the floor on its own attribute access
+    # and iteration, so there is nothing under it for this pass to reach.
+    if protected is not value:
+        return protected
+    if not isinstance(value, (list, tuple, dict, set, frozenset)):
+        return value
+    if _depth >= _SIDECAR_MAX_DEPTH:
+        logger.debug(
+            "[djust] sidecar floor stopped at depth %s for a %s; values below it are unprotected",
+            _depth,
+            type(value).__name__,
+        )
+        return value
+    if _memo is None:
+        _memo = {}
+    if _active is None:
+        _active = set()
+
+    # Two tables, because cycle-stopping and result-reuse want opposite
+    # lifetimes and an earlier version of this tried to serve both with one.
+    #
+    # `_active` is PATH-scoped (discarded on the way out) and keyed on id
+    # ALONE: a cycle's back-edge returns to the same object at a DEEPER depth,
+    # so a depth-keyed table can never see it. Seeding the depth-keyed memo
+    # with the original — which is what this did first — was dead code for
+    # exactly that reason: unreachable, while its comment claimed it was what
+    # stopped cycles. What actually stopped them was the depth cap, 12 levels
+    # of rebuilt wrapper later. Caught by instrumenting for seed reads and
+    # finding zero (#2508 re-review); the cycle test stayed green with the
+    # line deleted, which made it tautological by #1468.
+    if id(value) in _active:
+        return value
+
+    # `_memo` is RETAINED for the whole build, and keyed on `(id, depth)`
+    # because a result is depth-dependent — a subtree first reached at depth 10
+    # is truncated by the cap, and reusing that for the same object at depth 2
+    # would under-protect it. `[0]` pins the original alive so CPython cannot
+    # recycle its id() into a different object mid-walk.
+    memo_key = (id(value), _depth)
+    if memo_key in _memo:
+        return _memo[memo_key][1]
+    _active.add(id(value))
+
+    result: Any
+    if isinstance(value, dict):
+        result = {}
+        for k, v in value.items():
+            protected_key = _protect_sidecar_value(k)
+            if protected_key is not k:
+                # A Model/Manager/QuerySet used as a KEY. The floor cannot be
+                # carried onto it (a proxy is not reliably hashable), and the
+                # tag bridge hands this dict to a handler wholesale, so
+                # `list(ctx["x"])[0].password` read the real hash. Dropping the
+                # entry restores the pre-#2501 exposure on this path — which
+                # was nothing at all, since these paths carried no sidecar.
+                logger.debug(
+                    "[djust] sidecar floor dropped a %s used as a dict key; "
+                    "the entry is not reachable from a template",
+                    type(k).__name__,
+                )
+                continue
+            result[k] = _protect_sidecar_tree(v, _depth + 1, _memo, _active)
+    else:
+        items = [_protect_sidecar_tree(v, _depth + 1, _memo, _active) for v in value]
+        if isinstance(value, tuple):
+            # A namedtuple is detected by `_fields` and reconstructed
+            # POSITIONALLY. Trying the single-iterable form first and falling
+            # back on TypeError looks equivalent and is not: at arity 1 the
+            # single-iterable form SUCCEEDS and wraps the field in the list, so
+            # `P1(user)` came back as `P1(a=[proxy])` and a handler doing
+            # `x.a.username` got `AttributeError: 'list' object has no
+            # attribute 'username'` — the exact failure this branch exists to
+            # prevent. It survived because the test used a 2-field namedtuple,
+            # where the fallback path happens to be correct (#2508 re-review).
+            if hasattr(value, "_fields"):
+                try:
+                    result = type(value)(*items)
+                except TypeError:
+                    # A subclass with extra required `__new__` args cannot be
+                    # rebuilt; a plain tuple keeps the floor, loses the type.
+                    result = tuple(items)
+            else:
+                try:
+                    result = type(value)(items)
+                except TypeError:
+                    result = tuple(items)
+        elif isinstance(value, (set, frozenset)):
+            try:
+                result = type(value)(items)
+            except TypeError:
+                result = value
+        else:
+            result = items
+
+    _active.discard(id(value))
+    _memo[memo_key] = (value, result)
+    return result
+
+
 def _protect_sidecar_value(value: Any) -> Any:
     """Wrap a value reached during the template getattr sidecar walk so the
     serialization floor keeps holding transitively (#1986 review).
@@ -1015,11 +1270,16 @@ def _protect_sidecar_value(value: Any) -> Any:
       unwrapped model and leak the floor field.
     - Anything else → returned unchanged (no floor to enforce).
     """
+    # `models.Manager` / `models.QuerySet`, not a function-local
+    # `from django.db.models import Manager, QuerySet`. The names are the same
+    # objects (asserted below, and `django.db.models` is already imported at
+    # module scope), and #2501 put this function on the render hot path — it
+    # now runs once per non-scalar top-level context value per render.
+    # Measured on a release build: 0.40us per call with the function-local
+    # import against 0.14us hoisted, ~2% of a 12.7us render.
     if isinstance(value, models.Model):
         return _SidecarModelProxy(value)
-    from django.db.models import Manager, QuerySet
-
-    if isinstance(value, (Manager, QuerySet)):
+    if isinstance(value, (models.Manager, models.QuerySet)):
         return _SidecarQuerySetProxy(value)
     return value
 

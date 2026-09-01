@@ -33,8 +33,8 @@ Which paths, measured rather than reasoned about
 What this closes, and what it deliberately does not
 -----------------------------------------------------
 The map carries the attributes Python answers WITHOUT being called and WITHOUT
-recursing. Two families stay divergent and are pinned below in the diverging
-direction rather than quietly widened:
+recursing. Two families stay out of the MAP, for reasons that are measured
+below and unchanged:
 
 * **class attributes** ``min`` / ``max`` / ``resolution``. Their values are
   themselves ``datetime``s, and ``datetime.min.min is datetime.min`` — so
@@ -49,7 +49,18 @@ direction rather than quietly widened:
   ``python/tests/test_nullary_autocall_2485.py``.
 
 ``Decimal`` is a different CARRIER (``Value::Decimal``, not ``Encoded``), so
-``{{ d.real }}`` is untouched here and pinned as still-divergent.
+``{{ d.real }}`` cannot be answered by this map however wide it grows.
+
+**Since #2501, staying out of the map no longer means rendering empty.** That
+issue attached ``Context::resolve``'s raw-Python sidecar — a LAZY ``getattr``
+walk against the live object, with Django's auto-call and both of its guards —
+to the three entry points measured here, which is the mechanism the LiveView
+path has had since ADR-024. So every cell above resolves now, without the map
+carrying it and without the eager collection that could not terminate. The
+exemptions in ``TestWhatThisDeliberatelyDoesNOTClose`` are re-pinned there in
+their new direction, along with the ONE divergence that is left: how djust
+spells a ``date`` / ``time`` / ``struct_time``, which is the same divergence
+``{{ p }}`` on a bare datetime has always had.
 
 Every expectation is LIVE Django and LIVE Python, never a transcription.
 
@@ -106,6 +117,33 @@ def djust_render_with_dirs(source: str, context: dict) -> str:
     """The OTHER entry point `DjustTemplateBackend` binds."""
     try:
         return _rust.render_template_with_dirs(source, dict(context), [])
+    except Exception:  # noqa: BLE001
+        return "<<REFUSED>>"
+
+
+def django_lookup(value: object, attr: str) -> object:
+    """What `Variable._resolve_lookup` ends up holding for `{{ p.<attr> }}`:
+    the attribute, auto-called when it is callable. Spelled out because the
+    parametrisations below mix data attributes (`min`, `real`) with nullary
+    methods (`as_tuple`, `date`) and the assertion has to hold for both."""
+    resolved = getattr(value, attr)
+    return resolved() if callable(resolved) else resolved
+
+
+def liveview_render(source: str, context: dict) -> str:
+    """The LiveView path — `RustLiveView` with the raw-Python sidecar attached.
+
+    The FOURTH render path, and the one this file did not measure. It has had
+    `Context::resolve`'s sidecar walk since ADR-024, so it answered several of
+    the cells below all along while the three entry points measured here
+    rendered them empty. #2501 attached the same sidecar to those three; this
+    helper is what lets the tests state the convergence as a measurement
+    rather than as a claim (#1646).
+    """
+    try:
+        view = _rust.RustLiveView(source, [])
+        view.set_raw_py_values(dict(context))
+        return view.render()
     except Exception:  # noqa: BLE001
         return "<<REFUSED>>"
 
@@ -425,13 +463,41 @@ class TestTheStateRoundTripKeepsTheAttributes:
 
 
 class TestWhatThisDeliberatelyDoesNOTClose:
-    """Pinned as still-divergent so a stale exemption goes red (#1859)."""
+    """Pinned as still-divergent so a stale exemption goes red (#1859).
+
+    Several of these DID go red, in #2501, and are re-pinned here rather than
+    deleted — which is the pin working. The exemptions below were written
+    about the `Encoded` attribute MAP, and measured through
+    `_rust.render_template`; #2501 attached the raw-Python sidecar to that
+    entry point, so a second mechanism — lazy, against the live object —
+    now answers names the map still does not carry. The map's own exemptions
+    are unchanged and their REASON tests still pass; what changed is the
+    rendered cell, and only for the three entry points that were the only
+    ones NOT answering these names (`liveview_render` answered them all
+    along).
+    """
 
     @pytest.mark.parametrize(("value", "attr"), CLASS_ATTRS)
-    def test_a_class_attribute_still_renders_empty(self, value: object, attr: str) -> None:
+    def test_a_class_attribute_resolves_through_the_sidecar_since_2501(
+        self, value: object, attr: str
+    ) -> None:
+        """Was pinned EMPTY here until #2501.
+
+        The map still cannot carry these names —
+        `test_the_class_attributes_would_not_terminate` below is the reason,
+        and it is unchanged. It does not have to: the sidecar walk is LAZY, so
+        it resolves `p.min` for a template that spells `p.min` and never
+        touches it otherwise, which is exactly what an eager collector could
+        not do.
+        """
         source = "{{ p.%s }}" % attr
         assert django_render(source, {"p": value}) != ""
-        assert djust_render(source, {"p": value}) == ""
+        # The cell now holds the attribute's OWN value, rendered djust's way.
+        assert djust_render(source, {"p": value}) == djust_render(
+            "{{ r }}", {"r": django_lookup(value, attr)}
+        )
+        # And that is the answer the LiveView path already gave.
+        assert djust_render(source, {"p": value}) == liveview_render(source, {"p": value})
 
     def test_the_class_attributes_would_not_terminate(self) -> None:
         """The REASON, measured rather than asserted. `min` / `max` /
@@ -443,19 +509,35 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         assert datetime.timedelta.resolution.resolution is datetime.timedelta.resolution
 
     @pytest.mark.parametrize(("value", "attr"), METHODS_RESULT_SPELLS_DIFFERENTLY)
-    def test_a_nullary_method_whose_RESULT_spells_differently_renders_empty(
+    def test_a_nullary_method_now_resolves_and_keeps_djusts_own_spelling(
         self, value: object, attr: str
     ) -> None:
-        """#2485 closed the auto-call for every name whose result djust spells
-        the way Django spells it. These are the remainder, and the reason is
-        the RESULT's own rendering, not the call: Django localizes a `date` /
-        `time` / `datetime` and prints a `struct_time` as a namedtuple."""
+        """#2485 closed the auto-call in the MAP for every name whose result
+        djust spells the way Django spells it. These are the remainder, and
+        the reason is the RESULT's own rendering, not the call: Django
+        localizes a `date` / `time` / `datetime` and prints a `struct_time` as
+        a namedtuple.
+
+        Pinned EMPTY here until #2501. The map still does not carry them, for
+        that same unchanged reason — and the sidecar does not care, because it
+        does not have to decide in advance which names are worth carrying. So
+        the cell moves out of "djust refuses, Django renders" and into the
+        ONE remaining divergence, which is how djust spells a date: the
+        divergence `test_the_remaining_divergence_is_the_RESULTs_spelling`
+        below measures, and which `{{ p }}` on a bare datetime has had all
+        along.
+        """
         source = "{{ p.%s }}" % attr
         assert django_render(source, {"p": value}) != ""
-        assert djust_render(source, {"p": value}) == ""
+        # The call RUNS (Django parity on whether), and its result is rendered
+        # djust's way (the remaining divergence, on how).
+        assert djust_render(source, {"p": value}) == djust_render(
+            "{{ r }}", {"r": django_lookup(value, attr)}
+        )
+        assert djust_render(source, {"p": value}) == liveview_render(source, {"p": value})
 
     @pytest.mark.parametrize(("value", "attr"), METHODS_RESULT_SPELLS_DIFFERENTLY)
-    def test_carrying_the_result_would_swap_one_divergence_for_another(
+    def test_the_remaining_divergence_is_the_RESULTs_spelling(
         self, value: object, attr: str
     ) -> None:
         """The REASON, measured rather than asserted — the same shape as
@@ -463,8 +545,11 @@ class TestWhatThisDeliberatelyDoesNOTClose:
 
         Render the call's RESULT through djust and compare it with what Django
         renders for the lookup. They differ, which is why the name is not in
-        `ENCODED_CALL_NAMES`: carrying it would move the cell without closing
-        it."""
+        `ENCODED_CALL_NAMES` — and, since #2501 made the cell resolve anyway,
+        this is now the statement of what is LEFT to close: djust's own
+        spelling of a `date` / `time` / `struct_time`, one class of divergence
+        rather than an empty cell.
+        """
         result = getattr(value, attr)()
         assert djust_render("{{ r }}", {"r": result}) != django_render(
             "{{ p.%s }}" % attr, {"p": value}
@@ -473,11 +558,18 @@ class TestWhatThisDeliberatelyDoesNOTClose:
     @pytest.mark.parametrize("attr", ["real", "imag", "as_tuple", "is_finite", "adjusted"])
     def test_a_decimals_attributes_are_a_DIFFERENT_carrier(self, attr: str) -> None:
         """`Decimal` is `Value::Decimal`, not `Value::Encoded` — a different
-        variant with no attribute slot. Filed rather than folded in (#1079)."""
+        variant with no attribute slot, so #2481's map could never have
+        answered these however wide it grew. Pinned EMPTY here until #2501,
+        whose sidecar answers them WITHOUT a slot — which is the argument for
+        resolving lazily against the live object rather than by widening a
+        carrier, stated as a measurement."""
         source = "{{ p.%s }}" % attr
         value = decimal.Decimal("1.5")
         assert django_render(source, {"p": value}) != ""
-        assert djust_render(source, {"p": value}) == ""
+        assert djust_render(source, {"p": value}) == djust_render(
+            "{{ r }}", {"r": django_lookup(value, attr)}
+        )
+        assert djust_render(source, {"p": value}) == liveview_render(source, {"p": value})
 
     def test_a_None_attribute_survives_the_state_round_trip_since_2484(self) -> None:
         """`Value::None` and `Value::Missing` are deliberately DISTINCT (#2203)

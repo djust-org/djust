@@ -636,6 +636,8 @@ template = '{% if size == "lg" %}big{% endif %}{% if size == "sm" %}small{% endi
 
 **Components in templates render via `{{ component }}`** -- the `__str__` method calls `render()` automatically. For LiveComponents, use `{{ component.render }}` to ensure the wrapper div is included.
 
+> **On the `DjustTemplateBackend` and standalone render paths**, a component's markup is currently escaped, so it shows as literal text. Add `|safe` -- `{{ component|safe }}` or `{{ component.render|safe }}` -- until the second half of [#2501](https://github.com/djust-org/djust/issues/2501) lands. The LiveView path is unaffected and needs no `|safe`. Before #2501, `{{ component.render }}` rendered *nothing at all* on those paths.
+
 ## djust-components (Template Tag Library)
 
 [`djust-components`](https://github.com/djust-org/djust-components) is a separate package that provides 12 style-agnostic UI components as Django template tags. Unlike the core `djust.components` Python classes, these use CSS custom properties for all styling -- no hardcoded Bootstrap or Tailwind classes.

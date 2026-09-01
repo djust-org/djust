@@ -321,18 +321,21 @@ class RustBridgeMixin:
         including cache HITs and msgpack restores, where the flag is not
         part of the serialized view state. A no-op if the Rust build
         predates the setter (defensive ``hasattr`` guard).
+
+        The flag itself is read by the one shared
+        :func:`djust.config.template_auto_call_enabled`, which every framework
+        render path calls. This was the FOURTH reader — #2508 converged three
+        of them and left this one, while claiming in its own docstring to be
+        the single reader (#2508 re-review). No drift had occurred yet; the
+        point is that the parallel path #1646 exists to retire was still
+        standing.
         """
         rust_view = getattr(self, "_rust_view", None)
         if rust_view is None or not hasattr(rust_view, "set_template_auto_call"):
             return
-        try:
-            from ..config import get_config
+        from ..config import template_auto_call_enabled
 
-            enabled = bool(get_config().get("template_auto_call", True))
-        except Exception:  # pragma: no cover - config access is defensive
-            logger.debug("[LiveView] template_auto_call flag read failed; defaulting ON")
-            enabled = True
-        rust_view.set_template_auto_call(enabled)
+        rust_view.set_template_auto_call(template_auto_call_enabled())
 
     def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""
@@ -1042,8 +1045,20 @@ class RustBridgeMixin:
                         continue
                     if isinstance(_raw_val, _JSON_FRIENDLY):
                         continue
-                    if isinstance(_raw_val, (Component, LiveComponent)):
-                        continue
+                    # A `Component`/`LiveComponent` used to be excluded here
+                    # (#802, no recorded rationale). Un-excluded in #2501 so a
+                    # component's OTHER names — a class attribute, a property,
+                    # a nullary method — resolve here as they now do on the
+                    # three non-LiveView paths.
+                    #
+                    # `{{ c }}` and `{{ c.render }}` are NOT what this changes,
+                    # measured rather than assumed: the render loop above
+                    # replaces a component with `{"render": <html>}` in the
+                    # eager context and marks the key safe, so both spellings
+                    # hit `Context::get` and never reach the sidecar (which is
+                    # consulted only on a miss). `{{ c.render }}` worked here
+                    # already; `{{ c }}` renders that dict's repr, which is a
+                    # divergence of the eager shape and is #2503.
                     if isinstance(_raw_val, forms.BaseForm):
                         continue
                     sidecar[_raw_key] = _raw_val
