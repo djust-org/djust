@@ -56,7 +56,11 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
     try:
         from djust._rust import render_template
 
-        return render_template(template_str, context)
+        from ..config import template_auto_call_enabled
+
+        # A framework render path, so the project's auto-call setting governs
+        # rather than the Rust entry point's Django-matching default (#2508).
+        return render_template(template_str, context, template_auto_call_enabled())
     except (ImportError, AttributeError, RuntimeError):
         # Rust not available or template error, fall back to Django templates
         from django.template import Context, Template

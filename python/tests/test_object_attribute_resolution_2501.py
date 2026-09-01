@@ -252,3 +252,136 @@ class TestAutoCallGuards:
         """
         obj = Mutating()
         assert render("{{ o.keep }}", {"o": obj}) == django_render("{{ o.keep }}", {"o": obj})
+
+
+# ---------------------------------------------------------------------------
+# Stage-11 review findings (#2508). Each class below pins one 🔴/🟡 that the
+# 20,308-test suite was green through — the mechanisms were tested, these are
+# the SHAPES the tests never constructed.
+# ---------------------------------------------------------------------------
+
+
+class _SilentRaiser:
+    """A property raising ``Model.DoesNotExist`` — the commonest ORM-miss idiom.
+
+    ``ObjectDoesNotExist`` sets ``silent_variable_failure = True`` and every
+    ``Model.DoesNotExist`` inherits it, so Django's outermost handler renders
+    the cell empty instead of propagating.
+    """
+
+    name = "alice"
+
+    @property
+    def latest_order(self):
+        from django.contrib.auth.models import User
+
+        raise User.DoesNotExist("no match")
+
+    def latest_order_call(self):
+        from django.contrib.auth.models import User
+
+        raise User.DoesNotExist("no match")
+
+
+class TestSilentVariableFailure:
+    """A silent exception renders empty, not 500 (#2508 🔴 1).
+
+    The #2506 narrowing transcribed Django's three per-step catch tuples but
+    not the outer ``silent_variable_failure`` arm, turning every
+    ``{{ obj.missing_fk }}`` into a 500 — on the LiveView path too, since
+    ``Context::resolve`` is shared. Gate-off: drop the
+    ``is_silent_variable_failure`` check and every case here raises.
+    """
+
+    @pytest.mark.parametrize("render", PATHS)
+    def test_property_raising_does_not_exist_renders_empty(self, render):
+        source = "Hello {{ p.name }} - last: [{{ p.latest_order }}]"
+        context = {"p": _SilentRaiser()}
+        assert render(source, context) == django_render(source, context)
+
+    @pytest.mark.parametrize("render", PATHS)
+    def test_nullary_method_raising_does_not_exist_renders_empty(self, render):
+        """Django's outer handler wraps the auto-call as well as the lookup."""
+        source = "[{{ p.latest_order_call }}]"
+        context = {"p": _SilentRaiser()}
+        assert render(source, context) == django_render(source, context)
+
+    def test_a_non_silent_exception_still_propagates(self):
+        """The guard must not become a blanket swallow — that was #2506's bug."""
+
+        class Loud:
+            @property
+            def boom(self):
+                raise RuntimeError("authz check failed")
+
+        with pytest.raises(Exception, match="authz check failed"):
+            djust_render("{{ o.boom }}", {"o": Loud()})
+
+
+class TestExceptionTypePreserved:
+    """A propagated exception keeps its type (#2508 🔴 2).
+
+    ``From<PyErr> for DjangoRustError`` stringified, so Django's handler chain
+    saw ``RuntimeError`` — a 500 — where it dispatches ``PermissionDenied`` to
+    403 and ``Http404`` to 404. Asserting the TYPE, not a message substring,
+    is the point: the old test matched the message and was blind to this.
+    """
+
+    @pytest.mark.parametrize(
+        "exc_path",
+        [
+            "django.core.exceptions.PermissionDenied",
+            "django.http.Http404",
+        ],
+    )
+    def test_django_dispatchable_exceptions_keep_their_type(self, exc_path):
+        import importlib
+
+        module_name, _, attr = exc_path.rpartition(".")
+        exc_type = getattr(importlib.import_module(module_name), attr)
+
+        class Guarded:
+            @property
+            def secret(self):
+                raise exc_type("denied")
+
+        with pytest.raises(exc_type):
+            djust_render("{{ o.secret }}", {"o": Guarded()})
+
+    @pytest.mark.parametrize(
+        "exc_path",
+        [
+            "django.core.exceptions.PermissionDenied",
+            "django.http.Http404",
+            "django.core.exceptions.SuspiciousOperation",
+        ],
+    )
+    def test_the_backend_does_not_wrap_a_dispatchable_exception(self, exc_path):
+        """``DjustTemplateBackend`` must not re-wrap these into a bare Exception.
+
+        This is its own test because the class-level helper ``raised_type()``
+        in the sidecar suite deliberately sees THROUGH the backend's wrapper
+        via ``__cause__`` — which makes every assertion using it blind to
+        whether the backend wraps or not. Gating the unwrap off left the whole
+        suite green until this case existed: two mechanisms shadowing each
+        other, which is one fix and one decoration (#1859, #2135).
+
+        Asserting the type is EXACT (``is``, not ``isinstance``, and no
+        ``__cause__`` unwrapping), because a wrapped exception still has the
+        original in its chain and would pass a looser check.
+        """
+        import importlib
+
+        module_name, _, attr = exc_path.rpartition(".")
+        exc_type = getattr(importlib.import_module(module_name), attr)
+
+        class Guarded:
+            @property
+            def secret(self):
+                raise exc_type("denied")
+
+        with pytest.raises(Exception) as caught:
+            djust_backend_render("{{ o.secret }}", {"o": Guarded()})
+        assert type(caught.value) is exc_type, (
+            f"backend wrapped it as {type(caught.value).__name__}: {caught.value}"
+        )

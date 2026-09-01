@@ -1013,8 +1013,16 @@ _encoder = DjangoJSONEncoder()
 #: ``mixins/rust_bridge.py``: the objects this sidecar exists for routinely
 #: arrive inside a list or a dict (``{{ rows.0.cls_attr }}``,
 #: ``{{ d.x.cls_attr }}``), and the walk reaches them through its own
-#: item-access and integer-index arms. The walk is lazy, so admitting a
-#: container costs one reference, not a traversal.
+#: item-access and integer-index arms.
+#:
+#: Admitting a container is NOT free, and an earlier version of this comment
+#: claimed it was (#2508 review). The lookup WALK is lazy — no property getter
+#: or nullary method is evaluated until a template names it, which is the
+#: design's load-bearing constraint — but the floor ADMISSION eagerly
+#: traverses and rebuilds every admitted container once per render, whether or
+#: not the template touches it. Measured: ~1 ms for a list of 1000 dicts, ~5 ms
+#: for 5000. That is the price of the floor holding transitively; it is worth
+#: knowing rather than mis-stating.
 _SIDECAR_SKIP_TYPES = (bool, int, float, str, bytes)
 
 
@@ -1091,10 +1099,17 @@ def build_render_sidecar(context: Dict[str, Any]) -> Dict[str, Any]:
     defect rather than an instance of it.
     """
     sidecar: Dict[str, Any] = {}
+    # ONE memo for the whole context, not one per key: two top-level names
+    # commonly point at the same list (a queryset materialized once and bound
+    # twice), and a per-key memo re-walks it per binding and hands out a
+    # different proxy for each. Sharing it makes the walk linear across the
+    # whole sidecar and keeps object identity, which a template comparing two
+    # names can observe.
+    memo: Dict[Any, Any] = {}
     for key, value in context.items():
         if value is None or isinstance(value, _SIDECAR_SKIP_TYPES):
             continue
-        sidecar[key] = _protect_sidecar_tree(value)
+        sidecar[key] = _protect_sidecar_tree(value, 0, memo)
     return sidecar
 
 
@@ -1107,7 +1122,7 @@ def build_render_sidecar(context: Dict[str, Any]) -> Dict[str, Any]:
 _SIDECAR_MAX_DEPTH = 12
 
 
-def _protect_sidecar_tree(value: Any, _depth: int = 0, _seen: Optional[set] = None) -> Any:
+def _protect_sidecar_tree(value: Any, _depth: int = 0, _memo: Optional[dict] = None) -> Any:
     """:func:`_protect_sidecar_value`, applied at every depth of a container.
 
     Returns a NEW container rather than mutating in place: the values here are
@@ -1122,6 +1137,19 @@ def _protect_sidecar_tree(value: Any, _depth: int = 0, _seen: Optional[set] = No
 
     Cycles are answered by identity, so a self-referential context returns the
     already-visited container unchanged rather than recursing forever.
+
+    The identity table is a MEMO, not a path-scoped visited-set (#2508 review).
+    A discard-on-exit set answers true cycles but not a DAG: a container
+    referenced from N places was re-traversed N times, so width compounded
+    with depth and 48 shared objects took 1.8 seconds to walk — per render,
+    on a structure with no cycle in it at all. Retaining each result makes
+    that linear, and gives a shared model ONE proxy instead of N.
+
+    The key carries the depth because a result is depth-dependent: a subtree
+    first reached at depth 10 is truncated by the cap below, and returning
+    that truncated result for the same object reached at depth 2 would
+    under-protect it. Keying on `(id, depth)` bounds the work at
+    `objects x _SIDECAR_MAX_DEPTH` while keeping every result honest.
     """
     protected = _protect_sidecar_value(value)
     # A proxy is terminal: it enforces the floor on its own attribute access
@@ -1137,33 +1165,60 @@ def _protect_sidecar_tree(value: Any, _depth: int = 0, _seen: Optional[set] = No
             type(value).__name__,
         )
         return value
-    if _seen is None:
-        _seen = set()
-    if id(value) in _seen:
-        return value
-    _seen.add(id(value))
-    try:
-        if isinstance(value, dict):
-            # Keys are left alone: a dotted lookup reaches a VALUE, and a
-            # model used as a key is not a shape any template path reads.
-            return {k: _protect_sidecar_tree(v, _depth + 1, _seen) for k, v in value.items()}
-        items = [_protect_sidecar_tree(v, _depth + 1, _seen) for v in value]
+    if _memo is None:
+        _memo = {}
+    memo_key = (id(value), _depth)
+    if memo_key in _memo:
+        # `[1]` is the result; `[0]` pins the original alive so CPython cannot
+        # recycle its id() into a different object mid-walk.
+        return _memo[memo_key][1]
+    # Seed with the original so a back-edge inside a true cycle terminates by
+    # returning the container unchanged, exactly as the visited-set did.
+    _memo[memo_key] = (value, value)
+
+    result: Any
+    if isinstance(value, dict):
+        result = {}
+        for k, v in value.items():
+            protected_key = _protect_sidecar_value(k)
+            if protected_key is not k:
+                # A Model/Manager/QuerySet used as a KEY. The floor cannot be
+                # carried onto it (a proxy is not reliably hashable), and the
+                # tag bridge hands this dict to a handler wholesale, so
+                # `list(ctx["x"])[0].password` read the real hash. Dropping the
+                # entry restores the pre-#2501 exposure on this path — which
+                # was nothing at all, since these paths carried no sidecar.
+                logger.debug(
+                    "[djust] sidecar floor dropped a %s used as a dict key; "
+                    "the entry is not reachable from a template",
+                    type(k).__name__,
+                )
+                continue
+            result[k] = _protect_sidecar_tree(v, _depth + 1, _memo)
+    else:
+        items = [_protect_sidecar_tree(v, _depth + 1, _memo) for v in value]
         if isinstance(value, tuple):
-            # `_replace`-style namedtuples reject positional reconstruction;
-            # falling back to the original is the pre-#2501 exposure, not a
-            # new one, and over-protecting is not worth crashing a render.
             try:
-                return type(value)(items)
+                result = type(value)(items)
             except TypeError:
-                return tuple(items)
-        if isinstance(value, (set, frozenset)):
+                # A namedtuple rejects the single-iterable form and wants its
+                # fields positionally. Falling straight through to `tuple`
+                # silently downgraded the type, so a handler doing `x.field`
+                # got AttributeError.
+                try:
+                    result = type(value)(*items)
+                except TypeError:
+                    result = tuple(items)
+        elif isinstance(value, (set, frozenset)):
             try:
-                return type(value)(items)
+                result = type(value)(items)
             except TypeError:
-                return value
-        return items
-    finally:
-        _seen.discard(id(value))
+                result = value
+        else:
+            result = items
+
+    _memo[memo_key] = (value, result)
+    return result
 
 
 def _protect_sidecar_value(value: Any) -> Any:

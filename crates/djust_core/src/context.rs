@@ -1000,7 +1000,12 @@ impl Context {
                     // KeyError, ValueError, IndexError)` — the last two are
                     // its own numpy-lookup allowance. Anything else is a real
                     // error from a `__getitem__` and propagates.
-                    Err(e) if !is_django_item_lookup_error(py, &e) => return Err(e.into()),
+                    Err(e) if !is_django_item_lookup_error(py, &e) => {
+                        match propagate_lookup_error(py, e) {
+                            LookupOutcome::Empty => return Ok(None),
+                            LookupOutcome::Raise(err) => return Err(err),
+                        }
+                    }
                     Err(_) => match current.getattr(*part) {
                         Ok(v) => Ok(v),
                         // Django step 2: `except (TypeError, AttributeError)`.
@@ -1009,7 +1014,10 @@ impl Context {
                             if !(e.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
                                 || e.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)) =>
                         {
-                            return Err(e.into());
+                            match propagate_lookup_error(py, e) {
+                                LookupOutcome::Empty => return Ok(None),
+                                LookupOutcome::Raise(err) => return Err(err),
+                            }
                         }
                         // Django's "Reraise if the exception was raised by a
                         // @property" branch: `if bit in dir(current): raise`.
@@ -1017,7 +1025,12 @@ impl Context {
                         // raised is a bug in the object, not a missing
                         // lookup, so it must not fall through to the
                         // integer-index step and become empty.
-                        Err(e) if name_exists_on(&current, part) => return Err(e.into()),
+                        Err(e) if name_exists_on(&current, part) => {
+                            match propagate_lookup_error(py, e) {
+                                LookupOutcome::Empty => return Ok(None),
+                                LookupOutcome::Raise(err) => return Err(err),
+                            }
+                        }
                         Err(e) => match part.parse::<usize>() {
                             // Django step 3: `except (IndexError, ValueError,
                             // KeyError, TypeError)` → `VariableDoesNotExist`,
@@ -1038,7 +1051,10 @@ impl Context {
                         // that set is a real `__getitem__` failure and
                         // propagates, for the same reason steps 1 and 2 do.
                         if !is_django_index_lookup_error(py, &e) {
-                            return Err(e.into());
+                            match propagate_lookup_error(py, e) {
+                                LookupOutcome::Empty => return Ok(None),
+                                LookupOutcome::Raise(err) => return Err(err),
+                            }
                         }
                         return Ok(None);
                     }
@@ -1127,12 +1143,21 @@ impl Context {
                 if callable_requires_arguments(py, &obj) {
                     Ok(CallOutcome::Empty)
                 } else {
-                    Err(err.into())
+                    match propagate_lookup_error(py, err) {
+                        // Django's outer handler wraps the auto-call as well
+                        // as the lookup, so a silent exception raised INSIDE
+                        // a nullary method renders empty, not 500.
+                        LookupOutcome::Empty => Ok(CallOutcome::Empty),
+                        LookupOutcome::Raise(e) => Err(e),
+                    }
                 }
             }
             // Any other exception raised by the method propagates as a
             // render error, matching Django.
-            Err(err) => Err(err.into()),
+            Err(err) => match propagate_lookup_error(py, err) {
+                LookupOutcome::Empty => Ok(CallOutcome::Empty),
+                LookupOutcome::Raise(e) => Err(e),
+            },
         }
     }
 
@@ -1167,6 +1192,52 @@ impl Context {
 /// in the object, so Django lets it propagate and so must the sidecar walk.
 /// Rendering it as the empty string is a silent failure, and for a
 /// `__getitem__` that implements an access check it is a silent failure OPEN.
+/// Django's outermost lookup guard: an exception carrying a truthy
+/// `silent_variable_failure` renders as `string_if_invalid` ("") instead of
+/// propagating (#2508 review).
+///
+/// `django.template.base.Variable._resolve_lookup` wraps the WHOLE
+/// dict/attr/index chain in:
+///
+/// ```text
+/// except Exception as e:
+///     if getattr(e, "silent_variable_failure", False):
+///         current = context.template.engine.string_if_invalid
+///     else:
+///         raise
+/// ```
+///
+/// `ObjectDoesNotExist` sets that attribute, and every `Model.DoesNotExist`
+/// inherits it — so `{{ profile.latest_order }}` on a property that raises
+/// `User.DoesNotExist` is an EMPTY CELL in Django, not an error. The #2506
+/// narrowing transcribed Django's three per-step catch tuples but not this
+/// outer arm, which turned the single commonest ORM-miss idiom into a 500 on
+/// every render path. Checked before any propagation for that reason.
+fn is_silent_variable_failure(py: Python<'_>, err: &pyo3::PyErr) -> bool {
+    err.value(py)
+        .getattr("silent_variable_failure")
+        .ok()
+        .and_then(|v| v.is_truthy().ok())
+        .unwrap_or(false)
+}
+
+/// Propagate a Python exception raised by user code during a lookup, keeping
+/// its type (see `DjangoRustError::PythonException`) — unless it is silent,
+/// in which case Django renders empty and so do we.
+fn propagate_lookup_error(py: Python<'_>, err: pyo3::PyErr) -> LookupOutcome {
+    if is_silent_variable_failure(py, &err) {
+        LookupOutcome::Empty
+    } else {
+        LookupOutcome::Raise(crate::DjangoRustError::PythonException(err))
+    }
+}
+
+/// Either "render this cell empty" or "propagate this exception".
+enum LookupOutcome {
+    Empty,
+    Raise(crate::DjangoRustError),
+}
+
 fn is_django_item_lookup_error(py: Python<'_>, err: &pyo3::PyErr) -> bool {
     err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
         || err.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)

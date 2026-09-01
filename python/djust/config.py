@@ -639,3 +639,25 @@ def get_djust_config() -> Dict[str, Any]:
         return result
     except Exception:
         return {}
+
+
+def template_auto_call_enabled() -> bool:
+    """Whether Django's nullary auto-call is enabled for this project (ADR-024).
+
+    The single reader of ``LIVEVIEW_CONFIG['template_auto_call']``. The Rust
+    entry points default the flag ON (Django's behaviour) for a caller that
+    reaches them directly; every FRAMEWORK render path must consult the
+    project's setting instead, and there is more than one such path — the
+    template backend, ``SimpleLiveView.render_template`` and
+    ``Component._render_template_with_fallback`` (#2508 review, #1646).
+    Wiring the flag at one of the three and reading it inline is what let the
+    other two keep auto-calling in a project that had switched it off.
+
+    A config read that raises must not take a render down, so it fails ON,
+    matching the Rust default.
+    """
+    try:
+        return bool(get_config().get("template_auto_call", True))
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] template_auto_call flag read failed; defaulting ON")
+        return True

@@ -38,6 +38,7 @@ try:
 except ImportError:
     _RUST_AVAILABLE = False
 
+from .config import template_auto_call_enabled
 from .render_env import apply_render_env
 from .utils import get_template_dirs
 
@@ -121,7 +122,17 @@ class SimpleLiveView(View):
                 # timestamp in UTC while ``LiveView`` rendered it correctly.
                 apply_render_env()
                 context = self.get_context_data()
-                return str(render_template_with_dirs(self.template, context, get_template_dirs()))
+                # A framework render path, so the project's auto-call setting
+                # governs rather than the Rust default (#2508).
+                return str(
+                    render_template_with_dirs(
+                        self.template,
+                        context,
+                        get_template_dirs(),
+                        None,
+                        template_auto_call_enabled(),
+                    )
+                )
             except Exception:
                 # The exception detail goes to the LOG, never to the response
                 # (CodeQL `py/stack-trace-exposure`, alert #2596; CWE-209).

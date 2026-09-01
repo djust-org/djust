@@ -66,6 +66,24 @@ class _TemplateSourceWrapper:
         self.source = source
 
 
+#: Exceptions that mean "the project's own code raised", not "the template
+#: engine failed" — so they must cross a render boundary unwrapped (#2508).
+#:
+#: `SuspiciousOperation` is included for the same reason as its two siblings:
+#: Django's handler maps it to 400. `ImproperlyConfigured` is deliberately NOT
+#: here — it is a setup failure, and the template-location hint is genuinely
+#: useful for it.
+def _is_user_raised(exc: BaseException) -> bool:
+    from django.core.exceptions import (
+        ObjectDoesNotExist,
+        PermissionDenied,
+        SuspiciousOperation,
+    )
+    from django.http import Http404
+
+    return isinstance(exc, (PermissionDenied, Http404, SuspiciousOperation, ObjectDoesNotExist))
+
+
 class DjustTemplate:
     """
     Wrapper for a template rendered with djust's Rust engine.
@@ -819,15 +837,11 @@ class DjustTemplate:
             # this path is a project's render, so the project's
             # `LIVEVIEW_CONFIG['template_auto_call']` governs it — the same
             # flag `_apply_template_auto_call_flag` wires on the LiveView path
-            # (#2501). A config read that raises must not take the render
-            # down, so it falls back to ON.
-            try:
-                from ..config import get_config
+            # (#2501). One shared reader, called by all three framework render
+            # paths (#2508 review).
+            from ..config import template_auto_call_enabled
 
-                auto_call = bool(get_config().get("template_auto_call", True))
-            except Exception:  # pragma: no cover - defensive
-                logger.debug("[djust] template_auto_call flag read failed; defaulting ON")
-                auto_call = True
+            auto_call = template_auto_call_enabled()
             html = self.backend._render_fn_with_dirs(
                 resolved_template,
                 context_dict,
@@ -849,6 +863,16 @@ class DjustTemplate:
 
             return SafeString(html)
         except Exception as e:
+            # An exception RAISED BY THE PROJECT'S OWN CODE during a lookup
+            # (a property, a nullary method) crosses back whole so Django's
+            # handler chain can dispatch on its type — `PermissionDenied` to
+            # 403, `Http404` to 404 (#2508). Re-wrapping it as a bare
+            # `Exception` made both a 500, and the template-location hint
+            # below is worth nothing next to losing the status code. A real
+            # ENGINE failure (unsupported tag, parse error) still gets the
+            # hint, which is what it was written for.
+            if _is_user_raised(e):
+                raise
             # Provide helpful error message with template location
             origin_info = f" (from {self.origin.name})" if self.origin else ""
 

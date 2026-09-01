@@ -871,6 +871,26 @@ class TestBindingConstructsReachTheSidecar:
         assert render(source, dict(ctx)) == expected
 
 
+def raised_type(exc_value: BaseException) -> type:
+    """The type the PROJECT'S code raised, seen through the backend's wrapper.
+
+    ``DjustTemplateBackend`` adds a template-location hint by re-raising as a
+    bare ``Exception(... ) from e`` — worth keeping for an engine failure
+    ("Unsupported tag"), which is what it was written for. Since #2508 the
+    exceptions Django DISPATCHES on (``PermissionDenied`` 403, ``Http404``
+    404, ``SuspiciousOperation`` 400, and the silent ``ObjectDoesNotExist``)
+    skip that wrapper entirely, because a template-location hint is worth
+    nothing next to losing the status code.
+
+    Everything else is still wrapped and chained, so the original type is
+    reachable through ``__cause__``. Reading it here keeps the assertion about
+    the type the project raised rather than about which path it took.
+    """
+    if type(exc_value) is Exception and exc_value.__cause__ is not None:
+        return type(exc_value.__cause__)
+    return type(exc_value)
+
+
 class TestDjangosExceptionSetsAtEverySegment:
     """#2506 — the walk used to discard ANY exception from a lookup and render
     the empty string.
@@ -911,11 +931,16 @@ class TestDjangosExceptionSetsAtEverySegment:
 
         with pytest.raises(Exception) as djust_exc:
             render(source, {"r": RaisingAttributes()})
-        # The crate wraps a `PyErr` as `RuntimeError("Python error: <T>: <msg>")`
-        # at the boundary — its existing convention, shared with `maybe_call`'s
-        # propagation — so the ORIGINAL type is asserted by name in the message
-        # rather than by class. What matters is that it raises at all.
-        assert exc.__name__ in str(djust_exc.value), str(djust_exc.value)
+        # By CLASS. This asserted the type by NAME IN THE MESSAGE until #2508,
+        # because the crate stringified every `PyErr` into
+        # `RuntimeError("Python error: <T>: <msg>")` at the boundary — and that
+        # wrapping was itself the bug: Django dispatches `PermissionDenied` to
+        # 403 and `Http404` to 404 on TYPE, so both became a 500. The original
+        # now crosses back whole, and the by-name spelling would go on passing
+        # if the wrapping ever came back, so it is gone.
+        assert raised_type(djust_exc.value) is exc, (
+            f"{type(djust_exc.value).__name__}: {djust_exc.value}"
+        )
 
     @pytest.mark.parametrize("render", FIXED_PATHS)
     def test_step_2s_catch_set_is_independently_reachable(self, render):
@@ -969,6 +994,7 @@ class TestDjangosExceptionSetsAtEverySegment:
 
         with pytest.raises(Exception) as djust_exc:
             render(source, {"o": IndexRaisingGetItem()})
+        assert raised_type(djust_exc.value) is RuntimeError
         assert "index authz failed: 0" in str(djust_exc.value)
 
     def test_the_index_raising_premises(self):
@@ -989,9 +1015,17 @@ class TestDjangosExceptionSetsAtEverySegment:
         source = "{{ i.anything }}"
         with pytest.raises(Exception):
             django_render(source, {"i": RaisingGetItem()})
+        # Asserting the TYPE, not the word "RuntimeError" in the message
+        # (#2508 🔴 2). The old spelling passed only because the exception was
+        # stringified into a wrapper, which is the defect: Django dispatches
+        # `PermissionDenied` to 403 and `Http404` to 404 on TYPE, and both
+        # arrived here as a generic wrapper. Now the original crosses back
+        # whole, so the message no longer names its own class — and this
+        # assertion is the stronger one it should always have been.
         with pytest.raises(Exception) as djust_exc:
             render(source, {"i": RaisingGetItem()})
-        assert "RuntimeError" in str(djust_exc.value)
+        assert raised_type(djust_exc.value) is RuntimeError
+        assert "getitem authz failed" in str(djust_exc.value)
 
     @pytest.mark.parametrize("render", FIXED_PATHS)
     @pytest.mark.parametrize(
@@ -1395,3 +1429,119 @@ class TestTheAutoCallKillSwitch:
         # And the guard against a vacuous pass: ON is the default and renders.
         monkeypatch.undo()
         assert backend_render("{{ o.label }}", {"o": Presenter()}) == "presenter-method"
+
+
+# ---------------------------------------------------------------------------
+# Stage-11 review findings (#2508): container shapes the floor descent missed,
+# and the cost of the descent itself.
+# ---------------------------------------------------------------------------
+
+
+class TestSidecarWalkIsLinear:
+    """The identity table is a memo, not a path-scoped visited set (#2508 🔴 3).
+
+    A discard-on-exit set answers a true CYCLE but not a DAG: a container
+    referenced from N places was re-traversed N times, so cost was exponential
+    in width. 48 shared objects took 1.8 seconds — per render, on a structure
+    with no cycle in it. The depth cap named this exact DoS in its own comment
+    and did not bound it, which is a decorative guard (#1859).
+
+    Asserting a COUNT, not a duration: a wall-clock threshold is flaky under
+    load, and the invariant here is "each (object, depth) is walked once"
+    (v1.0.5-4/-5 concurrency rule, generalized).
+    """
+
+    def test_a_shared_subtree_is_walked_once_per_depth(self):
+        from djust.serialization import build_render_sidecar
+
+        walks = []
+
+        class Counted(list):
+            """A list that records every time the floor iterates it."""
+
+            def __iter__(self):
+                walks.append(id(self))
+                return super().__iter__()
+
+        leaf = Counted(["leaf"])
+        node = leaf
+        for _ in range(6):
+            # Ten references to the SAME child — a DAG, not a cycle.
+            node = Counted([node] * 10)
+
+        build_render_sidecar({"x": node})
+
+        # Exponential would be 10**6 walks of the leaf. Linear is one per
+        # (object, depth) pair, and each object here sits at exactly one depth.
+        assert walks.count(id(leaf)) == 1, (
+            f"the shared leaf was walked {walks.count(id(leaf))} times — "
+            "the memo is not retaining results"
+        )
+        assert len(walks) <= 20, f"walked {len(walks)} containers for 7 distinct objects"
+
+    def test_a_true_cycle_still_terminates(self):
+        """The memo must not lose what the visited-set got right."""
+        from djust.serialization import build_render_sidecar
+
+        cycle: list = []
+        cycle.append(cycle)
+        build_render_sidecar({"x": cycle})  # must not recurse forever
+
+        mutual_a: dict = {}
+        mutual_b: list = [mutual_a]
+        mutual_a["b"] = mutual_b
+        build_render_sidecar({"x": mutual_a})
+
+    def test_one_shared_object_yields_one_proxy(self):
+        """Two names bound to the same list share the protected result."""
+        from djust.serialization import build_render_sidecar
+
+        shared = [{"k": "v"}]
+        out = build_render_sidecar({"a": shared, "b": shared})
+        assert out["a"] is out["b"]
+
+
+class TestFloorReachesRemainingContainerShapes:
+    """Shapes the first descent left handing a raw model to a tag handler."""
+
+    def test_a_model_used_as_a_dict_key_is_dropped(self):
+        """The floor cannot ride on a key, so the entry does not travel.
+
+        Declining this as "not a shape any template path reads" was true for
+        the WALK sink and false for the TAG sink the descent exists to serve —
+        a handler doing ``list(ctx["x"])[0].password`` read the real hash.
+        Dropping restores the pre-#2501 exposure on these paths, which was
+        nothing at all.
+        """
+        from django.contrib.auth.models import User
+
+        from djust.serialization import build_render_sidecar
+
+        user = User(pk=1, username="alice")
+        user.set_password("hunter2")
+        assert user.password.startswith("pbkdf2")
+
+        out = build_render_sidecar({"x": {user: "v"}, "keep": {"ok": 1}})
+        assert out["x"] == {}, "the model-keyed entry must not reach a handler"
+        assert out["keep"] == {"ok": 1}, "ordinary keys are untouched"
+
+    def test_a_namedtuple_keeps_its_type(self):
+        """``type(value)(items)`` raises for a namedtuple; falling straight to
+        ``tuple`` silently downgraded it, so ``ctx["x"].field`` became
+        ``AttributeError`` in a handler."""
+        from collections import namedtuple
+
+        from django.contrib.auth.models import User
+
+        from djust.serialization import build_render_sidecar
+
+        Point = namedtuple("Point", "a b")
+        user = User(pk=1, username="alice")
+        user.set_password("hunter2")
+
+        out = build_render_sidecar({"x": Point(user, 1)})["x"]
+        assert type(out) is Point, f"downgraded to {type(out).__name__}"
+        # The floor refuses the field outright rather than returning a
+        # different value for it, so "still floored" is an AttributeError.
+        with pytest.raises(AttributeError):
+            out.a.password
