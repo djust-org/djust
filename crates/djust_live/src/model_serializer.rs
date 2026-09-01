@@ -181,7 +181,13 @@ pub fn serialize_models_to_list(
 ) -> PyResult<Py<PyList>> {
     let result_list = PyList::empty(py);
 
-    for item in models_data.iter() {
+    // Snapshotted before recursing (#2510 sibling — found by the SAME
+    // review that found the other three djust_live sites, in the file
+    // that PR already touched: `serialize_models_fast` was fixed;
+    // `serialize_models_to_list`, its sibling export, routes through these
+    // entirely separate, unpatched helpers).
+    let raw: Vec<Bound<'_, PyAny>> = models_data.iter().collect();
+    for item in raw {
         // Pass through dicts after normalization
         if let Ok(dict) = item.cast::<PyDict>() {
             let normalized = normalize_dict(py, dict)?;
@@ -196,7 +202,14 @@ pub fn serialize_models_to_list(
 fn normalize_dict(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<Py<PyDict>> {
     let result = PyDict::new(py);
 
-    for (key, value) in dict.iter() {
+    // Snapshotted into an owned `Vec` BEFORE any recursive
+    // `normalize_value` call (#2510 sibling). `dict.iter()` is a LIVE PyO3
+    // iterator; `normalize_value`'s fallback arm calls `value.str()?`,
+    // which invokes `__str__` — arbitrary Python that can mutate THIS SAME
+    // dict. Confirmed via `serialize_models_to_list([d])` with a value
+    // whose `__str__` adds a key to its own parent dict.
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+    for (key, value) in pairs {
         let key_str: String = key.extract()?;
         let normalized_value = normalize_value(py, &value)?;
         result.set_item(key_str, normalized_value)?;
@@ -228,8 +241,11 @@ fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 
     // Handle list
     if let Ok(list) = value.cast::<PyList>() {
+        // Snapshotted before recursing (#2510 sibling) — `.try_iter()?`
+        // driven lazily by the loop is just as live as `.iter()`.
+        let raw: Vec<PyResult<Bound<'_, PyAny>>> = list.try_iter()?.collect();
         let result_list = PyList::empty(py);
-        for item in list.try_iter()? {
+        for item in raw {
             let normalized = normalize_value(py, &item?)?;
             result_list.append(normalized)?;
         }
@@ -238,8 +254,9 @@ fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 
     // Handle tuple (convert to list for JSON compatibility)
     if let Ok(tuple) = value.cast::<PyTuple>() {
+        let raw: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
         let result_list = PyList::empty(py);
-        for item in tuple.iter() {
+        for item in raw {
             let normalized = normalize_value(py, &item)?;
             result_list.append(normalized)?;
         }

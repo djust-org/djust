@@ -251,3 +251,43 @@ class TestStage11ReviewFoundThreeMoreSites:
             assert params.get("late") is True
 
         asyncio.run(_run())
+
+
+class _MutOnStr:
+    """A THIRD flavor of reentrant mutation trigger: `__str__`, invoked by
+    `normalize_value`'s fallback `value.str()?` arm — which checks strict
+    `is_instance_of` for primitives first (not the `.extract::<T>()`
+    coercion the other converters use), so neither `_LazyLike`'s `__bool__`
+    nor `_IndexTrigger`'s `__index__` reaches this specific path.
+    """
+
+    def __init__(self, owner_dict):
+        self._owner_dict = owner_dict
+        self._fired = False
+
+    def __str__(self):
+        if not self._fired:
+            self._fired = True
+            self._owner_dict["sneaky"] = True
+        return "stringified"
+
+
+class TestReReviewFoundAFourthSite:
+    """Re-review of the Stage-11 fix pass found a FOURTH site — in the same
+    file (`model_serializer.rs`) the fix pass had already touched.
+    `serialize_models_fast` was fixed; its sibling export
+    `serialize_models_to_list` routes through entirely separate, unpatched
+    helpers (`normalize_dict`/`normalize_value`) that nobody had grepped for
+    yet, because the prior sweep's file list happened to stop at the
+    functions the earlier repros exercised rather than every function in
+    the file. Same shape, same fix, third round of "found more" on this
+    single PR — recorded here as the finding it is, not smoothed over.
+    """
+
+    def test_serialize_models_to_list_does_not_panic(self):
+        d = {}
+        d["z"] = _MutOnStr(d)
+        d["k2"] = "v2"
+        result = _rust.serialize_models_to_list([d])
+        assert result == [{"z": "stringified", "k2": "v2"}]
+        assert d.get("sneaky") is True
