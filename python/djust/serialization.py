@@ -1002,6 +1002,55 @@ class StateRoundtripJSONEncoder(DjangoJSONEncoder):
 _encoder = DjangoJSONEncoder()
 
 
+#: Values a dotted lookup has no reason to reach through the raw-Python
+#: sidecar. ``None`` carries nothing; the scalars are the shapes djust's own
+#: value stack already owns end to end (``Context::get`` for the value itself,
+#: ``string_index`` for Django's step-3 index over a ``str``). Keeping them out
+#: confines the sidecar to the objects #2501 is about and leaves every scalar
+#: cell rendering exactly what it renders today (#1079).
+#:
+#: Containers are deliberately NOT here, unlike the LiveView-path builder in
+#: ``mixins/rust_bridge.py``: the objects this sidecar exists for routinely
+#: arrive inside a list or a dict (``{{ rows.0.cls_attr }}``,
+#: ``{{ d.x.cls_attr }}``), and the walk reaches them through its own
+#: item-access and integer-index arms. The walk is lazy, so admitting a
+#: container costs one reference, not a traversal.
+_SIDECAR_SKIP_TYPES = (bool, int, float, str, bytes)
+
+
+def build_render_sidecar(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the raw-Python sidecar for a standalone template render (#2501).
+
+    ``Context::resolve``'s sidecar walk is the ONE implementation of Django's
+    ``Variable._resolve_lookup`` in this codebase — mapping item access,
+    ``getattr`` (which is what reaches a class attribute, a property or a
+    descriptor), the auto-call with its ``do_not_call_in_templates`` /
+    ``alters_data`` guards, then the integer index. Until #2501 only the
+    LiveView path attached it, so the same ``{{ obj.cls_attr }}`` resolved
+    there and rendered empty through ``render_template`` /
+    ``render_template_with_dirs`` / ``DjustTemplateBackend``.
+
+    Called from Rust at those entry points with the render context, so the
+    caller does not have to know the sidecar exists — the three paths get it
+    from the dict they already pass.
+
+    Every value is routed through :func:`_protect_sidecar_value` here, at the
+    point of entry, rather than left to the walk. The walk protects what IT
+    resolves, but the sidecar has a second sink: the custom-tag bridge
+    (``djust_templates::registry``) injects these objects straight into the
+    Python context a ``{% tag %}`` handler receives, overwriting the
+    serialized entry. Protecting at build time is what makes ONE floor govern
+    both sinks (#1646) — the same discipline the LiveView-path builder in
+    ``mixins/rust_bridge.py`` already applies for the same reason (#1986).
+    """
+    sidecar: Dict[str, Any] = {}
+    for key, value in context.items():
+        if value is None or isinstance(value, _SIDECAR_SKIP_TYPES):
+            continue
+        sidecar[key] = _protect_sidecar_value(value)
+    return sidecar
+
+
 def _protect_sidecar_value(value: Any) -> Any:
     """Wrap a value reached during the template getattr sidecar walk so the
     serialization floor keeps holding transitively (#1986 review).

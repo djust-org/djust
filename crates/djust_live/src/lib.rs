@@ -1751,8 +1751,43 @@ fn django_value_repr_enabled() -> bool {
     djust_core::django_value_repr()
 }
 
+/// Build the raw-Python sidecar for a standalone render entry point (#2501).
+///
+/// The three non-LiveView render paths all take their context as a plain
+/// Python dict, so the live objects are right there at the boundary — they
+/// were simply dropped once `HashMap<String, Value>` had been extracted from
+/// them. Deriving the sidecar from that same dict, HERE, is what makes the fix
+/// reach `_rust.render_template(src, ctx)` itself and not only the callers
+/// that could be taught to pass an extra argument.
+///
+/// `djust.serialization.build_render_sidecar` states which values enter and
+/// applies the serialization floor to each; see its docstring for both. It is
+/// the same module `Context::protect_sidecar` already imports, so this costs
+/// one `sys.modules` hit per render, not an import.
+///
+/// Fail-soft: any error (no Django, `djust.serialization` unimportable — the
+/// embedded-crate case) yields an empty sidecar, which is exactly the
+/// pre-#2501 behaviour. A render must not fail because a lookup fallback
+/// could not be built.
+fn entry_sidecar(context: &Bound<'_, PyAny>) -> HashMap<String, Py<PyAny>> {
+    context
+        .py()
+        .import("djust.serialization")
+        .and_then(|m| m.getattr("build_render_sidecar"))
+        .and_then(|f| f.call1((context,)))
+        .and_then(|d| d.extract::<HashMap<String, Py<PyAny>>>())
+        .unwrap_or_default()
+}
+
 #[pyfunction]
-fn render_template(template_source: String, context: HashMap<String, Value>) -> PyResult<String> {
+#[pyo3(signature = (template_source, context, auto_call=None))]
+fn render_template(
+    template_source: String,
+    context: &Bound<'_, PyAny>,
+    auto_call: Option<bool>,
+) -> PyResult<String> {
+    let state: HashMap<String, Value> = context.extract()?;
+    let sidecar = entry_sidecar(context);
     guard_panic("render_template", move || {
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
@@ -1764,7 +1799,13 @@ fn render_template(template_source: String, context: HashMap<String, Value>) -> 
             arc
         };
 
-        let ctx = Context::from_dict(context);
+        let mut ctx = Context::from_dict(state);
+        // ADR-024 kill-switch. `None` keeps `Context::from_dict`'s default of
+        // ON, which is Django's behaviour and what a caller reaching this
+        // function directly should get; `DjustTemplate.render` passes the
+        // project's `LIVEVIEW_CONFIG['template_auto_call']`.
+        ctx.set_auto_call(auto_call.unwrap_or(true));
+        ctx.set_raw_py_objects(sidecar);
         let result = template_arc.render(&ctx)?;
         // Strip VDOM placeholder + boundary markers in standalone rendering.
         // Legacy `<!--dj-if-->` placeholder (issue #295) and Iter-1 boundary
@@ -1787,13 +1828,16 @@ fn render_template(template_source: String, context: HashMap<String, Value>) -> 
 /// # Returns
 /// The rendered HTML string
 #[pyfunction]
-#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None))]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None))]
 fn render_template_with_dirs(
     template_source: String,
-    context: HashMap<String, Value>,
+    context: &Bound<'_, PyAny>,
     template_dirs: Vec<String>,
     safe_keys: Option<Vec<String>>,
+    auto_call: Option<bool>,
 ) -> PyResult<String> {
+    let state: HashMap<String, Value> = context.extract()?;
+    let sidecar = entry_sidecar(context);
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
 
@@ -1807,7 +1851,10 @@ fn render_template_with_dirs(
             arc
         };
 
-        let mut ctx = Context::from_dict(context);
+        let mut ctx = Context::from_dict(state);
+        // See `render_template` for why `None` means ON.
+        ctx.set_auto_call(auto_call.unwrap_or(true));
+        ctx.set_raw_py_objects(sidecar);
 
         // Mark keys as safe (skip auto-escaping), like Django's SafeData
         if let Some(keys) = safe_keys {

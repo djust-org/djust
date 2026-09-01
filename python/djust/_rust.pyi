@@ -14,15 +14,28 @@ from typing import Any, Awaitable, Dict, List, Optional, Tuple
 # Core Template Rendering Functions
 # ============================================================================
 
-def render_template(template_source: str, context: Dict[str, Any]) -> str:
+def render_template(
+    template_source: str,
+    context: Dict[str, Any],
+    auto_call: Optional[bool] = None,
+) -> str:
     """
     Render a template string with the given context.
 
     Fast Rust-based template rendering using the djust template engine.
 
+    Any context value that is not ``None`` and not a scalar also enters the
+    raw-Python sidecar (#2501), so a dotted lookup that the serialized value
+    cannot answer falls back to Django's ``getattr`` + auto-call against the
+    live object. Built from ``context`` itself — there is nothing to pass.
+
     Args:
         template_source: The template source string to render
         context: Template context variables as a dictionary
+        auto_call: Django-parity auto-call of callables reached through the
+            sidecar (ADR-024). ``None`` means ON, which is Django's behaviour;
+            ``DjustTemplate.render`` passes the project's
+            ``LIVEVIEW_CONFIG['template_auto_call']``.
 
     Returns:
         The rendered HTML string
@@ -41,6 +54,7 @@ def render_template_with_dirs(
     context: Dict[str, Any],
     template_dirs: List[str],
     safe_keys: Optional[List[str]] = None,
+    auto_call: Optional[bool] = None,
 ) -> str:
     """
     Render a template with support for {% include %} tags.
@@ -53,6 +67,7 @@ def render_template_with_dirs(
         context: Template context variables as a dictionary
         template_dirs: List of directories to search for included templates
         safe_keys: Optional list of context keys to mark as safe (skip auto-escaping)
+        auto_call: see ``render_template``. ``None`` means ON.
 
     Returns:
         The rendered HTML string

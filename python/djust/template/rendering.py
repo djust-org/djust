@@ -814,11 +814,26 @@ class DjustTemplate:
 
             _ensure_custom_filters_bridged()
             template_dirs = [str(d) for d in self.backend.template_dirs]
+            # ADR-024 auto-call kill-switch. The Rust entry point defaults it
+            # ON (Django's behaviour) for a caller that reaches it directly;
+            # this path is a project's render, so the project's
+            # `LIVEVIEW_CONFIG['template_auto_call']` governs it — the same
+            # flag `_apply_template_auto_call_flag` wires on the LiveView path
+            # (#2501). A config read that raises must not take the render
+            # down, so it falls back to ON.
+            try:
+                from ..config import get_config
+
+                auto_call = bool(get_config().get("template_auto_call", True))
+            except Exception:  # pragma: no cover - defensive
+                logger.debug("[djust] template_auto_call flag read failed; defaulting ON")
+                auto_call = True
             html = self.backend._render_fn_with_dirs(
                 resolved_template,
                 context_dict,
                 template_dirs,
                 safe_keys or None,
+                auto_call,
             )
 
             # In DEBUG mode, inject data-dj-src attributes for template source mapping.

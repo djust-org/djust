@@ -1042,8 +1042,14 @@ class RustBridgeMixin:
                         continue
                     if isinstance(_raw_val, _JSON_FRIENDLY):
                         continue
-                    if isinstance(_raw_val, (Component, LiveComponent)):
-                        continue
+                    # A `Component`/`LiveComponent` used to be excluded here
+                    # (#802, no recorded rationale) — which is why the
+                    # documented `{{ counter.render }}` spelling rendered
+                    # EMPTY on the LiveView path too (#2501). It cannot
+                    # regress `{{ c }}`: `normalize_django_value` puts
+                    # `str(component)` in the eager state, so the bare name
+                    # hits `Context::get` and never reaches the sidecar, which
+                    # is consulted only on a miss.
                     if isinstance(_raw_val, forms.BaseForm):
                         continue
                     sidecar[_raw_key] = _raw_val
