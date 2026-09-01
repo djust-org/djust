@@ -1,7 +1,7 @@
 # djust Roadmap
 
-> Current version: **1.1.0** (released 2026-08-10) — Last roadmap refresh: 2026-08-23
-> (v1.1.1-7 opened; shipped XSS found and fixed).
+> Current version: **1.1.2** (released 2026-08-30); **1.2.0rc1** cut 2026-09-01 — Last roadmap refresh: 2026-09-01
+> (v1.2.0 template-engine conformance arc opened).
 >
 > **v1.1.0 status**: all fourteen `v1.1.0-N` drain buckets are complete. Two items were
 > deliberately carried past the release rather than dropped: **#2017** (dj-virtual ADR-026
@@ -29,6 +29,144 @@ Two name shapes appear in this roadmap, with distinct meanings:
 **Historical note**: ROADMAP entries `v0.9.1` through `v0.9.5` (already shipped) were drain buckets under the old naming; they are equivalent to `v0.9.1-1` through `v0.9.1-5` under the new convention. They are NOT being retroactively renamed (would invalidate cross-references in 50+ PRs, retro files, and CHANGELOG entries). The convention applies forward-only.
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
+
+## Next: v1.2.0 — Template engine: Django conformance, measured by Django (HEADLINE)
+
+> **Opened 2026-09-01** from a packaging question — should the Rust template
+> engine become its own package and a plugin `TEMPLATES` backend for Django?
+> The investigation answered the packaging question with a **no, for now**, and
+> turned up four things worth an arc of their own. The facts it rests on, each
+> checked against the tree on the day:
+>
+> - The plugin backend **already exists**. `DjustTemplateBackend`
+>   (`python/djust/template/backend.py`, a 123-line `BaseEngine`) has been the
+>   first `TEMPLATES` entry on djust.org and docs.djust.org since 2025-11, and
+>   the `djust new` scaffold configures it (`scaffolding/templates.py:135`).
+> - A separate wheel would buy nothing today. The cdylib (`djust_live`) calls
+>   the templates crate as a Rust library at 47 sites across 9 files, and the
+>   crate depends on `djust_core` (the value bridge), `djust_vdom`
+>   (`loop_cache.rs:109`) and `djust_components` (`renderer.rs:7`). A second
+>   wheel is a second copy of the engine, a second entry in the 4-OS × 5-Python
+>   publish matrix, and two tag registries in any process that installs both.
+>   ADR-007's taxonomy ("runtime extensions that depend on djust core belong in
+>   core") already covers this case.
+> - The engine's parity is **measured by a corpus we invented**
+>   (`scripts/filter-parity-differential.py`, 4,259 lines) — which has found
+>   five of its own blind spots one at a time (the #2345 manifest). Django
+>   ships ~1,600 template tests of its own, and we have never run them.
+> - The engine converts the whole context to a Rust `Value` tree before
+>   rendering, then reaches object attributes afterwards through a **sidecar**.
+>   On the order of forty issues have lived in that conversion layer, including
+>   six of the six issues open today (#2502, #2504, #2505, #2509, #2513, and
+>   the #2510 panic PR #2514 fixes in the same extraction walk), two security
+>   findings (#2506 fail-open, #2507 mutators auto-callable), and a whole ADR
+>   (ADR-024) to recover auto-call. I checked whether the tree at least buys a
+>   GIL-free render: it does not — the render path holds the GIL throughout
+>   (only `render_markdown` and `fast_json_dumps` detach,
+>   `crates/djust_live/src/lib.rs:1588` / `:1938`). The conversion is paying
+>   its cost without collecting the benefit.
+> - Importing the backend alone loads 167 djust modules including `channels`,
+>   `live_view` and `presence`, and `channels[daphne]` is a hard dependency
+>   (`pyproject.toml`) — so "use djust just for its templates" is true in code
+>   and false at install.
+>
+> **The arc, drained in order.** Measure first, so every later iteration moves
+> a number; then converge resolution on Django's rules; then close the
+> plain-Django gaps; then fix the install and tell people. The separate-wheel
+> question gets a decision gate at the end, with the criteria written down now
+> so nobody re-derives them.
+>
+> - **v1.2.0-1 — Measure**: Django's own template test suite as the
+>   conformance gate; a feature-gated build that defines the engine/LiveView
+>   boundary; the model-backed benchmark later iterations are scored on.
+> - **v1.2.0-2 — Resolve like Django (headline)**: ADR-027 — variable
+>   resolution follows `Variable._resolve_lookup` at one sink; the sidecar
+>   class retires.
+> - **v1.2.0-3 — Plain-Django completeness**: `{% load %}` imports Django tag
+>   libraries; the six missing built-in tags; i18n; error diagnostics.
+> - **v1.2.0-4 — Install and positioning**: a backend-only import path; the
+>   README and site headline; a system check for the `TEMPLATES` shape.
+> - **Decision gate — a separate `djust-templates` wheel**: criteria below.
+>   Not scheduled.
+
+### v1.2.0-1 — Measure (drain bucket → ships in 1.2.0)
+
+*Goal:* a scoreboard before any engine change. Every later row in this arc is
+accepted or rejected by a number one of these three rows produces.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | (new) | **Run Django's own template test suite against `DjustTemplateBackend`.** A script that checks out the Django tag matching the installed version, patches `tests/template_tests` so its engine fixtures route through the djust backend, runs it, and prints `OK / FAIL / ERROR` plus a percentage. Django's ~1,600 template tests are a corpus maintained by Django, covering tags, filters, loaders, context, autoescape and inheritance — every axis our own differential has had to grow one blind spot at a time (#2345). Ship as a **non-gating** CI job first (the #1534 rule: a job the dev machine cannot fully mirror stays `continue-on-error` until it is runner-green), then promote it to a **ratchet**: the percentage on a PR may not drop below `main`'s. The baseline number is the arc's scoreboard and goes in the README in v1.2.0-4. | v1.2.0 |
+| **P1** | (new) | **Feature-gate the engine/LiveView boundary.** A `liveview` cargo feature on `djust_templates` (default on) gating the `djust_vdom::VNode` cache in `loop_cache.rs`, the `dj-if` boundary markers, and the `djust_components` path in `renderer.rs`; plus a CI step `cargo check -p djust_templates --no-default-features`. This is not the split — it is the measurement of what a split would have to carry, and a tripwire against LiveView concerns leaking into the engine. Prerequisite for the decision gate. | v1.2.0 |
+| **P2** | (carried from v1.1.1-2) | **Model-backed render benchmark** (`PERFORMANCE_BRAINSTORM.md` §7). Still no `models.Model` under `tests/benchmarks/`, so the Python↔Rust boundary cost is invisible to CI. v1.2.0-2 changes exactly that boundary, so this benchmark is its performance gate and must land first. Fixture requirements unchanged: a `@property` column, a reverse-relation call, an un-`select_related` FK, an attribute-change event, and instrumentation of whether the `SetText` fast path was taken. | v1.2.0 |
+| **P3** | (new) | **Generate the backend's supported/unsupported lists from the engine.** `docs/TEMPLATE_BACKEND.md:281-283` says `escapejs` is unsupported and offers a `json.dumps` workaround; `{{ s\|escapejs }}` renders Django's exact output today (verified 2026-09-01), and `:454` still lists it as a todo. Hand-maintained lists drift; emit them from the filter and tag registries the way `client-sizes.json` is emitted (#2138), and check them the same way. | v1.2.0 |
+
+### v1.2.0-2 — Resolve like Django (drain bucket → ships in 1.2.0) — HEADLINE
+
+*Goal:* one resolution sink that applies Django's documented lookup rules to a
+live Python object, replacing a conversion layer that has produced the arc's
+whole open-issue list. This is the #1646 cure shape (retire the class) applied
+to the template-resolution axis, and it follows the v1.1.0-3 playbook:
+characterize, define dormant, wire, flip, delete.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | (new) | **ADR-027 — variable resolution follows Django's lookup rules at one sink.** Django resolves `{{ a.b.c }}` one segment at a time: dict key, then attribute, then list index; a callable is called unless it sets `do_not_call_in_templates`, and one that sets `alters_data` renders as `string_if_invalid`; a lookup that raises is silent only if the exception sets `silent_variable_failure`. djust today converts the context to a `Value` tree up front (`djust_core::Value`, with `Value::Encoded` for anything without a variant) and reaches attributes afterwards by enumerating container shapes in the sidecar (#2509). The ADR decides three things: **(a)** an opaque value becomes a live-object handle resolved lazily at lookup time by exactly those rules, at ONE sink; **(b)** what stays eager — models under the `_ALWAYS_EXCLUDED_FIELDS` floor (`serialization.py:57`), and whatever the msgpack snapshot round trip (the #2484 class) and `changed_keys` partial re-render need materialised; **(c)** the security posture — the floor must hold at the lazy sink too, or models keep the eager path. GIL cost is not a new class, because the render already holds the GIL. Options considered per #1056; every cited position grep-verified per #1197. | v1.2.0 |
+| **P1** | (new) | **Implement ADR-027 as dormant-define → wire → flip.** (1) Characterization tests against the CURRENT sidecar for every open instance — #2502 (`do_not_call_in_templates` renders the marker dict), #2504 (a filtered or dict-view `{% for %}` operand cannot reach attributes), #2505 (a loop variable shadowing an outer name resolves against the outer object), #2513 (the page-shell path has no sidecar at all) — each with a gate-off sibling (#1468); the closed security findings #2506 (any exception swallowed, fail-open) and #2507 (`{{ c.unmount }}` runs a mutator during render) become permanent pins. (2) The lazy sink, defined and tested but not routed. (3) The flip, gated by the Django-suite percentage and the v1.2.0-1 benchmark. (4) Delete the enumeration arms. Expected dividend (the #1898 rule): the flip will surface divergences the sidecar hid — budget for them; they are findings, not regressions. | v1.2.0 |
+| **P2** | #2509 | **Floor the tag-handler sidecar at the sink, not by enumerating container types.** Absorbed by the two rows above — the "enumerate container types" mechanism is what ADR-027 replaces. Stays open until the flip lands, then closes with a pointer rather than by adding one more type. | v1.2.0 |
+
+### v1.2.0-3 — Plain-Django completeness (drain bucket → ships in 1.2.0)
+
+*Goal:* a Django project that has never heard of LiveView can point its
+`TEMPLATES` at the backend and have its existing templates, tag libraries and
+translations work. Each row is scored by the slice of the Django suite it turns
+green.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | (new) | **`{% load app_tags %}` imports the Django template library.** Today `parser.rs:812` keeps the library names so inheritance can re-emit the tag, and nothing imports them; a project's existing `templatetags/` modules are invisible to the Rust engine and must be re-registered by hand through `register_tag_handler` / `register_django_filter` (`template_filters.py:113`). Resolve the name with Django's own `get_installed_libraries()` and `django.template.library.import_library`, then bridge each entry by kind: `filters` through `register_django_filter`, `simple_tag` / `simple_block_tag` / `inclusion_tag` through the tag-handler sidecar (ADR-001). The `builtins` option of `TEMPLATES` gets the same treatment. Django's `template_tests/test_custom.py` is entirely this. | v1.2.0 |
+| **P2** | (new) | **Six built-in tags the parser does not know:** `autoescape`, `filter`, `lorem`, `debug`, `resetcycle`, `querystring` (by grep of the tag match in `parser.rs` / `tags.rs`, 2026-09-01). `autoescape` first — it is what makes the `needs_autoescape` flag observable, which #2284 left as "a decision, not a patch". `querystring` is Django 5.1+; gate on version. | v1.2.0 |
+| **P2** | (carried from v1.1.1-2) | **`{% translate %}` / `{% blocktranslate %}` and the `_("…")` literal.** Still `Unsupported template tag`, so no i18n project can use the Rust engine at all. Sequence per #1077: bridge through the Python tag registry first (gettext runs in Python, the catalogs stay Django's), measure, port catalog lookup into Rust only if the numbers say so. Pieces 2 and 3 of #2221 (localized month/day names, per-locale `DATE_FORMAT`) are catalog lookups too and ride the same bridge; `{% localize %}` and the `tz` library tags come with them. | v1.2.0 |
+| **P2** | (new) | **Template errors that Django's debug page can render.** The backend raises a generic `Error rendering template: …` (`docs/TEMPLATE_BACKEND.md:426`) and attaches no `template_debug` to it (`rendering.py`, none), so the technical 500 shows no template name, line, or source excerpt. Attach Django's `template_debug` dict (`name`, `line`, `during`, `source_lines`, `top`, `bottom`) from the parser's position information, and raise `TemplateSyntaxError` at parse time the way Django does. An unknown filter already refuses at parse time (#2419); extend that contract to every error. | v1.2.0 |
+| **P3** | (carried from v1.1.1-2) | **`{% url %}` fails soft to `''` where Django raises `NoReverseMatch`.** Inherited, not decided. With the Django suite in place this becomes a measurable choice: `template_tests/syntax_tests/test_url.py` encodes Django's answer. Decide, document, and either match it or write the rule down. | v1.2.0 |
+
+### v1.2.0-4 — Install and positioning (drain bucket → ships in 1.2.0)
+
+*Goal:* the sentence "use djust just for its templates" is true at `pip
+install`, at `import`, and on the front page, with the v1.2.0-1 number next to
+it.
+
+| Priority | Issue | Summary | Target |
+|---|---|---|---|
+| **P1** | (new) | **Importing the backend must not import the LiveView stack.** `djust/__init__.py:10` imports `live_view` eagerly, so `djust.template_backend` pulls `channels`, `presence` and over 160 other modules into a project that only wanted templates. Make the package init lazy (PEP 562 `__getattr__` for the public names) and pin it: a test that imports the backend in a fresh interpreter and asserts `channels` is absent from `sys.modules`. Non-breaking. | v1.2.0 |
+| **P2** | (new) | **Decide the extras shape for a templates-only install.** `channels[daphne]` and `msgpack` are hard dependencies (`pyproject.toml`). Moving them behind `djust[live]` makes a bare `pip install djust` lose the WebSocket stack — a breaking change that needs a deprecation cycle and belongs at a 2.0 boundary — or there is an additive alternative (a documented `djust[templates]` that adds nothing, or a metadata-only companion). A decision row: write the options down, pick one, record it in ADR-007's taxonomy table. | v1.2.0 |
+| **P2** | (new) | **"Rust templates for any Django view" as a headline, with numbers.** The README and djust.org get a section saying what `docs/TEMPLATE_BACKEND.md` already knows: any `TemplateView` or `render()` call, one `TEMPLATES` entry, no client.js. It carries two numbers and nothing softer — the Django-suite percentage from v1.2.0-1, and the measured "7–11x on filter-heavy templates, no faster on static markup" the README already claims (`README.md:22`). The scaffold already configures the backend; say so. | v1.2.0 |
+| **P3** | (new) | **A `C`-category system check for the `TEMPLATES` shape.** Warn when `DjustTemplateBackend` is configured without a `DjangoTemplates` entry after it (admin and contrib templates need one; the scaffold emits both, `scaffolding/templates.py:201`), and when two entries share a `NAME`. Next free `C5xx` id, checked against the registry at registration time (the #1561 V012/V014 collision). | v1.2.0 |
+
+### Decision gate — a separate `djust-templates` wheel (not scheduled)
+
+Not a milestone. A gate, with its criteria fixed on 2026-09-01 so that the next
+time the question comes up it is answered by measurement rather than re-derived.
+Open the split when **all** of the following hold:
+
+1. `cargo check -p djust_templates --no-default-features` has been green for a
+   full release (v1.2.0-1).
+2. The Django template suite passes at **≥ 95%** through `DjustTemplateBackend`,
+   and the number has been stable across two releases.
+3. Template-engine issue inflow is under three per month for two consecutive
+   months (on 2026-09-01 it was six of the six open issues).
+4. Someone outside the project has asked for it.
+
+What the split costs, recorded so it is not rediscovered: a second cdylib (the
+templates crate cannot become a Python-level dependency of `djust_live`, which
+calls it as Rust), a second entry in the 4-OS × 5-Python publish matrix, two
+engine copies and two tag registries in any process that installs both, a
+version-skew axis between the two packages, and a decision about the Python half
+of the value bridge (`serialization.py` goes with it or gets split). If the
+criteria are met, the split is a `[tool.maturin]` entry and a publish job. If
+they are not, the answer stays no.
+
+---
 
 ## v1.1.1-7 — filter-layer semantics, and one security finding (drain bucket → ships in 1.1.1)
 
