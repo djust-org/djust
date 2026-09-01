@@ -75,8 +75,13 @@ html = render_template("<h1>{{ title }}</h1>", {"title": "Hello"})
 
         content = stub_file.read_text()
 
-        # Verify key signatures are documented with types
-        assert "def render_template(template_source: str" in content
+        # Verify key signatures are documented with types. Spelled as two
+        # substrings rather than one contiguous prefix because the formatter
+        # wraps a signature once it grows past the line length — which it did
+        # when `render_template` gained `auto_call` (#2501), reddening this
+        # pin over a formatting change rather than over a missing type.
+        assert "def render_template(" in content
+        assert "template_source: str" in content
         assert "-> str:" in content
         assert "Dict[str, Any]" in content
 

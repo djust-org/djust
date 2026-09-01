@@ -1043,13 +1043,19 @@ class RustBridgeMixin:
                     if isinstance(_raw_val, _JSON_FRIENDLY):
                         continue
                     # A `Component`/`LiveComponent` used to be excluded here
-                    # (#802, no recorded rationale) — which is why the
-                    # documented `{{ counter.render }}` spelling rendered
-                    # EMPTY on the LiveView path too (#2501). It cannot
-                    # regress `{{ c }}`: `normalize_django_value` puts
-                    # `str(component)` in the eager state, so the bare name
-                    # hits `Context::get` and never reaches the sidecar, which
-                    # is consulted only on a miss.
+                    # (#802, no recorded rationale). Un-excluded in #2501 so a
+                    # component's OTHER names — a class attribute, a property,
+                    # a nullary method — resolve here as they now do on the
+                    # three non-LiveView paths.
+                    #
+                    # `{{ c }}` and `{{ c.render }}` are NOT what this changes,
+                    # measured rather than assumed: the render loop above
+                    # replaces a component with `{"render": <html>}` in the
+                    # eager context and marks the key safe, so both spellings
+                    # hit `Context::get` and never reach the sidecar (which is
+                    # consulted only on a miss). `{{ c.render }}` worked here
+                    # already; `{{ c }}` renders that dict's repr, which is a
+                    # divergence of the eager shape and is #2503.
                     if isinstance(_raw_val, forms.BaseForm):
                         continue
                     sidecar[_raw_key] = _raw_val
