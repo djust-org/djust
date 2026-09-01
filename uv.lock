@@ -591,7 +591,7 @@ wheels = [
 
 [[package]]
 name = "djust"
-version = "1.1.0"
+version = "1.2.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "channels", extra = ["daphne"] },
@@ -680,7 +680,7 @@ requires-dist = [
     { name = "markdown", specifier = ">=3.0,<4" },
     { name = "markdown", marker = "extra == 'components'", specifier = ">=3.0,<4" },
     { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.0,<2.0" },
-    { name = "mcp", extras = ["cli"], marker = "extra == 'dev'", specifier = ">=1.2.0,<2" },
+    { name = "mcp", extras = ["cli"], marker = "extra == 'dev'", specifier = ">=1.2.0,<3" },
     { name = "msgpack", specifier = ">=1.0.0,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0,<3" },
     { name = "nh3", specifier = ">=0.2,<1" },
