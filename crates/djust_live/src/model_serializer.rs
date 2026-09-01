@@ -59,9 +59,20 @@ pub fn serialize_models_fast(py: Python<'_>, models_data: &Bound<'_, PyList>) ->
 
 /// Convert a Python dict to serde_json::Value
 fn python_dict_to_json(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<JsonValue> {
-    let mut map = Map::new();
+    // Snapshotted into an owned `Vec` BEFORE any recursive conversion
+    // (#2510 sibling — the same live-iterator-plus-reentrant-extraction bug
+    // fixed in `djust_core::lib::rs`'s `impl FromPyObject for Value`; this
+    // crate's own converter had the identical shape, found by Stage-11
+    // review of that PR having grepped only `djust_core`). `dict.iter()` is
+    // a LIVE PyO3 iterator; converting one value can run arbitrary Python
+    // (e.g. `__index__`), and if that mutates THIS SAME dict, the live
+    // iterator's invariant breaks — confirmed via
+    // `_rust.serialize_models_fast([d])` with a value whose `__index__`
+    // adds a key to its own parent dict.
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+    let mut map = Map::with_capacity(pairs.len());
 
-    for (key, value) in dict.iter() {
+    for (key, value) in pairs {
         let key_str: String = key.extract()?;
         let json_val = python_to_json(py, &value)?;
         map.insert(key_str, json_val);
@@ -125,18 +136,24 @@ fn python_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<JsonValue>
 
     // Handle list
     if let Ok(list) = obj.cast::<PyList>() {
-        let items: Vec<JsonValue> = list
+        // `.iter().map(...).collect()` still drives the live PyList
+        // iterator ONE STEP AT A TIME as each closure call returns — the
+        // laziness of `.map()` does not snapshot anything. Collect the raw
+        // elements first (#2510 sibling), matching the dict-side fix above.
+        let raw: Vec<Bound<'_, PyAny>> = list.iter().collect();
+        let items: Vec<JsonValue> = raw
             .iter()
-            .map(|item| python_to_json(py, &item))
+            .map(|item| python_to_json(py, item))
             .collect::<PyResult<_>>()?;
         return Ok(JsonValue::Array(items));
     }
 
     // Handle tuple (same as list)
     if let Ok(tuple) = obj.cast::<PyTuple>() {
-        let items: Vec<JsonValue> = tuple
+        let raw: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
+        let items: Vec<JsonValue> = raw
             .iter()
-            .map(|item| python_to_json(py, &item))
+            .map(|item| python_to_json(py, item))
             .collect::<PyResult<_>>()?;
         return Ok(JsonValue::Array(items));
     }

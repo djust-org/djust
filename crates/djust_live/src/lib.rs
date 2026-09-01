@@ -1966,14 +1966,25 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
     } else if let Ok(s) = obj.extract::<String>() {
         Ok(JsonValue::String(s))
     } else if let Ok(list) = obj.cast::<PyList>() {
-        let mut vec = Vec::new();
-        for item in list.iter() {
+        // Snapshotted into an owned `Vec` BEFORE any recursive conversion
+        // (#2510 sibling — the same class of bug fixed in
+        // `djust_core::lib::rs`'s `impl FromPyObject for Value`, found by
+        // Stage-11 review of that PR's own grep, which was scoped to
+        // djust_core and missed this crate). `list.iter()` is a LIVE PyO3
+        // iterator; converting one element can run arbitrary Python (e.g.
+        // `__index__` on the `i64` arm above), and if that mutates THIS
+        // SAME list, the live iterator's invariant breaks.
+        let items: Vec<Bound<'_, PyAny>> = list.iter().collect();
+        let mut vec = Vec::with_capacity(items.len());
+        for item in items {
             vec.push(python_to_json_value(py, &item)?);
         }
         Ok(JsonValue::Array(vec))
     } else if let Ok(dict) = obj.cast::<PyDict>() {
-        let mut map = serde_json::Map::new();
-        for (key, value) in dict.iter() {
+        // Same snapshot-before-recurse fix, dict side (#2510 sibling).
+        let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+        let mut map = serde_json::Map::with_capacity(pairs.len());
+        for (key, value) in pairs {
             let key_str = key.extract::<String>()?;
             map.insert(key_str, python_to_json_value(py, &value)?);
         }
@@ -2373,9 +2384,15 @@ pub fn get_actor_stats() -> SupervisorStatsPy {
 
 /// Convert Python dict to Rust HashMap<String, Value>
 fn python_dict_to_hashmap(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, Value>> {
-    let mut map = HashMap::new();
+    // Snapshotted BEFORE any recursive conversion (#2510 sibling — the
+    // actor-dispatch path's own copy of the live-iterator-plus-reentrant-
+    // extraction bug fixed in djust_core's `impl FromPyObject for Value`;
+    // this is the SECOND Python->Value converter #1646 already calls out
+    // above, and it had the identical shape).
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+    let mut map = HashMap::with_capacity(pairs.len());
 
-    for (key, value) in dict.iter() {
+    for (key, value) in pairs {
         let key_str = key.extract::<String>()?;
         let rust_value = python_to_value(&value)?;
         map.insert(key_str, rust_value);
@@ -2440,8 +2457,11 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 
     // Tuple — before List, since a tuple is also a sequence (#2203).
     if let Ok(tuple) = obj.cast::<PyTuple>() {
-        let mut vec = Vec::new();
-        for item in tuple.iter() {
+        // Snapshotted before recursion (#2510 sibling) — see the dict arm
+        // below for the full rationale; identical shape.
+        let items: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
+        let mut vec = Vec::with_capacity(items.len());
+        for item in items {
             vec.push(python_to_value(&item)?);
         }
         return Ok(Value::Tuple(vec));
@@ -2449,8 +2469,9 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 
     // List
     if let Ok(list) = obj.cast::<PyList>() {
-        let mut vec = Vec::new();
-        for item in list.iter() {
+        let items: Vec<Bound<'_, PyAny>> = list.iter().collect();
+        let mut vec = Vec::with_capacity(items.len());
+        for item in items {
             vec.push(python_to_value(&item)?);
         }
         return Ok(Value::List(vec));
@@ -2467,8 +2488,18 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         // while the other path dropped it to a repr. Both now keep the key's
         // type (#2339), and `test_both_python_to_value_paths_share_one_key_extractor`
         // pins that they share the extractor rather than agreeing by luck.
-        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> = indexmap::IndexMap::new();
-        for (key, value) in dict.iter() {
+        //
+        // Snapshotted into an owned `Vec` BEFORE recursing into
+        // `python_to_value` (#2510 sibling): `dict.iter()` is a LIVE PyO3
+        // iterator, converting one value can run arbitrary Python, and if
+        // that mutates THIS SAME dict the live iterator panics
+        // ("dictionary changed size during iteration") — confirmed via
+        // `handle.mount(..., params)` with a value whose `__index__` adds a
+        // key to its own parent dict.
+        let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> =
+            indexmap::IndexMap::with_capacity(pairs.len());
+        for (key, value) in pairs {
             map.insert(djust_core::py_object_key(&key), python_to_value(&value)?);
         }
         return Ok(Value::Object(map));

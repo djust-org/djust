@@ -179,3 +179,75 @@ class TestReentrancyDoesNotOverreach:
         html = _rust.render_template("{{ c.a }}", {"c": obj})
         assert html == "a-value"
         assert unrelated == {"touched": True}
+
+
+class _IndexTrigger:
+    """A second flavor of reentrant mutation: `__index__` (invoked by
+    `.extract::<i64>()`), rather than `__bool__`. The `fast_json_dumps` /
+    `serialize_models_fast` / actor-dispatch converters below check `i64`
+    before `bool`, so a `__bool__`-only trigger like `_LazyLike` would never
+    reach them — this is the shape that actually exercises those paths.
+    """
+
+    def __init__(self, owner_dict):
+        self._owner_dict = owner_dict
+        self._done = False
+
+    def __index__(self):
+        if not self._done:
+            self._done = True
+            self._owner_dict["late"] = True
+        return 42
+
+
+class TestStage11ReviewFoundThreeMoreSites:
+    """Stage-11 review of the #2510 fix caught a false completeness claim in
+    the first commit's own message: "grepped every remaining `.iter()` in
+    the conversion boundary" was scoped to `djust_core/src/lib.rs` only.
+    The identical bug shape — a live PyO3 dict/list iterator plus a
+    recursive conversion that can run arbitrary Python — existed
+    unfixed in THREE more converters in `crates/djust_live/src/`, one of
+    which (`fast_json_dumps`) is used in shipped example code today with no
+    opt-in gate. All confirmed by the reviewer with a working reproducer,
+    independently re-confirmed here, and fixed in the same PR rather than
+    deferred — the fix shape is identical and mechanical.
+    """
+
+    def test_fast_json_dumps_does_not_panic(self):
+        d = {}
+        d["x"] = _IndexTrigger(d)
+        d["other"] = "y"
+        result = _rust.fast_json_dumps(d)
+        assert '"other":"y"' in result
+        assert '"x":42' in result
+        assert d.get("late") is True
+
+    def test_serialize_models_fast_does_not_panic(self):
+        d = {}
+        d["x"] = _IndexTrigger(d)
+        d["other"] = "y"
+        result = _rust.serialize_models_fast([d])
+        assert '"other":"y"' in result
+        assert '"x":42' in result
+
+    def test_the_actor_dispatch_path_does_not_panic(self):
+        """`use_actors` defaults to `False` (opt-in), so this path is not
+        the default request flow — still a real, reachable bug once
+        opted in, and the fix is the same shape."""
+        import asyncio
+
+        async def _run():
+            handle = await _rust.create_session_actor("test-2510-actor")
+            params: dict = {}
+            params["x"] = _IndexTrigger(params)
+            params["other"] = "y"
+            # A bogus view module is enough to exercise the params
+            # conversion; whether mount() itself succeeds or raises for an
+            # unrelated reason is not what this test is about.
+            try:
+                await handle.mount("bogus.module.NoSuchView", params)
+            except Exception:
+                pass
+            assert params.get("late") is True
+
+        asyncio.run(_run())
