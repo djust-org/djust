@@ -1773,6 +1773,55 @@ fn django_value_repr_enabled() -> bool {
     djust_core::django_value_repr()
 }
 
+/// Convert a Python dict-shaped context to `HashMap<String, Value>` without
+/// PyO3's own blanket `HashMap<K, V>: FromPyObject` impl (#2510, round 4).
+///
+/// That blanket impl (`pyo3-0.29.2/src/conversions/std/map.rs`) does the
+/// SAME live-iterator-plus-recursive-extraction as every hand-written loop
+/// this bug class was found in — it holds a live `PyDict` iterator over the
+/// TOP-LEVEL context dict and calls `Value::extract()` on each value as it
+/// goes. Fixing every NESTED arm inside `impl FromPyObject for Value`
+/// (`public_dict_attrs`, the nested-`PyDict` arm) does not protect this
+/// outer layer: if converting one TOP-LEVEL value runs Python that adds a
+/// key to the TOP-LEVEL dict itself (not a dict nested inside one of its
+/// values), the blanket impl's iterator still panics — confirmed via
+/// `render_template("{{ other }}", {"trigger": <a value whose __index__
+/// adds "late" to its own parent dict>, "other": "y"})`. Nor could that
+/// panic have been caught by `guard_panic`: it happened in PyO3's own FFI
+/// argument extraction, before any hand-written function body — including
+/// a `guard_panic` closure — ever ran. Snapshotting into an owned `Vec`
+/// first, exactly like every other site this bug class was found in, is
+/// the only fix. Now that the conversion IS a hand-written call, the two
+/// render entry points (`render_template`, `render_template_with_dirs`)
+/// make it INSIDE their `guard_panic` closure, so anything that does panic
+/// in here surfaces as a `RuntimeError` rather than a `PanicException`
+/// (PR #2514 review, finding 4; pinned by
+/// `TestTheSnapshotRunsInsideGuardPanic`).
+///
+/// # The contract the snapshot creates
+///
+/// The dict is read ONCE, before any value is converted, so a conversion
+/// side effect on the dict itself is never observed by this call:
+///
+/// - a key ADDED to the dict during conversion is not seen — it is absent
+///   from the returned map, and `{{ late }}` renders empty;
+/// - a key REMOVED from the dict during conversion is still converted from
+///   the snapshot, and renders its (now-deleted) value.
+///
+/// Both halves are pinned by `TestTheSnapshotContractIsPinned` in
+/// `python/tests/test_dict_mutation_during_iteration_panic_2510.py`.
+fn snapshot_context_to_value_hashmap(
+    context: &Bound<'_, PyDict>,
+) -> PyResult<HashMap<String, Value>> {
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = context.iter().collect();
+    let mut map = HashMap::with_capacity(pairs.len());
+    for (key, value) in pairs {
+        let key_str: String = key.extract()?;
+        map.insert(key_str, value.extract::<Value>()?);
+    }
+    Ok(map)
+}
+
 /// Build the raw-Python sidecar for a standalone render entry point (#2501).
 ///
 /// The three non-LiveView render paths all take their context as a plain
@@ -1815,37 +1864,6 @@ fn django_value_repr_enabled() -> bool {
 /// itself — a caller that cannot be taught to pass an extra argument — and
 /// the backend's narrower reach is the accepted cost. Do not assume live
 /// models on that path.
-/// Convert a Python dict-shaped context to `HashMap<String, Value>` without
-/// PyO3's own blanket `HashMap<K, V>: FromPyObject` impl (#2510, round 4).
-///
-/// That blanket impl (`pyo3-0.29.2/src/conversions/std/map.rs`) does the
-/// SAME live-iterator-plus-recursive-extraction as every hand-written loop
-/// this bug class was found in — it holds a live `PyDict` iterator over the
-/// TOP-LEVEL context dict and calls `Value::extract()` on each value as it
-/// goes. Fixing every NESTED arm inside `impl FromPyObject for Value`
-/// (`public_dict_attrs`, the nested-`PyDict` arm) does not protect this
-/// outer layer: if converting one TOP-LEVEL value runs Python that adds a
-/// key to the TOP-LEVEL dict itself (not a dict nested inside one of its
-/// values), the blanket impl's iterator still panics — confirmed via
-/// `render_template("{{ other }}", {"trigger": <a value whose __index__
-/// adds "late" to its own parent dict>, "other": "y"})`. It is also
-/// unguardable by wrapping the call in `guard_panic`: the panic happens in
-/// PyO3's own FFI argument-extraction / `.extract()` call, before any
-/// hand-written function body — including a `guard_panic` closure — ever
-/// runs. Snapshotting into an owned `Vec` first, exactly like every other
-/// site this bug class was found in, is the only fix.
-fn snapshot_context_to_value_hashmap(
-    context: &Bound<'_, PyDict>,
-) -> PyResult<HashMap<String, Value>> {
-    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = context.iter().collect();
-    let mut map = HashMap::with_capacity(pairs.len());
-    for (key, value) in pairs {
-        let key_str: String = key.extract()?;
-        map.insert(key_str, value.extract::<Value>()?);
-    }
-    Ok(map)
-}
-
 fn entry_sidecar(context: &Bound<'_, PyAny>) -> HashMap<String, Py<PyAny>> {
     match context
         .py()
@@ -1873,10 +1891,14 @@ fn render_template(
     context: &Bound<'_, PyAny>,
     auto_call: Option<bool>,
 ) -> PyResult<String> {
-    let state: HashMap<String, Value> =
-        snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
-    let sidecar = entry_sidecar(context);
     guard_panic("render_template", move || {
+        // Inside the closure, not before it (PR #2514 review, finding 4):
+        // the conversion runs arbitrary Python through every value's
+        // dunders, and a panic in it must surface as a `RuntimeError`, not
+        // a `PanicException`, exactly like a panic in the render itself.
+        let state: HashMap<String, Value> =
+            snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
+        let sidecar = entry_sidecar(context);
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
             cached.clone()
@@ -1924,11 +1946,13 @@ fn render_template_with_dirs(
     safe_keys: Option<Vec<String>>,
     auto_call: Option<bool>,
 ) -> PyResult<String> {
-    let state: HashMap<String, Value> =
-        snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
-    let sidecar = entry_sidecar(context);
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
+
+        // See `render_template` for why this is inside the closure.
+        let state: HashMap<String, Value> =
+            snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
+        let sidecar = entry_sidecar(context);
 
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
@@ -2021,14 +2045,19 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
     } else if let Ok(s) = obj.extract::<String>() {
         Ok(JsonValue::String(s))
     } else if let Ok(list) = obj.cast::<PyList>() {
-        // Snapshotted into an owned `Vec` BEFORE any recursive conversion
-        // (#2510 sibling — the same class of bug fixed in
-        // `djust_core::lib::rs`'s `impl FromPyObject for Value`, found by
-        // Stage-11 review of that PR's own grep, which was scoped to
-        // djust_core and missed this crate). `list.iter()` is a LIVE PyO3
-        // iterator; converting one element can run arbitrary Python (e.g.
-        // `__index__` on the `i64` arm above), and if that mutates THIS
-        // SAME list, the live iterator's invariant breaks.
+        // Snapshotted into an owned `Vec` before recursing, for the same
+        // SHAPE as the dict arm below (#2510 sibling) — but not for the
+        // same reason, and an earlier version of this comment claimed a
+        // panic here that cannot happen (PR #2514 review, finding 2).
+        // PyO3's `BoundListIterator` (`pyo3-0.29.2/src/types/list.rs`,
+        // `next_unsynchronized`) re-clamps to `length.min(list.len())` on
+        // every step, so a list that grows or shrinks under a live
+        // iterator simply ends early or late; only `BoundDictIterator`
+        // checks the size and panics. Kept as a snapshot anyway: it is the
+        // one shape every converter in this bug class now uses, it makes
+        // the set of elements converted independent of what a conversion
+        // side effect does to the list, and it does not lean on a clamp
+        // PyO3 documents nowhere and could change.
         let items: Vec<Bound<'_, PyAny>> = list.iter().collect();
         let mut vec = Vec::with_capacity(items.len());
         for item in items {
@@ -2512,8 +2541,10 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 
     // Tuple — before List, since a tuple is also a sequence (#2203).
     if let Ok(tuple) = obj.cast::<PyTuple>() {
-        // Snapshotted before recursion (#2510 sibling) — see the dict arm
-        // below for the full rationale; identical shape.
+        // Snapshotted before recursion for uniformity with the dict arm
+        // below (#2510 sibling) — same shape, NOT the same hazard: a tuple
+        // cannot change size, and PyO3's list/tuple iterators clamp rather
+        // than panic (see the list arm of `python_to_json_value`).
         let items: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
         let mut vec = Vec::with_capacity(items.len());
         for item in items {

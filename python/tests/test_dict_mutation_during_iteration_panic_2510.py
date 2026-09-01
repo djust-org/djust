@@ -29,9 +29,15 @@ not resolved and does not matter: the bug is reachable and confirmed at the
 Rust boundary directly, which is what these tests exercise).
 """
 
+import asyncio
 import functools
+from pathlib import Path
+
+import pytest
 
 from djust import _rust
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class _LazyLike:
@@ -370,3 +376,221 @@ class TestTheTwoHandWrittenClassBSitesTheThirdRoundFound:
         result = _rust.serialize_context(d)
         assert result == {"trigger": 42, "other": "y"}
         assert d.get("late") is True
+
+
+class _RemoveTrigger:
+    """`_IndexTrigger`'s inverse: its `__index__` DELETES a sibling key from
+    the owner dict rather than adding one. Pins the second half of the
+    snapshot contract, which needs a key that is present when the snapshot
+    is taken and gone by the time the loop reaches it — so the doomed key
+    must be inserted AFTER the trigger (dict order is insertion order).
+    """
+
+    def __init__(self, owner_dict, doomed_key):
+        self._owner_dict = owner_dict
+        self._doomed_key = doomed_key
+        self._done = False
+
+    def __index__(self):
+        if not self._done:
+            self._done = True
+            del self._owner_dict[self._doomed_key]
+        return 42
+
+
+class TestTheSnapshotContractIsPinned:
+    """Stage-11 review of PR #2514 approved the fix but found the contract
+    it introduces UNPINNED (finding 1): with the snapshot, a key ADDED to
+    the context mid-conversion is silently absent from the render, and a
+    key REMOVED mid-conversion still renders from the snapshot. Neither was
+    asserted anywhere, so a future change (re-reading the live dict after
+    each value, say) could flip either half silently. Both halves are
+    pinned here on both Python entry points that route through
+    `snapshot_context_to_value_hashmap` — `render_template` and
+    `RustLiveView.update_state` — and stated in that helper's doc comment.
+
+    Gate-off (#1468), three ways: reverting the helper to a live
+    `context.iter()` fails all four (PanicException); making it skip keys no
+    longer in the dict fails exactly the two `removed` cases; making it
+    re-scan the dict for keys added since the snapshot fails exactly the two
+    `added` cases.
+    """
+
+    def test_render_template_a_key_added_mid_conversion_is_absent_from_the_render(self):
+        d: dict = {}
+        d["trigger"] = _IndexTrigger(d)
+        d["other"] = "y"
+        assert _rust.render_template("[{{ late }}][{{ other }}]", d) == "[][y]"
+        # The mutation DID happen — the render just never saw it.
+        assert d.get("late") is True
+
+    def test_render_template_a_key_removed_mid_conversion_still_renders_from_the_snapshot(
+        self,
+    ):
+        d: dict = {}
+        d["trigger"] = _RemoveTrigger(d, "doomed")
+        d["doomed"] = "still-here"
+        assert _rust.render_template("[{{ doomed }}]", d) == "[still-here]"
+        assert "doomed" not in d
+
+    def test_update_state_a_key_added_mid_conversion_is_absent_from_the_render(self):
+        d: dict = {}
+        d["trigger"] = _IndexTrigger(d)
+        d["other"] = "y"
+        view = _rust.RustLiveView("<p>[{{ late }}][{{ other }}]</p>", [])
+        view.update_state(d)
+        assert view.render() == "<p>[][y]</p>"
+        assert d.get("late") is True
+
+    def test_update_state_a_key_removed_mid_conversion_still_renders_from_the_snapshot(
+        self,
+    ):
+        d: dict = {}
+        d["trigger"] = _RemoveTrigger(d, "doomed")
+        d["doomed"] = "still-here"
+        view = _rust.RustLiveView("<p>[{{ doomed }}]</p>", [])
+        view.update_state(d)
+        assert view.render() == "<p>[still-here]</p>"
+        assert "doomed" not in d
+
+
+class TestTheFourSitesNoTestReached:
+    """PR #2514 review, finding 3 (#1104 — N fixed sites need N tests): four
+    of the snapshotted sites had no test reaching them. Each test below
+    names its site, mutates the dict THAT site iterates (not a parent or a
+    child of it), and was gate-off-verified by reverting only that site to
+    a live `.iter()` — which fails exactly this test and no other.
+    """
+
+    def test_serialize_python_value_nested_dict_arm(self):
+        """`crates/djust_live/src/lib.rs` `serialize_python_value`, the
+        `PyDict` arm — reached through `serialize_context` with a NESTED
+        dict value. The existing top-level test only reaches
+        `serialize_context_py`'s own loop, one level up."""
+        nested: dict = {}
+        nested["trigger"] = _IndexTrigger(nested)
+        nested["other"] = "y"
+        result = _rust.serialize_context({"outer": nested})
+        assert result == {"outer": {"trigger": 42, "other": "y"}}
+        assert nested.get("late") is True
+
+    def test_python_to_value_nested_dict_arm(self):
+        """`crates/djust_live/src/lib.rs` `python_to_value`, the `PyDict` arm
+        — reached through `SessionActorHandle.mount` params with a NESTED
+        dict value. The existing actor test mutates the top-level params
+        dict, which is `python_dict_to_hashmap`'s loop, not this one."""
+
+        async def _run():
+            nested: dict = {}
+            nested["trigger"] = _IndexTrigger(nested)
+            nested["other"] = "y"
+            handle = await _rust.create_session_actor("test-2510-nested-params")
+            try:
+                await handle.mount("test.View", {"nested": nested}, None)
+            finally:
+                await handle.shutdown()
+            assert nested.get("late") is True
+
+        asyncio.run(_run())
+
+    def test_view_actor_sync_state_from_python(self):
+        """`crates/djust_live/src/actors/view.rs`
+        `ViewActor::sync_state_from_python` — the loop over the Python
+        view's own `get_context_data()` result, run after every
+        `SessionActorHandle.event`."""
+
+        class View:
+            def __init__(self):
+                self.context = None
+
+            def poke(self, **kwargs):
+                pass
+
+            def get_context_data(self):
+                d: dict = {}
+                d["trigger"] = _IndexTrigger(d)
+                d["other"] = "y"
+                self.context = d
+                return d
+
+        async def _run():
+            handle = await _rust.create_session_actor("test-2510-view-sync")
+            view = View()
+            try:
+                await handle.mount("test.View", {}, view)
+                result = await handle.event("poke", {})
+            finally:
+                await handle.shutdown()
+            assert "version" in result
+            assert view.context.get("late") is True
+
+        asyncio.run(_run())
+
+    def test_component_actor_sync_state_from_python(self):
+        """`crates/djust_live/src/actors/component.rs`
+        `ComponentActor::sync_state_from_python` — the loop over the Python
+        component's own `get_context_data()` result, run after every
+        `SessionActorHandle.component_event`. The re-render after the sync
+        is asserted too, so the synced state is proven to be the snapshot's."""
+
+        class Component:
+            def __init__(self):
+                self.context = None
+
+            def poke(self, **kwargs):
+                pass
+
+            def get_context_data(self):
+                d: dict = {}
+                d["trigger"] = _IndexTrigger(d)
+                d["other"] = "y"
+                self.context = d
+                return d
+
+        async def _run():
+            handle = await _rust.create_session_actor("test-2510-component-sync")
+            component = Component()
+            try:
+                view = await handle.mount("test.View", {}, None)
+                view_id = view["view_id"]
+                await handle.create_component(
+                    view_id, "comp", "<div>[{{ other }}][{{ trigger }}]</div>", {}, component
+                )
+                html = await handle.component_event(view_id, "comp", "poke", {})
+            finally:
+                await handle.shutdown()
+            assert html == "<div>[y][42]</div>"
+            assert component.context.get("late") is True
+
+        asyncio.run(_run())
+
+
+class TestTheSnapshotRunsInsideGuardPanic:
+    """PR #2514 review, finding 4: `render_template` and
+    `render_template_with_dirs` called `snapshot_context_to_value_hashmap`
+    BEFORE entering their `guard_panic` closure, so a panic anywhere in the
+    conversion — which runs arbitrary Python through every value's dunders
+    — would have escaped as a `pyo3_runtime.PanicException` (a
+    `BaseException` that `except Exception` does not catch) instead of the
+    `RuntimeError` every other engine panic becomes. No known input panics
+    inside the snapshot today (that is what the snapshot is for), so the
+    change is structural and this pin is a source-level one: the call must
+    sit lexically inside the closure. Same idiom as
+    `test_bool_before_int_converters_2212.py`.
+    """
+
+    LIB_RS = ROOT / "crates" / "djust_live" / "src" / "lib.rs"
+
+    @pytest.mark.parametrize("entry", ["render_template", "render_template_with_dirs"])
+    def test_the_snapshot_call_is_inside_the_guard_panic_closure(self, entry):
+        src = self.LIB_RS.read_text()
+        start = src.index(f"\nfn {entry}(")
+        # The first column-0 closing brace after the signature ends the fn.
+        end = src.index("\n}\n", start)
+        body = src[start:end]
+        guard = body.index(f'guard_panic("{entry}"')
+        snapshot = body.index("snapshot_context_to_value_hashmap(")
+        assert snapshot > guard, (
+            f"{entry} converts its context BEFORE entering guard_panic; a panic in the "
+            f"conversion would escape as PanicException (PR #2514 review, finding 4)"
+        )
