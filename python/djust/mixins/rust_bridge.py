@@ -680,7 +680,6 @@ class RustBridgeMixin:
           3. Computed value changes — id() reference comparison against previous render
         """
         if self._rust_view:
-            from ..components.base import Component, LiveComponent
             from django import forms
 
             # Per-render, before anything is formatted (#2209, #2221).
@@ -970,23 +969,7 @@ class RustBridgeMixin:
                 # through to the normal handling below.
                 if key in _request_scoped_keys and not _is_json_serializable(value):
                     continue
-                if isinstance(value, (Component, LiveComponent)):
-                    # Render caching: skip render if component has clean cached HTML
-                    cached = getattr(value, "_cached_html", None)
-                    if cached is not None and not getattr(value, "_dirty", True):
-                        rendered_html = cached
-                    else:
-                        rendered_html = str(value.render())
-                        # Cache for next render cycle
-                        try:
-                            object.__setattr__(value, "_cached_html", rendered_html)
-                            object.__setattr__(value, "_dirty", False)
-                        except (AttributeError, TypeError):
-                            pass  # Not all objects support attribute setting
-                    rendered_context[key] = {"render": rendered_html}
-                    safe_keys.append(key)
-                    needs_normalize = True
-                elif isinstance(value, forms.BaseForm):
+                if isinstance(value, forms.BaseForm):
                     from djust.serialization import render_form_value
 
                     rendered_context[key] = render_form_value(value)
@@ -1051,14 +1034,28 @@ class RustBridgeMixin:
                     # a nullary method — resolve here as they now do on the
                     # three non-LiveView paths.
                     #
-                    # `{{ c }}` and `{{ c.render }}` are NOT what this changes,
-                    # measured rather than assumed: the render loop above
-                    # replaces a component with `{"render": <html>}` in the
-                    # eager context and marks the key safe, so both spellings
-                    # hit `Context::get` and never reach the sidecar (which is
-                    # consulted only on a miss). `{{ c.render }}` worked here
-                    # already; `{{ c }}` renders that dict's repr, which is a
-                    # divergence of the eager shape and is #2503.
+                    # #2503 (fixed): the render loop above used to special-case
+                    # Component/LiveComponent, eagerly replacing one with
+                    # `{"render": <html>}` in the context and marking the key
+                    # safe. `{{ c.render }}` hit that dict and worked; `{{ c }}`
+                    # hit the SAME dict with no remaining path segments and
+                    # rendered ITS Python repr — measured, not assumed, and the
+                    # actual cause was the wrapper shape, not this sidecar
+                    # inclusion. Removing the special-case (so Component/
+                    # LiveComponent fall through to the generic "complex type"
+                    # branch, matching every other object) fixed it: both
+                    # spellings now converge on the SAME mechanism as the three
+                    # non-LiveView paths — `normalize_django_value`'s Component
+                    # arm answers the bare case directly; a MISS on `.render`
+                    # (a plain string has no such attribute) falls through to
+                    # THIS sidecar's raw object and the #2501 attribute walk
+                    # answers it there, calling `.render()` a second time. That
+                    # second call is the cost of one mechanism instead of two —
+                    # bounded to render cycles where the component was already
+                    # dirty (this loop iterates `context`, the change-detection
+                    # OUTPUT, not `full_context`), and only when a template
+                    # still uses the `.render` spelling the docs no longer
+                    # recommend.
                     if isinstance(_raw_val, forms.BaseForm):
                         continue
                     sidecar[_raw_key] = _raw_val
