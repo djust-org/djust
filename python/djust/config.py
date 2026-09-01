@@ -647,11 +647,19 @@ def template_auto_call_enabled() -> bool:
     The single reader of ``LIVEVIEW_CONFIG['template_auto_call']``. The Rust
     entry points default the flag ON (Django's behaviour) for a caller that
     reaches them directly; every FRAMEWORK render path must consult the
-    project's setting instead, and there is more than one such path — the
-    template backend, ``SimpleLiveView.render_template`` and
-    ``Component._render_template_with_fallback`` (#2508 review, #1646).
-    Wiring the flag at one of the three and reading it inline is what let the
-    other two keep auto-calling in a project that had switched it off.
+    project's setting instead, and there are FOUR such paths:
+
+    - ``DjustTemplateBackend`` (``template/rendering.py``)
+    - ``SimpleLiveView.render_template`` (``simple_live_view.py``)
+    - ``Component._render_template_with_fallback`` (``components/base.py``)
+    - ``RustBridgeMixin._apply_template_auto_call_flag`` (``mixins/rust_bridge.py``)
+
+    Wiring the flag at one of them and reading it inline is what let the
+    others keep auto-calling in a project that had switched it off. The first
+    version of this docstring said "three", having enumerated the callers it
+    expected rather than grepping the sink — so the LiveView reader stayed
+    un-converged in the very change that cited #1646 to retire it (#2508
+    re-review). Any new render path belongs on this list and must call this.
 
     A config read that raises must not take a render down, so it fails ON,
     matching the Rust default.

@@ -1109,7 +1109,7 @@ def build_render_sidecar(context: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in context.items():
         if value is None or isinstance(value, _SIDECAR_SKIP_TYPES):
             continue
-        sidecar[key] = _protect_sidecar_tree(value, 0, memo)
+        sidecar[key] = _protect_sidecar_tree(value, 0, memo, set())
     return sidecar
 
 
@@ -1122,7 +1122,12 @@ def build_render_sidecar(context: Dict[str, Any]) -> Dict[str, Any]:
 _SIDECAR_MAX_DEPTH = 12
 
 
-def _protect_sidecar_tree(value: Any, _depth: int = 0, _memo: Optional[dict] = None) -> Any:
+def _protect_sidecar_tree(
+    value: Any,
+    _depth: int = 0,
+    _memo: Optional[dict] = None,
+    _active: Optional[set] = None,
+) -> Any:
     """:func:`_protect_sidecar_value`, applied at every depth of a container.
 
     Returns a NEW container rather than mutating in place: the values here are
@@ -1135,8 +1140,9 @@ def _protect_sidecar_tree(value: Any, _depth: int = 0, _memo: Optional[dict] = N
     build time on every render. ``_SidecarQuerySetProxy`` protects the models
     it yields when something actually iterates it.
 
-    Cycles are answered by identity, so a self-referential context returns the
-    already-visited container unchanged rather than recursing forever.
+    Cycles are answered by identity (``_active``), so a self-referential
+    context returns the already-visited container unchanged rather than
+    recursing forever — at the cycle, not 12 rebuilt levels later.
 
     The identity table is a MEMO, not a path-scoped visited-set (#2508 review).
     A discard-on-exit set answers true cycles but not a DAG: a container
@@ -1167,14 +1173,33 @@ def _protect_sidecar_tree(value: Any, _depth: int = 0, _memo: Optional[dict] = N
         return value
     if _memo is None:
         _memo = {}
+    if _active is None:
+        _active = set()
+
+    # Two tables, because cycle-stopping and result-reuse want opposite
+    # lifetimes and an earlier version of this tried to serve both with one.
+    #
+    # `_active` is PATH-scoped (discarded on the way out) and keyed on id
+    # ALONE: a cycle's back-edge returns to the same object at a DEEPER depth,
+    # so a depth-keyed table can never see it. Seeding the depth-keyed memo
+    # with the original — which is what this did first — was dead code for
+    # exactly that reason: unreachable, while its comment claimed it was what
+    # stopped cycles. What actually stopped them was the depth cap, 12 levels
+    # of rebuilt wrapper later. Caught by instrumenting for seed reads and
+    # finding zero (#2508 re-review); the cycle test stayed green with the
+    # line deleted, which made it tautological by #1468.
+    if id(value) in _active:
+        return value
+
+    # `_memo` is RETAINED for the whole build, and keyed on `(id, depth)`
+    # because a result is depth-dependent — a subtree first reached at depth 10
+    # is truncated by the cap, and reusing that for the same object at depth 2
+    # would under-protect it. `[0]` pins the original alive so CPython cannot
+    # recycle its id() into a different object mid-walk.
     memo_key = (id(value), _depth)
     if memo_key in _memo:
-        # `[1]` is the result; `[0]` pins the original alive so CPython cannot
-        # recycle its id() into a different object mid-walk.
         return _memo[memo_key][1]
-    # Seed with the original so a back-edge inside a true cycle terminates by
-    # returning the container unchanged, exactly as the visited-set did.
-    _memo[memo_key] = (value, value)
+    _active.add(id(value))
 
     result: Any
     if isinstance(value, dict):
@@ -1194,19 +1219,29 @@ def _protect_sidecar_tree(value: Any, _depth: int = 0, _memo: Optional[dict] = N
                     type(k).__name__,
                 )
                 continue
-            result[k] = _protect_sidecar_tree(v, _depth + 1, _memo)
+            result[k] = _protect_sidecar_tree(v, _depth + 1, _memo, _active)
     else:
-        items = [_protect_sidecar_tree(v, _depth + 1, _memo) for v in value]
+        items = [_protect_sidecar_tree(v, _depth + 1, _memo, _active) for v in value]
         if isinstance(value, tuple):
-            try:
-                result = type(value)(items)
-            except TypeError:
-                # A namedtuple rejects the single-iterable form and wants its
-                # fields positionally. Falling straight through to `tuple`
-                # silently downgraded the type, so a handler doing `x.field`
-                # got AttributeError.
+            # A namedtuple is detected by `_fields` and reconstructed
+            # POSITIONALLY. Trying the single-iterable form first and falling
+            # back on TypeError looks equivalent and is not: at arity 1 the
+            # single-iterable form SUCCEEDS and wraps the field in the list, so
+            # `P1(user)` came back as `P1(a=[proxy])` and a handler doing
+            # `x.a.username` got `AttributeError: 'list' object has no
+            # attribute 'username'` — the exact failure this branch exists to
+            # prevent. It survived because the test used a 2-field namedtuple,
+            # where the fallback path happens to be correct (#2508 re-review).
+            if hasattr(value, "_fields"):
                 try:
                     result = type(value)(*items)
+                except TypeError:
+                    # A subclass with extra required `__new__` args cannot be
+                    # rebuilt; a plain tuple keeps the floor, loses the type.
+                    result = tuple(items)
+            else:
+                try:
+                    result = type(value)(items)
                 except TypeError:
                     result = tuple(items)
         elif isinstance(value, (set, frozenset)):
@@ -1217,6 +1252,7 @@ def _protect_sidecar_tree(value: Any, _depth: int = 0, _memo: Optional[dict] = N
         else:
             result = items
 
+    _active.discard(id(value))
     _memo[memo_key] = (value, result)
     return result
 

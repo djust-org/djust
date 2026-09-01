@@ -321,18 +321,21 @@ class RustBridgeMixin:
         including cache HITs and msgpack restores, where the flag is not
         part of the serialized view state. A no-op if the Rust build
         predates the setter (defensive ``hasattr`` guard).
+
+        The flag itself is read by the one shared
+        :func:`djust.config.template_auto_call_enabled`, which every framework
+        render path calls. This was the FOURTH reader — #2508 converged three
+        of them and left this one, while claiming in its own docstring to be
+        the single reader (#2508 re-review). No drift had occurred yet; the
+        point is that the parallel path #1646 exists to retire was still
+        standing.
         """
         rust_view = getattr(self, "_rust_view", None)
         if rust_view is None or not hasattr(rust_view, "set_template_auto_call"):
             return
-        try:
-            from ..config import get_config
+        from ..config import template_auto_call_enabled
 
-            enabled = bool(get_config().get("template_auto_call", True))
-        except Exception:  # pragma: no cover - config access is defensive
-            logger.debug("[LiveView] template_auto_call flag read failed; defaulting ON")
-            enabled = True
-        rust_view.set_template_auto_call(enabled)
+        rust_view.set_template_auto_call(template_auto_call_enabled())
 
     def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""

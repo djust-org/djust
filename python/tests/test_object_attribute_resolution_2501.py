@@ -385,3 +385,74 @@ class TestExceptionTypePreserved:
         assert type(caught.value) is exc_type, (
             f"backend wrapped it as {type(caught.value).__name__}: {caught.value}"
         )
+
+    def test_the_list_is_exactly_djangos_dispatch_set(self):
+        """Read from Django, not recalled — the first version had 3 of 5.
+
+        `BadRequest` and `MultiPartParserError` are SIBLINGS of
+        `SuspiciousOperation`, not subclasses, so an `isinstance` naming only
+        the sibling does not reach them and both rendered 500 instead of 400.
+        Pinning against Django's own source means a Django version that
+        changes its dispatch set fails here rather than silently costing a
+        status code.
+        """
+        import inspect
+
+        from django.core.handlers import exception as django_exception_handler
+
+        source = inspect.getsource(django_exception_handler.response_for_exception)
+        dispatched = {
+            name
+            for name in (
+                "Http404",
+                "PermissionDenied",
+                "MultiPartParserError",
+                "BadRequest",
+                "SuspiciousOperation",
+            )
+            if name in source
+        }
+
+        from djust.template.rendering import _is_user_raised
+
+        unwrapped = set()
+        for name in dispatched:
+            for module in (
+                "django.core.exceptions",
+                "django.http",
+                "django.http.multipartparser",
+            ):
+                import importlib
+
+                exc_type = getattr(importlib.import_module(module), name, None)
+                if exc_type is not None:
+                    if _is_user_raised(exc_type("x")):
+                        unwrapped.add(name)
+                    break
+
+        assert unwrapped == dispatched, (
+            f"Django dispatches {sorted(dispatched)} but djust unwraps only "
+            f"{sorted(unwrapped)} — the rest lose their status code"
+        )
+
+    @pytest.mark.parametrize(
+        "exc_path",
+        ["django.core.exceptions.BadRequest", "django.http.multipartparser.MultiPartParserError"],
+    )
+    def test_the_two_siblings_the_first_pass_missed(self, exc_path):
+        """End-to-end through the backend, which is where they were wrapped."""
+        import importlib
+
+        module_name, _, attr = exc_path.rpartition(".")
+        exc_type = getattr(importlib.import_module(module_name), attr)
+
+        class Guarded:
+            @property
+            def secret(self):
+                raise exc_type("bad")
+
+        with pytest.raises(Exception) as caught:
+            djust_backend_render("{{ o.secret }}", {"o": Guarded()})
+        assert type(caught.value) is exc_type, (
+            f"wrapped as {type(caught.value).__name__} — Django would have sent 400"
+        )

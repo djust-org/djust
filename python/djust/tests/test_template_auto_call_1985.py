@@ -756,3 +756,65 @@ class TestFilterArgErrorPolicy2202:
         with pytest.raises(Exception) as raised:
             _render("<div>{{ blank|default:probe.raises_valueerror }}</div>")
         assert "does not resolve" not in str(raised.value)
+
+
+class TestOneSharedFlagReader:
+    """Every framework path reads the flag through ONE function (#2508, #1646).
+
+    The #2508 fix converged three of the four framework readers and left
+    ``RustBridgeMixin._apply_template_auto_call_flag`` on its own inline
+    ``get_config().get(...)`` — while its own docstring claimed to be the
+    single reader and enumerated three paths. No behavioural drift had
+    occurred, because both copies were identical; the parallel path #1646
+    exists to retire was simply still standing.
+
+    Pinning the reader SET (not a floor) is what makes the convergence
+    mechanical rather than a claim: a new inline read fails this immediately.
+    """
+
+    def test_no_module_reads_the_flag_inline(self):
+        """Grep the SINK, not the callers you expect — that omission is
+        exactly how the fourth reader survived the fix that cited #1646."""
+        import pathlib
+
+        import djust
+
+        root = pathlib.Path(djust.__file__).parent
+        offenders = []
+        for path in root.rglob("*.py"):
+            if "/tests/" in str(path) or path.name.startswith("test_"):
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if 'get("template_auto_call"' in text or "get('template_auto_call'" in text:
+                # config.py IS the shared reader; everything else must call it.
+                if path.name != "config.py":
+                    offenders.append(str(path.relative_to(root)))
+        assert not offenders, (
+            "these read LIVEVIEW_CONFIG['template_auto_call'] inline instead of "
+            f"calling config.template_auto_call_enabled(): {offenders}"
+        )
+
+    def test_every_framework_render_path_calls_the_shared_reader(self):
+        """The four paths the shared reader's docstring names, pinned."""
+        import pathlib
+
+        import djust
+
+        root = pathlib.Path(djust.__file__).parent
+        expected = {
+            "template/rendering.py",
+            "simple_live_view.py",
+            "components/base.py",
+            "mixins/rust_bridge.py",
+        }
+        actual = set()
+        for p in root.rglob("*.py"):
+            # NOT `if "/tests/" in str(p) is False` — Python chains that into
+            # `("/tests/" in s) and (s is False)`, which is always False, so
+            # the set came out empty and the assertion passed vacuously in the
+            # other direction. Caught on the first run.
+            if "/tests/" in str(p) or p.name == "config.py":
+                continue
+            if "template_auto_call_enabled" in p.read_text(encoding="utf-8", errors="replace"):
+                actual.add(str(p.relative_to(root)))
+        assert expected <= actual, f"a framework path stopped calling it: {expected - actual}"

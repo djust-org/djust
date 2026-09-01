@@ -1479,18 +1479,46 @@ class TestSidecarWalkIsLinear:
         )
         assert len(walks) <= 20, f"walked {len(walks)} containers for 7 distinct objects"
 
-    def test_a_true_cycle_still_terminates(self):
-        """The memo must not lose what the visited-set got right."""
+    def test_a_true_cycle_stops_at_the_back_edge(self):
+        """Terminating is not enough to assert — assert WHERE it stops.
+
+        The first version only checked that the call returned, which the depth
+        cap guarantees on its own: the cycle guard was dead code (the memo key
+        carries the depth, and a back-edge returns to the same object at a
+        DEEPER depth, so a depth-keyed table can never see it) and deleting it
+        left this green. Tautological by #1468, in a PR whose thesis is #1859.
+
+        The guard is now a separate path-scoped `_active` set keyed on id
+        alone, so it is reachable — and this asserts the property only it
+        produces: ONE rebuilt level whose element is the ORIGINAL object,
+        rather than 12 rebuilt levels wrapped around it by the cap.
+        """
         from djust.serialization import build_render_sidecar
 
         cycle: list = []
         cycle.append(cycle)
-        build_render_sidecar({"x": cycle})  # must not recurse forever
+        out = build_render_sidecar({"x": cycle})["x"]
+        assert len(out) == 1
+        assert out[0] is cycle, "the back-edge should return the original container"
 
         mutual_a: dict = {}
         mutual_b: list = [mutual_a]
         mutual_a["b"] = mutual_b
-        build_render_sidecar({"x": mutual_a})
+        out2 = build_render_sidecar({"x": mutual_a})["x"]
+        assert out2["b"][0] is mutual_a
+
+    def test_a_model_inside_a_cycle_is_still_floored(self):
+        """Stopping early must not stop the floor."""
+        from django.contrib.auth.models import User
+
+        from djust.serialization import build_render_sidecar
+
+        user = User(pk=1, username="alice")
+        user.set_password("hunter2")
+        cycle: list = [user]
+        cycle.append(cycle)
+        out = build_render_sidecar({"x": cycle})["x"]
+        assert user.password not in repr(out[0])
 
     def test_one_shared_object_yields_one_proxy(self):
         """Two names bound to the same list share the protected result."""
@@ -1524,6 +1552,44 @@ class TestFloorReachesRemainingContainerShapes:
         out = build_render_sidecar({"x": {user: "v"}, "keep": {"ok": 1}})
         assert out["x"] == {}, "the model-keyed entry must not reach a handler"
         assert out["keep"] == {"ok": 1}, "ordinary keys are untouched"
+
+    @pytest.mark.parametrize("arity", [1, 2, 3])
+    def test_a_namedtuple_of_any_arity_keeps_its_shape(self, arity):
+        """Arity 1 was corrupted, and a 2-field test could not see it.
+
+        `type(value)(items)` RAISES for a 2- or 3-field namedtuple, so the
+        `*items` fallback ran and was correct. At arity 1 it SUCCEEDS and wraps
+        the single field in the items list — `P1(user)` came back as
+        `P1(a=[proxy])`, so a handler doing `x.a.username` got
+        `AttributeError: 'list' object has no attribute 'username'`: precisely
+        the failure the branch exists to prevent, surviving because the test
+        only ever built a 2-field one (#2508 re-review). Detection is now on
+        `_fields`, not on whether a constructor happens to raise.
+        """
+        from collections import namedtuple
+
+        from django.contrib.auth.models import User
+
+        from djust.serialization import build_render_sidecar
+
+        fields = "abc"[:arity]
+        Row = namedtuple("Row", " ".join(fields))
+        user = User(pk=1, username="alice")
+        user.set_password("hunter2")
+
+        out = build_render_sidecar({"x": Row(user, *range(arity - 1))})["x"]
+        assert type(out) is Row, f"arity {arity} degraded to {type(out).__name__}"
+        assert not isinstance(out.a, list), (
+            f"arity {arity}: the field was wrapped in a list — {out!r}"
+        )
+        with pytest.raises(AttributeError):
+            out.a.password
+
+    def test_a_plain_tuple_stays_a_plain_tuple(self):
+        """The `_fields` branch must not capture ordinary tuples."""
+        from djust.serialization import build_render_sidecar
+
+        assert type(build_render_sidecar({"x": (1, 2)})["x"]) is tuple
 
     def test_a_namedtuple_keeps_its_type(self):
         """``type(value)(items)`` raises for a namedtuple; falling straight to

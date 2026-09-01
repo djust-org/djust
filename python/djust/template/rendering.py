@@ -69,19 +69,31 @@ class _TemplateSourceWrapper:
 #: Exceptions that mean "the project's own code raised", not "the template
 #: engine failed" — so they must cross a render boundary unwrapped (#2508).
 #:
-#: `SuspiciousOperation` is included for the same reason as its two siblings:
-#: Django's handler maps it to 400. `ImproperlyConfigured` is deliberately NOT
-#: here — it is a setup failure, and the template-location hint is genuinely
-#: useful for it.
+#: This is EXACTLY the set `django.core.handlers.exception.response_for_exception`
+#: dispatches on, read from that function rather than recalled: `Http404` -> 404,
+#: `PermissionDenied` -> 403, `MultiPartParserError` -> 400, `BadRequest` -> 400,
+#: `SuspiciousOperation` -> 400. Wrapping any of them costs a status code, which
+#: no template-location hint is worth.
+#:
+#: The first version of this list had three of the five. `BadRequest` and
+#: `MultiPartParserError` are SIBLINGS of `SuspiciousOperation`, not subclasses,
+#: so the `isinstance` did not reach them and both still rendered 500 — the same
+#: defect this function exists to close, left half-closed (#2508 re-review). If
+#: Django's dispatch set changes, this list is what has to change with it.
+#:
+#: `ObjectDoesNotExist` is deliberately ABSENT: Django assigns it no status, and
+#: it is silent at the lookup layer (rendered empty long before it reaches here),
+#: so listing it only cost the hint. `ImproperlyConfigured` is absent for the
+#: same reason — a setup failure, where the hint is genuinely useful.
 def _is_user_raised(exc: BaseException) -> bool:
-    from django.core.exceptions import (
-        ObjectDoesNotExist,
-        PermissionDenied,
-        SuspiciousOperation,
-    )
+    from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
     from django.http import Http404
+    from django.http.multipartparser import MultiPartParserError
 
-    return isinstance(exc, (PermissionDenied, Http404, SuspiciousOperation, ObjectDoesNotExist))
+    return isinstance(
+        exc,
+        (Http404, PermissionDenied, MultiPartParserError, BadRequest, SuspiciousOperation),
+    )
 
 
 class DjustTemplate:
