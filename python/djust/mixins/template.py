@@ -1051,22 +1051,44 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
             else:
-                from ..components.base import Component, LiveComponent
-
                 context = self.get_context_data()
                 context = self._apply_context_processors(context, request)
 
                 from django.http import HttpRequest
 
-                rendered_context = {}
-                for key, value in context.items():
-                    if isinstance(value, HttpRequest):
-                        continue
-                    elif isinstance(value, (Component, LiveComponent)):
-                        rendered_context[key] = {"render": str(value.render())}
-                        safe_keys.append(key)
-                    else:
-                        rendered_context[key] = value
+                # A `Component`/`LiveComponent`-specific branch used to render
+                # eagerly and replace the value with `{"render": html}` here —
+                # the SAME wrapper-dict shape #2503 removed from
+                # `rust_bridge.py::_sync_state_to_rust`, and the identical bug:
+                # `{{ c }}` on THIS page-shell path rendered the dict's Python
+                # repr, not the component, because there were no remaining
+                # path segments for `Context::get` to resolve past the dict it
+                # hit. Caught by Stage 11 review of #2512 as a parallel-path
+                # twin (#1646) — this branch was never touched by that PR.
+                #
+                # Removed, matching the sibling `if serialized_context is not
+                # None:` branch above, which never special-cased Component at
+                # all: pass the raw context straight to
+                # `normalize_django_value`, whose Component-aware arm calls
+                # `str(value)` (the SafeString `__str__` → `render()` chain)
+                # directly. `str(value.render())` here explicitly stripped
+                # the SafeString marker `render()` returns — a second,
+                # independent bug this removal also closes, since
+                # `normalize_django_value` preserves it.
+                #
+                # `.render` (the dotted spelling) does NOT resolve on this
+                # path either way: `temp_rust` (below) has no
+                # `set_raw_py_values` sidecar wired, on EITHER branch, so a
+                # miss here renders empty rather than falling through to the
+                # #2501 attribute walk. That gap is pre-existing on the
+                # ALREADY-correct sibling branch too — not introduced or
+                # fixed by this change, and out of scope for it (tracked
+                # separately rather than folded in, per #1079).
+                rendered_context = {
+                    key: value
+                    for key, value in context.items()
+                    if not isinstance(value, HttpRequest)
+                }
 
                 from ..serialization import normalize_django_value
                 from ..mixins.rust_bridge import _collect_safe_keys

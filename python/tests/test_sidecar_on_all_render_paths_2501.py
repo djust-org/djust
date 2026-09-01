@@ -141,6 +141,22 @@ class Card(Component):
         return "card-property"
 
 
+class LiveCard(LiveComponent):
+    """Crosses as `Value::Object`: a real LiveComponent's public state attrs
+    (`component_id`, whatever `mount()` sets) put it on the same bulk-dump
+    arm as `Presenter` below — the shape #2503 needed checked separately
+    from `Card`, because a private-dict-only Component and a public-attr
+    LiveComponent take different carriers at the FromPyObject boundary."""
+
+    template = "<b>livecard</b>"
+
+    def mount(self, **kwargs):
+        pass
+
+    def get_context_data(self):
+        return {}
+
+
 class Presenter:
     """Crosses as `Value::Object`: a public instance attribute puts it on the
     `__dict__` bulk-dump arm, which answers `inst_attr` and nothing else."""
@@ -1102,12 +1118,19 @@ class TestTheLiveViewPathsComponentExclusion:
     the LiveView path. It is not, and the correction is worth stating because
     it changes what these tests are allowed to claim. Measured with the
     exclusion restored, `{{ c.render|safe }}` ALREADY rendered: the sync loop
-    replaces a component in the eager context with `{"render": <html>}` and
-    marks the key safe, so the dotted spelling hits `Context::get` and never
-    reaches the sidecar. What the un-exclusion buys is every OTHER name —
-    `{{ c.cls_attr }}` / `{{ c.label }}` / `{{ c.kind }}` rendered `||` before
-    it. The same wrapper dict is why `{{ c }}` renders a dict repr here, which
-    is #2503 and is pinned below in its diverging direction.
+    (at the time) replaced a component in the eager context with
+    `{"render": <html>}` and marked the key safe, so the dotted spelling hit
+    `Context::get` and never reached the sidecar. What the un-exclusion buys
+    is every OTHER name — `{{ c.cls_attr }}` / `{{ c.label }}` / `{{ c.kind }}`
+    rendered `||` before it.
+
+    The wrapper-dict special-case is GONE now (#2503 — see
+    `test_the_bare_spelling_now_matches_the_dotted_one` below): Component/
+    LiveComponent fall through to the generic "complex type" branch, same as
+    any object, and both `{{ c }}` and `{{ c.render }}` converge on the same
+    two-mechanism answer the three non-LiveView paths already use —
+    `normalize_django_value`'s Component arm for the bare case, a MISS on
+    `.render` falling through to this un-excluded sidecar for the dotted one.
 
     Measured through the REAL LiveView render rather than through
     `set_raw_py_values`, because the exclusion lives in the Python builder and
@@ -1135,6 +1158,32 @@ class TestTheLiveViewPathsComponentExclusion:
         html, _, _ = client.render_with_patches()
         return html
 
+    @staticmethod
+    def _render_live_component(template: str) -> str:
+        """Same helper, but with a REAL `LiveComponent` — the public-attr,
+        `Value::Object` carrier shape, checked separately from `Card`'s
+        private-dict `Value::Encoded` shape (#2503's fix touches the carrier
+        boundary, and this repo's canon is explicit that a suite covering a
+        multi-variant surface must exercise every variant, not one)."""
+        from djust import LiveView
+        from djust.testing import LiveViewTestClient
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self._live_card = LiveCard()
+                self._live_card.mount()
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["c"] = self._live_card
+                return ctx
+
+        _V.template = template
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        return html
+
     def test_a_components_documented_dotted_spelling_resolves(self):
         """Through the eager `{"render": <html>}` wrapper, not the sidecar —
         this one passed before the un-exclusion too, and it is here so the
@@ -1147,17 +1196,108 @@ class TestTheLiveViewPathsComponentExclusion:
         html = self._render("<div>{{ c.cls_attr }}|{{ c.label }}|{{ c.kind }}</div>")
         assert "card-class-level|card-method|card-property" in html
 
-    def test_the_bare_spelling_still_renders_the_wrapper_dicts_repr(self):
-        """Pinned in its DIVERGING direction (#2503), so the fix for it turns
-        this red rather than passing silently (#1859).
+    def test_the_bare_spelling_now_matches_the_dotted_one(self):
+        """#2503 fixed: the wrapper-dict special-case is removed, so a bare
+        component reference no longer renders that dict's Python repr.
 
-        Unchanged by the un-exclusion — the sidecar is consulted only on a
-        `Context::get` miss and `c` is present in the eager context — which is
-        what makes this a pre-existing defect of the wrapper shape rather than
-        something #2501 introduced.
+        This test previously pinned the BUG in its diverging direction
+        (#1859) — a fix for #2503 was supposed to turn it red, and it did,
+        the moment the special-case was removed. Now it pins the fix: both
+        spellings render the SAME content (escaped, same as the three
+        non-LiveView paths — the escaping half is #2501 PR 2, separate and
+        still open), and NEITHER contains the dict repr anymore.
         """
-        html = self._render("<div>{{ c }}</div>")
-        assert "{&#x27;render&#x27;:" in html or "{'render':" in html
+        bare = self._render("<div>{{ c }}</div>")
+        dotted = self._render("<div>{{ c.render }}</div>")
+        assert "{&#x27;render&#x27;:" not in bare and "{'render':" not in bare
+        assert bare == dotted
+        assert "&lt;b&gt;card&lt;/b&gt;" in bare
+
+    def test_the_bare_spelling_is_correct_with_safe(self):
+        """The escaped-but-correct content, unescaped — matches `.render|safe`.
+
+        VDOM adds `dj-id` attributes, so this checks for real markup + text,
+        not an exact byte match against the component's own `_render_custom`
+        output.
+        """
+        bare = self._render("<div>{{ c|safe }}</div>")
+        dotted = self._render("<div>{{ c.render|safe }}</div>")
+        assert "<b" in bare and ">card</b>" in bare
+        assert bare == dotted
+
+    def test_the_fix_holds_for_the_public_attr_liveComponent_shape_too(self):
+        """`LiveCard` crosses as `Value::Object`, not `Value::Encoded` like
+        `Card` — a different carrier at the FromPyObject boundary. Confirms
+        the #2503 fix isn't accidentally specific to the private-dict shape."""
+        import re
+
+        def _norm(h: str) -> str:
+            # Each call mounts a fresh LiveCard with its own random
+            # component_id suffix; normalize it before comparing content.
+            return re.sub(r'data-component-id="livecard_[0-9a-f]+"', "", h)
+
+        bare = _norm(self._render_live_component("<div>{{ c|safe }}</div>"))
+        dotted = _norm(self._render_live_component("<div>{{ c.render|safe }}</div>"))
+        assert "<b" in bare and ">livecard</b>" in bare
+        assert bare == dotted
+        assert "{'render':" not in self._render_live_component("<div>{{ c }}</div>")
+
+
+class TestMutatorsRefusedOnTheLiveViewPath:
+    """#2507's guard, re-checked on the LiveView path after #2503's fix.
+
+    #2503 removed the LiveView-specific eager wrapper-dict branch, routing
+    Component/LiveComponent through the SAME generic path the other three
+    render paths use. The `alters_data` guard #2507 stamped is Rust/sidecar
+    -side and was never part of the removed branch, so it should be
+    unaffected — checked here rather than assumed, since "should be
+    unaffected" is exactly the kind of claim worth falsifying (#1516).
+    """
+
+    @pytest.mark.django_db
+    def test_unmount_and_trigger_update_are_never_called(self):
+        from djust import LiveView
+        from djust.testing import LiveViewTestClient
+
+        calls = []
+
+        class _Mutating(LiveComponent):
+            template = "<b>x</b>"
+
+            def mount(self):
+                pass
+
+            def get_context_data(self):
+                return {}
+
+            def unmount(self):
+                calls.append("unmount")
+                super().unmount()
+
+            def trigger_update(self):
+                calls.append("trigger_update")
+                super().trigger_update()
+
+        def _make_view(tpl):
+            class V(LiveView):
+                def mount(self, request, **kwargs):
+                    self.c = _Mutating()
+                    self.c.mount()
+
+                def get_context_data(self, **kwargs):
+                    ctx = super().get_context_data(**kwargs)
+                    ctx["c"] = self.c
+                    return ctx
+
+            V.template = f"<div dj-root>{tpl}</div>"
+            return V
+
+        for tpl in ("{{ c.unmount }}", "{{ c.trigger_update }}"):
+            calls.clear()
+            client = LiveViewTestClient(_make_view(tpl))
+            client.mount()
+            client.render_with_patches()
+            assert calls == [], f"{tpl} called: {calls}"
 
 
 class TestComponentMutatorsAreNeverAutoCalled:
@@ -1611,3 +1751,86 @@ class TestFloorReachesRemainingContainerShapes:
         # different value for it, so "still floored" is an AttributeError.
         with pytest.raises(AttributeError):
             out.a.password
+
+
+class TestTheShellRenderPathHadTheSameWrapperDictBug:
+    """#2512 Stage-11 review: `_render_full_template_inner`'s page-SHELL
+    render (`python/djust/mixins/template.py`) had its own copy of the exact
+    bug #2503 fixed in `rust_bridge.py::_sync_state_to_rust` — the same
+    `rendered_context[key] = {"render": ...}` wrapper-dict shape, on a
+    DIFFERENT render path this repo's own canon (#1646) says to grep for and
+    the #2512 review's Stage 4 planning missed.
+
+    Reachable via `render_full_template(request)` called WITHOUT
+    `serialized_context` — the default, and the exact call shape one of
+    djust's own demo project view pairs uses inconsistently
+    (`examples/demo_project/djust_demos/views/no_template_demo.py` drops it;
+    the `demo_app` sibling forwards it).
+
+    `.render` (the dotted spelling) does NOT resolve on this path in EITHER
+    branch — `temp_rust` has no `set_raw_py_values` sidecar wired here, a
+    pre-existing gap on the ALREADY-correct `serialized_context is not None`
+    branch too. Not introduced or fixed by this change; tracked separately
+    rather than folded in (#1079).
+    """
+
+    @staticmethod
+    def _render(template: str, *, with_serialized_context: bool) -> str:
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory
+
+        from djust.live_view import LiveView
+
+        class _ShellCard(Component):
+            template = None
+
+            def _render_custom(self) -> str:
+                return "<b>shellcard</b>"
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.c = _ShellCard()
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["c"] = self.c
+                return ctx
+
+        _V.template = "<div dj-root>inner</div>"
+        _V._full_template = (
+            f"<html><body><div dj-root>inner</div><nav>{template}</nav></body></html>"
+        )
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        middleware = SessionMiddleware(lambda r: r)
+        middleware.process_request(request)
+        request.session.save()
+
+        view = _V()
+        view.setup(request)
+        view.mount(request)
+        view._full_template = _V._full_template
+
+        serialized_context = view.get_context_data() if with_serialized_context else None
+        return view.render_full_template(request, serialized_context=serialized_context)
+
+    @pytest.mark.django_db
+    @pytest.mark.parametrize(
+        "with_serialized_context", [False, True], ids=["else-branch", "sibling"]
+    )
+    def test_the_bare_spelling_renders_the_component_not_a_dict_repr(self, with_serialized_context):
+        html = self._render("{{ c }}", with_serialized_context=with_serialized_context)
+        assert "{'render':" not in html
+        assert "<b>shellcard</b>" in html
+
+    @pytest.mark.django_db
+    def test_both_branches_now_agree(self):
+        """The invariant #1646 cares about: parallel paths implementing the
+        same feature should agree — even where that agreement is a shared,
+        pre-existing gap (`.render` empty here) rather than full parity with
+        the LiveView/#2501 paths."""
+        for tpl in ("{{ c }}", "{{ c|safe }}", "{{ c.render }}", "{{ c.render|safe }}"):
+            via_else = self._render(tpl, with_serialized_context=False)
+            via_sibling = self._render(tpl, with_serialized_context=True)
+            assert via_else == via_sibling, f"{tpl} diverges between the two branches"
