@@ -224,9 +224,13 @@ class DashboardView(LiveView):
 ```html
 <div dj-root dj-view="myapp.views.DashboardView">
     <h2>Counter</h2>
-    {{ counter.render }}
+    {{ counter|safe }}
 </div>
 ```
+
+`{{ counter }}` is the recommended spelling (see the note on component
+rendering below) -- `|safe` is needed until [#2501](https://github.com/djust-org/djust/issues/2501)'s
+escaping fix lands.
 
 The `component_id` is automatically set to the attribute name (`"counter"`) by the framework. No manual ID management needed.
 
@@ -634,9 +638,9 @@ template = '{% if size == "lg" %}big{% elif size == "sm" %}small{% endif %}'
 template = '{% if size == "lg" %}big{% endif %}{% if size == "sm" %}small{% endif %}'
 ```
 
-**Components in templates render via `{{ component }}`** -- the `__str__` method calls `render()` automatically. For LiveComponents, use `{{ component.render }}` to ensure the wrapper div is included.
+**Components in templates render via `{{ component }}`** -- the `__str__` method calls `render()` automatically, and this is the recommended spelling for both `Component` and `LiveComponent`. `{{ component.render }}` still resolves (it's the same underlying call) but isn't preferred: it exists because Django's attribute-lookup syntax allows it, not because it does anything `{{ component }}` doesn't. As of [#2503](https://github.com/djust-org/djust/issues/2503), the two spellings render **identical output** on every render path -- verified directly, not assumed.
 
-> **On the `DjustTemplateBackend` and standalone render paths**, a component's markup is currently escaped, so it shows as literal text. Add `|safe` -- `{{ component|safe }}` or `{{ component.render|safe }}` -- until the second half of [#2501](https://github.com/djust-org/djust/issues/2501) lands. The LiveView path is unaffected and needs no `|safe`. Before #2501, `{{ component.render }}` rendered *nothing at all* on those paths.
+> **A component's markup is currently escaped on all four render paths** (`DjustTemplateBackend`, the two standalone `render_template` entry points, and the LiveView path), so it shows as literal text without `|safe`. Add it -- `{{ component|safe }}` or `{{ component.render|safe }}`, either spelling -- until the second half of [#2501](https://github.com/djust-org/djust/issues/2501) lands. An earlier version of this note claimed the LiveView path was unaffected; measured false -- it needs `|safe` exactly like the other three.
 
 ## djust-components (Template Tag Library)
 

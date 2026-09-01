@@ -31,7 +31,7 @@ class MyView(LiveView):
         return {"status_dot": self.status_dot}
 ```
 
-In the template: `{{ status_dot }}` — calls `__str__()` → `render()`.
+In the template: `{{ status_dot }}` — calls `__str__()` → `render()`. Add `|safe` (`{{ status_dot|safe }}`) until [#2501](https://github.com/djust-org/djust/issues/2501)'s escaping fix lands — without it the markup renders as literal text.
 
 ### Rendering Priority
 

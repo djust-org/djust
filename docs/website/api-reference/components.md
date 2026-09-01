@@ -47,7 +47,7 @@ def get_context_data(self, **kwargs):
     return {"status_badge": self.status_badge}
 ```
 
-In the template: `{{ status_badge }}` (calls `render()` via `__str__()`).
+In the template: `{{ status_badge }}` (calls `render()` via `__str__()`). Add `|safe` (`{{ status_badge|safe }}`) until [#2501](https://github.com/djust-org/djust/issues/2501)'s escaping fix lands — without it the markup renders as literal text.
 
 ---
 
