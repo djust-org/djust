@@ -8,6 +8,8 @@ missing attributes, property exceptions, and mixed dict+model
 contexts.
 """
 
+import pytest
+
 from djust._rust import RustLiveView
 
 
@@ -72,16 +74,58 @@ def test_missing_attribute_renders_empty():
     assert html == "[]"
 
 
-def test_property_that_raises_handled_gracefully():
-    """A property raising during access must not crash the render."""
+def test_property_that_raises_propagates_like_django():
+    """A property raising during access surfaces the error (#2506).
+
+    This asserted `== "before[]after"` until #2506. The premise it stated — "a
+    property raising during access must not crash the render" — was never a
+    property of the engine, only of the property half of it. Measured on the
+    pre-#2506 build:
+
+        {{ obj.broken_method }}    -> RuntimeError propagates
+        {{ obj.broken_property }}  -> renders ""
+
+    because the walk's `getattr` step discarded ANY exception while
+    `Context::maybe_call` (ADR-024) has always propagated one raised INSIDE a
+    nullary method. So the two halves of the same lookup disagreed, and this
+    test pinned the disagreeing half.
+
+    Django catches `(TypeError, AttributeError)` at that step and nothing else
+    — and even then re-raises when the name is in `dir(current)`, its "raised
+    by a @property" branch — so both halves now propagate, as Django does.
+    The security reading is the reason it is a fix rather than a preference:
+    an attribute implementing an access check by raising previously failed
+    silently, and for a raise-is-deny check that is silently OPEN.
+    """
 
     class _Bad:
         @property
         def broken(self):
             raise RuntimeError("kaboom")
 
-    html = _render("before[{{ obj.broken }}]after", raw={"obj": _Bad()})
-    assert html == "before[]after"
+        def broken_method(self):
+            raise RuntimeError("kaboom-method")
+
+    with pytest.raises(RuntimeError, match="kaboom"):
+        _render("before[{{ obj.broken }}]after", raw={"obj": _Bad()})
+
+    # The half that already behaved this way, asserted alongside so the
+    # convergence is visible rather than implied.
+    with pytest.raises(RuntimeError, match="kaboom-method"):
+        _render("before[{{ obj.broken_method }}]after", raw={"obj": _Bad()})
+
+
+def test_an_absent_attribute_still_renders_empty():
+    """The narrowing's other half: an ordinary miss is still Django's
+    `VariableDoesNotExist` and still renders `string_if_invalid` (`""`).
+    Without this, a change that propagated everything would pass the test
+    above and break every template with a missing name."""
+
+    class _Plain:
+        present = "here"
+
+    assert _render("[{{ obj.absent }}]", raw={"obj": _Plain()}) == "[]"
+    assert _render("[{{ obj.present }}]", raw={"obj": _Plain()}) == "[here]"
 
 
 def test_mix_dict_and_model_in_same_context():

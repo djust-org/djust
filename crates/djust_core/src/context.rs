@@ -911,6 +911,47 @@ impl Context {
         let Some(raw) = self.raw_py_objects.as_deref() else {
             return Ok(None);
         };
+        // The sidecar is keyed by TOP-LEVEL context name, so every construct
+        // that BINDS a value to a NEW name — `{% for r in rows %}`,
+        // `{% with q=p %}`, `{% include … with q=p %}` — put the loop/with
+        // variable in a frame as a `Value` and left the raw object
+        // unreachable under that name. `{{ rows.0.cls_attr }}` resolved while
+        // `{% for r in rows %}{{ r.cls_attr }}` — the far commoner spelling —
+        // did not.
+        //
+        // `Context::aliases` (#2375) already states exactly the
+        // correspondence needed to get back: `r` IS `rows.<i>`, `q` IS `p`.
+        // Reusing it rather than teaching each binding construct to carry a
+        // raw object is the #1646 cure — one statement of "which context path
+        // this name IS", already written, already guarded. Those guards are
+        // the load-bearing part and they are STRICTER than this use needs:
+        // an alias is registered only for a bare dotted path over a
+        // non-normalised, unfiltered operand, because `Context::is_safe`
+        // resolves an XSS decision through it. A filtered operand (`slice`
+        // shifts, `dictsort` reorders) and a dict/dict-view operand (whose
+        // marks are spelled BY KEY while the loop asserts an INDEX) therefore
+        // register nothing and are NOT reached here either — they stay empty,
+        // tracked at #2504.
+        //
+        // Consulted only when `key`'s OWN head names no sidecar entry, which
+        // keeps the miss-only property this whole change is bounded by: the
+        // sidecar can ADD a resolution and never CHANGE one. In particular a
+        // loop variable that SHADOWS a top-level context name still resolves
+        // against the outer object exactly as it does today (wrongly — a
+        // pre-existing defect this fix deliberately does not move, #2505).
+        let head = key.split('.').next().unwrap_or(key);
+        let expanded;
+        let key = if raw.contains_key(head) {
+            key
+        } else {
+            match self.resolve_alias(key) {
+                Some(path) => {
+                    expanded = path;
+                    expanded.as_str()
+                }
+                None => key,
+            }
+        };
         let parts: Vec<&str> = key.split('.').collect();
         let Some(first) = parts.first().copied() else {
             return Ok(None);
@@ -941,21 +982,64 @@ impl Context {
                 // implement no `__getitem__`, so item access on them falls
                 // through to `getattr` and the serialization floor still governs
                 // — this does not open a floor bypass.
-                let next = current
-                    .get_item(*part)
-                    .or_else(|_| current.getattr(*part))
-                    .or_else(|e| match part.parse::<usize>() {
-                        Ok(idx) => current.get_item(idx),
-                        Err(_) => Err(e),
-                    });
+                //
+                // Each step catches EXACTLY the exception set Django catches
+                // there, and no more (#2506). The walk previously used a bare
+                // `or_else(|_| …)` at every step and a final `Err(_) =>
+                // Ok(None)`, which discarded ANY exception — so a property
+                // that raised `RuntimeError("authz check failed")` rendered
+                // the empty string where Django propagates. That is a
+                // security reading, not only a parity one: an attribute
+                // implementing an authorization check fails OPEN and silently
+                // when its failure is spelled as an exception. `maybe_call`
+                // one step below already propagates a real exception raised
+                // INSIDE a nullary method; this makes the getattr half agree.
+                let next = match current.get_item(*part) {
+                    Ok(v) => Ok(v),
+                    // Django step 1: `except (TypeError, AttributeError,
+                    // KeyError, ValueError, IndexError)` — the last two are
+                    // its own numpy-lookup allowance. Anything else is a real
+                    // error from a `__getitem__` and propagates.
+                    Err(e) if !is_django_item_lookup_error(py, &e) => return Err(e.into()),
+                    Err(_) => match current.getattr(*part) {
+                        Ok(v) => Ok(v),
+                        // Django step 2: `except (TypeError, AttributeError)`.
+                        // A property raising anything else propagates.
+                        Err(e)
+                            if !(e.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+                                || e.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)) =>
+                        {
+                            return Err(e.into());
+                        }
+                        // Django's "Reraise if the exception was raised by a
+                        // @property" branch: `if bit in dir(current): raise`.
+                        // A name that EXISTS on the object but whose access
+                        // raised is a bug in the object, not a missing
+                        // lookup, so it must not fall through to the
+                        // integer-index step and become empty.
+                        Err(e) if name_exists_on(&current, part) => return Err(e.into()),
+                        Err(e) => match part.parse::<usize>() {
+                            // Django step 3: `except (IndexError, ValueError,
+                            // KeyError, TypeError)` → `VariableDoesNotExist`,
+                            // which the caller renders as empty.
+                            Ok(idx) => current.get_item(idx),
+                            Err(_) => Err(e),
+                        },
+                    },
+                };
                 match next {
                     Ok(n) => {
                         current = n;
                     }
-                    Err(_) => {
-                        // Swallow the lookup failure — invalid template paths
-                        // render as empty, matching Django's default
-                        // (`string_if_invalid` = "").
+                    Err(e) => {
+                        // Django's step-3 catch, then `VariableDoesNotExist`:
+                        // an invalid template path renders as empty
+                        // (`string_if_invalid` = ""). A step-3 error OUTSIDE
+                        // that set is a real `__getitem__` failure and
+                        // propagates, for the same reason steps 1 and 2 do.
+                        if !is_django_index_lookup_error(py, &e) {
+                            return Err(e.into());
+                        }
                         return Ok(None);
                     }
                 }
@@ -1066,6 +1150,65 @@ impl Context {
         }
         result
     }
+}
+
+/// Django's step-1 (item-access) catch set, transcribed (#2506).
+///
+/// `Variable._resolve_lookup` opens each segment with
+///
+/// ```python
+/// try:  # dictionary lookup
+///     current = current[bit]
+/// except (TypeError, AttributeError, KeyError, ValueError, IndexError):
+/// ```
+///
+/// — `ValueError`/`IndexError` being its own allowance for numpy arrays.
+/// An exception OUTSIDE this set came from a real `__getitem__` and is a bug
+/// in the object, so Django lets it propagate and so must the sidecar walk.
+/// Rendering it as the empty string is a silent failure, and for a
+/// `__getitem__` that implements an access check it is a silent failure OPEN.
+fn is_django_item_lookup_error(py: Python<'_>, err: &pyo3::PyErr) -> bool {
+    err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyValueError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyIndexError>(py)
+}
+
+/// Django's step-3 (integer-index) catch set, transcribed (#2506).
+///
+/// ```python
+/// try:  # list-index lookup
+///     current = current[int(bit)]
+/// except (IndexError, ValueError, KeyError, TypeError):
+///     raise VariableDoesNotExist(...)
+/// ```
+///
+/// `VariableDoesNotExist` is what the caller renders as `string_if_invalid`
+/// (`""`), so this set — and only this set — is the walk's "resolved to
+/// nothing" answer.
+fn is_django_index_lookup_error(py: Python<'_>, err: &pyo3::PyErr) -> bool {
+    err.is_instance_of::<pyo3::exceptions::PyIndexError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyValueError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)
+}
+
+/// Django's `bit in dir(current)` probe (#2506).
+///
+/// The `# Reraise if the exception was raised by a @property` branch of
+/// `Variable._resolve_lookup`: when `getattr` raised but the name DOES exist
+/// on the object, the failure came from the descriptor rather than from the
+/// name being absent, so Django re-raises instead of falling through to the
+/// integer-index step. Without it a property raising `AttributeError` — the
+/// single commonest way for a property to fail — renders empty.
+///
+/// `dir()` failing is answered `false`, which restores the fall-through: this
+/// probe may only ADD a propagation, never suppress one.
+fn name_exists_on(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> bool {
+    let probe = || -> PyResult<bool> { obj.dir()?.contains(name) };
+    probe().unwrap_or(false)
 }
 
 /// Truthiness of an optional attribute (`getattr(obj, name, False)` +

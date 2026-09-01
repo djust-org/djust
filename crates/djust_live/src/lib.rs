@@ -1769,14 +1769,48 @@ fn django_value_repr_enabled() -> bool {
 /// embedded-crate case) yields an empty sidecar, which is exactly the
 /// pre-#2501 behaviour. A render must not fail because a lookup fallback
 /// could not be built.
+///
+/// The failure is LOGGED rather than only swallowed. The two expected causes
+/// (no `djust.serialization` on the path) and the unexpected one (a value
+/// whose `_protect_sidecar_value` pass raised) degrade to the same silent
+/// empty sidecar, whose only symptom is `{{ obj.attr }}` rendering empty —
+/// indistinguishable from the bug this function exists to fix. One `debug!`
+/// line is the difference between "diagnosable" and "bisect the renderer".
+///
+/// # What this sidecar holds on each caller's path
+///
+/// `render_template` / `render_template_with_dirs` called DIRECTLY are handed
+/// the caller's own dict, so the objects here are LIVE Python objects and the
+/// walk reaches everything Django's `_resolve_lookup` reaches.
+///
+/// `DjustTemplateBackend` (`python/djust/template/rendering.py`) is different
+/// and the difference is deliberate: it runs `serialize_context()` on the
+/// context BEFORE calling `render_template_with_dirs`, so what arrives here
+/// is the SERIALIZED dict. A Django `Model` is already a dict by then, and
+/// `{{ m.greet }}` (a nullary method) resolves through `render_template` and
+/// does NOT resolve through the backend. Building the sidecar here rather
+/// than pre-serialization is what makes the fix reach `_rust.render_template`
+/// itself — a caller that cannot be taught to pass an extra argument — and
+/// the backend's narrower reach is the accepted cost. Do not assume live
+/// models on that path.
 fn entry_sidecar(context: &Bound<'_, PyAny>) -> HashMap<String, Py<PyAny>> {
-    context
+    match context
         .py()
         .import("djust.serialization")
         .and_then(|m| m.getattr("build_render_sidecar"))
         .and_then(|f| f.call1((context,)))
         .and_then(|d| d.extract::<HashMap<String, Py<PyAny>>>())
-        .unwrap_or_default()
+    {
+        Ok(sidecar) => sidecar,
+        Err(err) => {
+            tracing::debug!(
+                "[djust] raw-Python sidecar unavailable for this render; \
+                 object attribute lookups will resolve as empty: {}",
+                err
+            );
+            HashMap::new()
+        }
+    }
 }
 
 #[pyfunction]
