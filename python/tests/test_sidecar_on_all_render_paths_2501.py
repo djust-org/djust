@@ -1751,3 +1751,86 @@ class TestFloorReachesRemainingContainerShapes:
         # different value for it, so "still floored" is an AttributeError.
         with pytest.raises(AttributeError):
             out.a.password
+
+
+class TestTheShellRenderPathHadTheSameWrapperDictBug:
+    """#2512 Stage-11 review: `_render_full_template_inner`'s page-SHELL
+    render (`python/djust/mixins/template.py`) had its own copy of the exact
+    bug #2503 fixed in `rust_bridge.py::_sync_state_to_rust` — the same
+    `rendered_context[key] = {"render": ...}` wrapper-dict shape, on a
+    DIFFERENT render path this repo's own canon (#1646) says to grep for and
+    the #2512 review's Stage 4 planning missed.
+
+    Reachable via `render_full_template(request)` called WITHOUT
+    `serialized_context` — the default, and the exact call shape one of
+    djust's own demo project view pairs uses inconsistently
+    (`examples/demo_project/djust_demos/views/no_template_demo.py` drops it;
+    the `demo_app` sibling forwards it).
+
+    `.render` (the dotted spelling) does NOT resolve on this path in EITHER
+    branch — `temp_rust` has no `set_raw_py_values` sidecar wired here, a
+    pre-existing gap on the ALREADY-correct `serialized_context is not None`
+    branch too. Not introduced or fixed by this change; tracked separately
+    rather than folded in (#1079).
+    """
+
+    @staticmethod
+    def _render(template: str, *, with_serialized_context: bool) -> str:
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory
+
+        from djust.live_view import LiveView
+
+        class _ShellCard(Component):
+            template = None
+
+            def _render_custom(self) -> str:
+                return "<b>shellcard</b>"
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.c = _ShellCard()
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["c"] = self.c
+                return ctx
+
+        _V.template = "<div dj-root>inner</div>"
+        _V._full_template = (
+            f"<html><body><div dj-root>inner</div><nav>{template}</nav></body></html>"
+        )
+
+        factory = RequestFactory()
+        request = factory.get("/")
+        middleware = SessionMiddleware(lambda r: r)
+        middleware.process_request(request)
+        request.session.save()
+
+        view = _V()
+        view.setup(request)
+        view.mount(request)
+        view._full_template = _V._full_template
+
+        serialized_context = view.get_context_data() if with_serialized_context else None
+        return view.render_full_template(request, serialized_context=serialized_context)
+
+    @pytest.mark.django_db
+    @pytest.mark.parametrize(
+        "with_serialized_context", [False, True], ids=["else-branch", "sibling"]
+    )
+    def test_the_bare_spelling_renders_the_component_not_a_dict_repr(self, with_serialized_context):
+        html = self._render("{{ c }}", with_serialized_context=with_serialized_context)
+        assert "{'render':" not in html
+        assert "<b>shellcard</b>" in html
+
+    @pytest.mark.django_db
+    def test_both_branches_now_agree(self):
+        """The invariant #1646 cares about: parallel paths implementing the
+        same feature should agree — even where that agreement is a shared,
+        pre-existing gap (`.render` empty here) rather than full parity with
+        the LiveView/#2501 paths."""
+        for tpl in ("{{ c }}", "{{ c|safe }}", "{{ c.render }}", "{{ c.render|safe }}"):
+            via_else = self._render(tpl, with_serialized_context=False)
+            via_sibling = self._render(tpl, with_serialized_context=True)
+            assert via_else == via_sibling, f"{tpl} diverges between the two branches"
