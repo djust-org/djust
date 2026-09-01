@@ -67,7 +67,7 @@ from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
 from djust import _rust  # noqa: E402
-from djust.components.base import Component  # noqa: E402
+from djust.components.base import Component, LiveComponent  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +225,33 @@ class NumericSegmentRaisingGetattr:
         raise AttributeError(name)
 
     def __getitem__(self, key: object) -> object:
+        raise KeyError(key)
+
+
+class IndexRaisingGetItem:
+    """The one shape only Django's STEP-3 catch set answers.
+
+    Its `__getattr__` raises `AttributeError` — in step 2's set, so that arm
+    declines — for a name absent from `dir()`, so the "raised by a @property"
+    re-raise declines too. The walk therefore reaches the integer-index step,
+    where `__getitem__(0)` raises out of step 3's
+    `(IndexError, ValueError, KeyError, TypeError)` set. Without the outer
+    check that error becomes `VariableDoesNotExist` and renders empty; Django
+    propagates it.
+
+    The string form of `__getitem__` raises `KeyError` so step 1 is a legal
+    miss and the walk gets past it.
+    """
+
+    def __init__(self) -> None:
+        self.pub = "public"
+
+    def __getattr__(self, name: str) -> object:
+        raise AttributeError(name)
+
+    def __getitem__(self, key: object) -> object:
+        if isinstance(key, int):
+            raise RuntimeError(f"index authz failed: {key}")
         raise KeyError(key)
 
 
@@ -432,6 +459,124 @@ class TestTheSerializationFloorStillHolds:
             built["user"].password
         assert built["user"].username == "alice"
 
+    #: Every container shape a context value can arrive in, and the depth at
+    #: which the model sits. `{"user": u}` was already filtered before the
+    #: descent; the other five were not, and the two-level rows are why the
+    #: fix is a full descent rather than the one level the two cited leaks
+    #: would have needed.
+    CONTAINER_SHAPES = [
+        pytest.param(lambda u: {"user": u}, ("user",), id="top-level"),
+        pytest.param(lambda u: {"users": [u]}, ("users", 0), id="in-a-list"),
+        pytest.param(lambda u: {"d": {"u": u}}, ("d", "u"), id="in-a-dict"),
+        pytest.param(lambda u: {"t": (u,)}, ("t", 0), id="in-a-tuple"),
+        pytest.param(lambda u: {"s": {"a": [u]}}, ("s", "a", 0), id="two-levels-dict-then-list"),
+        pytest.param(lambda u: {"s": [{"u": u}]}, ("s", 0, "u"), id="two-levels-list-then-dict"),
+    ]
+
+    @staticmethod
+    def _walk(root, path):
+        cur = root
+        for seg in path:
+            cur = cur[seg] if isinstance(seg, int) or isinstance(cur, dict) else getattr(cur, seg)
+        return cur
+
+    @pytest.mark.parametrize(("build_ctx", "path"), CONTAINER_SHAPES)
+    @pytest.mark.parametrize("field", ["password", "is_superuser", "get_session_auth_hash"])
+    def test_the_floor_descends_into_containers(self, build_ctx, path, field):
+        """The floor is applied at EVERY depth of the sidecar, not just the top.
+
+        This builder deliberately admits `list`/`dict` (unlike the LiveView
+        path's, which excludes them) so `{{ rows.0.cls_attr }}` resolves — and
+        admitting them is what opened the hole: `_protect_sidecar_value` ran
+        only on the top-level value, so a model one level down reached the
+        custom-tag sink RAW. Measured before the descent, against a real
+        `User`:
+
+            {'user': u}      -> password filtered      (correct)
+            {'users': [u]}   -> 'pbkdf2$SECRET'        LEAK
+            {'d': {'u': u}}  -> 'pbkdf2$SECRET'        LEAK
+            {'deep':{'a':[u]}} -> 'pbkdf2$SECRET'      LEAK
+
+        All three were filtered before #2501 admitted containers at all.
+        """
+        from djust.serialization import build_render_sidecar
+
+        built = build_render_sidecar(build_ctx(self._user()))
+        with pytest.raises(AttributeError):
+            getattr(self._walk(built, path), field)
+
+    @pytest.mark.parametrize(("build_ctx", "path"), CONTAINER_SHAPES)
+    def test_a_safe_field_survives_the_descent(self, build_ctx, path):
+        """The crossed half. Without it every assertion above would also pass
+        against a descent that replaced the containers with nothing."""
+        from djust.serialization import build_render_sidecar
+
+        built = build_render_sidecar(build_ctx(self._user()))
+        assert self._walk(built, path).username == "alice"
+
+    def test_the_descent_does_not_mutate_the_callers_own_containers(self):
+        """The values here are the caller's live objects. Rewriting a user's
+        list during a render would be a side effect of looking at it, so the
+        descent returns NEW containers."""
+        from djust.serialization import build_render_sidecar
+
+        user = self._user()
+        rows = [user]
+        mapping = {"u": user}
+        build_render_sidecar({"rows": rows, "d": mapping})
+        assert rows[0] is user
+        assert mapping["u"] is user
+
+    def test_a_cyclic_context_terminates(self):
+        """Identity-guarded, so a self-referential container returns rather
+        than recursing forever. A render must not hang on a shape a caller is
+        free to construct."""
+        from djust.serialization import build_render_sidecar
+
+        cycle: list = [self._user()]
+        cycle.append(cycle)
+        built = build_render_sidecar({"c": cycle})
+        with pytest.raises(AttributeError):
+            built["c"][0].password
+
+    def test_a_queryset_is_wrapped_not_walked(self):
+        """Descending into a `Manager`/`QuerySet` would execute the query at
+        build time on EVERY render. It is wrapped and left alone; the proxy
+        protects the models it yields when something actually iterates it."""
+        from djust.serialization import _SidecarQuerySetProxy, build_render_sidecar
+
+        built = build_render_sidecar({"qs": User.objects.all()})
+        assert isinstance(built["qs"], _SidecarQuerySetProxy)
+
+    def test_the_limit_of_the_build_time_pass_is_pinned_not_assumed(self):
+        """The claim the docstring makes, falsification-tested (#1867).
+
+        The descent reaches models inside CONTAINERS. It does NOT reach a
+        model held as an attribute of a plain object — `_protect_sidecar_value`
+        returns a non-model unchanged, and rewriting arbitrary user objects is
+        not something a build-time pass can do. Asserted in its DIVERGING
+        direction so a future reader cannot mistake the floor for total, and
+        so a change that DOES close it turns this red rather than passing
+        silently (#1859).
+
+        This is not a regression from #2501: the LiveView-path builder has the
+        identical exposure, asserted alongside. The TEMPLATE sink is covered
+        regardless of shape, because the walk re-protects after every segment
+        — which is the half that actually is total.
+        """
+        from djust.serialization import _protect_sidecar_value, build_render_sidecar
+
+        user = self._user()
+        built = build_render_sidecar({"p": Presenter(user=user)})
+        # The limit, in its diverging direction.
+        assert built["p"].user.password == user.password
+        # Same on the LiveView path's own builder primitive — so the limit is
+        # a property of `_protect_sidecar_value`, not of this descent.
+        assert _protect_sidecar_value(Presenter(user=user)).user.password == user.password
+        # And the sink that IS total.
+        assert render_template("{{ p.user.password }}", {"p": Presenter(user=user)}) == ""
+        assert render_template("{{ p.user.username }}", {"p": Presenter(user=user)}) == "alice"
+
     @pytest.mark.django_db
     def test_a_manager_and_a_queryset_are_still_wrapped_after_the_import_hoist(self):
         """`_protect_sidecar_value` is now on the render hot path (once per
@@ -459,6 +604,39 @@ class TestTheSerializationFloorStillHolds:
         # And the negative half, so the assertions above cannot pass by
         # wrapping everything.
         assert _protect_sidecar_value(Presenter()).__class__ is Presenter
+
+    @pytest.mark.parametrize(("build_ctx", "path"), CONTAINER_SHAPES)
+    def test_the_floor_holds_at_the_REAL_custom_tag_sink(self, build_ctx, path):
+        """Measured at the sink itself, not at the builder.
+
+        `build_render_sidecar` is where the floor is applied, but the sink is
+        `djust_templates::registry` — three sites that `set_item` these objects
+        straight into the Python context a `{% tag %}` handler receives,
+        OVERWRITING the serialized entry. That path never touches the walk, so
+        the walk's per-step re-protection cannot cover it and only a build-time
+        pass can. Asserting at the builder alone would leave "does it actually
+        reach the handler that way" unmeasured.
+        """
+        seen: dict = {}
+
+        class _Probe:
+            def render(self, args, *rest):
+                seen.clear()
+                seen.update(rest[-1])
+                return ""
+
+        _rust.register_tag_handler("floorprobe_2501", _Probe())
+        try:
+            _rust.render_template("{% floorprobe_2501 %}", build_ctx(self._user()))
+        finally:
+            _rust.unregister_tag_handler("floorprobe_2501")
+
+        reached = self._walk(seen, path)
+        for field in ("password", "is_superuser", "get_session_auth_hash"):
+            with pytest.raises(AttributeError):
+                getattr(reached, field)
+        # The handler still gets a usable object, not a hole.
+        assert reached.username == "alice"
 
     @pytest.mark.parametrize("render", FIXED_PATHS)
     @pytest.mark.parametrize("source", ["{{ p._private }}", "{{ p.__class__ }}", "{{ p._meta }}"])
@@ -772,6 +950,39 @@ class TestDjangosExceptionSetsAtEverySegment:
         assert "0" not in dir(NumericSegmentRaisingGetattr())
 
     @pytest.mark.parametrize("render", FIXED_PATHS)
+    def test_step_3s_catch_set_is_independently_reachable(self, render):
+        """The third overlapping mechanism, gated off on its own.
+
+        Removing the outer `is_django_index_lookup_error` check left every
+        other case in this class AND the fail-open class green — steps 1 and 2
+        and the `dir()` branch between them answered them all. Three mechanisms
+        shadowing each other is one fix and two decorations, and no test can
+        tell them apart while all three exist. This is the shape only step 3
+        answers: an `AttributeError` from `__getattr__` for a name absent from
+        `dir()` (so both earlier arms decline) on a segment that parses as an
+        integer, where `__getitem__(0)` then raises out of step 3's set.
+        """
+        source = "{{ o.0 }}"
+        with pytest.raises(Exception) as django_exc:
+            django_render(source, {"o": IndexRaisingGetItem()})
+        assert isinstance(django_exc.value, RuntimeError)
+
+        with pytest.raises(Exception) as djust_exc:
+            render(source, {"o": IndexRaisingGetItem()})
+        assert "index authz failed: 0" in str(djust_exc.value)
+
+    def test_the_index_raising_premises(self):
+        """Each premise the case above depends on, measured. If any drifts the
+        test would silently start exercising a different arm."""
+        obj = IndexRaisingGetItem()
+        assert "0" not in dir(obj)
+        with pytest.raises(KeyError):
+            obj["0"]
+        with pytest.raises(RuntimeError):
+            obj[0]
+        assert _rust.crosses_as_encoded(obj) is False
+
+    @pytest.mark.parametrize("render", FIXED_PATHS)
     def test_a_raising_getitem_propagates_too(self, render):
         """Step 1's set, which is WIDER than step 2's — `KeyError` there is a
         miss, not an error, so only the out-of-set exception propagates."""
@@ -913,6 +1124,215 @@ class TestTheLiveViewPathsComponentExclusion:
         """
         html = self._render("<div>{{ c }}</div>")
         assert "{&#x27;render&#x27;:" in html or "{'render':" in html
+
+
+class TestComponentMutatorsAreNeverAutoCalled:
+    """#2507 — a template lookup must not run a component's lifecycle.
+
+    #2501 un-excluded `Component`/`LiveComponent` from the LiveView sidecar so
+    a component's class attributes, properties and nullary methods resolve.
+    None of the component MUTATORS carried `alters_data`, so auto-call
+    invoked them: `{{ c.unmount }}` ran the component's user-authored cleanup
+    mid-render and `{{ c.trigger_update }}` re-entered the parent view's
+    `_trigger_update`. That is precisely what `alters_data` exists for, and
+    why Django stamps it on `Model.save` / `QuerySet.delete`.
+
+    The fix is a class-level guard, not five decorators, because stamping the
+    base methods alone guards almost nobody: `alters_data` lives on the
+    FUNCTION, and overriding these methods is the documented way to use a
+    component (`unmount`'s own docstring says *"Override this method to
+    perform cleanup actions"*). Measured: with only the base stamped, a
+    subclass's overridden `unmount` still ran. `TemplateMutatorGuard`'s
+    `__init_subclass__` re-stamps every override at every depth, which makes
+    the marker a property of the NAME for the whole hierarchy (#1646).
+    """
+
+    MUTATORS = ["mount", "unmount", "update", "trigger_update", "clear_context_providers"]
+
+    @staticmethod
+    def _widget(calls: list):
+        """A component that OVERRIDES the mutators — the shape a base-only
+        stamp fails to guard, and the shape every real component has."""
+
+        class Widget(LiveComponent):
+            template = None
+
+            def _render_custom(self) -> str:
+                return "<b>w</b>"
+
+            def unmount(self) -> None:
+                calls.append("unmount")
+                super().unmount()
+
+            def mount(self, **kwargs) -> None:
+                calls.append("mount")
+
+            def update(self, **kwargs):
+                calls.append("update")
+                return self
+
+            def trigger_update(self) -> None:
+                calls.append("trigger_update")
+
+            def clear_context_providers(self) -> None:
+                calls.append("clear_context_providers")
+
+        return Widget
+
+    @pytest.mark.parametrize("render", ALL_PATHS)
+    @pytest.mark.parametrize("method", MUTATORS)
+    def test_an_overridden_mutator_is_refused(self, render, method):
+        calls: list = []
+        widget = self._widget(calls)()
+        # Construction runs `mount` — a legitimate DIRECT call, and the reason
+        # the list is cleared here rather than asserted empty from the start.
+        calls.clear()
+        assert render("[{{ c.%s }}]" % method, {"c": widget}) == "[]"
+        assert calls == [], f"{method} was CALLED during the render"
+
+    @pytest.mark.parametrize("method", MUTATORS)
+    def test_the_marker_survives_two_levels_of_subclassing(self, method):
+        """`__init_subclass__` runs at every depth, so a grandchild override is
+        stamped too. A guard that covered only direct subclasses would pass
+        every test above and miss the second generation."""
+        calls: list = []
+        base = self._widget(calls)
+
+        grand = type("Grand", (base,), {method: lambda self, *a, **k: calls.append("grand")})
+        assert getattr(getattr(grand, method), "alters_data", False) is True
+
+    @pytest.mark.parametrize("method", MUTATORS)
+    def test_the_base_method_carries_it_too(self, method):
+        """A component that does NOT override still has to be guarded."""
+        assert getattr(getattr(LiveComponent, method), "alters_data", False) is True
+
+    def test_the_read_only_spellings_are_deliberately_unstamped(self):
+        """`{{ c.render }}` is the documented spelling #2501 exists to fix, and
+        `get_context_data` is read-only. Stamping them would close the bug by
+        breaking the feature — so their ABSENCE from the guard set is asserted,
+        not left to inspection."""
+        from djust._template_guards import ALTERS_DATA_COMPONENT_METHODS
+
+        assert "render" not in ALTERS_DATA_COMPONENT_METHODS
+        assert "get_context_data" not in ALTERS_DATA_COMPONENT_METHODS
+        assert getattr(LiveComponent.render, "alters_data", False) is False
+        assert getattr(LiveComponent.get_context_data, "alters_data", False) is False
+
+    def test_the_guard_set_covers_every_nullary_mutator_on_the_hierarchy(self):
+        """A count-canary over the actual surface (#1125). A mutator added to
+        `Component`/`LiveComponent` later, with no required arguments, is
+        auto-callable from a template the moment it exists — this test names
+        the whole nullary surface so a new one fails here rather than shipping
+        callable.
+        """
+        import inspect
+
+        from djust._template_guards import ALTERS_DATA_COMPONENT_METHODS
+
+        found = set()
+        for cls in (Component, LiveComponent):
+            for name in dir(cls):
+                if name.startswith("_"):
+                    continue
+                attr = getattr(cls, name, None)
+                if not callable(attr):
+                    continue
+                try:
+                    params = inspect.signature(attr).parameters
+                except (TypeError, ValueError):
+                    continue
+                required = [
+                    p
+                    for k, p in params.items()
+                    if k != "self"
+                    and p.default is p.empty
+                    and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+                ]
+                if not required:
+                    found.add(name)
+
+        # Exactly: the guarded mutators plus the two deliberately read-only
+        # spellings. Anything else is new and unclassified.
+        assert found == ALTERS_DATA_COMPONENT_METHODS | {"render", "get_context_data"}
+
+    def test_a_direct_python_call_is_unaffected(self):
+        """`alters_data` gates TEMPLATE auto-call only. The framework's own
+        lifecycle dispatch and `ComponentMixin.update_component` (#1947) call
+        these methods directly and must keep working — without this, the guard
+        could have been 'fixed' by making the methods unusable."""
+        calls: list = []
+        widget = self._widget(calls)()
+        # Construction already dispatched `mount` through the framework's own
+        # lifecycle — the first proof that the marker gates templates only.
+        assert calls == ["mount"]
+        widget.update(foo=1)
+        widget.trigger_update()
+        widget.unmount()
+        assert calls == ["mount", "update", "trigger_update", "unmount"]
+
+
+class TestAGuardExpressionCannotFailOpen:
+    """#2506, at the operand site the swallow was most dangerous.
+
+    A raising property inside an `{% if %}` gate is worse than a raising one
+    inside `{{ }}`: the walk resolved it to EMPTY, `not empty` is True, and the
+    gated content rendered. Django's `smartif` answers the same expression
+    False and shows the else-branch, so djust failed OPEN where Django failed
+    closed — and only on the PROPERTY path, since a method guard already
+    propagated through `Context::maybe_call`.
+    """
+
+    SOURCE = "{% if not d.doc.is_restricted %}{{ d.doc.title }}{% else %}(withheld){% endif %}"
+
+    class _Doc:
+        title = "Q3 layoffs memo"
+
+        @property
+        def is_restricted(self):
+            from django.core.exceptions import PermissionDenied
+
+            raise PermissionDenied("acl backend down")
+
+        def is_restricted_method(self):
+            from django.core.exceptions import PermissionDenied
+
+            raise PermissionDenied("acl backend down")
+
+    class _Holder:
+        def __init__(self, doc):
+            self.doc = doc
+
+    @pytest.mark.parametrize("render", FIXED_PATHS)
+    @pytest.mark.parametrize("guard", ["is_restricted", "is_restricted_method"])
+    def test_the_gated_content_never_renders(self, render, guard):
+        source = self.SOURCE.replace("is_restricted", guard)
+        ctx = {"d": self._Holder(self._Doc())}
+
+        # Django's own answer: the else-branch. Never the protected title.
+        assert django_render(source, dict(ctx)) == "(withheld)"
+
+        # djust raises rather than rendering, which is the same direction and
+        # louder. The assertion that matters is that the title cannot appear.
+        with pytest.raises(Exception) as exc:
+            render(source, dict(ctx))
+        assert "acl backend down" in str(exc.value)
+
+    @pytest.mark.parametrize("render", FIXED_PATHS)
+    def test_a_non_raising_gate_still_works_both_ways(self, render):
+        """Non-vacuity: without this, every assertion above would pass against
+        an engine that refused the whole template."""
+
+        class _Open:
+            title = "public memo"
+            is_restricted = False
+
+        class _Shut(_Open):
+            is_restricted = True
+
+        for doc, expected in ((_Open(), "public memo"), (_Shut(), "(withheld)")):
+            ctx = {"d": self._Holder(doc)}
+            assert django_render(self.SOURCE, dict(ctx)) == expected
+            assert render(self.SOURCE, dict(ctx)) == expected
 
 
 class TestTheAutoCallKillSwitch:

@@ -12,6 +12,7 @@ import threading
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional, overload
 
 from ._deprecation import warn_deprecated
+from ._template_guards import alters_data  # noqa: F401 — re-export
 
 
 logger = logging.getLogger(__name__)
@@ -1119,4 +1120,5 @@ __all__ = [
     "client_state",
     "background",
     "on_mount",
+    "alters_data",
 ]

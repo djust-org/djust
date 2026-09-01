@@ -1034,21 +1034,136 @@ def build_render_sidecar(context: Dict[str, Any]) -> Dict[str, Any]:
     caller does not have to know the sidecar exists — the three paths get it
     from the dict they already pass.
 
-    Every value is routed through :func:`_protect_sidecar_value` here, at the
+    Every value is routed through :func:`_protect_sidecar_tree` here, at the
     point of entry, rather than left to the walk. The walk protects what IT
     resolves, but the sidecar has a second sink: the custom-tag bridge
-    (``djust_templates::registry``) injects these objects straight into the
-    Python context a ``{% tag %}`` handler receives, overwriting the
-    serialized entry. Protecting at build time is what makes ONE floor govern
-    both sinks (#1646) — the same discipline the LiveView-path builder in
-    ``mixins/rust_bridge.py`` already applies for the same reason (#1986).
+    (``djust_templates::registry``, three injection sites) sets these objects
+    straight into the Python context a ``{% tag %}`` handler receives,
+    OVERWRITING the serialized entry. That sink never touches the walk, so a
+    build-time pass is the only thing standing between a handler and a raw
+    model.
+
+    **The pass descends into containers**, and that is not an embellishment —
+    it is the difference between a floor and a decoration. This builder
+    deliberately admits ``list`` / ``dict`` (see :data:`_SIDECAR_SKIP_TYPES`),
+    unlike the LiveView-path builder in ``mixins/rust_bridge.py`` which
+    excludes them, so a top-level-only pass left a model one level down
+    completely unprotected:
+
+    ===========================  ==========================================
+    context                      ``password`` a tag handler could read
+    ===========================  ==========================================
+    ``{"user": u}``              filtered — ``AttributeError``
+    ``{"users": [u]}``           **LEAKED** before this descent
+    ``{"d": {"u": u}}``          **LEAKED** before this descent
+    ``{"deep": {"a": [u]}}``     **LEAKED** before this descent
+    ===========================  ==========================================
+
+    **What this pass does NOT reach, stated because measuring it is the only
+    way to know** (#1867 — a prose invariant has to be falsification-tested,
+    not written until it sounds true). A model held as an ATTRIBUTE of a plain
+    object is not reached: ``build_render_sidecar({"p": Presenter(user=u)})``
+    hands a tag handler a raw ``p``, and ``p.user.password`` is readable. That
+    is NOT a regression from this diff and NOT something the descent could fix
+    — ``_protect_sidecar_value`` returns a non-model unchanged, so the
+    LiveView-path builder has always had the identical exposure, and reaching
+    it would mean rewriting arbitrary user objects. The two sinks differ here
+    and the difference is real:
+
+    * the TEMPLATE sink is covered regardless of shape, because
+      ``Context::protect_sidecar`` re-protects after every segment —
+      ``{{ p.user.password }}`` renders ``''`` and ``{{ p.user.username }}``
+      renders ``alice``;
+    * the CUSTOM-TAG sink is covered for models reached through containers
+      (the table above) and not through arbitrary objects.
+
+    So the honest claim is *"the build-time pass restores container parity
+    with the LiveView path; the walk is what makes the template sink total"* —
+    not *"one floor governs both sinks"*, which is what this docstring said
+    while the container leak was live. Pinned by
+    ``TestTheSerializationFloorStillHolds`` in
+    ``python/tests/test_sidecar_on_all_render_paths_2501.py``.
+
+    All three were filtered before #2501 admitted containers at all, so the
+    leak was introduced by admitting them. The two-level row is why the fix is
+    a full descent rather than one level: fixing only the depths a reviewer
+    happened to cite leaves the next depth open, which is the shape of the
+    defect rather than an instance of it.
     """
     sidecar: Dict[str, Any] = {}
     for key, value in context.items():
         if value is None or isinstance(value, _SIDECAR_SKIP_TYPES):
             continue
-        sidecar[key] = _protect_sidecar_value(value)
+        sidecar[key] = _protect_sidecar_tree(value)
     return sidecar
+
+
+#: Depth bound for :func:`_protect_sidecar_tree`. A context nested deeper than
+#: this is not a shape a template reaches by hand, and an unbounded walk over
+#: an adversarial structure is a render-time DoS. Reaching the bound returns
+#: the value UNPROTECTED, which is the pre-#2501 exposure for that depth and
+#: not a new one — but it is logged, because a silent floor is the failure
+#: mode this whole function exists to close.
+_SIDECAR_MAX_DEPTH = 12
+
+
+def _protect_sidecar_tree(value: Any, _depth: int = 0, _seen: Optional[set] = None) -> Any:
+    """:func:`_protect_sidecar_value`, applied at every depth of a container.
+
+    Returns a NEW container rather than mutating in place: the values here are
+    the caller's own live objects, and rewriting a user's list during a render
+    would be a side effect of looking at it.
+
+    A ``Manager`` / ``QuerySet`` is wrapped by :func:`_protect_sidecar_value`
+    and is NOT descended into — it is not a ``list``/``dict``, so the isinstance
+    checks below decline it, and descending would execute the query at
+    build time on every render. ``_SidecarQuerySetProxy`` protects the models
+    it yields when something actually iterates it.
+
+    Cycles are answered by identity, so a self-referential context returns the
+    already-visited container unchanged rather than recursing forever.
+    """
+    protected = _protect_sidecar_value(value)
+    # A proxy is terminal: it enforces the floor on its own attribute access
+    # and iteration, so there is nothing under it for this pass to reach.
+    if protected is not value:
+        return protected
+    if not isinstance(value, (list, tuple, dict, set, frozenset)):
+        return value
+    if _depth >= _SIDECAR_MAX_DEPTH:
+        logger.debug(
+            "[djust] sidecar floor stopped at depth %s for a %s; values below it are unprotected",
+            _depth,
+            type(value).__name__,
+        )
+        return value
+    if _seen is None:
+        _seen = set()
+    if id(value) in _seen:
+        return value
+    _seen.add(id(value))
+    try:
+        if isinstance(value, dict):
+            # Keys are left alone: a dotted lookup reaches a VALUE, and a
+            # model used as a key is not a shape any template path reads.
+            return {k: _protect_sidecar_tree(v, _depth + 1, _seen) for k, v in value.items()}
+        items = [_protect_sidecar_tree(v, _depth + 1, _seen) for v in value]
+        if isinstance(value, tuple):
+            # `_replace`-style namedtuples reject positional reconstruction;
+            # falling back to the original is the pre-#2501 exposure, not a
+            # new one, and over-protecting is not worth crashing a render.
+            try:
+                return type(value)(items)
+            except TypeError:
+                return tuple(items)
+        if isinstance(value, (set, frozenset)):
+            try:
+                return type(value)(items)
+            except TypeError:
+                return value
+        return items
+    finally:
+        _seen.discard(id(value))
 
 
 def _protect_sidecar_value(value: Any) -> Any:

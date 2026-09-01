@@ -10,6 +10,8 @@ from typing import Callable, Dict, Any, List, Optional, Type, cast
 from abc import ABC
 from django.utils.safestring import mark_safe
 
+from djust._template_guards import TemplateMutatorGuard, alters_data
+
 from .assigns import (
     Assign,
     AssignValidationError,
@@ -64,7 +66,7 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
         return cast(str, template.render(django_context))
 
 
-class Component(ABC):
+class Component(TemplateMutatorGuard, ABC):
     """
     Base class for stateless presentation components with automatic performance optimization.
 
@@ -205,6 +207,7 @@ class Component(ABC):
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
+    @alters_data
     def update(self, **kwargs: Any) -> "Component":
         """
         Update component properties after initialization.
@@ -390,7 +393,7 @@ class Component(ABC):
 from djust._context_provider import ContextProviderMixin
 
 
-class LiveComponent(ContextProviderMixin):
+class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
     """
     Base class for creating reusable, reactive components.
 
@@ -688,6 +691,7 @@ class LiveComponent(ContextProviderMixin):
 
         return f"{self.__class__.__name__.lower()}_{uuid.uuid4().hex[:8]}"
 
+    @alters_data
     def mount(self, **kwargs: Any) -> None:
         """
         Initialize component state.
@@ -765,6 +769,7 @@ class LiveComponent(ContextProviderMixin):
         # provider. See :meth:`LiveView.provide_context`.
         self._djust_context_parent = parent
 
+    @alters_data
     def update(self, **kwargs: Any) -> "LiveComponent":
         """
         Update component properties after initialization.
@@ -795,6 +800,7 @@ class LiveComponent(ContextProviderMixin):
             setattr(self, key, value)
         return self
 
+    @alters_data
     def trigger_update(self) -> None:
         """
         Trigger a re-render of the parent LiveView.
@@ -831,6 +837,7 @@ class LiveComponent(ContextProviderMixin):
                 }
             )
 
+    @alters_data
     def unmount(self) -> None:
         """
         Clean up component when it's being removed.
