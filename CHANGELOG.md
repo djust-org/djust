@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Object attributes, properties and nullary methods resolve in templates on the three non-LiveView render paths (#2501).** Reported by an external user in discussion #2437: `{{ component.render }}` rendered nothing. djust's object conversion carried only the instance `__dict__`, so class attributes, properties and Django's callable auto-call were all unreachable — a real `Component`'s `__dict__` holds only `_`-prefixed internals, so its `render` was simply absent. Django's `Variable._resolve_lookup` does dictionary lookup → attribute lookup → auto-call → list-index; djust reached only the first. The fix walks the **existing** `Context::resolve` raw-Python sidecar lazily, consulted **only when `Context::get` misses**, so it can add a resolution and never change one — which is what bounds the change to cells that previously rendered empty. `{% for %}` and `{% with %}` bound names reach it via alias expansion. Attributes are not measured at conversion time: an eager sweep would evaluate every property getter and call every nullary method on every render, and an earlier eager `__dict__` walk is on record as having segfaulted on an ordinary presenter object.
+- **`{{ component.render|safe }}` now renders the component** — it was empty before, which is the spelling the reporter had to reach for. `{{ component }}` and `{{ component.render }}` now *resolve* but are still escaped; that half is the `serialize_value` / `normalize_django_value` drift, tracked as PR 2 of #2501.
+- **A template attribute lookup no longer swallows every exception (#2506).** The walk caught any error from `get_item`/`getattr`; Django catches a specific tuple. A property raising `PermissionDenied` rendered blank, so `{% if not doc.is_restricted %}` failed **open** where Django's `smartif` fails closed — and this change made that consequential by making the guarded content resolvable. Now narrowed to Django's sets, so such a property surfaces instead of silently passing the gate. djust raises where Django renders the `{% else %}` branch; that remaining divergence is in the fail-closed direction.
+
+### Security
+
+- **The serialization floor now descends into containers (#2501).** The floor was applied only at the top level of the raw-Python sidecar. That is sufficient for the walk sink, which re-protects at every step, but not for the custom-tag bridge, which injects the sidecar wholesale — so a model one level inside a list or dict reached a `{% tag %}` handler unfiltered and `{{ users.0.password }}` exposed the password hash. `{"user": u}` was filtered; `{"users": [u]}` and `{"d": {"u": u}}` were not. Found by the Stage 8 security check, reproduced against a real `django.contrib.auth.models.User`, and re-verified filtered on all three shapes after the fix.
+- **Component mutators are no longer auto-callable from a template (#2507).** Making component attributes resolvable meant `{{ c.unmount }}` invoked the component's user-authored cleanup *during render*, and `{{ c.trigger_update }}` re-entered the parent view's update mid-render. `clear_context_providers`, `mount`, `trigger_update`, `unmount` and `update` now carry Django's `alters_data` marker on both `Component` and `LiveComponent` — the same marker Django stamps on `Model.save` and `QuerySet.delete`. `LiveView`'s own mutators were never reachable; the view is not in the sidecar.
+
+### Changed
+
+- **A template can now reach further into a context object than it could before (#2501).** This is Django parity — Django resolves these and the developer placed the object in the context — but it is a real widening: `{{ settings_obj.SECRET_KEY }}` renders where it previously rendered empty. Two consequences worth knowing: a nullary method that raises is now a 500 where the cell used to render `""`, and a `{% tag %}` handler that received `ctx["user"]` as a dict now receives a `_SidecarModelProxy` on these three paths, so `ctx["user"]["username"]` breaks. The `_`-prefix refusal (#2436) applies at every segment, so `{{ o.__class__ }}` and `{{ o.__init__.__globals__ }}` stay refused.
+
 ## [1.2.0rc1] - 2026-08-31
 
 ### Added
