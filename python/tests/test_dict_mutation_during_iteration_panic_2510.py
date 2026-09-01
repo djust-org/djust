@@ -291,3 +291,82 @@ class TestReReviewFoundAFourthSite:
         result = _rust.serialize_models_to_list([d])
         assert result == [{"z": "stringified", "k2": "v2"}]
         assert d.get("sneaky") is True
+
+
+class TestASecondReReviewFoundTheOriginalBugStillLiveAtTheTopLevel:
+    """A THIRD review round found the most significant instance yet: the
+    literal ORIGINAL #2510 trigger — a top-level context dict mutating
+    itself — was still exploitable, because fixing every NESTED arm inside
+    `impl FromPyObject for Value` (`public_dict_attrs`, the nested-`PyDict`
+    arm) does nothing for the OUTERMOST container. `render_template`,
+    `render_template_with_dirs`, and `RustLiveView.update_state` all took
+    their context as `HashMap<String, Value>` (directly, or via a local
+    `.extract()` call) — PyO3's OWN blanket `HashMap<K, V>: FromPyObject`
+    impl does the identical live-iterator-plus-recursive-extraction as
+    every hand-written loop this bug class was found in, and it is
+    dependency code: no `impl FromPyObject for Value` fix can ever reach
+    it, no `guard_panic` wrapper can catch it (the panic happens in PyO3's
+    own FFI argument extraction, before any function body runs).
+
+    Fixed by changing each entry point to accept `&Bound<PyAny>`/cast to
+    `&Bound<PyDict>` and doing the conversion by hand via
+    `snapshot_context_to_value_hashmap`, mirroring every other fix in this
+    file. `update_state`'s Rust-only sibling caller (`update_state_rust`,
+    used by other Rust crates with no Python object at all, so no
+    reentrancy risk) required splitting the shared logic into
+    `apply_state_update` so its signature could stay unchanged.
+    """
+
+    def test_render_template_top_level_mutation_does_not_panic(self):
+        d: dict = {}
+        d["trigger"] = _IndexTrigger(d)
+        d["other"] = "y"
+        assert _rust.render_template("{{ other }}", d) == "y"
+        assert d.get("late") is True
+
+    def test_render_template_with_dirs_top_level_mutation_does_not_panic(self):
+        d: dict = {}
+        d["trigger"] = _IndexTrigger(d)
+        d["other"] = "y"
+        assert _rust.render_template_with_dirs("{{ other }}", d, []) == "y"
+
+    def test_update_state_top_level_mutation_does_not_panic(self):
+        d: dict = {}
+        d["trigger"] = _IndexTrigger(d)
+        d["other"] = "y"
+        view = _rust.RustLiveView("<p>{{ other }}</p>", [])
+        view.update_state(d)
+        assert view.render() == "<p>y</p>"
+        assert d.get("late") is True
+
+
+class TestTheTwoHandWrittenClassBSitesTheThirdRoundFound:
+    """The same review round found two more hand-written-loop instances,
+    both unrelated to the `HashMap<String, Value>` parameter-type class
+    above: `registry.rs`'s assign-tag-handler result coercion (a PUBLIC
+    extension point — a handler author's own return value), and
+    `serialize_context`/`serialize_python_value`.
+    """
+
+    def test_an_assign_handler_whose_return_value_mutates_itself_does_not_panic(self):
+        class Handler:
+            def render(self, args, context):
+                out: dict = {}
+                out["trigger"] = _IndexTrigger(out)
+                out["other"] = "y"
+                return out
+
+        _rust.register_assign_tag_handler("test2510assign", Handler())
+        try:
+            html = _rust.render_template("{% test2510assign %}{{ other }}", {})
+            assert html == "y"
+        finally:
+            _rust.unregister_assign_tag_handler("test2510assign")
+
+    def test_serialize_context_does_not_panic(self):
+        d: dict = {}
+        d["trigger"] = _IndexTrigger(d)
+        d["other"] = "y"
+        result = _rust.serialize_context(d)
+        assert result == {"trigger": 42, "other": "y"}
+        assert d.get("late") is True
