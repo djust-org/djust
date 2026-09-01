@@ -59,9 +59,20 @@ pub fn serialize_models_fast(py: Python<'_>, models_data: &Bound<'_, PyList>) ->
 
 /// Convert a Python dict to serde_json::Value
 fn python_dict_to_json(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<JsonValue> {
-    let mut map = Map::new();
+    // Snapshotted into an owned `Vec` BEFORE any recursive conversion
+    // (#2510 sibling — the same live-iterator-plus-reentrant-extraction bug
+    // fixed in `djust_core::lib::rs`'s `impl FromPyObject for Value`; this
+    // crate's own converter had the identical shape, found by Stage-11
+    // review of that PR having grepped only `djust_core`). `dict.iter()` is
+    // a LIVE PyO3 iterator; converting one value can run arbitrary Python
+    // (e.g. `__index__`), and if that mutates THIS SAME dict, the live
+    // iterator's invariant breaks — confirmed via
+    // `_rust.serialize_models_fast([d])` with a value whose `__index__`
+    // adds a key to its own parent dict.
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+    let mut map = Map::with_capacity(pairs.len());
 
-    for (key, value) in dict.iter() {
+    for (key, value) in pairs {
         let key_str: String = key.extract()?;
         let json_val = python_to_json(py, &value)?;
         map.insert(key_str, json_val);
@@ -125,18 +136,24 @@ fn python_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<JsonValue>
 
     // Handle list
     if let Ok(list) = obj.cast::<PyList>() {
-        let items: Vec<JsonValue> = list
+        // `.iter().map(...).collect()` still drives the live PyList
+        // iterator ONE STEP AT A TIME as each closure call returns — the
+        // laziness of `.map()` does not snapshot anything. Collect the raw
+        // elements first (#2510 sibling), matching the dict-side fix above.
+        let raw: Vec<Bound<'_, PyAny>> = list.iter().collect();
+        let items: Vec<JsonValue> = raw
             .iter()
-            .map(|item| python_to_json(py, &item))
+            .map(|item| python_to_json(py, item))
             .collect::<PyResult<_>>()?;
         return Ok(JsonValue::Array(items));
     }
 
     // Handle tuple (same as list)
     if let Ok(tuple) = obj.cast::<PyTuple>() {
-        let items: Vec<JsonValue> = tuple
+        let raw: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
+        let items: Vec<JsonValue> = raw
             .iter()
-            .map(|item| python_to_json(py, &item))
+            .map(|item| python_to_json(py, item))
             .collect::<PyResult<_>>()?;
         return Ok(JsonValue::Array(items));
     }
@@ -164,7 +181,13 @@ pub fn serialize_models_to_list(
 ) -> PyResult<Py<PyList>> {
     let result_list = PyList::empty(py);
 
-    for item in models_data.iter() {
+    // Snapshotted before recursing (#2510 sibling — found by the SAME
+    // review that found the other three djust_live sites, in the file
+    // that PR already touched: `serialize_models_fast` was fixed;
+    // `serialize_models_to_list`, its sibling export, routes through these
+    // entirely separate, unpatched helpers).
+    let raw: Vec<Bound<'_, PyAny>> = models_data.iter().collect();
+    for item in raw {
         // Pass through dicts after normalization
         if let Ok(dict) = item.cast::<PyDict>() {
             let normalized = normalize_dict(py, dict)?;
@@ -179,7 +202,14 @@ pub fn serialize_models_to_list(
 fn normalize_dict(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<Py<PyDict>> {
     let result = PyDict::new(py);
 
-    for (key, value) in dict.iter() {
+    // Snapshotted into an owned `Vec` BEFORE any recursive
+    // `normalize_value` call (#2510 sibling). `dict.iter()` is a LIVE PyO3
+    // iterator; `normalize_value`'s fallback arm calls `value.str()?`,
+    // which invokes `__str__` — arbitrary Python that can mutate THIS SAME
+    // dict. Confirmed via `serialize_models_to_list([d])` with a value
+    // whose `__str__` adds a key to its own parent dict.
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+    for (key, value) in pairs {
         let key_str: String = key.extract()?;
         let normalized_value = normalize_value(py, &value)?;
         result.set_item(key_str, normalized_value)?;
@@ -211,8 +241,11 @@ fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 
     // Handle list
     if let Ok(list) = value.cast::<PyList>() {
+        // Snapshotted before recursing (#2510 sibling) — `.try_iter()?`
+        // driven lazily by the loop is just as live as `.iter()`.
+        let raw: Vec<PyResult<Bound<'_, PyAny>>> = list.try_iter()?.collect();
         let result_list = PyList::empty(py);
-        for item in list.try_iter()? {
+        for item in raw {
             let normalized = normalize_value(py, &item?)?;
             result_list.append(normalized)?;
         }
@@ -221,8 +254,9 @@ fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAn
 
     // Handle tuple (convert to list for JSON compatibility)
     if let Ok(tuple) = value.cast::<PyTuple>() {
+        let raw: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
         let result_list = PyList::empty(py);
-        for item in tuple.iter() {
+        for item in raw {
             let normalized = normalize_value(py, &item)?;
             result_list.append(normalized)?;
         }

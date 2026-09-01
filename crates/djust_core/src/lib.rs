@@ -2007,10 +2007,28 @@ fn public_dict_attrs(ob: &Bound<'_, PyAny>) -> Option<IndexMap<ObjectKey, Value>
     // The `_`-prefix rule is [`is_public_attr_name`], so this builder and the
     // key-only probe beside it cannot disagree about which names are public
     // (#1646).
+    //
+    // Snapshotted into an owned `Vec` BEFORE any recursive
+    // `v.extract::<Value>()` call (#2510). `items.iter()` is a LIVE PyO3
+    // iterator directly over `ob.__dict__`; extracting one attribute's VALUE
+    // can run arbitrary Python (any dunder check on an unresolved
+    // `SimpleLazyObject` — e.g. Django's `request.user` before anything has
+    // forced it — triggers `_setup()`). Django's own
+    // `AuthenticationMiddleware.get_user` resolves it by doing
+    // `request._cached_user = auth.get_user(request)`, which writes a NEW
+    // key into `request.__dict__` — the EXACT dict this loop is iterating.
+    // The template need not even reference `.user`: this walk dumps the
+    // WHOLE `__dict__` regardless of which attribute was asked for, so any
+    // object with an unresolved lazy attribute anywhere in its `__dict__`
+    // hits this, not just one whose lazy attribute happens to be requested.
+    // Collecting into a `Vec` first fully drains the PyO3 iterator before any
+    // Python callback can run, so a later mutation has nothing left to
+    // invalidate.
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = items.iter().collect();
     // Attribute names, so the keys stay `ObjectKey::Str` — a `__dict__`
     // cannot have a non-string key.
     let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
-    for (k, v) in items.iter() {
+    for (k, v) in pairs {
         let Ok(k) = k.extract::<String>() else {
             continue;
         };
@@ -2988,8 +3006,22 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // its own `repr` — so `{% for k in d %}` iterated that string BY
             // CHARACTER and `{{ d|length }}` counted 14. The key now carries
             // its type, so such a dict is a real mapping.
-            let mut m: IndexMap<ObjectKey, Value> = IndexMap::with_capacity(d.len());
-            for (k, v) in d.iter() {
+            // Snapshotted into an owned `Vec` BEFORE any recursive
+            // `.extract::<Value>()` call (#2510). `d.iter()` is a LIVE PyO3
+            // iterator directly over the dict; `.extract::<Value>()` can run
+            // arbitrary Python (any dunder check on an unresolved
+            // `SimpleLazyObject`, e.g. `__bool__`, triggers Django's lazy
+            // `_setup()`). If that side effect mutates THIS SAME dict — which
+            // is exactly what happens when a dict's own value is a lazy
+            // object whose resolution writes back into the dict — the live
+            // iterator's size check fails mid-iteration and PyO3 panics
+            // ("dictionary changed size during iteration"). Collecting into a
+            // `Vec` first fully drains the iterator before any Python
+            // callback runs, so a later mutation has nothing left to
+            // invalidate.
+            let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = d.iter().collect();
+            let mut m: IndexMap<ObjectKey, Value> = IndexMap::with_capacity(pairs.len());
+            for (k, v) in pairs {
                 m.insert(py_object_key(&k), v.extract::<Value>().ok()?);
             }
             Some(m)

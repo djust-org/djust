@@ -368,28 +368,19 @@ impl RustLiveViewBackend {
     }
 
     /// Update state with a dictionary
-    fn update_state(&mut self, updates: HashMap<String, Value>) {
-        // Replacing a value REVOKES the safety granted to the old one (#2300).
-        //
-        // Relying on the caller to re-send the full safe-key set every render
-        // is the weaker guarantee: it holds only while every call site
-        // remembers, and the bug this fixes was exactly a call site that did
-        // not. Tying the grant to the value instead makes staleness
-        // structurally impossible — a grant cannot outlive the value it was
-        // granted for, whoever is driving the API.
-        //
-        // Scoped per key rather than wholesale, because `update_state` is a
-        // partial merge: clearing everything would revoke grants for keys this
-        // call never touched. Updating `p` drops `p` and its `p.0` / `p.items`
-        // descendants; a grant on an untouched `q` survives.
-        if !self.safe_keys.is_empty() {
-            for key in updates.keys() {
-                self.safe_keys.remove(key);
-                let prefix = format!("{key}.");
-                self.safe_keys.retain(|k| !k.starts_with(&prefix));
-            }
-        }
-        self.state.extend(updates);
+    ///
+    /// Takes `&Bound<PyAny>` rather than `HashMap<String, Value>` directly
+    /// (#2510, round 4): the latter is extracted via PyO3's own blanket
+    /// `HashMap<K, V>: FromPyObject` impl, which holds a live iterator over
+    /// the TOP-LEVEL dict and is exactly the shape this whole bug class is
+    /// about — see `snapshot_context_to_value_hashmap`'s doc comment for the
+    /// full reasoning. `update_state` is the literal call this issue's
+    /// `AuthenticationMiddleware`/`request.user` repro goes through.
+    fn update_state(&mut self, updates: &Bound<'_, PyAny>) -> PyResult<()> {
+        let updates: HashMap<String, Value> =
+            snapshot_context_to_value_hashmap(updates.cast::<PyDict>()?)?;
+        self.apply_state_update(updates);
+        Ok(())
     }
 
     /// Set the context keys that are safe (skip auto-escaping) for THIS
@@ -1357,7 +1348,38 @@ impl RustLiveViewBackend {
 
     /// Update state (Rust API)
     pub fn update_state_rust(&mut self, updates: HashMap<String, Value>) {
-        self.update_state(updates)
+        self.apply_state_update(updates)
+    }
+
+    /// Shared core of `update_state` (the Python entry point) and
+    /// `update_state_rust` (the pure-Rust entry point, used by other Rust
+    /// crates like djust_actors, which have no Python object at all — the
+    /// `HashMap<String, Value>` they build has no live Python container
+    /// backing it, so it carries no #2510-class reentrancy risk).
+    /// `update_state` does the safe, snapshot-based Python-dict-to-HashMap
+    /// conversion FIRST (#2510, round 4) and then delegates here.
+    fn apply_state_update(&mut self, updates: HashMap<String, Value>) {
+        // Replacing a value REVOKES the safety granted to the old one (#2300).
+        //
+        // Relying on the caller to re-send the full safe-key set every render
+        // is the weaker guarantee: it holds only while every call site
+        // remembers, and the bug this fixes was exactly a call site that did
+        // not. Tying the grant to the value instead makes staleness
+        // structurally impossible — a grant cannot outlive the value it was
+        // granted for, whoever is driving the API.
+        //
+        // Scoped per key rather than wholesale, because `update_state` is a
+        // partial merge: clearing everything would revoke grants for keys this
+        // call never touched. Updating `p` drops `p` and its `p.0` / `p.items`
+        // descendants; a grant on an untouched `q` survives.
+        if !self.safe_keys.is_empty() {
+            for key in updates.keys() {
+                self.safe_keys.remove(key);
+                let prefix = format!("{key}.");
+                self.safe_keys.retain(|k| !k.starts_with(&prefix));
+            }
+        }
+        self.state.extend(updates);
     }
 
     /// Render the template (Rust API)
@@ -1751,6 +1773,55 @@ fn django_value_repr_enabled() -> bool {
     djust_core::django_value_repr()
 }
 
+/// Convert a Python dict-shaped context to `HashMap<String, Value>` without
+/// PyO3's own blanket `HashMap<K, V>: FromPyObject` impl (#2510, round 4).
+///
+/// That blanket impl (`pyo3-0.29.2/src/conversions/std/map.rs`) does the
+/// SAME live-iterator-plus-recursive-extraction as every hand-written loop
+/// this bug class was found in — it holds a live `PyDict` iterator over the
+/// TOP-LEVEL context dict and calls `Value::extract()` on each value as it
+/// goes. Fixing every NESTED arm inside `impl FromPyObject for Value`
+/// (`public_dict_attrs`, the nested-`PyDict` arm) does not protect this
+/// outer layer: if converting one TOP-LEVEL value runs Python that adds a
+/// key to the TOP-LEVEL dict itself (not a dict nested inside one of its
+/// values), the blanket impl's iterator still panics — confirmed via
+/// `render_template("{{ other }}", {"trigger": <a value whose __index__
+/// adds "late" to its own parent dict>, "other": "y"})`. Nor could that
+/// panic have been caught by `guard_panic`: it happened in PyO3's own FFI
+/// argument extraction, before any hand-written function body — including
+/// a `guard_panic` closure — ever ran. Snapshotting into an owned `Vec`
+/// first, exactly like every other site this bug class was found in, is
+/// the only fix. Now that the conversion IS a hand-written call, the two
+/// render entry points (`render_template`, `render_template_with_dirs`)
+/// make it INSIDE their `guard_panic` closure, so anything that does panic
+/// in here surfaces as a `RuntimeError` rather than a `PanicException`
+/// (PR #2514 review, finding 4; pinned by
+/// `TestTheSnapshotRunsInsideGuardPanic`).
+///
+/// # The contract the snapshot creates
+///
+/// The dict is read ONCE, before any value is converted, so a conversion
+/// side effect on the dict itself is never observed by this call:
+///
+/// - a key ADDED to the dict during conversion is not seen — it is absent
+///   from the returned map, and `{{ late }}` renders empty;
+/// - a key REMOVED from the dict during conversion is still converted from
+///   the snapshot, and renders its (now-deleted) value.
+///
+/// Both halves are pinned by `TestTheSnapshotContractIsPinned` in
+/// `python/tests/test_dict_mutation_during_iteration_panic_2510.py`.
+fn snapshot_context_to_value_hashmap(
+    context: &Bound<'_, PyDict>,
+) -> PyResult<HashMap<String, Value>> {
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = context.iter().collect();
+    let mut map = HashMap::with_capacity(pairs.len());
+    for (key, value) in pairs {
+        let key_str: String = key.extract()?;
+        map.insert(key_str, value.extract::<Value>()?);
+    }
+    Ok(map)
+}
+
 /// Build the raw-Python sidecar for a standalone render entry point (#2501).
 ///
 /// The three non-LiveView render paths all take their context as a plain
@@ -1820,9 +1891,14 @@ fn render_template(
     context: &Bound<'_, PyAny>,
     auto_call: Option<bool>,
 ) -> PyResult<String> {
-    let state: HashMap<String, Value> = context.extract()?;
-    let sidecar = entry_sidecar(context);
     guard_panic("render_template", move || {
+        // Inside the closure, not before it (PR #2514 review, finding 4):
+        // the conversion runs arbitrary Python through every value's
+        // dunders, and a panic in it must surface as a `RuntimeError`, not
+        // a `PanicException`, exactly like a panic in the render itself.
+        let state: HashMap<String, Value> =
+            snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
+        let sidecar = entry_sidecar(context);
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
             cached.clone()
@@ -1870,10 +1946,13 @@ fn render_template_with_dirs(
     safe_keys: Option<Vec<String>>,
     auto_call: Option<bool>,
 ) -> PyResult<String> {
-    let state: HashMap<String, Value> = context.extract()?;
-    let sidecar = entry_sidecar(context);
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
+
+        // See `render_template` for why this is inside the closure.
+        let state: HashMap<String, Value> =
+            snapshot_context_to_value_hashmap(context.cast::<PyDict>()?)?;
+        let sidecar = entry_sidecar(context);
 
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
@@ -1966,14 +2045,30 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
     } else if let Ok(s) = obj.extract::<String>() {
         Ok(JsonValue::String(s))
     } else if let Ok(list) = obj.cast::<PyList>() {
-        let mut vec = Vec::new();
-        for item in list.iter() {
+        // Snapshotted into an owned `Vec` before recursing, for the same
+        // SHAPE as the dict arm below (#2510 sibling) — but not for the
+        // same reason, and an earlier version of this comment claimed a
+        // panic here that cannot happen (PR #2514 review, finding 2).
+        // PyO3's `BoundListIterator` (`pyo3-0.29.2/src/types/list.rs`,
+        // `next_unsynchronized`) re-clamps to `length.min(list.len())` on
+        // every step, so a list that grows or shrinks under a live
+        // iterator simply ends early or late; only `BoundDictIterator`
+        // checks the size and panics. Kept as a snapshot anyway: it is the
+        // one shape every converter in this bug class now uses, it makes
+        // the set of elements converted independent of what a conversion
+        // side effect does to the list, and it does not lean on a clamp
+        // PyO3 documents nowhere and could change.
+        let items: Vec<Bound<'_, PyAny>> = list.iter().collect();
+        let mut vec = Vec::with_capacity(items.len());
+        for item in items {
             vec.push(python_to_json_value(py, &item)?);
         }
         Ok(JsonValue::Array(vec))
     } else if let Ok(dict) = obj.cast::<PyDict>() {
-        let mut map = serde_json::Map::new();
-        for (key, value) in dict.iter() {
+        // Same snapshot-before-recurse fix, dict side (#2510 sibling).
+        let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+        let mut map = serde_json::Map::with_capacity(pairs.len());
+        for (key, value) in pairs {
             let key_str = key.extract::<String>()?;
             map.insert(key_str, python_to_json_value(py, &value)?);
         }
@@ -2373,9 +2468,15 @@ pub fn get_actor_stats() -> SupervisorStatsPy {
 
 /// Convert Python dict to Rust HashMap<String, Value>
 fn python_dict_to_hashmap(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, Value>> {
-    let mut map = HashMap::new();
+    // Snapshotted BEFORE any recursive conversion (#2510 sibling — the
+    // actor-dispatch path's own copy of the live-iterator-plus-reentrant-
+    // extraction bug fixed in djust_core's `impl FromPyObject for Value`;
+    // this is the SECOND Python->Value converter #1646 already calls out
+    // above, and it had the identical shape).
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+    let mut map = HashMap::with_capacity(pairs.len());
 
-    for (key, value) in dict.iter() {
+    for (key, value) in pairs {
         let key_str = key.extract::<String>()?;
         let rust_value = python_to_value(&value)?;
         map.insert(key_str, rust_value);
@@ -2440,8 +2541,13 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 
     // Tuple — before List, since a tuple is also a sequence (#2203).
     if let Ok(tuple) = obj.cast::<PyTuple>() {
-        let mut vec = Vec::new();
-        for item in tuple.iter() {
+        // Snapshotted before recursion for uniformity with the dict arm
+        // below (#2510 sibling) — same shape, NOT the same hazard: a tuple
+        // cannot change size, and PyO3's list/tuple iterators clamp rather
+        // than panic (see the list arm of `python_to_json_value`).
+        let items: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
+        let mut vec = Vec::with_capacity(items.len());
+        for item in items {
             vec.push(python_to_value(&item)?);
         }
         return Ok(Value::Tuple(vec));
@@ -2449,8 +2555,9 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 
     // List
     if let Ok(list) = obj.cast::<PyList>() {
-        let mut vec = Vec::new();
-        for item in list.iter() {
+        let items: Vec<Bound<'_, PyAny>> = list.iter().collect();
+        let mut vec = Vec::with_capacity(items.len());
+        for item in items {
             vec.push(python_to_value(&item)?);
         }
         return Ok(Value::List(vec));
@@ -2467,8 +2574,18 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         // while the other path dropped it to a repr. Both now keep the key's
         // type (#2339), and `test_both_python_to_value_paths_share_one_key_extractor`
         // pins that they share the extractor rather than agreeing by luck.
-        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> = indexmap::IndexMap::new();
-        for (key, value) in dict.iter() {
+        //
+        // Snapshotted into an owned `Vec` BEFORE recursing into
+        // `python_to_value` (#2510 sibling): `dict.iter()` is a LIVE PyO3
+        // iterator, converting one value can run arbitrary Python, and if
+        // that mutates THIS SAME dict the live iterator panics
+        // ("dictionary changed size during iteration") — confirmed via
+        // `handle.mount(..., params)` with a value whose `__index__` adds a
+        // key to its own parent dict.
+        let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
+        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> =
+            indexmap::IndexMap::with_capacity(pairs.len());
+        for (key, value) in pairs {
             map.insert(djust_core::py_object_key(&key), python_to_value(&value)?);
         }
         return Ok(Value::Object(map));
@@ -2674,7 +2791,10 @@ fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<
     guard_panic("serialize_context_py", move || {
         let result_dict = PyDict::new(py);
 
-        for (key, value) in context.iter() {
+        // Snapshotted before recursing (#2510, round 4) — same shape as
+        // every other site this bug class was found in.
+        let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = context.iter().collect();
+        for (key, value) in pairs {
             let key_str: String = key.extract()?;
             let serialized_value = serialize_python_value(py, &value)?;
             result_dict.set_item(key_str, serialized_value)?;
@@ -2702,8 +2822,9 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
 
     // Lists and tuples: recursively serialize
     if let Ok(list) = value.cast::<PyList>() {
+        let raw: Vec<Bound<'_, PyAny>> = list.iter().collect();
         let result_list = PyList::empty(py);
-        for item in list.iter() {
+        for item in raw {
             let serialized = serialize_python_value(py, &item)?;
             result_list.append(serialized)?;
         }
@@ -2711,18 +2832,21 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
     }
 
     if let Ok(tuple) = value.cast::<PyTuple>() {
+        let raw: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
         let result_list = PyList::empty(py);
-        for item in tuple.iter() {
+        for item in raw {
             let serialized = serialize_python_value(py, &item)?;
             result_list.append(serialized)?;
         }
         return Ok(result_list.into());
     }
 
-    // Dicts: recursively serialize
+    // Dicts: recursively serialize. Snapshotted before recursing (#2510,
+    // round 4) — same shape as every other site this bug class was found in.
     if let Ok(dict) = value.cast::<PyDict>() {
+        let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
         let result_dict = PyDict::new(py);
-        for (k, v) in dict.iter() {
+        for (k, v) in pairs {
             let key_str: String = k.extract()?;
             let serialized = serialize_python_value(py, &v)?;
             result_dict.set_item(key_str, serialized)?;

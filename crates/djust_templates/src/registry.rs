@@ -909,7 +909,29 @@ pub fn call_assign_handler_with_py_sidecar(
         // whole render. Warn once per handler when the coercion fails
         // so the developer sees the silent-empty pattern rather than
         // hunting for why their assign tag didn't set anything (#805).
-        match result.extract::<HashMap<String, djust_core::Value>>() {
+        //
+        // NOT `result.extract::<HashMap<String, Value>>()` (#2510, round 4):
+        // that blanket impl holds a live PyDict iterator over the handler's
+        // OWN returned dict while recursively converting each value, and a
+        // handler-authored value whose conversion mutates that SAME dict
+        // (e.g. an unresolved lazy object) panics exactly like every other
+        // site this bug class was found in. This is a PUBLIC extension
+        // point (`register_assign_tag_handler`) — a handler author's own
+        // return value is exactly the kind of object we can't assume is
+        // well-behaved. Snapshot into an owned `Vec` first, matching every
+        // other fix for this bug class.
+        let snapshotted: Result<HashMap<String, djust_core::Value>, PyErr> = (|| {
+            let dict = result.cast::<pyo3::types::PyDict>()?;
+            let pairs: Vec<(Bound<'_, pyo3::PyAny>, Bound<'_, pyo3::PyAny>)> =
+                dict.iter().collect();
+            let mut map = HashMap::with_capacity(pairs.len());
+            for (key, value) in pairs {
+                let key_str: String = key.extract()?;
+                map.insert(key_str, value.extract::<djust_core::Value>()?);
+            }
+            Ok(map)
+        })();
+        match snapshotted {
             Ok(map) => Ok(map),
             Err(err) => {
                 // None is the documented "no context updates" sentinel;

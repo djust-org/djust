@@ -422,8 +422,17 @@ impl ViewActor {
             })?;
 
             // Convert to HashMap and update backend
-            let mut state = HashMap::new();
-            for (key, value) in context_dict.iter() {
+            // Snapshotted into an owned `Vec` BEFORE any recursive
+            // `value.extract::<Value>()` call (#2510 sibling). The INNER
+            // conversion is already fixed (djust_core's `impl FromPyObject
+            // for Value`), but this OUTER `context_dict.iter()` is still a
+            // LIVE PyO3 iterator: if any value's conversion runs Python
+            // that mutates `context_dict` itself, the live iterator's
+            // invariant breaks regardless of the inner fix.
+            let pairs: Vec<(pyo3::Bound<'_, pyo3::PyAny>, pyo3::Bound<'_, pyo3::PyAny>)> =
+                context_dict.iter().collect();
+            let mut state = HashMap::with_capacity(pairs.len());
+            for (key, value) in pairs {
                 let key_str: String = key.extract().map_err(|e| {
                     ActorError::Python(format!("Failed to extract key as string: {e}"))
                 })?;
