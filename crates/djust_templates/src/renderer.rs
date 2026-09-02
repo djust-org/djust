@@ -291,11 +291,22 @@ fn filter_output_is_safe(filter_name: &str, produced_safe: bool, input_was_safe:
     // `mark_safe()`d its result without the static `is_safe=True` flag (#1660).
     produced_safe
         || SAFE_OUTPUT_FILTERS.contains(&filter_name)
-        || crate::filter_registry::is_custom_filter_safe(filter_name)
         // Django's case 1 (#2274): `is_safe=True` AND the input was `SafeData`.
         // BOTH terms are load-bearing — dropping `input_was_safe` would mark
         // `{{ hostile|lower }}` safe and is a direct XSS.
-        || (input_was_safe && IS_SAFE_FILTERS.contains(&filter_name))
+        //
+        // The same rule applied to a PROJECT filter (#2548): a custom filter's
+        // `is_safe=True` is "keeps a safe input safe", never "makes the output
+        // safe". Until #2548 the custom-filter term stood on its own, outside
+        // this conjunction, so `{{ hostile|shout }}` came out raw for any
+        // plain-return `is_safe=True` filter (and for `humanize`'s `intcomma`).
+        // One arm for both name sources: a future fourth term has to pick a
+        // side of `input_was_safe &&`, and the only terms outside it are the
+        // two that EARN the grant — a runtime `SafeString`, or a built-in that
+        // escapes internally.
+        || (input_was_safe
+            && (IS_SAFE_FILTERS.contains(&filter_name)
+                || crate::filter_registry::is_custom_filter_safe(filter_name)))
 }
 
 /// Returns ``true`` if the (parser-preserved) filter argument string is a
@@ -1518,9 +1529,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Auto-escape unless:
             // 1. |safe is the last filter (matches Django behavior)
             // 2. The variable is marked safe in the context (like Django's SafeData)
-            // 3. A filter that produces already-escaped/safe output is in the chain
-            //    (built-in safe_output_filters list OR a custom filter
-            //    registered with ``is_safe=True`` per #1121).
+            // 3. The LAST filter earned the grant: a built-in that escapes
+            //    internally (`SAFE_OUTPUT_FILTERS`), or an `is_safe=True` filter
+            //    — built-in OR custom (#1121) — whose INPUT was already safe
+            //    (#2274, #2548). A static `is_safe=True` alone never grants it.
             // 4. The final value is a runtime ``SafeString`` — a custom filter
             //    ``mark_safe()``d its result at runtime without the static
             //    ``is_safe=True`` flag (#1660). Additive: only ever marks MORE

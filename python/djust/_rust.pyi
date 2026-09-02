@@ -665,8 +665,11 @@ def register_custom_filter(
     Args:
         name: Filter name as used in templates (``{{ x|name }}``).
         callable: Django filter callable (``(value, arg=None) -> str``).
-        is_safe: Django ``filter.is_safe`` attribute — when True,
-            output bypasses auto-escape (filter returns SafeString).
+        is_safe: Django ``filter.is_safe`` attribute — when True, a
+            SafeData INPUT stays safe through the filter (Django's
+            ``is_safe and isinstance(obj, SafeData)`` rule, #2548). Unsafe
+            input is still escaped; a filter that produces markup must
+            return ``mark_safe(...)``/``format_html(...)`` itself.
         needs_autoescape: Django ``filter.needs_autoescape`` attribute —
             when True, ``autoescape=True`` is passed as a kwarg.
     """

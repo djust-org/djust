@@ -767,6 +767,13 @@ fn safe_filter_nested_dict_without_safe_escapes() {
 // `Context::mark_safe` — cannot be reached through `_rust.render_template`,
 // because `normalize_django_value` flattens a `SafeString` to a plain `str`
 // before it ever crosses the boundary. So it is pinned here or nowhere.
+//
+// The CUSTOM-filter half of the same rule (#2548 — a project filter registered
+// `is_safe=True` must not mark UNSAFE input safe) is pinned from Python in
+// `python/tests/test_custom_filter_is_safe_requires_safe_input_2548.py`: a
+// Python callable cannot be registered from a plain `cargo test` binary
+// (no `auto-initialize`), and a fake registry would test the fake. The Rust
+// helper both halves go through is `renderer::filter_output_is_safe`.
 
 fn safe_ctx(key: &str, val: &str) -> Context {
     let mut ctx = ctx_with(key, val);
