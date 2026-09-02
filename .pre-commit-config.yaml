@@ -206,7 +206,7 @@ repos:
         name: check generated template-backend support lists (#2533)
         entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh scripts/generate-template-backend-lists.py'
         language: system
-        files: ^(docs/TEMPLATE_BACKEND\.md|crates/djust_templates/src/(parser|filter_arity)\.rs|python/djust/template_tags/.*\.py|scripts/generate-template-backend-lists\.py|uv\.lock)$
+        files: ^(docs/TEMPLATE_BACKEND\.md|crates/djust_templates/src/(parser|filter_arity)\.rs|python/djust/template_tags/.*\.py|python/djust/template_filters\.py|scripts/generate-template-backend-lists\.py|uv\.lock)$
         pass_filenames: false
 
   # Lockfile self-entry version sync — catches the drift class #1487 cited

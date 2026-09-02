@@ -183,6 +183,7 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 
 ⚠️ **Not all Django features supported yet:**
 - Several Django built-in tags and most of Django's `{% load %}` library tags (`i18n`, `l10n`, `tz`, `cache`) are not implemented; the generated lists below are the authority
+- Django's `{% load %}` library *filters* (`unlocalize`, `language_name`, `utc`, …) are not implemented natively; they resolve only through the filter bridge, which needs a `DjangoTemplates` engine in `TEMPLATES` next to djust (the fallback engine in the Quick Start). The bridged `tz` filters resolve but currently render empty output (#2541)
 - A project's own `{% load %}` tag libraries are not loaded by the plain backend (the scoreboard's custom-library ERRORs below); register a handler with `djust.template_tags.register` instead
 
 ### Supported and unsupported tags and filters
@@ -206,9 +207,13 @@ Reference: Django 5.2.16 — `django.template.defaultfilters`, `defaulttags` and
 
 **Library tags — unsupported (17):** i18n `blocktrans`, `blocktranslate`, `get_available_languages`, `get_current_language`, `get_current_language_bidi`, `get_language_info`, `get_language_info_list`, `language`, `trans`, `translate`; l10n `localize`; tz `get_current_timezone`, `localtime`, `timezone`; static `get_media_prefix`, `get_static_prefix`; cache `cache`
 
-**Library filters — supported (0):** none
+**Library filters — native (0):** none
 
-**Library filters — unsupported (9):** i18n `language_bidi`, `language_name`, `language_name_local`, `language_name_translated`; l10n `localize`, `unlocalize`; tz `localtime`, `timezone`, `utc`
+**Library filters — bridged from a configured `DjangoTemplates` engine (9):** i18n `language_bidi`, `language_name`, `language_name_local`, `language_name_translated`; l10n `localize`, `unlocalize`; tz `localtime`, `timezone`, `utc`
+
+Bridged filters are Django's own callables, forwarded to the Rust engine by the filter bridge (#1121) from the `template_libraries` of a `django.template.backends.django.DjangoTemplates` engine in `TEMPLATES` — the fallback engine the recommended configuration above includes. On a djust-only `TEMPLATES` there is nothing to forward and each raises `Unknown filter`.
+
+**Library filters — unsupported (0):** none
 
 **djust extensions (not Django tags, not scored):** `dj_flash`, `djust_client_config`, `djust_markdown`, `djust_offline_indicator`, `djust_pwa_head`, `djust_pwa_manifest`, `djust_sw_register`, `live_render`
 <!-- /generated:template-backend-lists -->
@@ -222,7 +227,7 @@ The backend is scored against Django's own template test suite: `tests/template_
 
 Two result kinds are counted separately because they are different work:
 
-- **ERROR**: the test could not run to an assertion. An unsupported tag, an attribute the backend cannot express, or a crash. Top classes in the baseline: `autoescape` (79), `blocktrans` (34), `ifchanged` (24), `trans` (19), `cache` (15), `querystring` (14). Every Django built-in or library tag in those classes appears in the generated unsupported list above; `scripts/generate-template-backend-lists.py --cross-check .django-src/last-run.txt` reconciles the two.
+- **ERROR**: the test could not run to an assertion. An unsupported tag, an attribute the backend cannot express, or a crash. Top classes in the baseline: `autoescape` (79), `blocktrans` (34), `ifchanged` (24), `trans` (19), `cache` (15), `querystring` (14). Every Django built-in or library tag in those classes appears in the generated unsupported list above; `scripts/generate-template-backend-lists.py --cross-check .django-src/last-run.txt` reconciles the two. Four generated-unsupported names never appear on the scoreboard because no `template_tests` case reaches them as a tag error — `get_current_timezone`, `localize`, `localtime`, `timezone` — and for those the generator is the authority (a test pins that this is the whole never-exercised set).
 - **FAIL**: the test ran and the output was wrong. The largest class (111) is a `TemplateSyntaxError` that Django raises at parse time and djust does not. The rest are output mismatches such as `string_if_invalid` not honoured (#2518) and `{% if x|default_if_none:y %}` evaluating false when `x` is undefined (#2528). The `<!--dj-if-->` marker that leaked into plain-backend output was fixed in #2519; it accounted for five of the six cases it broke, and the sixth is the #2528 shape.
 
 Seven `template_tests` cases segfault the interpreter (a `DjustTemplate` or a type object placed in the context, the #2516 reference-cycle class). The runner isolates each one: a crash records the in-flight test as `ERROR: process crashed`, skips it and every finished test, and relaunches, so nothing after a crash is lost.

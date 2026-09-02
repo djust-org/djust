@@ -15,6 +15,14 @@ The lists are derived from the engine's own registries, never written by hand:
 * Django's sets — ``django.template.defaultfilters`` / ``defaulttags`` /
   ``loader_tags`` (the engine's ``default_builtins``) and the ``i18n``, ``l10n``,
   ``tz``, ``static`` and ``cache`` libraries, at the installed Django version.
+* Bridged library filters — detected, not assumed: the generator configures a
+  ``DjangoTemplates`` engine next to the djust backend, runs the real
+  Django→Rust filter bridge (``template_filters.bootstrap_django_filters``,
+  #1121, the same call ``DjustConfig.ready()`` and the backend's render path
+  make) and reads back ``djust._rust.get_registered_custom_filters()``. A
+  library filter that lands in the Rust registry is *bridged*: it resolves
+  only when a ``DjangoTemplates`` engine is configured alongside djust and
+  raises ``Unknown filter`` on a djust-only ``TEMPLATES``.
 
 Modes::
 
@@ -29,7 +37,7 @@ deterministic: sorted names, counts and the Django version only, no timestamps.
 
 Exit codes: 0 clean, 1 the doc's block is stale (or the cross-check disagrees),
 2 a structural error (missing markers, stale extraction regex, no compiled
-extension).
+extension, a registry name that is not a plain identifier, an unwritable doc).
 """
 
 from __future__ import annotations
@@ -37,8 +45,10 @@ from __future__ import annotations
 import argparse
 import difflib
 import importlib
+import os
 import re
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,8 +88,13 @@ PARSER_SENTINELS = frozenset({"if", "for", "block"})
 ARITY_HEADER = "const ARITY: &[(&str, u8, u8, u8)] = &["
 PARSER_MATCH = "match tag_name.as_str() {"
 _ARM_RE = re.compile(r'^ {16}("[a-z_0-9]+"(?:\s*\|\s*"[a-z_0-9]+")*)\s*=>')
-_ARITY_ROW_RE = re.compile(r'^\s*\("([a-z_0-9]+)",', re.M)
+_ARITY_ROW_RE = re.compile(r'^[ \t]*\("([a-z_0-9]+)",', re.M)
 _SCOREBOARD_RE = re.compile(r"Unsupported template tag '\{% ([a-z_0-9]+)")
+# Every name the doc block emits comes from a registry the generator reads at
+# runtime (Django's, djust's tag handlers, the Rust filter registry). A name
+# that is not a plain template identifier cannot be a real tag or filter and
+# would land verbatim in the doc, so it is refused rather than rendered.
+_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
 class ExtractionError(RuntimeError):
@@ -136,10 +151,28 @@ def _setup_django() -> None:
     from django.conf import settings
 
     if not settings.configured:
+        # Both engines, the doc's recommended shape: bridging detection
+        # (``bridged_library_filters``) needs a ``DjangoTemplates`` engine
+        # to be present, exactly as a project does.
         settings.configure(
             INSTALLED_APPS=["django.contrib.staticfiles"],
             STATIC_URL="/static/",
-            TEMPLATES=[],
+            TEMPLATES=[
+                {
+                    "BACKEND": "djust.template_backend.DjustTemplateBackend",
+                    "NAME": "djust",
+                    "DIRS": [],
+                    "APP_DIRS": False,
+                    "OPTIONS": {},
+                },
+                {
+                    "BACKEND": "django.template.backends.django.DjangoTemplates",
+                    "NAME": "django",
+                    "DIRS": [],
+                    "APP_DIRS": False,
+                    "OPTIONS": {},
+                },
+            ],
         )
     from django.apps import apps
 
@@ -183,6 +216,38 @@ def djust_python_handlers() -> tuple[set[str], set[str]]:
     return inline, assign
 
 
+def bridged_library_filters(library_filters: set[str]) -> set[str]:
+    """Library filters the Django→Rust bridge forwards into the Rust registry.
+
+    Runs the real bridge (``bootstrap_django_filters``: walks every configured
+    ``DjangoTemplates`` engine's ``template_libraries`` and forwards each
+    non-built-in filter to ``djust._rust``) and reads back what registered.
+    Detected rather than asserted so the list follows the bridge if it ever
+    changes what it forwards. Requires a ``DjangoTemplates`` engine in
+    ``TEMPLATES`` — the generator's own settings provide one; an ambient
+    configuration without one is a structural error, never an empty list.
+    """
+    _setup_django()
+    from django.template import engines
+    from django.template.backends.django import DjangoTemplates
+
+    if not any(isinstance(engine, DjangoTemplates) for engine in engines.all()):
+        raise ExtractionError(
+            "bridging detection needs a `django.template.backends.django.DjangoTemplates` "
+            "engine in TEMPLATES next to the djust backend; none is configured"
+        )
+    try:
+        from djust import _rust
+        from djust.template_filters import bootstrap_django_filters
+    except ImportError as exc:  # pragma: no cover — environment, not logic
+        raise ExtractionError(
+            "djust._rust is not importable — build the extension (`make dev-build`) "
+            f"before running this check ({exc})"
+        ) from exc
+    bootstrap_django_filters()
+    return library_filters & set(_rust.get_registered_custom_filters())
+
+
 # --------------------------------------------------------------------------- #
 # Bucketing
 # --------------------------------------------------------------------------- #
@@ -197,6 +262,7 @@ class SupportReport:
     djust_filters: set[str]
     native_tags: set[str]
     handler_tags: set[str]
+    bridged_filters: set[str] = field(default_factory=set)
     scoreboard: set[str] = field(default_factory=set)
 
     # -- filters ---------------------------------------------------------- #
@@ -250,11 +316,18 @@ class SupportReport:
 
     @property
     def supported_library_filters(self) -> set[str]:
+        """Library filters the Rust engine implements itself (no bridge needed)."""
         return self.library_filters & self.djust_filters
 
     @property
+    def bridged_library_filters(self) -> set[str]:
+        """Library filters that resolve only via the Django→Rust bridge, i.e.
+        only when a ``DjangoTemplates`` engine is configured alongside djust."""
+        return (self.library_filters & self.bridged_filters) - self.djust_filters
+
+    @property
     def unsupported_library_filters(self) -> set[str]:
-        return self.library_filters - self.djust_filters
+        return self.library_filters - self.djust_filters - self.bridged_filters
 
     @property
     def all_unsupported_tags(self) -> set[str]:
@@ -269,6 +342,7 @@ def build_report(
 ) -> SupportReport:
     version, dj_filters, dj_tags, libraries = django_sets()
     inline, assign = djust_python_handlers()
+    library_filters = {f for _, filters in libraries.values() for f in filters}
     return SupportReport(
         django_version=version,
         django_filters=dj_filters,
@@ -277,6 +351,7 @@ def build_report(
         djust_filters=djust_arity_filters(arity_rs),
         native_tags=djust_native_tags(parser_rs),
         handler_tags=inline | assign,
+        bridged_filters=bridged_library_filters(library_filters),
     )
 
 
@@ -286,19 +361,21 @@ def build_report(
 
 
 def _codes(names: set[str]) -> str:
+    bad = sorted(n for n in names if not _NAME_RE.match(n))
+    if bad:
+        raise ExtractionError(
+            f"refusing to emit registry names that are not plain identifiers: {bad}"
+        )
     return ", ".join(f"`{n}`" for n in sorted(names)) if names else "none"
 
 
-def _by_library(report: SupportReport, pick: str) -> str:
+def _by_library(report: SupportReport, pick: str, chosen_pool: set[str]) -> str:
+    """``chosen_pool`` grouped by the library that registers each name."""
     parts = []
     for lib in DJANGO_LIBRARIES:
         tags, filters = report.libraries[lib]
         pool = tags if pick == "tags" else filters
-        chosen = pool & (
-            report.unsupported_library_tags
-            if pick == "tags"
-            else report.unsupported_library_filters
-        )
+        chosen = pool & chosen_pool
         if chosen:
             parts.append(f"{lib} {_codes(chosen)}")
     return "; ".join(parts) if parts else "none"
@@ -338,13 +415,23 @@ def render_block(report: SupportReport) -> str:
         f"{_codes(report.supported_library_tags)}",
         "",
         f"**Library tags — unsupported ({len(report.unsupported_library_tags)}):** "
-        f"{_by_library(report, 'tags')}",
+        f"{_by_library(report, 'tags', report.unsupported_library_tags)}",
         "",
-        f"**Library filters — supported ({len(report.supported_library_filters)}):** "
+        f"**Library filters — native ({len(report.supported_library_filters)}):** "
         f"{_codes(report.supported_library_filters)}",
         "",
+        f"**Library filters — bridged from a configured `DjangoTemplates` engine "
+        f"({len(report.bridged_library_filters)}):** "
+        f"{_by_library(report, 'filters', report.bridged_library_filters)}",
+        "",
+        "Bridged filters are Django's own callables, forwarded to the Rust engine by the "
+        "filter bridge (#1121) from the `template_libraries` of a "
+        "`django.template.backends.django.DjangoTemplates` engine in `TEMPLATES` — the "
+        "fallback engine the recommended configuration above includes. On a djust-only "
+        "`TEMPLATES` there is nothing to forward and each raises `Unknown filter`.",
+        "",
         f"**Library filters — unsupported ({len(report.unsupported_library_filters)}):** "
-        f"{_by_library(report, 'filters')}",
+        f"{_by_library(report, 'filters', report.unsupported_library_filters)}",
         "",
         f"**djust extensions (not Django tags, not scored):** {_codes(report.djust_only_tags)}",
         MARKER_CLOSE,
@@ -452,14 +539,36 @@ def _rel(path: Path) -> Path:
     return path.relative_to(REPO) if path.is_relative_to(REPO) else path
 
 
+def _write_atomically(doc: Path, text: str) -> None:
+    """Replace ``doc`` via a same-directory temp file + ``os.replace``.
+
+    A read-only doc is refused up front (``os.replace`` would otherwise
+    swap it out regardless of its mode); a failure mid-write leaves the
+    original untouched and removes the temp file.
+    """
+    if doc.exists() and not os.access(doc, os.W_OK):
+        raise PermissionError(f"{doc} is not writable")
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{doc.name}.", suffix=".tmp", dir=doc.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        if doc.exists():
+            os.chmod(tmp, doc.stat().st_mode & 0o7777)
+        os.replace(tmp, doc)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     try:
         report = build_report(arity_rs=args.arity_rs, parser_rs=args.parser_rs)
+        block = render_block(report)
     except ExtractionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    block = render_block(report)
 
     if args.print:
         sys.stdout.write(block)
@@ -467,7 +576,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cross_check is not None:
         if not args.cross_check.exists():
-            print(f"ERROR: {args.cross_check} not found (run `make django-template-suite`)")
+            print(
+                f"ERROR: {_rel(args.cross_check)} not found (run `make django-template-suite`)",
+                file=sys.stderr,
+            )
             return 2
         print(cross_check_summary(report, args.cross_check))
         problems = cross_check(report, args.cross_check)
@@ -488,18 +600,25 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.write:
-        args.doc.write_text(splice_block(doc_text, block), encoding="utf-8")
+        try:
+            _write_atomically(args.doc, splice_block(doc_text, block))
+        except OSError as exc:
+            print(f"ERROR: cannot write {_rel(args.doc)}: {exc}", file=sys.stderr)
+            return 2
         print(f"{_rel(args.doc)}: generated block rewritten")
         return 0
 
     diff = difflib.unified_diff(
         old.splitlines(keepends=True),
         block.splitlines(keepends=True),
-        fromfile=f"{args.doc} (committed)",
-        tofile=f"{args.doc} (generated)",
+        fromfile=f"{_rel(args.doc)} (committed)",
+        tofile=f"{_rel(args.doc)} (generated)",
     )
     sys.stdout.writelines(diff)
-    print(f"\nERROR: the generated block in {args.doc} is stale — run: make template-backend-lists")
+    print(
+        f"\nERROR: the generated block in {_rel(args.doc)} is stale — "
+        "run: make template-backend-lists"
+    )
     return 1
 
 
