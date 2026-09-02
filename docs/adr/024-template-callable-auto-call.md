@@ -84,6 +84,15 @@ must call `get_settings()` mid-walk), if the object `is_callable()`:
 | `call0()` raises `TypeError` | probe `inspect.signature(obj).bind()`: bind **fails** (callable needs args) → `Value::Null`; bind **succeeds** (the `TypeError` came from inside the method) → propagate | Django's exact distinction; the probe runs only on the cold error path |
 | `call0()` raises anything else | propagate | djust's existing render-error path handles it, as Django propagates |
 
+> **Erratum (2026-09-02, #2535).** The parity note on the first row is wrong about
+> model classes: Django does **not** stamp `do_not_call_in_templates` on `ModelBase`
+> — `hasattr(ModelBase, "do_not_call_in_templates")` is `False` on `django==5.2.16`,
+> so `{{ M.pk }}` with `M = User` in the context instantiates an unsaved `User()` under
+> Django (no query, no write). Only `Choices` enums and related managers carry the
+> marker. The row's *behaviour* stands; the "for free" claim does not. Corrected in
+> [ADR-027](027-template-variable-resolution-follows-django.md) §Security, which
+> states the model-class auto-call surface plainly.
+
 The call result feeds the existing `current.extract::<Value>()` conversion.
 The shared `FromPyObject for Value` catch-all
 (`crates/djust_core/src/lib.rs`) gains **no auto-call** (that would change

@@ -51,7 +51,8 @@ with the container descent `_protect_sidecar_tree` `:1125` capped at `_SIDECAR_M
 `:529` → `lookup_segment` `:95`: mapping key, `Encoded::attrs`, integer index), then `dict_view`
 (`:672`) and `string_index` (`:645`), then the sidecar: head-name lookup with the alias fallback
 (`:911-961`, #2375/#2501) and the per-segment loop (`:973-1068`) transcribing Django's steps 1–3
-with Django's three catch sets (`:1241`, `:1261`, `:1280`), `maybe_call` after every segment
+with Django's three catch sets (step 1 `:1241`, step 2 inline at `:1013-1016`, step 3 `:1261`;
+the `dir()` re-raise probe is `name_exists_on` `:1280`), `maybe_call` after every segment
 (`:1113`, ADR-024), `propagate_lookup_error` honouring `silent_variable_failure` (`:1216`, `:1227`),
 and `protect_sidecar` after every materialisation (`:1094`). The terminal is
 `current.extract::<Value>()` (`:1069`) — **the walk ends by re-entering the eager conversion**,
@@ -259,7 +260,7 @@ re-attached on every render. No wire pin moves.
 ## Security
 
 1. **The floor at the lazy sink.** Unchanged mechanism, stronger claim: with the by-name sidecar narrowed to proxied models, every model handle is a `_SidecarModelProxy` by construction, and `protect_sidecar` after every segment covers a model reached through a plain object or a method result. Pins: `TestTheSerializationFloorStillHolds`, plus rows E1–E4 on the handle path with the flag ON.
-2. **`alters_data` / `do_not_call_in_templates`.** `maybe_call` (`context.rs:1113`) unchanged; the `TemplateMutatorGuard` re-stamp (`_template_guards.py:57`, #2507) is what makes a component handle safe. Row Q is a NEW auto-call surface and must be stated plainly: an arbitrary class in a context is instantiated exactly as Django instantiates it, **including a model class** (an unsaved instance; no query, no write). Only `Choices` enums and related managers carry Django's marker.
+2. **`alters_data` / `do_not_call_in_templates`.** `maybe_call` (`context.rs:1113`) unchanged; the `TemplateMutatorGuard` re-stamp (`_template_guards.py:58`, #2507) is what makes a component handle safe. Row Q is a NEW auto-call surface and must be stated plainly: an arbitrary class in a context is instantiated exactly as Django instantiates it, **including a model class** (an unsaved instance; no query, no write). Only `Choices` enums and related managers carry Django's marker.
 3. **Exceptions never fail open.** The three catch sets and `silent_variable_failure` are unchanged; the new step-1 metaclass guard raises `TypeError` INTO step 1's own catch set, so it cannot widen a swallow. Pins: `TestAGuardExpressionCannotFailOpen`, `TestDjangosExceptionSetsAtEverySegment`, plus handle-path twins.
 4. **The tag-bridge sink (#2509).** A handle is admitted to `py_context` (`registry.rs:529`) only if its object is not a `Model`/`Manager`/`QuerySet` — those never become handles. The residual exposure (a plain object holding a model as an attribute, readable by a HANDLER but not by a template) is today's documented limit, pinned by `test_the_limit_of_the_build_time_pass_is_pinned_not_assumed` (`test_sidecar_on_all_render_paths_2501.py:567`). Not widened.
 5. **SafeData across the handle boundary.** Today `_collect_safe_keys` (`rust_bridge.py:168`) marks TOP-LEVEL keys and `mark_safe_keys` (`djust_live/src/lib.rs:409`) replaces per render. A handle's `display` is computed at the sink, so the mark travels WITH the value: `Encoded.safe = isinstance(str(o), SafeData) or hasattr(o, "__html__")` (row O; what a `Component` handle needs), read where `runtime_safe` is read now (`renderer.rs:1420`). Never inferred from the text; never sticky across renders (#2300).
