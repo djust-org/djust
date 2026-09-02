@@ -1,5 +1,5 @@
 """
-Regression tests for #2562 — djust.C016 / djust.C017 validate the shape of
+Regression tests for #2562 — djust.C016 validates the shape of
 ``settings.TEMPLATES``.
 
 C016 (one id, two shapes, like C003):
@@ -10,9 +10,9 @@ C016 (one id, two shapes, like C003):
   A djust-only project without admin — the ``djust new`` default scaffold — is
   silent (the #1060 dogfood case).
 
-C017: two entries share an engine ``NAME``, explicit or DERIVED
-(``BACKEND.rsplit(".", 2)[-2]``, Django's own rule), which Django only reports
-as ``ImproperlyConfigured`` on the first render.
+There is no duplicate-NAME check (the issue's C017): Django's own
+``check_templates`` / admin ``check_dependencies`` raise ``ImproperlyConfigured``
+for that before any djust check runs, so it would be decorative.
 
 Every case calls the REAL registered ``check_configuration`` and filters on id,
 so the wiring in ``check_configuration`` is exercised, not just the helper.
@@ -168,41 +168,6 @@ def test_c016_accepts_user_subclass_of_django_templates_as_fallback():
 
 
 # ---------------------------------------------------------------------------
-# C017 — duplicate engine NAME
-# ---------------------------------------------------------------------------
-
-
-def test_c017_fires_for_duplicate_explicit_name():
-    """Case 9."""
-    templates = [_entry(DJANGO, NAME="x"), _entry(DJUST, NAME="x")]
-    msgs = _by_id(_run(templates), "djust.C017")
-    assert len(msgs) == 1
-    assert "'x'" in msgs[0].msg
-    assert "'x'" in msgs[0].fix_hint
-
-
-def test_c017_fires_for_duplicate_derived_name():
-    """Case 10: two DjangoTemplates entries with no NAME both derive 'django'."""
-    msgs = _by_id(_run([_entry(DJANGO), _entry(DJANGO)]), "djust.C017")
-    assert len(msgs) == 1
-    assert "'django'" in msgs[0].msg
-
-
-def test_c017_fires_when_explicit_name_collides_with_derived_name():
-    """Case 11: djust's derived alias is 'template_backend'."""
-    templates = [_entry(DJANGO, NAME="template_backend"), _entry(DJUST)]
-    msgs = _by_id(_run(templates), "djust.C017")
-    assert len(msgs) == 1
-    assert "'template_backend'" in msgs[0].msg
-
-
-def test_c017_silent_for_distinct_names():
-    """Case 12."""
-    templates = [_entry(DJANGO, NAME="a"), _entry(DJANGO, NAME="b")]
-    assert _by_id(_run(templates), "djust.C017") == []
-
-
-# ---------------------------------------------------------------------------
 # Robustness + suppression
 # ---------------------------------------------------------------------------
 
@@ -212,7 +177,6 @@ def test_unimportable_backend_is_skipped_without_crashing():
     templates = [_entry("nope.missing.Missing"), _entry(DJUST), _entry(DJANGO)]
     errors = _run(templates, apps=ADMIN_APPS)
     assert _by_id(errors, "djust.C016") == []
-    assert _by_id(errors, "djust.C017") == []
     # malformed shapes are skipped too, never raised on
     errors = []
     with _SettingsPatcher({"TEMPLATES": "not-a-list"}):
@@ -228,14 +192,6 @@ def test_c016_is_suppressible():
     assert _by_id(_run(templates), "djust.C016")  # fires unsuppressed
     errors = _run(templates, DJUST_CONFIG={"suppress_checks": ["C016"]})
     assert _by_id(errors, "djust.C016") == []
-
-
-def test_c017_is_suppressible():
-    """Case 15."""
-    templates = [_entry(DJANGO, NAME="x"), _entry(DJUST, NAME="x")]
-    assert _by_id(_run(templates), "djust.C017")  # fires unsuppressed
-    errors = _run(templates, DJUST_CONFIG={"suppress_checks": ["djust.C017"]})
-    assert _by_id(errors, "djust.C017") == []
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +215,6 @@ def test_real_settings_files_are_silent(tmp_path, with_db):
     demo = _load_settings_module(_REPO_ROOT / "examples/demo_project/demo_project/settings.py")
     errors = _run(demo["TEMPLATES"], apps=demo["INSTALLED_APPS"])
     assert _by_id(errors, "djust.C016") == []
-    assert _by_id(errors, "djust.C017") == []
 
     project_dir = generate_project(
         "shapeproj", target_dir=str(tmp_path), with_db=with_db, auto_setup=False
@@ -270,7 +225,6 @@ def test_real_settings_files_are_silent(tmp_path, with_db):
     assert ("django.contrib.admin" in scaffold["INSTALLED_APPS"]) is with_db
     errors = _run(scaffold["TEMPLATES"], apps=scaffold["INSTALLED_APPS"])
     assert _by_id(errors, "djust.C016") == []
-    assert _by_id(errors, "djust.C017") == []
 
 
 # ---------------------------------------------------------------------------
@@ -289,14 +243,15 @@ def _ids_emitted_by_module(module_path: Path) -> set[str]:
     return ids
 
 
-def test_c016_c017_are_emitted_by_configuration_module_and_map_to_config_category():
-    """Case 17: both ids live in the C0xx module (the #2070 uniqueness test
-    covers collisions) and `djust_check --category config` routes them."""
+def test_c016_is_emitted_by_configuration_module_and_maps_to_config_category():
+    """The id lives in the C0xx module (the #2070 uniqueness test covers
+    collisions), `djust_check --category config` routes it, and no C017 is
+    emitted anywhere (dropped on purpose; see _check_templates_shape)."""
     import djust.checks.configuration as cfg
 
     ids = _ids_emitted_by_module(Path(cfg.__file__))
-    assert {"djust.C016", "djust.C017"} <= ids
+    assert "djust.C016" in ids
+    assert "djust.C017" not in ids
     assert _category_for_check("djust.C016") == "config"
-    assert _category_for_check("djust.C017") == "config"
     # C5xx (what the issue proposed) would have been invisible to --category config
     assert _category_for_check("djust.C516") == "other"

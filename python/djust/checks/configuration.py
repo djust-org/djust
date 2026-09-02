@@ -535,16 +535,14 @@ def _check_unknown_extensions(errors: list) -> None:
             )
 
 
-def _classify_templates_entries() -> list[tuple[str, bool, bool]]:
-    """Return ``(name, is_djust, is_django)`` for each usable ``TEMPLATES`` entry.
+def _classify_templates_entries() -> list[tuple[bool, bool]]:
+    """Return ``(is_djust, is_django)`` for each usable ``TEMPLATES`` entry.
 
-    Mirrors Django's own rules (``django/template/utils.py``): ``NAME``
-    defaults to ``BACKEND.rsplit(".", 2)[-2]`` and backend classes are
-    resolved with ``import_string`` (Django's ``_contains_subclass`` idiom in
-    ``admin/checks.py`` — an unimportable ``BACKEND`` is skipped because
-    Django's ``templates.E001``-family owns that report). Malformed entries
-    (non-dict, non-string ``BACKEND``, too few dots) are skipped for the same
-    reason.
+    Backend classes are resolved with ``import_string`` (Django's
+    ``_contains_subclass`` idiom in ``admin/checks.py`` — an unimportable
+    ``BACKEND`` is skipped because Django's ``templates.E001``-family owns
+    that report). Malformed entries (non-dict, non-string ``BACKEND``) are
+    skipped for the same reason.
     """
     from django.conf import settings
     from django.template.backends.django import DjangoTemplates
@@ -556,15 +554,12 @@ def _classify_templates_entries() -> list[tuple[str, bool, bool]]:
     if not isinstance(templates, (list, tuple)):
         return []
 
-    classified: list[tuple[str, bool, bool]] = []
+    classified: list[tuple[bool, bool]] = []
     for tpl in templates:
         if not isinstance(tpl, dict):
             continue
         backend = tpl.get("BACKEND")
         if not isinstance(backend, str):
-            continue
-        parts = backend.rsplit(".", 2)
-        if len(parts) < 3:
             continue
         try:
             cls = import_string(backend)
@@ -572,10 +567,8 @@ def _classify_templates_entries() -> list[tuple[str, bool, bool]]:
             continue
         if not inspect.isclass(cls):
             continue
-        name = tpl.get("NAME") or parts[-2]
         classified.append(
             (
-                str(name),
                 issubclass(cls, DjustTemplateBackend),
                 issubclass(cls, DjangoTemplates),
             )
@@ -584,7 +577,7 @@ def _classify_templates_entries() -> list[tuple[str, bool, bool]]:
 
 
 def _check_templates_shape(errors: list) -> None:
-    """C016 / C017 — the ``TEMPLATES`` shape djust needs (#2562).
+    """C016 — the ``TEMPLATES`` shape djust needs (#2562).
 
     C016 fires when a ``DjustTemplateBackend`` entry is present and either
     (a) a ``DjangoTemplates`` entry PRECEDES it — Django tries engines in
@@ -595,12 +588,16 @@ def _check_templates_shape(errors: list) -> None:
     the placement advice). A djust-only project without admin — the
     ``djust new`` default scaffold — is silent.
 
-    C017 fires when two entries share an engine ``NAME`` (explicit or
-    derived), which Django only reports as ``ImproperlyConfigured`` on the
-    first render, not at startup.
+    There is deliberately NO duplicate-``NAME`` check here (the issue's
+    proposed C017): Django reports that itself. ``EngineHandler.templates``
+    raises ``ImproperlyConfigured("Template engine aliases aren't unique")``
+    and, on every supported Django, ``manage.py check`` reaches it before any
+    djust check could print — ``django/core/checks/templates.py``
+    (``check_templates`` iterates ``engines.all()``) and
+    ``django/contrib/admin/checks.py`` (``check_dependencies``) both trigger
+    it, aborting the check run with that traceback. A djust check for it
+    would never be observable (the decorative-check class, v1.0.8-1 rule).
     """
-    from collections import Counter
-
     from django.conf import settings
 
     entries = _classify_templates_entries()
@@ -608,8 +605,8 @@ def _check_templates_shape(errors: list) -> None:
         return
 
     if not _is_check_suppressed("djust.C016"):
-        djust_idx = [i for i, (_n, is_djust, _d) in enumerate(entries) if is_djust]
-        django_idx = [i for i, (_n, _j, is_django) in enumerate(entries) if is_django]
+        djust_idx = [i for i, (is_djust, _d) in enumerate(entries) if is_djust]
+        django_idx = [i for i, (_j, is_django) in enumerate(entries) if is_django]
         if djust_idx:
             first_djust = djust_idx[0]
             if any(i < first_djust for i in django_idx):
@@ -655,27 +652,6 @@ def _check_templates_shape(errors: list) -> None:
                             ),
                         )
                     )
-
-    if not _is_check_suppressed("djust.C017"):
-        counts = Counter(name for name, _j, _d in entries)
-        for name, count in counts.most_common():
-            if count < 2:
-                break
-            errors.append(
-                DjustWarning(
-                    f"TEMPLATES has more than one engine named '{name}'.",
-                    hint=(
-                        'Django raises ImproperlyConfigured ("Template engine aliases '
-                        "aren't unique\") the first time a template is rendered, not at "
-                        "startup. NAME defaults to the second-to-last segment of BACKEND, "
-                        "so two DjangoTemplates entries without an explicit NAME both "
-                        "become 'django'. Set a unique NAME on each entry. "
-                        "Suppress with DJUST_CONFIG = {'suppress_checks': ['C017']}."
-                    ),
-                    id="djust.C017",
-                    fix_hint=f"Add a distinct NAME to each TEMPLATES entry that shares '{name}'.",
-                )
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -784,7 +760,7 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C015 -- Unknown adapter name in DJUST_CONFIG['extensions'] (#2063)
     _check_unknown_extensions(errors)
 
-    # C016 / C017 -- TEMPLATES backend order / fallback and duplicate NAME (#2562)
+    # C016 -- TEMPLATES backend order / DjangoTemplates fallback (#2562)
     _check_templates_shape(errors)
 
     # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
