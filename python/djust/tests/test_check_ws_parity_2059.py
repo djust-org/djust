@@ -171,8 +171,11 @@ def test_v013_dogfood_zero_warnings_on_demo_project():
     rest of the pytest session. A fresh subprocess mirrors the demo
     project's ACTUAL running state: only views reachable via the real
     ``ROOT_URLCONF`` (walked by ``djust.checks._routed_liveview_classes``)
-    or already-imported get discovered -- exactly what a real ``manage.py
-    check`` run against the live demo would see.
+    or imported by that walk get discovered -- exactly what a real
+    ``manage.py check`` run against the live demo sees. NOTE that the
+    URLconf chain itself imports ``views_old`` (``demo_app/views/__init__.py``
+    re-exports from it), so the stale ``ProductDataTableView`` IS discovered
+    and its single V013 is the expected, pinned output.
     """
     env = dict(os.environ)
     env["DJANGO_SETTINGS_MODULE"] = "demo_project.settings"
@@ -201,4 +204,16 @@ def test_v013_dogfood_zero_warnings_on_demo_project():
     start = stdout.index("V013_JSON_START") + len("V013_JSON_START")
     end = stdout.index("V013_JSON_END")
     v013 = json.loads(stdout[start:end].strip())
-    assert v013 == [], "V013 must be silent on the live (routed) demo project: %r" % v013
+    # ``demo_app/views/__init__.py`` re-exports from the deprecated
+    # ``demo_app/views_old.py``, so the real ``ROOT_URLCONF`` import chain
+    # DOES import ``views_old`` and a real ``manage.py check`` has always
+    # reported its ``ProductDataTableView.post()`` override. This test only
+    # ever saw ``[]`` because ``check_liveviews`` ran its ``__subclasses__``
+    # walk BEFORE the URLconf walk imported anything (the ordering bug fixed
+    # in the #2559 review, PR #2573). Pin the exact set (not a floor): the
+    # one known stale hit, and NO routed demo view.
+    assert v013 == [
+        "demo_app.views_old.ProductDataTableView: demo_app.views_old.ProductDataTableView "
+        "overrides post(), which will NOT run on a WebSocket mount (the WS path calls "
+        "mount() directly, never dispatch()/get()/post())."
+    ], "V013 must be silent on every ROUTED demo view: %r" % v013
