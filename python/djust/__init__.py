@@ -3,50 +3,90 @@ djust - Blazing fast reactive server-side rendering for Django
 
 This package provides a Phoenix LiveView-style reactive framework for Django,
 powered by Rust for maximum performance.
+
+Lazy public names (#2559)
+-------------------------
+Only the templates-only surface is imported eagerly (``get_template_dirs``,
+the Rust extension, ``template_tags`` registration, ``enable_hot_reload``).
+Every other name in ``__all__`` -- ``LiveView``, the decorators, the mixins,
+``push_to_view`` and friends -- is resolved on first attribute access via
+PEP 562 ``__getattr__`` so that ``import djust`` or
+``import djust.template.backend`` no longer drags in ``channels`` and the
+whole LiveView stack. ``from djust import LiveView`` is unchanged in
+behaviour; the object returned is the same one ``djust.live_view.LiveView``
+is. Note that ``hasattr(djust, "PresenceMixin")`` therefore IMPORTS
+``djust.presence`` (and ``channels``) as a side effect.
+
+Two exported names collide with submodule names: ``live_view`` and
+``rate_limit``. ``from djust import live_view`` resolves to the decorator.
+``djust.live_view`` is the decorator once ANY lazy name has resolved
+(``__getattr__`` re-binds it on every resolution, see
+``_rebind_live_view_decorator``), regardless of whether the submodule was
+imported first. The one order that differs from the eager pre-#2559 init:
+``import djust.live_view`` BEFORE any lazy resolution leaves the attribute
+bound to the module until the first resolution -- the same thing
+``djust.rate_limit`` has always done. Import the decorators from
+``djust.live_view`` / ``djust.decorators`` directly to sidestep the
+collision entirely.
 """
 
+from __future__ import annotations
+
+import importlib
+import sys
+import types
+from typing import TYPE_CHECKING
+
 from .utils import get_template_dirs, clear_template_dirs_cache
-from .async_result import AsyncResult
-from .live_view import LiveView, live_view
-from .components.base import Component, LiveComponent
-from .components.assigns import Assign, AssignValidationError, Slot
-from .components.function_component import component, clear_components
-from .decorators import (
-    reactive,
-    event_handler,
-    event,
-    is_event_handler,
-    action,
-    is_action,
-    server_function,
-    is_server_function,
-    permission_required,
-    rate_limit,
-    state,
-    computed,
-    debounce,
-    throttle,
-    on_mount,
-    optimistic,
-    cache,
-    client_state,
-    background,
-)
-from .auth import LoginRequiredMixin, PermissionRequiredMixin
-from .react import react_components, register_react_component, ReactMixin
-from .forms import FormMixin, LiveViewForm
-from .wizard import WizardMixin
-from .drafts import DraftModeMixin
-from .push import push_to_view, apush_to_view
-from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTracker
-from .routing import live_session, get_route_map_script, DjustMiddlewareStack
-from .streaming import StreamingMixin
-from .uploads import UploadMixin
-from .mixins.flash import FlashMixin
-from .mixins.page_metadata import PageMetadataMixin
-from .mixins.notifications import NotificationMixin
-from .db import notify_on_save, send_pg_notify
-from .markdown import render_markdown as render_markdown
+
+if TYPE_CHECKING:
+    # Static-analysis view of the lazy names: mypy/pyright/IDEs see the real
+    # types (PEP 562 alone types every lazy name as ``Any`` and reds the
+    # ADR-023 strict-island gate, #1960). Never executed at runtime.
+    from .async_result import AsyncResult
+    from .live_view import LiveView, live_view
+    from .components.base import Component, LiveComponent
+    from .components.assigns import Assign, AssignValidationError, Slot
+    from .components.function_component import component, clear_components
+    from .decorators import (
+        reactive,
+        event_handler,
+        event,
+        is_event_handler,
+        action,
+        is_action,
+        server_function,
+        is_server_function,
+        permission_required,
+        rate_limit,
+        state,
+        computed,
+        debounce,
+        throttle,
+        on_mount,
+        optimistic,
+        cache,
+        client_state,
+        background,
+    )
+    from .auth import LoginRequiredMixin, PermissionRequiredMixin
+    from .react import react_components, register_react_component, ReactMixin
+    from .forms import FormMixin, LiveViewForm
+    from .wizard import WizardMixin
+    from .drafts import DraftModeMixin
+    from .push import push_to_view, apush_to_view
+    from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTracker
+    from .routing import live_session, get_route_map_script, DjustMiddlewareStack
+    from .streaming import StreamingMixin
+    from .uploads import UploadMixin
+    from .mixins.flash import FlashMixin
+    from .mixins.page_metadata import PageMetadataMixin
+    from .mixins.notifications import NotificationMixin
+    from .db import notify_on_save, send_pg_notify
+    from .markdown import render_markdown as render_markdown
+    from . import rust_components  # noqa: F401
+
+__version__ = "1.2.0rc1"
 
 # Import Rust functions
 try:
@@ -56,26 +96,125 @@ except ImportError as e:
     import warnings
 
     warnings.warn(f"Could not import Rust extension: {e}. Performance will be degraded.")
-    render_template = None
-    diff_html = None
-    RustLiveView = None
+    render_template = None  # type: ignore[assignment]
+    diff_html = None  # type: ignore[assignment]
+    RustLiveView = None  # type: ignore[assignment,misc]
 
 # Register template tag handlers (url, static, etc.)
-# This imports the template_tags module which auto-registers handlers
+# This imports the template_tags module which auto-registers handlers with
+# the Rust engine -- a templates-only project needs {% url %} / {% static %}.
 try:
     from . import template_tags  # noqa: F401
 except ImportError:
     # Template tags module not available (e.g., during initial install)
     pass
 
-# Import Rust components (optional, requires separate build)
-try:
-    from . import rust_components  # noqa: F401 — re-exported as djust.rust_components
-except ImportError:
-    # Rust components not yet built - this is optional
-    rust_components = None  # noqa: F841 — accessed as djust.rust_components by user code
+# Public name -> (module, attribute). Resolved on first access by ``__getattr__``.
+# Every name here MUST also be in ``__all__`` and vice versa (minus the eager
+# names); ``tests/test_lazy_package_init_2559.py`` pins both directions and
+# that every entry resolves to the source-module object.
+_LAZY: dict[str, tuple[str, str]] = {
+    "AsyncResult": ("djust.async_result", "AsyncResult"),
+    "LiveView": ("djust.live_view", "LiveView"),
+    "live_view": ("djust.live_view", "live_view"),
+    "Component": ("djust.components.base", "Component"),
+    "LiveComponent": ("djust.components.base", "LiveComponent"),
+    "Assign": ("djust.components.assigns", "Assign"),
+    "AssignValidationError": ("djust.components.assigns", "AssignValidationError"),
+    "Slot": ("djust.components.assigns", "Slot"),
+    "component": ("djust.components.function_component", "component"),
+    "clear_components": ("djust.components.function_component", "clear_components"),
+    "reactive": ("djust.decorators", "reactive"),
+    "event_handler": ("djust.decorators", "event_handler"),
+    "event": ("djust.decorators", "event"),
+    "is_event_handler": ("djust.decorators", "is_event_handler"),
+    "action": ("djust.decorators", "action"),
+    "is_action": ("djust.decorators", "is_action"),
+    "server_function": ("djust.decorators", "server_function"),
+    "is_server_function": ("djust.decorators", "is_server_function"),
+    "permission_required": ("djust.decorators", "permission_required"),
+    "rate_limit": ("djust.decorators", "rate_limit"),
+    "state": ("djust.decorators", "state"),
+    "computed": ("djust.decorators", "computed"),
+    "debounce": ("djust.decorators", "debounce"),
+    "throttle": ("djust.decorators", "throttle"),
+    "on_mount": ("djust.decorators", "on_mount"),
+    "optimistic": ("djust.decorators", "optimistic"),
+    "cache": ("djust.decorators", "cache"),
+    "client_state": ("djust.decorators", "client_state"),
+    "background": ("djust.decorators", "background"),
+    "LoginRequiredMixin": ("djust.auth", "LoginRequiredMixin"),
+    "PermissionRequiredMixin": ("djust.auth", "PermissionRequiredMixin"),
+    "react_components": ("djust.react", "react_components"),
+    "register_react_component": ("djust.react", "register_react_component"),
+    "ReactMixin": ("djust.react", "ReactMixin"),
+    "FormMixin": ("djust.forms", "FormMixin"),
+    "LiveViewForm": ("djust.forms", "LiveViewForm"),
+    "WizardMixin": ("djust.wizard", "WizardMixin"),
+    "DraftModeMixin": ("djust.drafts", "DraftModeMixin"),
+    "push_to_view": ("djust.push", "push_to_view"),
+    "apush_to_view": ("djust.push", "apush_to_view"),
+    "PresenceMixin": ("djust.presence", "PresenceMixin"),
+    "LiveCursorMixin": ("djust.presence", "LiveCursorMixin"),
+    "PresenceManager": ("djust.presence", "PresenceManager"),
+    "CursorTracker": ("djust.presence", "CursorTracker"),
+    "live_session": ("djust.routing", "live_session"),
+    "get_route_map_script": ("djust.routing", "get_route_map_script"),
+    "DjustMiddlewareStack": ("djust.routing", "DjustMiddlewareStack"),
+    "StreamingMixin": ("djust.streaming", "StreamingMixin"),
+    "UploadMixin": ("djust.uploads", "UploadMixin"),
+    "FlashMixin": ("djust.mixins.flash", "FlashMixin"),
+    "PageMetadataMixin": ("djust.mixins.page_metadata", "PageMetadataMixin"),
+    "NotificationMixin": ("djust.mixins.notifications", "NotificationMixin"),
+    "notify_on_save": ("djust.db", "notify_on_save"),
+    "send_pg_notify": ("djust.db", "send_pg_notify"),
+    "render_markdown": ("djust.markdown", "render_markdown"),
+    # The optional Rust-components submodule itself; ``None`` when not built.
+    "rust_components": ("djust.rust_components", ""),
+}
 
-__version__ = "1.2.0rc1"
+
+def __getattr__(name: str):  # PEP 562
+    try:
+        module_name, attr = _LAZY[name]
+    except KeyError:
+        raise AttributeError(f"module 'djust' has no attribute {name!r}") from None
+    if not attr:
+        # ``rust_components``: the submodule is the export; optional build.
+        try:
+            value = importlib.import_module(module_name)
+        except ImportError:
+            value = None
+        globals()[name] = value
+        return value
+    module = importlib.import_module(module_name)
+    value = getattr(module, attr)
+    globals()[name] = value
+    _rebind_live_view_decorator()
+    return value
+
+
+def _rebind_live_view_decorator() -> None:
+    """Pin ``djust.live_view`` to the DECORATOR once the package is in use.
+
+    Importing the ``djust.live_view`` submodule makes the import system bind
+    ``djust.live_view`` to the MODULE (that ``setattr`` happens after the
+    submodule body runs, so it cannot be intercepted). The eager pre-#2559
+    init always re-bound the decorator afterwards; with the lazy init the
+    re-bind happens here, on EVERY lazy resolution -- not only when a name
+    from ``djust.live_view`` is resolved -- so the binding does not depend on
+    WHICH public name was touched first. Contract: after any lazy name has
+    resolved, ``djust.live_view`` is the decorator regardless of import
+    order; only a submodule-first import with NO lazy resolution yet sees
+    the module (the same behaviour ``djust.rate_limit`` has always had).
+    """
+    submodule = sys.modules.get("djust.live_view")
+    if submodule is not None and isinstance(globals().get("live_view"), types.ModuleType):
+        globals()["live_view"] = submodule.live_view
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
 
 
 def enable_hot_reload():
