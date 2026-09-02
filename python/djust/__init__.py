@@ -18,10 +18,16 @@ is. Note that ``hasattr(djust, "PresenceMixin")`` therefore IMPORTS
 ``djust.presence`` (and ``channels``) as a side effect.
 
 Two exported names collide with submodule names: ``live_view`` and
-``rate_limit``. ``from djust import live_view`` resolves to the decorator
-unless ``djust.live_view`` was imported as a module first, in which case it
-is the module -- exactly what ``djust.rate_limit`` has always done. Import
-the decorators from ``djust.live_view`` / ``djust.decorators`` directly.
+``rate_limit``. ``from djust import live_view`` resolves to the decorator.
+``djust.live_view`` is the decorator once ANY lazy name has resolved
+(``__getattr__`` re-binds it on every resolution, see
+``_rebind_live_view_decorator``), regardless of whether the submodule was
+imported first. The one order that differs from the eager pre-#2559 init:
+``import djust.live_view`` BEFORE any lazy resolution leaves the attribute
+bound to the module until the first resolution -- the same thing
+``djust.rate_limit`` has always done. Import the decorators from
+``djust.live_view`` / ``djust.decorators`` directly to sidestep the
+collision entirely.
 """
 
 from __future__ import annotations
