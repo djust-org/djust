@@ -1763,7 +1763,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // deliberately DISCARDED: honouring it would emit loop items
             // unescaped, which is the one direction this fix must not move
             // (`{% for x in p|safe %}` over-escapes, as it did before).
-            let iterable_value = get_value(iterable, context)?;
+            let iterable_value = get_value_ignoring_failures(iterable, context)?;
 
             // Python iterates a string by CHARACTER, and #2325's own repro
             // table needs it: `{% for x in p|upper %}` over `"ab"` is `AB` in
@@ -2764,7 +2764,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // (e.g. `{% cycle a|md ... %}`) must NOT be re-escaped, matching the
             // Variable/InlineIf arms (#1660). `runtime_safe` is true ONLY when
             // the LAST filter produced a genuine SafeString → fail-safe.
-            let (resolved, runtime_safe) = get_value_safe(val.trim(), context)?;
+            let (resolved, runtime_safe) = get_value_safe_ignoring_failures(val.trim(), context)?;
             let output = if matches!(resolved, Value::Missing) {
                 // An unresolved operand renders NOTHING, and the comment this
                 // replaces claimed the opposite ("output the raw name (Django
@@ -3528,8 +3528,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     if condition.contains("==") {
         let parts: Vec<&str> = condition.split("==").map(|s| s.trim()).collect();
         if parts.len() == 2 {
-            let left = get_value(parts[0], context)?;
-            let right = get_value(parts[1], context)?;
+            let left = get_value_ignoring_failures(parts[0], context)?;
+            let right = get_value_ignoring_failures(parts[1], context)?;
             return Ok(values_equal(&left, &right));
         }
     }
@@ -3537,8 +3537,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     if condition.contains("!=") {
         let parts: Vec<&str> = condition.split("!=").map(|s| s.trim()).collect();
         if parts.len() == 2 {
-            let left = get_value(parts[0], context)?;
-            let right = get_value(parts[1], context)?;
+            let left = get_value_ignoring_failures(parts[0], context)?;
+            let right = get_value_ignoring_failures(parts[1], context)?;
             return Ok(!values_equal(&left, &right));
         }
     }
@@ -3548,13 +3548,13 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     // contains the latter as a substring. Space-padded markers avoid
     // matching variable names that merely contain "is" (e.g. "analysis").
     if let Some(pos) = condition.find(" is not ") {
-        let left = get_value(condition[..pos].trim(), context)?;
-        let right = get_value(condition[pos + 8..].trim(), context)?;
+        let left = get_value_ignoring_failures(condition[..pos].trim(), context)?;
+        let right = get_value_ignoring_failures(condition[pos + 8..].trim(), context)?;
         return Ok(!values_identity(&left, &right));
     }
     if let Some(pos) = condition.find(" is ") {
-        let left = get_value(condition[..pos].trim(), context)?;
-        let right = get_value(condition[pos + 4..].trim(), context)?;
+        let left = get_value_ignoring_failures(condition[..pos].trim(), context)?;
+        let right = get_value_ignoring_failures(condition[pos + 4..].trim(), context)?;
         return Ok(values_identity(&left, &right));
     }
 
@@ -3570,8 +3570,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     if condition.contains(">=") {
         let parts: Vec<&str> = condition.split(">=").map(|s| s.trim()).collect();
         if parts.len() == 2 {
-            let left = get_value(parts[0], context)?;
-            let right = get_value(parts[1], context)?;
+            let left = get_value_ignoring_failures(parts[0], context)?;
+            let right = get_value_ignoring_failures(parts[1], context)?;
             return Ok(try_compare(&left, &right).is_some_and(|c| c >= 0));
         }
     }
@@ -3580,8 +3580,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     if condition.contains("<=") {
         let parts: Vec<&str> = condition.split("<=").map(|s| s.trim()).collect();
         if parts.len() == 2 {
-            let left = get_value(parts[0], context)?;
-            let right = get_value(parts[1], context)?;
+            let left = get_value_ignoring_failures(parts[0], context)?;
+            let right = get_value_ignoring_failures(parts[1], context)?;
             return Ok(try_compare(&left, &right).is_some_and(|c| c <= 0));
         }
     }
@@ -3590,8 +3590,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     if condition.contains(" in ") {
         let parts: Vec<&str> = condition.splitn(2, " in ").map(|s| s.trim()).collect();
         if parts.len() == 2 {
-            let needle = get_value(parts[0], context)?;
-            let haystack = get_value(parts[1], context)?;
+            let needle = get_value_ignoring_failures(parts[0], context)?;
+            let haystack = get_value_ignoring_failures(parts[1], context)?;
             return match haystack {
                 Value::List(items) | Value::Tuple(items) => {
                     Ok(items.iter().any(|item| values_equal(&needle, item)))
@@ -3661,8 +3661,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     if condition.contains(" > ") {
         let parts: Vec<&str> = condition.split(" > ").map(|s| s.trim()).collect();
         if parts.len() == 2 {
-            let left = get_value(parts[0], context)?;
-            let right = get_value(parts[1], context)?;
+            let left = get_value_ignoring_failures(parts[0], context)?;
+            let right = get_value_ignoring_failures(parts[1], context)?;
             return Ok(try_compare(&left, &right).is_some_and(|c| c > 0));
         }
     }
@@ -3671,8 +3671,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     if condition.contains(" < ") {
         let parts: Vec<&str> = condition.split(" < ").map(|s| s.trim()).collect();
         if parts.len() == 2 {
-            let left = get_value(parts[0], context)?;
-            let right = get_value(parts[1], context)?;
+            let left = get_value_ignoring_failures(parts[0], context)?;
+            let right = get_value_ignoring_failures(parts[1], context)?;
             return Ok(try_compare(&left, &right).is_some_and(|c| c < 0));
         }
     }
@@ -3705,7 +3705,7 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
     // `Value::Missing` (falsy) exactly as the old `Ok(false)` did, while one
     // backed by the raw-Python sidecar now answers like `{{ }}` does rather
     // than being silently false.
-    Ok(get_value(condition, context)?.is_truthy())
+    Ok(get_value_ignoring_failures(condition, context)?.is_truthy())
 }
 
 /// Register the sub-path aliases for ONE multi-assignment binding tag
@@ -3915,6 +3915,31 @@ fn big_int_literal(expr: &str) -> Option<String> {
     Some(format!("{sign}{body}"))
 }
 
+/// [`get_value`] under Django's `ignore_failures=True` (#2528, ADR-027).
+///
+/// `FilterExpression.resolve` (`base.py:720-726`) turns a resolution failure
+/// into **None** rather than `string_if_invalid` when the caller passes
+/// `ignore_failures=True`, and exactly five tags do: `{% if %}`
+/// (`defaulttags.py:886`), `{% for %}` (`:194`), `{% cycle %}` (`:153`),
+/// `{% firstof %}` (`:271`) and `{% regroup %}` (`:365`, `:368`).
+///
+/// **Every other operand resolves STRICTLY**, and that set is not a detail:
+/// `{% with %}`, `{% include … with %}`, a tag's own arguments and a filter's
+/// arguments all pass the default `ignore_failures=False`, so a miss there is
+/// `string_if_invalid` and NOT `None`. The first version of #2539 applied the
+/// substitution inside the shared pipe branch, which claimed all of them —
+/// making `{% with x=y|default_if_none:'D' %}` render `D` where Django renders
+/// the empty string.
+fn get_value_ignoring_failures(expr: &str, context: &Context) -> Result<Value> {
+    get_value_safe_inner(expr, context, true).map(|(value, _)| value)
+}
+
+/// [`get_value_safe`] under Django's `ignore_failures=True` — see
+/// [`get_value_ignoring_failures`] for which callers may use it.
+fn get_value_safe_ignoring_failures(expr: &str, context: &Context) -> Result<(Value, bool)> {
+    get_value_safe_inner(expr, context, true)
+}
+
 fn get_value(expr: &str, context: &Context) -> Result<Value> {
     // Thin wrapper that discards the runtime-safe flag. Most callers
     // (condition operators, progress-bar math, etc.) only need the `Value`
@@ -3942,6 +3967,17 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
 /// `str`-subclass with `__html__` (the #1660 XSS-hardened check), so this can
 /// only ever mark MORE values safe — never under-escape a plain value.
 fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
+    get_value_safe_inner(expr, context, false)
+}
+
+/// The shared body of the four resolvers above. `ignore_failures` is Django's
+/// `FilterExpression.resolve` parameter and is threaded rather than read from
+/// the flag, because it is a property of the CALLER's tag, not of the render.
+fn get_value_safe_inner(
+    expr: &str,
+    context: &Context,
+    ignore_failures: bool,
+) -> Result<(Value, bool)> {
     // Handle pipe filters in expressions (e.g., "project.id|stringformat:\"s\"")
     //
     // The split is QUOTE-AWARE (#2409). `expr.contains('|')` and
@@ -3975,7 +4011,37 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         // Same two-resolvers-one-blind split #2376 closed for the bare literal,
         // one filter along. The recursion terminates: `var_name` is
         // `split_pipes`'s FIRST part and so contains no pipe.
-        let (mut value, mut runtime_safe) = get_value_safe(var_name, context)?;
+        let (mut value, mut runtime_safe) =
+            get_value_safe_inner(var_name, context, ignore_failures)?;
+        // Django's `ignore_failures=True` substitutes **None**, not "missing"
+        // (#2528, ADR-027). `FilterExpression.resolve` (`base.py:720-726`)
+        // reads
+        //
+        // ```python
+        // except VariableDoesNotExist:
+        //     if ignore_failures:
+        //         obj = None
+        // ```
+        //
+        // and every consumer of THIS function passes it: `{% if %}`
+        // (`defaulttags.py:886`), `{% for %}` (`:194`), `{% cycle %}`
+        // (`:153`), `{% firstof %}` (`:271`) and `{% regroup %}` (`:365`).
+        // The filter chain then runs over `None` — so
+        // `{% if x|default_if_none:y %}` with `x` undefined is Django's `y`
+        // and was djust's "no", because the chain ran over `Value::Missing`
+        // and `default_if_none` correctly refused to fire for it.
+        //
+        // Only the FILTERED operand is affected, which is the whole of the
+        // observable difference: with no filter in the chain `Missing` and
+        // `None` are both falsy to every consumer above, and substituting one
+        // for the other where the value is EMITTED (`{% firstof %}`) would
+        // change bytes for no Django reason.
+        //
+        // Gated on the flag with the rest of the movement: it is a behaviour
+        // change, and this movement's contract is flag-OFF byte identity.
+        if ignore_failures && djust_core::resolve_lazy() && matches!(value, Value::Missing) {
+            value = Value::None;
+        }
         // See the Variable arm: item-level safety, seeded from the context
         // (#2283, #2287) — the third of the three sites, kept in step with the
         // other two by construction (#1646).
@@ -4701,7 +4767,7 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
 /// LAST filter produced a genuine `SafeString` → fail-safe.
 fn first_of(args: &[String], context: &Context) -> Result<Option<String>> {
     for arg in args {
-        let (val, runtime_safe) = get_value_safe(arg.trim(), context)?;
+        let (val, runtime_safe) = get_value_safe_ignoring_failures(arg.trim(), context)?;
         if val.is_truthy() {
             let text = val.to_string();
             return Ok(Some(if runtime_safe {
@@ -6215,6 +6281,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
@@ -6230,6 +6297,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![]),
                 eq_class: None,
+                live: None,
             })),
             // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
             // Without it every `Encoded` sample here is EMPTY, and the sweep
@@ -6247,6 +6315,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![Value::String("a".to_string())]),
                 eq_class: None,
+                live: None,
             })),
             // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
             // has no length to read, so it `list()`s the object and renders
@@ -6264,6 +6333,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
+                live: None,
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
@@ -6280,6 +6350,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`
