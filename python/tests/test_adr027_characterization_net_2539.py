@@ -61,6 +61,7 @@ Refs #2539, #2535 (ADR-027), #2502, #2504, #2505, #2506, #2507, #2513, #2516,
 from __future__ import annotations
 
 import ast
+import contextlib
 import dataclasses
 import inspect
 import json
@@ -631,6 +632,39 @@ PLAIN_WRONG_TODAY = frozenset("A G H I J J2 K3 K4 M M2 M3 M5 M6 N N2 O P Q T V".
 LIVEVIEW_WRONG_TODAY = frozenset("A G J J2 M M2 M3 M4 M5 M6 N N2 N0 N0b O P Q T V".split())
 FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 
+#: The same question with ADR-027's kill-switch ON — a STATED set (#1125),
+#: like the two above, and deliberately NOT a fourth recorded column.
+#:
+#: A fourth column would state the flag-ON bytes as DATA, which is the same
+#: kind of recorded expectation the three columns already are — and would let
+#: a wrong flag-ON answer be recorded as correct, the way a curated table
+#: blinds you on the axis it did not sample. What movement 2 claims is
+#: *"with the flag ON the wrong set shrinks to this smaller set, and every row
+#: outside it equals **Django's** column"* — a claim about ``row.django``,
+#: which ``test_django_renders_what_the_table_says`` measures against the real
+#: Django engine every run. A row still in the set must keep TODAY's recorded
+#: bytes, so "wrong in a new way" fails too.
+#:
+#: Measured, not predicted. 29 of the 37 wrong in-process cells move to
+#: Django's bytes; these are the residue, and each has a NAMED reason:
+#:
+#: * ``O`` — an object whose ``__str__`` returns a ``SafeString`` renders
+#:   escaped. Needs a SafeData bit on ``Encoded``, which is a TWELFTH msgpack
+#:   slot; deferred with the wire widening (ADR-027 §Security 5).
+#: * ``V`` — a generator. ``opaque_gate`` declines a ONE-SHOT iterator
+#:   deliberately, and lifting that decline without the ``{% for %}`` sink
+#:   materialising through the handle would enumerate a caller's generator at
+#:   CONVERSION time — a NEW wrong answer, not an unfixed one. Deferred with
+#:   the ``Encoded`` accessor sweep.
+#: * ``J`` / ``J2`` / ``Q``, LiveView only — ``normalize_django_value``
+#:   replaces ANY callable with ``None`` before Rust sees it
+#:   (``serialization.py``'s "safety net: skip callables"), so a lambda and a
+#:   class never reach the sink on that path at all. The same shape as the
+#:   Component arm #2513 turns on, and deferred with it: lifting it changes
+#:   the LiveView STATE channel, not the resolution sink.
+PLAIN_WRONG_UNDER_LAZY = frozenset("O V".split())
+LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 O Q V".split())
+
 
 def recorded(row: Row, path: str) -> Any:
     return getattr(row, path)
@@ -688,6 +722,75 @@ def assert_wrong_rows_are_wrong_and_right_rows_are_right(row: Row, path: str, ac
 
 
 # ---------------------------------------------------------------------------
+# The ADR-027 kill-switch, as a test axis (#2539 movement 2)
+# ---------------------------------------------------------------------------
+@contextlib.contextmanager
+def resolve_lazy(enabled: bool):
+    """Flip ``LIVEVIEW_CONFIG['template_resolve_lazy']`` for the block.
+
+    Pushes it through the REAL wiring — ``apply_render_env()``, the one place
+    every render path acquires its ambient settings — and then ASSERTS the
+    Rust thread-local actually took the value. A fixture that set the config
+    and assumed the push would make every flag-ON assertion below vacuous if
+    the wiring broke; a setter with no getter cannot be tested end to end
+    (#2017), which is why ``_rust.resolve_lazy_enabled`` exists.
+    """
+    from djust.config import config
+    from djust.render_env import apply_render_env
+
+    previous = config.get("template_resolve_lazy", False)
+    config.update({"template_resolve_lazy": enabled})
+    apply_render_env()
+    assert _rust.resolve_lazy_enabled() is enabled, (
+        "the ADR-027 flag did not reach Rust — apply_render_env() is not wiring it"
+    )
+    try:
+        yield
+    finally:
+        config.update({"template_resolve_lazy": previous})
+        apply_render_env()
+
+
+#: The flag axis. ``off`` runs today's assertions byte-identically — that IS
+#: the no-behaviour-change proof — and ``on`` runs the shrunken-wrong-set ones.
+FLAGS = [pytest.param(False, id="lazy-off"), pytest.param(True, id="lazy-on")]
+
+
+def wrong_under_lazy(path: str) -> frozenset:
+    return PLAIN_WRONG_UNDER_LAZY if path == "plain" else LIVEVIEW_WRONG_UNDER_LAZY
+
+
+def assert_lazy_column(row: Row, path: str, actual: Any) -> None:
+    """With the flag ON: a row OUTSIDE the stated wrong set equals **Django's**
+    column; a row inside it still differs from Django AND still renders
+    today's recorded bytes. Module-level for the same reason its two siblings
+    are — ``TestTheTableIsLoadBearing`` calls it on a mutated row."""
+    expected = recorded(row, path)
+    if row.floor:
+        assert actual != row.django and actual == expected, (
+            f"row {row.id} on {path}: the serialization floor moved with the ADR-027 flag ON "
+            f"— {actual!r}. This cell is a SECURITY pin (SECURE_DEFAULTS Pattern 1); matching "
+            f"Django here is a leak, never progress."
+        )
+        return
+    if row.id in wrong_under_lazy(path):
+        assert actual != row.django, (
+            f"row {row.id} on {path} now matches Django with the flag ON ({actual!r}) — "
+            f"drop {row.id!r} from the *_WRONG_UNDER_LAZY set."
+        )
+        assert actual == expected, (
+            f"row {row.id} on {path} is wrong in a NEW way with the flag ON: {actual!r} "
+            f"(recorded {expected!r}, Django {row.django!r})"
+        )
+        return
+    assert actual == row.django, (
+        f"row {row.id} on {path} does not answer Django's bytes with the ADR-027 flag ON: "
+        f"{actual!r} != {row.django!r}. Either the movement regressed this cell, or the cell "
+        f"belongs in the *_WRONG_UNDER_LAZY set with a named reason."
+    )
+
+
+# ---------------------------------------------------------------------------
 # 1. The differential
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db
@@ -710,6 +813,61 @@ class TestTheDifferentialTable:
     def test_wrong_rows_are_wrong_and_right_rows_are_right(self, row: Row, path: str) -> None:
         actual = observe(RENDER[path], row.source, row.make_ctx())
         assert_wrong_rows_are_wrong_and_right_rows_are_right(row, path, actual)
+
+    @pytest.mark.parametrize(("row", "path"), CELLS)
+    def test_the_flag_off_column_is_the_committed_bytes(self, row: Row, path: str) -> None:
+        """Movement 2's headline gate: the switch OFF renders exactly what the
+        table records, EXPLICITLY off rather than by default. The two tests
+        above are the same claim in the ambient state; this one is the claim
+        with the flag pushed, which is what a project that switched it off and
+        back on gets."""
+        with resolve_lazy(False):
+            actual = observe(RENDER[path], row.source, row.make_ctx())
+        assert_column_is_todays_bytes(row, path, actual)
+
+    @pytest.mark.parametrize(("row", "path"), CELLS)
+    def test_the_flag_on_column_answers_django_outside_the_stated_set(
+        self, row: Row, path: str
+    ) -> None:
+        """Movement 2's delta, per cell. NOT a fourth recorded column — see
+        ``PLAIN_WRONG_UNDER_LAZY``: outside the stated set the assertion is
+        against ``row.django``, which is measured against the real Django
+        engine by ``test_django_renders_what_the_table_says``."""
+        with resolve_lazy(True):
+            actual = observe(RENDER[path], row.source, row.make_ctx())
+        assert_lazy_column(row, path, actual)
+
+    def test_the_flag_moves_the_cells_it_claims_and_no_others(self) -> None:
+        """The two states in ONE test, so the DELTA is asserted rather than
+        inferred from two independent runs. A row that is right today must
+        still be right with the flag on (no regression), and every row the
+        movement claims must actually move (no silent hold)."""
+        moved, held, regressed = set(), set(), set()
+        for row in ROWS:
+            for path in PATHS:
+                if recorded(row, path) is SEGFAULT or row.floor:
+                    continue
+                with resolve_lazy(False):
+                    off = observe(RENDER[path], row.source, row.make_ctx())
+                with resolve_lazy(True):
+                    on = observe(RENDER[path], row.source, row.make_ctx())
+                cell = f"{row.id}-{path}"
+                if off != row.django and on == row.django:
+                    moved.add(cell)
+                elif off != row.django:
+                    held.add(cell)
+                elif on != row.django:
+                    regressed.add(cell)
+        assert regressed == set(), (
+            f"the ADR-027 flag REGRESSED cells that answer Django today: {sorted(regressed)}"
+        )
+        expected_held = {f"{rid}-{path}" for path in PATHS for rid in wrong_under_lazy(path)} - {
+            f"{rid}-{path}" for rid, path in CRASH_CELLS
+        }
+        assert held == expected_held, (
+            f"held: +{sorted(held - expected_held)} -{sorted(expected_held - held)}"
+        )
+        assert len(moved) == 29, f"expected 29 cells to move, got {len(moved)}: {sorted(moved)}"
 
 
 class TestThePlainEntriesAgree:
@@ -760,6 +918,18 @@ class TestTheTableIsSelfConsistent:
             row = ROW_BY_ID[rid]
             assert row.plain != row.django and row.liveview != row.django, rid
 
+    def test_the_lazy_wrong_sets_are_subsets_of_todays(self) -> None:
+        """A row that answers Django TODAY cannot be listed as wrong under the
+        flag — that would be a regression the movement is claiming as
+        expected. And no floor row may appear in either set: a floor cell is
+        wrong DELIBERATELY and is governed by ``Row.floor``, not by these."""
+        assert PLAIN_WRONG_UNDER_LAZY <= PLAIN_WRONG_TODAY
+        assert LIVEVIEW_WRONG_UNDER_LAZY <= LIVEVIEW_WRONG_TODAY
+        assert not (PLAIN_WRONG_UNDER_LAZY & FLOOR_ROWS)
+        assert not (LIVEVIEW_WRONG_UNDER_LAZY & FLOOR_ROWS)
+        for rid in PLAIN_WRONG_UNDER_LAZY | LIVEVIEW_WRONG_UNDER_LAZY:
+            assert rid in ROW_BY_ID, rid
+
     def test_the_crash_cells_are_exactly_three(self) -> None:
         assert sorted(CRASH_CELLS) == [("H", "plain"), ("P", "liveview"), ("P", "plain")]
         assert len(CELLS) == 45 * 2 - 3
@@ -801,6 +971,32 @@ class TestTheTableIsLoadBearing:
         assert_wrong_rows_are_wrong_and_right_rows_are_right(row, "plain", "")
         with pytest.raises(AssertionError, match="SECURITY pin"):
             assert_wrong_rows_are_wrong_and_right_rows_are_right(row, "plain", row.django)
+
+    def test_the_lazy_check_reddens_in_all_three_directions(self) -> None:
+        """``assert_lazy_column`` is the flag-ON half and needs the same
+        treatment: a claimed row that does NOT reach Django, a held row that
+        silently DOES, and a floor row that leaks must each fail by name."""
+        # A row the movement claims (row I, plain) that fails to reach Django.
+        claimed = ROW_BY_ID["I"]
+        assert "I" not in PLAIN_WRONG_UNDER_LAZY, "the fixture row stopped being a claimed one"
+        assert_lazy_column(claimed, "plain", claimed.django)  # the genuine answer passes
+        with pytest.raises(AssertionError, match="does not answer Django's bytes"):
+            assert_lazy_column(claimed, "plain", claimed.plain)
+        # A HELD row (row O) that starts matching Django must fail loudly, so
+        # the residue set cannot rot into a floor.
+        held = ROW_BY_ID["O"]
+        assert "O" in PLAIN_WRONG_UNDER_LAZY
+        assert_lazy_column(held, "plain", held.plain)
+        with pytest.raises(AssertionError, match="WRONG_UNDER_LAZY"):
+            assert_lazy_column(held, "plain", held.django)
+        # And wrong in a NEW way is not the same as still wrong.
+        with pytest.raises(AssertionError, match="wrong in a NEW way"):
+            assert_lazy_column(held, "plain", held.plain + "x")
+        # The floor, with the flag ON.
+        floor = ROW_BY_ID["E1"]
+        assert_lazy_column(floor, "plain", floor.plain)
+        with pytest.raises(AssertionError, match="SECURITY pin"):
+            assert_lazy_column(floor, "plain", floor.django)
 
 
 class TestTheDjangoSideIsNonTrivial:
@@ -879,6 +1075,9 @@ settings.configure(
             "OPTIONS": {},
         }
     ],
+    # ADR-027's kill-switch, taken from argv so the child exercises the REAL
+    # config path (#2539). Absent -> the shipped default, which is OFF.
+    LIVEVIEW_CONFIG={"template_resolve_lazy": sys.argv[3:4] == ["lazy"]},
 )
 urlpatterns = []
 django.setup()
@@ -955,8 +1154,12 @@ print("RENDERED " + json.dumps(out))
 #: reading honest across platforms while a fix still flips to a named failure.
 CRASH_SIGNALS = {-signal.SIGSEGV, -signal.SIGBUS, -signal.SIGABRT}
 
+#: Crash cells ADR-027's flag does NOT fix, stated (#1125). See
+#: ``test_the_cell_under_the_lazy_flag`` for why this one is held.
+CRASH_CELLS_HELD_UNDER_LAZY = frozenset({("P", "liveview")})
 
-def run_child(key: str, path: str) -> subprocess.CompletedProcess:
+
+def run_child(key: str, path: str, *, lazy: bool = False) -> subprocess.CompletedProcess:
     """The repo's `python/` goes FIRST on `PYTHONPATH` so a worktree run
     imports the checkout under test, not an installed djust (#2533)."""
     env = dict(os.environ)
@@ -965,7 +1168,7 @@ def run_child(key: str, path: str) -> subprocess.CompletedProcess:
         p for p in (str(PYTHON_DIR), env.get("PYTHONPATH", "")) if p
     )
     return subprocess.run(
-        [sys.executable, "-c", CHILD, key, path],
+        [sys.executable, "-c", CHILD, key, path, *(["lazy"] if lazy else [])],
         capture_output=True,
         text=True,
         cwd=str(ROOT),
@@ -997,6 +1200,38 @@ class TestTheTwoCrashes:
             f"stdout tail={proc.stdout[-300:]!r}, stderr tail={proc.stderr[-300:]!r}) — the #2516/#2517 "
             f"crash is fixed; move the row to Django's bytes "
             f"({ROW_BY_ID[key].django!r}) and update the *_WRONG_TODAY sets."
+        )
+
+    @pytest.mark.parametrize(("key", "path"), CRASH_CELLS, ids=[f"{k}-{p}" for k, p in CRASH_CELLS])
+    def test_the_cell_under_the_lazy_flag(self, key: str, path: str) -> None:
+        """The #2516 crashes with ADR-027's flag ON. Two of the three are
+        fixed by it and the third is HELD — stated as data, because an
+        explicit hold is a finding and a silent one is a lie.
+
+        ``H-plain`` and ``P-plain`` are fixed by the SAME two mechanisms the
+        in-process rows turn on: nothing walks a `__dict__` eagerly any more
+        (so a reference cycle has no unbounded recursion to overflow), and the
+        segment walk carries Django's metaclass guard (so a `list`-subclass
+        CLASS never reaches `__class_getitem__`). ``P-liveview`` still dies,
+        and NOT in the sink: ``normalize_django_value`` replaces the class
+        with ``None`` before Rust sees it, so no handle exists, the value
+        stack cannot answer, and the pre-ADR sidecar walk — which is still
+        routed — makes the unguarded item call. It is fixed with the same
+        callable arm rows J / J2 / Q-liveview wait on.
+        """
+        proc = run_child(key, path, lazy=True)
+        if (key, path) in CRASH_CELLS_HELD_UNDER_LAZY:
+            assert proc.returncode in CRASH_SIGNALS, (
+                f"row {key} on {path} no longer crashes with the flag ON (rc={proc.returncode}) — "
+                f"drop it from CRASH_CELLS_HELD_UNDER_LAZY and record the win."
+            )
+            return
+        assert proc.returncode == 0, (
+            f"row {key} on {path} still dies with the ADR-027 flag ON (rc={proc.returncode}, "
+            f"stderr tail={proc.stderr[-500:]!r})"
+        )
+        assert child_rendered(proc) == ROW_BY_ID[key].django, (
+            f"row {key} on {path} survives with the flag ON but does not render Django's bytes"
         )
 
     @pytest.mark.django_db
@@ -1404,10 +1639,18 @@ def _lookup_segment_body(ctx: str) -> str:
     return ctx.split("fn lookup_segment", 1)[1].split("\n}\n", 1)[0]
 
 
-class TestTheSinkIsDefinedButUnrouted2539:
-    """`Context::walk_live` and `Walked` exist in `context.rs`; nothing calls
-    the helper; `lookup_segment` in particular does not. Movement 2 rewrites
-    this pin into "exactly one caller"."""
+def _fn_body(source: str, header: str) -> str:
+    """The body of a `fn`, from its header to the next same-indent `}`."""
+    after = source.split(header, 1)[1]
+    return after.split("\n    }\n", 1)[0]
+
+
+class TestTheSinkHasExactlyOneCaller2539:
+    """Movement 2's re-pointing of `TestTheSinkIsDefinedButUnrouted2539`.
+    `Context::walk_live` is still defined once, still reads no `Encoded`
+    attribute map and still calls no `lookup_segment` — and it now has
+    EXACTLY ONE caller, `Context::walk_from_handle`, and none anywhere else
+    in the workspace."""
 
     def test_the_sink_is_defined_once(self) -> None:
         ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
@@ -1416,9 +1659,18 @@ class TestTheSinkIsDefinedButUnrouted2539:
         assert "Object(pyo3::Bound<'py, pyo3::PyAny>)" in ctx
         assert "Invalid," in ctx
 
-    def test_nothing_calls_it(self) -> None:
+    def test_exactly_one_call_site_and_it_is_walk_from_handle(self) -> None:
         ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
-        assert CALLERS.findall(ctx) == [], "walk_live has a caller — movement 2 landed early?"
+        assert len(CALLERS.findall(ctx)) == 1, (
+            "the ADR-027 sink must have EXACTLY ONE call site — a second resolver "
+            "reaching it is the #1646 shape the whole movement exists to avoid"
+        )
+        assert "walk_live" in _fn_body(ctx, "fn walk_from_handle"), (
+            "the one caller is not `walk_from_handle`"
+        )
+        # The half of the movement-1 pin that stays TRUE FOREVER: the routing
+        # point returns an OWNED `Value`, and `lookup_segment` returns a
+        # BORROW into the value stack, so it can never be the call site.
         assert "walk_live" not in _lookup_segment_body(ctx)
         assert len(OTHER_CRATE_SOURCES) > 20, OTHER_CRATE_SOURCES
         for path in OTHER_CRATE_SOURCES:
@@ -1432,8 +1684,19 @@ class TestTheSinkIsDefinedButUnrouted2539:
             )
             callers = CALLERS.findall(stripped)
             assert callers == [], (
-                f"{path.relative_to(ROOT)} calls walk_live — movement 2 landed early?"
+                f"{path.relative_to(ROOT)} calls walk_live — a SECOND routing point"
             )
+
+    def test_the_route_is_gated_on_the_flag(self) -> None:
+        """The call site is reached only behind `resolve_lazy()`, which is
+        what makes the flag-OFF byte identity structural rather than a
+        measurement that could rot."""
+        ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
+        body = _fn_body(ctx, "fn resolve_without_builtins")
+        assert "crate::resolve_lazy()" in body, "the routing arm is not gated on the flag"
+        assert "walk_from_handle" in body, "resolve_without_builtins does not route"
+        gate = body.index("crate::resolve_lazy()")
+        assert gate < body.index("walk_from_handle"), "the gate is not above the route"
 
     def test_it_keeps_the_existing_reader_pins(self) -> None:
         """`TestTheSinkHasExactlyTheReadersItClaims` (#2481) counts ONE
@@ -1446,21 +1709,187 @@ class TestTheSinkIsDefinedButUnrouted2539:
         assert ".attrs.get(" not in body
         assert "lookup_segment(" not in body
 
-    def test_the_pin_goes_red_in_both_directions(self) -> None:
+    def test_the_pin_goes_red_in_every_direction(self) -> None:
         ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
-        with_caller = ctx + "\nlet _ = self.walk_live(py, obj, &parts, key);\n"
-        assert with_caller != ctx, "the ADD mutation did not apply"
-        assert len(CALLERS.findall(with_caller)) == 1
-        without_fn = ctx.replace("fn walk_live", "fn walk_dead", 1)
-        assert without_fn != ctx, "the REMOVE mutation did not apply"
-        assert without_fn.count("fn walk_live") == 0
-        body = _lookup_segment_body(ctx)
-        routed_body = body.replace(
-            "if let Value::Encoded(encoded) = current {",
-            "if let Value::Encoded(encoded) = current { let _ = walk_live;",
+        # A SECOND caller.
+        two = ctx + "\nlet _ = self.walk_live(py, obj, &parts, key);\n"
+        assert two != ctx, "the ADD mutation did not apply"
+        assert len(CALLERS.findall(two)) == 2
+        # ZERO callers.
+        none = ctx.replace("self.walk_live(", "self.walk_dead(", 1)
+        assert none != ctx, "the REMOVE mutation did not apply"
+        assert CALLERS.findall(none) == []
+        # A caller OUTSIDE `walk_from_handle` — the count still reads 1, so
+        # only the containment half catches this one.
+        moved = ctx.replace(
+            "self.walk_live(py, handle.bind(py).clone(), rest, key)",
+            "self.walk_dead(py, handle.bind(py).clone(), rest, key)",
+            1,
+        ).replace(
+            "fn walk_one_segment",
+            'fn elsewhere(&self) { let _ = self.walk_live(py, o, &[], ""); }\n    fn walk_one_segment',
             1,
         )
-        assert routed_body != body, "the ROUTE mutation did not apply"
-        routed = ctx.replace(body, routed_body, 1)
-        assert routed != ctx
-        assert "walk_live" in _lookup_segment_body(routed)
+        assert moved != ctx, "the MOVE mutation did not apply"
+        assert len(CALLERS.findall(moved)) == 1, "the move must keep the COUNT at one"
+        assert "walk_live" not in _fn_body(moved, "fn walk_from_handle")
+        # The GATE removed.
+        ungated = ctx.replace("if crate::resolve_lazy() {", "if true {", 1)
+        assert ungated != ctx, "the GATE mutation did not apply"
+        assert "crate::resolve_lazy()" not in _fn_body(ungated, "fn resolve_without_builtins")
+
+
+class TestTheHandleNeverReachesTheWire2539:
+    """The `Encoded` handle is TRANSIENT: it is not serialized, not compared
+    and not handed back to Python. Each of those is a `Value`-level contract
+    with a whole class of consequence behind it, so each is pinned at the
+    source rather than only exercised."""
+
+    CORE_RS = ROOT / "crates" / "djust_core" / "src" / "lib.rs"
+
+    def _core(self) -> str:
+        return _production(self.CORE_RS.read_text(encoding="utf-8"))
+
+    def test_the_serializer_does_not_write_it(self) -> None:
+        """P4. The `ENCODED_TAG` payload stays ELEVEN slots — which is what
+        makes "no wire pin moves" literally true, and why
+        `test_encoded_wire_positions_2471_2472.rs`'s assertions are unedited."""
+        core = self._core()
+        arm = core.split("Value::Encoded(e) if !serializer.is_human_readable()", 1)[1]
+        arm = arm.split("Value::", 1)[0]
+        assert "live" not in arm, "the serializer writes the transient handle"
+        assert "e.eq_class" in arm, "the slice no longer spans the payload"
+
+    def test_partial_eq_does_not_compare_it(self) -> None:
+        """P5. A round trip drops the handle, so comparing it would make every
+        restored value unequal to the one it was written from."""
+        body = self._core().split("impl PartialEq for Encoded", 1)[1].split("\n}", 1)[0]
+        assert "self.eq_class == other.eq_class" in body, "the slice moved"
+        assert "live" not in body
+
+    def test_neither_into_py_object_arm_hands_it_back(self) -> None:
+        """P6 / #2509: a handle can never reach a custom-tag handler's
+        `py_context`, because both `IntoPyObject` impls map an `Encoded` to
+        its DISPLAY string and nothing else."""
+        core = self._core()
+        owned = core.split("impl<'py> IntoPyObject<'py> for Value", 1)[1].split("\nimpl", 1)[0]
+        arm = owned.split("Value::Encoded(", 1)[1].split("Value::", 1)[0]
+        assert "display" in arm, "the Encoded arm stopped handing back the display string"
+        assert "live" not in arm, "a handle arm appeared in IntoPyObject for Value"
+        # The `&Value` impl has NO arm of its own — it clones and delegates,
+        # which is the stronger guarantee: there is one place to add a handle
+        # arm, not two. Pinned so a future hand-rolled copy has to face this.
+        borrowed = core.split("impl<'py> IntoPyObject<'py> for &Value", 1)[1].split("\n}\n", 1)[0]
+        assert "Value::Encoded" not in borrowed, (
+            "the &Value impl grew its own match — it must keep delegating to the owned one"
+        )
+        assert "self.clone().into_pyobject(py)" in borrowed
+
+    def test_a_handle_bearing_value_is_only_built_behind_the_flag(self) -> None:
+        """The carriage's own gate. `opaque_value` is the ONE producer, and it
+        attaches nothing unless `resolve_lazy()`."""
+        core = self._core()
+        body = core.split("pub fn opaque_value", 1)[1].split("\n/// ", 1)[0]
+        assert "resolve_lazy()" in body
+        assert core.count("Some(std::sync::Arc::new(ob.clone().unbind()))") == 1, (
+            "a second producer of the handle appeared — the ONE producer is opaque_value"
+        )
+
+    def test_the_teardown_clears_every_nested_handle(self) -> None:
+        """P7. `RustLiveView.state` is the one place a `Value` outlives a
+        render, so it gets an explicit clear; the containers a handle can ride
+        in are all covered."""
+        live_rs = _production(
+            (ROOT / "crates" / "djust_live" / "src" / "lib.rs").read_text(encoding="utf-8")
+        )
+        assert "fn clear_live_handles(&mut self)" in live_rs
+        walker = live_rs.split("fn clear_live_handles_in", 1)[1].split("\n}\n", 1)[0]
+        assert "encoded.live = None" in walker
+        for container in ("Value::List(items)", "Value::Object(map)", "Value::DictView"):
+            assert container in walker, f"{container} is not walked — a handle can hide there"
+
+
+class TestTheStrictHelpersAreTheSinksOwn2539:
+    """P8 / §3.3: `walk_one_segment` uses Django's exact step-3 tuple; the
+    loose helper — which carries an extra `AttributeError` for the PRE-ADR
+    walk's benefit — is named only by that walk."""
+
+    def test_the_sink_names_the_strict_helper(self) -> None:
+        ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
+        segment = _fn_body(ctx, "fn walk_one_segment")
+        assert "is_django_index_lookup_error_strict(" in segment
+        assert "is_django_index_lookup_error(py" not in segment
+        loose = _fn_body(ctx, "fn resolve_without_builtins")
+        assert "is_django_index_lookup_error(py" in loose
+
+    def test_the_strict_set_is_djangos_exact_tuple(self) -> None:
+        ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
+        body = ctx.split("fn is_django_index_lookup_error_strict", 1)[1].split("\n}", 1)[0]
+        for exc in ("PyIndexError", "PyValueError", "PyKeyError", "PyTypeError"):
+            assert exc in body, exc
+        assert "PyAttributeError" not in body, (
+            "AttributeError is not in Django's step-3 tuple (base.py:909-918)"
+        )
+
+    def test_the_underscore_refusal_is_the_first_statement(self) -> None:
+        """§3.2. Defence in depth, so its position is the whole of it: a guard
+        after step 1 would already have called `__getitem__`."""
+        ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
+        segment = _fn_body(ctx, "fn walk_one_segment")
+        assert "part.starts_with('_')" in segment
+        assert segment.index("starts_with('_')") < segment.index("get_item"), (
+            "the leading-underscore refusal must precede any item access"
+        )
+
+
+class TestTheFlagReachesEveryRenderEntry2539:
+    """P2: the ONE function every render path calls pushes all THREE ambient
+    settings, and the four Python render entries call it."""
+
+    def test_apply_render_env_pushes_all_three(self) -> None:
+        from djust import render_env
+
+        body = inspect.getsource(render_env.apply_render_env)
+        for applier in ("apply_active_timezone", "apply_number_format", "apply_resolve_lazy"):
+            assert f"{applier}()" in body, f"{applier} is not pushed by apply_render_env"
+
+    @pytest.mark.parametrize(
+        "module_path",
+        [
+            "djust/mixins/rust_bridge.py",
+            "djust/simple_live_view.py",
+            "djust/template/rendering.py",
+            "djust/components/base.py",
+        ],
+    )
+    def test_every_python_render_entry_calls_it(self, module_path: str) -> None:
+        source = (PYTHON_DIR / module_path).read_text(encoding="utf-8")
+        assert "apply_render_env" in source, (
+            f"{module_path} is a render entry that never acquires the ambient settings — "
+            f"the timezone (#2209), the number format (#2221) and the ADR-027 flag (#2539) "
+            f"all default to whatever the thread last rendered with"
+        )
+
+    def test_the_config_reader_is_the_only_one(self) -> None:
+        """The key is read in ONE place, like `template_auto_call` beside it."""
+        from djust import config as config_module
+
+        assert config_module.template_resolve_lazy_enabled() in (True, False)
+        offenders = []
+        for path in sorted((PYTHON_DIR / "djust").rglob("*.py")):
+            if path.name == "config.py":
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if '"template_resolve_lazy"' in text or "'template_resolve_lazy'" in text:
+                offenders.append(str(path.relative_to(PYTHON_DIR)))
+        assert offenders == [], (
+            f"these read the key inline instead of calling "
+            f"config.template_resolve_lazy_enabled(): {offenders}"
+        )
+
+    def test_the_default_is_off(self) -> None:
+        """Movement 2's contract in one assertion. Movement 3 flips it, and
+        this line is what it has to come here and change."""
+        from djust.config import LiveViewConfig
+
+        assert LiveViewConfig._defaults["template_resolve_lazy"] is False

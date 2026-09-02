@@ -126,6 +126,8 @@ fn sample() -> Encoded {
         // slot 7, so only the VALUES can catch a swap of the two
         // (#2480).
         eq_class: Some(djust_core::EqClass::Identity),
+        // TRANSIENT, never on the wire (#2539).
+        live: None,
     }
 }
 

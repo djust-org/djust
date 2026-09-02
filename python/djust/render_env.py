@@ -149,12 +149,46 @@ def _grouping_intervals(grouping: object) -> list[int]:
     return [int(grouping), 0]  # type: ignore[call-overload]
 
 
+def apply_resolve_lazy() -> None:
+    """Push ADR-027's lazy-resolution flag to Rust for the calling thread (#2539).
+
+    The third ambient setting, and the one whose home this module already
+    argued for. It has to be legible in TWO places in Rust — the conversion
+    (``impl FromPyObject for Value``, which decides whether an ordinary object
+    crosses as itself and carries a live handle) and the resolver
+    (``Context::resolve_without_builtins``, which decides whether a dotted
+    lookup walks that handle). The first has no ``Context`` and no config
+    parameter to thread one through, so a per-``Context`` flag could not reach
+    it; one thread-local read from both sites is one mechanism rather than two
+    seeded from one reader (#1646).
+
+    Default **OFF**, both here and in Rust. A read that raises leaves the flag
+    alone rather than taking a render down, exactly as the two settings above
+    do — and the Rust default is OFF, so an un-pushed thread renders today's
+    bytes.
+    """
+    try:
+        from ._rust import set_resolve_lazy
+    except ImportError:  # pragma: no cover - Rust build predates #2539
+        return
+    try:
+        from .config import template_resolve_lazy_enabled
+
+        enabled = template_resolve_lazy_enabled()
+    except Exception:  # pragma: no cover - config access is defensive
+        logger.debug("[djust] resolve-lazy read failed; leaving ADR-027 resolution off")
+        return
+    set_resolve_lazy(enabled)
+
+
 def apply_render_env() -> None:
     """Push every per-render Django setting Rust needs, for this thread.
 
     One entry point so a render path cannot pick up the timezone and miss the
-    number format (#1646). Both render paths call this and only this; the
-    structural test in ``test_timezone_render_2209.py`` pins that caller set.
+    number format (#1646) or ADR-027's resolution flag (#2539). Every render
+    path calls this and only this; the structural test in
+    ``test_timezone_render_2209.py`` pins that caller set.
     """
     apply_active_timezone()
     apply_number_format()
+    apply_resolve_lazy()

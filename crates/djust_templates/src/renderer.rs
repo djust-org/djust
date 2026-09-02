@@ -3976,6 +3976,35 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
         // one filter along. The recursion terminates: `var_name` is
         // `split_pipes`'s FIRST part and so contains no pipe.
         let (mut value, mut runtime_safe) = get_value_safe(var_name, context)?;
+        // Django's `ignore_failures=True` substitutes **None**, not "missing"
+        // (#2528, ADR-027). `FilterExpression.resolve` (`base.py:720-726`)
+        // reads
+        //
+        // ```python
+        // except VariableDoesNotExist:
+        //     if ignore_failures:
+        //         obj = None
+        // ```
+        //
+        // and every consumer of THIS function passes it: `{% if %}`
+        // (`defaulttags.py:886`), `{% for %}` (`:194`), `{% cycle %}`
+        // (`:153`), `{% firstof %}` (`:271`) and `{% regroup %}` (`:365`).
+        // The filter chain then runs over `None` — so
+        // `{% if x|default_if_none:y %}` with `x` undefined is Django's `y`
+        // and was djust's "no", because the chain ran over `Value::Missing`
+        // and `default_if_none` correctly refused to fire for it.
+        //
+        // Only the FILTERED operand is affected, which is the whole of the
+        // observable difference: with no filter in the chain `Missing` and
+        // `None` are both falsy to every consumer above, and substituting one
+        // for the other where the value is EMITTED (`{% firstof %}`) would
+        // change bytes for no Django reason.
+        //
+        // Gated on the flag with the rest of the movement: it is a behaviour
+        // change, and this movement's contract is flag-OFF byte identity.
+        if djust_core::resolve_lazy() && matches!(value, Value::Missing) {
+            value = Value::None;
+        }
         // See the Variable arm: item-level safety, seeded from the context
         // (#2283, #2287) — the third of the three sites, kept in step with the
         // other two by construction (#1646).
@@ -6215,6 +6244,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
@@ -6230,6 +6260,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![]),
                 eq_class: None,
+                live: None,
             })),
             // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
             // Without it every `Encoded` sample here is EMPTY, and the sweep
@@ -6247,6 +6278,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![Value::String("a".to_string())]),
                 eq_class: None,
+                live: None,
             })),
             // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
             // has no length to read, so it `list()`s the object and renders
@@ -6264,6 +6296,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
+                live: None,
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
@@ -6280,6 +6313,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`

@@ -454,6 +454,29 @@ impl RustLiveViewBackend {
         }
     }
 
+    /// Drop every ADR-027 live handle carried by this view's state (#2539).
+    ///
+    /// A handle is TRANSIENT by contract, and this is the teardown half of
+    /// that contract for the one place a `Value` outlives a render:
+    /// `RustLiveView.state`. It is the same discipline `set_raw_py_values`
+    /// has — that one is called on EVERY sync including the empty case,
+    /// precisely so a stale sidecar cannot survive a teardown — expressed for
+    /// a value-borne handle instead of a name-keyed map.
+    ///
+    /// **Not called per render, and that is deliberate.** `update_state`
+    /// MERGES, so a key whose value did not change keeps last render's
+    /// `Value` — clearing every handle each render would strip the handle
+    /// from exactly those entries and send their dotted lookups back to an
+    /// empty `attrs` map. Called instead where the view's identity resets: a
+    /// disconnect / re-mount. The msgpack round trip clears them for free
+    /// (`Deserialize` restores `live: None`), so a state entry that came back
+    /// from the state backend never carries one either.
+    fn clear_live_handles(&mut self) {
+        for value in self.state.values_mut() {
+            clear_live_handles_in(value);
+        }
+    }
+
     /// Update the template source while preserving VDOM state
     /// This allows dynamic templates to change without losing diffing capability
     fn update_template(&mut self, new_template_source: String) {
@@ -1696,6 +1719,65 @@ fn virtual_keyed_ops_enabled() -> bool {
 #[pyfunction]
 fn set_django_value_repr(enabled: bool) {
     djust_core::set_django_value_repr(enabled);
+}
+
+/// Drop the ADR-027 handle on this value and on every value nested inside it
+/// (#2539). The recursion covers the containers a handle can ride in: a list,
+/// a tuple, an object's map, and an `Encoded`'s own `attrs` / `items`.
+fn clear_live_handles_in(value: &mut Value) {
+    match value {
+        Value::Encoded(encoded) => {
+            encoded.live = None;
+            for nested in encoded.attrs.values_mut() {
+                clear_live_handles_in(nested);
+            }
+            if let Some(items) = encoded.items.as_mut() {
+                for nested in items {
+                    clear_live_handles_in(nested);
+                }
+            }
+        }
+        Value::List(items) | Value::Tuple(items) => {
+            for nested in items {
+                clear_live_handles_in(nested);
+            }
+        }
+        Value::Object(map) => {
+            for nested in map.values_mut() {
+                clear_live_handles_in(nested);
+            }
+        }
+        Value::DictView { items, .. } => {
+            for nested in items {
+                clear_live_handles_in(nested);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Set the CALLING THREAD's ADR-027 lazy-resolution flag (#2539 movement 2).
+///
+/// `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default **OFF** — with it off
+/// the engine's bytes are byte-identical to the pre-#2539 ones. Pushed by
+/// `djust.render_env.apply_render_env` beside the timezone (#2209) and the
+/// number format (#2221), for the reason that module exists: a render path
+/// cannot acquire one ambient setting and miss the other (#1646).
+///
+/// Thread-local rather than a `Context` field because half the work it gates
+/// lives inside `impl FromPyObject for Value`, which has no `Context` — see
+/// `djust_core::set_resolve_lazy`.
+#[pyfunction]
+fn set_resolve_lazy(enabled: bool) {
+    djust_core::set_resolve_lazy(enabled);
+}
+
+/// The calling thread's ADR-027 flag. Exposed so the Python side can ASSERT
+/// the wiring took effect rather than assume it — a setter with no getter
+/// cannot be tested end to end (#2017).
+#[pyfunction]
+fn resolve_lazy_enabled() -> bool {
+    djust_core::resolve_lazy()
 }
 
 /// Set the active render timezone for the CALLING THREAD (#2209).
@@ -4031,6 +4113,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;
+    m.add_function(wrap_pyfunction!(set_resolve_lazy, m)?)?;
+    m.add_function(wrap_pyfunction!(resolve_lazy_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(set_active_timezone, m)?)?;
     m.add_function(wrap_pyfunction!(active_timezone_name, m)?)?;
     m.add_function(wrap_pyfunction!(set_number_format, m)?)?;

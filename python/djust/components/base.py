@@ -57,7 +57,17 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
         from djust._rust import render_template
 
         from ..config import template_auto_call_enabled
+        from ..render_env import apply_render_env
 
+        # The FOURTH framework render entry, and it was the one missing from
+        # the ambient-settings handoff (#2209 / #2221 / #2539): a component
+        # rendered on a thread that had not already rendered a page got UTC
+        # timestamps, unlocalized numbers and — since ADR-027 — a resolution
+        # flag stuck at its default. It already reads the project's auto-call
+        # setting one line down, so this is the same one-line shape (#1646).
+        # A nested component inherits its enclosing render's thread-local and
+        # pays only the push.
+        apply_render_env()
         # A framework render path, so the project's auto-call setting governs
         # rather than the Rust entry point's Django-matching default (#2508).
         return render_template(template_str, context, template_auto_call_enabled())

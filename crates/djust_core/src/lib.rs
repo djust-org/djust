@@ -620,6 +620,39 @@ pub struct Encoded {
     /// died. Within a single render it cannot happen — every context object is
     /// alive at once, so their addresses are distinct.
     pub eq_class: Option<EqClass>,
+    /// The LIVE object this value was measured from — ADR-027's handle
+    /// (#2539). `None` unless [`resolve_lazy`] was on at the conversion.
+    ///
+    /// **TRANSIENT.** It is not serialized (the `ENCODED_TAG` payload stays
+    /// ELEVEN slots), not compared (`PartialEq for Encoded` does not mention
+    /// it), and not handed back to Python (`IntoPyObject` keeps mapping an
+    /// `Encoded` to [`Encoded::display`], so a handle can never reach a
+    /// custom-tag handler — #2509). A msgpack round trip therefore drops it
+    /// for free, and `Deserialize` restores `None`.
+    ///
+    /// **Why it rides IN the value.** The raw-Python sidecar is keyed by
+    /// TOP-LEVEL context name, so every construct that binds a value to a NEW
+    /// name — `{% for r in rows %}`, `{% with q=p %}`, `{% include … with %}`
+    /// — left the object unreachable under that name (#2504, #2505, #2542).
+    /// A handle carried by the value is carried by the BINDING, with no alias
+    /// fallback, no frame-origin bit and no per-construct plumbing.
+    ///
+    /// **`Arc` because `Py<T>` is not `Clone` in this workspace** (pyo3
+    /// without `py-clone`) while `Encoded` derives `Clone`, and a `Value` is
+    /// cloned per context entry per render. `Arc<Py<PyAny>>` clones with no
+    /// GIL — the same shape `Context::raw_py_objects` already uses.
+    ///
+    /// **What can never acquire one.** `crosses_as_encoded` / the
+    /// `FromPyObject` impl claim a `list`, a `dict`, a tuple, anything with
+    /// `__djust_serialize__` and any `Model` in arms ABOVE [`opaque_value`],
+    /// so no list, dict, model, manager or queryset reaches this field. That
+    /// is enforced by the existing ordering rather than by a new rule.
+    ///
+    /// **When it is `Some`, [`Encoded::attrs`] is EMPTY** — see
+    /// [`opaque_value`]. The handle is the authority for attribute lookups,
+    /// and the eager `__dict__` dump it replaces is the unbounded recursion
+    /// that segfaults on a reference cycle (#2516).
+    pub live: Option<std::sync::Arc<Py<PyAny>>>,
 }
 
 /// Which of Python's equality contracts a [`Value::Encoded`] obeys (#2480).
@@ -886,6 +919,13 @@ impl PartialEq for Encoded {
             // itself, which is the same note `values_structurally_equal`
             // already carries for `Value::Float`.
             && self.eq_class == other.eq_class
+        // [`Encoded::live`] is DELIBERATELY absent (#2539). This impl answers
+        // "did anything change on the way through the codec", and the codec
+        // does not carry the handle — a round trip drops it by construction,
+        // so comparing it would make every restored value unequal to the one
+        // it was written from and turn the wire pins red for a field that has
+        // no wire representation. It is also not a VALUE: two handles to the
+        // same object and one to a clone describe the same measured facts.
     }
 }
 
@@ -1506,6 +1546,12 @@ impl<'de> Deserialize<'de> for Value {
                                     _ => None,
                                 },
                                 eq_class: decode_eq_class(eq_class),
+                                // The handle is TRANSIENT (#2539): the wire
+                                // never carried it, so a restored value has
+                                // none. `{{ o.a }}` on a state entry that came
+                                // back from the backend re-acquires one at the
+                                // next conversion, or resolves through `attrs`.
+                                live: None,
                             })));
                         }
                         // TEN elements: the #2477/#2489 shape — slot 5
@@ -1550,6 +1596,12 @@ impl<'de> Deserialize<'de> for Value {
                                     _ => None,
                                 },
                                 eq_class: None,
+                                // The handle is TRANSIENT (#2539): the wire
+                                // never carried it, so a restored value has
+                                // none. `{{ o.a }}` on a state entry that came
+                                // back from the backend re-acquires one at the
+                                // next conversion, or resolves through `attrs`.
+                                live: None,
                             })));
                         }
                         // NINE elements: the #2481 shape, the attribute map
@@ -1588,6 +1640,12 @@ impl<'de> Deserialize<'de> for Value {
                                 // below: this width predates the field.
                                 items: None,
                                 eq_class: None,
+                                // The handle is TRANSIENT (#2539): the wire
+                                // never carried it, so a restored value has
+                                // none. `{{ o.a }}` on a state entry that came
+                                // back from the backend re-acquires one at the
+                                // next conversion, or resolves through `attrs`.
+                                live: None,
                             })));
                         }
                         // Eight elements: the #2471/#2472 shape, `repr` and
@@ -1628,6 +1686,12 @@ impl<'de> Deserialize<'de> for Value {
                                 // `iterable` for it exactly as it did.
                                 items: None,
                                 eq_class: None,
+                                // The handle is TRANSIENT (#2539): the wire
+                                // never carried it, so a restored value has
+                                // none. `{{ o.a }}` on a state entry that came
+                                // back from the backend re-acquires one at the
+                                // next conversion, or resolves through `attrs`.
+                                live: None,
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -1666,6 +1730,12 @@ impl<'de> Deserialize<'de> for Value {
                                 // `iterable` for it exactly as it did.
                                 items: None,
                                 eq_class: None,
+                                // The handle is TRANSIENT (#2539): the wire
+                                // never carried it, so a restored value has
+                                // none. `{{ o.a }}` on a state entry that came
+                                // back from the backend re-acquires one at the
+                                // next conversion, or resolves through `attrs`.
+                                live: None,
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -1695,6 +1765,12 @@ impl<'de> Deserialize<'de> for Value {
                                 // `iterable` for it exactly as it did.
                                 items: None,
                                 eq_class: None,
+                                // The handle is TRANSIENT (#2539): the wire
+                                // never carried it, so a restored value has
+                                // none. `{{ o.a }}` on a state entry that came
+                                // back from the backend re-acquires one at the
+                                // next conversion, or resolves through `attrs`.
+                                live: None,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -1722,6 +1798,12 @@ impl<'de> Deserialize<'de> for Value {
                                 // `iterable` for it exactly as it did.
                                 items: None,
                                 eq_class: None,
+                                // The handle is TRANSIENT (#2539): the wire
+                                // never carried it, so a restored value has
+                                // none. `{{ o.a }}` on a state entry that came
+                                // back from the backend re-acquires one at the
+                                // next conversion, or resolves through `attrs`.
+                                live: None,
                             })));
                         }
                     }
@@ -1931,6 +2013,12 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         attrs,
         items: None,
         eq_class: None,
+        // NEVER a handle, whatever the flag says (#2539). The datetime family
+        // carries its lookups by NAME in `attrs` (#2481) — measured from a C
+        // type with no `__dict__`, which no live walk would reach — and
+        // routing `{{ dt.year }}` through a handle instead would change the
+        // shape of a value the wire already carries correctly.
+        live: None,
     })
 }
 
@@ -2463,6 +2551,50 @@ pub fn set_django_value_repr(enabled: bool) {
 /// a setter alone cannot be (#2017).
 pub fn django_value_repr() -> bool {
     DJANGO_VALUE_REPR.load(Ordering::Relaxed)
+}
+
+thread_local! {
+    /// ADR-027's kill-switch, per THREAD (#2539 movement 2). Default `false`,
+    /// so a build with no Python side — and any thread that never rendered —
+    /// behaves exactly as before.
+    static RESOLVE_LAZY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Set this thread's ADR-027 lazy-resolution flag (#2539).
+///
+/// # Why a thread-local and not a `Context` field
+///
+/// Half of the work this flag gates lives inside `impl FromPyObject for Value`
+/// — a trait method with no `Context` and no config parameter, reached
+/// recursively from every nested dict value and list element. A `Context`
+/// field cannot reach it, so the two halves would need two mechanisms seeded
+/// from one reader, which is the #1646 shape this repo keeps paying for.
+///
+/// It is a thread-local rather than a process global for the reason the
+/// timezone (#2209) and the number format (#2221) are: djust renders run in
+/// `sync_to_async` worker threads and two connections render concurrently.
+/// It is pushed by `djust.render_env.apply_render_env`, beside those two —
+/// the module that exists precisely so "a render path cannot acquire one
+/// ambient setting and miss the other".
+///
+/// A nested render inherits the enclosing render's value, exactly as the
+/// timezone does; a thread that never called `apply_render_env` reads
+/// `false`. That is also what disposes of the `{% include … only %}`
+/// fresh-`Context` problem `auto_call` has (`renderer.rs`'s `Context::new()`
+/// there does not carry `auto_call`): a thread-local is not per-`Context`.
+pub fn set_resolve_lazy(enabled: bool) {
+    RESOLVE_LAZY.with(|c| c.set(enabled));
+}
+
+/// This thread's ADR-027 lazy-resolution flag (#2539). `false` by default.
+///
+/// Read at exactly two sites, and that is the whole of the routing:
+/// [`opaque_gate`]'s attribute-bearing decline (which decides whether an
+/// ordinary object CARRIES a live handle rather than being bulk-dumped) and
+/// `Context::resolve_without_builtins` (which decides whether a dotted lookup
+/// WALKS that handle). Exposed so the setter can be tested end to end (#2017).
+pub fn resolve_lazy() -> bool {
+    RESOLVE_LAZY.with(|c| c.get())
 }
 
 /// The code points CPython's `repr()` escapes: the union of the general
@@ -3225,7 +3357,16 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
     // is the arm an ordinary truthy object with attributes takes, and building
     // the full map to decline it would convert every attribute value only for
     // the `__dict__` arm below to convert them again.
-    if truthy && !iterable && has_public_dict_attrs(ob) {
+    //
+    // LIFTED under ADR-027's flag (#2539): the whole point of the sink is that
+    // an ordinary object crosses as itself — `{{ o }}` is `str(o)`, as Django
+    // renders it — and reaches its attributes through a LIVE walk rather than
+    // through a bulk dump of its `__dict__`. This one condition is the switch
+    // between the two carriers, and it is what rows I / T / K3 / K4 turn on.
+    // The ONE-SHOT iterator decline above is deliberately NOT lifted: reading
+    // a generator at conversion time would consume the caller's object, which
+    // is a NEW wrong answer rather than an unfixed one (row V, movement 3).
+    if !resolve_lazy() && truthy && !iterable && has_public_dict_attrs(ob) {
         return None;
     }
     Some(OpaqueFacts {
@@ -3488,6 +3629,16 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // `{{ p|pprint }}` over a `__bool__`-False instance renders whichever this
     // field holds. `repr()` is one call and answers it exactly.
     let repr = ob.repr().ok()?.extract::<String>().ok()?;
+    // ADR-027's transient handle (#2539). `Bound::unbind` needs no GIL token
+    // and makes no Python CALL — it is a refcount bump plus an `Arc`
+    // allocation, so attaching one adds no Rust→Python crossing to the
+    // per-render budget (#2532).
+    let lazy = resolve_lazy();
+    let live = if lazy {
+        Some(std::sync::Arc::new(ob.clone().unbind()))
+    } else {
+        None
+    };
     Some(Encoded {
         type_name,
         // No encoder spelling exists for these; `str(o)` is what the
@@ -3512,6 +3663,7 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // names and `LenZero() == LenZero()` is False WITHIN one — so no
         // carried spelling decides it. Filed as #2480.
         cmp_key: None,
+        live,
         // The object's PUBLIC `__dict__` (#2478) — the same map, built by the
         // same function, that the `__dict__` bulk-dump arm below would have
         // built. That IS the fix: this arm now claims a falsy object WITH
@@ -3525,7 +3677,22 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // Built only on the CLAIMING path; the decline above asks
         // `has_public_dict_attrs` instead, which reads the keys and converts
         // no values.
-        attrs: public_dict_attrs(ob).unwrap_or_default(),
+        //
+        // NOT built at all when a handle is attached (#2539). The handle is
+        // the authority for every attribute lookup under ADR-027, so building
+        // the map as well would be two mechanisms answering one question
+        // (#1646) — and the wrong one would WIN, because `Context::get`'s step
+        // 2 reads `attrs` and never auto-calls (Django resolves
+        // `{{ d.value }}` on a callable object by CALLING `d` first, which no
+        // eager map can express). It is also the recursion that segfaults:
+        // `public_dict_attrs` converts every attribute VALUE with no visited
+        // set, so an object whose `__dict__` reaches back to its own container
+        // kills the process (#2516 row H).
+        attrs: if lazy {
+            IndexMap::new()
+        } else {
+            public_dict_attrs(ob).unwrap_or_default()
+        },
         items,
         // The equality CONTRACT, measured from the live object (#2480). The
         // one producer that sets this: `django_json_encoded` leaves it `None`

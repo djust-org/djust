@@ -6868,6 +6868,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
@@ -6881,6 +6882,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![]),
                 eq_class: None,
+                live: None,
             })),
             // The FOURTH shape, and the one #2477/#2489 added: a NON-EMPTY
             // carried collection. It is what makes the `python_len` ==
@@ -6901,6 +6903,7 @@ mod tests {
                     Value::String("b".to_string()),
                 ]),
                 eq_class: Some(djust_core::EqClass::Set),
+                live: None,
             })),
             // The FIFTH: a falsy `__iter__` class with NO `__len__`. Django's
             // `|length` answers 0 (its `except TypeError`) while `{% for %}`
@@ -6918,6 +6921,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
+                live: None,
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -6936,6 +6940,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
         ]
     }
@@ -6988,6 +6993,7 @@ mod tests {
             attrs: Default::default(),
             items: None,
             eq_class: None,
+            live: None,
         }));
         assert!(iter_values(&legacy).is_some_and(|items| items.is_empty()));
         assert_eq!(python_len(&legacy), Some(0));
@@ -7441,6 +7447,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -7468,6 +7475,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![]),
                 eq_class: None,
+                live: None,
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -7486,6 +7494,7 @@ mod tests {
             attrs: Default::default(),
             items: None,
             eq_class: None,
+            live: None,
         }));
         assert!(
             iter_values(&hostile).is_none(),

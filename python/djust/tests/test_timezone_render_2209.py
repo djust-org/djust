@@ -248,11 +248,27 @@ def test_both_render_paths_call_the_same_timezone_function():
     UTC timestamps and the unseparated numbers the other two paths had been
     fixed for.
 
-    Deliberately NOT in the set: the nested ``_rust.render_template`` calls in
-    ``components/base.py`` and elsewhere. Those inherit a correct thread-local
-    from whichever top-level render encloses them, and pushing again costs
-    ~12us against a ~15us small render — ~78% overhead for no gain. If one of
-    them ever becomes reachable WITHOUT an enclosing render, it joins this set.
+    ``components/base.py`` JOINED the set in #2539 (ADR-027 movement 2), and
+    the reversal is recorded rather than quietly made. The earlier reading was
+    that a component render always has an enclosing top-level render to
+    inherit a correct thread-local from, so pushing again costs ~12us against
+    a ~15us small render — ~78% overhead for no gain. Two things changed it:
+
+    * a ``Component`` rendered OUTSIDE any djust render — from a plain Django
+      view, or as the first thing a fresh ``sync_to_async`` worker thread does
+      — never had an enclosing render to inherit from, so it was already
+      rendering UTC timestamps and unseparated numbers. That was a latent
+      gap, not a design.
+    * ADR-027's ``template_resolve_lazy`` is not a FORMATTING setting: an
+      unwired thread resolves dotted lookups by a different mechanism than
+      every other path on the same page. A wrong timezone is a wrong cell; a
+      wrong resolution mechanism is the parallel-path drift (#1646) the whole
+      movement exists to retire.
+
+    The ~12us is therefore paid deliberately, on the component path only, and
+    it is a per-render cost rather than a per-component-instance one. Still
+    deliberately absent: the other nested ``_rust.render_template`` callers,
+    which are reachable only from inside one of the four entries here.
     """
     import ast
     import pathlib
@@ -277,6 +293,7 @@ def test_both_render_paths_call_the_same_timezone_function():
                 callers.add(path.relative_to(root).as_posix())
 
     assert callers == {
+        "components/base.py",
         "mixins/rust_bridge.py",
         "simple_live_view.py",
         "template/rendering.py",

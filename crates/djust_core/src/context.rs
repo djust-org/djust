@@ -246,9 +246,22 @@ enum CallOutcome<'py> {
     AsIs(pyo3::Bound<'py, pyo3::PyAny>),
     /// The callable was invoked; continue the walk with its result.
     Called(pyo3::Bound<'py, pyo3::PyAny>),
-    /// `alters_data` refusal or an args-required callable — the whole
-    /// expression resolves to empty (Django's `string_if_invalid`).
+    /// `alters_data` refusal or an args-required callable — Django assigns
+    /// `current = string_if_invalid` INSIDE the per-segment loop and walks the
+    /// next bit (`base.py:925-937`).
     Empty,
+    /// A SILENT exception raised inside the auto-called method — Django's
+    /// OUTERMOST handler (`base.py:939-953`), which assigns
+    /// `string_if_invalid` and RETURNS.
+    ///
+    /// Distinct from [`CallOutcome::Empty`] because Django reaches the two
+    /// through different handlers and only one of them keeps walking: after a
+    /// silent `Model.DoesNotExist`, `{{ p.latest.isupper }}` is EMPTY in
+    /// Django, where after an `alters_data` refusal it is `False`. The
+    /// pre-ADR walk in [`Context::resolve_without_builtins`] collapses both
+    /// into `Value::Missing`, which is why splitting the variant is a no-op
+    /// with the ADR-027 flag off.
+    Silent,
 }
 
 /// Outcome of a Django-order walk over a LIVE object — the ADR-027 sink.
@@ -925,6 +938,38 @@ impl Context {
     /// of the several `Ok(None)` returns below — a per-branch fallback is the
     /// shape that leaves one branch behind.
     fn resolve_without_builtins(&self, key: &str) -> crate::Result<Option<Value>> {
+        // ADR-027's ONE routing point (#2539 movement 2). Behind
+        // `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default OFF — with the
+        // flag off this is a single thread-local `Cell<bool>` read and the
+        // engine's bytes are byte-identical to the pre-#2539 ones.
+        //
+        // FIRST, not after `get` — and that placement is the whole of the
+        // difference between "some dotted lookups resolve" and Django's
+        // answer. A handle-bearing `Encoded` is a value whose AUTHORITY is the
+        // live object, and three of Django's rules are unreachable once the
+        // value stack has answered:
+        //
+        // * the ROOT auto-call. `{{ callable }}` and `{{ SomeClass }}` are
+        //   `Context::get` hits, so a routing point below `get` never sees
+        //   them — Django calls both and renders the RESULT.
+        // * the auto-call at a MID segment. `{{ d.value }}` on a callable
+        //   object is Django's `d()` and then `.value` on its result; an
+        //   `attrs` map read by `Context::get`'s step 2 answers the raw
+        //   attribute instead, and wins.
+        // * every `{% for %}` / `{% with %}` binding, whose value carries the
+        //   handle with it (#2504, #2505, #2542).
+        //
+        // Placing it first is safe in the direction that matters: the arm
+        // fires ONLY where the deepest resolvable prefix is an `Encoded`
+        // carrying a handle, and nothing acquires a handle unless the flag is
+        // on (`opaque_value`). A `list`, a `dict`, a tuple, a `Model`, a
+        // `__djust_serialize__` object and the whole datetime family never
+        // carry one, so their resolution is untouched under either flag state.
+        if crate::resolve_lazy() {
+            if let Some(answer) = self.walk_from_handle(key)? {
+                return Ok(answer);
+            }
+        }
         if let Some(v) = self.get(key) {
             return Ok(Some(v.clone()));
         }
@@ -1013,7 +1058,11 @@ impl Context {
             // ({{ obj.get_settings.theme }}).
             current = match self.maybe_call(py, current, key)? {
                 CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
-                CallOutcome::Empty => return Ok(Some(Value::Missing)),
+                // BOTH "invalid" variants answer `Missing` here, which is
+                // byte for byte what this walk answered before the split
+                // (#2539). Telling them apart is the ADR-027 sink's job; this
+                // walk is deleted in movement 4.
+                CallOutcome::Empty | CallOutcome::Silent => return Ok(Some(Value::Missing)),
             };
             current = self.protect_sidecar(py, current);
             for part in &parts[1..] {
@@ -1107,7 +1156,11 @@ impl Context {
                 }
                 current = match self.maybe_call(py, current, key)? {
                     CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
-                    CallOutcome::Empty => return Ok(Some(Value::Missing)),
+                    // BOTH "invalid" variants answer `Missing` here, which is
+                    // byte for byte what this walk answered before the split
+                    // (#2539). Telling them apart is the ADR-027 sink's job; this
+                    // walk is deleted in movement 4.
+                    CallOutcome::Empty | CallOutcome::Silent => return Ok(Some(Value::Missing)),
                 };
                 current = self.protect_sidecar(py, current);
             }
@@ -1152,6 +1205,41 @@ impl Context {
         }
     }
 
+    /// [`Context::protect_sidecar`] with its failure arm CLOSED — the ADR-027
+    /// sink's floor (#2539 security review, requirement 1).
+    ///
+    /// `protect_sidecar` answers `Err(_) => obj`, so a `_protect_sidecar_value`
+    /// that RAISES for a mid-walk model hands the RAW model to the next
+    /// segment, and `{{ p.get_user.password }}` renders the hash. Fail-safe
+    /// for a *render* is fail-OPEN for a *floor*, and a floor that opens when
+    /// its own enforcement breaks is not one. `None` here is
+    /// [`Walked::Invalid`] at the call site: the cell renders empty.
+    ///
+    /// **The unreachable case is separated from the raising one, and that
+    /// separation is the whole design.** `py.import("djust.serialization")`
+    /// failing means there is no djust Python side on this interpreter — an
+    /// embedder, or a bare `cargo test` with no Django — where there is no
+    /// floor to fail closed about and refusing every lookup would break the
+    /// sink outright. The object passes through, exactly as it does today.
+    /// Once the function IS in reach, its raising is a floor failure and the
+    /// walk stops.
+    ///
+    /// Idempotent and cheap for the common case (wrapping a proxy returns it
+    /// unchanged), like the arm it hardens.
+    fn protect_sidecar_strict<'py>(
+        &self,
+        py: Python<'py>,
+        obj: pyo3::Bound<'py, pyo3::PyAny>,
+    ) -> Option<pyo3::Bound<'py, pyo3::PyAny>> {
+        let Ok(protect) = py
+            .import("djust.serialization")
+            .and_then(|m| m.getattr("_protect_sidecar_value"))
+        else {
+            return Some(obj);
+        };
+        protect.call1((obj,)).ok()
+    }
+
     /// Django-parity callable handling for one resolved attribute
     /// (ADR-024; mirrors `Variable._resolve_lookup`'s callable block).
     /// `path` is the full dotted expression, used only for the
@@ -1192,8 +1280,10 @@ impl Context {
                     match propagate_lookup_error(py, err) {
                         // Django's outer handler wraps the auto-call as well
                         // as the lookup, so a silent exception raised INSIDE
-                        // a nullary method renders empty, not 500.
-                        LookupOutcome::Empty => Ok(CallOutcome::Empty),
+                        // a nullary method renders empty, not 500 — and it
+                        // RETURNS rather than walking the next bit, which is
+                        // what `Silent` says and `Empty` does not (#2539).
+                        LookupOutcome::Empty => Ok(CallOutcome::Silent),
                         LookupOutcome::Raise(e) => Err(e),
                     }
                 }
@@ -1201,16 +1291,91 @@ impl Context {
             // Any other exception raised by the method propagates as a
             // render error, matching Django.
             Err(err) => match propagate_lookup_error(py, err) {
-                LookupOutcome::Empty => Ok(CallOutcome::Empty),
+                LookupOutcome::Empty => Ok(CallOutcome::Silent),
                 LookupOutcome::Raise(e) => Err(e),
             },
         }
     }
 
+    /// The ADR-027 sink's ONE call site (#2539 movement 2).
+    ///
+    /// Finds the LONGEST prefix of `key` that [`Context::get`] answers with a
+    /// [`Value::Encoded`] carrying a live handle, and walks the remaining
+    /// segments over the real Python object through [`Context::walk_live`].
+    /// # The outer `Option` is "did the sink answer", not "did it find a value"
+    ///
+    /// `Ok(None)` means NO prefix carried a handle, and the caller falls
+    /// through to the pre-ADR resolution — which is what bounds this change to
+    /// values that acquired one. `Ok(Some(answer))` means the sink ran, and
+    /// its answer is FINAL: `Some(None)` is Django's `VariableDoesNotExist`
+    /// and the caller must return it rather than re-trying.
+    ///
+    /// Collapsing the two — letting an `Invalid` fall through — walks the SAME
+    /// object a second time through the sidecar walk below, and Django's
+    /// auto-call makes that observable rather than merely wasteful:
+    /// `{{ d.value }}` on `test_callables`' `Doodad` left `num_calls == 2`
+    /// where Django leaves `1`. A resolution that produced nothing is an
+    /// ANSWER, and a second resolver asked after it is the #1646 shape.
+    ///
+    /// **The remainder may be EMPTY**, and that is not an oversight. `{{ o }}`
+    /// where `o` is a callable object or a CLASS is Django's root auto-call:
+    /// `Variable._resolve_lookup`'s callable block runs for the root bit
+    /// before any segment is walked, so Django renders `Cls()`'s `str` for
+    /// `{{ Cls }}` and the lambda's RESULT for `{{ callable }}`. A zero-length
+    /// remainder gives `walk_live` exactly that: `maybe_call` + the
+    /// serialization floor, then the terminal conversion.
+    ///
+    /// **The terminal re-enters `extract::<Value>()` deliberately**, and this
+    /// one line is what retires the eager `__dict__` dump. Under the flag an
+    /// object with no `Value` variant converts through [`crate::opaque_value`]
+    /// to an `Encoded` whose `display` is `str(o)` — Django's own bytes —
+    /// rather than to a `Value::Object` of its attributes. The conversion of
+    /// the RESULT is the call site's decision, which is why `Walked` hands
+    /// back a `Bound` rather than a `Value` (see [`Walked::Object`]).
+    ///
+    /// LONGEST first, so a nested handle wins over its container's: for
+    /// `{{ p.child.name }}` where both `p` and `p.child` carry one, the walk
+    /// starts at `p.child` and asks Python for one segment instead of two.
+    fn walk_from_handle(&self, key: &str) -> crate::Result<Option<Option<Value>>> {
+        let parts: Vec<&str> = key.split('.').collect();
+        // `consumed` counts segments answered by the value stack; the rest are
+        // walked live. `parts.len()` (the whole key) is included — that is the
+        // root-auto-call case above.
+        for consumed in (1..=parts.len()).rev() {
+            let prefix = if consumed == parts.len() {
+                key.to_string()
+            } else {
+                parts[..consumed].join(".")
+            };
+            let Some(Value::Encoded(encoded)) = self.get(&prefix) else {
+                continue;
+            };
+            let Some(handle) = encoded.live.clone() else {
+                continue;
+            };
+            let rest = &parts[consumed..];
+            return Python::attach(|py| -> crate::Result<Option<Option<Value>>> {
+                match self.walk_live(py, handle.bind(py).clone(), rest, key)? {
+                    // The terminal conversion. `ok()` rather than `?`: a value
+                    // Python refuses to convert is a MISS, which renders empty
+                    // — the same fail-to-absent every other arm of this
+                    // function takes.
+                    Walked::Object(obj) => Ok(Some(obj.extract::<Value>().ok())),
+                    // Django's `VariableDoesNotExist`, which the caller
+                    // renders as `string_if_invalid` ("") — and which is
+                    // FINAL, not a fall-through. See the doc comment.
+                    Walked::Invalid => Ok(Some(None)),
+                }
+            });
+        }
+        Ok(None)
+    }
+
     /// `django.template.base.Variable._resolve_lookup` (django 5.2.16
     /// `base.py:876-953`) over a LIVE `root`, one segment of `parts` at a
-    /// time — the ADR-027 sink. DORMANT in #2539 movement 1: nothing calls
-    /// it yet (see [`Walked`]).
+    /// time — the ADR-027 sink. Routed from exactly one call site,
+    /// [`Context::walk_from_handle`], behind the `template_resolve_lazy`
+    /// kill-switch (#2539 movement 2).
     ///
     /// `path` is the full dotted expression, used only as the label of the
     /// debug-mode ORM auto-call warning. Takes `py` rather than opening its
@@ -1242,11 +1407,46 @@ impl Context {
     ///    `int(bit)` `ValueError`, so it is `Invalid` without an item call.
     ///
     /// After the root and after every segment: [`Context::maybe_call`]
-    /// (auto-call unless `do_not_call_in_templates`; `alters_data` and an
-    /// args-required callable are `Invalid`; honours the `auto_call`
-    /// kill-switch) and then [`Context::protect_sidecar`] — djust's own
+    /// (auto-call unless `do_not_call_in_templates`; honours the `auto_call`
+    /// kill-switch) and then [`Context::protect_sidecar_strict`] — djust's own
     /// serialization floor (SECURE_DEFAULTS Pattern 1), which is not
     /// Django's rule and holds regardless of any option.
+    ///
+    /// # Django reaches `string_if_invalid` two ways, and only ONE keeps walking
+    ///
+    /// `_resolve_lookup` assigns `current = string_if_invalid` from two
+    /// different places, and they are not interchangeable:
+    ///
+    /// * **inside the per-segment loop** (`base.py:925-937`) for `alters_data`,
+    ///   an args-required callable and an unsignaturable one — and the loop
+    ///   then **continues with the next bit**. So `{{ o.delete.isupper }}` is
+    ///   `""` → `"".isupper` → callable → called → `False` in Django, not
+    ///   empty. That is [`CallOutcome::Empty`], which substitutes an empty
+    ///   Python `str` here and keeps going.
+    /// * **in the outermost `except Exception`** (`base.py:939-953`) for an
+    ///   exception carrying a truthy `silent_variable_failure`, which has
+    ///   already left the loop and **returns**. That is
+    ///   [`CallOutcome::Silent`], which is [`Walked::Invalid`].
+    ///
+    /// [`Walked::Invalid`] therefore means "Django stopped here" —
+    /// `VariableDoesNotExist` or a silent failure — and is what §6.2's
+    /// `ignore_failures` substitution keys on. `string_if_invalid` is `""` on
+    /// every djust path (delivering it as an engine option is an explicit ADR
+    /// non-goal, #2518), so the substitution is exact rather than approximate.
+    /// The pre-ADR sidecar walk in [`Context::resolve_without_builtins`]
+    /// collapses all of this into `Value::Missing` and is left alone —
+    /// changing it would be a behaviour change with the flag OFF.
+    ///
+    /// # The floor's failure arm is CLOSED here
+    ///
+    /// The pre-ADR walk's `protect_sidecar` answers `Err(_) => obj`, so a
+    /// `_protect_sidecar_value` that RAISES for a mid-walk model lets the raw
+    /// model flow on — the one open default in the sink's neighbourhood
+    /// (#2539 security review, requirement 1). [`Context::protect_sidecar_strict`]
+    /// answers `Invalid` instead. It still passes the object through when the
+    /// djust Python side is not importable at all, because an embedder with no
+    /// `djust.serialization` has no floor to fail closed about — that is a
+    /// DIFFERENT condition from "the floor ran and raised".
     ///
     /// Django's outermost `except Exception` — `silent_variable_failure`
     /// truthy renders `string_if_invalid`, anything else re-raises — is
@@ -1266,9 +1466,13 @@ impl Context {
         // (`{{ some_callable }}`), before any segment is walked.
         let mut current = match self.maybe_call(py, root, path)? {
             CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
-            CallOutcome::Empty => return Ok(Walked::Invalid),
+            CallOutcome::Empty => string_if_invalid(py)?,
+            CallOutcome::Silent => return Ok(Walked::Invalid),
         };
-        current = self.protect_sidecar(py, current);
+        current = match self.protect_sidecar_strict(py, current) {
+            Some(v) => v,
+            None => return Ok(Walked::Invalid),
+        };
 
         for part in parts {
             let next = match self.walk_one_segment(py, &current, part)? {
@@ -1277,9 +1481,13 @@ impl Context {
             };
             current = match self.maybe_call(py, next, path)? {
                 CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
-                CallOutcome::Empty => return Ok(Walked::Invalid),
+                CallOutcome::Empty => string_if_invalid(py)?,
+                CallOutcome::Silent => return Ok(Walked::Invalid),
             };
-            current = self.protect_sidecar(py, current);
+            current = match self.protect_sidecar_strict(py, current) {
+                Some(v) => v,
+                None => return Ok(Walked::Invalid),
+            };
         }
         Ok(Walked::Object(current))
     }
@@ -1294,6 +1502,24 @@ impl Context {
         current: &pyo3::Bound<'py, pyo3::PyAny>,
         part: &str,
     ) -> crate::Result<Walked<'py>> {
+        // Django refuses a leading underscore at `Variable.__init__`
+        // (`base.py:845-849`), BEFORE any lookup runs — so this is Django
+        // parity, not a djust-ism, and every one of these segments is
+        // `VariableDoesNotExist` on both engines.
+        //
+        // Defence in depth (#2539 security review, requirement 2). djust's
+        // parser already refuses the spelling (#2418) and the sidecar model
+        // proxies refuse the names again, so nothing user-typed reaches here
+        // with one. That is exactly why the guard belongs here: a future
+        // caller that builds a path programmatically — an accessor, a
+        // `{% regroup %}` key, a filter argument — would otherwise reach
+        // `getattr(o, "_state")` / `__class__` through this walk with no
+        // refusal of its own. Its test has to call the sink DIRECTLY for the
+        // same reason.
+        if part.starts_with('_') {
+            return Ok(Walked::Invalid);
+        }
+
         // Step 1, behind the metaclass guard. A failing `hasattr` probe is
         // answered "no `__getitem__`" — the guard may only SKIP an item call,
         // never invent one, so a broken metaclass falls to step 2 exactly as
@@ -1349,7 +1575,7 @@ impl Context {
             // `except (IndexError, ValueError, KeyError, TypeError)` →
             // `VariableDoesNotExist`; anything else is a real `__getitem__`
             // failure and propagates, as in steps 1 and 2.
-            Err(e) if !is_django_index_lookup_error(py, &e) => {
+            Err(e) if !is_django_index_lookup_error_strict(py, &e) => {
                 match propagate_lookup_error(py, e) {
                     LookupOutcome::Empty => Ok(Walked::Invalid),
                     LookupOutcome::Raise(err) => Err(err),
@@ -1462,6 +1688,37 @@ fn is_django_index_lookup_error(py: Python<'_>, err: &pyo3::PyErr) -> bool {
         || err.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
         || err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
         || err.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)
+}
+
+/// Django's step-3 catch set with NO extra member — the ADR-027 sink's
+/// (#2539 security review, requirement 3).
+///
+/// [`is_django_index_lookup_error`] above adds `AttributeError`, which
+/// Django's tuple (`base.py:909-918`) does not contain. That member exists for
+/// the PRE-ADR walk in [`Context::resolve_without_builtins`], whose step-2 arm
+/// reaches step 3 carrying the `AttributeError` it just caught; narrowing the
+/// shared helper would start propagating a real `__getitem__`'s
+/// `AttributeError` on that walk, which is a behaviour change with the flag
+/// OFF and therefore not this movement's to make. The loose helper is deleted
+/// with that walk in movement 4.
+///
+/// [`Context::walk_one_segment`] needs no such allowance: it answers `Invalid`
+/// for a non-integer segment BEFORE any item call, so the only exception that
+/// reaches this set came from a real `__getitem__` under an integer index —
+/// and an `AttributeError` raised there is the object's bug, which Django
+/// propagates.
+fn is_django_index_lookup_error_strict(py: Python<'_>, err: &pyo3::PyErr) -> bool {
+    err.is_instance_of::<pyo3::exceptions::PyIndexError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyValueError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+}
+
+/// Django's `string_if_invalid`, as a Python object the walk can keep going
+/// from (#2539). `""` on every djust path — see [`Context::walk_live`]'s
+/// "Django has TWO invalids" section.
+fn string_if_invalid(py: Python<'_>) -> crate::Result<pyo3::Bound<'_, pyo3::PyAny>> {
+    Ok(pyo3::types::PyString::new(py, "").into_any())
 }
 
 /// Django's `bit in dir(current)` probe (#2506).
