@@ -18,6 +18,10 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C010 | Config | Warning | Tailwind CDN in production templates |
 | C011 | Config | Info/Warning | Missing compiled Tailwind output.css |
 | C012 | Config | Warning | Manual client.js script tag in base template |
+| C013 | Config | Warning | Stale collectstatic copy of client.min.js |
+| C014 | Config | Warning | Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS |
+| C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
+| C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, or no DjangoTemplates fallback for admin |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |

@@ -141,7 +141,19 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # else at check time). The union closes the #1674 gap where a routed view
     # missing from LIVEVIEW_ALLOWED_MODULES was never flagged at check time.
     # Sorted for deterministic check output across runs.
-    discovered = {*_walk_subclasses(LiveView), *_routed_liveview_classes()}
+    #
+    # ORDER IS LOAD-BEARING: walk the URLconf FIRST. Importing the root
+    # URLconf is the side effect that imports every view module, and only an
+    # imported module's classes are visible to ``__subclasses__()``. Django's
+    # check registry is an id-hashed ``set``, so whether its own
+    # ``check_url_config`` (which imports the URLconf) has already run when
+    # this check executes depends on memory layout — the lazy package init
+    # (#2559) flipped that order on the demo project and silently dropped
+    # every non-routed LiveView subclass (545 → 492 messages). Evaluating
+    # ``_routed_liveview_classes()`` before the subclass walk makes the union
+    # complete regardless of registry order.
+    _routed = set(_routed_liveview_classes())
+    discovered = _routed | set(_walk_subclasses(LiveView))
     for cls in sorted(
         discovered,
         key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),

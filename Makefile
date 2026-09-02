@@ -268,6 +268,29 @@ test-python-parallel: ## Run Python tests in parallel (requires pytest-xdist)
 	@echo "$(GREEN)Running Python tests in parallel...$(NC)"
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto
 
+# CI runs python-tests as four pytest-split shards balanced by the durations
+# recorded in .test_durations (committed). pytest-split falls back to
+# splitting by test COUNT when an entry is missing, so a stale file only
+# unbalances the shards — it never drops a test. Refresh it when the suite
+# grows or shifts by more than ~10% (see CONTRIBUTING.md "CI shards"). One
+# full run of the same three roots CI uses; --clean-durations drops entries
+# for tests that no longer exist.
+.PHONY: test-durations
+test-durations: ## Regenerate .test_durations for the CI pytest-split shards (one full suite run)
+	@echo "$(GREEN)Recording per-test durations into .test_durations (full suite, ~7-10 min)...$(NC)"
+	@$(PYTHON) -c "import pytest_split" 2>/dev/null || { echo "$(YELLOW)pytest-split missing — install the [dev] extra$(NC)"; exit 1; }
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q \
+		--store-durations --clean-durations --durations-path .test_durations
+	@echo "$(GREEN)Wrote .test_durations — commit it with your change.$(NC)"
+
+# Run one CI shard exactly as the workflow does (default: shard 1 of 4).
+# `make test-shard GROUP=3` for another shard.
+GROUP ?= 1
+.PHONY: test-shard
+test-shard: ## Run one of the 4 CI pytest-split shards locally (GROUP=N)
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto \
+		--splits 4 --group $(GROUP) --durations-path .test_durations
+
 .PHONY: test-js
 test-js: ## Run JavaScript tests
 	@echo "$(GREEN)Running JavaScript tests...$(NC)"
