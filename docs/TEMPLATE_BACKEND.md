@@ -184,7 +184,19 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 ⚠️ **Not all Django features supported yet:**
 - Several Django built-in tags and most of Django's `{% load %}` library tags (`i18n`, `l10n`, `tz`, `cache`) are not implemented; the generated lists below are the authority
 - Django's `{% load %}` library *filters* (`unlocalize`, `language_name`, `utc`, …) are not implemented natively; they resolve only through the filter bridge, which needs a `DjangoTemplates` engine in `TEMPLATES` next to djust (the fallback engine in the Quick Start). The bridged `tz` filters resolve but currently render empty output (#2541)
-- A project's own `{% load %}` tag libraries are not loaded by the plain backend (the scoreboard's custom-library ERRORs below); register a handler with `djust.template_tags.register` instead
+- A project's own `{% load %}` tag libraries ARE loaded (#2547, see "Loading a project's template libraries" below); a raw `@register.tag` that consumes a body is the one shape that is refused
+
+### Loading a project's template libraries
+
+`{% load app_tags %}` imports the library the way Django does and bridges it into the Rust engine (#2547): the name resolves through Django's own library map — every installed app's `templatetags/` package (`get_installed_libraries()`) plus the backend's `OPTIONS['libraries']` — the module is imported with `django.template.library.import_library`, and every entry is registered. `{% load a b %}` and `{% load x y from lib %}` behave as on Django; an unknown name raises Django's exact `TemplateSyntaxError` at parse time.
+
+- **Filters** go through the same bridge as before (`is_safe` / `needs_autoescape` honoured; an `is_safe=True` filter keeps a safe input safe and never makes a hostile one safe).
+- **Tags** — `simple_tag`, `simple_block_tag`, `inclusion_tag`, and raw `@register.tag` functions that build a node from their own token — are rendered by the library's OWN compile function and Django node, so arguments, keyword arguments, `takes_context`, `as var`, escaping and inclusion-template rendering are Django's, byte for byte. A `takes_context` tag sees the template context as a plain dict.
+- **Refused, per tag:** a raw `@register.tag` whose compile function reads past its own token (`parser.parse((...))`, `next_token`, `skip_past`) has no token stream to consume here. The `{% load %}` succeeds and the rest of the library works; the moment a template uses that one tag the parser raises `TemplateSyntaxError: '<tag>' from library '<lib>' is a raw @register.tag that consumes a block … port it to @register.simple_block_tag, or wait for the raw-body registration kind (#2558)`. Port it to `simple_block_tag`.
+- **Not bridged, deliberately:** Django's own libraries (`i18n`, `l10n`, `tz`, `cache`, `static`) and djust's own `djust.templatetags.*`. They resolve — `{% load static %}` keeps parsing — but their tags come from the engine's native handlers, each its own row in the generated lists below.
+- **`OPTIONS['builtins']`** (dotted library paths) are bridged when the backend is constructed, so their tags and filters need no `{% load %}` — Django's meaning. Django's three default builtins are the Rust natives and are skipped.
+- **Scoping differs from Django.** Django scopes a loaded library to the template that loaded it; djust's registries are process-global, so once any render loads a library every later template on either engine path (plain backend or LiveView) sees its tags, `{% load %}` or not. A missing library is still refused. A test suite that clears the Rust tag registries must call `djust.template_libraries.reassert()` afterwards (the framework's own `djust.test_isolation` does): the Rust template cache is keyed by source, so a template parsed while the tags were registered is served from cache and never re-runs its `{% load %}`.
+- **Known gaps:** `context.use_l10n` / `autoescape` are not carried into a bridged tag's `Context` (#2586); the scoreboard's `test_no_render_side_effect` reads `template.nodelist`, a Django-internal attribute the backend does not have — a deliberate, documented ERROR (#2587).
 
 ### Supported and unsupported tags and filters
 
@@ -346,7 +358,7 @@ class HomeView(TemplateView):
 
 ### Missing Template Tags/Filters
 
-The generated lists above are the authority on what the backend supports. For an unsupported tag, either register a handler for it with `djust.template_tags.register` or route that template to the `DjangoTemplates` backend kept as a fallback in `TEMPLATES`.
+The generated lists above are the authority on what the backend supports. A project's own `{% load %}` libraries need nothing: they are bridged on load (see "Loading a project's template libraries"). For an unsupported Django built-in or library tag, either register a handler for it with `djust.template_tags.register` or route that template to the `DjangoTemplates` backend kept as a fallback in `TEMPLATES`.
 
 ## Use Cases
 
