@@ -165,13 +165,17 @@ Custom filters can take 0 or 1 argument:
 - Bare-identifier args (``|prefix:greeting``) are resolved against the
   template context first, then passed to the filter.
 
-Filters that produce HTML should declare ``is_safe=True`` so the
-renderer doesn't double-escape:
+``is_safe`` means exactly what it means in Django: the filter does not
+introduce HTML of its own, so a *safe* input may stay safe after it. It
+never makes an unsafe input safe — ``{{ user_text|shout }}`` is escaped
+whether or not ``shout`` is ``is_safe=True`` (#2548). A filter that
+*produces* markup must mark its own output, with ``mark_safe`` or
+``format_html``; the flag does nothing for it:
 
 ```python
-@register.filter(name="bold_html", is_safe=True)
+@register.filter(name="bold_html")
 def bold_html(value):
-    return mark_safe(f"<b>{value}</b>")
+    return format_html("<b>{}</b>", value)   # escapes value, output is safe
 ```
 
 Filters that need to know whether the surrounding template is in
