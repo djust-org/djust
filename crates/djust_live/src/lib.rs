@@ -470,7 +470,11 @@ impl RustLiveViewBackend {
     /// empty `attrs` map. Called instead where the view's identity resets: a
     /// disconnect / re-mount. The msgpack round trip clears them for free
     /// (`Deserialize` restores `live: None`), so a state entry that came back
-    /// from the state backend never carries one either.
+    /// from the state backend never carries one either — and, because a
+    /// handle-bearing value carries an EMPTY `attrs` map, such an entry
+    /// answers nothing for a dotted lookup until the next full sync
+    /// re-converts it (#2570; the Python bridge always syncs before the
+    /// first render of a clone).
     fn clear_live_handles(&mut self) {
         for value in self.state.values_mut() {
             clear_live_handles_in(value);
