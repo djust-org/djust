@@ -122,7 +122,8 @@ characterize, define dormant, wire, flip, delete.
 translations work. Each row is scored by the slice of the Django suite it turns
 green. The first #2517 baseline run filed #2518 (OPTIONS keys silently dropped),
 #2520 (`as var` never written back to the caller's Context) and #2521 (recursive
-`{% extends %}` across loaders); they belong here.
+`{% extends %}` across loaders), and the #2519 review added #2531 (`{{ block.super }}`
+drops the parent block on the backend path); they belong here.
 
 | Priority | Issue | Summary | Target |
 |---|---|---|---|
