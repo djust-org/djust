@@ -87,6 +87,7 @@ This directory contains comprehensive documentation for djust organized by topic
 ### 📄 Templates
 - **[Template Inheritance Design](templates/TEMPLATE_INHERITANCE_DESIGN.md)** - Inheritance system design
 - **[Template Inheritance Integration](templates/TEMPLATE_INHERITANCE_INTEGRATION.md)** - Integration guide
+- **[Django Template Backend](TEMPLATE_BACKEND.md)** - Use the Rust engine from any Django view; Django test-suite conformance scoreboard
 
 ### 🧪 Testing
 - **[JavaScript Testing](testing/TESTING_JAVASCRIPT.md)** - Test JavaScript code

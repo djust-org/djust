@@ -175,6 +175,35 @@ def my_view(request):
 
 See djust documentation for complete list of supported features.
 
+### Conformance
+
+The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
+
+- **43.55%** of the Django template tests that reach the engine pass (456 of 1047) <!-- django-suite-claim -->
+- Over the whole `template_tests` label the figure is 59.41% (865 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them.
+
+Two result kinds are counted separately because they are different work:
+
+- **ERROR**: the test could not run to an assertion. An unsupported tag, an attribute the backend cannot express, or a crash. Top classes in the baseline: `autoescape` (79), `blocktrans` (34), `ifchanged` (24), `trans` (19), `cache` (15), `querystring` (14).
+- **FAIL**: the test ran and the output was wrong. The largest class (111) is a `TemplateSyntaxError` that Django raises at parse time and djust does not. The rest are output mismatches such as `string_if_invalid` not honoured (#2518) and a leaked `<!--dj-if-->` marker (#2519).
+
+Seven `template_tests` cases segfault the interpreter (a `DjustTemplate` or a type object placed in the context, the #2516 reference-cycle class). The runner isolates each one: a crash records the in-flight test as `ERROR: process crashed`, skips it and every finished test, and relaunches, so nothing after a crash is lost.
+
+**Running it**
+
+```bash
+make django-template-suite   # clones django/django at the installed tag into .django-src/
+```
+
+Outputs land in `.django-src/last-run.txt` (one line per test plus the summary) and `.django-src/last-run.json`; both are gitignored. `scripts/run-django-template-suite.py run --gate-off` runs the same harness with the adapter not installed, Django against itself, and must report 100% or the harness is broken. `scripts/run-django-template-suite.py compare --json .django-src/last-run.json` is the ratchet: it exits non-zero when a run's percentage drops below the committed baseline.
+
+The number above moves only through `scripts/django-template-suite-baseline.json`, regenerated with `--write-baseline` in the PR that improves it, never edited by hand. A test pins this page's figure to that file. The `django-template-suite` CI job runs on every PR but is non-gating (`continue-on-error`, informational `compare`) until #2522 promotes it to a blocking ratchet.
+
+Known limits of the harness:
+
+- A crash with no test in flight (in a class or module `setUpClass`) cannot be attributed to a test. The run stops with a message naming how many tests had finished; isolate the module with `--label`.
+- Django's runner turns `RuntimeWarning` and `ResourceWarning` into errors. A future warning raised by djust would surface as ERRORs. That is a finding about the backend, not a harness bug.
+
 ## Performance
 
 ### Benchmarks
