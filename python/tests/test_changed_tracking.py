@@ -15,6 +15,18 @@ from djust.websocket import _snapshot_assigns, _compute_changed_keys
 # ---------------------------------------------------------------------------
 
 
+def _mock_rust_view() -> Mock:
+    """A stand-in ``RustLiveView`` for driving ``_sync_state_to_rust``.
+
+    ``retain_state_keys`` (#2564) is the one method whose RETURN the bridge
+    consumes — the removed keys join ``set_changed_keys`` — so a bare ``Mock``
+    hands back a ``Mock`` where a list is unpacked. Nothing is removed here.
+    """
+    mock = Mock()
+    mock.retain_state_keys.return_value = []
+    return mock
+
+
 class CounterView(LiveView):
     """Simple view to test changed/unchanged attribute tracking."""
 
@@ -237,7 +249,7 @@ class TestSyncStateChangeTracking:
         view = CounterView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         view._sync_state_to_rust()
@@ -250,7 +262,7 @@ class TestSyncStateChangeTracking:
         view = MultiAttrView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First sync — sends everything
@@ -277,7 +289,7 @@ class TestSyncStateChangeTracking:
         view = CachedDemoView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First sync — sends everything including demos
@@ -300,7 +312,7 @@ class TestSyncStateChangeTracking:
         view = CounterView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First sync
@@ -319,7 +331,7 @@ class TestSyncStateChangeTracking:
         view = CounterView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         view._changed_keys = {"count"}
@@ -337,7 +349,7 @@ class TestSyncStateChangeTracking:
         view = MultiAttrView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First sync — sends everything
@@ -360,7 +372,7 @@ class TestSyncStateChangeTracking:
         view = CounterView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         assert not hasattr(view, "_prev_context_refs") or not view._prev_context_refs
@@ -495,7 +507,7 @@ class TestDerivedContextSubObjectSync:
         view = DerivedContextView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First render — sends everything
@@ -517,7 +529,7 @@ class TestDerivedContextSubObjectSync:
         view = DerivedListView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First render
@@ -542,7 +554,7 @@ class TestDerivedContextSubObjectSync:
         view = CounterView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First render
@@ -577,7 +589,7 @@ class TestDerivedContextSubObjectSync:
         view = PrivateParentView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         view._sync_state_to_rust()
@@ -597,7 +609,7 @@ class TestDerivedContextSubObjectSync:
         view = DerivedContextView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First render
@@ -647,7 +659,7 @@ class TestDerivedImmutableSync:
         view = TodoStatsView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First render — sends everything
@@ -690,7 +702,7 @@ class TestDerivedImmutableSync:
         view = StatusView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         view._sync_state_to_rust()
@@ -720,7 +732,7 @@ class TestDerivedImmutableSync:
         view = FixedView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         view._sync_state_to_rust()

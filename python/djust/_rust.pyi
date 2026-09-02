@@ -874,6 +874,24 @@ class RustLiveView:
         """
         ...
 
+    def retain_state_keys(self, keys: List[str]) -> List[str]:
+        """
+        Drop every state key absent from ``keys`` and return the removed keys.
+
+        ``update_state`` merges and never removes (#2564); the bridge calls
+        this with the FULL context's keys before every ``update_state`` so a
+        key the context stopped carrying stops rendering. Removal revokes the
+        removed keys' safe grants (#2300). The caller adds the returned keys
+        to ``set_changed_keys`` so a partial render re-renders their regions.
+
+        Args:
+            keys: The keys to KEEP (the full context, plus static assigns)
+
+        Returns:
+            The keys that were removed
+        """
+        ...
+
     def mark_safe_keys(self, keys: List[str]) -> None:
         """
         Mark context keys as safe (skip auto-escaping).
