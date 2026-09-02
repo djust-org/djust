@@ -14,6 +14,7 @@ from uuid import UUID
 
 from django.core.serializers.json import DjangoJSONEncoder as _DjangoJSONEncoder
 from django.db import models
+from django.utils.datastructures import MultiValueDict
 from django.utils.functional import Promise
 
 logger = logging.getLogger(__name__)
@@ -1164,6 +1165,15 @@ def _protect_sidecar_tree(
         return protected
     if not isinstance(value, (list, tuple, dict, set, frozenset)):
         return value
+    # A `QueryDict` / `MultiValueDict` is a dict subclass whose VALUES are
+    # lists behind a last-value `items()`, and whose type is the point: a
+    # `{% querystring my_qd a=2 %}` handler calls `.copy()` / `.setlist()` /
+    # `.urlencode()` on it (#2556). Rebuilding it as a plain `dict` below
+    # would drop every repeated key and every one of those methods. It is
+    # request data — strings (or uploads), never a model — so there is
+    # nothing under it for the floor to protect; hand it over as it is.
+    if isinstance(value, MultiValueDict):
+        return value
     if _depth >= _SIDECAR_MAX_DEPTH:
         logger.debug(
             "[djust] sidecar floor stopped at depth %s for a %s; values below it are unprotected",
@@ -1378,6 +1388,13 @@ class _SidecarModelProxy:
         # terminal value of a walk.
         return str(object.__getattribute__(self, "_obj"))
 
+    def __repr__(self) -> str:
+        # ``{% debug %}`` (#2556) ``pformat``s the context, and Django's
+        # ``Model.__repr__`` is ``<Class: str(self)>`` — the same text
+        # ``__str__`` above already hands out, so delegating leaks nothing
+        # the proxy did not already expose.
+        return repr(object.__getattribute__(self, "_obj"))
+
 
 class _SidecarQuerySetProxy:
     """Floor-preserving wrapper for a Django ``Manager`` / ``QuerySet`` reached
@@ -1585,6 +1602,15 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
         return value
 
     if isinstance(value, str):
+        return value
+
+    # A `QueryDict` / `MultiValueDict` keeps its TYPE (#2556): its multi-values
+    # and `.urlencode()` are what `{% querystring my_qd a=2 %}` needs, and a
+    # rebuilt plain dict has neither. The Rust `Value` extractor reads it as
+    # the dict it is (last value per key) for `{{ qd.a }}`; the raw object
+    # rides the render sidecar to the handler. Request data holds strings,
+    # never a model, so there is nothing below it for this pass to normalize.
+    if isinstance(value, MultiValueDict):
         return value
 
     # Containers -- recurse

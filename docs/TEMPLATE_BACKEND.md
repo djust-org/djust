@@ -205,11 +205,11 @@ Reference: Django 5.2.16 — `django.template.defaultfilters`, `defaulttags` and
 
 **Built-in filters — unsupported (0):** none
 
-**Built-in tags — 18 of 25 supported:**
-- native Rust (16): `block`, `comment`, `csrf_token`, `cycle`, `extends`, `firstof`, `for`, `if`, `include`, `load`, `now`, `spaceless`, `templatetag`, `verbatim`, `widthratio`, `with`
-- via Python handler (2): `regroup`, `url`
+**Built-in tags — 23 of 25 supported:**
+- native Rust (18): `block`, `comment`, `csrf_token`, `cycle`, `extends`, `filter`, `firstof`, `for`, `if`, `include`, `load`, `now`, `resetcycle`, `spaceless`, `templatetag`, `verbatim`, `widthratio`, `with`
+- via Python handler (5): `debug`, `lorem`, `querystring`, `regroup`, `url`
 
-**Built-in tags — unsupported (7):** `autoescape`, `debug`, `filter`, `ifchanged`, `lorem`, `querystring`, `resetcycle`
+**Built-in tags — unsupported (2):** `autoescape`, `ifchanged`
 
 **Library tags (`{% load … %}`) — supported (1):** `static`
 

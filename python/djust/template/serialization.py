@@ -6,6 +6,7 @@ Converts Django/Python types to JSON-compatible values for the Rust engine.
 
 from datetime import date, datetime, time
 from decimal import Decimal
+from django.utils.datastructures import MultiValueDict
 from typing import Any, Dict, List, Union, cast
 from uuid import UUID
 
@@ -87,6 +88,13 @@ def serialize_value(
     form_result = render_form_value(value)
     if form_result is not None:
         return cast(str, form_result)
+
+    # A `QueryDict` / `MultiValueDict` keeps its TYPE (#2556) — the same rule
+    # as `djust.serialization.normalize_django_value`: `{% querystring my_qd
+    # a=2 %}` needs its multi-values and `.urlencode()`, which a rebuilt
+    # plain dict has neither of. Request data is strings, never a model.
+    if isinstance(value, MultiValueDict):
+        return cast(JSONValue, value)
 
     # Handle dict - recursively serialize
     if isinstance(value, dict):

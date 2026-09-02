@@ -272,9 +272,9 @@ class TestExtractionMatchesTheRegistries:
         assert not (native & handler)
         assert not (native & unsupported)
         assert not (handler & unsupported)
-        # The two Python-handler tags and the native collision rule
+        # The five Python-handler tags (#2556 added three) and the native collision rule
         # (`templatetag` has both an arm and a handler; the arm wins).
-        assert handler == {"regroup", "url"}
+        assert handler == {"debug", "lorem", "querystring", "regroup", "url"}
         assert "templatetag" in native
 
     def test_native_tag_extraction_sees_an_injected_arm(self, gen, tmp_path):

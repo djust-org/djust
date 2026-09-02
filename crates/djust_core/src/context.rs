@@ -215,6 +215,19 @@ pub struct Context {
     /// whichever path parsed first decide for both. Mirrors `auto_call`;
     /// `{% include … only %}` builds a fresh `Context` and must copy it.
     emit_dj_if_markers: bool,
+    /// Per-RENDER state for `{% cycle %}` / `{% resetcycle %}` (#2556):
+    /// `cycle node id -> number of times it has advanced`. Django keeps this
+    /// in `context.render_context[node]`, an `itertools.cycle` per
+    /// `CycleNode` per render, and `Context.__copy__` shallow-copies
+    /// `render_context` so every derived context (`{% for %}`, `{% with %}`,
+    /// `{% include %}`, `context.new()` for `include … only`) SHARES it.
+    /// `Clone` shares the `Arc` for the same reason; `new()` / `from_dict()`
+    /// start a fresh store, and every top-level render entry builds a fresh
+    /// `Context`, which is what makes the state per-render by construction.
+    /// The key is the parser-assigned node id (`<template-prefix>-cycle-N`),
+    /// so two `{% include %}`s of one template share a node's state exactly
+    /// as Django's cached `Template` shares its `CycleNode` objects.
+    cycle_state: std::sync::Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
 impl Default for Context {
@@ -234,6 +247,10 @@ impl Clone for Context {
             raw_py_objects: self.raw_py_objects.clone(),
             auto_call: self.auto_call,
             emit_dj_if_markers: self.emit_dj_if_markers,
+            // SHARED, not copied: Django's `Context.__copy__` shallow-copies
+            // `render_context`, so a `{% for %}` / `{% with %}` clone
+            // advances the same `{% cycle %}` iterators as its parent.
+            cycle_state: std::sync::Arc::clone(&self.cycle_state),
         }
     }
 }
@@ -292,6 +309,7 @@ impl Context {
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            cycle_state: std::sync::Arc::default(),
         }
     }
 
@@ -311,6 +329,7 @@ impl Context {
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            cycle_state: std::sync::Arc::default(),
         }
     }
 
@@ -331,6 +350,41 @@ impl Context {
     /// Should the renderer emit `<!--dj-if-->` markers under this context?
     pub fn emit_dj_if_markers(&self) -> bool {
         self.emit_dj_if_markers
+    }
+
+    /// Advance one `{% cycle %}` node's per-render iterator and return the
+    /// index it was AT (#2556) — Django's `next(itertools.cycle(values))`
+    /// on `render_context[node]`. The first call for an id returns `0`.
+    /// `len == 0` is the caller's problem; this only counts.
+    pub fn cycle_advance(&self, id: &str) -> usize {
+        let mut state = self
+            .cycle_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let slot = state.entry(id.to_string()).or_insert(0);
+        let at = *slot;
+        *slot += 1;
+        at
+    }
+
+    /// `{% resetcycle %}`: `CycleNode.reset` replaces the iterator with a
+    /// fresh `itertools.cycle`, so the next advance yields the first value.
+    pub fn cycle_reset(&self, id: &str) {
+        let mut state = self
+            .cycle_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.insert(id.to_string(), 0);
+    }
+
+    /// Make this context share `other`'s per-render `{% cycle %}` store.
+    ///
+    /// For the ONE derived context that is not a `Clone`: the fresh
+    /// `Context::new()` an `{% include … only %}` builds. Django's
+    /// `Context.new()` is `copy(self)` with the dicts replaced, so
+    /// `render_context` is still the same object there (`cycle24`).
+    pub fn share_cycle_state_from(&mut self, other: &Context) {
+        self.cycle_state = std::sync::Arc::clone(&other.cycle_state);
     }
 
     /// Attach a map of raw Python objects for `getattr`-fallback

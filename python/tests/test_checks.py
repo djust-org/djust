@@ -3883,7 +3883,7 @@ class TestT011UnsupportedTemplateTags:
                 """\
                 {# noqa: T011 #}
                 <div dj-view="myapp.views.MyView">
-                    {% resetcycle %}
+                    {% ifchanged %}x{% endifchanged %}
                 </div>
                 """
             )
@@ -3909,9 +3909,9 @@ class TestT011UnsupportedTemplateTags:
             textwrap.dedent(
                 """\
                 <div dj-view="myapp.views.MyView">
-                    {% resetcycle %}
-                    {% lorem 3 p %}
-                    {% debug %}
+                    {% ifchanged a %}x{% endifchanged %}
+                    {% ifchanged b %}y{% endifchanged %}
+                    {% ifchanged c %}z{% endifchanged %}
                 </div>
                 """
             )

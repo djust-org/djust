@@ -836,7 +836,8 @@ fn firstof_and_the_variable_arm_agree_about_a_context_safe_value() {
     let ctx = safe_ctx("html", "<b>trusted</b>");
     assert_eq!(render("{% firstof html %}", &ctx), "<b>trusted</b>");
     assert_eq!(render("{% firstof html|lower %}", &ctx), "<b>trusted</b>");
-    assert_eq!(render("{% cycle html %}", &ctx), "<b>trusted</b>");
+    // Two operands: one operand is the `{% cycle name %}` REFERENCE form (#2556).
+    assert_eq!(render("{% cycle html html %}", &ctx), "<b>trusted</b>");
 }
 
 #[test]

@@ -413,6 +413,15 @@ def _register_builtins() -> None:
         from . import client_config  # noqa: F401
         from . import live_render  # noqa: F401  # #1145
         from . import regroup  # noqa: F401  # Django {% regroup %} parity
+        from . import debug  # noqa: F401  # Django {% debug %} (#2556)
+        from . import lorem  # noqa: F401  # Django {% lorem %} (#2556)
+
+        # `{% querystring %}` exists on Django >= 5.1 only; below that the tag
+        # is unsupported on BOTH engines and the generated doc lists agree.
+        import django
+
+        if django.VERSION >= (5, 1):
+            from . import querystring  # noqa: F401  # Django {% querystring %} (#2556)
     except ImportError as e:
         logger.debug("Could not import built-in handlers: %s", e)
 
