@@ -192,9 +192,14 @@ worktree-env: ## Own .venv + Rust extension for this checkout/worktree (pip, not
 	else \
 		echo "$(GREEN)Reusing existing .venv$(NC)"; \
 	fi; \
-	echo "$(GREEN)Installing requirements-dev.txt with pip...$(NC)"; \
-	$(WT_VENV)/bin/python -m pip install --quiet --upgrade pip && \
-	$(WT_VENV)/bin/python -m pip install --quiet -r requirements-dev.txt && \
+	$(WT_VENV)/bin/python -m pip install --quiet --upgrade pip || exit 1; \
+	if command -v uv >/dev/null && uv export --frozen --no-hashes --no-emit-project --extra dev -o $(WT_VENV)/lock-requirements.txt >/dev/null 2>&1; then \
+		echo "$(GREEN)Installing the LOCKED versions from uv.lock (uv export --frozen: no resolve, no relock)...$(NC)"; \
+		$(WT_VENV)/bin/python -m pip install --quiet -r $(WT_VENV)/lock-requirements.txt || exit 1; \
+	else \
+		echo "$(GREEN)uv not available: installing requirements-dev.txt with pip (unpinned; expect version skew vs the main venv)...$(NC)"; \
+		$(WT_VENV)/bin/python -m pip install --quiet -r requirements-dev.txt || exit 1; \
+	fi; \
 	$(WT_VENV)/bin/python -c 'import tomllib;p=tomllib.load(open("pyproject.toml","rb"))["project"];print("\n".join(p["dependencies"]+p["optional-dependencies"]["dev"]))' > $(WT_VENV)/pyproject-deps.txt && \
 	$(WT_VENV)/bin/python -m pip install --quiet -r $(WT_VENV)/pyproject-deps.txt || exit 1; \
 	echo "$(GREEN)Building the Rust extension into this checkout (release)...$(NC)"; \

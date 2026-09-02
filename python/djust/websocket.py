@@ -587,6 +587,45 @@ def _find_sticky_slot_ids(html: str) -> set[str]:
     return p.ids
 
 
+def _clear_live_handles(view_instance: Any) -> None:
+    """Drop the ADR-027 live handles a torn-down view's Rust state holds (#2539).
+
+    A ``Value::Encoded`` produced under ``template_resolve_lazy`` carries the
+    Python object it was measured from, so ``RustLiveView.state`` — which
+    outlives a render and is only replaced key-by-key as values change — keeps
+    a strong reference to every such object for the life of the connection.
+    That is the same retention the raw-Python sidecar has, and the sidecar is
+    already cleared on every sync precisely so a stale one cannot survive; this
+    is the value-borne half of that discipline.
+
+    Called at the DISCONNECT teardown rather than per render, and the
+    distinction is load-bearing: ``update_state`` MERGES, so a key whose value
+    did not change keeps last render's ``Value``. Clearing every render would
+    strip the handle from exactly those entries and send their dotted lookups
+    to an empty attribute map.
+
+    Best-effort by construction — a teardown that raises would mask the
+    disconnect — and a no-op on a build whose Rust side predates #2539.
+    """
+    rust_view = getattr(view_instance, "_rust_view", None)
+    if rust_view is None:
+        return
+    # BOTH channels, because both hold `Py<PyAny>` for the life of the
+    # connection and draining one leaves the objects reachable through the
+    # other. The sidecar is keyed by top-level name and already has this
+    # discipline per render (`set_raw_py_values` is called on every sync
+    # INCLUDING the empty case, so a stale entry cannot survive); the handles
+    # are the value-borne half, which no per-render call reaches.
+    for name, args in (("clear_live_handles", ()), ("set_raw_py_values", ({},))):
+        method = getattr(rust_view, name, None)
+        if method is None:
+            continue
+        try:
+            method(*args)
+        except Exception:  # noqa: BLE001 — cleanup must never break a disconnect
+            logger.warning("%s failed during teardown", name, exc_info=True)
+
+
 class LiveViewConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for handling LiveView connections.
@@ -1970,6 +2009,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._sticky_preserved = {}
 
         # Clean up session state
+        _clear_live_handles(self.view_instance)
         self.view_instance = None
         self.actor_handle = None
         # (#1919, Finding A) Also null the shared runtime's view so a later
