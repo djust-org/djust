@@ -73,7 +73,9 @@ SUBPROCESS_TIMEOUT = 30
 # bulk dispatch-site count-test pattern) -- a silent omission would leave a
 # 7th unfixed PYO3_PYTHON=$(PYTHON) site that this file's other assertions
 # would still catch, but bumping this count is the conscious acknowledgment.
-EXPECTED_PYO3_PYTHON_ASSIGNMENT_COUNT = 6
+EXPECTED_PYO3_PYTHON_ASSIGNMENT_COUNT = (
+    9  # +3 in #2519: check-no-default-features (check, tree, test)
+)
 
 STUB_EMBEDDABLE_PYTHON_SH = """#!/bin/bash
 # Test stub for scripts/embeddable-python.sh -- records that it was invoked
@@ -140,7 +142,8 @@ def test_every_pyo3_python_assignment_uses_embeddable_python() -> None:
     assert len(assignments) == EXPECTED_PYO3_PYTHON_ASSIGNMENT_COUNT, (
         f"expected exactly {EXPECTED_PYO3_PYTHON_ASSIGNMENT_COUNT} "
         f"PYO3_PYTHON= assignments (test, test-rust x2, lint, "
-        f"benchmark-rust x2), found {len(assignments)}: {assignments}. "
+        f"benchmark-rust x2, check-no-default-features x3), "
+        f"found {len(assignments)}: {assignments}. "
         f"If you added/removed a cargo-invoking target, update "
         f"EXPECTED_PYO3_PYTHON_ASSIGNMENT_COUNT deliberately (#1125)."
     )

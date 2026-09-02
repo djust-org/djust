@@ -457,6 +457,15 @@ pub fn body_is_cacheable(nodes: &[Node], var_names: &[String]) -> bool {
 ///
 /// `bindings` is the list of `(var_name, value)` pairs set for this iteration
 /// (one for `{% for x in xs %}`, several for tuple unpacking).
+///
+/// `Context::emit_dj_if_markers` (#2519) is deliberately NOT part of this key,
+/// and the plain and LiveView render paths share this cache (same AST
+/// pointers, thread-local guard inherited by nested renders). That is safe
+/// only because a body whose bytes depend on the switch contains a
+/// `Node::If`, and [`body_is_position_dependent`] rejects every `Node::If`
+/// body before it can reach the fragment or parse cache — so no
+/// marker-dependent bytes are ever stored. If a `Node::If` body ever becomes
+/// cacheable, the switch must join this key.
 pub fn content_hash(body_identity: (usize, usize), bindings: &[(&str, &djust_core::Value)]) -> u64 {
     let mut hasher = DefaultHasher::new();
     // Domain separator so an empty binding list still hashes distinctly.
