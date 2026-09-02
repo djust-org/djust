@@ -192,6 +192,8 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 ⚠️ **Not all Django features supported yet:**
 - Several Django built-in tags and most of Django's `{% load %}` library tags (`i18n`, `l10n`, `tz`, `cache`) are not implemented; the generated lists below are the authority
 - Django's `{% load %}` library *filters* (`unlocalize`, `language_name`, `utc`, …) are not implemented natively; they resolve only through the filter bridge, which needs a `DjangoTemplates` engine in `TEMPLATES` next to djust (the fallback engine in the Quick Start). The bridged `tz` filters resolve but currently render empty output (#2541)
+- `{% debug %}` renders `""` unless `settings.DEBUG` (Django's own gate), and what it dumps has already been through djust's serialization floor and sidecar proxies — protected model fields never reach it. On the plain backend a model shows as its serialized dict rather than its repr (#2590)
+- `{% querystring %}` reads `request.GET` from the render: the plain backend carries a `RequestContext`'s request or the `request=` argument, and the LiveView WebSocket path carries the mount-time request; the LiveView GET page-shell wires no request into the render (pre-existing, #2589), so pass an explicit `QueryDict` there. `{% querystring … as var %}` is refused until #2591
 - A project's own `{% load %}` tag libraries are not loaded by the plain backend (the scoreboard's custom-library ERRORs below); register a handler with `djust.template_tags.register` instead
 
 ### Supported and unsupported tags and filters
