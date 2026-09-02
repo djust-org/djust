@@ -531,45 +531,44 @@ reports which parse-skipping path fired (`RenderTiming.fast_path`), so the
 `fast` column is an instrument, not an inference.
 
 Release build (`maturin develop --release`), medians of 3 rounds after a
-warm-up, sqlite `:memory:`, ms. This run shared the machine with another
-test suite, so the mount rows carry load noise — `list_control`'s mount row
-is the first benchmark in the process and includes its cold start; the
-quiet-machine run in commit `b96dc703` reads 8.0–8.3 ms for a list mount.
-The counts (crossings, queries, serializer calls) are deterministic and
-identical across both runs.
+warm-up, sqlite `:memory:`, ms, taken on a quiet machine (load ~6 on 12
+cores, no other suite running). `list_control`'s mount row is the first
+benchmark in the process and includes its cold start. The counts
+(crossings, queries, serializer calls) are deterministic and were identical
+across every run taken for this section, loaded or quiet; only timings move
+with load, which is why nothing here asserts on a duration.
 
 ```
 variant            phase            total  1 rust  2 xings  2 proxy  2 xing_ms  py_calls  3 q  3 sql_ms  3 list_ms  4 state  4 jit  4 persist  5 parse  5 diff  5 ser  5 fast
 -----------------  ---------------  -----  ------  -------  -------  ---------  --------  ---  --------  ---------  -------  -----  ---------  -------  ------  -----  ------
-list_control       mount            52.38    0.53        0        0       0.00       976    2      0.17       1.22    15.69   2.01       0.00     0.35    0.00   0.16       -
-list_control       text_change       6.20    0.01        0        0       0.00       497    1      0.06       0.00     1.26   1.01       0.00     0.00    0.00   0.14    frag
-list_control       attr_change       4.55    0.47        0        0       0.00       497    1      0.05       0.00     1.45   0.80       0.00     0.33    0.22   0.16    full
-list_control       row_text_change   4.67    0.42        0        0       0.00       947    2      0.08       0.00     2.03   0.79       0.00     0.06    0.00   0.12  region
-list_property      mount            14.21    0.43        0        0       0.00       976    2      0.04       0.44     9.57   0.97       0.00     0.26    0.00   0.13       -
-list_property      text_change       3.07    0.01        0        0       0.00       497    1      0.03       0.00     1.22   0.74       0.00     0.00    0.00   0.11    frag
-list_property      attr_change       3.71    0.42        0        0       0.00       497    1      0.03       0.00     1.19   0.66       0.00     0.23    0.18   0.11    full
-list_property      row_text_change   4.04    0.39        0        0       0.00       947    2      0.04       0.00     1.85   0.62       0.00     0.06    0.00   0.12  region
-list_reverse       mount            17.70    0.47        0        0       0.00      1026    3      0.16       0.45    10.20   3.44       0.00     0.26    0.00   0.13       -
-list_reverse       text_change       5.80    0.01        0        0       0.00       497    2      0.09       0.00     1.52   2.44       0.00     0.00    0.00   0.15    frag
-list_reverse       attr_change       5.97    0.41        0        0       0.00       497    2      0.07       0.00     1.52   2.19       0.00     0.25    0.20   0.12    full
-list_reverse       row_text_change   6.47    0.45        0        0       0.00       997    3      0.11       0.00     2.28   2.25       0.00     0.06    0.00   0.13  region
-list_fk_nosel      mount            13.91    0.38        0        0       0.00       976    2      0.10       0.33     9.26   1.09       0.00     0.23    0.00   0.11       -
-list_fk_nosel      text_change       3.52    0.01        0        0       0.00       497    1      0.05       0.00     1.45   0.82       0.00     0.00    0.00   0.12    frag
-list_fk_nosel      attr_change       4.08    0.41        0        0       0.00       497    1      0.04       0.00     1.35   0.73       0.00     0.25    0.18   0.11    full
-list_fk_nosel      row_text_change   4.48    0.39        0        0       0.00       947    2      0.06       0.00     2.03   0.68       0.00     0.06    0.00   0.14  region
-presenter_control  mount            16.08    0.00       52      850       4.66       526    1      0.01       0.36     8.41   0.33       0.00     0.25    0.00   0.12       -
-presenter_control  text_change       2.36    0.00        0        0       0.00       498    0      0.00       0.00     1.19   0.10       0.00     0.00    0.00   0.12    frag
-presenter_control  attr_change       7.10    0.00       52      850       4.78       498    0      0.00       0.00     1.19   0.08       0.00     0.24    0.19   0.12    full
-presenter_control  row_text_change   6.91    0.00       52      850       4.83       498    1      0.01       0.00     1.23   0.09       0.00     0.06    0.00   0.11  region
-presenter_reverse  mount            24.81    7.05      302      950       6.20       526   51      0.31       0.39     8.38   0.09       0.00     0.31    0.00   0.13       -
-presenter_reverse  text_change       2.62    0.01        0        0       0.00       498    0      0.00       0.00     1.38   0.10       0.00     0.00    0.00   0.14    frag
-presenter_reverse  attr_change      14.82    6.28      302      950       5.56       498   50      0.27       0.00     1.25   0.09       0.00     0.26    0.20   0.14    full
-presenter_reverse  row_text_change  14.09    6.23      302      950       4.92       498   51      0.28       0.00     1.47   0.10       0.00     0.05    0.00   0.11  region
-snapshot           mount            17.23    0.40        0        0       0.00       976    2      0.04       0.35     9.24   0.83       0.00     0.23    0.00   0.11       -
-snapshot           text_change       5.20    0.01        0        0       0.00       987    5      0.14       0.00     1.27   0.62       2.23     0.00    0.00   0.12    frag
-snapshot           attr_change       5.91    0.38        0        0       0.00       987    4      0.10       0.00     1.28   0.67       1.95     0.25    0.22   0.12    full
-snapshot           row_text_change   6.36    0.39        0        0       0.00      1437    5      0.10       0.00     1.85   0.71       2.09     0.04    0.00   0.12  region
-buckets: 1 rust render proper (render_ms - crossings' Python time) | 2 direct Rust-origin boundary crossings / proxy = transitive re-wraps inside them / py_calls = serializer calls while Rust was not running | 3 ORM queries / sql time / list() at mount | 4 state serialization (sync - jit) / jit = get_context_data / persist | 5 parse + diff + serialize, fast = frag | region | full
+list_control       mount             8.43    0.39        0        0       0.00       976    2      0.04       0.40     4.54   0.67       0.00     0.23    0.00   0.13       -
+list_control       text_change       3.08    0.00        0        0       0.00       497    1      0.03       0.00     1.30   0.75       0.00     0.00    0.00   0.13    frag
+list_control       attr_change       3.77    0.39        0        0       0.00       497    1      0.04       0.00     1.24   0.68       0.00     0.25    0.19   0.12    full
+list_control       row_text_change   4.11    0.38        0        0       0.00       947    2      0.04       0.00     1.89   0.65       0.00     0.06    0.00   0.12  region
+list_property      mount             8.71    0.38        0        0       0.00       976    2      0.04       0.41     4.55   0.72       0.00     0.25    0.00   0.12       -
+list_property      text_change       3.16    0.01        0        0       0.00       497    1      0.03       0.00     1.31   0.75       0.00     0.00    0.00   0.12    frag
+list_property      attr_change       3.82    0.38        0        0       0.00       497    1      0.03       0.00     1.27   0.70       0.00     0.26    0.19   0.12    full
+list_property      row_text_change   4.33    0.40        0        0       0.00       947    2      0.04       0.00     1.99   0.72       0.00     0.05    0.00   0.12  region
+list_reverse       mount            11.17    0.47        0        0       0.00      1026    3      0.07       0.43     4.79   2.08       0.00     0.24    0.00   0.13       -
+list_reverse       text_change       4.86    0.01        0        0       0.00       497    2      0.06       0.00     1.43   2.09       0.00     0.00    0.00   0.12    frag
+list_reverse       attr_change       5.51    0.39        0        0       0.00       497    2      0.05       0.00     1.32   2.09       0.00     0.27    0.19   0.11    full
+list_reverse       row_text_change   5.81    0.39        0        0       0.00       997    3      0.07       0.00     2.06   2.02       0.00     0.06    0.00   0.11  region
+list_fk_nosel      mount             9.10    0.43        0        0       0.00       976    2      0.06       0.31     4.87   0.75       0.00     0.26    0.00   0.12       -
+list_fk_nosel      text_change       3.55    0.01        0        0       0.00       497    1      0.04       0.00     1.39   0.87       0.00     0.00    0.00   0.11    frag
+list_fk_nosel      attr_change       4.16    0.41        0        0       0.00       497    1      0.04       0.00     1.36   0.77       0.00     0.24    0.18   0.11    full
+list_fk_nosel      row_text_change   4.54    0.39        0        0       0.00       947    2      0.06       0.00     2.06   0.75       0.00     0.04    0.00   0.10  region
+presenter_control  mount            11.67    0.00       52      850       5.11       526    1      0.02       0.44     4.05   0.09       0.00     0.24    0.00   0.13       -
+presenter_control  text_change       2.58    0.01        0        0       0.00       498    0      0.00       0.00     1.35   0.10       0.00     0.00    0.00   0.12    frag
+presenter_control  attr_change       7.46    0.00       52      850       5.15       498    0      0.00       0.00     1.33   0.09       0.00     0.24    0.18   0.11    full
+presenter_control  row_text_change   7.14    0.00       52      850       5.08       498    1      0.02       0.00     1.32   0.09       0.00     0.05    0.00   0.12  region
+presenter_reverse  mount            18.98    6.25      302      950       5.37       526   51      0.28       0.42     4.06   0.09       0.00     0.24    0.00   0.11       -
+presenter_reverse  text_change       2.51    0.00        0        0       0.00       498    0      0.00       0.00     1.28   0.10       0.00     0.00    0.00   0.11    frag
+presenter_reverse  attr_change      14.20    6.13      302      950       5.25       498   50      0.26       0.00     1.25   0.09       0.00     0.24    0.18   0.12    full
+presenter_reverse  row_text_change  14.18    6.12      302      950       5.40       498   51      0.28       0.00     1.33   0.10       0.00     0.05    0.00   0.11  region
+snapshot           mount            12.68    0.38        0        0       0.00       976    2      0.04       0.40     4.67   0.65       0.00     0.23    0.00   0.11       -
+snapshot           text_change       5.61    0.00        0        0       0.00       987    5      0.10       0.00     1.30   0.72       2.40     0.00    0.00   0.12    frag
+snapshot           attr_change       5.83    0.37        0        0       0.00       987    4      0.08       0.00     1.28   0.71       1.95     0.23    0.18   0.12    full
+snapshot           row_text_change   6.24    0.36        0        0       0.00      1437    5      0.09       0.00     2.04   0.65       1.97     0.04    0.00   0.12  region
 ```
 
 Column notes: `2 xing_ms` is the Python time inside the direct crossings and
