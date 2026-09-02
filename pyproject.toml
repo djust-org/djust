@@ -105,6 +105,7 @@ dev = [
     "pytest-django>=4.5,<6",
     "pytest-asyncio>=0.21,<2",
     "pytest-xdist>=3.0,<4",  # Parallel test execution
+    "pytest-split>=0.10,<1",  # CI shards (--splits/--group against .test_durations)
     "pytest-benchmark>=4.0.0,<6",  # Performance benchmarking
     "ruff>=0.1,<1",
     "mypy>=1.0,<3",
