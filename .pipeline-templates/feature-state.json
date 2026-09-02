@@ -152,7 +152,7 @@
           "done": false
         },
         {
-          "action": "DO NOT modify CHANGELOG.md in this stage — defer all [Unreleased] hunks to the Stage 9 docs commit (two-commit shape per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
+          "action": "DO NOT write the changelog.d/ fragment (or touch CHANGELOG.md) in this stage — defer it to the Stage 9 docs commit (two-commit shape per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
           "done": false,
           "mandatory": true
         },
@@ -335,12 +335,12 @@
           "done": false
         },
         {
-          "action": "update CHANGELOG.md for feat/fix changes (CANONICAL CHANGELOG COMMIT BOUNDARY — Stage 5 deferred all [Unreleased] hunks here per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
+          "action": "write `changelog.d/<issue>.<section>.md` for feat/fix changes — NEVER edit CHANGELOG.md [Unreleased] directly; the release cut compiles the fragments (see changelog.d/README.md). CANONICAL CHANGELOG COMMIT BOUNDARY — Stage 5 deferred the fragment here per v0.9.1 retro / Action Tracker #181 / GitHub #1173",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "If this PR changes a documented API contract (decorator semantics, function signature, attribute behavior, error envelope), the CHANGELOG entry MUST include a 'Behavior change' block with: (a) what changed, (b) who's affected, (c) migration path. PR #1294 is the canonical reference example.",
+          "action": "If this PR changes a documented API contract (decorator semantics, function signature, attribute behavior, error envelope), the changelog.d/ fragment MUST include a 'Behavior change' block with: (a) what changed, (b) who's affected, (c) migration path. PR #1294 is the canonical reference example.",
           "done": false,
           "mandatory": false
         },
@@ -350,7 +350,7 @@
           "mandatory": true
         },
         {
-          "action": "this Stage 9 commit must include ONLY docs + CHANGELOG hunks; no implementation code (the two-commit shape gate)",
+          "action": "this Stage 9 commit must include ONLY docs + changelog.d/ hunks (allowed paths: changelog.d/, CHANGELOG.md, ROADMAP.md, docs/, README.md); no implementation code (the two-commit shape gate)",
           "done": false,
           "mandatory": true
         },
