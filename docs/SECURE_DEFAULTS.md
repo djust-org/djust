@@ -436,7 +436,7 @@ output (`format_html` / `mark_safe` on an escaped body). Never set
 
 Regression tests: `python/tests/test_custom_filter_is_safe_requires_safe_input_2548.py`
 (all three render entries against Django in-process, including the encoded
-and attribute-breakout variants) Item-rule
+and attribute-breakout variants). Item-rule
 coverage lives in `python/tests/test_context_item_safety_2287.py`.
 
 ---
