@@ -166,6 +166,9 @@ class TestGuardCoversTheRenderSurface:
             "render_markdown_py",
             "render_template",
             "render_template_with_dirs",
+            # The construction-time parse (#2549): `Template::new` runs on the
+            # user's source before any render, so it is a panic surface too.
+            "compile_template",
             "diff_html",
             "fast_json_dumps",
             "resolve_template_inheritance",

@@ -2055,6 +2055,37 @@ fn render_template(
     })
 }
 
+/// Parse a template without rendering it — the construction-time check
+/// behind `DjustTemplate.__init__` (#2549).
+///
+/// Django's `Engine.from_string` / `get_template` raise `TemplateSyntaxError`
+/// before any render; djust parsed lazily at first render, so the same
+/// defect surfaced one call later and a defect in an untaken branch never
+/// surfaced at all. This goes through `TEMPLATE_CACHE` exactly like the
+/// render entry points: a successful parse is cached, so the render that
+/// follows does not pay for it twice; a failed parse is never cached (same
+/// as today), so a handler registered afterwards is honoured.
+#[pyfunction]
+fn compile_template(template_source: String) -> PyResult<()> {
+    guard_panic("compile_template", move || {
+        if TEMPLATE_CACHE.get(&template_source).is_none() {
+            let template = Template::new(&template_source)?;
+            TEMPLATE_CACHE.insert(template_source, Arc::new(template));
+        }
+        Ok(())
+    })
+}
+
+/// Whether `TEMPLATE_CACHE` already holds a parse of this exact source.
+///
+/// A test-support probe for the #2549 "one parse, not two" claim: after
+/// `compile_template(src)` the render entry points find the cached
+/// `Template` instead of parsing again. Read-only.
+#[pyfunction]
+fn template_cache_contains(template_source: &str) -> bool {
+    TEMPLATE_CACHE.contains_key(template_source)
+}
+
 /// Fast template rendering with template directories for {% include %} support
 ///
 /// This function extends render_template to support {% include %} tags by
@@ -4103,6 +4134,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
+    m.add_function(wrap_pyfunction!(compile_template, m)?)?;
+    m.add_function(wrap_pyfunction!(template_cache_contains, m)?)?;
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
