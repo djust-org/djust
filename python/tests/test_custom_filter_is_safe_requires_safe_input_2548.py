@@ -452,6 +452,9 @@ class TestEncodedAndAlternateRepresentations:
 
 
 _TEMPLATES_SRC = Path(__file__).resolve().parents[2] / "crates" / "djust_templates" / "src"
+#: `is_custom_filter_safe` is `pub`, so a second reader could appear in any
+#: crate, not only the one that defines it.
+_CRATES = Path(__file__).resolve().parents[2] / "crates"
 
 
 def _helper_body_without_comments() -> str:
@@ -534,7 +537,7 @@ def test_the_helper_has_exactly_two_unconditional_terms() -> None:
 def test_is_custom_filter_safe_has_exactly_one_production_call_site() -> None:
     """The pin is only as good as the sink being the only reader."""
     hits = []
-    for path in sorted(_TEMPLATES_SRC.rglob("*.rs")):
+    for path in sorted(_CRATES.glob("*/src/**/*.rs")):
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith("//"):
