@@ -123,9 +123,21 @@ def test_b_unrelated_module_selects_nothing_of_the_others():
 # --------------------------------------------------------------------------
 
 
+def test_engine_crates_force_the_full_suite() -> None:
+    """A change under djust_templates or djust_vdom is exercised by every test
+    that renders, not only by the tests naming the file (#2575 review)."""
+    for path in (
+        "crates/djust_templates/src/filters.rs",
+        "crates/djust_vdom/src/diff.rs",
+        "crates/djust_core/src/value.rs",
+    ):
+        sel = _select([path])
+        assert sel.full, path
+
+
 def test_c_rust_basename_selects_the_pin_test():
     """The rule that caught two broken pins on 2026-09-02. Gate-off target."""
-    sel = _select(["crates/djust_templates/src/renderer.rs"])
+    sel = _select(["crates/djust_components/src/renderer.rs"])
     assert not sel.full
     assert sel.tests == ["python/tests/test_renderer_pins.py"]
 
@@ -137,14 +149,14 @@ def test_c_basename_match_is_whole_token():
         "python/tests/test_a.py": 'read("xrenderer.rs")\n',
         "python/tests/test_b.py": 'read("renderer.rsx")\n',
     }
-    sel = _select(["crates/djust_templates/src/renderer.rs"], tests=tests, texts=texts)
+    sel = _select(["crates/djust_components/src/renderer.rs"], tests=tests, texts=texts)
     assert sel.full  # empty selection -> full, nothing falsely matched
 
 
 def test_c_basename_match_inside_a_path_string():
     tests = ["python/tests/test_a.py"]
-    texts = {"python/tests/test_a.py": 'Path("crates/djust_templates/src/context.rs")\n'}
-    sel = _select(["crates/djust_templates/src/context.rs"], tests=tests, texts=texts)
+    texts = {"python/tests/test_a.py": 'Path("crates/djust_components/src/context.rs")\n'}
+    sel = _select(["crates/djust_components/src/context.rs"], tests=tests, texts=texts)
     assert sel.tests == ["python/tests/test_a.py"]
 
 
@@ -216,7 +228,7 @@ def test_reader_errors_are_treated_as_no_text():
     def boom(_p):
         raise OSError("unreadable")
 
-    sel = st.select_tests(["crates/djust_templates/src/renderer.rs"], TESTS, boom, "x")
+    sel = st.select_tests(["crates/djust_components/src/renderer.rs"], TESTS, boom, "x")
     assert sel.full and "empty" in sel.reason
 
 

@@ -16,6 +16,9 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 ARGS=(--workspace --exclude djust_live)
 if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
     if SEL="$(bash scripts/run-with-venv-python.sh scripts/select-tests.py --cargo)"; then
+        if [ -z "$SEL" ]; then
+            echo "pre-push cargo: selector returned nothing; running the workspace" >&2
+        fi
         if [ -n "$SEL" ] && [ "$SEL" != "--workspace" ]; then
             ARGS=()
             for _tok in $SEL; do

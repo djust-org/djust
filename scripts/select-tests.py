@@ -68,7 +68,14 @@ FULL_SUITE_FILES = frozenset(
         "python/djust/apps.py",
     }
 )
-FULL_SUITE_PREFIXES = ("crates/djust_core/src/",)
+# The whole engine: a change under any of these is exercised by every test that
+# renders a template, not only by the tests that name the file (the #2575 review
+# measured `filters.rs` selecting 11 of 27 floatformat tests by name/import alone).
+FULL_SUITE_PREFIXES = (
+    "crates/djust_core/src/",
+    "crates/djust_templates/src/",
+    "crates/djust_vdom/src/",
+)
 FULL_SUITE_BRANCH_RE = re.compile(r"flip|routing|convergence", re.IGNORECASE)
 
 # Workspace-wide cargo run when these change.
