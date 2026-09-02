@@ -106,6 +106,10 @@ pub struct LoopRenderCache {
     /// Sibling of `fragments`, same content-hash key (an item that hit the
     /// render cache also hits the parse cache), same `prune`/`begin_render`/
     /// `clear`/`set_enabled(false)` lifecycle.
+    ///
+    /// LiveView-only (#2519): the parsed subtrees are spliced into the VDOM
+    /// diff baseline by `render_with_diff`; the plain engine has no VDOM.
+    #[cfg(feature = "liveview")]
     parsed: HashMap<u64, Vec<djust_vdom::VNode>>,
     /// Per-render item manifest (#1970): one entry per loop item rendered this
     /// render, in document order, recorded ONLY for parse-cache-eligible items
@@ -113,8 +117,10 @@ pub struct LoopRenderCache {
     /// cached subtrees in for placeholder-emitted items. Cleared at render start.
     manifest: Vec<ManifestEntry>,
     /// Debug parse-cache reuse counter (cached subtrees spliced this render).
+    #[cfg(feature = "liveview")]
     parse_hits: u64,
     /// Debug parse-cache miss counter (item subtrees parsed this render).
+    #[cfg(feature = "liveview")]
     parse_misses: u64,
     /// Per-render random nonce (#1970 security fix). The placeholder sentinel
     /// tag is `dj-pc-<nonce_hex>` — the nonce makes the sentinel UNFORGEABLE so
@@ -168,6 +174,7 @@ impl LoopRenderCache {
             self.seen_this_render.clear();
             self.cacheable_verdict.clear();
             // #1970 parse cache + manifest follow the same default-off invariant.
+            #[cfg(feature = "liveview")]
             self.parsed.clear();
             self.manifest.clear();
         }
@@ -185,10 +192,13 @@ impl LoopRenderCache {
         self.misses = 0;
         // #1970: the parsed subtrees also reference the OLD template AST and
         // must not survive a template change; the manifest is per-render.
-        self.parsed.clear();
+        #[cfg(feature = "liveview")]
+        {
+            self.parsed.clear();
+            self.parse_hits = 0;
+            self.parse_misses = 0;
+        }
         self.manifest.clear();
-        self.parse_hits = 0;
-        self.parse_misses = 0;
     }
 
     /// Begin a render: reset the per-render bookkeeping.
@@ -200,8 +210,11 @@ impl LoopRenderCache {
         // stale manifest can never leak into the next render's parse path,
         // even when a render takes a fast path that never reads it.
         self.manifest.clear();
-        self.parse_hits = 0;
-        self.parse_misses = 0;
+        #[cfg(feature = "liveview")]
+        {
+            self.parse_hits = 0;
+            self.parse_misses = 0;
+        }
         // #1970 security: fresh per-render nonce so the placeholder sentinel tag
         // (`dj-pc-<nonce>`) is unforgeable by `|safe`/`mark_safe` item content.
         self.nonce = next_render_nonce();
@@ -218,6 +231,7 @@ impl LoopRenderCache {
         // #1970: prune the parse cache by the same seen-this-render set so its
         // size tracks the current item set (bounds memory) — symmetric with
         // the render-fragment prune.
+        #[cfg(feature = "liveview")]
         self.parsed.retain(|k, _| seen.contains(k));
     }
 
@@ -276,13 +290,22 @@ impl LoopRenderCache {
     /// Does the parse cache already hold a parsed subtree for `hash`?
     /// Used by the For arm to decide HIT (emit a placeholder) vs MISS (emit the
     /// real item HTML so djust_live parses + caches it).
+    #[cfg(feature = "liveview")]
     pub fn has_parsed(&self, hash: u64) -> bool {
         self.parsed.contains_key(&hash)
+    }
+
+    /// Without the `liveview` feature there is no parse cache, so the For arm
+    /// never sees a HIT and never emits a `<dj-pc-…>` placeholder (#2519).
+    #[cfg(not(feature = "liveview"))]
+    pub fn has_parsed(&self, _hash: u64) -> bool {
+        false
     }
 
     /// Look up the cached parsed subtree roots for `hash` (clone on hit).
     /// Bumps the parse-hit counter on a hit. The returned roots have their
     /// dj-ids re-assigned by the caller's pre-order re-walk.
+    #[cfg(feature = "liveview")]
     pub fn get_parsed(&mut self, hash: u64) -> Option<Vec<djust_vdom::VNode>> {
         match self.parsed.get(&hash) {
             Some(roots) => {
@@ -296,6 +319,7 @@ impl LoopRenderCache {
     /// Insert freshly parsed subtree roots under `hash`, bumping the parse-miss
     /// counter. Caller passes the roots with dj-ids already stripped (or it does
     /// not matter — the assembled tree is re-walked).
+    #[cfg(feature = "liveview")]
     pub fn insert_parsed(&mut self, hash: u64, roots: Vec<djust_vdom::VNode>) {
         self.parse_misses += 1;
         self.parsed.insert(hash, roots);
@@ -323,11 +347,13 @@ impl LoopRenderCache {
     }
 
     /// Parse-cache reuse count for the current render (debug / tests).
+    #[cfg(feature = "liveview")]
     pub fn parse_hits(&self) -> u64 {
         self.parse_hits
     }
 
     /// Item-subtree parse count for the current render (debug / tests).
+    #[cfg(feature = "liveview")]
     pub fn parse_misses(&self) -> u64 {
         self.parse_misses
     }
@@ -341,11 +367,13 @@ impl LoopRenderCache {
 
     /// Bump the parse-hit counter (used when a manifest placeholder is spliced
     /// from cache without going through `get_parsed`, keeping the probe honest).
+    #[cfg(feature = "liveview")]
     pub fn bump_parse_hits(&mut self, n: u64) {
         self.parse_hits += n;
     }
 
     /// Bump the parse-miss counter.
+    #[cfg(feature = "liveview")]
     pub fn bump_parse_misses(&mut self, n: u64) {
         self.parse_misses += n;
     }

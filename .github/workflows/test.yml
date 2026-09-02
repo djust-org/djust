@@ -101,6 +101,20 @@ jobs:
           # genuine Rust-test coverage (not just compile-checks).
           cargo test -p djust_live --no-default-features --release
 
+      - name: Engine without the liveview feature (#2519)
+        run: |
+          export PYO3_PYTHON=$(pwd)/.venv/bin/python
+          # The plain Django-backend engine: no VNode parse cache, no
+          # `<!--dj-if-->` markers, no Rust components.
+          cargo check -p djust_templates --no-default-features
+          # Load-bearing pin (#1859): the feature must actually drop BOTH
+          # crates from the graph, or it gates nothing.
+          if cargo tree -p djust_templates --no-default-features -e normal --depth 1 | grep -E 'djust_(vdom|components)'; then
+            echo "::error::djust_vdom / djust_components still in the no-default-features graph — 'optional = true' lost?"
+            exit 1
+          fi
+          cargo test -p djust_templates --no-default-features --release
+
       - name: Run Rust linter
         run: |
           export PYO3_PYTHON=$(pwd)/.venv/bin/python

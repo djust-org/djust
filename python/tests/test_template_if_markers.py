@@ -16,26 +16,35 @@ The markers are framework-internal metadata for the upcoming Iter 3
 (Rust VDOM differ) which uses them as keyed boundaries when
 conditionals flip.
 
-These tests use `render_template_with_dirs` (which preserves the
-markers, since djust uses the same path internally for VDOM
-diffing). The public `render_template` STRIPS the markers so the
-contract that standalone rendering yields clean HTML is preserved.
+These tests render through `RustLiveView.render()` — the LiveView path,
+the one the VDOM differ consumes and the only path that emits markers.
+The plain entries (`render_template`, `render_template_with_dirs`, the
+`DjustTemplateBackend`) switch marker emission OFF on their render
+`Context` (#2519) so standalone rendering yields Django's bytes; the
+`TestPublicRenderTemplateDoesNotEmit` class below is that contract's pin
+for `render_template`, and `test_dj_if_marker_plain_backend_2519.py`
+covers the rest.
 """
 
 import re
 
 import pytest
 
-from djust._rust import render_template, render_template_with_dirs
+from djust._rust import RustLiveView, render_template
 
 
 def render_raw(source: str, ctx: dict) -> str:
-    """Render template via `render_template_with_dirs` (no marker stripping).
+    """Render through the LiveView path (`RustLiveView.render`), markers ON.
 
-    djust uses this path internally for VDOM rendering — the markers
-    are needed there. The public `render_template` strips them.
+    Before #2519 this helper called `render_template_with_dirs` and its
+    docstring claimed djust used that entry for VDOM rendering — it does
+    not (the backend and `SimpleLiveView` do), which is exactly the path
+    the markers leaked on. `RustLiveView.render` is the path the markers
+    exist for.
     """
-    return render_template_with_dirs(source, ctx, [])
+    view = RustLiveView(source)
+    view.update_state(ctx)
+    return view.render()
 
 
 _PREFIXED_ID_RE = re.compile(r'id="if-[0-9a-f]{8}-(\d+)"')
@@ -100,14 +109,16 @@ class TestPureTextSkip:
 
 
 # ---------------------------------------------------------------------------
-# Public `render_template` strips ALL markers (clean output contract)
+# Public `render_template` emits NO markers (clean output contract, #2519:
+# the flag is switched off on its Context — nothing is stripped after the
+# fact, the markers are never built)
 # ---------------------------------------------------------------------------
 
 
-class TestPublicRenderTemplateStrips:
-    def test_strips_boundary_markers_from_element_if(self):
-        # The internal raw rendering shows markers; the public
-        # `render_template` strips them. This preserves the existing
+class TestPublicRenderTemplateDoesNotEmit:
+    def test_no_boundary_markers_from_element_if(self):
+        # The LiveView raw rendering shows markers; the public
+        # `render_template` never emits them. This preserves the existing
         # contract that public rendering returns clean HTML.
         result = render_template(
             "{% if show %}<div>foo</div>{% endif %}",
@@ -116,7 +127,7 @@ class TestPublicRenderTemplateStrips:
         assert result == "<div>foo</div>"
         assert "dj-if" not in result
 
-    def test_strips_boundary_markers_when_false(self):
+    def test_no_boundary_markers_when_false(self):
         result = render_template(
             "{% if show %}<div>foo</div>{% endif %}",
             {"show": False},
@@ -124,12 +135,12 @@ class TestPublicRenderTemplateStrips:
         assert result == ""
         assert "dj-if" not in result
 
-    def test_strips_legacy_placeholder(self):
-        # Pure-text-conditional placeholder (issue #295) also stripped.
+    def test_no_legacy_placeholder(self):
+        # Pure-text-conditional placeholder (issue #295) also not emitted.
         result = render_template("{% if show %}foo{% endif %}", {"show": False})
         assert result == ""
 
-    def test_strips_markers_in_complex_template(self):
+    def test_no_markers_in_complex_template(self):
         result = render_template(
             "<section>"
             "{% if a %}<div>A</div>{% endif %}"

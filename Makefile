@@ -239,6 +239,16 @@ test-rust: ## Run Rust tests
 	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo test --workspace --exclude djust_live
 	@echo "$(YELLOW)Phase 2: djust_live with --no-default-features (libpython static link, #1543)$(NC)"
 	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo test -p djust_live --no-default-features
+	@$(MAKE) --no-print-directory check-no-default-features
+
+.PHONY: check-no-default-features
+check-no-default-features: ## Build + test djust_templates without the liveview feature (the plain engine, #2519)
+	@echo "$(YELLOW)Phase 3: djust_templates without the liveview feature (#2519)$(NC)"
+	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo check -p djust_templates --no-default-features
+	@if PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo tree -p djust_templates --no-default-features -e normal --depth 1 | grep -E 'djust_(vdom|components)'; then \
+		echo "$(RED)djust_vdom / djust_components still in the no-default-features graph — 'optional = true' lost?$(NC)"; exit 1; \
+	fi
+	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo test -p djust_templates --no-default-features
 
 .PHONY: test-python
 test-python: ## Run Python tests

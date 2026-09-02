@@ -291,33 +291,20 @@ impl Template {
     }
 }
 
-/// Strip all `dj-if` VDOM markers from a rendered string.
+/// Fast template rendering function for Python (standalone, no VDOM).
 ///
-/// Removes:
-///   - Legacy single-comment placeholder: `<!--dj-if-->` (issue #295)
-///   - Boundary marker pair (Iter 1 of #1358):
-///     `<!--dj-if id="if-N"-->` and `<!--/dj-if-->`
-///
-/// Used by the public Python `render_template` and
-/// `render_template_with_dirs` entries (in djust_live) to preserve
-/// the contract that standalone rendering yields clean HTML — the
-/// markers are framework-internal metadata for VDOM diffing, not
-/// user-visible content.
-pub fn strip_dj_if_markers(html: &str) -> String {
-    static MARKER_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"<!--/?dj-if(?:\s[^>]*)?-->").unwrap());
-    MARKER_RE.replace_all(html, "").into_owned()
-}
-
-/// Fast template rendering function for Python
+/// The `<!--dj-if-->` VDOM markers are switched OFF on the render context
+/// (#2519) — the markers are framework-internal metadata for LiveView
+/// diffing, not user-visible HTML, so standalone rendering yields Django's
+/// bytes. They are never built; nothing is stripped after the fact (the old
+/// post-render regex strip was the second mechanism that let the plain
+/// `render_template_with_dirs` entry ship without either).
 #[pyfunction]
 fn render_template(source: String, context: HashMap<String, Value>) -> PyResult<String> {
     let template = Template::new(&source)?;
-    let ctx = Context::from_dict(context);
-    let result = template.render(&ctx)?;
-    // Strip VDOM placeholder + boundary markers in standalone rendering
-    // — these are framework-internal metadata, not user-visible HTML.
-    Ok(strip_dj_if_markers(&result))
+    let mut ctx = Context::from_dict(context);
+    ctx.set_emit_dj_if_markers(false);
+    Ok(template.render(&ctx)?)
 }
 
 /// Python module for template functionality

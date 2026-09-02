@@ -203,6 +203,18 @@ pub struct Context {
     /// `loop_render_cache_enabled` flag plumbing). `false` restores the
     /// pre-ADR plain-getattr walk (kill-switch).
     auto_call: bool,
+    /// Emit the `<!--dj-if-->` placeholder (#295) and the
+    /// `<!--dj-if id="if-…"-->…<!--/dj-if-->` boundary pair (#1358/#1832)
+    /// around `{% if %}` blocks. They are the VDOM differ's keyed
+    /// boundaries, so the LiveView path needs them; the plain
+    /// `DjustTemplateBackend` / `render_template*` entries switch them off
+    /// because Django emits nothing there (#2519). Default `true` so every
+    /// existing LiveView render keeps its bytes with no edit; render-time
+    /// on the `Context`, never on the parsed `Template` — the template
+    /// cache is shared by both paths, so a parse-time flag would let
+    /// whichever path parsed first decide for both. Mirrors `auto_call`;
+    /// `{% include … only %}` builds a fresh `Context` and must copy it.
+    emit_dj_if_markers: bool,
 }
 
 impl Default for Context {
@@ -221,6 +233,7 @@ impl Clone for Context {
             // the contained `Py<PyAny>` refcount is not touched.
             raw_py_objects: self.raw_py_objects.clone(),
             auto_call: self.auto_call,
+            emit_dj_if_markers: self.emit_dj_if_markers,
         }
     }
 }
@@ -246,6 +259,7 @@ impl Context {
             aliases: AHashMap::new(),
             raw_py_objects: None,
             auto_call: true,
+            emit_dj_if_markers: true,
         }
     }
 
@@ -264,6 +278,7 @@ impl Context {
             aliases: AHashMap::new(),
             raw_py_objects: None,
             auto_call: true,
+            emit_dj_if_markers: true,
         }
     }
 
@@ -272,6 +287,18 @@ impl Context {
     /// `LIVEVIEW_CONFIG["template_auto_call"]`).
     pub fn set_auto_call(&mut self, enabled: bool) {
         self.auto_call = enabled;
+    }
+
+    /// Enable/disable `<!--dj-if-->` marker emission for renders under this
+    /// context (#2519). The plain entries pass `false`; the LiveView path
+    /// keeps the default `true`.
+    pub fn set_emit_dj_if_markers(&mut self, enabled: bool) {
+        self.emit_dj_if_markers = enabled;
+    }
+
+    /// Should the renderer emit `<!--dj-if-->` markers under this context?
+    pub fn emit_dj_if_markers(&self) -> bool {
+        self.emit_dj_if_markers
     }
 
     /// Attach a map of raw Python objects for `getattr`-fallback

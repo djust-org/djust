@@ -14,6 +14,11 @@
 //! appended to the marker id at emission, so each rendered `{% if %}`
 //! boundary inside a loop gets a unique-yet-stable id. An `{% if %}`
 //! OUTSIDE any loop keeps the bare `if-<hash>-N` form (backward compatible).
+//!
+//! Renders with a DEFAULT `Context` and asserts the markers — the LiveView
+//! path; `liveview` feature only (#2519).
+
+#![cfg(feature = "liveview")]
 
 use djust_core::{Context, Value};
 use djust_templates::Template;

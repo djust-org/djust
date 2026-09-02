@@ -26,6 +26,11 @@
 //! - HTML attribute context (`{% if %}` inside an unclosed tag) skips
 //!   marker emission — comments inside attribute values produce
 //!   malformed HTML (issue #380).
+//!
+//! These render with a DEFAULT `Context` and assert the markers, so they are
+//! the LiveView-path pin: `liveview` feature only (#2519).
+
+#![cfg(feature = "liveview")]
 
 use djust_core::{Context, Value};
 use djust_templates::Template;
