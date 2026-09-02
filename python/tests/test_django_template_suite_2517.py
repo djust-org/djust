@@ -18,7 +18,13 @@ to be trustworthy in the specific ways a scoreboard can lie:
 * the ratchet (``TestRatchetCompare``): ``compare`` says 1 on a drop, even
   though CI does not enforce it yet;
 * the seam (``TestAdapterInSubprocess``): ``install()`` rebinds exactly the
-  two names it claims to and leaves the ``TEMPLATES`` backend real.
+  two names it claims to, leaves the ``TEMPLATES`` backend real, and
+  produces ``DjustTemplate`` objects — not Django's;
+* argv hardening (``TestArgvHardening``, the #2517 review): a traversal tag
+  is refused before any filesystem access, a label that looks like an
+  option is refused rather than smuggled past ``--gate-off``'s baseline
+  refusal, and a baseline is never written from a run where nothing reached
+  the engine.
 
 Everything that mutates process globals (``install()``, ``settings.configure``)
 runs in a subprocess, following ``test_differential_reachability_manifest_2345``.
@@ -26,6 +32,7 @@ runs in a subprocess, following ``test_differential_reachability_manifest_2345``
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import os
@@ -35,6 +42,7 @@ import subprocess
 import sys
 import textwrap
 import unittest
+from types import ModuleType
 
 import pytest
 
@@ -61,6 +69,15 @@ def _env() -> dict[str, str]:
         [str(REPO / "python"), *([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])]
     )
     return env
+
+
+def _runner() -> ModuleType:
+    """Import ``scripts/run-django-template-suite.py`` (a hyphenated file) for unit tests."""
+    spec = importlib.util.spec_from_file_location("run_django_template_suite", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_cli(*args: str, timeout: int = 300) -> subprocess.CompletedProcess[str]:
@@ -362,6 +379,47 @@ class TestRecordingResult:
         long = "x" * 1000
         assert len(first_line((ValueError, ValueError(long), None))) == 300
 
+    # -- S3/F1: the checkout root and the repo root must not leak -------------
+    _RUST_SHAPE = (
+        "Exception: Error rendering template (from %s/tests/template_tests/templates/x.html): "
+        "Template error: Template not found: missing.html"
+    )
+
+    def test_checkout_root_is_normalised_to_django_src(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scripts.lib.django_template_suite.recorder import normalize
+
+        root = "/Users/someone/src/djust/.django-src/5.2.16"
+        monkeypatch.setenv("DJUST_SUITE_SRC", root)
+        assert normalize(self._RUST_SHAPE % root) == (
+            "Exception: Error rendering template "
+            "(from <django-src>/tests/template_tests/templates/x.html): "
+            "Template error: Template not found: missing.html"
+        )
+        # The macOS ``/private`` spelling of the same root, and a trailing slash.
+        assert "<django-src>/tests" in normalize(self._RUST_SHAPE % ("/private" + root))
+        monkeypatch.setenv("DJUST_SUITE_SRC", root + "/")
+        assert "<django-src>/tests" in normalize(self._RUST_SHAPE % root)
+
+    def test_repo_root_is_normalised_to_repo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from scripts.lib.django_template_suite.recorder import normalize
+
+        monkeypatch.delenv("DJUST_SUITE_SRC", raising=False)
+        out = normalize("ValueError: bad file %s/python/djust/x.py" % REPO)
+        assert out == "ValueError: bad file <repo>/python/djust/x.py"
+        # A checkout inside the repo is <django-src>, never <repo>/.django-src.
+        monkeypatch.setenv("DJUST_SUITE_SRC", str(REPO / ".django-src" / "5.2.16"))
+        assert normalize(self._RUST_SHAPE % (REPO / ".django-src" / "5.2.16")).startswith(
+            "Exception: Error rendering template (from <django-src>/tests/"
+        )
+
+    def test_no_env_means_no_checkout_substitution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from scripts.lib.django_template_suite.recorder import normalize
+
+        monkeypatch.delenv("DJUST_SUITE_SRC", raising=False)
+        assert normalize("x /Users/a/b.html y") == "x /Users/a/b.html y"
+
 
 # --------------------------------------------------------------------------- #
 # (1) the empirical canary (#1459)
@@ -521,7 +579,63 @@ HANG_MODULE = textwrap.dedent(
 )
 
 
+CRASH_IN_SETUPCLASS_MODULE = textwrap.dedent(
+    """
+    import os
+    import signal
+
+    from django.test import SimpleTestCase
+
+
+    class AFinishes(SimpleTestCase):
+        def test_a(self):
+            pass
+
+        def test_b(self):
+            pass
+
+
+    class BDiesInSetUpClass(SimpleTestCase):
+        @classmethod
+        def setUpClass(cls):
+            super().setUpClass()
+            os.kill(os.getpid(), signal.SIGSEGV)
+
+        def test_c(self):
+            pass
+    """
+)
+
+
 class TestCrashIsolation:
+    def test_crash_between_tests_names_the_finished_count_and_stops(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        # F3: a segfault in a later class's setUpClass has no test in flight.
+        # The recorder cannot attribute it, so the loop must say what it
+        # knows — N finished, the crash is in class/module setup or teardown
+        # — and exit 2, never "before any test started".
+        _write_module(tmp_path, "setup_crash_tests", CRASH_IN_SETUPCLASS_MODULE)
+        out_txt = tmp_path / "run.txt"
+        proc = run_cli(
+            "run",
+            "--discover-root",
+            str(tmp_path),
+            "--label",
+            "setup_crash_tests",
+            "--parsed-output",
+            str(out_txt),
+        )
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "between tests after 2 finished" in proc.stderr
+        assert "class/module setup or teardown" in proc.stderr
+        assert "rerun with --label <module> to isolate" in proc.stderr
+        assert "before any test started" not in proc.stderr
+        lines = parsed_lines(out_txt.read_text(encoding="utf-8"))
+        assert lines["setup_crash_tests.AFinishes.test_a"].startswith("OK    ")
+        assert lines["setup_crash_tests.AFinishes.test_b"].startswith("OK    ")
+        assert "setup_crash_tests.BDiesInSetUpClass.test_c" not in lines
+
     def test_segfault_is_recorded_and_the_rest_still_runs(self, tmp_path: pathlib.Path) -> None:
         _write_module(tmp_path, "crash_tests", CRASH_MODULE)
         out_txt, out_json = tmp_path / "run.txt", tmp_path / "run.json"
@@ -588,6 +702,89 @@ class TestCrashIsolation:
         )
         assert lines["hang_tests.Hangs.test_c_after"].startswith("OK    ")
         assert json.loads(out_json.read_text("utf-8"))["restarts"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# argv hardening (S1 / S2 of the #2517 review)
+# --------------------------------------------------------------------------- #
+
+
+class TestArgvHardening:
+    def test_traversal_tag_is_refused_before_touching_the_cache(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        # S1: ``<cache>/deep/../../x.partial`` is ``<tmp>/x.partial``; the old
+        # code rmtree'd it before the clone even failed.
+        cache = tmp_path / "cache" / "deep"
+        cache.mkdir(parents=True)
+        outside = tmp_path / "x.partial"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("still here", encoding="utf-8")
+        proc = run_cli("run", "--django-tag", "../../x", "--cache-dir", str(cache))
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "refusing to run" in proc.stderr and "'..'" in proc.stderr
+        assert (outside / "keep.txt").read_text(encoding="utf-8") == "still here"
+        assert "cloning" not in proc.stderr
+
+    @pytest.mark.parametrize(
+        "tag",
+        ["../../x", "a/b", "a\\b", "-rf", "5.2 16", "", "5.2.16\n", ".."],
+    )
+    def test_validate_tag_refuses(self, tag: str) -> None:
+        assert _runner().validate_tag(tag) is not None
+
+    @pytest.mark.parametrize("tag", ["5.2.16", "5.2", "main", "stable-5.2.x", "4.2.0a1"])
+    def test_validate_tag_accepts_ordinary_tags(self, tag: str) -> None:
+        assert _runner().validate_tag(tag) is None
+
+    def test_ensure_checkout_refuses_a_path_outside_the_cache(self, tmp_path: pathlib.Path) -> None:
+        # The belt under validate_tag: containment is asserted on the resolved paths.
+        runner = _runner()
+        cache = tmp_path / "cache" / "deep"
+        outside = tmp_path / "x.partial"
+        outside.mkdir()
+        assert runner.ensure_checkout("../../x", cache, quiet=True) is None
+        assert outside.is_dir()
+        runner.validate_tag = lambda tag: None  # bypass the first line of defence
+        assert runner.ensure_checkout("../../x", cache, quiet=True) is None
+        assert outside.is_dir()
+
+    def test_option_looking_label_is_refused_and_writes_no_baseline(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        # S2: ``--label=--gate-off`` used to reach the child as a bare
+        # ``--gate-off``, run Django against itself, and — because the parent
+        # never saw the flag — WRITE a ``ran: 0`` baseline.
+        baseline = tmp_path / "b.json"
+        proc = run_cli(
+            "run",
+            "--label=--gate-off",
+            "--write-baseline",
+            "--baseline",
+            str(baseline),
+            "--discover-root",
+            str(tmp_path),
+        )
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "refusing label(s) that look like options: --gate-off" in proc.stderr
+        assert not baseline.exists()
+
+    def test_labels_are_passed_after_a_double_dash(self) -> None:
+        import argparse
+
+        runner = _runner()
+        args = argparse.Namespace(discover_root=None, gate_off=True, labels=["a", "b"])
+        argv = runner._child_argv(args, pathlib.Path("/x"))
+        assert argv[-3:] == ["--", "a", "b"]
+        assert argv[argv.index("--") - 1] == "--gate-off"
+
+    def test_baseline_refusal_covers_gate_off_discover_and_ran_zero(self) -> None:
+        refuse = _runner().baseline_refusal
+        assert refuse(gate_off=True, discover=False, engine_ran=10) is not None
+        assert refuse(gate_off=False, discover=True, engine_ran=10) is not None
+        refusal = refuse(gate_off=False, discover=False, engine_ran=0)
+        assert refusal is not None and "ran == 0" in refusal
+        assert refuse(gate_off=False, discover=False, engine_ran=1) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -717,6 +914,22 @@ ADAPTER_PROBE = textwrap.dedent(
     out["select"] = engine.select_template(["missing.html", "b.html"]).render(Context({}))
     out["touch_delta"] = adapter.TOUCH["count"] - before
     out["repr"] = repr(engine)
+    # F2: the adapter must hand back djust's template object, not Django's.
+    out["get_template_type"] = type(engine.get_template("a.html")).__name__
+    out["from_string_type"] = type(engine.from_string("{{ x }}")).__name__
+    out["django_template_type"] = type(real_engine(loaders=loaders).get_template("a.html")).__name__
+    # F4: a bad loader must raise at get_template time, as on Django, never at construction.
+    try:
+        lazy = Engine(loaders=["no.such.Loader"])
+        out["bad_loader_constructs"] = True
+    except Exception as exc:  # noqa: BLE001 — the probe reports whatever happened
+        out["bad_loader_constructs"] = type(exc).__name__
+    else:
+        try:
+            lazy.get_template("a.html")
+            out["bad_loader_get_template"] = "no exception"
+        except ImportError as exc:
+            out["bad_loader_get_template"] = type(exc).__name__
     print(json.dumps(out))
     """
 )
@@ -757,6 +970,19 @@ class TestAdapterInSubprocess:
         # render_to_string, get_template(missing), select_template (2 lookups) = 4.
         assert probe["touch_delta"] == 4
         assert probe["repr"].startswith("<Engine:")
+
+    def test_adapter_produces_djust_templates_not_djangos(self, probe: dict) -> None:
+        # F2: identical output ("hi!") from both engines cannot tell the seam
+        # apart; the template TYPE can.
+        assert probe["get_template_type"] == "DjustTemplate"
+        assert probe["from_string_type"] == "DjustTemplate"
+        assert probe["django_template_type"] == "Template"
+
+    def test_bad_loader_raises_at_get_template_not_construction(self, probe: dict) -> None:
+        # F4: ``template_dirs`` is lazy, so the suite's "bad loader raises on
+        # first use" tests see the exception where Django raises it.
+        assert probe["bad_loader_constructs"] is True
+        assert probe["bad_loader_get_template"] in ("ModuleNotFoundError", "ImportError")
 
 
 # --------------------------------------------------------------------------- #
@@ -832,3 +1058,28 @@ class TestAgainstRealDjangoCheckout:
         assert len(data["tests"]) == 115
         assert all(t["status"] == "OK" for t in data["tests"])
         assert data["ran"] == 0
+
+    def test_write_baseline_refuses_when_nothing_reached_the_engine(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        # S2 belt: ``test_smartif`` measures Django's parser against itself and
+        # never builds an Engine — the adapter installs but sees no tests. A
+        # baseline from it would read ``ran: 0`` and neuter ``compare``.
+        src = _real_checkout()
+        assert src is not None
+        baseline = tmp_path / "b.json"
+        args = [
+            "run",
+            "--label",
+            "template_tests.test_smartif",
+            "--write-baseline",
+            "--baseline",
+            str(baseline),
+            "--quiet",
+        ]
+        if src != REPO / ".django-src" / src.name:
+            args += ["--django-src", str(src)]
+        proc = run_cli(*args)
+        assert proc.returncode == 2, proc.stdout + proc.stderr[-3000:]
+        assert "no test reached the djust engine (ran == 0)" in proc.stderr
+        assert not baseline.exists()

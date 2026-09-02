@@ -715,7 +715,11 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
+      # Nothing in this job pushes, and the child process executes the
+      # cloned upstream test tree — do not leave the token on disk for it.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v7
         with:

@@ -11,17 +11,22 @@ drops the ids in that file.
 Status precedence is ERROR > FAIL > OK. A subtest failure marks its parent
 (unittest never calls ``addSuccess`` for a test whose subtest failed); an
 unexpected success is a FAIL, as unittest treats it. ``message`` is
-``"{ExcType}: {first line}"`` with addresses and temp paths normalised and a
-300-character cap, so two runs diff cleanly.
+``"{ExcType}: {first line}"`` with addresses, temp paths, the Django checkout
+root (``$DJUST_SUITE_SRC`` → ``<django-src>``) and the repo root (``<repo>``)
+normalised and a 300-character cap, so two runs diff cleanly — including
+runs from different machines, whose checkouts live under different absolute
+paths.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
 import time
 import unittest
+from pathlib import Path
 from typing import IO, Any
 
 from django.test.runner import DiscoverRunner
@@ -33,11 +38,42 @@ _ADDR_RE = re.compile(r"0x[0-9a-fA-F]+")
 _TMP_RE = re.compile(r"/(?:private/)?(?:var/folders|tmp)/[^\s'\"]*")
 _MESSAGE_CAP = 300
 _RANK = {"OK": 0, "SKIP": 0, "XFAIL": 0, "FAIL": 1, "ERROR": 2}
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@functools.lru_cache(maxsize=8)
+def _root_spellings(root: str) -> tuple[str, ...]:
+    """Every absolute spelling of ``root`` a message might carry, longest first.
+
+    The raw string, its ``resolve()``d form (symlinks), and each with the
+    macOS ``/private`` prefix added or removed — the Rust engine reports the
+    path it was handed, which may be either spelling.
+    """
+    raw = root.rstrip("/")
+    if not raw:
+        return ()
+    spellings = {raw, str(Path(raw).resolve())}
+    for spelling in list(spellings):
+        if spelling.startswith("/private/"):
+            spellings.add(spelling[len("/private") :])
+        elif spelling.startswith("/"):
+            spellings.add("/private" + spelling)
+    return tuple(sorted((s for s in spellings if s not in ("", "/")), key=len, reverse=True))
 
 
 def normalize(message: str) -> str:
-    """Make a failure message stable across runs (addresses, temp paths)."""
+    """Make a failure message stable across runs and machines.
+
+    Addresses → ``0x…``; the Django checkout root (``$DJUST_SUITE_SRC``, set
+    by the outer loop) → ``<django-src>``; this repo's root → ``<repo>``;
+    temp paths → ``<tmp>``. The checkout root goes first because it usually
+    lives inside the repo (``.django-src/<tag>``).
+    """
     message = _ADDR_RE.sub("0x…", message)
+    for spelling in _root_spellings(os.environ.get("DJUST_SUITE_SRC", "")):
+        message = message.replace(spelling, "<django-src>")
+    for spelling in _root_spellings(str(_REPO_ROOT)):
+        message = message.replace(spelling, "<repo>")
     message = _TMP_RE.sub("<tmp>", message)
     return message
 

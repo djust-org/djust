@@ -63,6 +63,8 @@ def run_runtests(django_src: Path, labels: list[str], *, gate_off: bool) -> int:
         "--noinput",
         "-v",
         "1",
+        # ``--`` so runtests.py reads every label as a positional module.
+        "--",
         *(labels or ["template_tests"]),
     ]
     try:

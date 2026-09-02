@@ -24,6 +24,19 @@ flushed JSON line per test, so the outer loop knows the in-flight test id,
 records it as ``ERROR … process crashed (signal N)``, adds it plus every
 finished id to a skip list, and relaunches. Nothing after a crash is lost.
 
+A crash with NO test in flight is different: the child died in a class or
+module ``setUpClass`` / ``tearDownClass`` (Django's runner imports every
+module up front, so an import-time crash shows as "before any test
+started"). The recorder has no test id to attribute it to, so the loop
+does not relaunch — it reports how many tests had finished, exits 2, and
+the caller isolates the module with ``--label``.
+
+The tag (``--django-tag``) is validated before any filesystem access — no
+``/``, ``..``, whitespace or a leading ``-`` — and the checkout paths are
+asserted to lie inside ``--cache-dir``. Labels starting with ``-`` are
+refused, and labels are passed after a literal ``--`` to both the child and
+``runtests.py``, so a label can never be read as an option.
+
 Usage::
 
     scripts/run-django-template-suite.py [run] [--label L ...] [--parsed-output F]
@@ -101,18 +114,51 @@ def checkout_version(django_src: Path) -> str | None:
     return get_version(version)
 
 
+def validate_tag(tag: str) -> str | None:
+    """Why ``tag`` is unusable as a checkout directory name, or None if it is fine.
+
+    Runs BEFORE any filesystem access: ``ensure_checkout`` joins the tag onto
+    the cache dir and removes ``<tag>.partial``, so a tag such as ``../../x``
+    would delete outside the cache before the clone even failed.
+    """
+    if not tag:
+        return "empty tag"
+    if tag.startswith("-"):
+        return "tag %r starts with '-' (would be read as a git option)" % tag
+    if "/" in tag or "\\" in tag or ".." in tag:
+        return "tag %r contains a path separator or '..'" % tag
+    if any(ch.isspace() for ch in tag):
+        return "tag %r contains whitespace" % tag
+    return None
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def ensure_checkout(tag: str, cache_dir: Path, *, quiet: bool) -> Path | None:
     """``<cache>/<tag>`` with a ``tests/runtests.py``; cloned shallow if absent."""
+    problem = validate_tag(tag)
+    if problem is not None:
+        _say("refusing to check out: %s" % problem)
+        return None
     dest = cache_dir / tag
+    partial = cache_dir / ("%s.partial" % tag)
+    if not (_inside(dest, cache_dir) and _inside(partial, cache_dir)):
+        _say("refusing to check out: %s would land outside %s" % (dest, cache_dir))
+        return None
     if (dest / "tests" / "runtests.py").is_file():
         return dest
     cache_dir.mkdir(parents=True, exist_ok=True)
-    partial = cache_dir / ("%s.partial" % tag)
     if partial.exists():
         shutil.rmtree(partial, ignore_errors=True)
     _say("cloning django/django at tag %s into %s ..." % (tag, dest), quiet=quiet)
     started = time.perf_counter()
-    proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+    proc = subprocess.run(  # noqa: S603 — list argv, no shell; the tag is validated above
         ["git", "clone", "--quiet", "--depth", "1", "--branch", tag, DJANGO_GIT, str(partial)],
         capture_output=True,
         text=True,
@@ -146,7 +192,9 @@ def _child_argv(args: argparse.Namespace, django_src: Path | None) -> list[str]:
         argv += ["runtests", "--django-src", str(django_src)]
     if args.gate_off:
         argv.append("--gate-off")
-    argv += args.labels
+    # After ``--`` argparse reads everything as positional: a label can never
+    # be smuggled in as an option (``--label=--gate-off``).
+    argv += ["--", *args.labels]
     return argv
 
 
@@ -166,6 +214,10 @@ def run_children(
     env["DJUST_SUITE_SKIP_IDS"] = str(skip_path)
     env["TMPDIR"] = str(run_root)
     env["PYTHONUNBUFFERED"] = "1"
+    if django_src is not None:
+        # The recorder rewrites this root to ``<django-src>`` in messages so
+        # two runs from different checkouts (CI, a laptop) diff cleanly.
+        env["DJUST_SUITE_SRC"] = str(django_src)
     argv = _child_argv(args, django_src)
 
     while True:
@@ -212,10 +264,21 @@ def run_children(
         else:
             reason = "process crashed (signal %d)" % -returncode
         if victim is None:
-            _say(
-                "child #%d died (%s) before any test started:\n%s"
-                % (restarts + 1, reason, _tail(log_path))
-            )
+            if not finished:
+                _say(
+                    "child #%d died (%s) before any test started:\n%s"
+                    % (restarts + 1, reason, _tail(log_path))
+                )
+            else:
+                # Django's runner imports every module up front, so with N
+                # tests finished the crash is in a class/module setUp or
+                # tearDown — nothing the recorder can attribute to a test id.
+                _say(
+                    "child #%d died (%s) between tests after %d finished; the crash is in "
+                    "class/module setup or teardown, which the recorder cannot attribute "
+                    "to a test; stopping — rerun with --label <module> to isolate:\n%s"
+                    % (restarts + 1, reason, len(finished), _tail(log_path))
+                )
             return records, restarts, 2
         if victim in victims:
             _say(
@@ -243,6 +306,11 @@ def _crash_record(test_id: str, reason: str, log_path: Path) -> dict:
         "id": test_id,
         "status": "ERROR",
         "message": reason,
+        # A crash is attributed to the engine by construction: only native
+        # code (the Rust extension) can kill the process mid-test, and a
+        # test that never reached it cannot segfault. Recording it as
+        # touched puts it in the headline bucket and keeps it out of the
+        # "untouched tests failed" harness-integrity check.
         "touched": True,
         "ms": 0.0,
         "crash": True,
@@ -255,9 +323,29 @@ def _crash_record(test_id: str, reason: str, log_path: Path) -> dict:
 # --------------------------------------------------------------------------- #
 
 
+def baseline_refusal(*, gate_off: bool, discover: bool, engine_ran: int) -> str | None:
+    """Why ``--write-baseline`` must not write from this run, or None."""
+    if gate_off or discover:
+        return "refusing to write a baseline from a --gate-off or --discover-root run"
+    if engine_ran == 0:
+        return (
+            "refusing to write a baseline: no test reached the djust engine (ran == 0) — "
+            "the adapter installed but measured nothing"
+        )
+    return None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
+    bad_labels = [label for label in args.labels if label.startswith("-")]
+    if bad_labels:
+        _say("refusing label(s) that look like options: %s" % ", ".join(bad_labels))
+        return 2
     django_version = installed_django_version()
     tag = args.django_tag or django_version
+    problem = validate_tag(tag)
+    if problem is not None:
+        _say("refusing to run: %s" % problem)
+        return 2
     django_src: Path | None = None
 
     if args.discover_root is None:
@@ -343,8 +431,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         report.write_json(args.json, run_data)
     if args.write_baseline:
-        if args.gate_off or args.discover_root is not None:
-            _say("refusing to write a baseline from a --gate-off or --discover-root run")
+        refusal = baseline_refusal(
+            gate_off=bool(args.gate_off),
+            discover=args.discover_root is not None,
+            engine_ran=int(result["ran"]),
+        )
+        if refusal is not None:
+            _say(refusal)
             return 2
         report.write_json(args.baseline, result)
         _say("baseline written to %s" % args.baseline, quiet=args.quiet)
@@ -433,7 +526,13 @@ def build_parser() -> argparse.ArgumentParser:
     compare = sub.add_parser(
         "compare", help="the ratchet: compare a run's --json against the baseline"
     )
-    compare.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
+    compare.add_argument(
+        "--baseline",
+        type=Path,
+        default=DEFAULT_BASELINE,
+        help="the stored baseline to ratchet against (default: %s)"
+        % DEFAULT_BASELINE.relative_to(_REPO_ROOT),
+    )
     compare.add_argument("--json", type=Path, required=True, help="a run's --json output")
     compare.set_defaults(func=cmd_compare)
     return parser
