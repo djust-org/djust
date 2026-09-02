@@ -8,6 +8,12 @@ for the xdist-safe assertion contract.
 
 import pytest
 
+from tests.benchmarks.model_backed_profile_2532 import (
+    PROFILE_ROWS,
+    format_table,
+    write_json_if_requested,
+)
+
 
 # Per-segment budgets (ROADMAP v0.6.0 perf-profile targets — see
 # docs/performance/v0.6.0-profile.md). New benchmark files should import these
@@ -85,6 +91,30 @@ def pytest_configure(config):
     """Configure pytest-benchmark defaults."""
     # These can be overridden via command line
     config.addinivalue_line("markers", "benchmark: marks tests as benchmarks")
+
+
+def pytest_terminal_summary(terminalreporter):
+    """Print the model-backed five-bucket table (#2532) when its benchmark ran.
+
+    Visible under plain ``-q`` (no ``-s`` needed) because it goes through the
+    terminal reporter, not stdout capture. ``DJUST_BENCH_TABLE_JSON=<path>``
+    additionally dumps the raw rows + medians for the docs.
+    """
+    if not PROFILE_ROWS:
+        return
+    terminalreporter.section("model-backed render profile (#2532) — medians, ms")
+    terminalreporter.write_line(format_table(PROFILE_ROWS))
+    terminalreporter.write_line(
+        "buckets: 1 rust render proper (render_ms - crossings' Python time) | "
+        "2 direct Rust-origin boundary crossings / proxy = transitive re-wraps inside them "
+        "/ py_calls = serializer calls while Rust was not running | "
+        "3 ORM queries / sql time / list() at mount | "
+        "4 state serialization (sync - jit) / jit = get_context_data / persist | "
+        "5 parse + diff + serialize, fast = frag | region | full"
+    )
+    path = write_json_if_requested(PROFILE_ROWS)
+    if path:
+        terminalreporter.write_line(f"rows + medians written to {path}")
 
 
 @pytest.fixture

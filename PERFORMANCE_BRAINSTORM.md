@@ -86,18 +86,28 @@ states the contract verbatim:
 **Consequence for the first draft's example:** a 50-row × 6-column table with a
 `select_related` FK traversal per row costs approximately **zero** GIL
 re-entries, not 300–600. That example was the entire empirical case for
-ranking Idea 1 first, and it does not hold.
+ranking Idea 1 first, and it does not hold. (Measured 2026-09-02: exactly
+zero, and so is every other list-row shape below — §7.1.)
 
-**What the sidecar surface actually is** — narrower, and a different shape:
+**What the sidecar surface actually is** — narrower, and a different shape.
+The middle column is what this section originally reasoned from the source;
+the right column is what the #2532 benchmark measured on a **`list[Model]`
+row** (§7.1), and it is different: a list never reaches the sidecar at all.
+`ContextMixin.get_context_data` JIT-serialises a `list[Model]` in Python by
+the paths the template extracts (a re-query with `select_related` /
+`prefetch_related` derived from those paths, then per-row codegen), and
+`rust_bridge.py` never admits a `list` to the sidecar. The middle column
+still holds for an object the sidecar *does* receive — a presenter-shaped
+container (`Page(rows)`) or a path the extractor misses.
 
-| Path shape | Resolves where |
-|---|---|
-| Concrete model fields | Eager dict (Rust) |
-| FK/O2O traversal **with** `select_related`/prefetch | Eager dict (Rust), recursively |
-| FK **without** `select_related` | Only `<field>_id` is serialized; the traversal misses the dict |
-| `@property` | Sidecar — `_meta.get_fields()` never yields properties |
-| Reverse relations, managers, querysets | Sidecar (`{{ workspace.memberships.count }}`, #1985) |
-| Non-`get_`-prefixed methods | Sidecar |
+| Path shape | Resolves where (object reaching the sidecar) | Measured on a `list[Model]` row (#2532, §7.1) |
+|---|---|---|
+| Concrete model fields | Eager dict (Rust) | JIT-eager, Python; 0 crossings |
+| FK/O2O traversal **with** `select_related`/prefetch | Eager dict (Rust), recursively | JIT-eager; 0 crossings (`list_control`) |
+| FK **without** `select_related` | Only `<field>_id` is serialized; the traversal misses the dict | JIT re-queries **with** `select_related` it derived from the template; 0 crossings, same query count as the control (`list_fk_nosel`) |
+| `@property` | Sidecar — `_meta.get_fields()` never yields properties | JIT codegen reads it in Python; 0 crossings — **not** the sidecar (`list_property`) |
+| Reverse relations, managers, querysets | Sidecar (`{{ workspace.memberships.count }}`, #1985) | JIT `prefetch_related` + one extra query per event; 0 crossings (`list_reverse`). On a presenter row: 302 crossings + 50 `COUNT(*)` per full render (`presenter_reverse`) |
+| Non-`get_`-prefixed methods | Sidecar | Not measured (no variant) |
 
 Two second-order costs live on that fallback path and are worth measuring
 before designing anything around it:
@@ -108,7 +118,11 @@ before designing anything around it:
 2. Each segment also runs the Django-parity auto-call probe (`maybe_call`).
 
 Both are only worth attacking if §7's benchmark shows the sidecar path carries
-real traffic. It is a correctness-critical path (#1986 serialization floor) —
+real traffic. It does — for the presenter shape, and only there (§7.1:
+`presenter_control` pays 52 direct crossings + 850 transitive re-wraps for
+the one-off `Value` extraction of the row list, ~5 ms of Python per full
+render, before a single sidecar segment is resolved). It is a
+correctness-critical path (#1986 serialization floor) —
 `_protect_sidecar_value` must survive any optimization, not be bypassed.
 
 ### 2.2 The state-clone cost is real; the number cited for it is not
@@ -153,6 +167,10 @@ until a model-backed benchmark exists* — but would have built the wrong
 benchmark. A fixture using `select_related` throughout measures ~0 sidecar
 cost and would "prove" the sidecar is free. See §7 for what the fixture
 actually has to contain.
+
+**Measured 2026-09-02 (#2532).** The benchmark exists and §7.1 holds its
+table. The premise of §6's ranking is now data rather than reasoning; §6 is
+left as written here and re-ranked separately.
 
 ---
 
@@ -496,6 +514,115 @@ That measurement decides the order of Ideas 1b, 3 and 4, and tells us whether
 Idea 2's attribute work is worth Medium effort. Without it we are ranking on
 reasoning, not data — which is exactly how the first draft went wrong.
 
+### 7.1 Measured (2026-09-02, #2532)
+
+`tests/benchmarks/test_model_backed_render_2532.py` (`make benchmark-model`)
+is the benchmark above: a 50-row × 6-column model list through the real
+WebSocket mount and event paths (`WebsocketCommunicator` → `LiveViewConsumer`
+→ `ViewRuntime.dispatch_mount` / `dispatch_event`), seven variants, three
+events each, split into the five buckets. Every variant the list above asked
+for is present — `list_control` (the `select_related` control),
+`list_property`, `list_reverse` (`{{ row.comments.count }}`), `list_fk_nosel`
+— plus two the list did not know it needed, `presenter_control` and
+`presenter_reverse` (the same rows behind a plain `Page(rows)` object), and
+`snapshot` (`list_control` with `enable_state_snapshot = True`, the one
+variant on which bucket 4's `persist` column is non-zero). The differ now
+reports which parse-skipping path fired (`RenderTiming.fast_path`), so the
+`fast` column is an instrument, not an inference.
+
+Release build (`maturin develop --release`), medians of 3 rounds after a
+warm-up, sqlite `:memory:`, ms, taken on a quiet machine (load ~6 on 12
+cores, no other suite running). `list_control`'s mount row is the first
+benchmark in the process and includes its cold start. The counts
+(crossings, queries, serializer calls) are deterministic and were identical
+across every run taken for this section, loaded or quiet; only timings move
+with load, which is why nothing here asserts on a duration.
+
+```
+variant            phase            total  1 rust  2 xings  2 proxy  2 xing_ms  py_calls  3 q  3 sql_ms  3 list_ms  4 state  4 jit  4 persist  5 parse  5 diff  5 ser  5 fast
+-----------------  ---------------  -----  ------  -------  -------  ---------  --------  ---  --------  ---------  -------  -----  ---------  -------  ------  -----  ------
+list_control       mount             8.43    0.39        0        0       0.00       976    2      0.04       0.40     4.54   0.67       0.00     0.23    0.00   0.13       -
+list_control       text_change       3.08    0.00        0        0       0.00       497    1      0.03       0.00     1.30   0.75       0.00     0.00    0.00   0.13    frag
+list_control       attr_change       3.77    0.39        0        0       0.00       497    1      0.04       0.00     1.24   0.68       0.00     0.25    0.19   0.12    full
+list_control       row_text_change   4.11    0.38        0        0       0.00       947    2      0.04       0.00     1.89   0.65       0.00     0.06    0.00   0.12  region
+list_property      mount             8.71    0.38        0        0       0.00       976    2      0.04       0.41     4.55   0.72       0.00     0.25    0.00   0.12       -
+list_property      text_change       3.16    0.01        0        0       0.00       497    1      0.03       0.00     1.31   0.75       0.00     0.00    0.00   0.12    frag
+list_property      attr_change       3.82    0.38        0        0       0.00       497    1      0.03       0.00     1.27   0.70       0.00     0.26    0.19   0.12    full
+list_property      row_text_change   4.33    0.40        0        0       0.00       947    2      0.04       0.00     1.99   0.72       0.00     0.05    0.00   0.12  region
+list_reverse       mount            11.17    0.47        0        0       0.00      1026    3      0.07       0.43     4.79   2.08       0.00     0.24    0.00   0.13       -
+list_reverse       text_change       4.86    0.01        0        0       0.00       497    2      0.06       0.00     1.43   2.09       0.00     0.00    0.00   0.12    frag
+list_reverse       attr_change       5.51    0.39        0        0       0.00       497    2      0.05       0.00     1.32   2.09       0.00     0.27    0.19   0.11    full
+list_reverse       row_text_change   5.81    0.39        0        0       0.00       997    3      0.07       0.00     2.06   2.02       0.00     0.06    0.00   0.11  region
+list_fk_nosel      mount             9.10    0.43        0        0       0.00       976    2      0.06       0.31     4.87   0.75       0.00     0.26    0.00   0.12       -
+list_fk_nosel      text_change       3.55    0.01        0        0       0.00       497    1      0.04       0.00     1.39   0.87       0.00     0.00    0.00   0.11    frag
+list_fk_nosel      attr_change       4.16    0.41        0        0       0.00       497    1      0.04       0.00     1.36   0.77       0.00     0.24    0.18   0.11    full
+list_fk_nosel      row_text_change   4.54    0.39        0        0       0.00       947    2      0.06       0.00     2.06   0.75       0.00     0.04    0.00   0.10  region
+presenter_control  mount            11.67    0.00       52      850       5.11       526    1      0.02       0.44     4.05   0.09       0.00     0.24    0.00   0.13       -
+presenter_control  text_change       2.58    0.01        0        0       0.00       498    0      0.00       0.00     1.35   0.10       0.00     0.00    0.00   0.12    frag
+presenter_control  attr_change       7.46    0.00       52      850       5.15       498    0      0.00       0.00     1.33   0.09       0.00     0.24    0.18   0.11    full
+presenter_control  row_text_change   7.14    0.00       52      850       5.08       498    1      0.02       0.00     1.32   0.09       0.00     0.05    0.00   0.12  region
+presenter_reverse  mount            18.98    6.25      302      950       5.37       526   51      0.28       0.42     4.06   0.09       0.00     0.24    0.00   0.11       -
+presenter_reverse  text_change       2.51    0.00        0        0       0.00       498    0      0.00       0.00     1.28   0.10       0.00     0.00    0.00   0.11    frag
+presenter_reverse  attr_change      14.20    6.13      302      950       5.25       498   50      0.26       0.00     1.25   0.09       0.00     0.24    0.18   0.12    full
+presenter_reverse  row_text_change  14.18    6.12      302      950       5.40       498   51      0.28       0.00     1.33   0.10       0.00     0.05    0.00   0.11  region
+snapshot           mount            12.68    0.38        0        0       0.00       976    2      0.04       0.40     4.67   0.65       0.00     0.23    0.00   0.11       -
+snapshot           text_change       5.61    0.00        0        0       0.00       987    5      0.10       0.00     1.30   0.72       2.40     0.00    0.00   0.12    frag
+snapshot           attr_change       5.83    0.37        0        0       0.00       987    4      0.08       0.00     1.28   0.71       1.95     0.23    0.18   0.12    full
+snapshot           row_text_change   6.24    0.36        0        0       0.00      1437    5      0.09       0.00     2.04   0.65       1.97     0.04    0.00   0.12  region
+```
+
+Column notes: `2 xing_ms` is the Python time inside the direct crossings and
+includes the counting wrappers' own `perf_counter` / `_getframe` overhead
+(~900 wrapped calls on the presenter variants), so on those rows bucket 1 is
+under- and bucket 2 over-attributed, and `1 rust` can floor at 0. `4 state`
+is `_sync_state_to_rust` minus `get_context_data`; `4 jit` is
+`get_context_data` alone.
+
+**Three findings.**
+
+1. **Lists never cross the sidecar; the presenter shape is the sidecar
+   path.** All five list-shaped variants (`list_*` and `snapshot`) make 0
+   Rust→Python crossings in every phase, including `list_property` and
+   `list_reverse`, which §7 above (and #2532's own fixture table) predicted
+   would be sidecar traffic. The mechanism per path shape is in §2.1's
+   right-hand column: the JIT resolves everything on a `list[Model]` row in
+   Python before Rust runs. The sidecar carries traffic only for a container
+   the JIT skips: `presenter_control` pays 52 direct crossings + 850
+   transitive re-wraps (~5 ms of Python) for the one-off `Value` extraction
+   of the row list, and `presenter_reverse` pays 302 + 950 plus 50–51
+   `COUNT(*)` queries per full render — an N+1 on every attribute-change
+   event, ~6 ms in the Rust-side walk. The four `list_*` variants' zero
+   crossings are the invariant ADR-027's flip (#2539) is held to; the
+   presenter contrast is what the flip is meant to change. The spike's
+   original 357 decomposes as 252 direct `_protect_sidecar_value` calls +
+   100 proxy re-wraps + 5 Python-side.
+
+2. **The JIT re-serialises every row on every event.** `py_calls` sits at
+   ~497 serializer calls per event on every list variant, and `3 q` reads
+   one query per event even for `text_change` (one label outside the loop;
+   the presenter variants read 0 there). `list_reverse` pays a second query
+   per event for the `prefetch_related` the JIT derived. That is #2536: a
+   static list costs a query plus 50 instantiations plus serialisation per
+   event, and an in-memory row mutation is silently discarded by the
+   re-query. Measurement only here (#1079).
+
+3. **A list mount is state sync, not render.** On the quiet-machine run a
+   list mount spends ~4.3 ms in `_sync_state_to_rust` (after `get_context_data`)
+   against ~0.4 ms of Rust render and ~0.2 ms of parse; under load the same
+   ratio holds (9–16 ms vs 0.4–0.5 ms above). `snapshot` adds the persistence
+   path §2.2 wanted measured: 1.8–2.3 ms per event in
+   `_persist_state_after_event` (the signed-snapshot session write), and 4–5
+   queries per event where the other list variants issue 1–2 — the session
+   store's own writes. Every other variant reads 0 in `4 persist` by design,
+   since `_persist_state_after_event` runs only under the `enable_state_snapshot`
+   opt-in.
+
+What this does to §6 is deliberately not decided here (#1079): Idea 1a's
+handle cache addresses the presenter shape only; Idea 1b's manifest was
+premised on `@property` reaching the sidecar, which it does not on a list; and
+finding 3 puts state serialization, not the boundary, at the top of the list
+mount. Re-ranking is its own pass.
+
 ---
 
 ## 8. Open questions
@@ -514,7 +641,9 @@ reasoning, not data — which is exactly how the first draft went wrong.
 - What fraction of real template paths land on the sidecar rather than the
   eager dict? This is the single number that decides whether Idea 1b exists.
   A downstream corpus (djust.org, djustlive, the demo project) would answer it
-  faster than synthetic reasoning.
+  faster than synthetic reasoning. **Answered for the synthetic corpus
+  (§7.1):** none of them on a `list[Model]` row, all of them on a
+  presenter-shaped container. The downstream-corpus fraction is still open.
 - Is production Postgres remote or co-located? This alone decides whether Idea 4
   is the biggest item in this document or the smallest.
 - Does over-extraction in Idea 1b (pulling paths guarded by `{% if %}` that

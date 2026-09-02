@@ -375,7 +375,7 @@ benchmark-rust: ## Run Rust benchmarks (Criterion)
 	@echo "$(YELLOW)HTML reports available in target/criterion/$(NC)"
 
 .PHONY: benchmark-python
-benchmark-python: ## Run Python benchmarks (pytest-benchmark)
+benchmark-python: ## Run Python benchmarks (pytest-benchmark); see benchmark-model for the #2532 five-bucket table
 	@echo "$(GREEN)Running Python benchmarks...$(NC)"
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/benchmarks/ -v --benchmark-only --benchmark-autosave
 
@@ -397,6 +397,12 @@ benchmark-e2e: ## Run end-to-end LiveView benchmarks
 	@echo "$(GREEN)Running end-to-end benchmarks...$(NC)"
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/benchmarks/test_e2e.py -v --benchmark-only \
 		--benchmark-min-rounds=5
+
+.PHONY: benchmark-model
+benchmark-model: ## Model-backed render benchmark — the five-bucket boundary profile (#2532); needs a RELEASE build
+	@echo "$(GREEN)Running the model-backed render benchmark (serial; release build required)...$(NC)"
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/benchmarks/test_model_backed_render_2532.py -q \
+		--benchmark-only -p no:cacheprovider
 
 ##@ Database
 
