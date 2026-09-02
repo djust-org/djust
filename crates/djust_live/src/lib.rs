@@ -161,6 +161,19 @@ struct SerializableViewState {
     timestamp: f64, // Unix timestamp for session age tracking
 }
 
+/// `RenderTiming::fast_path` values (#2532). A float so the whole timing
+/// dict stays `HashMap<String, f64>` for the existing Python consumer
+/// (`LiveView._rust_render_timing`); Python reads `> 0.0` as "taken".
+const FAST_PATH_NONE: f64 = 0.0;
+/// The fragment fast path: every changed template fragment was plain text
+/// with a known VDOM text node, so the parse + diff were skipped and
+/// `SetText` patches were produced directly.
+const FAST_PATH_FRAGMENT: f64 = 1.0;
+/// The text-region fast path: the fragment path could not fire (a changed
+/// fragment contained tags) but the byte diff of the full HTML was a single
+/// text span inside one text node.
+const FAST_PATH_TEXT_REGION: f64 = 2.0;
+
 /// Per-phase timing from render_with_diff()
 #[derive(Debug, Clone)]
 struct RenderTiming {
@@ -170,6 +183,12 @@ struct RenderTiming {
     serialize_ms: f64,
     total_ms: f64,
     html_len: usize,
+    /// Which parse-skipping path produced the patches — one of the
+    /// `FAST_PATH_*` constants. `FAST_PATH_NONE` means html5ever parse +
+    /// full VDOM diff ran. Instrumentation only (#2532): the model-backed
+    /// benchmark asserts on it so a variant that silently falls through to
+    /// the slow path cannot be reported as the fast one.
+    fast_path: f64,
 }
 
 /// A LiveView component that manages state and rendering (Rust backend)
@@ -770,9 +789,12 @@ impl RustLiveViewBackend {
             };
 
             let mut took_full_parse = false;
+            // Which parse-skipping path fired, for `RenderTiming::fast_path` (#2532).
+            let fast_path: f64;
             let (mut new_vdom, patches, parse_ms, diff_ms) = if let Some((vdom, text_patches)) =
                 text_fast_path
             {
+                fast_path = FAST_PATH_FRAGMENT;
                 let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
                 let patches_json = if text_patches.is_empty() {
                     Some("[]".to_string())
@@ -789,6 +811,7 @@ impl RustLiveViewBackend {
                 self.text_node_index = None;
                 (vdom, patches_json, parse_ms, 0.0)
             } else if let Some((vdom, text_patches)) = text_region_fast_path {
+                fast_path = FAST_PATH_TEXT_REGION;
                 let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
                 let patches_json = if text_patches.is_empty() {
                     Some("[]".to_string())
@@ -800,6 +823,7 @@ impl RustLiveViewBackend {
                 (vdom, patches_json, parse_ms, 0.0)
             } else {
                 took_full_parse = true;
+                fast_path = FAST_PATH_NONE;
                 // dj-id collision defense (#1550 / #1552). Before
                 // `parse_html_continue` generates fresh ids for the new
                 // tree, advance the thread-local id counter past the
@@ -934,6 +958,7 @@ impl RustLiveViewBackend {
                 serialize_ms,
                 total_ms,
                 html_len: html.len(),
+                fast_path,
             });
 
             // Cache HTML for dj-update="ignore" subtrees so subsequent
@@ -1128,6 +1153,7 @@ impl RustLiveViewBackend {
                         Ok(v)
                     }
                 };
+            let mut fast_path = FAST_PATH_NONE;
             let mut new_vdom = if let (Some(ref old_html), Some(_)) =
                 (&self.last_html, &self.last_vdom)
             {
@@ -1144,6 +1170,7 @@ impl RustLiveViewBackend {
                 // cache from the manifest so a future reorder hits even when this
                 // render took the in-place path.
                 if try_text_only_vdom_update_inplace(&mut vdom, &old_html, &html) {
+                    fast_path = FAST_PATH_FRAGMENT;
                     Self::populate_parse_cache_from_manifest(&loop_parse_manifest, &mut loop_cache);
                     vdom
                 } else {
@@ -1209,6 +1236,7 @@ impl RustLiveViewBackend {
                 serialize_ms,
                 total_ms,
                 html_len: html.len(),
+                fast_path,
             });
 
             cache_ignore_subtree_html(&mut new_vdom);
@@ -1312,7 +1340,9 @@ impl RustLiveViewBackend {
     }
 
     /// Get per-phase timing from the last render_with_diff() call.
-    /// Returns a dict with render_ms, parse_ms, diff_ms, serialize_ms, total_ms, html_len.
+    /// Returns a dict with render_ms, parse_ms, diff_ms, serialize_ms, total_ms,
+    /// html_len, and `fast_path` (#2532: 0.0 = full parse + diff, 1.0 = the
+    /// fragment text fast path, 2.0 = the text-region fast path).
     fn get_render_timing(&self) -> Option<HashMap<String, f64>> {
         self.last_render_timing.as_ref().map(|t| {
             let mut m = HashMap::new();
@@ -1322,6 +1352,7 @@ impl RustLiveViewBackend {
             m.insert("serialize_ms".to_string(), t.serialize_ms);
             m.insert("total_ms".to_string(), t.total_ms);
             m.insert("html_len".to_string(), t.html_len as f64);
+            m.insert("fast_path".to_string(), t.fast_path);
             m
         })
     }
@@ -4201,5 +4232,114 @@ mod panic_boundary_tests {
             assert!(err.is_instance_of::<pyo3::exceptions::PyValueError>(py));
             assert!(err.value(py).to_string().contains("ordinary failure"));
         });
+    }
+}
+
+#[cfg(test)]
+mod fast_path_flag_tests {
+    //! Pins `RenderTiming::fast_path` (#2532) so the model-backed benchmark's
+    //! "was the text fast path taken?" assertion rests on an instrument that is
+    //! itself tested, not inferred from `diff_ms == 0.0`.
+    //!
+    //! Run with `cargo test -p djust_live --no-default-features` (see the
+    //! `[features]` note in this crate's Cargo.toml).
+    use super::{RustLiveViewBackend, FAST_PATH_FRAGMENT, FAST_PATH_NONE, FAST_PATH_TEXT_REGION};
+    use djust_core::{ObjectKey, Value};
+    use indexmap::IndexMap;
+    use pyo3::prelude::*;
+    use std::collections::HashMap;
+
+    const TEMPLATE: &str = concat!(
+        "<div dj-id=\"0\"><p>{{ label }}</p>",
+        "<table><tbody>{% for row in rows %}",
+        "<tr class=\"{% if row.id == highlight_id %}hl{% endif %}\">",
+        "<td>{{ row.title }}</td><td>{{ row.views }}</td></tr>",
+        "{% endfor %}</tbody></table></div>"
+    );
+
+    fn row(id: i64, views: i64) -> Value {
+        let mut m = IndexMap::new();
+        m.insert(ObjectKey::Str("id".to_string()), Value::Integer(id));
+        m.insert(
+            ObjectKey::Str("title".to_string()),
+            Value::String(format!("Post {id}")),
+        );
+        m.insert(ObjectKey::Str("views".to_string()), Value::Integer(views));
+        Value::Object(m)
+    }
+
+    fn state(label: &str, highlight_id: i64, views7: i64) -> HashMap<String, Value> {
+        let mut s = HashMap::new();
+        s.insert("label".to_string(), Value::String(label.to_string()));
+        s.insert("highlight_id".to_string(), Value::Integer(highlight_id));
+        s.insert(
+            "rows".to_string(),
+            Value::List(
+                (1..=10)
+                    .map(|i| row(i, if i == 7 { views7 } else { 100 + i }))
+                    .collect(),
+            ),
+        );
+        s
+    }
+
+    fn timing(view: &RustLiveViewBackend, key: &str) -> f64 {
+        view.get_render_timing()
+            .and_then(|m| m.get(key).copied())
+            .expect("render_with_diff stores a timing dict")
+    }
+
+    fn mounted() -> RustLiveViewBackend {
+        Python::initialize();
+        let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
+        view.update_state_rust(state("v0", 0, 107));
+        view.render_with_diff().expect("initial render");
+        view
+    }
+
+    #[test]
+    fn first_render_reports_no_fast_path() {
+        let view = mounted();
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
+    }
+
+    #[test]
+    fn text_only_change_outside_the_loop_takes_the_fragment_fast_path() {
+        let mut view = mounted();
+        view.update_state_rust(state("v1", 0, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
+        // The flag agrees with the pre-#2532 inference the benchmark cross-checks.
+        assert_eq!(timing(&view, "diff_ms"), 0.0);
+        let patches = patches.expect("a diff render returns patches");
+        assert!(patches.contains("SetText"), "patches: {patches}");
+        assert!(!patches.contains("SetAttr"), "patches: {patches}");
+    }
+
+    #[test]
+    fn attribute_change_takes_the_full_parse_and_diff() {
+        let mut view = mounted();
+        view.update_state_rust(state("v0", 7, 107));
+        view.set_changed_keys(vec!["highlight_id".to_string()]);
+        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
+        let patches = patches.expect("a diff render returns patches");
+        assert!(patches.contains("SetAttr"), "patches: {patches}");
+    }
+
+    #[test]
+    fn text_change_inside_the_loop_takes_the_text_region_fast_path() {
+        // The changed fragment is the whole `{% for %}` body (it contains
+        // tags), so the fragment path cannot fire; the byte diff of the full
+        // HTML is still one text span inside one `<td>`.
+        let mut view = mounted();
+        view.update_state_rust(state("v0", 0, 108));
+        view.set_changed_keys(vec!["rows".to_string()]);
+        let (_html, patches, _v) = view.render_with_diff().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+        assert_eq!(timing(&view, "diff_ms"), 0.0);
+        let patches = patches.expect("a diff render returns patches");
+        assert!(patches.contains("SetText"), "patches: {patches}");
     }
 }
