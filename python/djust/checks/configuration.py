@@ -636,7 +636,7 @@ def _check_templates_shape(errors: list) -> None:
                     errors.append(
                         DjustWarning(
                             "TEMPLATES has a DjustTemplateBackend entry but no "
-                            "DjangoTemplates entry after it; django.contrib.admin "
+                            "DjangoTemplates entry after it; the admin / admindocs "
                             "templates cannot render.",
                             hint=(
                                 "Add a 'django.template.backends.django.DjangoTemplates' "
