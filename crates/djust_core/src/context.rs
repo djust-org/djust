@@ -1231,6 +1231,13 @@ impl Context {
         py: Python<'py>,
         obj: pyo3::Bound<'py, pyo3::PyAny>,
     ) -> Option<pyo3::Bound<'py, pyo3::PyAny>> {
+        // movement 3: narrow to ModuleNotFoundError. As written, ANY import
+        // failure takes the pass-through arm — including an `ImportError` from
+        // a djust that IS installed but whose own imports are broken, which is
+        // a floor that failed to load rather than a floor that is absent. The
+        // two are different conditions and only the second should pass an
+        // object through; distinguishing them needs the error's type, which
+        // `.and_then` discards here.
         let Ok(protect) = py
             .import("djust.serialization")
             .and_then(|m| m.getattr("_protect_sidecar_value"))

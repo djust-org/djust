@@ -265,10 +265,17 @@ def test_both_render_paths_call_the_same_timezone_function():
       wrong resolution mechanism is the parallel-path drift (#1646) the whole
       movement exists to retire.
 
-    The ~12us is therefore paid deliberately, on the component path only, and
-    it is a per-render cost rather than a per-component-instance one. Still
-    deliberately absent: the other nested ``_rust.render_template`` callers,
-    which are reachable only from inside one of the four entries here.
+    The ~12us is therefore paid deliberately — but ONCE PER THREAD, not once
+    per component instance. ``components/base.py`` calls
+    ``apply_render_env_once``, because it is the one entry that runs many
+    times inside a single parent render: a parent with N components paid N
+    pushes inside a render whose own push had already set every thread-local
+    correctly. The sentinel is what makes the first push (the fresh-thread
+    case above) still happen. Both spellings count as a caller below, since
+    the question this pin asks is which paths ACQUIRE the settings.
+
+    Still deliberately absent: the other nested ``_rust.render_template``
+    callers, which are reachable only from inside one of the four entries.
     """
     import ast
     import pathlib
@@ -288,7 +295,7 @@ def test_both_render_paths_call_the_same_timezone_function():
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "apply_render_env"
+                and node.func.id in ("apply_render_env", "apply_render_env_once")
             ):
                 callers.add(path.relative_to(root).as_posix())
 

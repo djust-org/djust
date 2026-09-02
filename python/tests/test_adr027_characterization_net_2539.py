@@ -488,6 +488,38 @@ ROWS: list[Row] = [
         "no",
         "no",
     ),
+    # G2 / G3 guard the two halves of the #2539 `ignore_failures` fix, and
+    # both are RIGHT today — which is what makes them regression guards rather
+    # than progress rows: each goes red if its defect returns.
+    #
+    # G2 is the STRICT half. Django resolves a `{% with %}` operand with
+    # `ignore_failures=False`, so a missing `y` is `string_if_invalid` and
+    # `default_if_none` does NOT fire. The first version of movement 2 put the
+    # None substitution in the shared pipe branch, which claimed `{% with %}`,
+    # `{% include … with %}` and every tag/filter argument along with the five
+    # tags that really do ignore failures — and rendered `[D]` here.
+    _r(
+        "G2",
+        "{% with x=y|default_if_none:'D' %}[{{ x }}]{% endwith %}",
+        lambda: {},
+        "[]",
+        "[]",
+        "[]",
+    ),
+    # G3 is the TYPED half, and the reason row G alone was not enough: row G's
+    # `y` is 1, so a fallback that came back as the STRING "1" answered `yes`
+    # by luck. `y = 0` is Django's own `test_if_tag_badarg02` value and tells
+    # the two apart — `Value::Integer(0)` is falsy, `Value::String("0")` is
+    # not. The dispatch table takes a `&str`, so the fallback was stringified
+    # until the resolution site started returning the argument's own value.
+    _r(
+        "G3",
+        "{% if x|default_if_none:y %}yes{% else %}no{% endif %}",
+        lambda: {"y": 0},
+        "no",
+        "no",
+        "no",
+    ),
     _r("H", "{{ x }}", cycle, "1", SEGFAULT, "1"),
     _r(
         "I",
@@ -895,8 +927,8 @@ class TestThePlainEntriesAgree:
 
 class TestTheTableIsSelfConsistent:
     def test_every_row_has_three_columns_and_a_unique_id(self) -> None:
-        assert len(ROWS) == 45
-        assert len(ROW_BY_ID) == 45
+        assert len(ROWS) == 47
+        assert len(ROW_BY_ID) == 47
         for row in ROWS:
             for column in ("django", "plain", "liveview"):
                 assert recorded(row, column) is not None, f"row {row.id} lacks {column}"
@@ -932,7 +964,7 @@ class TestTheTableIsSelfConsistent:
 
     def test_the_crash_cells_are_exactly_three(self) -> None:
         assert sorted(CRASH_CELLS) == [("H", "plain"), ("P", "liveview"), ("P", "plain")]
-        assert len(CELLS) == 45 * 2 - 3
+        assert len(CELLS) == 47 * 2 - 3
 
 
 class TestTheTableIsLoadBearing:
@@ -1807,6 +1839,21 @@ class TestTheHandleNeverReachesTheWire2539:
         assert "encoded.live = None" in walker
         for container in ("Value::List(items)", "Value::Object(map)", "Value::DictView"):
             assert container in walker, f"{container} is not walked — a handle can hide there"
+
+    def test_the_clear_has_a_real_caller_at_the_teardown(self) -> None:
+        """A CALLER pin, not a definition one. The first version of this class
+        asserted only that the method's text existed — which is decorative: a
+        clear nothing calls protects nothing, and the suite would have stayed
+        green if routing never reached it (#1859)."""
+        consumer = (PYTHON_DIR / "djust" / "websocket.py").read_text(encoding="utf-8")
+        assert consumer.count("_clear_live_handles(") == 2, (
+            "expected exactly one definition and one call site of the teardown helper"
+        )
+        # And the call is at the disconnect teardown, immediately before the
+        # view reference it drains is dropped.
+        assert "_clear_live_handles(self.view_instance)\n        self.view_instance = None" in (
+            consumer
+        ), "the clear is not wired at the disconnect teardown"
 
 
 class TestTheStrictHelpersAreTheSinksOwn2539:

@@ -504,6 +504,86 @@ class TestOneExpressionInvokesACallableOnce2539:
 
 
 # ---------------------------------------------------------------------------
+# The handle is released at teardown
+# ---------------------------------------------------------------------------
+@pytest.mark.django_db
+class TestTheHandleIsReleasedAtTeardown2539:
+    """A handle keeps the Python object it was measured from ALIVE, and
+    `RustLiveView.state` outlives a render — so without an explicit clear a
+    connection retains every handle-bearing object until it closes.
+
+    Asserted through a WEAKREF rather than through the absence of the field:
+    "the handle is gone" is what the structural pin next door says, and it
+    would stay green if the object were still reachable some other way. What
+    matters is that nothing holds the object.
+    """
+
+    def test_a_handle_bearing_object_is_collectable_after_the_clear(self) -> None:
+        import gc
+        import weakref
+
+        from djust.websocket import _clear_live_handles
+
+        class _Held:
+            cls_attr = "class-level"
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.obj = _Held()
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["obj"] = self.obj
+                return ctx
+
+        _V.template = "<div dj-root>{{ obj.cls_attr }}</div>"
+        with resolve_lazy(True):
+            client = LiveViewTestClient(_V)
+            client.mount()
+            html = client.render()
+            assert "class-level" in html, "premise: the handle resolved the attribute"
+            view = client.view_instance
+            ref = weakref.ref(view.obj)
+            # The view's own attribute is not what this measures — drop it, so
+            # the only thing that could still hold the object is Rust state.
+            view.obj = None
+            gc.collect()
+            assert ref() is not None, (
+                "premise: with the flag ON the Rust state holds the object — if this "
+                "fails the test cannot show the clear doing anything"
+            )
+            _clear_live_handles(view)
+            gc.collect()
+            assert ref() is None, (
+                "a handle survived the teardown: the object is still reachable from "
+                "RustLiveView.state, so a connection retains every object it ever "
+                "resolved through"
+            )
+
+    def test_the_clear_is_a_no_op_with_the_flag_off(self) -> None:
+        """Non-vacuity in the other direction: with no handles to drop, the
+        teardown neither raises nor disturbs a view."""
+        from djust.websocket import _clear_live_handles
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.n = 1
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["n"] = self.n
+                return ctx
+
+        _V.template = "<div dj-root>{{ n }}</div>"
+        with resolve_lazy(False):
+            client = LiveViewTestClient(_V)
+            client.mount()
+            assert "1" in client.render()
+            _clear_live_handles(client.view_instance)
+        _clear_live_handles(None)  # and a torn-down consumer with no view
+
+
+# ---------------------------------------------------------------------------
 # 3.5 — the tag bridge stays closed (#2509)
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db
@@ -765,6 +845,35 @@ class TestTheSwitch2539:
             thread.start()
             thread.join()
         assert seen == [False], "the flag is not thread-local"
+
+    def test_a_failed_config_read_pushes_the_flag_OFF(self, monkeypatch) -> None:
+        """The kill-switch fails CLOSED, and that is where it differs from the
+        two ambient settings beside it.
+
+        The timezone and number-format handoffs return early on a failed read,
+        keeping the thread's previous value — right for a FORMAT, because the
+        last good one is the conservative answer. This flag selects a
+        resolution MECHANISM, and the thread is reused: returning early would
+        let a render whose config read failed inherit the previous render's
+        mechanism, which is the opposite of what a kill-switch is for.
+        """
+        from djust import config as config_module
+        from djust.render_env import apply_resolve_lazy
+
+        # Start with the flag genuinely ON, so "OFF afterwards" cannot be the
+        # state it was already in.
+        with resolve_lazy(True):
+            assert _rust.resolve_lazy_enabled() is True
+
+            def exploding() -> bool:
+                raise RuntimeError("settings unreadable")
+
+            monkeypatch.setattr(config_module, "template_resolve_lazy_enabled", exploding)
+            apply_resolve_lazy()
+            assert _rust.resolve_lazy_enabled() is False, (
+                "a config read that raised left the previous value in place — the flag "
+                "must fail CLOSED to the shipped default"
+            )
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_the_switch_is_what_gates_the_behaviour(self, render) -> None:

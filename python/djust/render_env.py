@@ -32,6 +32,7 @@ store; Django resolves the name from a thread-local it already maintains.
 """
 
 import logging
+import threading
 from typing import Optional, Set
 
 logger = logging.getLogger(__name__)
@@ -162,10 +163,27 @@ def apply_resolve_lazy() -> None:
     it; one thread-local read from both sites is one mechanism rather than two
     seeded from one reader (#1646).
 
-    Default **OFF**, both here and in Rust. A read that raises leaves the flag
-    alone rather than taking a render down, exactly as the two settings above
-    do — and the Rust default is OFF, so an un-pushed thread renders today's
-    bytes.
+    Default **OFF**, both here and in Rust.
+
+    **A failed read pushes OFF rather than leaving the previous value**, and
+    that is the one place this differs from the timezone and number-format
+    handoffs above. Those two describe how a value is FORMATTED, so keeping the
+    last good format through a transient settings failure is the conservative
+    answer. This one selects which RESOLUTION MECHANISM runs, and the thread is
+    reused: leaving it alone would let a render whose config read failed
+    silently inherit the previous render's mechanism — the opposite of a
+    kill-switch. Pushed OFF, a failed read gets the shipped default, which is
+    the behaviour a project that never heard of ADR-027 has.
+
+    **The thread-local is SET, not scoped.** Nothing restores it at the end of
+    a render, so a thread keeps the last value pushed. Every framework entry
+    (``RustBridgeMixin``, ``SimpleLiveView``, ``DjustTemplateBackend``, and the
+    component path through :func:`apply_render_env_once`) pushes on each
+    render, so they always reset it. The exception is a caller reaching
+    ``_rust.render_template`` / ``render_template_with_dirs`` DIRECTLY: it
+    inherits whatever the thread last rendered with, which for a fresh thread
+    is the Rust default OFF and for a reused one is the previous framework
+    render's setting.
     """
     try:
         from ._rust import set_resolve_lazy
@@ -176,9 +194,43 @@ def apply_resolve_lazy() -> None:
 
         enabled = template_resolve_lazy_enabled()
     except Exception:  # pragma: no cover - config access is defensive
-        logger.debug("[djust] resolve-lazy read failed; leaving ADR-027 resolution off")
-        return
+        logger.debug("[djust] resolve-lazy read failed; forcing ADR-027 resolution OFF")
+        enabled = False
     set_resolve_lazy(enabled)
+
+
+#: Threads that have pushed the render env at least once. See
+#: :func:`apply_render_env_once`.
+_PUSHED = threading.local()
+
+
+def apply_render_env_once() -> None:
+    """:func:`apply_render_env`, but at most once per thread.
+
+    For the COMPONENT path, which is the one entry that can run many times
+    inside a single parent render — once per component instance. The three
+    top-level entries push unconditionally on every render, so a component
+    nested inside one already has correct thread-locals and a second push per
+    instance buys nothing: measured at ~12us against a ~15us small render, an
+    N+1 on a component-heavy page.
+
+    What the first push still buys, and why this is not simply removed: a
+    ``Component`` rendered OUTSIDE any djust render — from a plain Django view,
+    or as the first thing a fresh ``sync_to_async`` worker thread does — has no
+    enclosing render to inherit from, and before #2539 it rendered UTC
+    timestamps, unlocalized numbers and a stale ADR-027 flag.
+
+    The sentinel is never cleared, and that is the deliberate limit: after the
+    first push this path trusts the enclosing render. A component rendered
+    outside any render LATER on the same thread, under settings that have since
+    changed, keeps the previous values — which is exactly the position the
+    other three entries were always in for their nested calls, and strictly
+    better than the pre-#2539 behaviour of never pushing at all.
+    """
+    if getattr(_PUSHED, "done", False):
+        return
+    _PUSHED.done = True
+    apply_render_env()
 
 
 def apply_render_env() -> None:
