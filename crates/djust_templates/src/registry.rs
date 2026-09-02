@@ -264,6 +264,25 @@ struct TagHandlerEntry {
     resolve_positions: Option<HashSet<usize>>,
     /// See [`read_returns_bindings`] (#2547).
     returns_bindings: bool,
+    /// `Some(message)` when the parser must REFUSE this tag with Django's
+    /// `TemplateSyntaxError` the moment a template uses it (#2547): a raw
+    /// `@register.tag` that consumes a body cannot be bridged, and the
+    /// refusal is per TAG so the rest of its library still works. Read off
+    /// the handler's `REFUSE_AT_PARSE` attribute at registration.
+    parse_refusal: Option<String>,
+}
+
+/// The handler's opt-in parse-time refusal message (#2547); `None` when the
+/// attribute is absent or `None`.
+fn read_parse_refusal(handler: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    if !handler.hasattr("REFUSE_AT_PARSE")? {
+        return Ok(None);
+    }
+    let attr = handler.getattr("REFUSE_AT_PARSE")?;
+    if attr.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(attr.extract::<String>()?))
 }
 
 /// A registered assign-tag handler plus its arg-resolution policy.
@@ -329,6 +348,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     // (#2041, extended to inline tags in #2423).
     let resolve_positions = read_resolve_positions(handler_ref)?;
     let returns_bindings = read_returns_bindings(handler_ref)?;
+    let parse_refusal = read_parse_refusal(handler_ref)?;
 
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -340,6 +360,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
             handler,
             resolve_positions,
             returns_bindings,
+            parse_refusal,
         },
     );
     Ok(())
@@ -820,6 +841,35 @@ pub fn block_handler_resolve_positions(name: &str) -> Option<HashSet<usize>> {
         registry
             .get(name)
             .and_then(|entry| entry.resolve_positions.clone())
+    })
+}
+
+/// Internal Rust API — the parse-time refusal message the inline handler for
+/// `name` declared (#2547), `None` for a bridgeable or unregistered tag.
+pub fn tag_handler_parse_refusal(name: &str) -> Option<String> {
+    TAG_HANDLERS.read().ok().and_then(|registry| {
+        registry
+            .get(name)
+            .and_then(|entry| entry.parse_refusal.clone())
+    })
+}
+
+/// Django's own `TemplateSyntaxError(message)`, stamped as library-raised so
+/// `DjustTemplate.render` passes it through WHOLE (#2547). Falls back to a
+/// `TemplateError` string when Django is not importable (pure-Rust use).
+pub fn library_syntax_error(message: &str) -> DjangoRustError {
+    Python::attach(|py| {
+        let Ok(module) = py.import("django.template") else {
+            return DjangoRustError::TemplateError(message.to_string());
+        };
+        let Ok(cls) = module.getattr("TemplateSyntaxError") else {
+            return DjangoRustError::TemplateError(message.to_string());
+        };
+        let Ok(exc) = cls.call1((message,)) else {
+            return DjangoRustError::TemplateError(message.to_string());
+        };
+        let _ = exc.setattr("_djust_raised_by_library", true);
+        DjangoRustError::PythonException(PyErr::from_value(exc))
     })
 }
 

@@ -946,6 +946,14 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             args: args.clone(),
                             children,
                         }))
+                    } else if let Some(message) =
+                        crate::registry::tag_handler_parse_refusal(tag_name)
+                    {
+                        // A `{% load %}`-bridged raw tag that consumes a body
+                        // (#2547): refused at PARSE time, per TAG, with
+                        // Django's own `TemplateSyntaxError` — the rest of
+                        // its library keeps working.
+                        Err(crate::registry::library_syntax_error(&message))
                     } else if crate::registry::handler_exists(tag_name) {
                         // Inline handler exists - create CustomTag node
                         Ok(Some(Node::CustomTag {

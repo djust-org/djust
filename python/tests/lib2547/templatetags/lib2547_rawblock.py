@@ -1,9 +1,21 @@
 """A raw ``@register.tag`` that CONSUMES A BODY — the shape #2547 refuses
-loudly at ``{% load %}`` time (the raw-body registration kind is #2558)."""
+loudly, per tag, when a template uses it (the raw-body registration kind is
+#2558) — next to a simple tag and a filter that the same ``{% load %}`` must
+still bridge."""
 
 from django import template
 
 register = template.Library()
+
+
+@register.simple_tag
+def sibling2547():
+    return "sibling - Expected result"
+
+
+@register.filter
+def sibling_filter2547(value):
+    return "[%s]" % value
 
 
 class WrapNode(template.Node):

@@ -30,9 +30,11 @@ Mechanisms and the gate-off split (#1468 / #2129 / #2135)
   measured; ``RawMarkupNode`` is that shape in the scratch library.
 * **bindings diff** (``_render_node``'s ``ctx.dicts[-1]`` diff): gate it off
   and ONLY the ``as var`` / ``set_two`` rows go red (measured: 16).
-* **block-tag refusal** (``_bridge_tag``'s ``_consumes_body`` check): gate it
-  off and ONLY ``test_raw_block_consuming_tag_is_refused_loudly`` goes red
-  (measured: 1).
+* **block-tag refusal** (``_bridge_tag``'s ``_consumes_body`` branch →
+  ``RefusedTagHandler`` → the parser's ``REFUSE_AT_PARSE`` check): gate it
+  off and ONLY ``test_raw_block_consuming_tag_is_refused_loudly`` and the
+  mixed-library case go red — the raw tag then bridges as an ordinary
+  handler and dies in Django's ``unclosed_block_tag`` at render.
 """
 
 from __future__ import annotations
@@ -273,7 +275,7 @@ def test_liveview_inclusion_tag_renders_through_the_enclosing_backend(shape):
 
 def test_load_inside_a_block_of_an_extended_template():
     expected = str(DJANGO.get_template("lib2547_child.html").render({}))
-    assert expected == "[one_param - Expected result: 9]"
+    assert expected.strip() == "[one_param - Expected result: 9]"
     assert str(DJUST.get_template("lib2547_child.html").render({})) == expected
 
 
@@ -425,6 +427,8 @@ def test_unknown_tag_without_load_is_refused():
 
 
 def test_raw_block_consuming_tag_is_refused_loudly():
+    """Per TAG, at parse time, when a template USES it — not at `{% load %}`."""
+    assert plain_render("{% load lib2547_rawblock %}loaded-ok", CTX) == "loaded-ok"
     with pytest.raises(TemplateSyntaxError) as info:
         plain_render("{% load lib2547_rawblock %}{% wrapblock2547 %}x{% endwrapblock2547 %}", CTX)
     message = str(info.value)
@@ -436,6 +440,18 @@ def test_raw_block_consuming_tag_is_refused_loudly():
         django_render("{% load lib2547_rawblock %}{% wrapblock2547 %}x{% endwrapblock2547 %}", CTX)
         == "[x]"
     )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", sorted(RENDER))
+def test_a_library_with_one_raw_block_tag_still_bridges_its_other_entries(path):
+    """The refusal is scoped to the ONE tag: the sibling simple tag and the
+    filter from the same library render byte-equal to Django."""
+    source = "{% load lib2547_rawblock %}{% sibling2547 %}|{{ name|sibling_filter2547 }}"
+    assert RENDER[path](source, CTX) == django_render(source, CTX)
+    assert django_render(source, CTX) == "sibling - Expected result|[Jack &amp; Jill]"
+    with pytest.raises(TemplateSyntaxError, match="wrapblock2547"):
+        RENDER[path]("{% load lib2547_rawblock %}{% wrapblock2547 %}y{% endwrapblock2547 %}", CTX)
 
 
 def test_djangos_own_libraries_resolve_but_are_not_bridged():

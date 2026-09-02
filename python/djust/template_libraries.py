@@ -57,10 +57,12 @@ What is refused, loudly
 A raw ``@register.tag`` compile function that CONSUMES A BODY
 (``parser.parse((...))``, ``next_token``, ``skip_past``) cannot be bridged:
 the synthetic parser has no token stream to hand it. Such a tag is refused
-at ``{% load %}`` time with a ``TemplateSyntaxError`` naming the tag and the
-library and pointing at #2558, which adds the raw-body registration kind.
-A silent partial bridge would be worse than an error. A raw tag that
-builds a node from its own token (``echo``, ``counter``) bridges fine.
+PER TAG, at parse time, the moment a template uses it — a
+``TemplateSyntaxError`` naming the tag and the library and pointing at
+#2558, which adds the raw-body registration kind — while the rest of its
+library (every other tag, every filter) bridges normally. A silent partial
+bridge would be worse than an error. A raw tag that builds a node from its
+own token (``echo``, ``counter``) bridges fine.
 
 Scoping
 -------
@@ -363,16 +365,7 @@ def _bridge_library(label: str, library: Any) -> None:
 
 
 def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None:
-    from django.template import TemplateSyntaxError
-
     kind = _classify(compile_func)
-    if kind == "raw" and _consumes_body(compile_func):
-        raise TemplateSyntaxError(
-            "'%s' from library '%s' is a raw @register.tag that consumes a block "
-            "(it calls parser.parse / next_token). djust bridges raw tags that build "
-            "a node from their own token only; port it to @register.simple_block_tag, "
-            "or wait for the raw-body registration kind (#2558)." % (name, label)
-        )
     if not _may_override(name):
         logger.warning(
             "Template library '%s' registers tag '%s', which djust already provides; "
@@ -403,6 +396,15 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
             _handlers[compile_func] = handler
         register_block_tag_handler(name, handler.end_name, handler)
         unregister_tag_handler(name)
+    elif kind == "raw" and _consumes_body(compile_func):
+        # Refused per TAG, at parse time, the moment a template uses it —
+        # the rest of the library bridges normally. The Rust parser reads
+        # `REFUSE_AT_PARSE` and raises Django's `TemplateSyntaxError`.
+        if not isinstance(handler, RefusedTagHandler):
+            handler = RefusedTagHandler(label, name)
+            _handlers[compile_func] = handler
+        register_tag_handler(name, handler)
+        unregister_block_tag_handler(name)
     else:
         if handler is None or isinstance(handler, LibraryBlockTagHandler):
             handler = LibraryTagHandler(label, name, compile_func)
@@ -642,6 +644,36 @@ class LibraryTagHandler:
             raise
 
 
+class RefusedTagHandler:
+    """A raw ``@register.tag`` that consumes a body — registered so the parser
+    refuses it LOUDLY, per tag, the moment a template uses it (#2547).
+
+    The Rust parser reads ``REFUSE_AT_PARSE`` at registration and raises
+    Django's ``TemplateSyntaxError`` with this message instead of building a
+    node; ``render`` is never reached (it exists only because the registry
+    requires one).
+    """
+
+    RETURNS_BINDINGS = True
+
+    def __init__(self, label: str, name: str) -> None:
+        self.label = label
+        self.name = name
+        self.REFUSE_AT_PARSE = (
+            "'%s' from library '%s' is a raw @register.tag that consumes a block "
+            "(it calls parser.parse / next_token). djust bridges raw tags that build "
+            "a node from their own token only; port it to @register.simple_block_tag, "
+            "or wait for the raw-body registration kind (#2558)." % (name, label)
+        )
+
+    def render(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+        from django.template import TemplateSyntaxError
+
+        exc = TemplateSyntaxError(self.REFUSE_AT_PARSE)
+        _stamp(exc)
+        raise exc
+
+
 class LibraryBlockTagHandler(LibraryTagHandler):
     """The generic block handler: a ``simple_block_tag``.
 
@@ -674,6 +706,7 @@ class LibraryBlockTagHandler(LibraryTagHandler):
 __all__ = [
     "LibraryBlockTagHandler",
     "LibraryTagHandler",
+    "RefusedTagHandler",
     "install_loader",
     "load_libraries",
     "owned_tags",
