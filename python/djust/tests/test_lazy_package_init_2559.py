@@ -251,6 +251,49 @@ class TestImportFootprint:
         assert report["extra"]["kind"] == "function"
         assert report["extra"]["same"] is True
 
+    def test_live_view_is_the_module_after_submodule_first_import_with_no_lazy_resolution(self):
+        """Collision case B: ``import djust.live_view`` BEFORE any lazy name
+        has resolved leaves the attribute bound to the MODULE (the import
+        system's own ``setattr`` on the parent, which cannot be intercepted)
+        -- the same contract ``djust.rate_limit`` has always had. This is the
+        one order that differs from the eager pre-#2559 init, where the
+        rebind always won."""
+        report = _fresh_import(
+            "import djust.live_view; import djust; EXTRA={'kind': type(djust.live_view).__name__}"
+        )
+        assert report["extra"]["kind"] == "module"
+
+    @pytest.mark.parametrize(
+        "lazy_name",
+        ["LiveView", "event_handler", "PresenceMixin"],
+        ids=["from-live_view-module", "from-decorators", "from-presence"],
+    )
+    def test_live_view_is_the_decorator_once_any_lazy_name_resolves_after_submodule_first_import(
+        self, lazy_name
+    ):
+        """Collision case C: submodule-first, then ANY lazy resolution -- of a
+        name from ``djust.live_view`` OR from an unrelated module -- rebinds
+        ``djust.live_view`` to the decorator, so the binding never depends on
+        WHICH public name was touched first."""
+        report = _fresh_import(
+            f"import djust.live_view; import djust; djust.{lazy_name}; "
+            "m = sys.modules['djust.live_view']; "
+            "EXTRA={'kind': type(djust.live_view).__name__, "
+            "'same': djust.live_view is m.live_view}"
+        )
+        assert report["extra"]["kind"] == "function"
+        assert report["extra"]["same"] is True
+
+    def test_live_view_stays_the_decorator_when_the_submodule_is_imported_afterwards(self):
+        """Collision case D: lazy resolution first, then ``import
+        djust.live_view`` -- the already-loaded submodule is NOT re-bound onto
+        the package, so the decorator binding is stable."""
+        report = _fresh_import(
+            "import djust; djust.LiveView; import djust.live_view; "
+            "EXTRA={'kind': type(djust.live_view).__name__}"
+        )
+        assert report["extra"]["kind"] == "function"
+
     def test_rate_limit_name_is_the_decorator_before_the_submodule_is_imported(self):
         report = _fresh_import(
             "from djust import rate_limit; import djust.decorators as d; "

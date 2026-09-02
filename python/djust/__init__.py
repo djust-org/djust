@@ -27,6 +27,8 @@ the decorators from ``djust.live_view`` / ``djust.decorators`` directly.
 from __future__ import annotations
 
 import importlib
+import sys
+import types
 from typing import TYPE_CHECKING
 
 from .utils import get_template_dirs, clear_template_dirs_cache
@@ -181,12 +183,28 @@ def __getattr__(name: str):  # PEP 562
         return value
     module = importlib.import_module(module_name)
     value = getattr(module, attr)
-    if module_name == "djust.live_view":
-        # Importing the submodule bound ``djust.live_view`` to the MODULE;
-        # re-bind the exported decorator, mirroring the pre-#2559 eager init.
-        globals()["live_view"] = module.live_view
     globals()[name] = value
+    _rebind_live_view_decorator()
     return value
+
+
+def _rebind_live_view_decorator() -> None:
+    """Pin ``djust.live_view`` to the DECORATOR once the package is in use.
+
+    Importing the ``djust.live_view`` submodule makes the import system bind
+    ``djust.live_view`` to the MODULE (that ``setattr`` happens after the
+    submodule body runs, so it cannot be intercepted). The eager pre-#2559
+    init always re-bound the decorator afterwards; with the lazy init the
+    re-bind happens here, on EVERY lazy resolution -- not only when a name
+    from ``djust.live_view`` is resolved -- so the binding does not depend on
+    WHICH public name was touched first. Contract: after any lazy name has
+    resolved, ``djust.live_view`` is the decorator regardless of import
+    order; only a submodule-first import with NO lazy resolution yet sees
+    the module (the same behaviour ``djust.rate_limit`` has always had).
+    """
+    submodule = sys.modules.get("djust.live_view")
+    if submodule is not None and isinstance(globals().get("live_view"), types.ModuleType):
+        globals()["live_view"] = submodule.live_view
 
 
 def __dir__() -> list[str]:
