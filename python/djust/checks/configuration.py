@@ -535,6 +535,149 @@ def _check_unknown_extensions(errors: list) -> None:
             )
 
 
+def _classify_templates_entries() -> list[tuple[str, bool, bool]]:
+    """Return ``(name, is_djust, is_django)`` for each usable ``TEMPLATES`` entry.
+
+    Mirrors Django's own rules (``django/template/utils.py``): ``NAME``
+    defaults to ``BACKEND.rsplit(".", 2)[-2]`` and backend classes are
+    resolved with ``import_string`` (Django's ``_contains_subclass`` idiom in
+    ``admin/checks.py`` — an unimportable ``BACKEND`` is skipped because
+    Django's ``templates.E001``-family owns that report). Malformed entries
+    (non-dict, non-string ``BACKEND``, too few dots) are skipped for the same
+    reason.
+    """
+    from django.conf import settings
+    from django.template.backends.django import DjangoTemplates
+    from django.utils.module_loading import import_string
+
+    from djust.template.backend import DjustTemplateBackend
+
+    templates = getattr(settings, "TEMPLATES", None)
+    if not isinstance(templates, (list, tuple)):
+        return []
+
+    classified: list[tuple[str, bool, bool]] = []
+    for tpl in templates:
+        if not isinstance(tpl, dict):
+            continue
+        backend = tpl.get("BACKEND")
+        if not isinstance(backend, str):
+            continue
+        parts = backend.rsplit(".", 2)
+        if len(parts) < 3:
+            continue
+        try:
+            cls = import_string(backend)
+        except ImportError:
+            continue
+        if not inspect.isclass(cls):
+            continue
+        name = tpl.get("NAME") or parts[-2]
+        classified.append(
+            (
+                str(name),
+                issubclass(cls, DjustTemplateBackend),
+                issubclass(cls, DjangoTemplates),
+            )
+        )
+    return classified
+
+
+def _check_templates_shape(errors: list) -> None:
+    """C016 / C017 — the ``TEMPLATES`` shape djust needs (#2562).
+
+    C016 fires when a ``DjustTemplateBackend`` entry is present and either
+    (a) a ``DjangoTemplates`` entry PRECEDES it — Django tries engines in
+    list order, so the Django engine shadows djust for every template it
+    can find — or (b) there is no ``DjangoTemplates`` entry at all while
+    ``django.contrib.admin`` / ``admindocs`` is installed (their templates
+    need the Django engine; Django's ``admin.E403`` reports the gap without
+    the placement advice). A djust-only project without admin — the
+    ``djust new`` default scaffold — is silent.
+
+    C017 fires when two entries share an engine ``NAME`` (explicit or
+    derived), which Django only reports as ``ImproperlyConfigured`` on the
+    first render, not at startup.
+    """
+    from collections import Counter
+
+    from django.conf import settings
+
+    entries = _classify_templates_entries()
+    if not entries:
+        return
+
+    if not _is_check_suppressed("djust.C016"):
+        djust_idx = [i for i, (_n, is_djust, _d) in enumerate(entries) if is_djust]
+        django_idx = [i for i, (_n, _j, is_django) in enumerate(entries) if is_django]
+        if djust_idx:
+            first_djust = djust_idx[0]
+            if any(i < first_djust for i in django_idx):
+                errors.append(
+                    DjustWarning(
+                        "TEMPLATES lists a DjangoTemplates backend before "
+                        "DjustTemplateBackend, so every template the Django engine "
+                        "can find is rendered by Django and never reaches djust.",
+                        hint=(
+                            "Django tries engines in TEMPLATES order. Put the "
+                            "DjustTemplateBackend entry first and the DjangoTemplates "
+                            "entry after it as the fallback for admin and contrib "
+                            "templates (the shape `djust new --with-db` emits). "
+                            "Suppress with DJUST_CONFIG = {'suppress_checks': ['C016']}."
+                        ),
+                        id="djust.C016",
+                        fix_hint=(
+                            "Reorder TEMPLATES so the "
+                            "'djust.template_backend.DjustTemplateBackend' entry precedes "
+                            "'django.template.backends.django.DjangoTemplates'."
+                        ),
+                    )
+                )
+            elif not django_idx:
+                installed = list(getattr(settings, "INSTALLED_APPS", []))
+                if "django.contrib.admin" in installed or "django.contrib.admindocs" in installed:
+                    errors.append(
+                        DjustWarning(
+                            "TEMPLATES has a DjustTemplateBackend entry but no "
+                            "DjangoTemplates entry after it; django.contrib.admin "
+                            "templates cannot render.",
+                            hint=(
+                                "Add a 'django.template.backends.django.DjangoTemplates' "
+                                "entry AFTER the djust entry with APP_DIRS=False and the "
+                                "app_directories loader, as the djust scaffold does. "
+                                "Django's admin.E403 reports the same gap. "
+                                "Suppress with DJUST_CONFIG = {'suppress_checks': ['C016']}."
+                            ),
+                            id="djust.C016",
+                            fix_hint=(
+                                "Append the DjangoTemplates fallback entry to TEMPLATES "
+                                "after the DjustTemplateBackend entry."
+                            ),
+                        )
+                    )
+
+    if not _is_check_suppressed("djust.C017"):
+        counts = Counter(name for name, _j, _d in entries)
+        for name, count in counts.most_common():
+            if count < 2:
+                break
+            errors.append(
+                DjustWarning(
+                    f"TEMPLATES has more than one engine named '{name}'.",
+                    hint=(
+                        'Django raises ImproperlyConfigured ("Template engine aliases '
+                        "aren't unique\") the first time a template is rendered, not at "
+                        "startup. NAME defaults to the second-to-last segment of BACKEND, "
+                        "so two DjangoTemplates entries without an explicit NAME both "
+                        "become 'django'. Set a unique NAME on each entry. "
+                        "Suppress with DJUST_CONFIG = {'suppress_checks': ['C017']}."
+                    ),
+                    id="djust.C017",
+                    fix_hint=f"Add a distinct NAME to each TEMPLATES entry that shares '{name}'.",
+                )
+            )
+
+
 # ---------------------------------------------------------------------------
 # Configuration checks (C0xx)
 # ---------------------------------------------------------------------------
@@ -640,6 +783,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C015 -- Unknown adapter name in DJUST_CONFIG['extensions'] (#2063)
     _check_unknown_extensions(errors)
+
+    # C016 / C017 -- TEMPLATES backend order / fallback and duplicate NAME (#2562)
+    _check_templates_shape(errors)
 
     # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
     _check_tenant_strict_mode_disabled(errors)
