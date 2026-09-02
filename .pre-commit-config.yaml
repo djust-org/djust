@@ -47,6 +47,12 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         args: [--maxkb=1000]
+        # .test_durations is the pytest-split balance file for the CI shards
+        # (~3.3 MB: one {nodeid: seconds} line per test). It must be complete:
+        # pytest-split fills a MISSING entry with the average of the entries
+        # present, so a pruned "slow tests only" file would be worse than
+        # none. Regenerated wholesale by `make test-durations`.
+        exclude: '^\.test_durations$'
       - id: check-merge-conflict
       - id: check-toml
       # `.pxd` excluded: Pixelmator logo files in python/djust/ are
