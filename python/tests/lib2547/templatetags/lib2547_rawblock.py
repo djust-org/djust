@@ -1,0 +1,21 @@
+"""A raw ``@register.tag`` that CONSUMES A BODY — the shape #2547 refuses
+loudly at ``{% load %}`` time (the raw-body registration kind is #2558)."""
+
+from django import template
+
+register = template.Library()
+
+
+class WrapNode(template.Node):
+    def __init__(self, nodelist):
+        self.nodelist = nodelist
+
+    def render(self, context):
+        return "[" + self.nodelist.render(context) + "]"
+
+
+@register.tag
+def wrapblock2547(parser, token):
+    nodelist = parser.parse(("endwrapblock2547",))
+    parser.delete_first_token()
+    return WrapNode(nodelist)

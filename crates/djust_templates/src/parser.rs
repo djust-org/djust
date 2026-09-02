@@ -812,6 +812,18 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 "load" => {
                     // {% load static %} — preserve library names so inheritance
                     // reconstruction can re-emit the tag for Django rendering.
+                    //
+                    // And the sink for `{% load app_tags %}` (#2547): the
+                    // Python-side loader, when installed, imports the Django
+                    // library named here and registers its tags and filters
+                    // BEFORE this parse reaches them — every parse goes
+                    // through `parse_token`, so an `{% include %}`d file or a
+                    // `{% load %}` inside a `{% block %}` fires it too. An
+                    // unknown library is Django's own `TemplateSyntaxError`,
+                    // crossing whole. The arguments go across exactly as
+                    // written (`{% load x from lib %}` included) so the
+                    // Python side reproduces Django's `load` byte for byte.
+                    crate::registry::call_library_loader(args)?;
                     Ok(Some(Node::Load(args.clone())))
                 }
 

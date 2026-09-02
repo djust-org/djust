@@ -90,7 +90,16 @@ def _is_user_raised(exc: BaseException) -> bool:
     from django.http import Http404
     from django.http.multipartparser import MultiPartParserError
 
-    return isinstance(
+    # An exception that came out of a bridged Django template library — the
+    # library's own code (`RuntimeError("I am a bad tag")`), Django's
+    # `TemplateSyntaxError` from `parse_bits`, or the `{% load %}` loader's
+    # unknown-library / refused-block-tag error — crosses back WHOLE, as it
+    # does on Django's own engine (#2547). The bridge stamps it so this
+    # passthrough needs no allowlist of types; see
+    # ``template_libraries._raised_by_library``.
+    from ..template_libraries import raised_by_library
+
+    return raised_by_library(exc) or isinstance(
         exc,
         (Http404, PermissionDenied, MultiPartParserError, BadRequest, SuspiciousOperation),
     )
@@ -854,13 +863,23 @@ class DjustTemplate:
             from ..config import template_auto_call_enabled
 
             auto_call = template_auto_call_enabled()
-            html = self.backend._render_fn_with_dirs(
-                resolved_template,
-                context_dict,
-                template_dirs,
-                safe_keys or None,
-                auto_call,
-            )
+            # The backend a bridged `inclusion_tag` renders its template
+            # through, and the library map a `{% load %}` in THIS parse
+            # resolves against (#2547). A ContextVar, NOT a context-dict
+            # entry: a backend object in the context is the #2516 segfault
+            # class. Set around the Rust call only, so a nested render
+            # (an inclusion tag's own template) inherits it and a LiveView
+            # render, which never comes through here, sees the fallback.
+            from ..template_libraries import rendering_with_backend
+
+            with rendering_with_backend(self.backend):
+                html = self.backend._render_fn_with_dirs(
+                    resolved_template,
+                    context_dict,
+                    template_dirs,
+                    safe_keys or None,
+                    auto_call,
+                )
 
             # In DEBUG mode, inject data-dj-src attributes for template source mapping.
             # This adds the template filename to opening HTML element tags, enabling

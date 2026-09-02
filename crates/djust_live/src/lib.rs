@@ -4161,6 +4161,20 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
+    // `{% load app_tags %}` library loader hook (#2547)
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::register_library_loader,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::clear_library_loader,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::has_library_loader,
+        m
+    )?)?;
+
     // Tag handler registry for custom template tags (url, static, etc.)
     m.add_function(wrap_pyfunction!(
         djust_templates::registry::register_tag_handler,

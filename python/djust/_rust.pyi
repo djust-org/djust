@@ -8,7 +8,7 @@ functions and classes.
 Generated for djust framework - see crates/djust_live/src/lib.rs
 """
 
-from typing import Any, Awaitable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 # ============================================================================
 # Core Template Rendering Functions
@@ -502,6 +502,32 @@ def serialize_models_to_list(
     Returns:
         List of lists containing serialized field values
     """
+    ...
+
+# ============================================================================
+# `{% load %}` library loader (#2547)
+# ============================================================================
+
+def register_library_loader(callable: Callable[[List[str]], None]) -> None:
+    """
+    Install the parser's ``{% load %}`` hook.
+
+    ``callable(args)`` receives the tag's arguments exactly as written
+    (``["static"]``, ``["a", "b"]``, ``["echo", "from", "testtags"]``) at
+    PARSE time — for every parse, including ``{% include %}``d and
+    ``{% extends %}``ed files — and registers the named library's tags and
+    filters before the parser reaches them. An exception it raises (Django's
+    ``TemplateSyntaxError`` for an unknown library) crosses the parse whole.
+    ``djust.template_libraries.install_loader`` is the framework's caller.
+    """
+    ...
+
+def clear_library_loader() -> None:
+    """Remove the ``{% load %}`` hook; ``{% load %}`` is a no-op again."""
+    ...
+
+def has_library_loader() -> bool:
+    """Is a ``{% load %}`` hook installed?"""
     ...
 
 # ============================================================================
@@ -1161,6 +1187,9 @@ __all__ = [
     "serialize_models_fast",
     "serialize_models_to_list",
     # Tag handlers (inline)
+    "register_library_loader",
+    "clear_library_loader",
+    "has_library_loader",
     "register_tag_handler",
     "has_tag_handler",
     "get_registered_tags",
