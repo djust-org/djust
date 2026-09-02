@@ -163,6 +163,44 @@ dev-build: ## Build Rust extensions in development mode
 	@echo "$(GREEN)Building Rust extensions (dev mode)...$(NC)"
 	@uv run maturin develop
 
+# A self-contained environment for THIS checkout — the main clone or any
+# `git worktree` (#2526). `make build` from a worktree repoints the SHARED
+# venv's `djust.pth` at the worktree, so the next row's tests run against the
+# wrong tree; and one checkout with the only usable build serialises every
+# row behind it. With its own `.venv`, a worktree has its own extension and
+# its own `djust.pth`, and scripts/run-with-venv-python.sh prefers that venv
+# over the main checkout's. Cargo's `target/` is already per-checkout, so two
+# worktrees building at once no longer race on artifacts.
+#
+# pip, not uv, on purpose: `uv sync`/`uv run` re-lock `uv.lock` against a
+# local index on this machine, and the diff then rides into the PR.
+# Idempotent: an existing `.venv` is reused, dependencies are re-checked.
+#
+# WT_VENV is the venv this recipe CREATES in the current checkout. Every other
+# recipe must reach the interpreter through $(PYTHON) (the #1796 pin,
+# tests/test_run_with_venv_python.py::test_makefile_routes_through_resolver);
+# this one is the exception because it is what the resolver then prefers.
+WT_VENV := .venv
+.PHONY: worktree-env
+worktree-env: ## Own .venv + Rust extension for this checkout/worktree (pip, not uv; no shared-venv repoint)
+	@PYVER=$$( [ -f .python-version ] && cat .python-version || echo 3.12 ); \
+	PYVER=$${PYVER%%[!0-9.]*}; \
+	if [ ! -x $(WT_VENV)/bin/python ]; then \
+		echo "$(GREEN)Creating .venv with python$$PYVER...$(NC)"; \
+		command -v "python$$PYVER" >/dev/null || { echo "$(RED)python$$PYVER not on PATH$(NC)"; exit 1; }; \
+		"python$$PYVER" -m venv $(WT_VENV) || exit 1; \
+	else \
+		echo "$(GREEN)Reusing existing .venv$(NC)"; \
+	fi; \
+	echo "$(GREEN)Installing requirements-dev.txt with pip...$(NC)"; \
+	$(WT_VENV)/bin/python -m pip install --quiet --upgrade pip && \
+	$(WT_VENV)/bin/python -m pip install --quiet -r requirements-dev.txt && \
+	$(WT_VENV)/bin/python -c 'import tomllib;p=tomllib.load(open("pyproject.toml","rb"))["project"];print("\n".join(p["dependencies"]+p["optional-dependencies"]["dev"]))' > $(WT_VENV)/pyproject-deps.txt && \
+	$(WT_VENV)/bin/python -m pip install --quiet -r $(WT_VENV)/pyproject-deps.txt || exit 1; \
+	echo "$(GREEN)Building the Rust extension into this checkout (release)...$(NC)"; \
+	$(WT_VENV)/bin/maturin develop --release && \
+	echo "$(GREEN)worktree-env ready: $$(pwd)/$(WT_VENV) (djust -> $$($(WT_VENV)/bin/python -c 'import djust,os;print(os.path.dirname(djust.__file__))'))$(NC)"
+
 ##@ Testing & Quality
 
 .PHONY: roadmap-lint

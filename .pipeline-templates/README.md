@@ -113,6 +113,36 @@ git log main..HEAD --format='%B' | grep -iF "$CN" && echo LEAK
 Maintained per-operator — add every downstream app identifier you
 might accidentally paste in.
 
+## Worktree environments — `make worktree-env` (#2526)
+
+Every implementer/reviewer subagent that needs to *build or run* code gets its
+own `git worktree`, and until now every worktree shared the main checkout's
+`.venv`. Two costs followed: `make build` from a worktree repoints the shared
+venv's `djust.pth` at that worktree (every other row now tests the wrong
+tree), and the one checkout holding a usable build serialises every row
+behind it (six hours on 2026-09-01).
+
+From any checkout — the main clone or a worktree — run:
+
+```bash
+make worktree-env
+.venv/bin/python -c "import djust; print(djust.__file__)"   # prints THIS tree
+```
+
+What it does, idempotently: creates `./.venv` with the interpreter named in
+`.python-version` (`python3.12`), `pip install`s `requirements-dev.txt` plus
+pyproject's runtime and `[dev]` dependencies (pip, **not** uv — `uv sync`
+re-locks `uv.lock` on this machine), then `.venv/bin/maturin develop
+--release` so the tree owns its extension and its `djust.pth`. Cargo's
+`target/` is already per-checkout, so parallel worktree builds do not race.
+
+`scripts/run-with-venv-python.sh` prefers a checkout's own `.venv` over the
+main one, so `make test`, the pre-push hooks and every `scripts/*.py` run
+against the worktree's build without `PYTHONPATH` juggling; the
+`--worktree-pythonpath` shadow is skipped for a tree that owns a venv. A
+worktree WITHOUT its own venv keeps the pre-#2526 behaviour (shared venv +
+PYTHONPATH shadow + main-tree `.so` symlink).
+
 ## Updating
 
 If you change these templates and want the changes to propagate to other
