@@ -185,6 +185,10 @@ check-adr-status: ## Validate ADR Status/version-line consistency (closes #1501)
 check-doc-snippets: ## Smoke-check fenced Python doc snippets + Django/JS-size claims (closes #1500)
 	@$(PYTHON) scripts/check-doc-snippets.py $(if $(VERBOSE),--verbose,)
 
+.PHONY: django-template-suite
+django-template-suite: ## Run Django's own template_tests against DjustTemplateBackend (scoreboard, closes #2517)
+	@$(PYTHON) scripts/run-django-template-suite.py --parsed-output .django-src/last-run.txt --json .django-src/last-run.json $(if $(VERBOSE),,--quiet)
+
 .PHONY: check-lockfile-versions
 check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries match manifests (closes #1498)
 	@$(PYTHON) scripts/check-lockfile-versions.py $(if $(VERBOSE),--verbose,)

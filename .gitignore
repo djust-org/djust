@@ -53,6 +53,8 @@ Thumbs.db
 *.pid
 server.log
 scratch/
+# Django source checkout cache for `make django-template-suite` (#2517)
+.django-src/
 
 # JavaScript/Node.js
 node_modules/

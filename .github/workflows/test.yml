@@ -699,6 +699,72 @@ jobs:
           # these thresholds came to be unenforced everywhere.
           uv run python -m pytest tests/benchmarks/ --benchmark-only -q
 
+  # Django's own template_tests against DjustTemplateBackend — the v1.2.0
+  # conformance scoreboard (#2517). Clones django/django at the installed
+  # tag, routes every Engine the suite builds through djust's Rust engine,
+  # isolates segfaults per test, and prints the pass percentage.
+  #
+  # continue-on-error until it has been green on the runner once (#1534);
+  # the `compare` step (the ratchet against scripts/django-template-suite-
+  # baseline.json) is informational (`|| true`) for the same reason.
+  # Promotion — drop continue-on-error, make compare blocking, add the job to
+  # test-summary `needs` AND its &&-chain (#1713) — is a follow-up.
+  # NOT wired into the test-summary aggregate gate.
+  django-template-suite:
+    name: django template_tests scoreboard (non-gating)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      # Nothing in this job pushes, and the child process executes the
+      # cloned upstream test tree — do not leave the token on disk for it.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: astral-sh/setup-uv@v7
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install
+        run: |
+          uv sync --extra dev
+          uv run maturin develop --release
+
+      - name: Run Django's template_tests through djust
+        run: |
+          uv run python scripts/run-django-template-suite.py \
+            --parsed-output .django-src/last-run.txt \
+            --json .django-src/last-run.json
+          {
+            echo '## Django template_tests scoreboard'
+            echo '```'
+            tail -n 5 .django-src/last-run.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compare against the stored baseline (informational until promoted)
+        run: |
+          uv run python scripts/run-django-template-suite.py compare \
+            --json .django-src/last-run.json || true
+
+      - name: Runner self-tests against the real checkout
+        run: |
+          uv run python -m pytest python/tests/test_django_template_suite_2517.py -q
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: django-template-suite
+          path: |
+            .django-src/last-run.txt
+            .django-src/last-run.json
+          if-no-files-found: warn
+
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
