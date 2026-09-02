@@ -251,6 +251,25 @@ enum CallOutcome<'py> {
     Empty,
 }
 
+/// Outcome of a Django-order walk over a LIVE object — the ADR-027 sink.
+///
+/// Dormant in #2539 movement 1: defined and unit-tested
+/// (`crates/djust_core/tests/test_django_lookup_sink_2539.rs`), called by
+/// nothing — pinned by `TestTheSinkIsDefinedButUnrouted2539` in
+/// `python/tests/test_adr027_characterization_net_2539.py`. Movement 2
+/// routes `lookup_segment` / the model-miss path through it.
+pub enum Walked<'py> {
+    /// `_resolve_lookup` ended on an object; the CALLER decides its
+    /// conversion. This helper never re-enters `extract::<Value>()` — the
+    /// terminal conversion of a bare object (ADR-027 rows I / T) is decided
+    /// at the call site, which is the whole point of the ADR.
+    Object(pyo3::Bound<'py, pyo3::PyAny>),
+    /// Django's `string_if_invalid`: a `VariableDoesNotExist`, an
+    /// `alters_data` refusal, an args-required callable, or an exception
+    /// carrying a truthy `silent_variable_failure`.
+    Invalid,
+}
+
 impl Context {
     pub fn new() -> Self {
         Self {
@@ -1185,6 +1204,158 @@ impl Context {
                 LookupOutcome::Empty => Ok(CallOutcome::Empty),
                 LookupOutcome::Raise(e) => Err(e),
             },
+        }
+    }
+
+    /// `django.template.base.Variable._resolve_lookup` (django 5.2.16
+    /// `base.py:876-953`) over a LIVE `root`, one segment of `parts` at a
+    /// time — the ADR-027 sink. DORMANT in #2539 movement 1: nothing calls
+    /// it yet (see [`Walked`]).
+    ///
+    /// `path` is the full dotted expression, used only as the label of the
+    /// debug-mode ORM auto-call warning. Takes `py` rather than opening its
+    /// own `Python::attach` because every caller is already attached (the
+    /// sidecar walk in [`Context::resolve_without_builtins`] is).
+    ///
+    /// Django's order, transcribed per segment:
+    ///
+    /// 1. **Item access, behind the metaclass guard.** `_resolve_lookup`
+    ///    opens with `if not hasattr(type(current), "__getitem__"): raise
+    ///    TypeError` and only then `current[bit]`, catching `(TypeError,
+    ///    AttributeError, KeyError, ValueError, IndexError)`. The guard is
+    ///    why Django never reaches `__class_getitem__`: a CLASS in the
+    ///    context (`{{ MyList.class_property }}` on a `list` subclass) has
+    ///    `type(current) is type`, which has no `__getitem__`, so item access
+    ///    is skipped outright. The current sidecar walk calls
+    ///    `PyObject_GetItem` unguarded, which honours `__class_getitem__`,
+    ///    yields a `types.GenericAlias`, and segfaults in conversion
+    ///    (ADR-027 row P, one of the #2517 crashes). An error OUTSIDE step
+    ///    1's catch set came from a real `__getitem__` and propagates
+    ///    (#2506), honouring `silent_variable_failure`.
+    /// 2. **Attribute access.** `getattr(current, bit)`, catching
+    ///    `(TypeError, AttributeError)` — re-raised when `bit in
+    ///    dir(current)`, Django's "raised by a @property" branch, so a
+    ///    property that raises `AttributeError` is a bug and not a miss.
+    /// 3. **Integer index.** `current[int(bit)]`, catching `(IndexError,
+    ///    ValueError, KeyError, TypeError)` into `VariableDoesNotExist` —
+    ///    which is [`Walked::Invalid`]. A non-integer segment IS Django's
+    ///    `int(bit)` `ValueError`, so it is `Invalid` without an item call.
+    ///
+    /// After the root and after every segment: [`Context::maybe_call`]
+    /// (auto-call unless `do_not_call_in_templates`; `alters_data` and an
+    /// args-required callable are `Invalid`; honours the `auto_call`
+    /// kill-switch) and then [`Context::protect_sidecar`] — djust's own
+    /// serialization floor (SECURE_DEFAULTS Pattern 1), which is not
+    /// Django's rule and holds regardless of any option.
+    ///
+    /// Django's outermost `except Exception` — `silent_variable_failure`
+    /// truthy renders `string_if_invalid`, anything else re-raises — is
+    /// applied at every propagation point through `propagate_lookup_error`.
+    ///
+    /// Constraints the existing pins hold this to: it reads no `Encoded`
+    /// attribute map and calls no `lookup_segment`
+    /// (`TestTheSinkHasExactlyTheReadersItClaims`, `#2481`).
+    pub fn walk_live<'py>(
+        &self,
+        py: Python<'py>,
+        root: pyo3::Bound<'py, pyo3::PyAny>,
+        parts: &[&str],
+        path: &str,
+    ) -> crate::Result<Walked<'py>> {
+        // Django's callable block runs for the ROOT bit too
+        // (`{{ some_callable }}`), before any segment is walked.
+        let mut current = match self.maybe_call(py, root, path)? {
+            CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
+            CallOutcome::Empty => return Ok(Walked::Invalid),
+        };
+        current = self.protect_sidecar(py, current);
+
+        for part in parts {
+            let next = match self.walk_one_segment(py, &current, part)? {
+                Walked::Object(v) => v,
+                Walked::Invalid => return Ok(Walked::Invalid),
+            };
+            current = match self.maybe_call(py, next, path)? {
+                CallOutcome::AsIs(v) | CallOutcome::Called(v) => v,
+                CallOutcome::Empty => return Ok(Walked::Invalid),
+            };
+            current = self.protect_sidecar(py, current);
+        }
+        Ok(Walked::Object(current))
+    }
+
+    /// One segment of [`Context::walk_live`]: Django's steps 1–3 over
+    /// `current`, WITHOUT the callable block and the floor (the caller
+    /// applies both after every segment). Split out so each step's catch
+    /// set reads next to the rule it transcribes.
+    fn walk_one_segment<'py>(
+        &self,
+        py: Python<'py>,
+        current: &pyo3::Bound<'py, pyo3::PyAny>,
+        part: &str,
+    ) -> crate::Result<Walked<'py>> {
+        // Step 1, behind the metaclass guard. A failing `hasattr` probe is
+        // answered "no `__getitem__`" — the guard may only SKIP an item call,
+        // never invent one, so a broken metaclass falls to step 2 exactly as
+        // Django's own `hasattr` (which swallows) would.
+        let has_getitem = current.get_type().hasattr("__getitem__").unwrap_or(false);
+        if has_getitem {
+            match current.get_item(part) {
+                Ok(found) => return Ok(Walked::Object(found)),
+                // Django step 1: `except (TypeError, AttributeError, KeyError,
+                // ValueError, IndexError)` — the last two its own numpy
+                // allowance. Anything else is a real `__getitem__` error.
+                Err(e) if !is_django_item_lookup_error(py, &e) => {
+                    return match propagate_lookup_error(py, e) {
+                        LookupOutcome::Empty => Ok(Walked::Invalid),
+                        LookupOutcome::Raise(err) => Err(err),
+                    };
+                }
+                // Caught: fall through to step 2.
+                Err(_) => {}
+            }
+        }
+
+        // Step 2: `getattr(current, bit)`, `except (TypeError, AttributeError)`.
+        match current.getattr(part) {
+            Ok(found) => return Ok(Walked::Object(found)),
+            Err(e)
+                if !(e.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+                    || e.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)) =>
+            {
+                return match propagate_lookup_error(py, e) {
+                    LookupOutcome::Empty => Ok(Walked::Invalid),
+                    LookupOutcome::Raise(err) => Err(err),
+                };
+            }
+            // `if bit in dir(current): raise` — the name EXISTS and its
+            // descriptor raised, so this is the object's bug, not a miss.
+            Err(e) if name_exists_on(current, part) => {
+                return match propagate_lookup_error(py, e) {
+                    LookupOutcome::Empty => Ok(Walked::Invalid),
+                    LookupOutcome::Raise(err) => Err(err),
+                };
+            }
+            Err(_) => {}
+        }
+
+        // Step 3: `current[int(bit)]`. A non-integer `bit` is Django's own
+        // `ValueError` from `int()`, caught into `VariableDoesNotExist`.
+        let Ok(idx) = part.parse::<usize>() else {
+            return Ok(Walked::Invalid);
+        };
+        match current.get_item(idx) {
+            Ok(found) => Ok(Walked::Object(found)),
+            // `except (IndexError, ValueError, KeyError, TypeError)` →
+            // `VariableDoesNotExist`; anything else is a real `__getitem__`
+            // failure and propagates, as in steps 1 and 2.
+            Err(e) if !is_django_index_lookup_error(py, &e) => {
+                match propagate_lookup_error(py, e) {
+                    LookupOutcome::Empty => Ok(Walked::Invalid),
+                    LookupOutcome::Raise(err) => Err(err),
+                }
+            }
+            Err(_) => Ok(Walked::Invalid),
         }
     }
 
