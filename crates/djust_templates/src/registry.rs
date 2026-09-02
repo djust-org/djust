@@ -74,12 +74,15 @@ fn escape_handler_return(
     result: &Bound<'_, PyAny>,
     what: &str,
     name: &str,
+    // Django's `if context.autoescape:` guard above (#2556): under
+    // `{% autoescape off %}` the return is inserted raw, `__html__` or not.
+    autoescape: bool,
 ) -> Result<String, String> {
     let already_html = crate::filter_registry::py_value_is_safe_string(result);
     let text = result
         .extract::<String>()
         .map_err(|_| format!("{what} '{name}' render() must return a string"))?;
-    if already_html {
+    if already_html || !autoescape {
         Ok(text)
     } else {
         Ok(crate::filters::html_escape(&text))
@@ -467,7 +470,7 @@ pub fn call_block_handler(
     content: &str,
     context: &HashMap<String, djust_core::Value>,
 ) -> Result<String, String> {
-    call_block_handler_with_py_sidecar(name, args, content, context, None)
+    call_block_handler_with_py_sidecar(name, args, content, context, None, true)
 }
 
 /// Variant of [`call_block_handler`] that additionally injects raw
@@ -488,6 +491,7 @@ pub fn call_block_handler_with_py_sidecar(
     content: &str,
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    autoescape: bool,
 ) -> Result<String, String> {
     let handler = {
         let registry = BLOCK_TAG_HANDLERS
@@ -565,7 +569,7 @@ pub fn call_block_handler_with_py_sidecar(
                 )
             })?;
 
-        escape_handler_return(&result, "Block handler", name)
+        escape_handler_return(&result, "Block handler", name, autoescape)
     })
 }
 
@@ -601,7 +605,7 @@ pub fn call_handler(
     args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
 ) -> Result<String, String> {
-    call_handler_with_py_sidecar(name, args, context, None)
+    call_handler_with_py_sidecar(name, args, context, None, true)
 }
 
 /// Variant of [`call_handler`] that additionally injects raw Python
@@ -623,6 +627,7 @@ pub fn call_handler_with_py_sidecar(
     args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    autoescape: bool,
 ) -> Result<String, String> {
     // Get handler from registry
     let handler = {
@@ -688,7 +693,7 @@ pub fn call_handler_with_py_sidecar(
                 )
             })?;
 
-        escape_handler_return(&result, "Handler", name)
+        escape_handler_return(&result, "Handler", name, autoescape)
     })
 }
 

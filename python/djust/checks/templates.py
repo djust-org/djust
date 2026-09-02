@@ -641,7 +641,7 @@ def _check_view_root_same_element(
 # inheritance was implemented (PR #272). {% regroup %} is FULLY SUPPORTED
 # since the built-in assign-tag handler was added (djust.template_tags.regroup).
 # Do not add either here.
-_UNSUPPORTED_TAGS_RE = re.compile(r"\{%\s*(ifchanged|resetcycle|lorem|debug|filter|autoescape)\b")
+_UNSUPPORTED_TAGS_RE = re.compile(r"\{%\s*(ifchanged|resetcycle|lorem|debug|filter)\b")
 
 
 def _check_unsupported_tags(

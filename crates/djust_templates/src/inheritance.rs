@@ -149,6 +149,13 @@ impl InheritanceChain {
                 assignments: assignments.clone(),
                 nodes: self.apply_block_overrides(nodes),
             },
+            // A parent's `{% autoescape off %}{% block b %}…` governs the
+            // child's override, so the block inside it must be reachable
+            // (#2556).
+            Node::AutoEscape { on, nodes } => Node::AutoEscape {
+                on: *on,
+                nodes: self.apply_block_overrides(nodes),
+            },
             // Skip extends nodes in the output
             Node::Extends(_) => Node::Comment,
             // Everything else passes through unchanged
@@ -189,7 +196,7 @@ fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>
                 extract_blocks_recursive(child, blocks);
             }
         }
-        Node::For { nodes, .. } | Node::With { nodes, .. } => {
+        Node::For { nodes, .. } | Node::With { nodes, .. } | Node::AutoEscape { nodes, .. } => {
             for child in nodes {
                 extract_blocks_recursive(child, blocks);
             }
@@ -611,6 +618,12 @@ fn node_to_template_string(node: &Node) -> String {
             let mut result = "{% spaceless %}".to_string();
             result.push_str(&nodes_to_template_string(nodes));
             result.push_str("{% endspaceless %}");
+            result
+        }
+        Node::AutoEscape { on, nodes } => {
+            let mut result = format!("{{% autoescape {} %}}", if *on { "on" } else { "off" });
+            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str("{% endautoescape %}");
             result
         }
         Node::Cycle { values, name } => {

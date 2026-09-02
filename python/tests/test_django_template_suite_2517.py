@@ -443,11 +443,12 @@ CANARY_MODULE = textwrap.dedent(
             with self.assertRaises(TemplateSyntaxError):
                 Engine().from_string("{% if foo == %}yes{% endif %}").render(Context({}))
 
-        def test_3_autoescape_off(self):
-            # Django renders "<b>"; djust raises on the unsupported tag.
-            src = "{% autoescape off %}{{ x }}{% endautoescape %}"
-            out = Engine().from_string(src).render(Context({"x": "<b>"}))
-            self.assertEqual(out, "<b>")
+        def test_3_ifchanged(self):
+            # Django renders "ab"; djust raises on the unsupported tag
+            # (`autoescape` was the canary until #2556 implemented it).
+            src = "{% for x in xs %}{% ifchanged %}{{ x }}{% endifchanged %}{% endfor %}"
+            out = Engine().from_string(src).render(Context({"xs": ["a", "a", "b"]}))
+            self.assertEqual(out, "ab")
     '''
 )
 
@@ -506,10 +507,10 @@ class TestEmpiricalCanary:
             "FAIL  canary_tests.Canary.test_2_incomplete_if_must_raise_at_parse | AssertionError: "
             "TemplateSyntaxError not raised"
         )
-        assert lines["canary_tests.Canary.test_3_autoescape_off"].startswith(
-            "ERROR canary_tests.Canary.test_3_autoescape_off | Exception: "
+        assert lines["canary_tests.Canary.test_3_ifchanged"].startswith(
+            "ERROR canary_tests.Canary.test_3_ifchanged | Exception: "
         )
-        assert "Unsupported template tag" in lines["canary_tests.Canary.test_3_autoescape_off"]
+        assert "Unsupported template tag" in lines["canary_tests.Canary.test_3_ifchanged"]
 
     def test_engine_percent_and_touched(self, djust_run: tuple[str, dict]) -> None:
         text, data = djust_run
