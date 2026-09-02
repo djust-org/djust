@@ -8,7 +8,7 @@ Python boundary crossings; ORM; state serialization on the event path; HTML
 parse + VDOM diff tagged by the differ's ``fast_path`` flag. ADR-027 changes
 the boundary bucket 2 measures and is scored against this table.
 
-Six variants, one benchmark test each (``--benchmark-only`` runs them all;
+Seven variants, one benchmark test each (``--benchmark-only`` runs them all;
 the table prints from ``pytest_terminal_summary`` in ``conftest.py``):
 
 ==================== ========================================== ======================================
@@ -23,12 +23,30 @@ variant              row shape / variant column                 why it is in the
                      page.rows %}``, ``{{ row.author.name }}``
 ``presenter_reverse`` ``Page(rows)``, ``{{ row.comments.count }}`` the per-segment sidecar walk — the
                                                                 informative contrast (acceptance)
+``snapshot``         ``list_control`` +                         the only variant whose bucket-4
+                     ``enable_state_snapshot = True``           ``persist`` column is non-zero
 ==================== ========================================== ======================================
 
 Three events per variant: ``text_change`` (a label outside the loop → the
 fragment fast path), ``attr_change`` (a ``class`` on a ``<tr>`` → full parse +
 diff), ``row_text_change`` (a persisted ``views += 1`` on row 7 → the
 text-region fast path).
+
+**Why ``snapshot`` is in and ``queryset_control`` is out.** The plan's
+``snapshot`` variant was dropped from the first cut, which left bucket 4's
+``persist`` column dead: ``ViewRuntime._persist_state_after_event`` runs
+only for a view with ``enable_state_snapshot = True`` (the #1552 opt-in), so
+no variant could ever read anything but 0 there. ``snapshot`` restores it —
+the ``list_control`` shape with the opt-in — so the column measures the
+per-event session save that normalises the 50 model rows to plain data
+(``normalize_django_value(..., state_roundtrip=True)``) and writes them
+through the session backend. That is the state-persistence path ADR-027's
+transient handle must be proven to drop through, so it needs a baseline. The
+mount-side signed-snapshot emission (``_capture_snapshot_state(strict=True)``)
+runs on the same variant and is inside its mount ``total``. The plan's
+``queryset_control`` (a bare ``QuerySet`` in state) stays dropped: it exercises
+``_rust.serialize_queryset``, a different boundary from the sidecar walk this
+table profiles, and is out of #2532's scope.
 
 **Premise correction the spike proved (each traced to code).** The issue's
 table says ``@property`` and reverse relations on a list row reach the
@@ -47,9 +65,10 @@ assertions below pin exactly that contrast.
 Assertions are on COUNTS and FLAGS only — never on a duration (v1.0.5-4
 rule; #1534 keeps timing non-gating until runner-stable):
 
-(a) the four ``list_*`` variants have 0 Rust-origin crossings in every phase
-    and ``presenter_reverse`` has > 0 on every full render (the
-    fixture-is-informative proof and the ADR-027 invariant);
+(a) the five list-shaped variants (the four ``list_*`` plus ``snapshot``)
+    have 0 Rust-origin crossings in every phase and ``presenter_reverse``
+    has > 0 on every full render (the fixture-is-informative proof and the
+    ADR-027 invariant);
 (b) the differ's ``fast_path`` is True for ``text_change`` and
     ``row_text_change`` and False for ``attr_change`` in every variant, and
     agrees with the pre-#2532 inference (``diff_ms == 0`` ∧ all patches
@@ -59,7 +78,14 @@ rule; #1534 keeps timing non-gating until runner-stable):
     ``presenter_control`` (the N+1) — asserted as ``>``, not a number;
 (d) the variant column actually rendered (row 7's expected cell is in the
     mount HTML) — a column that silently rendered empty would report 0
-    crossings for the wrong reason.
+    crossings for the wrong reason;
+(e) the persist column is PRESENT where it is claimed: ``snapshot`` records
+    exactly one ``_persist_state_after_event`` call per event, its wall time
+    is non-zero, and the 50 normalised rows are readable back from the
+    session store (with row 7's bumped ``views``); every other variant
+    records 0 calls — by design, not by accident (#1859);
+(f) the ORM ``execute_wrappers`` hook the session installs on the worker
+    thread's connection is gone from that connection after teardown.
 
 Run::
 
@@ -103,7 +129,8 @@ MOD = __name__
 
 ROW_COUNT = 50
 #: Row whose cell is checked for rendering and whose ``views`` the
-#: ``row_text_change`` event bumps. 7 → 3 comments, 12 words, author 2.
+#: ``row_text_change`` event bumps. 7 → 3 comments (``7 % 4``), 5 words
+#: (``5 + 7 % 7``), author 2 (``7 % 5``).
 PROBE_ROW = 7
 
 VARIANTS = (
@@ -113,9 +140,18 @@ VARIANTS = (
     "list_fk_nosel",
     "presenter_control",
     "presenter_reverse",
+    "snapshot",
 )
 LIST_VARIANTS = tuple(v for v in VARIANTS if v.startswith("list_"))
+#: Every variant whose rows are a ``list[Model]`` in state — the JIT owns
+#: those, so none of them may cross the Rust boundary.
+ZERO_CROSSING_VARIANTS = LIST_VARIANTS + ("snapshot",)
+#: The one variant that opts into state persistence (``enable_state_snapshot``).
+SNAPSHOT_VARIANT = "snapshot"
 EVENTS = ("text_change", "attr_change", "row_text_change")
+#: Where ``_persist_state_after_event`` writes: ``liveview_{mount path}``.
+MOUNT_URL = "/bench/"
+SESSION_STATE_KEY = f"liveview_{MOUNT_URL}"
 
 #: Rounds measured per variant (plus one warm-up: the JIT / template caches
 #: are process globals, so the first session pays their population).
@@ -219,6 +255,30 @@ def _install_query_log() -> None:
         connection.execute_wrappers.append(_query_wrapper)
 
 
+def _uninstall_query_log() -> bool:
+    """Remove the hook from THIS thread's connection; ``True`` when it is gone.
+
+    Must run on the SAME worker thread ``mount()`` installed it on —
+    ``_drive`` does so via ``sync_to_async`` in its ``finally``. asgiref's
+    thread-sensitive executor is process-global, so a hook left behind
+    would time every ORM statement of every later test in the process."""
+    while _query_wrapper in connection.execute_wrappers:
+        connection.execute_wrappers.remove(_query_wrapper)
+    return _query_wrapper not in connection.execute_wrappers
+
+
+def _query_hook_installed_on_worker() -> bool:
+    """Whether the hook is on the ``sync_to_async`` worker thread's connection
+    right now (drives a fresh loop so it lands on that thread)."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            sync_to_async(lambda: _query_wrapper in connection.execute_wrappers)()
+        )
+    finally:
+        loop.close()
+
+
 def _reset_phase_counters() -> None:
     CROSSINGS.reset()
     QUERY_LOG.clear()
@@ -244,6 +304,7 @@ _VARIANT_COLUMN = {
     "list_fk_nosel": "{{ row.author.name }}",
     "presenter_control": "{{ row.author.name }}",
     "presenter_reverse": "{{ row.comments.count }}",
+    "snapshot": "{{ row.author.name }}",
 }
 
 
@@ -283,6 +344,10 @@ def _make_view(variant: str) -> str:
 
     class _V(LiveView):
         template = _template(variant, cls_name)
+        # The #1552 opt-in: only ``snapshot`` persists state after each event
+        # (and emits the signed snapshot on mount). Every other variant's
+        # ``persist`` column is 0 by design — assertion (e) says so.
+        enable_state_snapshot = variant == SNAPSHOT_VARIANT
 
         def mount(self, request: Any, **kwargs: Any) -> None:
             LAST_VIEW[:] = [self]
@@ -416,6 +481,7 @@ def _phase_row(
         sync_ms=sum(SYNC_SECS) * 1000.0,
         jit_ms=sum(GCD_SECS) * 1000.0,
         persist_ms=sum(PERSIST_SECS) * 1000.0,
+        persist_calls=len(PERSIST_SECS),
         parse_ms=timing.get("parse_ms", 0.0),
         diff_ms=timing.get("diff_ms", 0.0),
         ser_ms=timing.get("serialize_ms", 0.0),
@@ -438,35 +504,43 @@ async def _drive(variant: str) -> List[PhaseRow]:
     assert connected
     await comm.receive_json_from(timeout=5)
 
-    _reset_phase_counters()
-    t0 = time.perf_counter()
-    await comm.send_json_to({"type": "mount", "view": f"{MOD}.{cls_name}", "url": "/bench/"})
-    mount = await _recv_until(comm, "mount")
-    total_s = time.perf_counter() - t0
-    view = LAST_VIEW[0]
-    mount_row = _phase_row(variant, "mount", mount, total_s, view)
-    rows.append(mount_row)
-
-    # (d) the variant column rendered. Computed on the worker thread — the
-    # test thread's connection is a different one.
-    probe = await sync_to_async(lambda: view._rows()[PROBE_ROW])()
-    expected = await sync_to_async(_expected_cell)(variant, probe)
-    html = mount.get("html", "")
-    assert expected in html, (
-        f"{variant}: the variant column did not render — expected {expected!r} for row "
-        f"{PROBE_ROW} in the mount HTML ({len(html)} chars)"
-    )
-
-    for i, event in enumerate(EVENTS):
-        ref = 100 + i
+    try:
         _reset_phase_counters()
         t0 = time.perf_counter()
-        await comm.send_json_to({"type": "event", "event": event, "params": {}, "ref": ref})
-        frame = await _recv_until(comm, "patch", ref=ref)
+        await comm.send_json_to({"type": "mount", "view": f"{MOD}.{cls_name}", "url": MOUNT_URL})
+        mount = await _recv_until(comm, "mount")
         total_s = time.perf_counter() - t0
-        rows.append(_phase_row(variant, event, frame, total_s, view))
+        view = LAST_VIEW[0]
+        mount_row = _phase_row(variant, "mount", mount, total_s, view)
+        rows.append(mount_row)
 
-    await comm.disconnect()
+        # (d) the variant column rendered. Computed on the worker thread — the
+        # test thread's connection is a different one.
+        probe = await sync_to_async(lambda: view._rows()[PROBE_ROW])()
+        expected = await sync_to_async(_expected_cell)(variant, probe)
+        html = mount.get("html", "")
+        assert expected in html, (
+            f"{variant}: the variant column did not render — expected {expected!r} for row "
+            f"{PROBE_ROW} in the mount HTML ({len(html)} chars)"
+        )
+
+        for i, event in enumerate(EVENTS):
+            ref = 100 + i
+            _reset_phase_counters()
+            t0 = time.perf_counter()
+            await comm.send_json_to({"type": "event", "event": event, "params": {}, "ref": ref})
+            frame = await _recv_until(comm, "patch", ref=ref)
+            total_s = time.perf_counter() - t0
+            rows.append(_phase_row(variant, event, frame, total_s, view))
+    finally:
+        try:
+            await comm.disconnect()
+        finally:
+            # (f) Same thread ``mount()`` installed the hook on: the consumer's
+            # ORM work and this call both go through asgiref's thread-sensitive
+            # executor. Left in place it would outlive the session (and the test).
+            removed = await sync_to_async(_uninstall_query_log)()
+            assert removed, "the query hook is still on the worker thread's connection"
     return rows
 
 
@@ -486,10 +560,14 @@ def _run_session(variant: str) -> List[PhaseRow]:
 
 
 @pytest.fixture(autouse=True)
-def _bench_env(monkeypatch: pytest.MonkeyPatch):
+def _bench_env(monkeypatch: pytest.MonkeyPatch, transactional_db: Any):
     """Tables + seed, the crossing counters, the ``in_rust_render`` flag around
     the differ call, the ``_persist_state_after_event`` timer, and the
-    consumer's module allowlist."""
+    consumer's module allowlist.
+
+    ``transactional_db`` is requested explicitly (not only via the module's
+    ``django_db(transaction=True)`` mark) so the fixture cannot touch the DB
+    before pytest-django has set it up, whatever order the marks resolve in."""
     pytest.importorskip("channels")
     _ensure_tables()
     _seed()
@@ -515,11 +593,16 @@ def _bench_env(monkeypatch: pytest.MonkeyPatch):
     orig_persist = ViewRuntime._persist_state_after_event
 
     async def persist(self: Any, *args: Any, **kwargs: Any) -> Any:
+        n_gcd = len(GCD_SECS)
         t0 = time.perf_counter()
         try:
             return await orig_persist(self, *args, **kwargs)
         finally:
             PERSIST_SECS.append(time.perf_counter() - t0)
+            # The save's own ``get_context_data`` call is persist time, not
+            # JIT time: drop it from ``jit_ms`` so ``state_ms`` (sync − jit)
+            # is not under-counted on the snapshot variant.
+            del GCD_SECS[n_gcd:]
 
     monkeypatch.setattr(ViewRuntime, "_persist_state_after_event", persist)
 
@@ -571,7 +654,7 @@ def _assert_fast_path_flags(variant: str, rows: List[PhaseRow]) -> None:
 def _assert_crossings(variant: str, rows: List[PhaseRow]) -> None:
     """(a): list rows never reach the sidecar; the presenter reverse path does."""
     phases = _by_phase(rows)
-    if variant in LIST_VARIANTS:
+    if variant in ZERO_CROSSING_VARIANTS:
         for phase, row in phases.items():
             assert row.xings == 0, (
                 f"{variant}/{phase}: {row.xings} Rust-origin boundary crossings ({row.xing_kinds}); "
@@ -610,10 +693,59 @@ def _measured_sessions(benchmark: Any, variant: str) -> List[List[PhaseRow]]:
     return sessions
 
 
+def _persisted_state(view: Any) -> Optional[Dict[str, Any]]:
+    """What ``_persist_state_after_event`` left in the session store for this
+    view's mount path, read back fresh from the backend (``None`` when the
+    request's session was never saved)."""
+    session = getattr(getattr(view, "_djust_mount_request", None), "session", None)
+    key = getattr(session, "session_key", None)
+    if not key:
+        return None
+    fresh = type(session)(session_key=key)
+    return fresh.get(SESSION_STATE_KEY)
+
+
+def _assert_persist_presence(variant: str, rows: List[PhaseRow], view: Any) -> None:
+    """(e): the persist column is non-zero exactly where it is claimed."""
+    phases = _by_phase(rows)
+    assert phases["mount"].persist_calls == 0, "persist runs on the event path only"
+    if variant != SNAPSHOT_VARIANT:
+        for event in EVENTS:
+            assert phases[event].persist_calls == 0, (
+                f"{variant}/{event}: _persist_state_after_event ran "
+                f"{phases[event].persist_calls}× on a view that did not opt into "
+                f"enable_state_snapshot — the persist column is 0 by design here"
+            )
+        return
+    for event in EVENTS:
+        row = phases[event]
+        assert row.persist_calls == 1, (
+            f"{variant}/{event}: expected exactly one _persist_state_after_event "
+            f"call, got {row.persist_calls} — the snapshot variant must opt in"
+        )
+        # A presence check against literal zero, not a threshold: the pin in
+        # test_model_backed_table_2532.py exempts comparisons with 0.
+        assert row.persist_ms > 0.0, f"{variant}/{event}: persist ran but recorded no time"
+    # The save actually wrote through: 50 normalised rows, row 7 bumped.
+    saved = _persisted_state(view)
+    assert saved is not None, f"{variant}: nothing under {SESSION_STATE_KEY!r} in the session"
+    saved_rows = saved.get("rows")
+    assert isinstance(saved_rows, list) and len(saved_rows) == ROW_COUNT, (
+        f"{variant}: the session holds {type(saved_rows).__name__} "
+        f"{len(saved_rows) if isinstance(saved_rows, list) else ''} under 'rows', "
+        f"expected {ROW_COUNT} normalised rows"
+    )
+    live_views = view._rows()[PROBE_ROW].views
+    assert saved_rows[PROBE_ROW]["views"] == live_views, (
+        f"{variant}: row {PROBE_ROW} persisted views={saved_rows[PROBE_ROW]['views']} "
+        f"but the view holds {live_views} after row_text_change"
+    )
+
+
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_model_backed_render_profile(benchmark: Any, variant: str) -> None:
-    """Mount + three events over the real WS path; asserts (a), (b), (d) for
-    every variant and (c) for ``presenter_reverse``."""
+    """Mount + three events over the real WS path; asserts (a), (b), (d), (e)
+    for every variant and (c) for ``presenter_reverse``."""
     for rows in _measured_sessions(benchmark, variant):
         assert rows[0].frame_type == "mount"
         assert len(rows) == 1 + len(EVENTS)
@@ -621,6 +753,21 @@ def test_model_backed_render_profile(benchmark: Any, variant: str) -> None:
         _assert_fast_path_flags(variant, rows)
         if variant == "presenter_reverse":
             _assert_reverse_walk_is_an_n_plus_one(rows)
+    # ``LAST_VIEW`` is the final session's view; (e) reads its session back.
+    _assert_persist_presence(variant, rows, LAST_VIEW[0])
+
+
+def test_query_hook_is_removed_from_the_worker_connection_on_teardown() -> None:
+    """(f): a session leaves no ``execute_wrappers`` hook behind. The hook
+    lives on the ``sync_to_async`` worker thread's connection — the same
+    thread a fresh loop's ``sync_to_async`` lands on, which is how this test
+    can observe it from outside a session (and why a leak would time every
+    ORM statement of every later test in the process)."""
+    _run_session("list_control")
+    assert not _query_hook_installed_on_worker(), (
+        "_query_wrapper is still in the worker thread's connection.execute_wrappers "
+        "after the session ended"
+    )
 
 
 def _assert_reverse_walk_is_an_n_plus_one(reverse_rows: List[PhaseRow]) -> None:

@@ -36,15 +36,23 @@ Bucket definitions (per phase, per variant):
    ``proxy`` — transitive re-wraps the sidecar proxy performed inside one of
    those crossings (Python-internal, counted apart so ``xings`` stays exact);
    ``py_calls`` — calls made while Rust was not running (the eager/JIT path).
+   ``xing_ms`` includes the counting wrappers' own ``perf_counter`` +
+   ``sys._getframe`` overhead (two of each per call — ~900 calls on the
+   presenter variants), so on those variants bucket 2 is over-attributed and
+   bucket 1 under-attributed by that overhead, and ``rust_ms`` can floor at 0.
 3. ``queries`` / ``sql_ms`` — ORM: statements issued and their wall time,
    measured by an ``execute_wrappers`` hook installed in the consumer's worker
    thread; ``list_ms`` (mount only) is the queryset instantiation wall time.
 4. ``state_ms`` — state serialization on the event path:
    ``_sync_state_to_rust`` wall time minus the ``get_context_data`` calls it
    made (normalise + change-detect + ``update_state``); ``jit_ms`` is
-   ``get_context_data`` (the JIT/eager serialization); ``persist_ms`` is
-   ``ViewRuntime._persist_state_after_event`` (0 unless the view opted into
-   ``enable_state_snapshot``).
+   ``get_context_data`` (the JIT/eager serialization); ``persist_ms`` /
+   ``persist_calls`` are ``ViewRuntime._persist_state_after_event`` — the
+   per-event session save that normalises the public state with
+   ``state_roundtrip=True`` and writes it through the session backend,
+   including the ``get_context_data`` call the save itself makes (excluded
+   from ``jit_ms``). It runs only for a view with ``enable_state_snapshot``:
+   the ``snapshot`` variant. Every other variant reads 0 calls by design.
 5. ``parse_ms`` / ``diff_ms`` / ``ser_ms`` and ``fast`` — HTML parse + VDOM
    diff + serialization, tagged by which text fast path the differ reports
    (``RenderTiming::fast_path``: ``-`` mount, ``frag`` fragment, ``region``
@@ -237,6 +245,10 @@ class PhaseRow:
     sync_ms: float = 0.0
     jit_ms: float = 0.0
     persist_ms: float = 0.0
+    #: ``_persist_state_after_event`` invocations in the phase: 1 per event
+    #: on the ``snapshot`` variant, 0 everywhere else (a presence count, so
+    #: the persist column cannot be dead without a test noticing — #1859).
+    persist_calls: int = 0
     # bucket 5
     parse_ms: float = 0.0
     diff_ms: float = 0.0
@@ -313,7 +325,7 @@ _NUMERIC = {
     "render_ms",
     "sync_ms",
 }
-_COUNTS = {"xings", "proxy_xings", "py_xings", "queries"}
+_COUNTS = {"xings", "proxy_xings", "py_xings", "queries", "persist_calls"}
 
 
 def summarize(rows: Iterable[PhaseRow]) -> List[Dict[str, Any]]:
@@ -383,6 +395,11 @@ def write_json_if_requested(
     path = env.get("DJUST_BENCH_TABLE_JSON")
     if not path:
         return None
+    parent = os.path.dirname(os.path.abspath(path))
+    assert os.path.isdir(parent), (
+        f"DJUST_BENCH_TABLE_JSON={path!r}: its directory {parent!r} does not exist — "
+        f"create it first (the benchmark will not create directories for you)"
+    )
     rows = list(rows)
     payload = {
         "rows": [asdict(r) for r in rows],

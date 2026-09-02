@@ -13,6 +13,8 @@ import re
 from pathlib import Path
 from typing import List
 
+import pytest
+
 from tests.benchmarks.model_backed_profile_2532 import (
     BUCKET_COLUMNS,
     Crossings,
@@ -34,8 +36,19 @@ VARIANTS = (
     "list_fk_nosel",
     "presenter_control",
     "presenter_reverse",
+    "snapshot",
 )
 PHASES = ("mount", "text_change", "attr_change", "row_text_change")
+
+#: The no-threshold pin. A comparison of any ``*_ms`` attribute — whatever the
+#: receiver expression (``row.total_ms``, ``phases["x"].total_ms``) — against
+#: anything but literal zero is a duration threshold. ``> 0`` / ``> 0.0`` is a
+#: PRESENCE check (the persist column on the snapshot variant) and is exempt.
+#: The zero exemption lives INSIDE the lookahead (``(?!\s*0...)``) and the
+#: operator is pinned with ``(?!=)``: with ``\s*`` outside it, or ``=?`` free
+#: to give up its ``=``, the engine backtracks past the exemption and flags
+#: ``> 0.0`` anyway (the shape the first version of this regex had).
+NO_THRESHOLD_RE = re.compile(r"assert\s+[^\n]*\.\w+_ms\s*[<>]=?(?!=)(?!\s*0(?:\.0+)?(?![.\w]))")
 
 
 def _row(variant: str, phase: str, **overrides: object) -> PhaseRow:
@@ -204,6 +217,13 @@ class TestSummaryTable:
         payload = json.loads(out.read_text())
         assert len(payload["rows"]) == len(rows)
         assert len(payload["medians"]) == len(VARIANTS) * len(PHASES)
+        assert all("persist_calls" in m for m in payload["medians"])
+
+    def test_json_dump_names_the_missing_directory(self, tmp_path):
+        missing = tmp_path / "no_such_dir" / "t.json"
+        with pytest.raises(AssertionError, match=r"does not exist"):
+            write_json_if_requested(self._rows(), env={"DJUST_BENCH_TABLE_JSON": str(missing)})
+        assert not missing.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -217,11 +237,44 @@ class TestBenchmarkModuleShape:
         ``_assert_benchmark_under`` (median, skipped under ``-n auto``)."""
         src = BENCHMARK_MODULE.read_text()
         assert "benchmark.stats" not in src
-        assert not re.search(r"assert\s+\w+\.(total|render|sync|jit|sql|xing)_ms\s*[<>]", src)
+        hit = NO_THRESHOLD_RE.search(src)
+        assert hit is None, f"duration threshold in the benchmark module: {hit.group(0)!r}"
 
-    def test_declares_the_six_variants_and_three_events(self):
+    def test_no_threshold_pin_catches_every_receiver_shape(self):
+        """The pin is only as good as its regex: it must catch a threshold on a
+        subscripted receiver (the shape the first version missed), on ``<=``,
+        and on every ``*_ms`` attribute — and must NOT flag a presence check
+        against literal zero."""
+        caught = (
+            'assert phases["x"].total_ms < 5',
+            "assert row.render_ms <= budget",
+            "assert rows[0].persist_ms > 1.5",
+            "assert _by_phase(rows)['mount'].xing_ms<10",
+            "assert r.sql_ms >= 0.5",
+        )
+        for src in caught:
+            assert NO_THRESHOLD_RE.search(src), f"pin missed a threshold: {src!r}"
+        exempt = (
+            "assert row.persist_ms > 0.0",
+            "assert row.persist_ms > 0",
+            "assert phases[event].persist_ms >= 0",
+            "assert row.persist_calls == 1",
+            "assert row.xings == 0",
+        )
+        for src in exempt:
+            assert not NO_THRESHOLD_RE.search(src), f"pin flagged a non-threshold: {src!r}"
+
+    def test_declares_the_seven_variants_and_three_events(self):
         src = BENCHMARK_MODULE.read_text()
         for variant in VARIANTS:
             assert f'"{variant}"' in src
         for event in PHASES[1:]:
             assert f'"{event}"' in src
+
+    def test_only_the_snapshot_variant_opts_into_state_persistence(self):
+        """The persist column is claimed non-zero for exactly one variant; the
+        opt-in must be spelled as a comparison with that variant's name, so a
+        second opted-in variant (or none) is visible in the source."""
+        src = BENCHMARK_MODULE.read_text()
+        assert 'SNAPSHOT_VARIANT = "snapshot"' in src
+        assert "enable_state_snapshot = variant == SNAPSHOT_VARIANT" in src

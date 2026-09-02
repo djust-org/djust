@@ -166,12 +166,22 @@ struct SerializableViewState {
 /// (`LiveView._rust_render_timing`); Python reads `> 0.0` as "taken".
 const FAST_PATH_NONE: f64 = 0.0;
 /// The fragment fast path: every changed template fragment was plain text
-/// with a known VDOM text node, so the parse + diff were skipped and
-/// `SetText` patches were produced directly.
+/// with a known VDOM text node (`fragment_text_map`), so the parse + diff
+/// were skipped and `SetText` patches were produced directly from the
+/// template's changed-fragment list. Only `render_with_diff` has that
+/// list; `render_binary_diff` never reports this value.
 const FAST_PATH_FRAGMENT: f64 = 1.0;
-/// The text-region fast path: the fragment path could not fire (a changed
-/// fragment contained tags) but the byte diff of the full HTML was a single
-/// text span inside one text node.
+/// The text-region fast path: the whole-HTML byte diff mechanism. No
+/// template fragment is consulted — the OLD and NEW rendered HTML are
+/// compared bytewise and, when every difference lies inside text content,
+/// the old VDOM's text nodes are patched in place. Two sites report it:
+/// `render_with_diff` (`try_text_region_fast_path`, after the fragment path
+/// could not fire — a single text span, resolved through the byte-offset
+/// `text_node_index`) and `render_binary_diff`
+/// (`djust_vdom::try_text_only_vdom_update_inplace`, its only text fast
+/// path — one or more text spans, resolved by walking the tree). A text
+/// change that `render_with_diff` would report as `FAST_PATH_FRAGMENT` is
+/// therefore reported as this value by `render_binary_diff`.
 const FAST_PATH_TEXT_REGION: f64 = 2.0;
 
 /// Per-phase timing from render_with_diff()
@@ -1170,7 +1180,11 @@ impl RustLiveViewBackend {
                 // cache from the manifest so a future reorder hits even when this
                 // render took the in-place path.
                 if try_text_only_vdom_update_inplace(&mut vdom, &old_html, &html) {
-                    fast_path = FAST_PATH_FRAGMENT;
+                    // The whole-HTML text-only byte diff — the text-REGION
+                    // mechanism, not the fragment one: no changed-fragment
+                    // list or `fragment_text_map` is consulted here (#2532
+                    // review; the first cut mislabelled this site).
+                    fast_path = FAST_PATH_TEXT_REGION;
                     Self::populate_parse_cache_from_manifest(&loop_parse_manifest, &mut loop_cache);
                     vdom
                 } else {
@@ -4341,5 +4355,91 @@ mod fast_path_flag_tests {
         assert_eq!(timing(&view, "diff_ms"), 0.0);
         let patches = patches.expect("a diff render returns patches");
         assert!(patches.contains("SetText"), "patches: {patches}");
+    }
+
+    // ------------------------------------------------------------------
+    // The second site that sets `fast_path`: `render_binary_diff` (#1104 —
+    // two sites, two sets of tests). Its only text fast path is
+    // `try_text_only_vdom_update_inplace`, the whole-HTML byte diff, so it
+    // reports `FAST_PATH_TEXT_REGION` for EVERY text-only change — including
+    // the outside-the-loop label change `render_with_diff` reports as
+    // `FAST_PATH_FRAGMENT`. The first cut labelled it as the fragment path.
+    // ------------------------------------------------------------------
+
+    /// Drive the binary entry point; returns the hydrated HTML and the
+    /// msgpack patches (`None` is the in-place path's documented no-patch
+    /// result — see the #1970 comment at the call site).
+    fn render_binary(view: &mut RustLiveViewBackend) -> (String, Option<Vec<djust_vdom::Patch>>) {
+        Python::attach(|py| {
+            let (html, patches, _v) = view.render_binary_diff(py).expect("binary render");
+            let decoded = patches.map(|p| {
+                let bytes = p
+                    .bind(py)
+                    .cast::<pyo3::types::PyBytes>()
+                    .expect("patches are bytes")
+                    .as_bytes()
+                    .to_vec();
+                rmp_serde::from_slice::<Vec<djust_vdom::Patch>>(&bytes).expect("msgpack patches")
+            });
+            (html, decoded)
+        })
+    }
+
+    fn mounted_binary() -> RustLiveViewBackend {
+        Python::initialize();
+        let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
+        view.update_state_rust(state("v0", 0, 107));
+        render_binary(&mut view);
+        view
+    }
+
+    #[test]
+    fn binary_first_render_reports_no_fast_path() {
+        let view = mounted_binary();
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
+    }
+
+    #[test]
+    fn binary_text_only_change_outside_the_loop_is_the_text_region_path_not_fragment() {
+        // The same label change that takes the FRAGMENT path through
+        // `render_with_diff`: the binary path has no changed-fragment list,
+        // so it can only have reached the patched VDOM via the whole-HTML
+        // byte diff — the region mechanism.
+        let mut view = mounted_binary();
+        view.update_state_rust(state("v1", 0, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        let (html, patches) = render_binary(&mut view);
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+        assert_ne!(timing(&view, "fast_path"), FAST_PATH_FRAGMENT);
+        assert!(html.contains(">v1</p>"), "html: {html}");
+        // The in-place path patches the old tree and emits no patch list.
+        assert!(patches.is_none(), "patches: {patches:?}");
+    }
+
+    #[test]
+    fn binary_text_change_inside_the_loop_takes_the_text_region_fast_path() {
+        let mut view = mounted_binary();
+        view.update_state_rust(state("v0", 0, 108));
+        view.set_changed_keys(vec!["rows".to_string()]);
+        let (html, patches) = render_binary(&mut view);
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+        assert!(html.contains(">108</td>"), "html: {html}");
+        assert!(patches.is_none(), "patches: {patches:?}");
+    }
+
+    #[test]
+    fn binary_attribute_change_takes_the_full_parse_and_diff() {
+        let mut view = mounted_binary();
+        view.update_state_rust(state("v0", 7, 107));
+        view.set_changed_keys(vec!["highlight_id".to_string()]);
+        let (_html, patches) = render_binary(&mut view);
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
+        let patches = patches.expect("a structural change returns patches");
+        assert!(
+            patches
+                .iter()
+                .any(|p| matches!(p, djust_vdom::Patch::SetAttr { .. })),
+            "patches: {patches:?}"
+        );
     }
 }
