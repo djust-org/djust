@@ -994,7 +994,7 @@ class TestTheTwoCrashes:
         proc = run_child(key, path)
         assert proc.returncode in CRASH_SIGNALS, (
             f"row {key} on {path} no longer crashes (rc={proc.returncode}, "
-            f"stdout={proc.stdout[-300]!r}, stderr tail={proc.stderr[-300:]!r}) — the #2516/#2517 "
+            f"stdout tail={proc.stdout[-300:]!r}, stderr tail={proc.stderr[-300:]!r}) — the #2516/#2517 "
             f"crash is fixed; move the row to Django's bytes "
             f"({ROW_BY_ID[key].django!r}) and update the *_WRONG_TODAY sets."
         )
@@ -1350,11 +1350,14 @@ class TestMutatorsAreNeverAutoCalled2507:
         calls: list = []
         card_cls = make_recording_card(calls)
         nav = render_page_shell(
-            "{{ c.%s }}" % method,
+            "[{{ c }}][{{ c.%s }}]" % method,
             with_serialized_context=with_serialized_context,
             card_cls=card_cls,
         )
-        assert nav == ""
+        # Presence AND silence: the card itself renders (so the lookup did
+        # reach `c`), and the mutator segment renders nothing.
+        assert nav.endswith("][]"), f"{method} rendered something: {nav!r}"
+        assert nav != "[][]", "the card itself rendered empty — the shell never resolved `c`"
         # Construction dispatches `mount` through the framework's own
         # lifecycle — a legitimate DIRECT call; nothing else may appear.
         assert [c for c in calls if c != "mount"] == [], f"{method} was CALLED during the render"
@@ -1389,6 +1392,12 @@ def _production(source: str) -> str:
 
 
 CALLERS = re.compile(r"(?<!fn )walk_live\(")
+#: Every Rust source in the workspace other than the file that defines the
+#: sink — a caller added in `djust_templates` or `djust_live` must redden the
+#: unrouted pin just as one in `context.rs` does.
+OTHER_CRATE_SOURCES = sorted(
+    path for path in (ROOT / "crates").glob("*/src/**/*.rs") if path != CONTEXT_RS
+)
 
 
 def _lookup_segment_body(ctx: str) -> str:
@@ -1411,13 +1420,29 @@ class TestTheSinkIsDefinedButUnrouted2539:
         ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
         assert CALLERS.findall(ctx) == [], "walk_live has a caller — movement 2 landed early?"
         assert "walk_live" not in _lookup_segment_body(ctx)
+        assert len(OTHER_CRATE_SOURCES) > 20, OTHER_CRATE_SOURCES
+        for path in OTHER_CRATE_SOURCES:
+            # Comment-strip only: `_production` cuts a file at its FIRST
+            # `#[cfg(test)]`, which in e.g. `djust_templates/src/lib.rs`
+            # hides 350 lines of production code that follow the test module
+            # (found by gate-off: a probe caller appended there stayed green).
+            source = path.read_text(encoding="utf-8")
+            stripped = "\n".join(
+                line for line in source.splitlines() if not line.lstrip().startswith("//")
+            )
+            callers = CALLERS.findall(stripped)
+            assert callers == [], (
+                f"{path.relative_to(ROOT)} calls walk_live — movement 2 landed early?"
+            )
 
     def test_it_keeps_the_existing_reader_pins(self) -> None:
         """`TestTheSinkHasExactlyTheReadersItClaims` (#2481) counts ONE
         `.attrs.get(` and ONE `lookup_segment(` caller in the whole file —
         the helper adds neither."""
         ctx = _production(CONTEXT_RS.read_text(encoding="utf-8"))
-        body = ctx.split("fn walk_live", 1)[1].split("\n    /// Convert the entire context", 1)[0]
+        assert "pub fn to_hashmap" in ctx
+        body = ctx.split("fn walk_live", 1)[1].split("\n    pub fn to_hashmap", 1)[0]
+        assert "walk_one_segment" in body, "the slice no longer spans the helper"
         assert ".attrs.get(" not in body
         assert "lookup_segment(" not in body
 
