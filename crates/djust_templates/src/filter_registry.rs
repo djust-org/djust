@@ -23,8 +23,9 @@
 //! # Filter signature
 //!
 //! Django filter callables accept ``(value, arg=None)`` and return a
-//! string (or a SafeString when ``is_safe=True``). ``needs_autoescape=True``
-//! filters additionally accept ``autoescape`` as a kwarg.
+//! string (or a SafeString when they produce markup of their own).
+//! ``needs_autoescape=True`` filters additionally accept ``autoescape`` as a
+//! kwarg.
 //!
 //! - ``value`` — the filtered expression's current `Value`, converted to
 //!   the appropriate Python type (str/int/float/bool/None/list/dict).
@@ -33,8 +34,11 @@
 //!     - bare identifiers are resolved against the template context. If
 //!       the context resolves to a primitive, it's passed as that type;
 //!       otherwise as the value's natural Python representation.
-//! - return — the result. ``is_safe=True`` filters' results bypass
-//!   auto-escape via [`is_custom_filter_safe`] consulted by the renderer.
+//! - return — the result. The renderer escapes it unless it is a runtime
+//!   ``SafeString``, or the filter is ``is_safe=True`` AND its input was
+//!   already safe — Django's ``is_safe and isinstance(obj, SafeData)`` rule,
+//!   applied in `renderer::filter_output_is_safe` via
+//!   [`is_custom_filter_safe`] (#2548). The flag alone never grants safety.
 
 use crate::filters::InputSafety;
 use crate::Value;
@@ -223,8 +227,12 @@ pub fn is_registered_custom_filter(name: &str) -> bool {
 
 /// Returns ``true`` if a registered custom filter has ``is_safe=True``.
 ///
-/// The renderer consults this alongside the hardcoded built-in
-/// ``safe_output_filters`` list to decide whether to skip auto-escape.
+/// The renderer consults this alongside the built-in ``IS_SAFE_FILTERS`` list,
+/// and ONLY when the filter's input was already safe (#2548): Django's
+/// ``is_safe`` means "a safe input stays safe through this filter", not "this
+/// filter's output is safe". The unconditional grants — a runtime
+/// ``SafeString`` return, or a built-in that escapes internally — live in
+/// ``renderer::filter_output_is_safe``, not here.
 ///
 /// Hot path: this is called once per filter in the
 /// ``filter_specs.iter().any(...)`` loop on every variable expansion.
