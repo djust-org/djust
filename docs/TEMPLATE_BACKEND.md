@@ -14,6 +14,14 @@ This provides the best of both worlds:
 
 ## Quick Start
 
+A templates-only project pays only for the template engine. Since #2559 the
+`djust` package resolves its public names lazily, so configuring
+`DjustTemplateBackend` imports about 25 `djust` modules and none of the LiveView
+stack (`channels`, the WebSocket consumer, presence) — those load the first time
+something imports `djust.LiveView`. `channels` and `msgpack` are still installed
+by `pip install djust` (the extras decision is #2560); they are simply not
+imported.
+
 ### 1. Configure Django Settings
 
 Add `DjustTemplateBackend` to your `TEMPLATES` setting:
