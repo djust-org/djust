@@ -483,10 +483,25 @@ def test_the_custom_filter_term_is_gated_on_the_input_being_safe() -> None:
             if depth == 0:
                 if code[i + 1 :].lstrip().startswith("input_was_safe &&"):
                     gated = True
+                    group_open = i
                     break
             else:
                 depth -= 1
     assert gated, f"is_custom_filter_safe is not inside an `input_was_safe &&` group:\n{code}"
+    # `&&` binds tighter than `||`, so `(input_was_safe && A || custom(...))`
+    # opens with the conjunction yet leaves the custom term ungated. Require
+    # that no `||` sits at depth 0 between the group's opening and the call.
+    inner = code[group_open + 1 : pos]
+    depth = 0
+    for j, ch in enumerate(inner):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and inner.startswith("||", j):
+            raise AssertionError(
+                f"a depth-0 `||` inside the `input_was_safe &&` group leaves the custom term ungated:\n{code}"
+            )
 
 
 def test_the_helper_has_exactly_two_unconditional_terms() -> None:
