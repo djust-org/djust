@@ -185,6 +185,14 @@ check-adr-status: ## Validate ADR Status/version-line consistency (closes #1501)
 check-doc-snippets: ## Smoke-check fenced Python doc snippets + Django/JS-size claims (closes #1500)
 	@$(PYTHON) scripts/check-doc-snippets.py $(if $(VERBOSE),--verbose,)
 
+.PHONY: template-backend-lists
+template-backend-lists: ## Regenerate docs/TEMPLATE_BACKEND.md's supported/unsupported tag+filter lists from the engine (closes #2533)
+	@PYTHONPATH=. $(PYTHON) scripts/generate-template-backend-lists.py --write
+
+.PHONY: check-template-backend-lists
+check-template-backend-lists: ## Fail when docs/TEMPLATE_BACKEND.md's generated lists differ from the engine (closes #2533)
+	@PYTHONPATH=. $(PYTHON) scripts/generate-template-backend-lists.py
+
 .PHONY: django-template-suite
 django-template-suite: ## Run Django's own template_tests against DjustTemplateBackend (scoreboard, closes #2517)
 	@$(PYTHON) scripts/run-django-template-suite.py --parsed-output .django-src/last-run.txt --json .django-src/last-run.json $(if $(VERBOSE),,--quiet)
