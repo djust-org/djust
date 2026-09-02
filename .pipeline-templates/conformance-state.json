@@ -1,0 +1,615 @@
+{
+  "pipeline_type": "conformance",
+  "task_description": "",
+  "branch_name": "",
+  "pr_target_branch": "main",
+  "project_path": "",
+  "started_at": "",
+  "completed_at": null,
+  "current_stage": 1,
+  "stages": {
+    "1": {
+      "name": "Environment Check",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {
+          "action": "git fetch origin",
+          "done": false
+        },
+        {
+          "action": "checkout fresh branch from target",
+          "done": false
+        },
+        {
+          "action": "verify python/venv",
+          "done": false
+        },
+        {
+          "action": "install dependencies",
+          "done": false
+        },
+        {
+          "action": "smoke test imports",
+          "done": false
+        },
+        {
+          "action": "output ENV_OK or ENV_FAILED",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    },
+    "2": {
+      "name": "Change Detection",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {
+          "action": "git diff --name-only against target",
+          "done": false
+        },
+        {
+          "action": "classify as CODE_CHANGES or DOCS_ONLY",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    },
+    "3": {
+      "name": "Conflict Check",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {
+          "action": "git diff --check",
+          "done": false
+        },
+        {
+          "action": "grep for conflict markers",
+          "done": false
+        },
+        {
+          "action": "output MERGE_CLEAN or MERGE_CONFLICTS_FOUND",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    },
+    "4": {
+      "name": "Planning",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {
+          "action": "NAME THE FAMILY: a `--label` of Django's `template_tests` (e.g. `template_tests.syntax_tests.test_autoescape`) or a test-id prefix (e.g. `template_tests.filter_tests.test_escape`). Write it verbatim into the plan; every later stage filters on it.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "LIST THE CELLS AND THEIR CURRENT STATE from `.django-src/last-run.txt` (run `make django-template-suite` first if it is stale or absent; the file is gitignored). Grep the family's prefix: `grep -E '^(OK|FAIL|ERROR) +<prefix>' .django-src/last-run.txt`. Record every cell as OK / FAIL / ERROR with its first-line message, and the counts. This is the scoreboard the loop is measured against.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "NAME THE DJANGO REFERENCE IMPLEMENTATION TO LIFT (#1077): the file:line in `.django-src/<tag>/django/template/` (defaulttags.py / defaultfilters.py / base.py / loader_tags.py / library.py / the i18n or tz library) that defines the behaviour the cells assert. Lift its semantics FIRST, generalize SECOND. Quote the rule the cells encode (e.g. `is_safe preserves safety; it does not create it`).",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "VERIFY ARTIFACT BEFORE PLANNING (#1210): the family's failing cells ARE the reproducer — confirm at least one of them fails today by running the family alone: `scripts/run-django-template-suite.py run --label <family> --parsed-output /tmp/family.txt --quiet`. Do not plan against a cell you have not seen fail.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "VERIFY LITERAL API CONTRACTS (#1243): for every engine entry point the plan names (parser.rs tag arms, filter_arity.rs ARITY, renderer.rs sinks, template_filters.py bridge, template_tags registry), grep for the existing convention before locking. Cite file:line per #1197.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "PARALLEL-PATH AUDIT (#1646): the engine is reached by the plain backend, the LiveView path and the Django-template-backend bridge; a family fix at one sink must name the other consumers of the same rule and decide each explicitly. Prefer the single-sink shape.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "DECLARE BLOCK EXPECTATIONS: for each cell, say whether the plan expects it to flip to OK, or to stay blocked (an unsupported tag out of scope, a #2516-class crash, a cell that measures Django against itself). A blocked cell needs a reason and, if new, an issue number to file at Documentation.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "list files to create/modify",
+          "done": false
+        },
+        {
+          "action": "key design decisions",
+          "done": false
+        },
+        {
+          "action": "test strategy: pytest regression cases for the rule (the family's cells are Django's; djust needs its own pins too)",
+          "done": false
+        },
+        {
+          "action": "potential risks (cells outside the family that share the sink)",
+          "done": false
+        },
+        {
+          "action": "write plan to .pipeline-state/<branch>-plan.md so later stages can read it — including the family label, the cell table and the reference file:line",
+          "done": false,
+          "mandatory": true
+        }
+      ],
+      "_note": "A conformance row is scored by a FAMILY of Django-suite cells, not by a feature. The plan names the family, enumerates its cells with their current state, and names the Django reference implementation the fix lifts from (#1077)."
+    },
+    "5": {
+      "name": "Implementation",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {
+          "action": "read .pipeline-state/<branch>-plan.md for the family label, the cell table and the reference implementation",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "write tests first (TDD): a djust pytest regression file that pins the rule the family encodes (the Django cells stay Django's; djust's own pins survive a Django bump). Gate-off per #1468 stays: with the fix removed, at least one new pytest case AND at least one family cell must go red.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "THE LOOP — repeat until the family is green or blocked: (1) make the smallest change per cell (lift the Django rule from the plan's reference file:line); (2) rebuild if Rust changed (`make dev-build`, or `.venv/bin/maturin develop` in a worktree-env checkout); (3) re-run the family: `scripts/run-django-template-suite.py run --label <family> --parsed-output .django-src/family.txt --quiet`; (4) compare each cell against Django in-process — the cells assert Django's exact output, so a FAIL message IS the diff; (5) record the cell table after each iteration in the plan file (iteration N: ok/fail/error). Stop when green, or when every remaining cell has a written reason it is blocked.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "RECORD BLOCKED CELLS with reasons in .pipeline-state/<branch>-plan.md (cell id, first-line message, why it cannot flip in this row, the issue it belongs to). A cell without a reason is not blocked, it is unfinished.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "WHOLE-SUITE RATCHET — 0 REGRESSIONS: run `make django-template-suite` (writes .django-src/last-run.json) then `scripts/run-django-template-suite.py compare --json .django-src/last-run.json`. It must print `OK: no drop against the baseline`; additionally diff the per-cell states against the pre-change last-run.txt (keep a copy before the loop starts) and confirm NO cell outside the family moved OK->FAIL/ERROR. A cell outside the family that improved is fine; note it.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "run the scoped pytest selection for the diff (`scripts/select-tests.py` prints it) plus the family's own pins; the pre-push hook re-runs this — Stage 6 runs the FULL suite once.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "DO NOT modify CHANGELOG.md, the baseline JSON or docs/TEMPLATE_BACKEND.md in this stage — those are the Documentation commit (two-commit shape, #1173)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "BUNDLING CHECK (#1209 / #1251): `git diff --cached --stat` matches what you planned to ship",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "git status clean",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "write list of all changed files to .pipeline-state/<branch>-changes.txt (git diff --name-only HEAD)",
+          "done": false,
+          "mandatory": true
+        }
+      ],
+      "_note": "A LOOP, not a single pass. Objective: turn the family's cells green without any other cell moving. After each change re-run the family; compare against Django in-process; stop when the family is green or every remaining cell is blocked with a reason. The whole-suite `compare` must show 0 regressions before commit."
+    },
+    "6": {
+      "name": "Test Execution",
+      "status": "pending",
+      "verdict": null,
+      "skip_if": "DOCS_ONLY",
+      "checklist": [
+        {
+          "action": "run full pytest suite once, all three roots, -n auto (read-only, no source modifications)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "run the family alone once more and paste its final cell table into the stage output",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "report pass/fail counts + the family's ok/fail/error and the whole-suite compare line",
+          "done": false
+        },
+        {
+          "action": "output TESTS_PASSED or TESTS_FAILED",
+          "done": false,
+          "mandatory": true
+        }
+      ],
+      "_note": "One full local run per PR (#2526): this stage is it. Implementers and the hook run the scoped selection."
+    },
+    "7": {
+      "name": "Self-Review",
+      "status": "pending",
+      "verdict": null,
+      "skip_if": "DOCS_ONLY",
+      "checklist": [
+        {
+          "action": "read .pipeline-state/<branch>-plan.md for the original plan",
+          "done": false
+        },
+        {
+          "action": "FAMILY SCOPE CHECK: every cell the plan expected to flip is OK, every blocked cell has a reason, and no cell outside the family moved down. Compare the plan's cell table with the final one line by line.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "GATE-OFF (#1468, #2129): with the fix removed, name the pytest case AND the family cell that go red. A gate-off that leaves both green is a tautology; a gate-off that broke the build is not a measurement.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "cross-ref plan vs implementation — mark each deliverable DONE/MISSING",
+          "done": false
+        },
+        {
+          "action": "check auto-reject triggers (per profile and generic: print vs logging, except:pass, no tests, phantom modules, stub code)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "scrutinize every code example in new/changed docs with the same security rigor as production code — doc examples are copy-pasted by users and inherit the production trust boundary",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "trace every contract boundary where server/backend data reaches the client — does ANY exception message, error string, or internal path leak identifying info (ARNs, bucket names, endpoints, file paths)? Raw exceptions surfaced via response bodies, WebSocket error frames, or template context are the main leak vectors",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "WIRING_CHECK — for every new public method/attribute/hook added on a framework base class (LiveView, LiveComponent, etc.), grep framework hot paths (consumer.py / websocket.py / dispatch.py / renderer) for a real call site. A test-only caller means the feature is not integrated — flag it as a WIRING_GAP finding, not a pass. Stage 7-vs-Stage 11 delta PRs #814/#837/#840 all failed here.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "WORKFLOW-HEADER CROSS-REF (#1244, v0.9.2-1 retro Action Tracker #204): when changed files include `.github/workflows/*.yml` or any file with a header docstring describing runtime behavior, list every behavioural claim in the docstring and verify each one matches the implementation. Behavioural claims include: 'silent in normal operation', 'green run', 'no false positives', 'idempotent', 'safe to run repeatedly', etc. Cross-ref against actual step semantics (pipefail, exit codes, conditional triggers). Pattern from PR #1241 — the retro-gate-audit.yml header said 'annotations not red runs' but the audit script's exit 1 + GHA `set -eo pipefail` produced red runs on every flagged PR. Stage 11 caught it; Stage 7 should have.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "DOWNSTREAM-APP NAME LEAK SCAN (djust-specific) — djust sits alongside multiple private downstream apps (the downstream apps listed in .customer-names, etc.). Patterns extracted upstream into the public framework repo MUST NOT ship with private-project identifiers in commit metadata OR file contents. Recipe: `CN=$(grep -v '^#' .customer-names | grep -v '^$')` then check `gh pr view $PR --json title,body | grep -iF \"$CN\"` AND `git log main..HEAD --format='%B' | grep -iF \"$CN\"` AND `git diff main..HEAD | grep -iF \"$CN\"`. Any match = REVIEW_FAILED; fix with `git commit --amend` + `gh pr edit` before proceeding. IMPORTANT: .customer-names uses `#` for comment lines — they MUST be stripped before feeding to grep or every `#NNN` PR reference will false-positive. Caught by PR #836 retro.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "test coverage gaps — if code generates output, do tests assert on content correctness (not just 'no error')?",
+          "done": false
+        },
+        {
+          "action": "type hints on public APIs",
+          "done": false
+        },
+        {
+          "action": "code quality (broad except, missing raise-from, unused params, lazy imports)",
+          "done": false
+        },
+        {
+          "action": "Tautology check (Action #1200): for every new 'action happened' test assertion, ask 'would this pass if the action didn't run?' Tests that mock-and-call without invoking the SUT fail this check.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "DISCONFIRMING CITATION (#1386, v0.9.5-1 retro): identify at least one specific claim in the implementation (a docstring claim about exception class hierarchy, a comment claiming 'no callers', an assertion about wire-protocol shape, a Python version compat assumption) and actively try to DISPROVE it via grep / inspect / test. If the disproof attempt finds the claim wrong, file a 🟡 finding. If the claim survives, document the verification. Empirical: across v0.9.5-1 (-1a/-1b/-1c) Stage 7 caught 0 findings, Stage 11 caught 7 🟡 — the framing 'implementer reviews own diff' biases toward confirmation. Active falsification compresses Stage 11 findings into Stage 7 (cheaper, earlier).",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "CANON-PR SELF-APPLICABILITY CHECK (#1247 retro / #1248): if this PR adds a new mandatory checklist item or self-review rule, explicitly answer two questions in the Stage 7 output. (a) Does the new rule false-positive on this PR's own diff? If yes, narrow the scope before merge. (b) Would the new rule have caught the originating bug at the stage it adds? If no, reconsider the stage placement. Skip this item only when the PR doesn't introduce new canon (the typical feature/bugfix case).",
+          "done": false,
+          "mandatory": false
+        },
+        {
+          "action": "output REVIEW_PASSED or REVIEW_FAILED",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    },
+    "8": {
+      "name": "Security Check",
+      "status": "pending",
+      "verdict": null,
+      "skip_if": "DOCS_ONLY",
+      "checklist": [
+        {
+          "action": "get changed files list",
+          "done": false
+        },
+        {
+          "action": "scan changed files for security patterns (per profile: secrets, injection, XSS, etc.)",
+          "done": false
+        },
+        {
+          "action": "broad codebase scan — pre-existing issues as IMPROVEMENT: lines only",
+          "done": false
+        },
+        {
+          "action": "output SECURITY_PASSED or SECURITY_FAILED",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    },
+    "9": {
+      "name": "Documentation",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {
+          "action": "read .pipeline-state/<branch>-plan.md for the family, the final cell table and the blocked cells",
+          "done": false
+        },
+        {
+          "action": "WRITE THE NEW BASELINE: `scripts/run-django-template-suite.py run --write-baseline --parsed-output .django-src/last-run.txt --json .django-src/last-run.json --quiet` (writes scripts/django-template-suite-baseline.json from a fresh full run). Verify with `compare --json .django-src/last-run.json` that the new baseline equals the run.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "UPDATE THE docs/TEMPLATE_BACKEND.md CLAIM LINE (the `<!-- django-suite-claim -->` line: engine-subset percent and `N of M`) and the whole-label sentence under it from the new baseline; scripts/check-doc-snippets.py pins the claim against the baseline JSON.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "REGENERATE THE SUPPORT LISTS: `scripts/generate-template-backend-lists.py --write` then `scripts/generate-template-backend-lists.py --cross-check .django-src/last-run.txt` (both must exit 0; the pre-commit hook `check-template-backend-lists` gates it).",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "FILE AN ISSUE FOR EACH NEWLY-BLOCKED CELL CLASS that has none, back-referencing this row (#2142 chain convention), and put the numbers in the plan file and the PR body.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "add/update docstrings for new/modified public APIs",
+          "done": false
+        },
+        {
+          "action": "update the ROADMAP row: cells turned green, cells blocked (with issue numbers)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "update CHANGELOG.md (CANONICAL CHANGELOG COMMIT BOUNDARY, #1173): name the family, the cell delta (ok before -> after), the rule lifted, and the blocked cells",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "BUNDLING CHECK (#1209 / #1251): `git diff --cached --stat` matches what you planned to ship",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "this Documentation commit must include ONLY docs + CHANGELOG + baseline JSON + generated lists; no implementation code (the two-commit shape gate)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "verify no broken internal links or orphaned docs",
+          "done": false
+        },
+        {
+          "action": "output DOCS_UPDATED with categorized list",
+          "done": false,
+          "mandatory": true
+        }
+      ],
+      "_note": "The baseline, the claim line and the generated support lists are written HERE, in the docs commit — never in Implementation."
+    },
+    "10": {
+      "name": "Commit & PR",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {
+          "action": "read .pipeline-state/<branch>-changes.txt for list of files modified by implementation",
+          "done": false
+        },
+        {
+          "action": "git remote -v — verify github remote exists",
+          "done": false
+        },
+        {
+          "action": "checkout/create branch",
+          "done": false
+        },
+        {
+          "action": "git add -u to stage ALL modified tracked files",
+          "done": false
+        },
+        {
+          "action": "git add each file from changes.txt to catch new files",
+          "done": false
+        },
+        {
+          "action": "BUNDLING CHECK (#1209 / #1251): after staging files but before `git commit`, run `git diff --cached --stat` and verify the line counts match what you planned to ship. If a staged file shows significantly more lines than expected, the working tree had pre-existing uncommitted modifications that got bundled. Investigate before committing. Pattern from pipeline-skill commit bf1a67f which silently bundled 130 unintended lines.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "git diff --check — no conflict markers",
+          "done": false
+        },
+        {
+          "action": "commit with feat(templates): / fix(templates): prefix naming the family",
+          "done": false
+        },
+        {
+          "action": "git push -u origin",
+          "done": false
+        },
+        {
+          "action": "gh pr create with summary",
+          "done": false
+        },
+        {
+          "action": "PR body carries the family's cell table (before -> after), the blocked cells with issue numbers, and the whole-suite compare line",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "verify PR body against actual diff — no phantom features, wrong counts, or incorrect terminology; fix with gh pr edit if needed",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "output PR_CREATED/PR_EXISTS/PR_SKIPPED",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    },
+    "11": {
+      "name": "Code Review",
+      "status": "pending",
+      "verdict": null,
+      "run_as": "subagent",
+      "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. This is a CONFORMANCE PR: it turns one family of Django template-suite cells green. Review the FAMILY once, adversarially, in your OWN git worktree (`git worktree add`, then `make worktree-env` there; NEVER `git config` or `git checkout` the main checkout — #1804). BUDGET (#1211): cap the final review comment at 350 words. Step 0: read .pipeline-state/*-plan.md for the family label, the cell table and the reference file:line. Step 1: `git diff {pr_target_branch}...HEAD`; read changed files; use docs/PULL_REQUEST_CHECKLIST.md as the framework. Step 2: EMPIRICAL — run the family: `scripts/run-django-template-suite.py run --label <family> --parsed-output /tmp/family.txt --quiet`; every cell the plan expected to flip must be OK and every blocked cell must carry a reason. Step 3: EMPIRICAL — whole-suite ratchet: `make django-template-suite` then `scripts/run-django-template-suite.py compare --json .django-src/last-run.json` must say `OK: no drop`; diff per-cell states against origin/{pr_target_branch}'s run and confirm no cell outside the family moved down. Step 4: GATE-OFF (#1468, #2129): remove the fix (assert the mutation text was found and the source changed; count errors as well as failures; if the module did not build the measurement is INVALID) and confirm at least one djust pytest case and at least one family cell go red. Step 5: PARITY — for the rule lifted, construct 2-3 inputs the family does NOT cover (encoded variants for anything escaping-related, #1825; the value-axis bisection for value-dependent rules) and compare djust's output with Django's in-process. Step 6: correctness, security (only the shapes the plan documented), single-sink (#1646), quality, docs (baseline JSON + claim line + generated lists must agree: `scripts/generate-template-backend-lists.py --cross-check .django-src/last-run.txt`). Step 7: run the scoped pytest selection (`scripts/select-tests.py`) and report. Step 8: decide APPROVE/REQUEST_CHANGES/COMMENT. Step 9 MANDATORY: `gh pr review {pr_number} --comment --body '<review under 350 words>'` (--request-changes when REQUEST_CHANGES). Remove your worktree when done. Step 10: output the verdict.",
+      "checklist": [
+        {
+          "action": "Stage-11 stale-base check (#1450): `git fetch origin && BEHIND=$(git rev-list --count HEAD..origin/{pr_target_branch})`; if BEHIND > 0, rebase BEFORE reviewing",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "review runs in its OWN worktree (`make worktree-env` there); never touches the main checkout's git config (#1804)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "read .pipeline-state/<branch>-plan.md: family label, cell table, reference file:line",
+          "done": false
+        },
+        {
+          "action": "run the family alone; every expected cell OK, every blocked cell reasoned",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "whole-suite compare says OK and no cell outside the family moved down",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "gate-off: a pytest case AND a family cell go red with the fix removed (mutation found, source changed, build intact)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "parity probe: 2-3 inputs outside the family compared with Django in-process (encoded variants where escaping is involved)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "review: correctness, single-sink, security, testing, quality, docs",
+          "done": false
+        },
+        {
+          "action": "baseline JSON, claim line and generated lists agree with the run (`--cross-check`)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "post review to GitHub: gh pr review --comment with the cell table and findings",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "output APPROVE/REQUEST_CHANGES/COMMENT",
+          "done": false,
+          "mandatory": true
+        }
+      ],
+      "_note": "ONE adversarial worktree-isolated review per FAMILY, not per tag or per cell."
+    },
+    "12": {
+      "name": "Review Verdict",
+      "status": "pending",
+      "verdict": null,
+      "note": "Verdict is determined by the Code Review subagent above. If APPROVE, proceed to Merge. If REQUEST_CHANGES, fix issues, re-commit, re-push, re-run Code Review.",
+      "checklist": [
+        {
+          "action": "if REQUEST_CHANGES: fix issues, re-commit, re-push, re-run stage 11",
+          "done": false
+        },
+        {
+          "action": "if APPROVE: proceed to Merge",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    },
+    "13": {
+      "name": "Merge PR",
+      "status": "pending",
+      "verdict": null,
+      "run_as": "subagent",
+      "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' — verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
+      "checklist": [
+        {
+          "action": "verify CI green: gh pr checks — if failing for pre-existing reasons, document in PR comment before merging",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "gh pr merge --squash --delete-branch (do NOT self-approve)",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "output PR_MERGED or MERGE_FAILED",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    },
+    "14": {
+      "name": "Retrospective",
+      "status": "pending",
+      "verdict": null,
+      "run_as": "subagent",
+      "subagent_prompt": "Write retrospective for conformance family: {task_description}. Count the row as ONE finding and N PRs if it chained (#2142); record cells turned green, cells blocked, and whether the loop stopped on green or on blocked. Project: {project_path}. PR #{pr_number}. Run 'gh pr view {pr_number} --json commits,title,body' to get PR details (branch deleted after merge). Rate quality 1-5, what went well, lessons learned, improvements. STEP A (MANDATORY): use the Write tool to create pr/feedback/retro-{pr_number}.md with the full retro body — DO NOT use bash heredoc (`cat > file <<EOF`), which fails silently under zsh `set -o noclobber` and leaves stale content (#1245). The Write tool bypasses shell redirection. STEP B (MANDATORY): post via `gh pr comment {pr_number} --body-file pr/feedback/retro-{pr_number}.md` — DO NOT use `--body \"$(cat ...)\"`, which dutifully posts whatever the file currently contains (e.g., a leftover Stage 11 review) when STEP A silently failed. The `--body-file` form passes the file path directly; gh re-reads it at post time. STEP C (MANDATORY): verify with `gh pr view {pr_number} --json comments` that at least one comment matches the audit-script retro-marker regex — see `scripts/lib/retro_markers.py:RETRO_MARKER_REGEX` for the canonical pattern (single source of truth per #1249). The regex matches headings/sentinels like `Retrospective`, `Quality: <digit>`, `Lessons learned`, `RETRO_COMPLETE`, `What went well` (case-insensitive). MANDATORY: Append to .pipeline-log.md (create if needed, ensure in .gitignore). Your FINAL output line MUST be exactly 'RETRO_COMPLETE'.",
+      "checklist": [
+        {
+          "action": "rate quality 1-5",
+          "done": false
+        },
+        {
+          "action": "what went well + lessons learned",
+          "done": false
+        },
+        {
+          "action": "IDEA: lines for improvements",
+          "done": false
+        },
+        {
+          "action": "post retrospective to GitHub PR: gh pr comment",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "append to .pipeline-log.md",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "output RETRO_COMPLETE",
+          "done": false,
+          "mandatory": true
+        }
+      ]
+    }
+  },
+  "pr_number": null,
+  "pr_url": null,
+  "rewind_count": 0,
+  "_note": "Conformance loop for a FAMILY of Django template-suite cells (v1.2.0-3 rows). Same stages and stage names as feature-state.json so pipeline-run matches them; the differences are in Planning (name the family, list its cells and their current state, name the Django reference to lift), Implementation (a LOOP: turn the family's cells green without any other cell moving, stop when green or blocked), Code Review (one adversarial worktree review per family, not per tag) and Documentation (write the new baseline + the docs/TEMPLATE_BACKEND.md claim line + the generated support lists). Scoreboard: `make django-template-suite` writes .django-src/last-run.txt (per-cell OK/FAIL/ERROR) and last-run.json; `scripts/run-django-template-suite.py run --label <family>` runs one family; `scripts/run-django-template-suite.py compare --json .django-src/last-run.json` ratchets a whole run against scripts/django-template-suite-baseline.json."
+}

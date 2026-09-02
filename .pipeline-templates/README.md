@@ -113,6 +113,35 @@ git log main..HEAD --format='%B' | grep -iF "$CN" && echo LEAK
 Maintained per-operator — add every downstream app identifier you
 might accidentally paste in.
 
+## `conformance-state.json` — a row scored by a family of Django-suite cells
+
+Use it for any ROADMAP row whose progress is measured by the Django template
+suite (`make django-template-suite`, `.django-src/last-run.txt`): the v1.2.0-3
+rows (#2549, #2556, #2547, #2558, #2557, #2563) and any later
+compatibility family. Do NOT use it for a feature or a bugfix that the suite
+does not score — those keep `feature-state.json` / `bugfix-state.json`.
+
+Same stage names as `feature-state.json`, so `pipeline-run` matches them. The
+differences, written into the stage `_note` / `checklist` / `subagent_prompt`:
+
+- **Planning** names the FAMILY (a `--label` or test-id prefix of Django's
+  `template_tests`), lists its cells with their current OK/FAIL/ERROR state
+  from `.django-src/last-run.txt`, and names the Django reference
+  implementation to lift (#1077).
+- **Implementation** is a LOOP with one objective — *turn these cells green
+  without any other cell moving*: re-run the family after each change
+  (`scripts/run-django-template-suite.py run --label <family>`), compare
+  against Django in-process, stop when the family is green or every remaining
+  cell is blocked with a written reason. The whole-suite `compare` must show 0
+  regressions; gate-off per #1468 stays.
+- **Code Review** is one adversarial worktree review per family, not per tag.
+- **Documentation** writes the new baseline (`--write-baseline`), the
+  `docs/TEMPLATE_BACKEND.md` claim line, and the generated support lists
+  (`scripts/generate-template-backend-lists.py --write`).
+
+`pr_target_branch` is `main` (the 1.2 line is `main`; see the release-branch
+note above for the older `1.1` value the other two templates still carry).
+
 ## Worktree environments — `make worktree-env` (#2526)
 
 Every implementer/reviewer subagent that needs to *build or run* code gets its
