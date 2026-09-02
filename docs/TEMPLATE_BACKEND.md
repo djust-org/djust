@@ -126,6 +126,18 @@ def my_view(request):
 - **DjustTemplateBackend**: Blog posts, marketing pages, documentation, about pages
 - **LiveView**: Dashboards, real-time forms, interactive UIs, live data
 
+### The engine without LiveView
+
+Both columns render through the same Rust crate, `djust_templates`. The parts of it that only LiveView uses sit behind a cargo feature named `liveview`, on by default (#2519). Built with `--no-default-features` the engine has:
+
+- No `<!--dj-if-->` boundary markers around `{% if %}` blocks. They are the VDOM differ's keyed boundaries and mean nothing without a differ.
+- No parsed-VNode loop cache. That cache is what `render_with_diff` splices into the diff baseline; without the feature `djust_vdom` leaves the dependency graph.
+- No Rust UI components. A `<RustButton />`-style tag still parses, but rendering one raises a template error naming the feature; `djust_components` leaves the graph.
+
+It is still a PyO3 crate. The tag and filter registries that serve `{% url %}` and `@register.filter` callables are Python-backed, and a plain Django project needs them more than LiveView does; cutting that dependency is a separate, larger change. The loop-cache manifest and its placeholder string are also left in place, since they are inert unless a LiveView installs a cache guard.
+
+The feature is a compile-time boundary, not the reason backend output is clean. Whether markers are emitted is decided per render by a switch on the context. Every plain entry (the backend, `SimpleLiveView.render_template`, and the `render_template` / `render_template_with_dirs` functions) turns that switch off, so a default build renders the same bytes on the backend path as a `--no-default-features` build; the LiveView path keeps it on. CI builds and tests the engine both ways (`make check-no-default-features`).
+
 ## Features
 
 ### Supported
@@ -180,12 +192,12 @@ See djust documentation for complete list of supported features.
 The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
 
 - **44.03%** of the Django template tests that reach the engine pass (461 of 1047) <!-- django-suite-claim -->
-- Over the whole `template_tests` label the figure is 59.41% (865 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them.
+- Over the whole `template_tests` label the figure is 59.75% (870 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them.
 
 Two result kinds are counted separately because they are different work:
 
 - **ERROR**: the test could not run to an assertion. An unsupported tag, an attribute the backend cannot express, or a crash. Top classes in the baseline: `autoescape` (79), `blocktrans` (34), `ifchanged` (24), `trans` (19), `cache` (15), `querystring` (14).
-- **FAIL**: the test ran and the output was wrong. The largest class (111) is a `TemplateSyntaxError` that Django raises at parse time and djust does not. The rest are output mismatches such as `string_if_invalid` not honoured (#2518) and a leaked `<!--dj-if-->` marker (#2519).
+- **FAIL**: the test ran and the output was wrong. The largest class (111) is a `TemplateSyntaxError` that Django raises at parse time and djust does not. The rest are output mismatches such as `string_if_invalid` not honoured (#2518) and `{% if x|default_if_none:y %}` evaluating false when `x` is undefined (#2528). The `<!--dj-if-->` marker that leaked into plain-backend output was fixed in #2519; it accounted for five of the six cases it broke, and the sixth is the #2528 shape.
 
 Seven `template_tests` cases segfault the interpreter (a `DjustTemplate` or a type object placed in the context, the #2516 reference-cycle class). The runner isolates each one: a crash records the in-flight test as `ERROR: process crashed`, skips it and every finished test, and relaunches, so nothing after a crash is lost.
 
