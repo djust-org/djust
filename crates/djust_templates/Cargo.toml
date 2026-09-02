@@ -8,6 +8,15 @@ license.workspace = true
 [lib]
 crate-type = ["rlib"]
 
+[features]
+# The LiveView half of the engine: the `djust_vdom::VNode` loop parse cache,
+# the `<!--dj-if-->` VDOM boundary markers and the `djust_components`
+# renderer path. Default ON. `--no-default-features` is the plain
+# Django-backend engine (#2519) — still a PyO3 crate (the tag-handler and
+# filter registries are Python-backed); that is a different, larger cut.
+default = ["liveview"]
+liveview = ["dep:djust_vdom", "dep:djust_components"]
+
 [dependencies]
 indexmap = { workspace = true }
 pyo3.workspace = true
@@ -35,8 +44,8 @@ markup5ever = "0.39"
 # `isprintable` one (#2292) was not.
 unicode-normalization = { workspace = true }
 djust_core = { path = "../djust_core" }
-djust_vdom = { path = "../djust_vdom" }
-djust_components = { path = "../djust_components" }
+djust_vdom = { path = "../djust_vdom", optional = true }
+djust_components = { path = "../djust_components", optional = true }
 
 [dev-dependencies]
 criterion = "0.8"

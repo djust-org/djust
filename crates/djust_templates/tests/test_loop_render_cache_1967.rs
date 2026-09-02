@@ -785,9 +785,9 @@ fn gate_off_outer_context_subset_check_is_load_bearing() {
 // ===========================================================================
 
 mod parse_cache_1970 {
-    use djust_templates::loop_cache::{
-        item_html_is_foster_safe, render_loop_placeholder, LoopRenderCache,
-    };
+    #[cfg(feature = "liveview")]
+    use djust_templates::loop_cache::LoopRenderCache;
+    use djust_templates::loop_cache::{item_html_is_foster_safe, render_loop_placeholder};
 
     /// The foster-safe gate accepts non-table/non-select item roots so a
     /// `<dj-pc>` placeholder emitted in their place survives html5ever.
@@ -900,6 +900,7 @@ mod parse_cache_1970 {
     /// Parse cache get/insert + manifest recording follow the same lifecycle as
     /// the render fragments (begin_render clears manifest + parse counters;
     /// has_parsed/get_parsed/insert_parsed; prune retains by seen-this-render).
+    #[cfg(feature = "liveview")]
     #[test]
     fn parse_cache_get_insert_and_manifest_lifecycle() {
         let mut c = LoopRenderCache::new(true);
@@ -929,6 +930,7 @@ mod parse_cache_1970 {
 
     /// Disabling the cache drops the parse cache + manifest (default-off memory
     /// invariant, mirroring the render fragments).
+    #[cfg(feature = "liveview")]
     #[test]
     fn disable_clears_parse_cache_and_manifest() {
         let mut c = LoopRenderCache::new(true);

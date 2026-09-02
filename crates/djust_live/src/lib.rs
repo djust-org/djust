@@ -1915,13 +1915,16 @@ fn render_template(
         // function directly should get; `DjustTemplate.render` passes the
         // project's `LIVEVIEW_CONFIG['template_auto_call']`.
         ctx.set_auto_call(auto_call.unwrap_or(true));
+        // Plain entry, no VDOM: the `<!--dj-if-->` placeholder (#295) and the
+        // boundary pair (#1358) are framework-internal metadata for LiveView
+        // diffing, not user-visible HTML. Switch them off at render time
+        // rather than stripping them afterwards (#2519): the old post-render
+        // regex here was a second mechanism the sibling
+        // `render_template_with_dirs` never had, so the backend leaked
+        // `<!--dj-if-->` on every false `{% if %}` while this entry was clean.
+        ctx.set_emit_dj_if_markers(false);
         ctx.set_raw_py_objects(sidecar);
-        let result = template_arc.render(&ctx)?;
-        // Strip VDOM placeholder + boundary markers in standalone rendering.
-        // Legacy `<!--dj-if-->` placeholder (issue #295) and Iter-1 boundary
-        // markers `<!--dj-if id="if-N"-->...<!--/dj-if-->` (issue #1358) are
-        // framework-internal metadata, not user-visible HTML.
-        Ok(djust_templates::strip_dj_if_markers(&result))
+        Ok(template_arc.render(&ctx)?)
     })
 }
 
@@ -1967,6 +1970,9 @@ fn render_template_with_dirs(
         let mut ctx = Context::from_dict(state);
         // See `render_template` for why `None` means ON.
         ctx.set_auto_call(auto_call.unwrap_or(true));
+        // Plain entry (the `DjustTemplateBackend` and `SimpleLiveView` path):
+        // no `<!--dj-if-->` markers — see `render_template` (#2519).
+        ctx.set_emit_dj_if_markers(false);
         ctx.set_raw_py_objects(sidecar);
 
         // Mark keys as safe (skip auto-escaping), like Django's SafeData

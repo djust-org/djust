@@ -4,11 +4,33 @@ use crate::filters;
 use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
 use crate::registry::TagArg;
+#[cfg(feature = "liveview")]
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashSet;
+
+/// Should this render emit the `<!--dj-if-->` VDOM markers (#2519)?
+///
+/// Two bodies, one seam. With the `liveview` feature (the default) the
+/// answer is the render-time flag on the `Context` — `true` on the LiveView
+/// path, `false` on the plain entries. Without the feature the engine is
+/// the plain Django backend and the markers are never built, whatever the
+/// `Context` says. The `Node::If` arm branches on this ONE helper so the
+/// legacy placeholder (#295) and the boundary pair (#1358/#1832) cannot
+/// drift apart (#1646).
+#[cfg(feature = "liveview")]
+#[inline]
+fn dj_if_markers_enabled(ctx: &Context) -> bool {
+    ctx.emit_dj_if_markers()
+}
+
+#[cfg(not(feature = "liveview"))]
+#[inline]
+fn dj_if_markers_enabled(_ctx: &Context) -> bool {
+    false
+}
 
 /// Regex for {% spaceless %}: matches whitespace between > and <
 static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
@@ -1625,15 +1647,20 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             marker_id,
         } => {
             let condition_result = evaluate_condition_for_if(condition, context)?;
+            // #2519: the plain-backend path (and the engine built without the
+            // `liveview` feature) renders `{% if %}` exactly as Django does —
+            // no placeholder, no boundary pair. One switch for both forms.
+            let markers = dj_if_markers_enabled(context);
 
             // Render the body that fires (truthy/falsy branch).
             let body = if condition_result {
                 render_nodes_with_loader(true_nodes, context, loader)?
             } else if false_nodes.is_empty() {
-                if *in_tag_context {
+                if *in_tag_context || !markers {
                     // Inside an HTML attribute value: a comment node would produce
                     // malformed HTML (e.g. class="btn <!--dj-if-->"). Emit empty
-                    // string instead. Fix for issue #380.
+                    // string instead. Fix for issue #380. Same answer when
+                    // markers are off (#2519).
                     String::new()
                 } else if !nodes_contain_elements(true_nodes)
                     && !nodes_contain_elements(false_nodes)
@@ -1670,7 +1697,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // differ) follow in subsequent PRs. The markers are
             // metadata only — browsers ignore HTML comments — so
             // this iter is zero-observable-behavior.
-            if !*in_tag_context
+            if markers
+                && !*in_tag_context
                 && (nodes_contain_elements(true_nodes) || nodes_contain_elements(false_nodes))
             {
                 if let Some(id) = marker_id {
@@ -2412,8 +2440,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
                 // Create context for included template
                 let mut include_context = if *only {
-                    // Only use with_vars, not parent context
-                    Context::new()
+                    // Only use with_vars, not parent context. The render-time
+                    // switches are not "context", they are the render's: the
+                    // fresh Context must carry the parent's dj-if marker
+                    // setting or a plain page with an `only` include leaks
+                    // the markers again (#2519). (`auto_call` is not carried
+                    // here either — pre-existing, tracked in the #2519
+                    // follow-up issue.)
+                    let mut fresh = Context::new();
+                    fresh.set_emit_dj_if_markers(context.emit_dj_if_markers());
+                    fresh
                 } else {
                     // Start with parent context
                     context.clone()
@@ -2510,10 +2546,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             Ok(output)
         }
 
+        #[cfg(feature = "liveview")]
         Node::RustComponent { name, props } => {
             // Render Rust component server-side
             render_rust_component(name, props, context)
         }
+
+        #[cfg(not(feature = "liveview"))]
+        Node::RustComponent { name, .. } => Err(DjangoRustError::TemplateError(format!(
+            "<{name} /> components require the `liveview` feature of djust_templates (#2519)"
+        ))),
 
         Node::CsrfToken => {
             // Render CSRF token hidden input if a real token is available.
@@ -2876,6 +2918,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 }
 
 /// Render a Rust component by instantiating it and calling its render method
+#[cfg(feature = "liveview")]
 fn render_rust_component(
     name: &str,
     props: &[(String, String)],
@@ -3360,6 +3403,7 @@ fn render_rust_component(
 }
 
 /// Get a prop value, resolving template variables if needed
+#[cfg(feature = "liveview")]
 fn get_prop(key: &str, props: &[(String, String)], context: &Context) -> Result<String> {
     for (k, v) in props {
         if k == key {
@@ -5276,6 +5320,8 @@ mod tests {
         assert_eq!(result, "outerinnerouter");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_and_operator() {
         let tokens = tokenize("{% if a and b %}yes{% endif %}").unwrap();
@@ -5290,6 +5336,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_or_operator() {
         let tokens = tokenize("{% if a or b %}yes{% endif %}").unwrap();
@@ -5304,6 +5352,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_not_and_not() {
         let tokens = tokenize("{% if not a and not b %}empty{% endif %}").unwrap();
@@ -5321,6 +5371,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_mixed_and_or_precedence() {
         // "and" binds tighter than "or": a or b and c == a or (b and c)
@@ -5341,6 +5393,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_chained_and() {
         let tokens = tokenize("{% if a and b and c %}yes{% endif %}").unwrap();
@@ -5356,6 +5410,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_not_with_or() {
         // not a or b == (not a) or b
@@ -5379,6 +5435,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_in_list() {
         let tokens = tokenize("{% if item in items %}found{% endif %}").unwrap();
@@ -5400,6 +5458,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_in_string() {
         let tokens = tokenize("{% if sub in text %}found{% endif %}").unwrap();
@@ -5414,6 +5474,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_in_dict() {
         // Django: "x in dict" checks dict keys
@@ -5538,6 +5600,8 @@ mod tests {
 
     // Tests for issue #295: VDOM diff bug with {% if %} removing elements
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_false_emits_placeholder() {
         // When {% if %} is false with no {% else %}, should emit comment placeholder
@@ -5572,6 +5636,8 @@ mod tests {
         assert!(!result.contains("<!--dj-if-->"));
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_siblings_with_placeholder() {
         // Test that placeholder maintains sibling positions
@@ -5584,6 +5650,8 @@ mod tests {
         assert_eq!(result, "<div><!--dj-if--><span>item2</span></div>");
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_multiple_if_blocks_with_placeholders() {
         // Test multiple conditional blocks
@@ -5902,6 +5970,8 @@ mod tests {
         );
     }
 
+    // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
+    #[cfg(feature = "liveview")]
     #[test]
     fn test_if_in_text_node_still_emits_comment() {
         // #380: Outside attribute context the <!--dj-if--> VDOM anchor must be preserved.

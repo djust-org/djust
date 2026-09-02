@@ -81,23 +81,14 @@ def assert_agrees(tpl: str, ctx: dict) -> str:
     return djust_out
 
 
-#: djust emits a `<!--dj-if …-->` marker for a `{% if %}` region so the VDOM
-#: differ can pair it across renders (#1832). Django emits nothing, so ANY
-#: `{% if %}` cell disagrees on the marker bytes alone — with or without a
-#: `forloop` anywhere in it. `TestTheDjIfMarkerIsOrthogonal` proves that with a
-#: forloop-free template; the cells below compare modulo the marker so they
-#: measure the thing this file is about.
+#: Until #2519 the plain render entry used here leaked the LiveView VDOM
+#: `<!--dj-if …-->` boundary marker (#1832) into its output, so every
+#: `{% if %}` cell in this file had to compare modulo the marker and
+#: `TestTheDjIfMarkerIsOrthogonal` was a tripwire that failed the day the leak
+#: was fixed ("the marker artifact has gone — drop the stripping"). It fired in
+#: #2519: the plain entries now render with `emit_dj_if_markers` off, so the
+#: cells compare byte-for-byte and the class below pins the absence instead.
 IF_MARKER = re.compile(r"<!--/?dj-if(?: id=\"[^\"]*\")?-->")
-
-
-def assert_agrees_modulo_if_markers(tpl: str, ctx: dict) -> str:
-    django_out, djust_out = render_both(tpl, ctx)
-    stripped = IF_MARKER.sub("", djust_out)
-    assert stripped == django_out, (
-        f"{tpl!r} over {ctx!r}\n  django {django_out!r}\n  djust  {djust_out!r}"
-        f"\n  djust (markers stripped) {stripped!r}"
-    )
-    return stripped
 
 
 class TestEverySevenMembers:
@@ -156,7 +147,7 @@ class TestArithmeticBoundaries:
         assert out == "[TrueTrue1]", out
 
     def test_counter_meets_revcounter_at_the_middle(self):
-        assert_agrees_modulo_if_markers(
+        assert_agrees(
             "{% for a in p %}{% if forloop.counter == forloop.revcounter %}M{% endif %}"
             "{% endfor %}",
             {"p": [1, 2, 3]},
@@ -372,7 +363,7 @@ class TestCoordinatingTagsInsideTheLoop:
         )
 
     def test_the_comma_separator_idiom(self):
-        out = assert_agrees_modulo_if_markers(
+        out = assert_agrees(
             "{% for a in p %}{{ forloop.counter }}{% if not forloop.last %},{% endif %}{% endfor %}",
             {"p": [1, 2, 3]},
         )
@@ -380,20 +371,22 @@ class TestCoordinatingTagsInsideTheLoop:
 
 
 class TestTheDjIfMarkerIsOrthogonal:
-    """`{% if %}` in a loop disagrees on marker bytes with NO forloop present.
+    """`{% if %}` in a loop, with NO forloop present, agrees byte-for-byte.
 
-    Two cells above compare modulo `<!--dj-if-->`; this is what licenses that.
-    Without it the stripping would be an unexplained escape hatch that could
-    also be hiding a real forloop defect.
+    The inverse of the tripwire this class used to be: since #2519 the plain
+    render entry emits no `<!--dj-if …-->` boundary marker, so a forloop-free
+    conditional inside a loop is byte-equal to Django and the marker regex
+    matches nothing. If a marker ever leaks back into the plain path, the
+    second assertion names it before any forloop cell can be blamed.
     """
 
-    def test_a_forloop_free_if_in_a_loop_already_disagrees_on_the_marker(self):
+    def test_a_forloop_free_if_in_a_loop_agrees_byte_for_byte(self):
         tpl = "{% for a in p %}{% if a %}Y{% endif %}{% endfor %}"
         ctx = {"p": [1, 0, 1]}
         django_out, djust_out = render_both(tpl, ctx)
         assert "forloop" not in tpl
-        assert djust_out != django_out, "the marker artifact has gone — drop the stripping"
-        assert IF_MARKER.sub("", djust_out) == django_out, (django_out, djust_out)
+        assert djust_out == django_out, (django_out, djust_out)
+        assert IF_MARKER.search(djust_out) is None, djust_out
 
 
 class TestFilterChainsOnForloop:
