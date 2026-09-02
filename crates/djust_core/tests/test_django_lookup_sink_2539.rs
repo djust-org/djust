@@ -132,6 +132,79 @@ def counted():
 order_dict = {"0": "s", 0: "i"}
 items_dict = {"items": "the-key"}
 a_list = ["zero", "one"]
+
+
+# --- movement 2 (#2539) -------------------------------------------------
+class Mutator:
+    """`alters_data` MID-path: Django substitutes `string_if_invalid` and
+    keeps walking, so `{{ o.delete.isupper }}` is `"".isupper()` -> False."""
+    def delete(self):
+        raise AssertionError("alters_data was CALLED")
+
+    delete.alters_data = True
+
+
+class Underscored:
+    """`Variable.__init__` refuses a leading-underscore bit BEFORE any lookup
+    (base.py:845-849), so neither of these is reachable in Django."""
+    _secret = "LEAKED"
+    public = "fine"
+
+
+class Holder:
+    def __init__(self, inner):
+        self.inner = inner
+
+
+class IndexAttrError:
+    """A REAL `__getitem__` that raises `AttributeError` under an integer
+    index. Django's step-3 tuple is (IndexError, ValueError, KeyError,
+    TypeError) — `AttributeError` is NOT in it, so this propagates."""
+    def __getitem__(self, key):
+        raise AttributeError("getitem authz")
+
+
+class Cls:
+    cls_attr = "class-level"
+
+    def __repr__(self):
+        return "<Cls>"
+
+
+class Plain:
+    def __init__(self):
+        self.inst_attr = "in-dict"
+
+    def __repr__(self):
+        return "<Plain>"
+
+
+def install_fake_serialization(mode):
+    """Put a `djust.serialization` in `sys.modules` so `protect_sidecar_strict`
+    finds a floor to fail closed about. `mode` is 'raise' or 'passthrough'."""
+    import sys, types
+    pkg = sys.modules.get("djust")
+    if pkg is None:
+        pkg = types.ModuleType("djust")
+        sys.modules["djust"] = pkg
+    mod = types.ModuleType("djust.serialization")
+
+    def _protect_sidecar_value(obj):
+        if mode == "raise":
+            raise RuntimeError("floor enforcement broke")
+        return obj
+
+    mod._protect_sidecar_value = _protect_sidecar_value
+    sys.modules["djust.serialization"] = mod
+    pkg.serialization = mod
+
+
+def uninstall_fake_serialization():
+    import sys
+    sys.modules.pop("djust.serialization", None)
+    pkg = sys.modules.get("djust")
+    if pkg is not None and getattr(pkg, "__file__", None) is None:
+        sys.modules.pop("djust", None)
 "#
 );
 
@@ -262,6 +335,10 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
             "3 the_value: root call count"
         );
         let alters = call("DoodadAlters", 42);
+        // `alters_data` at the ROOT substitutes `""` and keeps walking
+        // (#2539 movement 2, §6.1), so `.value` / `.the_value` on a `str`
+        // is Django's `VariableDoesNotExist` — the SAME rendered cell as
+        // before, reached the way Django reaches it.
         expect_invalid(
             "3 test_alters_data d.value",
             walk(&ctx, py, &alters, &["value"]),
@@ -295,10 +372,17 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
             other => panic!("4 do_not_call: {:?}", other.map(|_| ())),
         }
 
-        // 5. An args-required callable is invalid (Django's
-        //    `signature().bind()` probe); a `TypeError` raised INSIDE a
-        //    nullary is a real error and propagates.
-        expect_invalid("5 args-required", walk(&ctx, py, &get("needs_args"), &[]));
+        // 5. An args-required callable substitutes `string_if_invalid` and
+        //    KEEPS WALKING (Django's `signature().bind()` probe, `base.py:930`
+        //    — the loop assigns `current` and falls through to the next bit).
+        //    With no bits left that IS the answer, so the terminal is `""`,
+        //    not `Invalid` (#2539 movement 2, §6.1); a `TypeError` raised
+        //    INSIDE a nullary is a real error and still propagates.
+        expect_str(
+            "5 args-required",
+            walk(&ctx, py, &get("needs_args"), &[]),
+            "",
+        );
         expect_raises(
             "5 TypeError inside nullary",
             py,
@@ -400,5 +484,199 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
             1,
             "11 root auto-call: called exactly once"
         );
+
+        // ================= movement 2 (#2539): the WIRING =================
+        // Everything below runs with the sink ROUTED — the flag is a
+        // thread-local, and this test is the only thing on this thread.
+
+        // 12. `alters_data` MID-path continues from `string_if_invalid`
+        //     (§6.1). Django's loop assigns `current = ""` and walks the next
+        //     bit, so `{{ o.delete.isupper }}` is `False`, not empty. The
+        //     refusal itself is unchanged: `delete` raises if ever CALLED.
+        let mutator = get("Mutator").call0().expect("Mutator()");
+        expect_str(
+            "12 alters_data mid-path continues",
+            walk(&ctx, py, &mutator, &["delete", "isupper"]),
+            "False",
+        );
+        expect_str(
+            "12 alters_data terminal is the empty string",
+            walk(&ctx, py, &mutator, &["delete"]),
+            "",
+        );
+
+        // 13. The leading-underscore refusal (§3.2), root-adjacent and
+        //     mid-path. Called DIRECTLY, because djust's parser refuses the
+        //     spelling first — which is exactly what makes this defence in
+        //     depth rather than the only guard. The public sibling is the
+        //     control: the walk itself works on this object.
+        let underscored = get("Underscored").call0().expect("Underscored()");
+        expect_invalid(
+            "13 leading underscore, root-adjacent",
+            walk(&ctx, py, &underscored, &["_secret"]),
+        );
+        expect_str(
+            "13 public sibling (control)",
+            walk(&ctx, py, &underscored, &["public"]),
+            "fine",
+        );
+        let holder = get("Holder").call1((&underscored,)).expect("Holder()");
+        expect_invalid(
+            "13 leading underscore, mid-path",
+            walk(&ctx, py, &holder, &["inner", "_secret"]),
+        );
+        expect_str(
+            "13 mid-path public sibling (control)",
+            walk(&ctx, py, &holder, &["inner", "public"]),
+            "fine",
+        );
+
+        // 14. The floor's failure arm is CLOSED (§3.1). A
+        //     `_protect_sidecar_value` that RAISES answers `Invalid` — the
+        //     raw object must not flow on. The passthrough control proves the
+        //     arm is reached in both directions and that installing a module
+        //     is not itself what fails the walk.
+        let install = get("install_fake_serialization");
+        let uninstall = get("uninstall_fake_serialization");
+        install
+            .call1(("passthrough",))
+            .expect("install passthrough");
+        expect_str(
+            "14 floor passthrough (control)",
+            walk(&ctx, py, &underscored, &["public"]),
+            "fine",
+        );
+        install.call1(("raise",)).expect("install raise");
+        expect_invalid(
+            "14 floor raises -> Invalid, never the raw object",
+            walk(&ctx, py, &underscored, &["public"]),
+        );
+        uninstall.call0().expect("uninstall");
+        expect_str(
+            "14 floor unreachable -> passes through (embedder)",
+            walk(&ctx, py, &underscored, &["public"]),
+            "fine",
+        );
+
+        // 15. Django's step-3 catch set, STRICT (§3.3). An `AttributeError`
+        //     from a real `__getitem__` under an INTEGER segment is outside
+        //     `(IndexError, ValueError, KeyError, TypeError)` and propagates.
+        //     The loose helper the pre-ADR walk still uses would swallow it.
+        expect_raises(
+            "15 strict step-3 catch set",
+            py,
+            walk(
+                &ctx,
+                py,
+                &get("IndexAttrError").call0().expect("()"),
+                &["0"],
+            ),
+            "AttributeError",
+        );
+
+        // 16. THE ROUTE (§2.4), through the real `Context::resolve`. A value
+        //     that crossed under the flag carries a handle; a dotted lookup
+        //     the value stack cannot answer walks it. The flag-OFF control is
+        //     the same context and the same key, answering nothing — which is
+        //     what makes this the switch and not the carriage.
+        let cls_instance = get("Cls").call0().expect("Cls()");
+        djust_core::set_resolve_lazy(true);
+        let live_value: djust_core::Value = cls_instance
+            .extract()
+            .expect("16 conversion under the flag");
+        match &live_value {
+            djust_core::Value::Encoded(e) => {
+                assert!(e.live.is_some(), "16: no handle attached under the flag");
+                assert_eq!(e.display, "<Cls>", "16: the display is str(o)");
+                assert!(
+                    e.attrs.is_empty(),
+                    "16: a handle-bearing value must carry NO eager attribute dump"
+                );
+            }
+            other => panic!("16: expected an Encoded, got {other:?}"),
+        }
+        let routed = Context::from_dict([("o".to_string(), live_value.clone())]);
+        assert_eq!(
+            routed
+                .resolve("o.cls_attr")
+                .expect("16 resolve")
+                .expect("16 resolved nothing")
+                .to_string(),
+            "class-level",
+            "16 the route: a class attribute through the handle"
+        );
+        // R2: a missing segment is `Invalid`, which the caller renders empty.
+        assert!(
+            routed.resolve("o.absent").expect("16 resolve").is_none(),
+            "16 the route: a missing segment must resolve to nothing"
+        );
+        djust_core::set_resolve_lazy(false);
+        assert!(
+            routed.resolve("o.cls_attr").expect("16 off").is_none(),
+            "16 the SWITCH: the same value and key resolve nothing with the flag off"
+        );
+
+        // 17. The eager `__dict__` dump is what the handle REPLACES. With the
+        //     flag off the same object crosses as a `Value::Object` of its
+        //     attributes (or is declined into one); with it on, `{{ o }}` is
+        //     `str(o)`. Both directions asserted so neither can drift.
+        let plain = get("Plain").call0().expect("Plain()");
+        let eager: djust_core::Value = plain.extract().expect("17 eager conversion");
+        assert!(
+            matches!(eager, djust_core::Value::Object(_)),
+            "17: with the flag OFF an attribute-bearing object is bulk-dumped, got {eager:?}"
+        );
+        djust_core::set_resolve_lazy(true);
+        let lazy: djust_core::Value = plain.extract().expect("17 lazy conversion");
+        match &lazy {
+            djust_core::Value::Encoded(e) => {
+                assert_eq!(e.display, "<Plain>", "17: display");
+                assert!(e.live.is_some(), "17: handle");
+            }
+            other => panic!("17: expected an Encoded under the flag, got {other:?}"),
+        }
+        djust_core::set_resolve_lazy(false);
+
+        // 18. The handle is TRANSIENT. A msgpack round trip drops it and
+        //     leaves every other field intact, so a state entry that came
+        //     back from the backend never carries a stale object.
+        let bytes = rmp_serde::to_vec(&lazy).expect("18 encode");
+        let back: djust_core::Value = rmp_serde::from_slice(&bytes).expect("18 decode");
+        match (&lazy, &back) {
+            (djust_core::Value::Encoded(before), djust_core::Value::Encoded(after)) => {
+                assert!(after.live.is_none(), "18: the handle survived the wire");
+                assert_eq!(after.display, before.display, "18: display");
+                assert_eq!(after.type_name, before.type_name, "18: type_name");
+                assert_eq!(after.truthy, before.truthy, "18: truthy");
+                // `PartialEq for Encoded` must IGNORE the handle, or a pin
+                // that a value survived the codec unchanged could never pass.
+                assert_eq!(
+                    **after, **before,
+                    "18: PartialEq must not compare the handle"
+                );
+            }
+            other => panic!("18: {other:?}"),
+        }
     });
+
+    // 19. Lifetime: a handle-bearing `Value` clones with no GIL held and
+    //     drops OUTSIDE `Python::attach`. Same profile as
+    //     `Context::raw_py_objects`, which stores `Py<PyAny>` the same way.
+    let escaped = Python::attach(|py| {
+        let m = PyModule::from_code(py, FIXTURES, c_str!("sink_2539.py"), c_str!("sink_2539"))
+            .expect("compile fixtures");
+        djust_core::set_resolve_lazy(true);
+        let value: djust_core::Value = m
+            .getattr("Cls")
+            .expect("Cls")
+            .call0()
+            .expect("Cls()")
+            .extract()
+            .expect("19 conversion");
+        djust_core::set_resolve_lazy(false);
+        value
+    });
+    let cloned = escaped.clone();
+    drop(escaped);
+    drop(cloned);
 }

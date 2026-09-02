@@ -231,6 +231,14 @@ class LiveViewConfig:
         # the pre-ADR plain-getattr behavior — a kill-switch only, not a
         # feature toggle (candidate for removal at 2.0).
         "template_auto_call": True,
+        # ADR-027 (#2539): resolve a dotted template lookup against the LIVE
+        # Python object, one segment at a time, the way Django's
+        # ``Variable._resolve_lookup`` does — instead of converting the whole
+        # object eagerly and walking the conversion. Default False: movement 2
+        # WIRES the path and proves the engine's bytes are unchanged with the
+        # flag off; movement 3 flips the default. A kill-switch, not a feature
+        # toggle (candidate for removal at 2.0).
+        "template_resolve_lazy": False,
         # #1987: TYPE-based serialization floor (defense-in-depth over the
         # name/method floor). A list of Django field CLASS names (matched
         # anywhere in a field's MRO) to always exclude from client-bound
@@ -669,3 +677,23 @@ def template_auto_call_enabled() -> bool:
     except Exception:  # pragma: no cover - defensive
         logger.debug("[djust] template_auto_call flag read failed; defaulting ON")
         return True
+
+
+def template_resolve_lazy_enabled() -> bool:
+    """Whether ADR-027 lazy template resolution is on for this project (#2539).
+
+    The single reader of ``LIVEVIEW_CONFIG['template_resolve_lazy']``, mirroring
+    :func:`template_auto_call_enabled` one key over. Pushed to Rust — for the
+    calling thread — by :func:`djust.render_env.apply_resolve_lazy`, which is
+    the one place every render path acquires its ambient settings (#1646).
+
+    A config read that raises must not take a render down, and this one fails
+    **OFF**: that matches the Rust default and is the conservative direction,
+    where ``template_auto_call`` fails ON because ON is Django's behaviour and
+    already the shipped one.
+    """
+    try:
+        return bool(get_config().get("template_resolve_lazy", False))
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] template_resolve_lazy flag read failed; defaulting OFF")
+        return False

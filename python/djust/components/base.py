@@ -57,7 +57,20 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
         from djust._rust import render_template
 
         from ..config import template_auto_call_enabled
+        from ..render_env import apply_render_env_once
 
+        # The FOURTH framework render entry, and it was the one missing from
+        # the ambient-settings handoff (#2209 / #2221 / #2539): a component
+        # rendered on a thread that had not already rendered a page got UTC
+        # timestamps, unlocalized numbers and — since ADR-027 — a resolution
+        # flag stuck at its default.
+        #
+        # `_once`, not `apply_render_env`, and the difference is N+1: this
+        # runs once per component INSTANCE, so a parent with N components paid
+        # N pushes at ~12us each inside a render whose own push already set
+        # every thread-local correctly. See that function for what the first
+        # push still buys and what the sentinel deliberately does not cover.
+        apply_render_env_once()
         # A framework render path, so the project's auto-call setting governs
         # rather than the Rust entry point's Django-matching default (#2508).
         return render_template(template_str, context, template_auto_call_enabled())

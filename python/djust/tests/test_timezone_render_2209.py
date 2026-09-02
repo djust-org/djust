@@ -248,11 +248,34 @@ def test_both_render_paths_call_the_same_timezone_function():
     UTC timestamps and the unseparated numbers the other two paths had been
     fixed for.
 
-    Deliberately NOT in the set: the nested ``_rust.render_template`` calls in
-    ``components/base.py`` and elsewhere. Those inherit a correct thread-local
-    from whichever top-level render encloses them, and pushing again costs
-    ~12us against a ~15us small render — ~78% overhead for no gain. If one of
-    them ever becomes reachable WITHOUT an enclosing render, it joins this set.
+    ``components/base.py`` JOINED the set in #2539 (ADR-027 movement 2), and
+    the reversal is recorded rather than quietly made. The earlier reading was
+    that a component render always has an enclosing top-level render to
+    inherit a correct thread-local from, so pushing again costs ~12us against
+    a ~15us small render — ~78% overhead for no gain. Two things changed it:
+
+    * a ``Component`` rendered OUTSIDE any djust render — from a plain Django
+      view, or as the first thing a fresh ``sync_to_async`` worker thread does
+      — never had an enclosing render to inherit from, so it was already
+      rendering UTC timestamps and unseparated numbers. That was a latent
+      gap, not a design.
+    * ADR-027's ``template_resolve_lazy`` is not a FORMATTING setting: an
+      unwired thread resolves dotted lookups by a different mechanism than
+      every other path on the same page. A wrong timezone is a wrong cell; a
+      wrong resolution mechanism is the parallel-path drift (#1646) the whole
+      movement exists to retire.
+
+    The ~12us is therefore paid deliberately — but ONCE PER THREAD, not once
+    per component instance. ``components/base.py`` calls
+    ``apply_render_env_once``, because it is the one entry that runs many
+    times inside a single parent render: a parent with N components paid N
+    pushes inside a render whose own push had already set every thread-local
+    correctly. The sentinel is what makes the first push (the fresh-thread
+    case above) still happen. Both spellings count as a caller below, since
+    the question this pin asks is which paths ACQUIRE the settings.
+
+    Still deliberately absent: the other nested ``_rust.render_template``
+    callers, which are reachable only from inside one of the four entries.
     """
     import ast
     import pathlib
@@ -272,11 +295,12 @@ def test_both_render_paths_call_the_same_timezone_function():
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "apply_render_env"
+                and node.func.id in ("apply_render_env", "apply_render_env_once")
             ):
                 callers.add(path.relative_to(root).as_posix())
 
     assert callers == {
+        "components/base.py",
         "mixins/rust_bridge.py",
         "simple_live_view.py",
         "template/rendering.py",
