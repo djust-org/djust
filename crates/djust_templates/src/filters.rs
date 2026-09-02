@@ -822,6 +822,45 @@ pub fn apply_filter_full_safe(
         is_falsy: arg_is_falsy(resolved_type.as_ref(), arg, arg_was_quoted),
     };
 
+    // The two fallback filters return the ARGUMENT ITSELF, so they are the
+    // only built-ins whose OUTPUT is the argument's Python object rather than
+    // a string derived from it — and the dispatch table below takes a `&str`,
+    // so it cannot express that (#2539 review).
+    //
+    // `{% if x|default_if_none:y %}` with `y = 0` is Django's FALSE: `x`
+    // resolves to `None` under `ignore_failures`, the filter substitutes the
+    // integer `0`, and `0` is falsy. The dispatch table substituted
+    // `Value::String("0")` instead — a non-empty string, therefore TRUTHY —
+    // so the cell answered True. Every falsy non-string fallback has the same
+    // shape: `0`, `0.0`, `False`, `[]`, `{}`, `None`.
+    //
+    // Handled HERE rather than by widening [`ArgType`], for the reason that
+    // struct's own doc gives: it is `Copy`, carries only BITS about the
+    // argument, and exists precisely so a whole `Value` is not pushed through
+    // 57 arms. This is the one place the argument's `Value` is still alive,
+    // which is where the two arms that need it belong.
+    //
+    // Latent until #2539: `{{ }}` resolves with `ignore_failures=False`, so
+    // Django substitutes `string_if_invalid` BEFORE the filter runs and the
+    // fallback never fires there. Only the five `ignore_failures` tags can
+    // reach it, and they could not reach it until the sink was routed.
+    if let (Some(resolved), false) = (resolved_type.as_ref(), arg_was_quoted) {
+        let fires = match filter_name {
+            "default_if_none" => matches!(value, Value::None),
+            // Exactly the dispatch arms' own conditions, so the only thing
+            // this changes is the fallback's TYPE.
+            "default" => !value.is_truthy(),
+            _ => false,
+        };
+        if fires {
+            // The fallback is the argument's own value, so its safety is the
+            // argument's — never the input's. `false` matches what the string
+            // path reported for these two names (`builtin_produced_safe`
+            // answers `true` for four names, and neither of these is one).
+            return Ok((resolved.clone(), false));
+        }
+    }
+
     // Built-ins take precedence over custom filters (mirrors the original
     // dispatch order). A built-in hit reports safety through
     // `builtin_produced_safe`, which answers `false` for all but four names.
@@ -6868,6 +6907,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
@@ -6881,6 +6921,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![]),
                 eq_class: None,
+                live: None,
             })),
             // The FOURTH shape, and the one #2477/#2489 added: a NON-EMPTY
             // carried collection. It is what makes the `python_len` ==
@@ -6901,6 +6942,7 @@ mod tests {
                     Value::String("b".to_string()),
                 ]),
                 eq_class: Some(djust_core::EqClass::Set),
+                live: None,
             })),
             // The FIFTH: a falsy `__iter__` class with NO `__len__`. Django's
             // `|length` answers 0 (its `except TypeError`) while `{% for %}`
@@ -6918,6 +6960,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
+                live: None,
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -6936,6 +6979,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
         ]
     }
@@ -6988,6 +7032,7 @@ mod tests {
             attrs: Default::default(),
             items: None,
             eq_class: None,
+            live: None,
         }));
         assert!(iter_values(&legacy).is_some_and(|items| items.is_empty()));
         assert_eq!(python_len(&legacy), Some(0));
@@ -7441,6 +7486,7 @@ mod tests {
                 attrs: Default::default(),
                 items: None,
                 eq_class: None,
+                live: None,
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -7468,6 +7514,7 @@ mod tests {
                 attrs: Default::default(),
                 items: Some(vec![]),
                 eq_class: None,
+                live: None,
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -7486,6 +7533,7 @@ mod tests {
             attrs: Default::default(),
             items: None,
             eq_class: None,
+            live: None,
         }));
         assert!(
             iter_values(&hostile).is_none(),

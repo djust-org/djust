@@ -454,12 +454,8 @@ class _RustTagProbe:
 _rust.register_tag_handler("ct_ident", _RustTagProbe(_ct_ident, "tag"))
 _rust.register_tag_handler("ct_safe", _RustTagProbe(_ct_safe, "tag"))
 _rust.register_tag_handler("ct_cond", _RustTagProbe(_ct_cond, "tag"))
-_rust.register_block_tag_handler(
-    "cb_ident", "endcb_ident", _RustTagProbe(_cb_ident, "block")
-)
-_rust.register_block_tag_handler(
-    "cb_plain", "endcb_plain", _RustTagProbe(_cb_plain, "block")
-)
+_rust.register_block_tag_handler("cb_ident", "endcb_ident", _RustTagProbe(_cb_ident, "block"))
+_rust.register_block_tag_handler("cb_plain", "endcb_plain", _RustTagProbe(_cb_plain, "block"))
 _rust.register_assign_tag_handler("ca_ident", _RustTagProbe(_ca_ident, "assign"))
 
 #: One shape per probe, rendered over every input.
@@ -2314,6 +2310,73 @@ def builtin_cells():
             yield lit, None, shape
 
 
+#: The shapes ADR-027's `template_resolve_lazy` can move (#2539), each one a
+#: dotted lookup the flag resolves by a different mechanism.
+#:
+#: Deliberately small and NOT a cross with the filter corpus: the flag changes
+#: how `p.…` reaches a value, not what a filter does to it, so multiplying it
+#: across 57 filters would add cells that all answer the same question. What it
+#: must carry is one cell per RESOLUTION SHAPE — a bare object, an attribute, a
+#: bound name, an auto-called callable — because those are the arms that differ.
+RESOLUTION_MODE_SHAPES = {
+    "bare": "{{ p }}",
+    "attribute": "{{ p.inst_attr }}",
+    "class-attribute": "{{ p.cls_attr }}",
+    "missing": "{{ p.absent }}",
+    "truthiness": "{% if p %}T{% else %}F{% endif %}",
+    "length": "{{ p|length }}",
+    # The BOUND-name shapes, which are the reason the handle rides in the
+    # value: the raw-Python sidecar is keyed by top-level name and has no entry
+    # for a name the template itself binds.
+    "with-bound": "{% with q=p %}{{ q.cls_attr }}{% endwith %}",
+    "for-bound": "{% for q in ps %}{{ q.cls_attr }},{% endfor %}",
+    # Django auto-calls at every step, so a callable object resolves to the
+    # RESULT — and a lookup that then misses must not re-call it.
+    "autocall": "{{ p.the_value }}",
+    "autocall-miss": "{{ p.value }}",
+}
+
+
+class _LazyPlain:
+    """A plain object: truthy, non-iterable, with a public `__dict__`. The
+    shape `opaque_gate`'s decline is about, and the one the flag moves."""
+
+    cls_attr = "class-level"
+
+    def __init__(self) -> None:
+        self.inst_attr = "in-dict"
+
+    def __repr__(self) -> str:
+        return "<LazyPlain>"
+
+
+class _LazyCallable(_LazyPlain):
+    """Django's `test_callables.Doodad`: an object the engine must CALL, once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.value = 42
+
+    def __call__(self) -> dict:
+        return {"the_value": self.value}
+
+
+#: Built per cell rather than shared, because two of these shapes MUTATE (an
+#: auto-call increments) and a shared instance would make the corpus
+#: order-dependent.
+RESOLUTION_MODE_INPUTS = {
+    "o-plain": _LazyPlain,
+    "o-callable": _LazyCallable,
+}
+
+
+def resolution_mode_cells():
+    """Every ADR-027 resolution shape × the object kinds the flag moves."""
+    for shape in RESOLUTION_MODE_SHAPES:
+        for key in RESOLUTION_MODE_INPUTS:
+            yield shape, key
+
+
 def builtin_x_mapping_cells():
     """A context builtin as the needle of a membership test over a mapping.
 
@@ -3719,6 +3782,8 @@ def axis_of(cid: str) -> str:
         return "variable-name"
     if cid.startswith("@ctag "):
         return "ctag"
+    if cid.startswith("@lazy "):
+        return "resolution-mode"
     if cid.startswith("@path"):
         return "path"
     expr, _key, *shape = cid.split("\t")
@@ -3941,6 +4006,36 @@ def measure(out_path: str) -> None:
         if cid in result:
             continue
         dj, du = render_both(source, {"p": INPUTS[key]}, CONTEXT_SAFE_KEYS.get(key))
+        result[cid] = [dj, du]
+
+    # The ADR-027 RESOLUTION-MODE axis (#2539). The only axis that renders the
+    # same source TWICE, and that is the whole of it: `template_resolve_lazy`
+    # does not change a filter's answer, it changes how a dotted lookup reaches
+    # a value at all, so every other axis above renders it in exactly one mode
+    # and is blind to the other.
+    #
+    # It is a corpus MEMBER rather than an `ENTRY_POINTS_NOT_SWEPT` exemption,
+    # unlike the localization and timezone channels beside it. Those are output
+    # FORMATTING — a second corpus for one setting, with nothing to learn per
+    # cell. This flag is the resolution step itself, which is what this whole
+    # differential measures, so exempting it would declare the sweep blind on
+    # the axis it exists for.
+    for shape, key in resolution_mode_cells():
+        source = RESOLUTION_MODE_SHAPES[shape]
+        cid = f"@lazy {shape}\t{key}\tresolution-mode"
+        if cid in result:
+            continue
+        _rust.set_resolve_lazy(True)
+        try:
+            make = RESOLUTION_MODE_INPUTS[key]
+            # `ps` for the `{% for %}` shape, and a FRESH object per name so a
+            # cell that auto-calls cannot perturb its neighbour.
+            dj, du = render_both(source, {"p": make(), "ps": [make(), make()]})
+        finally:
+            # Restored unconditionally: the flag is a THREAD-LOCAL that is set
+            # rather than scoped, so leaking it on would silently re-render
+            # every cell of a later run in the other mode.
+            _rust.set_resolve_lazy(False)
         result[cid] = [dj, du]
 
     exact, collapsed = agreement(result)

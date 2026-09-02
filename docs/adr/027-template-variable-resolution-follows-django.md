@@ -270,6 +270,18 @@ re-attached on every render. No wire pin moves.
 
 ## Sequencing (dormant-define → wire → flip → delete; the implementation row)
 
+> **Erratum (2026-09-02, after movements 1 and 2 shipped — PRs #2553 and the movement-2 PR).**
+> Steps 1–3 below are the plan as written; the shipped shape differs in three places, each
+> stronger than the plan. (1) Step 1's single-file `xfail(strict=True)` net became a
+> three-column characterization table (`python/tests/test_adr027_characterization_net_2539.py`)
+> that records Django's bytes AND today's bytes per path, so a cell that moves fails with a
+> message saying which way it moved. (2) Step 3's flag is not carried on `Context`: half the
+> work happens inside the Python-to-`Value` conversion, where no `Context` exists, so the switch
+> is a per-render thread-local pushed by `djust.render_env.apply_render_env`. (3) The routing
+> point is `Context::resolve_without_builtins`, not `lookup_segment`, which returns a borrow
+> into the value stack and cannot yield a lazily constructed value. Movement 2 also split
+> `CallOutcome` to match Django's two `string_if_invalid` outcomes (§Security 3).
+
 **Step 1 — characterize the net against the CURRENT sidecar.** One new file,
 `python/tests/test_resolve_like_django_2535.py`, each case parametrised over the three paths,
 asserting `django == djust`, `xfail(strict=True)` where the table says wrong-today (the #2502 pin

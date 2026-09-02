@@ -646,17 +646,35 @@ class TestOneStatementOfEachRule:
         assert core.count("template_builtin(key)") == 1, (
             "Context::resolve should consult the helper exactly once"
         )
-        # The renderer must not re-derive the mapping. `get_value_safe`'s
+        # The renderer must not re-derive the mapping. The RESOLVER BODY's
         # surroundings are checked rather than the whole file, since `"True"`
         # appears legitimately elsewhere (component attribute parsing).
-        start = renderer.index("fn get_value_safe(")
+        #
+        # The body is `get_value_safe_inner` since #2539 split the resolver
+        # into strict and ignore-failures wrappers over one implementation;
+        # `get_value_safe` is now a one-line wrapper and holds no arms at all.
+        # Located by the arm it must CONTAIN rather than by a hard-coded
+        # function name, so the next rename moves the pin with the code
+        # instead of silently emptying its slice — which is exactly how this
+        # test went green-then-red across that split (#1391).
+        holder = "get_value_safe_inner"
+        assert f"fn {holder}(" in renderer, (
+            f"the resolver body is no longer `{holder}` — point this pin at whichever "
+            "function holds the lowercase arms, and check it is still exactly one"
+        )
+        start = renderer.index(f"fn {holder}(")
         body = renderer[start : renderer.index("\nfn ", start + 10)]
         for spelling in ('"True" =>', '"True" ==', 'expr == "True"'):
             assert spelling not in body, (
-                f"get_value_safe re-derives the builtin mapping ({spelling!r}); "
+                f"{holder} re-derives the builtin mapping ({spelling!r}); "
                 "there must be exactly one place that maps these names (#1646)"
             )
         assert '"true" =>' in body, "the lowercase djust extension should still live here"
+        # And exactly ONE function in the renderer carries them, so a wrapper
+        # cannot grow a second copy while this slice stays clean.
+        assert renderer.count('"true" =>') == 1, (
+            "the lowercase djust extension is mapped in more than one place (#1646)"
+        )
 
     def test_the_bool_argument_rule_has_both_int_helpers_as_callers(self) -> None:
         """``python_int_arg`` AND ``add`` — the drift that broke ``add:True``."""

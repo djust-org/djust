@@ -623,11 +623,31 @@ class TestEveryFilteredOperandSiteIsAccountedFor:
     not.
     """
 
+    #: The FAMILY of shared resolvers, and it is a closed set on purpose.
+    #:
+    #: All four are one function: ``get_value_safe_inner`` holds the body, and
+    #: the other three are wrappers that pick Django's ``ignore_failures``
+    #: parameter and whether to keep the safety half of the return. The #2325
+    #: invariant is "an operand goes through the ONE filter-aware resolver
+    #: rather than a bare ``context.get``", and a wrapper satisfies it; a FIFTH
+    #: name appearing here would not, which is why this is enumerated rather
+    #: than matched by prefix.
+    SHARED_RESOLVERS = frozenset(
+        {
+            "get_value",
+            "get_value_safe",
+            "get_value_ignoring_failures",
+            "get_value_safe_ignoring_failures",
+        }
+    )
+
     #: Every renderer site that resolves a user-written tag OPERAND — an
     #: expression Django would build a ``FilterExpression`` for. Each must go
-    #: through ``get_value`` / ``get_value_safe``.
+    #: through one of :attr:`SHARED_RESOLVERS`.
     OPERAND_SITES = {
-        "let iterable_value = get_value(iterable, context)?;": "{% for %} iterable (#2325)",
+        (
+            "let iterable_value = get_value_ignoring_failures(iterable, context)?;"
+        ): "{% for %} iterable (#2325)",
         # These two moved from `get_value` to `get_value_safe` in #2363: the
         # binding sites now KEEP the safety half of the return instead of
         # discarding it, so the grant travels with the value. `get_value` is a
@@ -640,20 +660,98 @@ class TestEveryFilteredOperandSiteIsAccountedFor:
         (
             "let (value, runtime_safe) = get_value_safe(value_expr, context)?;"
         ): "{% include ... with %} (#2325, #2363)",
-        "Ok(get_value(condition, context)?.is_truthy())\n}": "{% if %} truthiness (#2325)",
-        # What makes routing them through `get_value` safe: the shared
+        (
+            "Ok(get_value_ignoring_failures(condition, context)?.is_truthy())\n}"
+        ): "{% if %} truthiness (#2325)",
+        # What makes routing them through the family safe: the shared
         # resolver's last arm keeps the #806 getattr walk the `{% for %}` arm
         # used to do itself. See TestOperandSitesKeepTheGetattrWalk.
         "if let Some(value) = context.resolve(expr)? {": "get_value_safe's #806 fallback",
+    }
+
+    #: Which operand sites resolve under Django's ``ignore_failures=True``
+    #: (#2528, ADR-027), and which do NOT. `FilterExpression.resolve` turns a
+    #: resolution failure into ``None`` for the first set and into
+    #: ``string_if_invalid`` for the second, and the difference is observable
+    #: the moment a filter follows: `{% if x|default_if_none:y %}` fires the
+    #: filter, `{% with x=y|default_if_none:'D' %}` does not.
+    #:
+    #: Enumerated as a SPLIT rather than as two lists of names, because the
+    #: failure this guards is one site drifting to the other side — which a
+    #: per-side test cannot see, since each side stays internally consistent.
+    IGNORE_FAILURES_SPLIT = {
+        "get_value_ignoring_failures(iterable, context)": True,
+        "get_value_ignoring_failures(condition, context)": True,
+        "get_value_safe(expression, context)": False,
+        "get_value_safe(value_expr, context)": False,
     }
 
     def test_every_operand_site_routes_through_the_shared_resolver(self) -> None:
         src = RENDERER_RS.read_text()
         missing = [why for line, why in self.OPERAND_SITES.items() if line not in src]
         assert not missing, (
-            "these tag operands no longer resolve through get_value: "
-            f"{missing}. Django resolves each with a FilterExpression; a bare "
-            "context lookup drops the filter chain and renders nothing (#2325)."
+            "these tag operands no longer resolve through the shared resolver family "
+            f"{sorted(self.SHARED_RESOLVERS)}: {missing}. Django resolves each with a "
+            "FilterExpression; a bare context lookup drops the filter chain and renders "
+            "nothing (#2325)."
+        )
+
+    def test_the_resolver_family_is_exactly_four_wrappers_of_one_body(self) -> None:
+        """The family is closed, and it is one function underneath.
+
+        #2325's claim is that there is ONE filter-aware resolver. Four names
+        keep that true only while three of them are wrappers: if a wrapper ever
+        grows its own pipe loop, the claim quietly becomes false and every site
+        above still passes.
+        """
+        src = RENDERER_RS.read_text()
+        defined = {name for name in self.SHARED_RESOLVERS if f"fn {name}(" in src}
+        assert defined == self.SHARED_RESOLVERS, (
+            f"the resolver family changed: {sorted(defined)} — update "
+            "SHARED_RESOLVERS and IGNORE_FAILURES_SPLIT with it"
+        )
+        assert src.count("fn get_value_safe_inner(") == 1, "the shared body is not one function"
+        # Exactly one pipe loop in the file, and it is the body's.
+        assert src.count("let pipe_parts = crate::filter_lexer::split_pipes(expr);") == 1, (
+            "a second resolver grew its own filter chain — #2325's 'one filter-aware "
+            "resolver' claim is no longer true"
+        )
+        # Each wrapper reaches the body — directly, or through another
+        # wrapper: `get_value` delegates to `get_value_safe`, which delegates
+        # to the body. What matters is that no wrapper resolves for itself,
+        # and the single-pipe-loop assertion above is what proves that.
+        for wrapper in (
+            "get_value",
+            "get_value_safe",
+            "get_value_ignoring_failures",
+            "get_value_safe_ignoring_failures",
+        ):
+            body = src.split(f"fn {wrapper}(", 1)[1].split("\n}\n", 1)[0]
+            delegates = [
+                other
+                for other in self.SHARED_RESOLVERS | {"get_value_safe_inner"}
+                if other != wrapper and f"{other}(" in body
+            ]
+            assert delegates, f"{wrapper} no longer delegates — it resolves for itself"
+
+    def test_each_operand_site_passes_djangos_own_ignore_failures(self) -> None:
+        """The SPLIT, pinned. `{% if %}` / `{% for %}` ignore failures;
+        `{% with %}` and `{% include ... with %}` do not — which is Django, and
+        which #2539 got wrong in one direction before this pin existed."""
+        src = RENDERER_RS.read_text()
+        wrong = []
+        for site, ignores in self.IGNORE_FAILURES_SPLIT.items():
+            if site not in src:
+                wrong.append(f"{site} — site not found")
+                continue
+            uses_sibling = "ignoring_failures" in site
+            if uses_sibling is not ignores:
+                wrong.append(f"{site} — expected ignore_failures={ignores}")
+        assert not wrong, (
+            f"{wrong}. Django passes ignore_failures=True from exactly the tags whose "
+            "operand may legitimately be absent ({% if %}, {% for %}, {% cycle %}, "
+            "{% firstof %}, {% regroup %}) and False everywhere else — a `{% with %}` "
+            "operand that resolves to None fires a `default_if_none` Django does not."
         )
 
     def test_no_operand_site_kept_the_raw_expression_text_fallback(self) -> None:
