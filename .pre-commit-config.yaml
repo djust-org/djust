@@ -192,6 +192,23 @@ repos:
         files: ^(README|QUICKSTART|CLAUDE)\.md$|^pyproject\.toml$|^docs/website/guides/.*\.md$|^python/djust/static/djust/client-sizes\.json$
         pass_filenames: false
 
+  # docs/TEMPLATE_BACKEND.md's supported/unsupported tag and filter lists are
+  # generated from the engine's own registries (the ARITY filter table, the
+  # parser's tag match arms, python/djust/template_tags/ handlers) against the
+  # installed Django. This fails when the committed block is stale; run
+  # `make template-backend-lists` to regenerate. Runs through the venv
+  # resolver because it imports the compiled `djust._rust` for the handler
+  # set. See scripts/generate-template-backend-lists.py and
+  # tests/test_generate_template_backend_lists.py. Closes #2533.
+  - repo: local
+    hooks:
+      - id: check-template-backend-lists
+        name: check generated template-backend support lists (#2533)
+        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh scripts/generate-template-backend-lists.py'
+        language: system
+        files: ^(docs/TEMPLATE_BACKEND\.md|crates/djust_templates/src/(parser|filter_arity)\.rs|python/djust/template_tags/.*\.py|python/djust/template_filters\.py|scripts/generate-template-backend-lists\.py|uv\.lock)$
+        pass_filenames: false
+
   # Lockfile self-entry version sync — catches the drift class #1487 cited
   # (`make version` bumps the manifests but a lockfile self-entry stays
   # pinned at the old version). Scoped to manifests/lockfiles so a routine
