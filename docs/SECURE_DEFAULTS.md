@@ -408,15 +408,22 @@ Regression tests: `python/djust/tests/test_template_auto_call_1985.py`
 
 ## 6. Filter output safety is earned, never declared
 
-**The default**: a template filter's output is auto-escaped unless one of
-exactly four things holds, all decided at one sink
-(`crates/djust_templates/src/renderer.rs::filter_output_is_safe`): the filter
-itself returned a `SafeString`; the filter is one of the ten built-ins that
-escape internally (`safe`, `escape`, `json_script`, `urlize`, …); or the
-**input was already safe** AND the filter is `is_safe` — whether a built-in
-(#2274) or a project filter registered `is_safe=True` (#2548). The last two
-share one `input_was_safe &&` conjunction so that a future grant has to
-choose a side.
+**The default**: a template filter's output is auto-escaped. A *whole-value*
+grant is decided at one sink
+(`crates/djust_templates/src/renderer.rs::filter_output_is_safe`) and needs
+one of exactly three things: the filter itself returned a `SafeString`; the
+filter is one of the ten built-ins that escape internally (`safe`, `escape`,
+`json_script`, `urlize`, …); or the **input was already safe** AND the filter
+is `is_safe` — whether a built-in (#2274) or a project filter registered
+`is_safe=True` (#2548). Those last two share one `input_was_safe &&`
+conjunction so that a future grant has to choose a side.
+
+A sequence's *items* are decided separately, at
+`filter_output_items_are_safe` in the same file: `safeseq` / `escapeseq` are
+Django's explicit per-item opt-in, and `slice` preserves item safety it was
+given. So `{{ L|safeseq|join:"" }}` renders its items raw — Django does the
+same, and it is the author's explicit act, but it means "one sink" describes
+the value rule, not the whole escaping surface.
 
 **Why it matters**: `is_safe=True` is what Django's docs recommend for every
 string-transforming filter, and `django.contrib.humanize` ships three. Until
@@ -429,7 +436,8 @@ output (`format_html` / `mark_safe` on an escaped body). Never set
 
 Regression tests: `python/tests/test_custom_filter_is_safe_requires_safe_input_2548.py`
 (all three render entries against Django in-process, including the encoded
-and attribute-breakout variants).
+and attribute-breakout variants) Item-rule
+coverage lives in `python/tests/test_context_item_safety_2287.py`.
 
 ---
 
