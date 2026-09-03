@@ -694,6 +694,14 @@ FLOOR_ROWS = frozenset("E1 E2 E3 E4".split())
 #:   class never reach the sink on that path at all. The same shape as the
 #:   Component arm #2513 turns on, and deferred with it: lifting it changes
 #:   the LiveView STATE channel, not the resolution sink.
+#:
+#: **Tracked at #2621** (the movement-3 follow-on). Movement 3 flipped the
+#: default and left these six held; #2621 carries the two mechanisms that
+#: close five of them — a transient ``Encoded.safe`` bit (O) and gating
+#: ``normalize_django_value``'s callable arm on the flag (J, J2, Q, and the
+#: ``P``-liveview crash cell below). V needs the ``{% for %}``-sink accessor
+#: and may outlive them. Filed rather than left as a comment because an
+#: unfiled prerequisite is how a hold reason quietly becomes permanent.
 PLAIN_WRONG_UNDER_LAZY = frozenset("O V".split())
 LIVEVIEW_WRONG_UNDER_LAZY = frozenset("J J2 O Q V".split())
 
@@ -1253,7 +1261,10 @@ print("RENDERED " + json.dumps(out))
 CRASH_SIGNALS = {-signal.SIGSEGV, -signal.SIGBUS, -signal.SIGABRT}
 
 #: Crash cells ADR-027's flag does NOT fix, stated (#1125). See
-#: ``test_the_cell_under_the_lazy_flag`` for why this one is held.
+#: ``test_the_cell_under_the_lazy_flag`` for why this one is held, and **#2621**
+#: for the fix: it is the same ``normalize_django_value`` callable arm as
+#: J / J2 / Q, so all four close together. ``H-plain`` and ``P-plain`` were
+#: fixed by the flip itself and have already left this set.
 CRASH_CELLS_HELD_UNDER_LAZY = frozenset({("P", "liveview")})
 
 

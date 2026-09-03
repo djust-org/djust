@@ -336,6 +336,8 @@ cannot drift from the shipped default the way #2017's prose did.
 | 4. flip the default | **shipped** |
 | 5. delete the enumeration arms | **not shipped** |
 
+The six cells movement 3 left held (O, V, J, J2, Q, P-liveview) are tracked at **#2621**, which carries the two mechanisms that close five of them: a transient `Encoded.safe` bit and gating `normalize_django_value`'s callable arm on the flag. It blocks step 5.
+
 ### Erratum (movement 3, 2026-09-03)
 
 Four claims above were falsified by measuring the flip rather than reasoning about it. They are
