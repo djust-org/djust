@@ -45,7 +45,6 @@ from djust import _rust
 # spelling (Django ``render_to_string`` refuses, but still at PARSE time inside
 # ``do_url``, before the missing view is reversed).
 MALFORMED = {
-    "fail01": "{% url %}",
     "fail04": '{% url "view" id, %}',
     "fail05": '{% url "view" id= %}',
     "fail06": '{% url "view" a.id=id %}',
@@ -114,12 +113,11 @@ class TestMalformedUrlArgumentsRefuseAtParse:
     def test_djust_refuses_at_parse_too(self, cell: str) -> None:
         compiled, msg = djust_compiles(MALFORMED[cell])
         assert not compiled, f"{cell}: djust still parsed a malformed url list"
-        # fail01 is the empty-args refusal; every other cell is the head-atom
-        # remainder refusal — the two mechanisms the gate-off exercises.
-        expected = (
-            "takes at least one argument" if cell == "fail01" else "Could not parse the remainder"
-        )
-        assert expected in msg, f"{cell}: unexpected message {msg!r}"
+        # Every malformed-LIST cell is the head-atom remainder refusal. The
+        # no-args case (`{% url %}`, Django's `len(bits) < 2`) is NOT here: it
+        # is a missing-required-argument error owned by the render-time handler
+        # (#2563), which raises Django's genuine `TemplateSyntaxError`.
+        assert "Could not parse the remainder" in msg, f"{cell}: unexpected message {msg!r}"
 
 
 class TestWellFormedUrlArgumentsStillCompile:

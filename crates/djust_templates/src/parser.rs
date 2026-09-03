@@ -2959,11 +2959,13 @@ fn validate_url_operand(expr: &str) -> Result<()> {
             )));
         }
     }
-    // The head atom's underscore rule, then its filter chain — Django's order
-    // inside `FilterExpression.__init__`, the same two calls `validate_tag_operand`
-    // makes, so a `{% url %}` operand and an `{% if %}` operand refuse an
-    // underscore lookup and a malformed filter identically (#2418/#2419).
-    validate_variable_name(head)?;
+    // Then its filter chain, via the shared `parse_filter_specs` — a malformed
+    // filter on a `{% url %}` operand refuses exactly as on any tag operand.
+    // The head atom's underscore rule (`Variable.__init__`) is deliberately NOT
+    // applied here: #2418 pins that rule to exactly three call sites (none of
+    // them url), and no `test_url_failNN` cell exercises an underscore name, so
+    // the grammar refusal this defect is about is the head-atom tiling above.
+    // url-operand underscore parity is a separate #2418-family concern.
     let filter_specs: Vec<String> = parts[1..].iter().map(|s| s.trim().to_string()).collect();
     parse_filter_specs(&filter_specs, expr).map(|_| ())
 }
@@ -3011,10 +3013,15 @@ fn url_kwarg_value(bit: &str) -> &str {
 /// the existing handler dispatch below — this only refuses, it does not change
 /// what a WELL-FORMED `{% url %}` compiles to.
 pub(crate) fn validate_url_args(args: &[String]) -> Result<()> {
+    // Empty args (`{% url %}`) is Django's `len(bits) < 2` MISSING-required-
+    // argument error, NOT an argument-LIST grammar error. The render-time
+    // `UrlTagHandler` already raises Django's genuine `TemplateSyntaxError`
+    // ("'url' takes at least one argument, a URL pattern name.") for it (#2563).
+    // Refusing it here at parse would pre-empt that with a
+    // `DjustTemplateSyntaxError` of the wrong exception class, so leave the
+    // no-args case to the handler and only validate a NON-empty argument list.
     if args.is_empty() {
-        return Err(DjangoRustError::TemplateError(
-            "'url' takes at least one argument, a URL pattern name.".to_string(),
-        ));
+        return Ok(());
     }
     validate_url_operand(&args[0])?;
     let mut rest = &args[1..];
@@ -3078,13 +3085,17 @@ mod tests {
     }
 
     #[test]
-    fn url_no_arguments_is_refused() {
-        // fail01: `{% url %}`
-        let err = validate_url_args(&[]).unwrap_err();
-        assert!(
-            format!("{err}").contains("'url' takes at least one argument"),
-            "{err}"
-        );
+    fn url_no_arguments_is_not_a_parse_grammar_error() {
+        // fail01: `{% url %}` (empty args) is Django's `len(bits) < 2`
+        // MISSING-required-argument error, NOT an argument-LIST grammar error.
+        // It is deliberately NOT refused here at parse: the render-time
+        // `UrlTagHandler` raises Django's genuine `TemplateSyntaxError`
+        // ("'url' takes at least one argument, a URL pattern name.") for it
+        // (#2563), with the correct exception class. Refusing it here would
+        // pre-empt that with a `DjustTemplateSyntaxError` of the wrong class,
+        // so `validate_url_args` returns Ok for the empty list and only
+        // validates a NON-empty argument list.
+        assert!(validate_url_args(&[]).is_ok());
     }
 
     #[test]
