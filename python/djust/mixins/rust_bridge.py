@@ -1085,13 +1085,24 @@ class RustBridgeMixin:
                 # `{% for u in qs %}{{ u.password }}`) leak to the client. Wrap
                 # every sidecar value (both explicitly-assigned models above AND
                 # request-scoped ones like `user`) in the floor-enforcing proxy;
-                # `_protect_sidecar_value` is a no-op for non-model values
-                # (request/view/etc.), and the proxy protects transitively so
-                # ONE floor governs the eager and sidecar channels (#1646).
-                from ..serialization import _protect_sidecar_value
+                # the walk is a no-op for non-model values (request/view/etc.),
+                # and the proxy protects transitively so ONE floor governs the
+                # eager and sidecar channels (#1646).
+                #
+                # `_protect_sidecar_tree`, not `_protect_sidecar_value`: the
+                # LEAF wrapper cannot see inside a container, so a model held
+                # in a `MultiValueDict` reached a tag handler live here while
+                # the plain-backend entry (`build_render_sidecar`, which uses
+                # the tree) gave it a proxy — the same floor, two answers
+                # (#2556 re-review, #1646). One shared `memo` across the loop,
+                # for the reason `build_render_sidecar` shares one: two names
+                # commonly point at the same object, and a per-key memo re-walks
+                # it and hands out a different proxy for each.
+                from ..serialization import _protect_sidecar_tree
 
+                _sidecar_memo: Dict[Any, Any] = {}
                 for _sk in list(sidecar.keys()):
-                    sidecar[_sk] = _protect_sidecar_value(sidecar[_sk])
+                    sidecar[_sk] = _protect_sidecar_tree(sidecar[_sk], 0, _sidecar_memo, set())
 
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a

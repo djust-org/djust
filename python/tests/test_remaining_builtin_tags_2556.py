@@ -27,12 +27,14 @@ from typing import Any, Dict, Optional
 import django
 import pytest
 from django.contrib.auth.models import User
+from django.db import models
 from django.http import QueryDict
 from django.template import Context as DjangoContext
 from django.template import RequestContext
 from django.template import Template as DjangoTemplate
 from django.template import TemplateSyntaxError
 from django.test import RequestFactory
+from django.utils.datastructures import MultiValueDict
 from django.utils.lorem_ipsum import COMMON_P, WORDS
 
 from djust.template_backend import DjustTemplateBackend
@@ -984,3 +986,302 @@ class TestEveryChildrenWalkerKnowsTheNewBlockNode:
             # cycle-resolution pass, which `Spaceless` predates.
             assert filter_ >= spaceless, (name, per_file)
         assert sum(f for _, f in per_file.values()) >= 12, per_file
+
+
+# =========================================================================== #
+# The serialization floor inside a MultiValueDict (#2596 re-review)
+# =========================================================================== #
+
+
+class SecretiveUser(User):
+    """A model carrying all three shapes the serialization floor governs.
+
+    * ``password`` — a floor field (``_ALWAYS_EXCLUDED_FIELDS``);
+    * ``_secret`` — an underscore name the sidecar proxy refuses outright
+      (Django-parity: template resolution never touches ``_``-names);
+    * ``session_digest`` — a ``@property`` returning a hash, denied by the
+      model's own ``djust_exclude_fields``. A property, not a method, on
+      purpose: the floor has to hold for a descriptor too, and it must hold on
+      BOTH channels — the eager serializer's property pass and the sidecar
+      proxy's ``__getattr__`` consult the same denylist.
+
+    A proxy model, so it needs no table and no migration.
+    """
+
+    _secret = "instance-only-marker"
+    djust_exclude_fields = ("session_digest",)
+
+    class Meta:
+        proxy = True
+        app_label = "auth"
+
+    @property
+    def session_digest(self) -> str:
+        return "hmac$" + self.password
+
+
+#: What the probe tag handler was handed on the last render. A REAL registered
+#: handler is the only faithful harness here: the tag bridge gives a handler
+#: the sidecar's raw Python objects WHOLESALE, which is the sink the floor has
+#: to hold at — the ``{{ x.y }}`` walk re-protects per segment and would report
+#: safe either way (#1650 reproduction fidelity).
+_FLOOR_PROBE_SEEN: Dict[str, Any] = {}
+
+
+def _register_floor_probe() -> None:
+    from djust.template_tags import TagHandler, register
+
+    @register("djust_floor_probe_2556")
+    class _FloorProbeTag(TagHandler):
+        def render(self, args, context):
+            _FLOOR_PROBE_SEEN.clear()
+            _FLOOR_PROBE_SEEN.update(context)
+            return ""
+
+
+_register_floor_probe()
+
+
+def _secretive_user() -> "SecretiveUser":
+    user = SecretiveUser(pk=1, username="alice")
+    user.set_password("hunter2")
+    assert user.password.startswith("pbkdf2"), user.password
+    return user
+
+
+def _probe_backend(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """The plain ``DjustTemplateBackend`` entry."""
+    _FLOOR_PROBE_SEEN.clear()
+    backend_render("{% djust_floor_probe_2556 %}", ctx)
+    return dict(_FLOOR_PROBE_SEEN)
+
+
+def _probe_liveview(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """The LiveView entry that carries a sidecar — ``_sync_state_to_rust``.
+
+    NOT ``liveview_render`` above: that is ``render_full_template``'s page
+    shell, which wires no sidecar at all (#2513), so it could never show the
+    difference this test is about.
+    """
+    from djust import LiveView
+    from djust.testing import LiveViewTestClient
+
+    values = dict(ctx)
+
+    class _V(LiveView):
+        def mount(self, request, **kwargs):
+            for key, value in values.items():
+                setattr(self, key, value)
+
+    _V.template = "<div dj-root>{% djust_floor_probe_2556 %}</div>"
+    client = LiveViewTestClient(_V)
+    client.mount()
+    _FLOOR_PROBE_SEEN.clear()
+    client.render_with_patches()
+    return dict(_FLOOR_PROBE_SEEN)
+
+
+#: ``box`` holds the user in a container the handler reaches by hand. The
+#: plain-dict row is the CONTROL — the shape the floor already protected — and
+#: every ``MultiValueDict`` row must answer identically.
+_FLOOR_SHAPES = {
+    "plain-dict": (lambda u: {"u": u}, lambda box: box["u"]),
+    "mvd-top": (lambda u: MultiValueDict({"u": [u]}), lambda box: box["u"]),
+    "mvd-in-dict": (lambda u: {"q": MultiValueDict({"u": [u]})}, lambda box: box["q"]["u"]),
+    "mvd-in-list": (lambda u: [MultiValueDict({"u": [u]})], lambda box: box[0]["u"]),
+}
+
+#: The three names the floor governs on :class:`SecretiveUser`.
+_FLOOR_NAMES = ("password", "_secret", "session_digest")
+
+
+def _floor_verdict(reached: Any) -> Dict[str, str]:
+    """How each governed name answers, whatever channel produced ``reached``.
+
+    A handler can be handed a model through the sidecar (then the answer is a
+    ``_SidecarModelProxy`` and a governed name RAISES) or through the eager
+    serializer's floor-filtered dict (then the name is simply ABSENT). Both are
+    the floor holding; a live ``Model`` whose attribute returns the value is
+    not. Recording the verdict per name rather than asserting one channel keeps
+    the row honest on an entry that answers through the other one.
+    """
+    verdict = {}
+    for name in _FLOOR_NAMES:
+        if isinstance(reached, dict):
+            verdict[name] = "absent" if name not in reached else "LEAK:%r" % (reached[name],)
+            continue
+        try:
+            value = getattr(reached, name)
+        except AttributeError:
+            verdict[name] = "refused"
+        else:
+            verdict[name] = "LEAK:%r" % (value,)
+    return verdict
+
+
+@pytest.mark.parametrize("probe", [_probe_backend, _probe_liveview], ids=["backend", "liveview"])
+class TestTheFloorHoldsInsideAMultiValueDict:
+    """#2596 re-review 🔴: ``_protect_sidecar_tree`` handed a ``MultiValueDict``
+    to a tag handler RAW, so a model inside one arrived live.
+
+    Measured before the fix, through the handler below:
+    ``{"box": {"u": user}}`` gave a ``_SidecarModelProxy`` and ``.password``
+    raised; ``{"box": MultiValueDict({"u": [user]})}`` gave the ``User`` itself
+    and ``.password`` was the hash. Introduced and fixed inside this PR.
+
+    The two entries reach the handler through different channels for different
+    shapes, which is why the security row below asserts the VERDICT rather than
+    one channel's shape: the LiveView entry's eager serializer already answers a
+    JSON-friendly plain ``dict`` of models with a floor-filtered dict, while a
+    ``MultiValueDict`` is not JSON-friendly and rides the sidecar. Both are the
+    floor holding. On the plain backend the sidecar answers every shape, so the
+    stricter "identical to the plain-dict control" assertion lives there.
+    """
+
+    @pytest.mark.parametrize("shape", list(_FLOOR_SHAPES), ids=list(_FLOOR_SHAPES))
+    def test_no_governed_name_is_reachable_on_any_shape(self, probe, shape):
+        """The security invariant, on every entry × shape.
+
+        ``LEAK:`` is what the pre-fix ``MultiValueDict`` rows reported, and it
+        is the only verdict that fails here — refused (a proxy raised) and
+        absent (the eager serializer's floor dropped it) are both the floor.
+        """
+        build, reach = _FLOOR_SHAPES[shape]
+        reached = reach(probe({"box": build(_secretive_user())})["box"])
+        assert not isinstance(reached, models.Model), "a live model reached the handler: %r" % (
+            reached,
+        )
+        verdict = _floor_verdict(reached)
+        assert all(v in ("refused", "absent") for v in verdict.values()), (shape, verdict)
+
+    @pytest.mark.parametrize("shape", list(_FLOOR_SHAPES), ids=list(_FLOOR_SHAPES))
+    def test_the_answer_matches_the_plain_dict_control_where_one_channel_answers(
+        self, probe, shape
+    ):
+        """The stricter row: same TYPE and same per-name verdict as a plain dict.
+
+        Skipped on an entry/shape pair whose two containers legitimately take
+        different channels (see the class docstring) — asserting equality there
+        would pin the eager/sidecar split rather than the floor. The skip is
+        keyed on the observed channel, not on a hard-coded entry name, so a
+        future change that routes a shape differently re-arms the assertion
+        rather than silently keeping it skipped.
+        """
+        control = _FLOOR_SHAPES["plain-dict"][1](
+            probe({"box": _FLOOR_SHAPES["plain-dict"][0](_secretive_user())})["box"]
+        )
+        reached = _FLOOR_SHAPES[shape][1](
+            probe({"box": _FLOOR_SHAPES[shape][0](_secretive_user())})["box"]
+        )
+        if isinstance(control, dict) != isinstance(reached, dict):
+            pytest.skip(
+                "different channels: control=%s, %s=%s"
+                % (type(control).__name__, shape, type(reached).__name__)
+            )
+        assert type(reached) is type(control), (type(reached), type(control))
+        assert _floor_verdict(reached) == _floor_verdict(control)
+
+
+class TestTheBackendEntryHandsOverAProxy:
+    """Non-vacuity for the rows above: on the plain backend the sidecar IS the
+    channel for all four shapes, so ``_SidecarModelProxy`` — not merely "not a
+    live model", and not the eager serializer's dict — is what every one of
+    them must produce. Without this, a change that stopped attaching the
+    sidecar entirely would leave the verdict rows green."""
+
+    @pytest.mark.parametrize("shape", list(_FLOOR_SHAPES), ids=list(_FLOOR_SHAPES))
+    def test_every_shape_arrives_as_a_sidecar_proxy(self, shape):
+        from djust.serialization import _SidecarModelProxy
+
+        build, reach = _FLOOR_SHAPES[shape]
+        reached = reach(_probe_backend({"box": build(_secretive_user())})["box"])
+        assert isinstance(reached, _SidecarModelProxy), (shape, type(reached))
+
+
+class TestProtectingAMultiValueDictKeepsItsType:
+    """The second mechanism: the floor rebuilds THROUGH the container's type.
+
+    Rebuilding as a plain ``dict`` would keep the floor and break
+    ``{% querystring %}`` — which calls ``.copy()`` / ``.setlist()`` /
+    ``.urlencode()`` — and would collapse every repeated key. These rows go red
+    for that mistake alone, and stay green for the floor mistake above.
+    """
+
+    def test_a_query_dict_with_nothing_to_protect_is_returned_untouched(self):
+        """Every real request ``QueryDict`` is this row: strings, no model.
+
+        Identity, not just equality — a rebuild would cost a copy per render on
+        the hot path, and would silently make an immutable ``request.GET``
+        writable.
+        """
+        from djust.serialization import build_render_sidecar
+
+        qd = _FACTORY.get("/?a=1&a=2&page=3").GET
+        assert build_render_sidecar({"qd": qd})["qd"] is qd
+
+    def test_a_query_dict_that_carried_a_model_is_still_a_query_dict(self):
+        from djust.serialization import _SidecarModelProxy, build_render_sidecar
+
+        qd = QueryDict("a=1&a=2&page=3", mutable=True)
+        qd.setlist("u", [_secretive_user()])
+        out = build_render_sidecar({"qd": qd})["qd"]
+
+        assert isinstance(out, QueryDict), type(out)
+        assert out is not qd, "the protected copy must not be the caller's own object"
+        assert isinstance(out["u"], _SidecarModelProxy), type(out["u"])
+        with pytest.raises(AttributeError):
+            out["u"].password
+        # Repeated keys survive: the plain-`dict` rebuild would keep only "2".
+        assert out.getlist("a") == ["1", "2"]
+        assert out.urlencode().startswith("a=1&a=2&page=3&u=")
+
+    def test_the_rebuilt_copy_keeps_the_originals_mutability(self):
+        """``QueryDict.copy()`` always returns a MUTABLE copy, so a rebuilt
+        ``request.GET`` would start accepting writes Django refuses."""
+        from djust.serialization import build_render_sidecar
+
+        frozen = QueryDict("a=1", mutable=True)
+        frozen.setlist("u", [_secretive_user()])
+        frozen._mutable = False
+        out = build_render_sidecar({"qd": frozen})["qd"]
+        with pytest.raises(AttributeError):
+            out["page"] = "9"
+
+    @_QS
+    def test_querystring_still_renders_from_a_protected_query_dict(self):
+        """The tag runs on the object the floor handed over, on both entries."""
+        from djust import LiveView
+        from djust.testing import LiveViewTestClient
+
+        def _qd():
+            qd = QueryDict("a=1&a=2&page=3", mutable=True)
+            qd.setlist("u", [_secretive_user()])
+            return qd
+
+        src = "{% querystring qd page=4 %}"
+        expected = django_render(src, {"qd": _qd()})
+        assert "page=4" in expected and "a=1&amp;a=2" in expected, expected
+        assert backend_render(src, {"qd": _qd()}) == expected
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.qd = _qd()
+
+        _V.template = "<div dj-root>%s</div>" % src
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert expected in html, html
+
+    def test_a_multi_value_dict_whose_lists_cannot_be_read_is_not_downgraded(self):
+        """A subclass with a hostile ``lists()`` keeps its type rather than
+        being rebuilt as a plain ``dict`` — the floor declines, it does not
+        silently destroy the container it cannot walk."""
+        from djust.serialization import build_render_sidecar
+
+        class _Hostile(MultiValueDict):
+            def lists(self):
+                raise RuntimeError("no")
+
+        hostile = _Hostile({"a": ["1"]})
+        assert build_render_sidecar({"h": hostile})["h"] is hostile
