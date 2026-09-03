@@ -22,16 +22,20 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.git_env import isolated_git_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESOLVER = REPO_ROOT / "scripts" / "run-with-venv-python.sh"
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    # Don't let the host user's global git config leak in.
-    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    # Don't let the host user's global git config leak in, and never inherit
+    # git's own execution variables — under a hook they point at the REAL
+    # repository and this fixture would re-init it (#2608).
+    env = isolated_git_env(
+        GIT_CONFIG_GLOBAL="/dev/null",
+        GIT_CONFIG_SYSTEM="/dev/null",
+    )
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -45,7 +49,9 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def _run_resolver(
     cwd: Path, *args: str, extra_path: str | None = None
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
+    # The resolver runs `git` itself, so it must not inherit git's execution
+    # variables either — under a hook they name the REAL repository (#2608).
+    env = isolated_git_env()
     if extra_path is not None:
         env["PATH"] = extra_path
     return subprocess.run(
