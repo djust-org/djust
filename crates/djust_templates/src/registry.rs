@@ -76,12 +76,15 @@ fn escape_handler_return(
     result: &Bound<'_, PyAny>,
     what: &str,
     name: &str,
+    // Django's `if context.autoescape:` guard above (#2556): under
+    // `{% autoescape off %}` the return is inserted raw, `__html__` or not.
+    autoescape: bool,
 ) -> Result<String, String> {
     let already_html = crate::filter_registry::py_value_is_safe_string(result);
     let text = result
         .extract::<String>()
         .map_err(|_| format!("{what} '{name}' render() must return a string"))?;
-    if already_html {
+    if already_html || !autoescape {
         Ok(text)
     } else {
         Ok(crate::filters::html_escape(&text))
@@ -256,6 +259,8 @@ struct BlockHandlerEntry {
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
     returns_bindings: bool,
+    /// See [`read_wants_autoescape`] (#2556).
+    wants_autoescape: bool,
 }
 
 /// Global registry for block tag handlers (tags with children).
@@ -302,6 +307,15 @@ fn read_resolve_positions(handler: &Bound<'_, PyAny>) -> PyResult<Option<HashSet
 /// `(output, {name: value})` and its exceptions cross as
 /// `DjangoRustError::PythonException` instead of being flattened to a string.
 ///
+/// A bindings handler is also handed the surrounding `{% autoescape %}`
+/// policy as a keyword argument, `render(args, [content,] context,
+/// autoescape=bool)` (#2556): a bridged tag renders through Django's OWN node
+/// on a Django `Context`, and it is that context's `autoescape` — not the
+/// registry's output escape, which the bridge's `mark_safe`d return makes a
+/// no-op — that decides whether a `simple_tag`'s return is inserted raw. The
+/// bare-string contract keeps `render(args, context)`; the renderer applies
+/// the policy to its return instead.
+///
 /// Absent or falsy = the historical contract, untouched for every existing
 /// handler. ONE reader for both registries, like [`read_resolve_positions`].
 fn read_returns_bindings(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -332,6 +346,34 @@ fn read_accepts_as_var(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     handler.getattr("ACCEPTS_AS_VAR")?.is_truthy()
 }
 
+/// The handler's opt-in "hand me the `{% autoescape %}` policy" declaration
+/// (#2556).
+///
+/// A handler that sets `WANTS_AUTOESCAPE = True` (with `RETURNS_BINDINGS`)
+/// is called as `render(args, [content,] context, autoescape=bool)`.
+///
+/// Opt-IN rather than a new term of the `RETURNS_BINDINGS` contract, because
+/// the kwarg is a signature change and `RETURNS_BINDINGS` is public: passing
+/// it unconditionally is a `TypeError` for every handler that does not name
+/// the parameter — which is exactly what `{% url %}`'s `UrlTagHandler`
+/// (#2563) became the moment the two branches met, on EVERY render, not only
+/// under `{% autoescape off %}`.
+///
+/// Only the `{% load %}` bridge needs it: a bridged tag renders through
+/// Django's OWN node on a Django `Context`, and it is that context's
+/// `autoescape` — not [`escape_handler_return`], which the bridge's
+/// `mark_safe`d return makes a no-op — that decides whether a `simple_tag`'s
+/// plain-`str` return is inserted raw. Every other handler returns a bare
+/// string and has the policy applied to it by `escape_handler_return`, which
+/// is Django's `if context.autoescape:` in the one place both registries
+/// share. ONE reader for both registries, like [`read_returns_bindings`].
+fn read_wants_autoescape(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("WANTS_AUTOESCAPE")? {
+        return Ok(false);
+    }
+    handler.getattr("WANTS_AUTOESCAPE")?.is_truthy()
+}
+
 /// A registered inline-tag handler plus its arg-resolution policy (#2423).
 ///
 /// Same shape as [`AssignHandlerEntry`], and for the same reason one registry
@@ -347,6 +389,8 @@ struct TagHandlerEntry {
     returns_bindings: bool,
     /// See [`read_accepts_as_var`] (#2563).
     accepts_as_var: bool,
+    /// See [`read_wants_autoescape`] (#2556).
+    wants_autoescape: bool,
     /// `Some(message)` when the parser must REFUSE this tag with Django's
     /// `TemplateSyntaxError` the moment a template uses it (#2547): a raw
     /// `@register.tag` that consumes a body cannot be bridged, and the
@@ -432,6 +476,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     let resolve_positions = read_resolve_positions(handler_ref)?;
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let accepts_as_var = read_accepts_as_var(handler_ref)?;
+    let wants_autoescape = read_wants_autoescape(handler_ref)?;
     if accepts_as_var && !returns_bindings {
         return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
             "Handler '{name}' declares ACCEPTS_AS_VAR but not RETURNS_BINDINGS — \
@@ -451,6 +496,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
             resolve_positions,
             returns_bindings,
             accepts_as_var,
+            wants_autoescape,
             parse_refusal,
         },
     );
@@ -552,11 +598,12 @@ pub fn register_block_tag_handler(
         ));
     }
 
-    // The SAME two readers the inline registry uses (#2547): the block
+    // The SAME readers the inline registry uses (#2547): the block
     // registry ignoring `RESOLVE_ARG_POSITIONS` was the #1646 drift the
     // #2547 plan measured.
     let resolve_positions = read_resolve_positions(handler_ref)?;
     let returns_bindings = read_returns_bindings(handler_ref)?;
+    let wants_autoescape = read_wants_autoescape(handler_ref)?;
 
     let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -569,6 +616,7 @@ pub fn register_block_tag_handler(
             handler,
             resolve_positions,
             returns_bindings,
+            wants_autoescape,
         },
     );
     Ok(())
@@ -632,7 +680,7 @@ pub fn call_block_handler(
     content: &str,
     context: &HashMap<String, djust_core::Value>,
 ) -> Result<String, DjangoRustError> {
-    call_block_handler_with_py_sidecar(name, args, content, context, None)
+    call_block_handler_with_py_sidecar(name, args, content, context, None, true)
 }
 
 /// Variant of [`call_block_handler`] that additionally injects raw
@@ -656,6 +704,7 @@ pub fn call_block_handler_with_py_sidecar(
     content: &str,
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    autoescape: bool,
 ) -> Result<String, DjangoRustError> {
     let handler = {
         let registry = BLOCK_TAG_HANDLERS
@@ -703,7 +752,7 @@ pub fn call_block_handler_with_py_sidecar(
             .call_method1("render", (py_args, py_content, py_context))
             .map_err(handler_exception)?;
 
-        escape_handler_return(&result, "Block handler", name)
+        escape_handler_return(&result, "Block handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)
     })
 }
@@ -740,7 +789,7 @@ pub fn call_handler(
     args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
 ) -> Result<String, DjangoRustError> {
-    call_handler_with_py_sidecar(name, args, context, None)
+    call_handler_with_py_sidecar(name, args, context, None, true)
 }
 
 /// A Python exception raised by a handler's `render`, carried WHOLE (#2563).
@@ -785,6 +834,7 @@ pub fn call_handler_with_py_sidecar(
     args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
+    autoescape: bool,
 ) -> Result<String, DjangoRustError> {
     // Get handler from registry
     let handler = {
@@ -816,7 +866,8 @@ pub fn call_handler_with_py_sidecar(
             .call_method1("render", (py_args, py_context))
             .map_err(handler_exception)?;
 
-        escape_handler_return(&result, "Handler", name).map_err(DjangoRustError::TemplateError)
+        escape_handler_return(&result, "Handler", name, autoescape)
+            .map_err(DjangoRustError::TemplateError)
     })
 }
 
@@ -1135,6 +1186,7 @@ fn split_bindings_result(
     result: &Bound<'_, PyAny>,
     what: &str,
     name: &str,
+    autoescape: bool,
 ) -> Result<(String, Vec<HandlerBinding>), String> {
     let tuple = result.cast::<pyo3::types::PyTuple>().map_err(|_| {
         format!("{what} '{name}' declared RETURNS_BINDINGS but did not return a (str, dict) tuple")
@@ -1148,7 +1200,7 @@ fn split_bindings_result(
     let output = tuple
         .get_item(0)
         .map_err(|e| format!("{what} '{name}': {e}"))?;
-    let html = escape_handler_return(&output, what, name)?;
+    let html = escape_handler_return(&output, what, name, autoescape)?;
     let dict_obj = tuple
         .get_item(1)
         .map_err(|e| format!("{what} '{name}': {e}"))?;
@@ -1176,6 +1228,25 @@ fn split_bindings_result(
     Ok((html, bindings))
 }
 
+/// The `autoescape=` keyword a bindings handler that declared
+/// `WANTS_AUTOESCAPE` receives (#2556); `None` for every other handler, whose
+/// `render` signature does not name the parameter. See
+/// [`read_wants_autoescape`].
+fn autoescape_kwargs(
+    py: Python<'_>,
+    wants: bool,
+    autoescape: bool,
+) -> Result<Option<Bound<'_, pyo3::types::PyDict>>, String> {
+    if !wants {
+        return Ok(None);
+    }
+    let kwargs = pyo3::types::PyDict::new(py);
+    kwargs
+        .set_item("autoescape", autoescape)
+        .map_err(|e| format!("Failed to set autoescape kwarg: {e}"))?;
+    Ok(Some(kwargs))
+}
+
 /// Call an inline handler that declared `RETURNS_BINDINGS` (#2547).
 ///
 /// Differs from [`call_handler_with_py_sidecar`] in exactly the two ways
@@ -1190,26 +1261,33 @@ pub fn call_handler_with_bindings(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     safe_paths: &[String],
+    autoescape: bool,
 ) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
-    let handler = {
+    let (handler, wants) = {
         let registry = TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
         let entry = registry.get(name).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("No handler registered for tag: {name}"))
         })?;
-        Python::attach(|py| entry.handler.clone_ref(py))
+        (
+            Python::attach(|py| entry.handler.clone_ref(py)),
+            entry.wants_autoescape,
+        )
     };
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
         let py_context = build_py_context(py, context, raw_py_objects)
             .map_err(DjangoRustError::TemplateError)?;
         remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
+        let kwargs =
+            autoescape_kwargs(py, wants, autoescape).map_err(DjangoRustError::TemplateError)?;
         let result = handler
             .bind(py)
-            .call_method1("render", (py_args, py_context))
+            .call_method("render", (py_args, py_context), kwargs.as_ref())
             .map_err(DjangoRustError::PythonException)?;
-        split_bindings_result(&result, "Handler", name).map_err(DjangoRustError::TemplateError)
+        split_bindings_result(&result, "Handler", name, autoescape)
+            .map_err(DjangoRustError::TemplateError)
     })
 }
 
@@ -1224,15 +1302,19 @@ pub fn call_block_handler_with_bindings(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     safe_paths: &[String],
+    autoescape: bool,
 ) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
-    let handler = {
+    let (handler, wants) = {
         let registry = BLOCK_TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
         let entry = registry.get(name).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
         })?;
-        Python::attach(|py| entry.handler.clone_ref(py))
+        (
+            Python::attach(|py| entry.handler.clone_ref(py)),
+            entry.wants_autoescape,
+        )
     };
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -1242,11 +1324,13 @@ pub fn call_block_handler_with_bindings(
         let py_context = build_py_context(py, context, raw_py_objects)
             .map_err(DjangoRustError::TemplateError)?;
         remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
+        let kwargs =
+            autoescape_kwargs(py, wants, autoescape).map_err(DjangoRustError::TemplateError)?;
         let result = handler
             .bind(py)
-            .call_method1("render", (py_args, py_content, py_context))
+            .call_method("render", (py_args, py_content, py_context), kwargs.as_ref())
             .map_err(DjangoRustError::PythonException)?;
-        split_bindings_result(&result, "Block handler", name)
+        split_bindings_result(&result, "Block handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)
     })
 }

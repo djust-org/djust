@@ -3135,6 +3135,51 @@ impl fmt::Display for Value {
     }
 }
 
+/// The `(key, value)` pairs of a Django `MultiValueDict` / `QueryDict`, one
+/// per key with the LAST value — `QueryDict.__getitem__`'s rule, and what
+/// Django renders for `{{ qd.a }}` on `?a=1&a=2` (#2556).
+///
+/// A `MultiValueDict` is a `dict` subclass whose STORAGE holds a list per
+/// key behind a last-value `items()`. Every converter in this workspace
+/// reaches a mapping through `cast::<PyDict>()` and iterates the storage, so
+/// the raw object rendered `['1', '2']` for `{{ qd.a }}`, `''` for
+/// `{{ qd.page|add:1 }}` and a false `{% if qd.page == '3' %}` (PR #2596
+/// Stage 11). Rebuilding it as a plain dict in Python is not an option on
+/// the plain-backend path: its raw-Python sidecar is derived from the SAME
+/// dict the values are extracted from (`entry_sidecar`), and
+/// `{% querystring my_qd a=2 %}` needs the real object there. So the
+/// object stays raw at the boundary and the converters read it as Django
+/// does.
+///
+/// `None` for anything that is not one: an exact `dict` costs a single type
+/// check and no attribute lookup; a subclass is recognised by the
+/// `getlist` + `lists` pair that `MultiValueDict` defines and a plain
+/// mapping does not. One helper, three converters (`FromPyObject for Value`,
+/// `python_to_value`, `python_to_json_value`) — the #1646 shape.
+pub fn multi_value_dict_pairs<'py>(
+    ob: &Bound<'py, PyAny>,
+) -> Option<Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>> {
+    let d = ob.cast::<PyDict>().ok()?;
+    if d.is_exact_instance_of::<PyDict>() {
+        return None;
+    }
+    if !ob.hasattr("getlist").ok()? || !ob.hasattr("lists").ok()? {
+        return None;
+    }
+    // Snapshotted before any recursive conversion, for the same reason the
+    // plain-dict arms snapshot (#2510): `items()` runs Python.
+    ob.call_method0("items")
+        .ok()?
+        .try_iter()
+        .ok()?
+        .map(|pair| {
+            pair.ok()?
+                .extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()
+                .ok()
+        })
+        .collect()
+}
+
 /// A Python dict KEY, with its type kept (#2339).
 ///
 /// Total by construction: every Python dict key is hashable, and a key whose
@@ -3232,6 +3277,15 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             Ok(Value::Tuple(items))
         } else if let Ok(list) = ob.extract::<Vec<Value>>() {
             Ok(Value::List(list))
+        } else if let Some(pairs) = multi_value_dict_pairs(&ob.to_owned()) {
+            // A Django `QueryDict` / `MultiValueDict` BEFORE the dict arm:
+            // last value per key, as Django resolves it (#2556). See the
+            // helper for why the object arrives raw.
+            let mut m: IndexMap<ObjectKey, Value> = IndexMap::with_capacity(pairs.len());
+            for (k, v) in pairs {
+                m.insert(py_object_key(&k), v.extract::<Value>()?);
+            }
+            Ok(Value::Object(m))
         } else if let Some(map) = ob.cast::<PyDict>().ok().and_then(|d| {
             // Iterated by hand rather than `extract::<IndexMap<..>>()`, because
             // extraction is exactly where Python's insertion order would be

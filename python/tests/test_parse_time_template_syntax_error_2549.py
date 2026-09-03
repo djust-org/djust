@@ -138,9 +138,9 @@ class TestConstructionTimeRefusal:
     def test_message_is_the_engine_text_unchanged(self, backend):
         """Published contract: the same bytes the render path raised with."""
         with pytest.raises(DjustTemplateSyntaxError) as info:
-            backend.from_string("{% autoescape on %}x{% endautoescape %}")
+            backend.from_string("{% ifchanged %}x{% endifchanged %}")
         assert str(info.value) == (
-            "Template error: Unsupported template tag '{% autoescape on %}'. "
+            "Template error: Unsupported template tag '{% ifchanged %}'. "
             "Register a handler via djust._rust.register_tag_handler(), "
             "or use Django's template engine instead."
         )

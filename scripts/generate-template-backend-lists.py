@@ -76,6 +76,8 @@ CLOSERS = frozenset(
         "endverbatim",
         "endwith",
         "endspaceless",
+        "endautoescape",
+        "endfilter",
     }
 )
 

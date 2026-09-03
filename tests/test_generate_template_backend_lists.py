@@ -272,17 +272,17 @@ class TestExtractionMatchesTheRegistries:
         assert not (native & handler)
         assert not (native & unsupported)
         assert not (handler & unsupported)
-        # The two Python-handler tags and the native collision rule
+        # The five Python-handler tags (#2556 added three) and the native collision rule
         # (`templatetag` has both an arm and a handler; the arm wins).
-        assert handler == {"regroup", "url"}
+        assert handler == {"debug", "lorem", "querystring", "regroup", "url"}
         assert "templatetag" in native
 
     def test_native_tag_extraction_sees_an_injected_arm(self, gen, tmp_path):
         """Gate-off for the arm regex: a new arm in a copy of parser.rs is extracted.
 
-        `autoescape` is asserted absent because it has no arm today; when the
-        v1.2.0-3 autoescape row lands, this assertion flips and the generated
-        unsupported list shrinks with it.
+        `autoescape` has an arm since #2556 (v1.2.0-3) and `filter` since
+        #2596, so both are asserted PRESENT — and `ifchanged`, the one Django
+        built-in the parser still has no arm for, absent.
         """
         src = _PARSER_RS.read_text(encoding="utf-8")
         anchor = '                "if" => {'
@@ -293,8 +293,12 @@ class TestExtractionMatchesTheRegistries:
         names = gen.djust_native_tags(probe)
         assert "zzz_probe" in names
         assert "if" in names
-        assert "autoescape" not in names
+        assert "autoescape" in names
+        assert "filter" in names
+        assert "ifchanged" not in names
         assert "endif" not in names, "closers must be dropped"
+        assert "endautoescape" not in names, "closers must be dropped"
+        assert "endfilter" not in names, "closers must be dropped"
 
     def test_hidden_arity_row_turns_the_check_red(self, tmp_path):
         """Coverage (1) gate-off: remove one filter from the ARITY input -> red.
@@ -346,13 +350,22 @@ class TestCheckMode:
 
     def test_hand_edited_unsupported_list_fails_the_check(self, tmp_path):
         text = _DOC.read_text(encoding="utf-8")
-        needle = "`querystring`, "
-        assert text.count(needle) == 1, "the unsupported line is the mutation target"
+        # Mutate the unsupported-tags line itself — pick its first entry
+        # rather than hard-coding a tag name, so the test keeps targeting
+        # that line as tags graduate out of it (#2556 moved four, #2596 five,
+        # leaving one). Two shapes the assertion must not assume, both of
+        # which the one-entry list produced: there is no comma after the last
+        # entry, and the tag name is NOT unique in the file (`ifchanged` is
+        # also named in the ERROR-classes prose below). So the mutation is
+        # applied to the matched SPAN, by offset, not to a bare needle.
+        m = re.search(r"^(\*\*Built-in tags — unsupported \(\d+\):\*\* )`(\w+)`(, )?", text, re.M)
+        assert m, "the unsupported line is the mutation target"
+        first_tag = m.group(2)
         edited = tmp_path / "TEMPLATE_BACKEND.md"
-        edited.write_text(text.replace(needle, "", 1), encoding="utf-8")
+        edited.write_text(text[: m.start()] + m.group(1) + text[m.end() :], encoding="utf-8")
         code, out = _run("--doc", str(edited))
         assert code == 1, out
-        assert "querystring" in out
+        assert first_tag in out
         assert "run: make template-backend-lists" in out
 
     def test_hand_edited_count_fails_the_check(self, tmp_path):
@@ -478,7 +491,9 @@ class TestScoreboardParity:
     def test_every_scoreboard_django_tag_is_in_the_generated_unsupported_set(self, gen, report):
         board = gen.scoreboard_unsupported_tags(_SCOREBOARD)
         assert board, "the scoreboard regex found no `Unsupported template tag` lines"
-        assert "autoescape" in board
+        # A tag the engine still refuses; `autoescape` left this set in #2556.
+        assert "ifchanged" in board
+        assert "autoescape" not in report.all_unsupported_tags
         known = report.django_tags | report.library_tags
         django_names_on_the_board = board & known
         assert django_names_on_the_board, "the scoreboard names no Django tag at all?"
@@ -527,12 +542,16 @@ class TestCrossCheckDetectsDisagreement:
     def test_synthetic_scoreboard_naming_a_supported_tag_is_a_finding(self, gen, report, tmp_path):
         board = tmp_path / "last-run.txt"
         board.write_text(
+            # `for` is supported and so IS a finding; `ifchanged` is the one
+            # Django built-in the engine still refuses, so naming it is not
+            # (`filter` played that control role until #2596 implemented it);
+            # `badtag` is no Django tag at all, so it is bucketed away.
             "ERROR template_tests.x.y | Unsupported template tag '{% for x in y %}'. Register\n"
-            "ERROR template_tests.x.z | Unsupported template tag '{% autoescape on %}'. Register\n"
+            "ERROR template_tests.x.z | Unsupported template tag '{% ifchanged %}'. Register\n"
             "ERROR template_tests.x.w | Unsupported template tag '{% badtag %}'. Register\n",
             encoding="utf-8",
         )
-        assert gen.scoreboard_unsupported_tags(board) == {"for", "autoescape", "badtag"}
+        assert gen.scoreboard_unsupported_tags(board) == {"for", "ifchanged", "badtag"}
         problems = gen.cross_check(report, board)
         assert len(problems) == 1
         assert "['for']" in problems[0]
@@ -654,8 +673,12 @@ class TestGeneratedTagBucketsMatchTheEngine:
         success — ``extends``/``include``/``url`` fail for other reasons."""
         for shape, rendered in rendered_tags.items():
             assert _direction_findings(report, rendered) == [], shape
-        # The buckets are not vacuous.
-        assert _UNSUPPORTED_TAG_TEXT in rendered_tags["djust_only"]["autoescape"]
+        # The buckets are not vacuous. `ifchanged` is the last Django
+        # built-in the engine still refuses; `filter` left this side in #2596
+        # and `autoescape` in #2556, so both are asserted SUPPORTED below.
+        assert _UNSUPPORTED_TAG_TEXT in rendered_tags["djust_only"]["ifchanged"]
+        assert rendered_tags["djust_only"]["filter"] == "OK:X"
+        assert rendered_tags["djust_only"]["autoescape"] == "OK:1234"
         assert rendered_tags["djust_only"]["with"] == "OK:1"
         assert rendered_tags["djust_only"]["regroup"] == "OK:2"
 
