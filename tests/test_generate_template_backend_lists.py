@@ -559,23 +559,28 @@ class TestDocAndWiring:
 
     def test_troubleshooting_quotes_the_engines_error_text(self):
         text = _DOC.read_text(encoding="utf-8")
-        renderer = (_REPO / "crates" / "djust_templates" / "src" / "renderer.rs").read_text(
+        # One producer for the text since #2549: `unsupported_tag_message` in
+        # parser.rs (the parser refuses at parse time; the renderer's
+        # hand-built-node arm calls the same function).
+        parser = (_REPO / "crates" / "djust_templates" / "src" / "parser.rs").read_text(
             encoding="utf-8"
         )
         # The Rust literal is a `\`-continued format string; collapse it to
         # the bytes the engine emits before comparing.
         engine_text = " ".join(
             re.search(
-                r'"(Unsupported template tag \'\{tag_sig\}\'\. \\\n.*?instead\.)"', renderer, re.S
+                r'"(Unsupported template tag \'\{\{% \{name\}\{args_str\} %\}\}\'\. \\\n.*?instead\.)"',
+                parser,
+                re.S,
             )
             .group(1)
             .replace("\\\n", "\n")
             .split()
         )
         assert engine_text.startswith(
-            "Unsupported template tag '{tag_sig}'. Register a handler via"
+            "Unsupported template tag '{{% {name}{args_str} %}}'. Register a handler via"
         )
-        assert engine_text.replace("{tag_sig}", "{% tag_name %}") in text
+        assert engine_text.replace("{{% {name}{args_str} %}}", "{% tag_name %}") in text
         assert "Unsupported tag '{% tag_name %}'" not in text
 
     def test_rendered_block_has_no_timestamp(self, gen, report):

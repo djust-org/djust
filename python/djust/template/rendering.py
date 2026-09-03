@@ -143,6 +143,35 @@ class DjustTemplate:
         # LiveView expects: template.template.source
         self.template = _TemplateSourceWrapper(template_string)
 
+        self._compile()
+
+    def _compile(self) -> None:
+        """Parse the source now, where Django's ``Engine.from_string`` /
+        ``get_template`` parse (#2549).
+
+        Until #2549 the Rust parse ran at first ``render``, so a syntax
+        error surfaced one call later than Django's, and a defect in a
+        branch that never rendered never surfaced at all. The parse goes
+        through the engine's ``TEMPLATE_CACHE``, so the render that follows
+        finds it parsed and does not pay twice. Raises
+        ``DjustTemplateSyntaxError`` — Django's ``TemplateSyntaxError`` and
+        a ``RuntimeError`` — with the engine's message text unchanged.
+
+        ``_ensure_custom_filters_bridged`` runs first for the same reason
+        ``render`` runs it: the parser refuses an unknown filter (#2419),
+        and a project's ``@register.filter`` callables reach the Rust
+        registry only through that bridge.
+        """
+        from .._rust import compile_template
+        from ..mixins.rust_bridge import _ensure_custom_filters_bridged
+        from .exceptions import DjustTemplateSyntaxError
+
+        _ensure_custom_filters_bridged()
+        try:
+            compile_template(self.template_string)
+        except RuntimeError as e:
+            raise DjustTemplateSyntaxError(str(e), origin=self.origin) from e
+
     def _jit_serialize_queryset(self, queryset: QuerySet, variable_name: str) -> list:
         """
         Apply JIT auto-serialization to a Django QuerySet.

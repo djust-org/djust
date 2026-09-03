@@ -137,7 +137,7 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 - Run the full suite before push; let pre-push hooks run
 - Tests must be deterministic — no flaky tests
 - Test imports must match actual module paths (a common rejection reason)
-- `feat:` and `fix:` PRs must update CHANGELOG.md
+- `feat:` and `fix:` PRs must add a changelog fragment: `changelog.d/<issue-or-slug>.<section>.md` (section ∈ added/changed/fixed/security/documentation/removed/deprecated; body = the bullet). Do NOT edit `CHANGELOG.md`'s `[Unreleased]` directly — pre-commit refuses it; the release cut compiles the fragments (`changelog.d/README.md`)
 
 ## Key Patterns
 
@@ -629,13 +629,16 @@ Canonicalized here so the next drain doesn't repeat the failure mode.
   worktrees or different repos are safe — the rule is one-checkout =
   one-agent.
 
-- **Two-commit shape: impl+tests / docs+CHANGELOG** (#181 / #1173,
+- **Two-commit shape: impl+tests / docs+changelog-fragment** (#181 / #1173,
   applied to `.pipeline-templates/feature-state.json`,
   `bugfix-state.json`, `ship-state.json`). Stage 5 (Implementation)
-  forbids CHANGELOG.md edits; Stage 9 (feature/bugfix) or Stage 5
+  forbids the changelog fragment; Stage 9 (feature/bugfix) or Stage 5
   (ship-pipelines, since they have no separate Implementation stage)
-  is the canonical CHANGELOG commit boundary. Defends against
-  cross-edit collisions on `[Unreleased]` even under serial execution.
+  is the canonical changelog commit boundary — it writes
+  `changelog.d/<issue>.<section>.md`, never `CHANGELOG.md` `[Unreleased]`.
+  Defends against cross-edit collisions even under serial execution;
+  the fragment directory retires the collision class entirely (one new
+  file per PR, nothing edits shared lines).
 
 - **3-clean-runs verification gate for pollution-class fixes** (#182 /
   #1174, applied to `.pipeline-templates/bugfix-state.json` Stage 6).

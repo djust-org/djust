@@ -1113,9 +1113,41 @@ class RustBridgeMixin:
                 if _candidate:
                     user_changed = _candidate
 
+            # Full-context truth (#2564): drop every Rust state key the context
+            # no longer carries, BEFORE the merge. ``update_state`` only ever
+            # extends, and a key that is simply absent is not a change the
+            # detector above can see — so ``del self.secret`` (or a
+            # ``if self.show: ctx["secret"] = …`` gate flipping closed) kept
+            # rendering the last value. On EVERY sync, including partial ones,
+            # because the removal is a delta ``context`` never contains; and
+            # from ``full_context`` as it stands here (post-filtering), not
+            # ``prev_refs`` — that fingerprint is emptied by
+            # ``_force_full_html`` on every restore, so a tombstone diff would
+            # be blind to a key that vanished across one while the restored
+            # clone still carries it. ``hasattr`` guard mirrors
+            # ``set_raw_py_values`` for a build that predates the method.
+            #
+            # One deliberate exemption: ``static_assigns``. Those are sent
+            # once and then SKIPPED by ``get_context_data`` (context.py,
+            # ``_static_assigns_sent``) precisely because Rust retains them —
+            # the user declared them constant, so they are truth without
+            # being in this render's context.
+            removed_keys: List[str] = []
+            if hasattr(self._rust_view, "retain_state_keys"):
+                keep_keys = list(full_context)
+                if getattr(self, "_static_assigns_sent", False):
+                    keep_keys.extend(getattr(self, "static_assigns", None) or [])
+                removed_keys = self._rust_view.retain_state_keys(keep_keys)
+
             self._rust_view.update_state(json_compatible_context)
             if safe_keys:
                 self._rust_view.mark_safe_keys(safe_keys)
+
+            # The removed set must JOIN the changed keys (#2564, mechanism 2).
+            # A removed key is not in ``context``, so the partial render would
+            # skip its region and serve the OLD text from the node cache.
+            if removed_keys:
+                user_changed = [*(user_changed or []), *removed_keys]
 
             # Always call set_raw_py_values (even when empty) so stale
             # objects from a previous render are cleared.

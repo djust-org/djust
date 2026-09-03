@@ -8,6 +8,18 @@ from django.test import RequestFactory, override_settings
 from djust import LiveView
 
 
+def _mock_rust_view() -> Mock:
+    """A stand-in ``RustLiveView`` for driving ``_sync_state_to_rust``.
+
+    ``retain_state_keys`` (#2564) is the one method whose RETURN the bridge
+    consumes — the removed keys join ``set_changed_keys`` — so a bare ``Mock``
+    hands back a ``Mock`` where a list is unpacked. Nothing is removed here.
+    """
+    mock = Mock()
+    mock.retain_state_keys.return_value = []
+    return mock
+
+
 class DateView(LiveView):
     """Minimal view for testing DATE_FORMAT injection."""
 
@@ -37,7 +49,7 @@ class TestDateFormatInjection:
         view.request = mock_request
 
         # Create a mock Rust view that captures update_state calls
-        mock_rust_view = Mock()
+        mock_rust_view = _mock_rust_view()
         mock_rust_view.update_state = Mock()
         mock_rust_view.mark_safe_keys = Mock()
         view._rust_view = mock_rust_view
@@ -57,7 +69,7 @@ class TestDateFormatInjection:
         view.mount(mock_request)
         view.request = mock_request
 
-        mock_rust_view = Mock()
+        mock_rust_view = _mock_rust_view()
         mock_rust_view.update_state = Mock()
         mock_rust_view.mark_safe_keys = Mock()
         view._rust_view = mock_rust_view
@@ -83,7 +95,7 @@ class TestDateFormatInjection:
         view.mount(mock_request)
         view.request = mock_request
 
-        mock_rust_view = Mock()
+        mock_rust_view = _mock_rust_view()
         mock_rust_view.update_state = Mock()
         mock_rust_view.mark_safe_keys = Mock()
         view._rust_view = mock_rust_view

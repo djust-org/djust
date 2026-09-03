@@ -268,6 +268,29 @@ test-python-parallel: ## Run Python tests in parallel (requires pytest-xdist)
 	@echo "$(GREEN)Running Python tests in parallel...$(NC)"
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto
 
+# CI runs python-tests as four pytest-split shards balanced by the durations
+# recorded in .test_durations (committed). pytest-split falls back to
+# splitting by test COUNT when an entry is missing, so a stale file only
+# unbalances the shards — it never drops a test. Refresh it when the suite
+# grows or shifts by more than ~10% (see CONTRIBUTING.md "CI shards"). One
+# full run of the same three roots CI uses; --clean-durations drops entries
+# for tests that no longer exist.
+.PHONY: test-durations
+test-durations: ## Regenerate .test_durations for the CI pytest-split shards (one full suite run)
+	@echo "$(GREEN)Recording per-test durations into .test_durations (full suite, ~7-10 min)...$(NC)"
+	@$(PYTHON) -c "import pytest_split" 2>/dev/null || { echo "$(YELLOW)pytest-split missing — install the [dev] extra$(NC)"; exit 1; }
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q \
+		--store-durations --clean-durations --durations-path .test_durations
+	@echo "$(GREEN)Wrote .test_durations — commit it with your change.$(NC)"
+
+# Run one CI shard exactly as the workflow does (default: shard 1 of 4).
+# `make test-shard GROUP=3` for another shard.
+GROUP ?= 1
+.PHONY: test-shard
+test-shard: ## Run one of the 4 CI pytest-split shards locally (GROUP=N)
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto \
+		--splits 4 --group $(GROUP) --durations-path .test_durations
+
 .PHONY: test-js
 test-js: ## Run JavaScript tests
 	@echo "$(GREEN)Running JavaScript tests...$(NC)"
@@ -343,6 +366,15 @@ check: lint typecheck check-bundle-init-order test ## Run linters, type-check, a
 .PHONY: check-changelog
 check-changelog: ## Validate CHANGELOG test-count claims against actual tests (closes #908)
 	@$(PYTHON) scripts/check-changelog-test-counts.py
+	@$(PYTHON) scripts/changelog-fragments.py check
+
+.PHONY: changelog-preview
+changelog-preview: ## Print [Unreleased] as it would read with changelog.d/ fragments folded in
+	@$(PYTHON) scripts/changelog-fragments.py preview
+
+.PHONY: changelog-compile
+changelog-compile: ## Fold changelog.d/ fragments into CHANGELOG.md [Unreleased] and delete them (release cut only)
+	@$(PYTHON) scripts/changelog-fragments.py compile
 
 .PHONY: ci-mirror
 ci-mirror: ## Mirror exact CI pytest invocations locally — catches coverage/xdist surprises pre-push (closes #960)
@@ -606,6 +638,14 @@ ifndef VERSION
 	@exit 1
 endif
 	@echo "$(YELLOW)Creating release v$(VERSION)...$(NC)"
+	@# Fold changelog.d/ fragments into [Unreleased] FIRST — before the rename to
+	@# "## [$(VERSION)]" and before the tag. If this changes anything the tree is
+	@# dirty and the clean check below stops the cut: review + commit, then re-run.
+	@$(PYTHON) scripts/changelog-fragments.py compile
+	@if [ -n "$$(git status --porcelain CHANGELOG.md changelog.d)" ]; then \
+		echo "$(RED)ERROR: changelog.d/ fragments were just folded into CHANGELOG.md [Unreleased]. Review the diff, commit it, then re-run make release.$(NC)"; \
+		exit 1; \
+	fi
 	@# Verify we're on main or release branch
 	@BRANCH=$$(git branch --show-current); \
 	case "$$BRANCH" in \
@@ -662,6 +702,10 @@ endif
 	@echo ""
 	@echo "$(YELLOW)Changes since last tag:$(NC)"
 	@git log --oneline $$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD~10)..HEAD | head -20
+	@echo ""
+	@echo "$(YELLOW)Pending changelog.d/ fragments (folded into [Unreleased] by make release):$(NC)"
+	@ls changelog.d/*.md 2>/dev/null | grep -v '/README\.md$$' | sed 's/^/  /' || echo "  (none)"
+	@$(PYTHON) scripts/changelog-fragments.py check
 	@echo ""
 	@echo "$(YELLOW)Would create tag:$(NC) v$(VERSION)"
 	@if echo "$(VERSION)" | grep -qE '[ab]|rc'; then \
