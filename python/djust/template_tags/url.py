@@ -19,12 +19,9 @@ the fail-soft that hides a broken link, and Django's own suite asserts
 the raise (``template_tests/syntax_tests/test_url.py``).
 """
 
-import logging
 from typing import Any, Dict, List, Tuple
 
-from . import TagHandler, register
-
-logger = logging.getLogger(__name__)
+from . import AsVarName, TagHandler, register
 
 
 @register("url")
@@ -73,14 +70,19 @@ class UrlTagHandler(TagHandler):
     """
 
     #: ``render`` returns ``(output, bindings)`` (#2547) so the ``as var``
-    #: form can bind the name for the siblings that follow; a Python
-    #: exception crosses the Rust boundary WHOLE, which is what lets the
-    #: ``NoReverseMatch`` reach the caller with its type.
+    #: form can bind the name for the siblings that follow. The 2-tuple is
+    #: what this handler needs from #2547; the exception passthrough it also
+    #: brought is what carries the ``NoReverseMatch`` out, and that half has
+    #: been whole since #2547 itself.
     RETURNS_BINDINGS = True
 
     #: The engine hands the trailing ``as <name>`` over as two literal
     #: TOKENS instead of resolving them as variables (#2563), exactly
-    #: Django's ``bits[-2] == "as"`` rule in ``defaulttags.url``.
+    #: Django's ``bits[-2] == "as"`` rule in ``defaulttags.url`` — and it
+    #: applies that rule to the RAW tokens, marking the NAME as
+    #: :class:`~djust.template_tags.AsVarName`. This handler reads that
+    #: marker; it must never re-run the ``"as"`` test on its own resolved
+    #: arguments (see ``render``).
     ACCEPTS_AS_VAR = True
 
     def render(self, args: List[str], context: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
@@ -93,7 +95,9 @@ class UrlTagHandler(TagHandler):
             First arg is the URL name (quoted string).
             Subsequent args are positional or keyword arguments.
             Note: Rust has already resolved context variables to their values,
-            except for a trailing ``as <name>`` pair, which arrives verbatim.
+            except for a trailing ``as <name>`` pair, which arrives verbatim
+            with the NAME wearing
+            :class:`~djust.template_tags.AsVarName`.
 
         context : dict
             Template context (for additional variable resolution if needed).
@@ -115,9 +119,17 @@ class UrlTagHandler(TagHandler):
         from django.template import TemplateSyntaxError
         from django.urls import NoReverseMatch, reverse
 
+        # Django's `bits[-2] == "as"` rule was already applied — ONCE, to the
+        # RAW tokens, in `renderer.rs::resolve_custom_tag_args` — and the NAME
+        # arrived wearing `AsVarName`. Reading the marker instead of re-testing
+        # `args[-2] == "as"` is what keeps the two sides from disagreeing:
+        # every other position here is RESOLVED, so `{% url named 'as' v %}`
+        # and `{% url named sep v %}` with `sep = "as"` both manufacture the
+        # literal the old test matched, and both silently became `as var` forms
+        # that swallowed the `NoReverseMatch` (#2563 review, #1646).
         as_variable = None
-        if len(args) >= 2 and args[-2] == "as":
-            as_variable = args[-1]
+        if len(args) >= 2 and isinstance(args[-1], AsVarName):
+            as_variable = str(args[-1])
             args = args[:-2]
 
         if not args:

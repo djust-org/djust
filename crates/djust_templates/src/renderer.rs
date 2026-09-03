@@ -947,6 +947,13 @@ fn resolve_custom_tag_args(name: &str, args: &[String], context: &Context) -> Ve
     // resolving them handed the handler two empty strings and no way to tell
     // `{% url named as v %}` from `{% url named "" "" %}`. Passed as tokens,
     // with no grant, like every other passthrough position.
+    //
+    // This is the ONE site that answers "is there an `as` tail?" (#2563
+    // review). The NAME half leaves here as [`TagArg::as_var_name`], so the
+    // handler READS the answer rather than re-deriving it from its resolved
+    // arguments — where a `'as'` literal or a variable holding `"as"` would
+    // have manufactured a false positive and silently swallowed the
+    // `NoReverseMatch`. See that constructor's doc comment.
     let as_tail_start = if crate::registry::tag_handler_accepts_as_var(name)
         && args.len() >= 2
         && args[args.len() - 2] == "as"
@@ -958,10 +965,18 @@ fn resolve_custom_tag_args(name: &str, args: &[String], context: &Context) -> Ve
     args.iter()
         .enumerate()
         .map(|(position, arg)| {
-            if position >= as_tail_start
-                || resolve_positions
-                    .as_ref()
-                    .is_some_and(|declared| !declared.contains(&position))
+            if position >= as_tail_start {
+                // The `as` tail. Both tokens are passthrough; only the NAME —
+                // the one the handler consumes — carries the marker.
+                return if position == as_tail_start {
+                    TagArg::plain(arg.clone())
+                } else {
+                    TagArg::as_var_name(arg.clone())
+                };
+            }
+            if resolve_positions
+                .as_ref()
+                .is_some_and(|declared| !declared.contains(&position))
             {
                 // A position the handler wants LITERAL. Passed exactly as the
                 // template wrote it — quotes, dots and all — and with NO

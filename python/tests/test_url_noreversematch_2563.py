@@ -35,12 +35,19 @@ other):
    the two arrived as two empty strings, indistinguishable from
    `{% url named "" "" %}`.
 2. P1 honours `as var` and re-raises Django's exception bare.
-3. A handler's Python exception crosses PyO3 WHOLE at all three
-   `call_*_with_py_sidecar` sites (`DjangoRustError::PythonException`, the
-   #2508 mechanism) instead of being flattened to a string and re-raised as a
-   `RuntimeError`, and `NoReverseMatch` is in `_is_user_raised`. Without
-   this, deleting the `except` in `url.py` turns `''` into an untyped
-   `Exception` and Django's `assertRaises(NoReverseMatch)` still fails.
+3. `NoReverseMatch` is in `rendering.py::_is_user_raised`, so
+   `DjustTemplate.render` re-raises it bare instead of wrapping it as
+   `Exception("Error rendering template: …")`. Without this the raise in (1)
+   reaches the caller untyped and `assertRaises(NoReverseMatch)` still fails.
+
+   `{% url %}` needs NOTHING else from the boundary: it declares
+   `RETURNS_BINDINGS`, so it is called through `call_handler_with_bindings`,
+   which has mapped a handler's `PyErr` to `DjangoRustError::PythonException`
+   since #2547 — that half was already whole. The widening of the same
+   passthrough to the three `call_*_with_py_sidecar` sites (and
+   `renderer.rs::handler_call_error`) that this PR also carries is the #2506
+   class — every OTHER handler shape, none of which is `{% url %}` — and its
+   tests are `TestExceptionCrossesWhole` below, not the parity rows.
 
 Every parity case is measured against LIVE Django in-process on BOTH the plain
 backend (P1 + P2) and the LiveView entry (`RustLiveView`, which never runs the
@@ -68,6 +75,7 @@ from django.test import RequestFactory, override_settings  # noqa: E402
 from django.urls import NoReverseMatch, include, path  # noqa: E402
 
 from djust import _rust  # noqa: E402
+from djust.template_tags import AsVarName  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -169,6 +177,26 @@ PARITY_CASES = [
     pytest.param("{% url 'ns:index' %}", {}, id="namespaced-valid"),
     pytest.param("{% url 'ns:nope' %}", {}, id="namespaced-missing-raises"),
     pytest.param("{% url 'ns:nope' as v %}[{{ v }}]", {}, id="namespaced-missing-asvar"),
+    # The `as`-tail decision belongs to the RAW tokens, and only to them
+    # (#2563 review). Both rows below have an ORDINARY argument that merely
+    # RESOLVES to the string `as`, so Django reverses with it and raises;
+    # while the handler re-ran `args[-2] == "as"` on its resolved arguments
+    # it read them as `as var` forms and rendered `''` instead.
+    pytest.param(
+        "{% url named 'as' v %}",
+        {"named": "index", "v": "x"},
+        id="quoted-as-literal-is-an-argument",
+    ),
+    pytest.param(
+        "{% url named sep v %}",
+        {"named": "index", "sep": "as", "v": "x"},
+        id="variable-valued-as-is-an-argument",
+    ),
+    # Django's `TemplateSyntaxError` must reach the caller with its type, not
+    # flattened into `Exception("Error rendering template: …")` (#2563
+    # review). The handler-level test cannot see this — it never crosses the
+    # render boundary — so the row lives here, on both entries.
+    pytest.param("{% url %}", {}, id="no-arguments-is-template-syntax-error"),
 ]
 
 
@@ -358,8 +386,8 @@ class TestUrlTagHandlerContract:
         assert handler.RETURNS_BINDINGS is True
         assert handler.ACCEPTS_AS_VAR is True
         assert handler.render(["index"], {}) == ("/", {})
-        assert handler.render(["index", "as", "v"], {}) == ("", {"v": "/"})
-        assert handler.render(["nope", "as", "v"], {}) == ("", {"v": ""})
+        assert handler.render(["index", "as", AsVarName("v")], {}) == ("", {"v": "/"})
+        assert handler.render(["nope", "as", AsVarName("v")], {}) == ("", {"v": ""})
         with pytest.raises(NoReverseMatch):
             handler.render(["nope"], {})
 
@@ -442,3 +470,71 @@ class TestStructuralPins:
 
         assert _is_user_raised(NoReverseMatch("x"))
         assert not _is_user_raised(RuntimeError("engine"))
+
+    def test_template_syntax_error_is_user_raised(self):
+        """A handler's own `TemplateSyntaxError` is user-raised BY
+        CONSTRUCTION — the Rust engine never builds one — so
+        `DjustTemplate.render` must not flatten it (#2563 review, #2605)."""
+        from djust.template.rendering import _is_user_raised
+
+        assert _is_user_raised(TemplateSyntaxError("'url' takes at least one argument"))
+        assert not _is_user_raised(RuntimeError("engine"))
+
+    def test_exactly_one_site_decides_whether_there_is_an_as_tail(self):
+        """Django asks `bits[-2] == "as"` ONCE, of the raw tokens. So does
+        djust — in `renderer.rs::resolve_custom_tag_args` — and everyone else
+        READS that decision off `AsVarName` (#1646).
+
+        The handler's copy of the test was the #2563-review bug: by the time
+        it ran, the other positions were resolved, so an ordinary argument
+        that merely resolved to `as` became a false `as var` and swallowed the
+        `NoReverseMatch`. The two parity rows
+        `quoted-as-literal-is-an-argument` /
+        `variable-valued-as-is-an-argument` are the behavioural half of this
+        pin; this is the structural half.
+        """
+        renderer = (REPO / "crates/djust_templates/src/renderer.rs").read_text()
+        # The one decision, on the raw token stream.
+        assert renderer.count('args[args.len() - 2] == "as"') == 1
+        assert "TagArg::as_var_name(" in renderer
+
+        # No handler that declared the policy re-derives it. Checked over the
+        # LIVE registry rather than a hand-written file list, so a future
+        # `ACCEPTS_AS_VAR` handler is covered the moment it registers — and
+        # over the AST, so the prose above may quote the banned comparison
+        # without tripping its own pin.
+        import ast
+        import inspect
+
+        from djust.template_tags import get_registered_handlers
+
+        declarers = [
+            handler
+            for handler in get_registered_handlers().values()
+            if getattr(handler, "ACCEPTS_AS_VAR", False)
+        ]
+        assert declarers, "no handler declares ACCEPTS_AS_VAR — the pin would be vacuous"
+        for handler in declarers:
+            source_file = inspect.getsourcefile(type(handler))
+            assert source_file is not None
+            tree = ast.parse(Path(source_file).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Compare) and any(
+                    isinstance(c, ast.Constant) and c.value == "as" for c in node.comparators
+                ):
+                    raise AssertionError(
+                        f"{source_file} compares against the literal 'as' at line "
+                        f"{node.lineno} — the engine already decided; read AsVarName"
+                    )
+
+        # And the handler consumes the marker.
+        url_src = (REPO / "python/djust/template_tags/url.py").read_text()
+        assert "isinstance(args[-1], AsVarName)" in url_src
+
+    def test_as_var_name_is_a_plain_str_subclass(self):
+        """The marker must not change what a handler that ignores it sees."""
+        name = AsVarName("v")
+        assert isinstance(name, str)
+        assert name == "v"
+        assert type(name) is not str
+        assert name.upper() == "V"

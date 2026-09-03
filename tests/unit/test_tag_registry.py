@@ -41,6 +41,8 @@ built-in to its correct registry AND strips it from the other one.
 import pytest
 from unittest.mock import patch
 
+from djust.template_tags import AsVarName
+
 
 @pytest.fixture(autouse=True)
 def _isolate_tag_registries():
@@ -225,7 +227,10 @@ class TestUrlTagHandler:
         handler = UrlTagHandler()
 
         with patch("django.urls.reverse", return_value="/"):
-            assert handler.render(["'home'", "as", "home_url"], {}) == ("", {"home_url": "/"})
+            assert handler.render(["'home'", "as", AsVarName("home_url")], {}) == (
+                "",
+                {"home_url": "/"},
+            )
 
     def test_url_handler_no_reverse_match(self):
         """NoReverseMatch RAISES — Django's behaviour (#2563)."""
@@ -248,7 +253,7 @@ class TestUrlTagHandler:
         handler = UrlTagHandler()
 
         with patch("django.urls.reverse", side_effect=NoReverseMatch("not found")):
-            assert handler.render(["'nonexistent'", "as", "v"], {}) == ("", {"v": ""})
+            assert handler.render(["'nonexistent'", "as", AsVarName("v")], {}) == ("", {"v": ""})
 
     def test_url_handler_empty_args(self):
         """Empty args is Django's TemplateSyntaxError (#2563)."""

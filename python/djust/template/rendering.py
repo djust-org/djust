@@ -89,6 +89,7 @@ def _is_user_raised(exc: BaseException) -> bool:
     from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
     from django.http import Http404
     from django.http.multipartparser import MultiPartParserError
+    from django.template import TemplateSyntaxError
     from django.urls import NoReverseMatch
 
     # An exception that came out of a bridged Django template library — the
@@ -105,7 +106,21 @@ def _is_user_raised(exc: BaseException) -> bool:
     # `assertRaises(NoReverseMatch)` — and the DEBUG page names the pattern
     # only if the type survives. Reached from BOTH url paths: the Python
     # pre-pass raises it directly, and the Rust `CustomTag` handler's raise
-    # now crosses the boundary whole (`DjangoRustError::PythonException`).
+    # crosses the boundary whole (`DjangoRustError::PythonException`).
+    #
+    # `TemplateSyntaxError` (#2563 review) is user-raised BY CONSTRUCTION, not
+    # by allow-list judgement: the Rust engine never constructs one — its own
+    # failures are `DjangoRustError`, which reaches here as the untyped
+    # `Exception` this function is deciding whether to wrap — so a Django
+    # `TemplateSyntaxError` arriving out of a djust render can only have come
+    # from Python code the render CALLED: a bridged library's `parse_bits`
+    # (already whole via `raised_by_library`) or a tag handler's own raise,
+    # such as `UrlTagHandler`'s `'url' takes at least one argument`. Django
+    # never wraps one either. This is the same structural rule #2605 will
+    # generalize to the whole list — "it arrived through
+    # `DjangoRustError::PythonException`, therefore it is user-raised" — which
+    # is why it is stated as a rule here rather than added as one more type
+    # someone thought of.
     return raised_by_library(exc) or isinstance(
         exc,
         (
@@ -115,6 +130,7 @@ def _is_user_raised(exc: BaseException) -> bool:
             BadRequest,
             SuspiciousOperation,
             NoReverseMatch,
+            TemplateSyntaxError,
         ),
     )
 

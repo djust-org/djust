@@ -62,6 +62,32 @@ _VAR_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*(\.\w+)*$")  # dotted-identifier path
 _registered_handlers: Dict[str, "TagHandler"] = {}
 
 
+class AsVarName(str):
+    """The NAME half of a trailing ``as <name>``, as the ENGINE decided it.
+
+    Django's ``url()`` asks ``bits[-2] == "as"`` ONCE, of the raw token stream,
+    at compile time. djust's engine asks the same question of the same raw
+    tokens in ``renderer.rs::resolve_custom_tag_args`` and then hands the NAME
+    over wearing this class, so a handler that declared
+    :attr:`TagHandler.ACCEPTS_AS_VAR` CONSUMES that answer::
+
+        if args and isinstance(args[-1], AsVarName):
+            as_variable, args = str(args[-1]), args[:-2]
+
+    A handler must NOT re-derive the answer with ``args[-2] == "as"``: by then
+    the other positions have been RESOLVED, so ``{% url named 'as' v %}`` and
+    ``{% url named sep v %}`` with ``sep = "as"`` both manufacture the string
+    the test looks for. Django treats both as ordinary arguments and raises
+    ``NoReverseMatch``; the second test made djust swallow it and render ``''``
+    — the fail-soft #2563 exists to remove (#2563 review, #1646).
+
+    A plain ``str`` subclass so every ``str`` operation, and every handler that
+    does not care, behaves exactly as before.
+    """
+
+    __slots__ = ()
+
+
 class TagHandler:
     """
     Base class for custom template tag handlers.
@@ -118,6 +144,10 @@ class TagHandler:
     #: literal TOKENS (``"as"``, ``"<name>"``) instead of two resolved
     #: variables — Django's ``bits[-2] == "as"`` rule (#2563). The
     #: registry refuses this without ``RETURNS_BINDINGS``.
+    #:
+    #: The engine applies that rule to the RAW tokens and marks the NAME as
+    #: :class:`AsVarName`; the handler must test for that class, never
+    #: ``args[-2] == "as"`` on its resolved arguments (#2563 review).
     ACCEPTS_AS_VAR: ClassVar[bool] = False
 
     def render(
