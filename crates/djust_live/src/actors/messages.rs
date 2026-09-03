@@ -129,10 +129,19 @@ pub struct PatchResponse {
 /// Messages sent to ViewActor
 #[derive(Debug)]
 pub enum ViewMsg {
-    /// Update state
+    /// Update state (a MERGE — the delta entry; see `RetainStateKeys`)
     UpdateState {
         updates: HashMap<String, Value>,
         reply: oneshot::Sender<Result<()>>,
+    },
+
+    /// Drop every state key absent from `keys`; replies with the removed keys
+    /// (#2592). The truth half of `UpdateState`, which merges and so cannot
+    /// see a key the caller stopped carrying — the same split as
+    /// `RustLiveView.update_state` / `retain_state_keys` (#2564).
+    RetainStateKeys {
+        keys: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<String>>>,
     },
 
     /// Render to HTML
