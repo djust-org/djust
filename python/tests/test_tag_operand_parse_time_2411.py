@@ -285,7 +285,7 @@ class TestTheCallerSetIsPinned:
                 # grepping the SINK for "what resolves a NAME" turned up four
                 # operand-bearing tags this list did not name. A floor would
                 # have passed (#1125); a SET does not.
-                "validate_tag_operand(parts[1])?",  # `{% include … with k=v %}`
+                "validate_tag_operand(value)?",  # `{% include … with k=v %}` (#2579)
                 "validate_tag_operand(operand)?",  # the `"widthratio"` arm
                 "validate_tag_operand(operand)?",  # the `"firstof"` arm
                 "validate_tag_operand(value)?",  # the `"cycle"` arm
