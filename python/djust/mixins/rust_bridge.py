@@ -7,6 +7,8 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Union
 from urllib.parse import parse_qs, urlencode
 
+from django.utils.datastructures import MultiValueDict
+
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
 from ..utils import get_template_dirs
@@ -1026,7 +1028,15 @@ class RustBridgeMixin:
                 for _raw_key, _raw_val in full_context.items():
                     if _raw_val is None:
                         continue
-                    if isinstance(_raw_val, _JSON_FRIENDLY):
+                    # A `QueryDict` / `MultiValueDict` is a `dict` subclass,
+                    # but its Value is the last-value-per-key rebuild
+                    # (`normalize_django_value`); the raw object is what
+                    # `{% querystring my_qd a=2 %}` needs, so it rides the
+                    # sidecar the way `build_render_sidecar` already carries
+                    # it on the non-LiveView paths (#2556, #1646).
+                    if isinstance(_raw_val, _JSON_FRIENDLY) and not isinstance(
+                        _raw_val, MultiValueDict
+                    ):
                         continue
                     # A `Component`/`LiveComponent` used to be excluded here
                     # (#802, no recorded rationale). Un-excluded in #2501 so a

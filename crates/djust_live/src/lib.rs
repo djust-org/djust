@@ -2279,6 +2279,15 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
             vec.push(python_to_json_value(py, &item)?);
         }
         Ok(JsonValue::Array(vec))
+    } else if let Some(pairs) = djust_core::multi_value_dict_pairs(obj) {
+        // A Django `QueryDict` / `MultiValueDict`: last value per key, the
+        // same rule as the two `Value` converters (#2556, #1646).
+        let mut map = serde_json::Map::with_capacity(pairs.len());
+        for (key, value) in pairs {
+            let key_str = key.extract::<String>()?;
+            map.insert(key_str, python_to_json_value(py, &value)?);
+        }
+        Ok(JsonValue::Object(map))
     } else if let Ok(dict) = obj.cast::<PyDict>() {
         // Same snapshot-before-recurse fix, dict side (#2510 sibling).
         let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
@@ -2776,6 +2785,18 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
             vec.push(python_to_value(&item)?);
         }
         return Ok(Value::List(vec));
+    }
+
+    // A Django `QueryDict` / `MultiValueDict` BEFORE the dict arm: last value
+    // per key, through the ONE helper `FromPyObject for Value` uses (#2556,
+    // #1646).
+    if let Some(pairs) = djust_core::multi_value_dict_pairs(obj) {
+        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> =
+            indexmap::IndexMap::with_capacity(pairs.len());
+        for (key, value) in pairs {
+            map.insert(djust_core::py_object_key(&key), python_to_value(&value)?);
+        }
+        return Ok(Value::Object(map));
     }
 
     // Dict - recursively convert nested values

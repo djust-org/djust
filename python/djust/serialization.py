@@ -1604,14 +1604,19 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     if isinstance(value, str):
         return value
 
-    # A `QueryDict` / `MultiValueDict` keeps its TYPE (#2556): its multi-values
-    # and `.urlencode()` are what `{% querystring my_qd a=2 %}` needs, and a
-    # rebuilt plain dict has neither. The Rust `Value` extractor reads it as
-    # the dict it is (last value per key) for `{{ qd.a }}`; the raw object
-    # rides the render sidecar to the handler. Request data holds strings,
-    # never a model, so there is nothing below it for this pass to normalize.
+    # A `QueryDict` / `MultiValueDict` becomes `dict(value.items())` — the
+    # LAST value per key, which is `QueryDict.__getitem__`'s rule and what
+    # Django renders for `{{ qd.a }}` on `?a=1&a=2` (#2556). Handing the raw
+    # object over instead does NOT read that way: the Rust `Value` extractor
+    # walks the underlying `dict` storage and sees the LISTS, so `{{ qd.a }}`
+    # rendered `['1', '2']`, `{{ qd.page|add:1 }}` `''` and
+    # `{% if qd.page == '3' %}` false (PR #2596 Stage 11). The multi-values
+    # and `.urlencode()` that `{% querystring my_qd a=2 %}` needs ride the raw
+    # sidecar (`_protect_sidecar_tree` / the `rust_bridge` sidecar), which
+    # keeps the object's type; this is the Value side only. Request data holds
+    # strings, never a model, so nothing below it needs normalizing.
     if isinstance(value, MultiValueDict):
-        return value
+        return dict(value.items())
 
     # Containers -- recurse
     if isinstance(value, dict):

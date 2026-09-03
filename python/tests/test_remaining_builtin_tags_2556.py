@@ -836,6 +836,113 @@ class TestQuerystringTag:
                     backend_render(src, ctx, request=request)
 
 
+class TestQueryDictLookupsKeepDjangosLastValue:
+    """A `QueryDict` context VARIABLE resolves like Django's on both entries.
+
+    The multi-value storage rides only the sidecar (for `{% querystring %}`);
+    the `Value` the extractor sees is `dict(qd.items())` — last value per
+    key, `QueryDict.__getitem__`'s rule. Stage 11 of PR #2596 measured the
+    raw pass-through rendering `['3']` / `['1', '2']` / `''` / a false
+    `{% if %}` for the four cells below.
+    """
+
+    _CELLS = (
+        ("{{ qd.page }}", "3"),
+        ("{{ qd.a }}", "2"),
+        ("{{ qd.page|add:1 }}", "4"),
+        ("{% if qd.page == '3' %}yes{% else %}no{% endif %}", "yes"),
+        ("{% for k in qd %}{{ k }};{% endfor %}", "a;page;"),
+        ("{{ qd.missing }}", ""),
+    )
+
+    @pytest.mark.parametrize("src, expected", _CELLS, ids=[c[0] for c in _CELLS])
+    def test_the_lookup_cells_on_both_entries(self, src, expected):
+        ctx = {"qd": _FACTORY.get("/?a=1&a=2&page=3").GET}
+        assert assert_both_entries_agree(src, ctx) == expected
+
+    @pytest.mark.parametrize(
+        "src, expected",
+        [
+            ("{{ request.GET.page }}", "3"),
+            ("{{ request.GET.a }}", "2"),
+            ("{{ request.GET.page|add:1 }}", "4"),
+        ],
+    )
+    def test_request_get_lookups_reach_the_query_dict_through_the_request(self, src, expected):
+        """`request.GET` is reached through the sidecar's getattr walk, so
+        the raw `QueryDict` meets the converter directly — the same
+        last-value rule. Was `['3']` on the backend before the converter
+        arm. The page-shell LiveView entry carries no `request` (#2589), so
+        the LiveView side pinned here is the WS/render path."""
+        from djust import LiveView
+        from djust.testing import LiveViewTestClient
+
+        request = _FACTORY.get("/?a=1&a=2&page=3")
+        assert django_render(src, {}, request=request) == expected
+        assert backend_render(src, {}, request=request) == expected
+        assert backend_render(src, {}, request=request, request_context=True) == expected
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.x = 1
+
+        _V.template = f"<div dj-root>[{src}]</div>"
+        client = LiveViewTestClient(_V)
+        client.mount()
+        client.view_instance.request = _FACTORY.get("/?a=1&a=2&page=3")
+        html, _, _ = client.render_with_patches()
+        assert f"[{expected}]" in html, html
+
+    def test_normalize_django_value_yields_a_json_native_last_value_dict(self):
+        """The LiveView state boundary (session / signed snapshot) takes
+        `normalize_django_value`'s output through `json.dumps`, which walks a
+        `dict` subclass's STORAGE — a raw `QueryDict` would persist as lists
+        and restore as `{{ qd.a }}` = `['1', '2']`. So the normalized value
+        is a plain, JSON-native, last-value dict; the converter arm that
+        reads a raw object the same way is for the paths that carry one."""
+        import json
+
+        from djust.serialization import normalize_django_value
+
+        out = normalize_django_value(QueryDict("a=1&a=2&page=3"))
+        assert type(out) is dict
+        assert out == {"a": "2", "page": "3"}
+        assert json.loads(json.dumps(out)) == {"a": "2", "page": "3"}
+
+    def test_a_multi_value_dict_that_is_not_a_query_dict(self):
+        from django.utils.datastructures import MultiValueDict
+
+        ctx = {"mvd": MultiValueDict({"x": ["p", "q"], "y": ["r"]})}
+        assert assert_both_entries_agree("{{ mvd.x }}-{{ mvd.y }}", ctx) == "q-r"
+
+    @_QS
+    def test_the_same_variable_still_feeds_querystring_with_every_value(self):
+        """One context, both sinks: the lookup sees the last value, the tag
+        sees the whole list — on the plain backend AND the LiveView WS/render
+        path (`_sync_state_to_rust`, whose sidecar now carries the raw
+        `QueryDict`). The full-template shell entry (`render_full_template`'s
+        `temp_rust`) wires no sidecar at all — pre-existing, noted in
+        `mixins/template.py` — so it is not the LiveView entry pinned here."""
+        from djust import LiveView
+        from djust.testing import LiveViewTestClient
+
+        ctx = {"qd": QueryDict("a=1&a=2&page=3")}
+        src = "{{ qd.a }}|{% querystring qd page=4 %}"
+        expected = django_render(src, ctx)
+        assert expected == "2|?a=1&amp;a=2&amp;page=4"
+        assert backend_render(src, ctx) == expected
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.qd = QueryDict("a=1&a=2&page=3")
+
+        _V.template = f"<div dj-root>{src}</div>"
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        assert expected in html, html
+
+
 class TestQuerystringVersionGate:
     def test_registration_follows_django_version(self):
         from djust import _rust
