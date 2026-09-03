@@ -49,6 +49,26 @@ def render_template(
     """
     ...
 
+def compile_template(template_source: str) -> None:
+    """
+    Parse a template without rendering it (#2549).
+
+    The construction-time check behind ``DjustTemplate.__init__``: raises
+    ``RuntimeError`` with the engine's message when the source does not
+    parse — an unregistered tag, an unknown filter, a bad arity, an unclosed
+    block — and returns ``None`` otherwise. A successful parse is stored in
+    the engine's template cache, so the render that follows does not parse
+    again; a failed parse is never cached.
+    """
+    ...
+
+def template_cache_contains(template_source: str) -> bool:
+    """Whether the engine's template cache holds a parse of this exact source.
+
+    Read-only test-support probe for the #2549 construction-time parse.
+    """
+    ...
+
 def render_template_with_dirs(
     template_source: str,
     context: Dict[str, Any],
@@ -1164,6 +1184,8 @@ __all__ = [
     # Core rendering
     "render_template",
     "render_template_with_dirs",
+    "compile_template",
+    "template_cache_contains",
     "render_markdown",
     "diff_html",
     "resolve_template_inheritance",
