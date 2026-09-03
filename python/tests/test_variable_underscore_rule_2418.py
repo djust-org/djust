@@ -438,6 +438,12 @@ class TestNoIfOperatorWordIsRefusable:
             assert not word.startswith("_"), word
             assert "._" not in word, word
             source = "{%% if p %s p %%}Y{%% else %%}N{%% endif %%}" % word
+            # The variable-name rule never refuses an operator word (asserted
+            # above). Rendering is gated on Django because `not` is prefix-only:
+            # `{% if p not p %}` raises in smartif and, since #2576, in djust's
+            # grammar check too — a refusal that is not this rule's concern.
+            if not django_renders(source):
+                continue
             rendered, out = djust_renders(source)
             assert rendered, f"operator {word!r} was refused as an operand: {out}"
 

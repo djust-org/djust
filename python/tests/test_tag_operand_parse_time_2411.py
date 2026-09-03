@@ -249,11 +249,19 @@ class TestItIsNotStricterThanDjango:
         Django's operator words, because it can: an operator carries no
         unquoted ``|``, so the validator is a no-op on it. This is why there is
         no operator-set constant to drift — the claim is checked against
-        Django's live ``smartif.OPERATORS`` instead of a transcription."""
+        Django's live ``smartif.OPERATORS`` instead of a transcription.
+
+        The claim is "not stricter than Django," so it is gated on Django: an
+        operator word that Django itself refuses in infix position (``not`` —
+        it is prefix-only, so ``{% if p not p %}`` raises in ``smartif`` and,
+        since #2576, in djust's ``validate_if_grammar`` too) is not this
+        validator's concern and is skipped, not asserted rendered."""
         from django.template.smartif import OPERATORS  # noqa: PLC0415
 
         for word in {w for key in OPERATORS for w in key.split()}:
             source = "{%% if p %s p %%}Y{%% else %%}N{%% endif %%}" % word
+            if not django_renders(source):
+                continue  # Django refuses this word as infix (e.g. `not`, #2576)
             rendered, out = djust_renders(source)
             assert rendered, f"operator {word!r} was refused as an operand: {out}"
 
