@@ -253,8 +253,8 @@ Bridged filters are Django's own callables, forwarded to the Rust engine by the 
 
 The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
 
-- **47.09%** of the Django template tests that reach the engine pass (493 of 1047) <!-- django-suite-claim -->
-- Over the whole `template_tests` label the figure is 62.08% (907 of 1461, 9 skipped). That is not the headline: 414 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them.
+- **57.02%** of the Django template tests that reach the engine pass (597 of 1047) <!-- django-suite-claim -->
+- Over the whole `template_tests` label the figure is 69.09% (1006 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them.
 
 Two result kinds are counted separately because they are different work:
 
