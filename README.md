@@ -33,6 +33,39 @@ no JavaScript to write, no bundler, and no build step in your project.
 - **Multi-tenant** — tenant isolation for SaaS architectures
 - **Auth** — view-level and handler-level authorization via Django permissions
 
+## Rust templates for any Django view
+
+You don't need LiveView to get the Rust engine. Point one `TEMPLATES` entry at
+the backend and every existing `TemplateView`, `render()` call, and
+`{% include %}` in your project renders through Rust — no WebSocket, no
+client.js, no rewrite of your templates or your views.
+
+```python
+TEMPLATES = [
+    {
+        "BACKEND": "djust.template_backend.DjustTemplateBackend",
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
+        "OPTIONS": {"context_processors": [...]},
+    },
+    {
+        # admin and contrib templates still need Django's own backend
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {"context_processors": [...]},
+    },
+]
+```
+
+Two numbers, and nothing softer:
+
+- **71.35%** of Django's own `template_tests` suite passes unmodified against this backend (747 of the 1,047 cells that reach an engine at all; measured by `scripts/run-django-template-suite.py` against the Django tag matching the installed version — see [`docs/TEMPLATE_BACKEND.md`](docs/TEMPLATE_BACKEND.md) for the full breakdown and what the remaining cells are). <!-- django-suite-claim -->
+- Rendering is **7–11x faster** on variable- and filter-heavy templates (see [Performance](#performance) below); static markup is not faster, because there is nothing there to accelerate.
+
+The scaffold (`djust startproject`) already configures the `TEMPLATES` setting
+this way. Read more in [`docs/TEMPLATE_BACKEND.md`](docs/TEMPLATE_BACKEND.md).
+
 ## Quick Example
 
 ```python
