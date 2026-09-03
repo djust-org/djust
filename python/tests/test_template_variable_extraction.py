@@ -215,10 +215,29 @@ class TestEdgeCases:
         assert isinstance(result, dict)
 
     def test_special_characters_in_text(self):
-        """Test that special characters in text don't cause issues."""
-        template = '<div data-value="{{ value }}">{{ & < > }}</div>'
+        """Special characters in genuine TEXT don't cause issues.
+
+        The ``& < >`` sit outside any ``{{ … }}`` here — they are plain text
+        the lexer never treats as a variable expression, so extraction still
+        picks up ``value`` cleanly.
+        """
+        template = '<div data-value="{{ value }}">& < ></div>'
         result = extract_template_variables(template)
         assert "value" in result
+
+    def test_special_characters_inside_braces_are_refused(self):
+        """``{{ & < > }}`` is a malformed variable expression Django refuses.
+
+        #2578: the ``& < >`` is INSIDE ``{{ }}`` — it is a variable expression,
+        not text. Its head is not ``[\\w.]``-tileable, so Django's
+        ``FilterExpression`` refuses it with ``Could not parse the remainder``
+        and djust now matches. Extraction shares the render parser (#1646) and
+        surfaces the same refusal rather than silently extracting a partial
+        head from a template that will never render.
+        """
+        template = '<div data-value="{{ value }}">{{ & < > }}</div>'
+        with pytest.raises(ValueError, match="Could not parse the remainder"):
+            extract_template_variables(template)
 
 
 class TestDeduplication:
@@ -400,12 +419,18 @@ class TestPerformance:
 class TestComplexExpressions:
     """Test extraction from complex template expressions."""
 
-    def test_method_calls_with_arguments(self):
-        """Test method calls with arguments."""
+    def test_method_calls_with_arguments_are_refused(self):
+        """A method call with arguments is not valid Django variable syntax.
+
+        #2578: ``items.filter(active=True).count`` leaves the un-tileable
+        remainder ``(active=True).count`` after the ``[\\w.]`` head, so Django's
+        ``FilterExpression`` refuses it and djust now matches. Extraction
+        propagates the same refusal (#1646) rather than partially extracting
+        ``items`` from a template neither engine will render.
+        """
         template = "{{ items.filter(active=True).count }}"
-        result = extract_template_variables(template)
-        # Should extract the base variable and path
-        assert "items" in result
+        with pytest.raises(ValueError, match="Could not parse the remainder"):
+            extract_template_variables(template)
 
     def test_list_indexing(self):
         """Test list indexing in templates."""

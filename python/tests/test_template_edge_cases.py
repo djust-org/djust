@@ -11,13 +11,19 @@ from djust._rust import extract_template_variables
 class TestExpressionParsingEdgeCases:
     """Test edge cases in expression parsing."""
 
-    def test_string_literal_with_dots_in_variable(self):
-        """Test that string literals with dots don't interfere with variable extraction."""
-        # String literal should not be treated as variable path
+    def test_method_call_expression_is_refused(self):
+        """A method-call expression is not a valid Django ``{{ … }}`` variable.
+
+        #2578: djust now refuses whatever Django's ``FilterExpression`` refuses.
+        ``user.get_attribute("profile.name")`` is not ``[\\w.]``-tileable head
+        (the ``("profile.name")`` remainder is un-tileable), so both Django and
+        djust reject it. Extraction shares the render parser (#1646) and so
+        surfaces the same refusal — it no longer silently extracts a partial
+        ``user`` head from a template that will never render.
+        """
         template = '{{ user.get_attribute("profile.name") }}'
-        result = extract_template_variables(template)
-        # Should extract 'user' and 'get_attribute', not 'profile.name' as a path
-        assert "user" in result
+        with pytest.raises(ValueError, match="Could not parse the remainder"):
+            extract_template_variables(template)
 
     def test_string_literal_in_filter_argument(self):
         """Test string literals in filter arguments."""
@@ -123,13 +129,18 @@ class TestExpressionParsingEdgeCases:
 class TestComplexExpressionEdgeCases:
     """Test complex expression combinations."""
 
-    def test_method_call_with_string_arg(self):
-        """Test method calls with string arguments containing dots."""
+    def test_method_call_with_string_arg_is_refused(self):
+        """A method call with a string argument is not valid Django variable syntax.
+
+        #2578: ``items.get("key.with.dots")`` leaves the un-tileable remainder
+        ``("key.with.dots")`` after the ``[\\w.]`` head, so Django's
+        ``FilterExpression`` refuses it and djust now matches. Extraction
+        propagates the same refusal (#1646) rather than partially extracting
+        ``items``.
+        """
         template = '{{ items.get("key.with.dots") }}'
-        result = extract_template_variables(template)
-        assert "items" in result
-        # Should extract 'get' as a path, not the string argument
-        assert "key" not in result
+        with pytest.raises(ValueError, match="Could not parse the remainder"):
+            extract_template_variables(template)
 
     def test_dictionary_key_with_dots(self):
         """Test dictionary key access with dots in key name."""
@@ -211,13 +222,17 @@ class TestRealWorldEdgeCases:
         # KNOWN LIMITATION: Currently also extracts path components due to simplified parsing
         # This is acceptable for Phase 1 - false positives are harmless
 
-    def test_json_path_notation(self):
-        """Test JSON path-like notation in strings."""
+    def test_json_path_notation_is_refused(self):
+        """A JSON-path method call is not valid Django variable syntax.
+
+        #2578: ``data.get_path("$.items[0].name")`` leaves the un-tileable
+        remainder ``("$.items[0].name")`` after the ``[\\w.]`` head, so Django's
+        ``FilterExpression`` refuses it and djust now matches. Extraction
+        surfaces the same refusal (#1646).
+        """
         template = '{{ data.get_path("$.items[0].name") }}'
-        result = extract_template_variables(template)
-        assert "data" in result
-        # Should not parse JSON path string as variables
-        assert "items" not in result or result.get("items") == []
+        with pytest.raises(ValueError, match="Could not parse the remainder"):
+            extract_template_variables(template)
 
     def test_regex_pattern_in_template(self):
         """Test regex patterns don't interfere.
