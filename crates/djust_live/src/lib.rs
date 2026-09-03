@@ -2140,15 +2140,43 @@ fn render_template(
 /// render entry points: a successful parse is cached, so the render that
 /// follows does not pay for it twice; a failed parse is never cached (same
 /// as today), so a handler registered afterwards is honoured.
+/// The attribute a located parse error carries its `(start, end)` byte span
+/// on (#2557).
+///
+/// Set on the `RuntimeError` instance rather than folded into the message, so
+/// `str(exc)` is byte-identical to what it has always been and a caller that
+/// does not know about the span sees no change at all.
+/// `python/djust/template/rendering.py` reads it with `getattr(..., None)` and
+/// turns it into Django's `template_debug` dict.
+pub const SPAN_ATTR: &str = "djust_token_span";
+
 #[pyfunction]
 fn compile_template(template_source: String) -> PyResult<()> {
     guard_panic("compile_template", move || {
         if TEMPLATE_CACHE.get(&template_source).is_none() {
-            let template = Template::new(&template_source)?;
+            let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
             TEMPLATE_CACHE.insert(template_source, Arc::new(template));
         }
         Ok(())
     })
+}
+
+/// Convert a template error to a `PyErr`, preserving its source span (#2557).
+///
+/// `From<DjangoRustError> for PyErr` stringifies, which throws the position
+/// away; this keeps the same message and hangs the span off the exception
+/// instance so Python can build `template_debug` from it. A failure to set the
+/// attribute is swallowed on purpose: the ORIGINAL error is what the caller
+/// must see, and a missing span degrades to exactly the pre-#2557 behaviour.
+fn span_aware_pyerr(err: djust_core::DjangoRustError) -> PyErr {
+    let span = err.span();
+    let py_err: PyErr = err.into();
+    if let Some((start, end)) = span {
+        Python::attach(|py| {
+            let _ = py_err.value(py).setattr(SPAN_ATTR, (start, end));
+        });
+    }
+    py_err
 }
 
 /// Whether `TEMPLATE_CACHE` already holds a parse of this exact source.

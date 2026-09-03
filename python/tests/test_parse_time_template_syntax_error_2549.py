@@ -24,8 +24,8 @@ own ``assertRaises`` / loaders / debug view see the type they expect) AND a
 ``RuntimeError`` (the type every Rust engine failure has crossed to Python as,
 so a caller catching ``RuntimeError`` around construction — ``components/base.py``
 — keeps catching). The message text is the engine's, unchanged: it is a
-published contract. ``template_debug`` exists and is ``None``; the dict is
-#2557's job.
+published contract. ``template_debug`` exists; #2557 filled it with the
+positions (see ``test_template_debug_2557.py``).
 
 Gate-off (#1468 / #2135, each mechanism alone):
 * revert the construction-time parse (``DjustTemplate._compile``) →
@@ -227,15 +227,21 @@ class TestExistingCallersStillCatch:
             caught = e
         assert isinstance(caught, DjustTemplateSyntaxError)
 
-    def test_template_debug_attribute_exists_and_is_none(self, backend):
+    def test_template_debug_attribute_exists(self, backend):
+        """#2557 filled the dict this class originally pinned as ``None``.
+
+        The #2549 contract was only that the attribute EXISTS, so Django's
+        ``getattr(exc, "template_debug", None)`` never raises; #2557 supplies
+        the positions. What that dict contains is pinned in
+        ``test_template_debug_2557.py``.
+        """
         with pytest.raises(DjustTemplateSyntaxError) as info:
             backend.from_string("{% unknown %}")
-        assert info.value.template_debug is None
+        assert hasattr(info.value, "template_debug")
 
     def test_django_debug_reporter_accepts_it(self, backend, rf):
         """Django's technical-500 page reads ``template_debug`` with ``getattr``
-        and renders the plain traceback when it is ``None`` — run the real
-        reporter rather than trusting the citation."""
+        — run the real reporter rather than trusting the citation."""
         import sys
 
         from django.views.debug import ExceptionReporter
@@ -245,5 +251,5 @@ class TestExistingCallersStillCatch:
         except DjustTemplateSyntaxError:
             reporter = ExceptionReporter(rf.get("/"), *sys.exc_info())
             data = reporter.get_traceback_data()
-        assert data["template_info"] is None
+        assert data["template_info"]["during"] == "{% unknown %}"
         assert "Unsupported template tag" in data["exception_value"]

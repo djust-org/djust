@@ -200,16 +200,34 @@ class DjustTemplate:
         ``render`` runs it: the parser refuses an unknown filter (#2419),
         and a project's ``@register.filter`` callables reach the Rust
         registry only through that bridge.
+
+        When the engine knows WHERE the parse failed it hands the byte span
+        of the offending token back on the exception's ``djust_token_span``
+        attribute (``crates/djust_live/src/lib.rs`` ``SPAN_ATTR``); that
+        becomes Django's ``template_debug`` dict, so the technical-500 page
+        shows the template name, the line and the source excerpt instead of
+        a bare message (#2557).
         """
         from .._rust import compile_template
         from ..mixins.rust_bridge import _ensure_custom_filters_bridged
-        from .exceptions import DjustTemplateSyntaxError
+        from .exceptions import DjustTemplateSyntaxError, build_template_debug
 
         _ensure_custom_filters_bridged()
         try:
             compile_template(self.template_string)
         except RuntimeError as e:
-            raise DjustTemplateSyntaxError(str(e), origin=self.origin) from e
+            message = str(e)
+            exc = DjustTemplateSyntaxError(message, origin=self.origin)
+            span = getattr(e, "djust_token_span", None)
+            if span is not None:
+                exc.template_debug = build_template_debug(
+                    self.template_string,
+                    getattr(self.origin, "name", None),
+                    span[0],
+                    span[1],
+                    message,
+                )
+            raise exc from e
 
     def _jit_serialize_queryset(self, queryset: QuerySet, variable_name: str) -> list:
         """

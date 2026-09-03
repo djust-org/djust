@@ -1,6 +1,6 @@
 //! Template parser for building an AST from tokens
 
-use crate::lexer::Token;
+use crate::lexer::{Span, Token};
 use djust_core::{DjangoRustError, Result};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -353,7 +353,7 @@ pub const TEMPLATETAG_NAMES: [&str; 8] = [
 ];
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
-    parse_internal(tokens, hash_tokens(tokens))
+    parse_internal(tokens, &[], hash_tokens(tokens))
 }
 
 /// Parse a token stream into an AST, deriving the boundary-marker
@@ -371,15 +371,31 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
 /// re-parses. Different sources → different prefix (with extremely
 /// high probability — collision rate is ~1/4 billion).
 pub fn parse_with_source(tokens: &[Token], source: &str) -> Result<Vec<Node>> {
-    parse_internal(tokens, hash_source(source))
+    parse_internal(tokens, &[], hash_source(source))
 }
 
-fn parse_internal(tokens: &[Token], identity_hash: u64) -> Result<Vec<Node>> {
+/// [`parse_with_source`] with the lexer's per-token byte spans, so a parse
+/// error carries the position of the token that caused it (#2557).
+///
+/// `spans[i]` is the source span of `tokens[i]` — the pair Django keeps on
+/// `Token.position` and feeds to `Template.get_exception_info` to build the
+/// `template_debug` dict its technical-500 page renders. The span-less
+/// entry points above stay valid: an empty table simply attaches nothing, so
+/// a caller that has no spans gets exactly today's behaviour.
+pub fn parse_with_source_spanned(
+    tokens: &[Token],
+    spans: &[Span],
+    source: &str,
+) -> Result<Vec<Node>> {
+    parse_internal(tokens, spans, hash_source(source))
+}
+
+fn parse_internal(tokens: &[Token], spans: &[Span], identity_hash: u64) -> Result<Vec<Node>> {
     let mut nodes = Vec::new();
     let mut i = 0;
 
     while i < tokens.len() {
-        let node = parse_token(tokens, &mut i)?;
+        let node = parse_token(tokens, spans, &mut i)?;
         if let Some(n) = node {
             nodes.push(n);
         }
@@ -667,7 +683,19 @@ fn resolve_cycle_nodes(
     Ok(())
 }
 
-fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
+/// Parse the token at `*i`, tagging any error with that token's source
+/// span (#2557).
+///
+/// Every recursive descent goes through this one function, so the INNERMOST
+/// frame is the first to attach a span and [`DjangoRustError::at`] declines
+/// to overwrite it — which is how the reported position ends up on the
+/// offending tag rather than on the outermost block that contains it.
+fn parse_token(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<Option<Node>> {
+    let at = *i;
+    parse_token_inner(tokens, spans, i).map_err(|e| e.at(spans.get(at).copied()))
+}
+
+fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<Option<Node>> {
     match &tokens[*i] {
         Token::Text(text) => Ok(Some(Node::Text(text.clone()))),
 
@@ -735,7 +763,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     // where Variable tokens separate the tag opening from the {% if %}.
                     let in_tag_context = is_inside_html_tag_at(tokens, *i);
                     let (true_nodes, false_nodes, end_pos) =
-                        parse_if_block(tokens, *i + 1, in_tag_context)?;
+                        parse_if_block(tokens, spans, *i + 1, in_tag_context)?;
                     *i = end_pos;
                     Ok(Some(Node::If {
                         condition,
@@ -859,7 +887,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     // — a branch that never renders — refused on Django and
                     // rendered here.
                     validate_tag_operand(&iterable)?;
-                    let (nodes, empty_nodes, end_pos) = parse_for_block(tokens, *i + 1)?;
+                    let (nodes, empty_nodes, end_pos) = parse_for_block(tokens, spans, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::For {
                         var_names,
@@ -877,7 +905,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         ));
                     }
                     let name = args[0].clone();
-                    let (nodes, end_pos) = parse_block(tokens, *i + 1)?;
+                    let (nodes, end_pos) = parse_block(tokens, spans, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::Block { name, nodes }))
                 }
@@ -1023,7 +1051,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         }
                     }
 
-                    let (nodes, end_pos) = parse_with_block(tokens, *i + 1)?;
+                    let (nodes, end_pos) = parse_with_block(tokens, spans, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::With { assignments, nodes }))
                 }
@@ -1116,7 +1144,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
 
                 "spaceless" => {
                     // {% spaceless %} ... {% endspaceless %}
-                    let (nodes, end_pos) = parse_spaceless_block(tokens, *i + 1)?;
+                    let (nodes, end_pos) = parse_spaceless_block(tokens, spans, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::Spaceless { nodes }))
                 }
@@ -1144,7 +1172,8 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             ));
                         }
                     };
-                    let (nodes, end_pos) = parse_block_custom_tag(tokens, *i + 1, "endautoescape")?;
+                    let (nodes, end_pos) =
+                        parse_block_custom_tag(tokens, spans, *i + 1, "endautoescape")?;
                     *i = end_pos;
                     Ok(Some(Node::AutoEscape { on, nodes }))
                 }
@@ -1176,7 +1205,8 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             )));
                         }
                     }
-                    let (nodes, end_pos) = parse_block_custom_tag(tokens, *i + 1, "endfilter")?;
+                    let (nodes, end_pos) =
+                        parse_block_custom_tag(tokens, spans, *i + 1, "endfilter")?;
                     *i = end_pos;
                     Ok(Some(Node::Filter { filters, nodes }))
                 }
@@ -1293,7 +1323,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             ));
                         }
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, *i + 1, "endlanguage")?;
+                            parse_block_custom_tag(tokens, spans, *i + 1, "endlanguage")?;
                         *i = end_pos;
                         return Ok(Some(Node::Language {
                             expr: args[0].clone(),
@@ -1312,7 +1342,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             }
                         };
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, *i + 1, "endlocalize")?;
+                            parse_block_custom_tag(tokens, spans, *i + 1, "endlocalize")?;
                         *i = end_pos;
                         return Ok(Some(Node::Localize { use_l10n, children }));
                     }
@@ -1328,7 +1358,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             }
                         };
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, *i + 1, "endlocaltime")?;
+                            parse_block_custom_tag(tokens, spans, *i + 1, "endlocaltime")?;
                         *i = end_pos;
                         return Ok(Some(Node::LocalTime { use_tz, children }));
                     }
@@ -1339,7 +1369,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             ));
                         }
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, *i + 1, "endtimezone")?;
+                            parse_block_custom_tag(tokens, spans, *i + 1, "endtimezone")?;
                         *i = end_pos;
                         return Ok(Some(Node::Timezone {
                             expr: args[0].clone(),
@@ -1369,7 +1399,8 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     }
                     // Check if a Python block tag handler is registered (tags with children)
                     if let Some(end_tag) = crate::registry::block_handler_exists(tag_name) {
-                        let (children, end_pos) = parse_block_custom_tag(tokens, *i + 1, &end_tag)?;
+                        let (children, end_pos) =
+                            parse_block_custom_tag(tokens, spans, *i + 1, &end_tag)?;
                         *i = end_pos;
                         Ok(Some(Node::BlockCustomTag {
                             name: tag_name.clone(),
@@ -1451,6 +1482,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
 
 fn parse_if_block(
     tokens: &[Token],
+    spans: &[Span],
     start: usize,
     in_tag_context: bool,
 ) -> Result<(Vec<Node>, Vec<Node>, usize)> {
@@ -1483,7 +1515,7 @@ fn parse_if_block(
                 validate_if_operands(args)?;
                 let elif_condition = args.join(" ");
                 let (elif_true, elif_false, end_pos) =
-                    parse_if_block(tokens, i + 1, in_tag_context)?;
+                    parse_if_block(tokens, spans, i + 1, in_tag_context)?;
                 false_nodes.push(Node::If {
                     condition: elif_condition,
                     true_nodes: elif_true,
@@ -1498,7 +1530,7 @@ fn parse_if_block(
                 return Ok((true_nodes, false_nodes, i));
             }
             _ => {
-                if let Some(node) = parse_token(tokens, &mut i)? {
+                if let Some(node) = parse_token(tokens, spans, &mut i)? {
                     if in_else {
                         false_nodes.push(node);
                     } else {
@@ -1515,7 +1547,11 @@ fn parse_if_block(
     ))
 }
 
-fn parse_for_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node>, usize)> {
+fn parse_for_block(
+    tokens: &[Token],
+    spans: &[Span],
+    start: usize,
+) -> Result<(Vec<Node>, Vec<Node>, usize)> {
     let mut nodes = Vec::new();
     let mut empty_nodes = Vec::new();
     let mut in_empty_block = false;
@@ -1533,7 +1569,7 @@ fn parse_for_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Nod
             }
         }
 
-        if let Some(node) = parse_token(tokens, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, &mut i)? {
             if in_empty_block {
                 empty_nodes.push(node);
             } else {
@@ -1548,7 +1584,7 @@ fn parse_for_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Nod
     ))
 }
 
-fn parse_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
+fn parse_block(tokens: &[Token], spans: &[Span], start: usize) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
     let mut i = start;
 
@@ -1559,7 +1595,7 @@ fn parse_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
             }
         }
 
-        if let Some(node) = parse_token(tokens, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -1570,7 +1606,7 @@ fn parse_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
     ))
 }
 
-fn parse_with_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
+fn parse_with_block(tokens: &[Token], spans: &[Span], start: usize) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
     let mut i = start;
 
@@ -1581,7 +1617,7 @@ fn parse_with_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)
             }
         }
 
-        if let Some(node) = parse_token(tokens, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -1609,7 +1645,11 @@ fn split_asvar(args: &[String]) -> (Vec<String>, Option<String>) {
     }
 }
 
-fn parse_spaceless_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
+fn parse_spaceless_block(
+    tokens: &[Token],
+    spans: &[Span],
+    start: usize,
+) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
     let mut i = start;
 
@@ -1620,7 +1660,7 @@ fn parse_spaceless_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, u
             }
         }
 
-        if let Some(node) = parse_token(tokens, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -1699,6 +1739,7 @@ fn collect_raw_source(
 /// Scans forward collecting child nodes until `end_tag` is encountered.
 fn parse_block_custom_tag(
     tokens: &[Token],
+    spans: &[Span],
     start: usize,
     end_tag: &str,
 ) -> Result<(Vec<Node>, usize)> {
@@ -1712,7 +1753,7 @@ fn parse_block_custom_tag(
             }
         }
 
-        if let Some(node) = parse_token(tokens, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -2470,22 +2511,28 @@ fn extract_from_expression(
 
 /// Find the position of the ` if ` keyword in an expression, skipping over
 /// quoted strings so that `'some if text' if cond else ''` works correctly.
+///
+/// Walks `char_indices` rather than raw bytes (#2551, #2552): the byte walk
+/// evaluated `expr[i..]` at EVERY byte, including the continuation bytes of a
+/// multi-byte character, which is not a char boundary and panics the slice.
+/// Every `{{ … }}` whose expression held a non-ASCII character outside quotes
+/// — `{{ café }}`, `{{ x.é }}` — therefore panicked on a template Django
+/// renders fine. `i` is a char boundary by construction here, so the slice is
+/// always valid; the returned offset is still a BYTE offset, which is what the
+/// two callers slice with.
 fn find_if_keyword(expr: &str) -> Option<usize> {
-    let bytes = expr.as_bytes();
-    let mut i = 0;
     let mut in_single = false;
     let mut in_double = false;
 
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\'' if !in_double => in_single = !in_single,
-            b'"' if !in_single => in_double = !in_double,
+    for (i, ch) in expr.char_indices() {
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
             _ if !in_single && !in_double && expr[i..].starts_with(" if ") => {
                 return Some(i);
             }
             _ => {}
         }
-        i += 1;
     }
     None
 }
@@ -4490,5 +4537,111 @@ mod dep_tests {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // located parse errors (#2557)
+    // -----------------------------------------------------------------------
+
+    /// Parse `source` through the spanned path and return the failure's span.
+    fn located(source: &str) -> (String, Option<(usize, usize)>) {
+        let (tokens, spans) = crate::lexer::tokenize_spanned(source).expect("tokenize");
+        let err = parse_with_source_spanned(&tokens, &spans, source)
+            .expect_err("this source must not parse");
+        (err.to_string(), err.span())
+    }
+
+    #[test]
+    fn a_parse_error_carries_the_span_of_the_offending_token() {
+        let source = "hello\n{% nosuchtag %}\nworld";
+        let (_, span) = located(source);
+        let (start, end) = span.expect("the error must be located");
+        assert_eq!(&source[start..end], "{% nosuchtag %}");
+    }
+
+    /// The INNERMOST enclosing token wins: `DjangoRustError::at` refuses to
+    /// overwrite a span an inner frame already attached. Without that rule
+    /// every nested failure would report its outermost block instead.
+    #[test]
+    fn the_innermost_token_is_the_one_reported() {
+        for source in [
+            "{% if a %}{% nosuchtag %}{% endif %}",
+            "{% for i in xs %}{% nosuchtag %}{% endfor %}",
+            "{% if a %}{% for i in xs %}{% with y=1 %}{% nosuchtag %}{% endwith %}{% endfor %}{% endif %}",
+            "{% if a %}{% else %}{% nosuchtag %}{% endif %}",
+        ] {
+            let (_, span) = located(source);
+            let (start, end) = span.expect("the error must be located");
+            assert_eq!(&source[start..end], "{% nosuchtag %}", "{source:?}");
+        }
+    }
+
+    /// The span-less entry points keep working and simply attach nothing, so a
+    /// caller with no span table sees exactly the pre-#2557 error.
+    #[test]
+    fn the_spanless_entry_points_attach_no_span() {
+        let source = "{% nosuchtag %}";
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let err = parse_with_source(&tokens, source).expect_err("must not parse");
+        assert!(err.span().is_none());
+        let err = parse(&tokens).expect_err("must not parse");
+        assert!(err.span().is_none());
+    }
+
+    /// Locating an error must not change its MESSAGE — the text is a published
+    /// contract (#2549) and every existing assertion on it must keep holding.
+    #[test]
+    fn locating_an_error_leaves_its_message_byte_identical() {
+        for source in [
+            "{% nosuchtag %}",
+            "{% if x %}",
+            "{{ x|nosuchfilter }}",
+            "{% for %}{% endfor %}",
+            "{% templatetag nope %}",
+        ] {
+            let tokens = crate::lexer::tokenize(source).expect("tokenize");
+            let (_, spans) = crate::lexer::tokenize_spanned(source).expect("tokenize");
+            let unlocated = parse_with_source(&tokens, source)
+                .expect_err("must not parse")
+                .to_string();
+            let (message, _) = located(source);
+            assert_eq!(message, unlocated, "{source:?}");
+            let _ = spans;
+        }
+    }
+
+    /// `find_if_keyword` walks char boundaries, not bytes (#2551 / #2552).
+    ///
+    /// The byte walk evaluated `expr[i..]` at every byte — including the
+    /// continuation bytes of a multi-byte character — and panicked.
+    #[test]
+    fn find_if_keyword_does_not_panic_on_a_multibyte_expression() {
+        for expr in [
+            "caf\u{e9}",
+            "x.\u{e9}",
+            "na\u{ef}ve|default:'\u{2615}'",
+            "\u{65e5}\u{672c}\u{8a9e}",
+            "'\u{2615} if not a keyword'",
+            "a if caf\u{e9} else b",
+            "\u{e9} if c else \u{e9}",
+        ] {
+            let _ = find_if_keyword(expr);
+        }
+    }
+
+    #[test]
+    fn find_if_keyword_still_finds_the_keyword_it_should() {
+        assert_eq!(find_if_keyword("a if c else b"), Some(1));
+        assert_eq!(find_if_keyword("no keyword here"), None);
+        // The `if` INSIDE the quotes is skipped; the one after them is found.
+        let quoted = "'some if text' if c else ''";
+        let at = find_if_keyword(quoted).expect("the unquoted keyword is there");
+        assert_eq!(at, quoted.len() - " if c else ''".len());
+        assert_eq!(&quoted[at..at + 4], " if ");
+        // The offset it returns is a BYTE offset its callers slice with.
+        let expr = "caf\u{e9} if c else b";
+        let at = find_if_keyword(expr).expect("the keyword is there");
+        assert_eq!(&expr[..at], "caf\u{e9}");
+        assert_eq!(&expr[at..at + 4], " if ");
     }
 }
