@@ -506,8 +506,11 @@ class TestEmpiricalCanary:
             "FAIL  canary_tests.Canary.test_2_incomplete_if_must_raise_at_parse | AssertionError: "
             "TemplateSyntaxError not raised"
         )
+        # Since #2549 the unsupported tag is refused at `from_string`, as
+        # `DjustTemplateSyntaxError` (a `TemplateSyntaxError`); the canary's
+        # `assertEqual` never runs, so it is an ERROR, not a FAIL.
         assert lines["canary_tests.Canary.test_3_autoescape_off"].startswith(
-            "ERROR canary_tests.Canary.test_3_autoescape_off | Exception: "
+            "ERROR canary_tests.Canary.test_3_autoescape_off | DjustTemplateSyntaxError: "
         )
         assert "Unsupported template tag" in lines["canary_tests.Canary.test_3_autoescape_off"]
 

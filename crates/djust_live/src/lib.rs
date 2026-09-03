@@ -412,6 +412,53 @@ impl RustLiveViewBackend {
         Ok(())
     }
 
+    /// Drop every state key absent from `keys`, returning the removed keys
+    /// (#2564).
+    ///
+    /// `update_state` MERGES — it is the delta entry for change-detection and
+    /// for the actor crate's partial updates, and must stay that way. But a
+    /// merge has no removal path: a key the Python context stopped carrying
+    /// kept its last `Value`, so `{{ secret }}` kept answering after
+    /// `del self.secret` — the `if self.show: ctx["secret"] = …` content gate
+    /// failed OPEN. With ADR-027's lazy flag ON the class widens from strings
+    /// and dicts to every plain object, because the object then lives IN the
+    /// merged state with a handle instead of only in the per-render sidecar.
+    ///
+    /// This is the truth half: the bridge calls it with the FULL context's
+    /// keys on every sync, before `update_state`. Full-context truth rather
+    /// than tombstones from the Python fingerprint, because that fingerprint
+    /// is emptied by `_force_full_html` on every restore — a key that
+    /// vanished across a restore would never be tombstoned, while the clone
+    /// still carries it.
+    ///
+    /// Removal REVOKES the removed keys' safe grants and their `key.`
+    /// descendants, exactly as `apply_state_update` does for a replaced value
+    /// (#2300): a grant cannot outlive the value it was granted for, and
+    /// `set_state` re-inserts without revoking.
+    ///
+    /// Returns the removed keys so the caller can add them to
+    /// `set_changed_keys` — a removed key is not in the changed context, so
+    /// a partial render would otherwise serve its region from the node cache
+    /// and the OLD text would survive.
+    fn retain_state_keys(&mut self, keys: Vec<String>) -> Vec<String> {
+        let keep: HashSet<String> = keys.into_iter().collect();
+        let removed: Vec<String> = self
+            .state
+            .keys()
+            .filter(|k| !keep.contains(*k))
+            .cloned()
+            .collect();
+        for key in &removed {
+            self.state.remove(key);
+            if !self.safe_keys.is_empty() {
+                self.safe_keys.remove(key);
+                let prefix = format!("{key}.");
+                self.safe_keys.retain(|k| !k.starts_with(&prefix));
+            }
+        }
+        removed
+    }
+
     /// Set the context keys that are safe (skip auto-escaping) for THIS
     /// render, replacing whatever the previous render set.
     ///
@@ -470,7 +517,11 @@ impl RustLiveViewBackend {
     /// empty `attrs` map. Called instead where the view's identity resets: a
     /// disconnect / re-mount. The msgpack round trip clears them for free
     /// (`Deserialize` restores `live: None`), so a state entry that came back
-    /// from the state backend never carries one either.
+    /// from the state backend never carries one either — and, because a
+    /// handle-bearing value carries an EMPTY `attrs` map, such an entry
+    /// answers nothing for a dotted lookup until the next full sync
+    /// re-converts it (#2570; the Python bridge always syncs before the
+    /// first render of a clone).
     fn clear_live_handles(&mut self) {
         for value in self.state.values_mut() {
             clear_live_handles_in(value);
@@ -2053,6 +2104,37 @@ fn render_template(
         ctx.set_raw_py_objects(sidecar);
         Ok(template_arc.render(&ctx)?)
     })
+}
+
+/// Parse a template without rendering it — the construction-time check
+/// behind `DjustTemplate.__init__` (#2549).
+///
+/// Django's `Engine.from_string` / `get_template` raise `TemplateSyntaxError`
+/// before any render; djust parsed lazily at first render, so the same
+/// defect surfaced one call later and a defect in an untaken branch never
+/// surfaced at all. This goes through `TEMPLATE_CACHE` exactly like the
+/// render entry points: a successful parse is cached, so the render that
+/// follows does not pay for it twice; a failed parse is never cached (same
+/// as today), so a handler registered afterwards is honoured.
+#[pyfunction]
+fn compile_template(template_source: String) -> PyResult<()> {
+    guard_panic("compile_template", move || {
+        if TEMPLATE_CACHE.get(&template_source).is_none() {
+            let template = Template::new(&template_source)?;
+            TEMPLATE_CACHE.insert(template_source, Arc::new(template));
+        }
+        Ok(())
+    })
+}
+
+/// Whether `TEMPLATE_CACHE` already holds a parse of this exact source.
+///
+/// A test-support probe for the #2549 "one parse, not two" claim: after
+/// `compile_template(src)` the render entry points find the cached
+/// `Template` instead of parsing again. Read-only.
+#[pyfunction]
+fn template_cache_contains(template_source: &str) -> bool {
+    TEMPLATE_CACHE.contains_key(template_source)
 }
 
 /// Fast template rendering with template directories for {% include %} support
@@ -4103,6 +4185,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
+    m.add_function(wrap_pyfunction!(compile_template, m)?)?;
+    m.add_function(wrap_pyfunction!(template_cache_contains, m)?)?;
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;

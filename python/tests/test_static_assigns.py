@@ -13,6 +13,18 @@ from djust.websocket import _snapshot_assigns
 # ---------------------------------------------------------------------------
 
 
+def _mock_rust_view() -> Mock:
+    """A stand-in ``RustLiveView`` for driving ``_sync_state_to_rust``.
+
+    ``retain_state_keys`` (#2564) is the one method whose RETURN the bridge
+    consumes — the removed keys join ``set_changed_keys`` — so a bare ``Mock``
+    hands back a ``Mock`` where a list is unpacked. Nothing is removed here.
+    """
+    mock = Mock()
+    mock.retain_state_keys.return_value = []
+    return mock
+
+
 class StaticView(LiveView):
     """View with static_assigns configured."""
 
@@ -112,7 +124,7 @@ class TestStaticAssignsSentFlag:
         assert not getattr(view, "_static_assigns_sent", False)
 
         # Mock the Rust view so _sync_state_to_rust can run
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         view._sync_state_to_rust()
@@ -127,7 +139,7 @@ class TestStaticAssignsSentFlag:
         view = NoStaticView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         view._sync_state_to_rust()
@@ -139,7 +151,7 @@ class TestStaticAssignsSentFlag:
         view = StaticView()
         view.mount(mock_request)
 
-        mock_rust = Mock()
+        mock_rust = _mock_rust_view()
         view._rust_view = mock_rust
 
         # First sync — includes demos
