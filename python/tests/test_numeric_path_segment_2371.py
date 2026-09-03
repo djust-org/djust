@@ -54,8 +54,12 @@ One path was fixed and its twin was not, which is the drift class CLAUDE.md
 What this deliberately does NOT change
 ---------------------------------------
 * ``{{ l.-1 }}`` — Django raises ``TemplateSyntaxError`` at *parse* time for a
-  segment starting with ``-``; djust renders empty. That is a lexer-level
-  divergence, not a resolution one, and it is pinned below rather than fixed.
+  segment starting with ``-``; when #2371 landed djust rendered empty. That
+  was a lexer/grammar-level divergence, not a resolution one, and #2371 left
+  it alone. It has since CONVERGED: #2578 tightened the plain-variable head
+  grammar to Django's ``[\\w.]``-only rule, so both engines now refuse
+  ``{{ l.-1 }}`` at compile time (see
+  ``TestTheLexerLevelDivergenceIsNowConverged`` below).
 * ``{{ d.items.0 }}`` — a Python ``dict_items`` is not subscriptable, so
   Django's step 3 raises and the cell is empty on both engines. The fix must
   keep it empty, which is why ``Value::DictView`` is absent from the index arm.
@@ -415,19 +419,24 @@ class TestTheStringIndexStepIsCLOSED:
         assert r == d, (d, r)
 
 
-class TestTheLexerLevelDivergenceIsNamedNotFixed:
-    """``{{ l.-1 }}`` is a Django *parse* error; djust renders empty.
+class TestTheLexerLevelDivergenceIsNowConverged:
+    """``{{ l.-1 }}`` is a Django *parse* error, and since #2578 djust refuses it too.
 
-    Not a resolution bug and not fixed here. Pinned so it cannot be mistaken
-    for something this change was supposed to have covered, and so it goes red
-    if either engine moves.
+    This was a lexer-level divergence when #2371 landed — Django raised
+    ``TemplateSyntaxError`` at parse time for a segment starting with ``-``
+    while djust rendered empty. #2578 tightened the plain-variable head
+    grammar to Django's ``[\\w.]``-only ``FilterExpression`` rule, so the
+    ``-1`` remainder is now refused at compile time on both engines (djust
+    surfaces it as ``RuntimeError`` carrying Django's
+    ``Could not parse the remainder`` wording). Pinned so it goes red if
+    either engine moves back.
     """
 
     @pytest.mark.parametrize("src", ["{{ l.-1 }}", "{{ d.-1 }}"])
-    def test_django_raises_at_parse_time_and_djust_renders_empty(self, src: str) -> None:
+    def test_both_engines_refuse_at_compile_time(self, src: str) -> None:
         d, r = both(src, {"l": [7, 8], "d": {-1: "neg"}})
         assert d == "<<EXC TemplateSyntaxError>>", f"Django moved: {d!r}"
-        assert r == ""
+        assert r == "<<EXC RuntimeError>>", f"djust no longer refuses (#2578): {r!r}"
 
 
 # ===========================================================================
