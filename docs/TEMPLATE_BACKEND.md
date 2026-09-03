@@ -191,7 +191,7 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 
 ⚠️ **Not all Django features supported yet:**
 - Several Django built-in tags and the `cache` library are not implemented; the generated lists below are the authority
-- Django's `i18n`, `l10n` and `tz` libraries are bridged on `{% load %}` (#2558): their tags and filters resolve on any `TEMPLATES` shape once the template loads the library. The three `tz` *filters* (`localtime`, `timezone`, `utc`) are the exception — they need a datetime object the Rust engine cannot carry (#2216) and are refused loudly at load rather than rendering blank (#2541)
+- Django's `i18n`, `l10n` and `tz` libraries are bridged on `{% load %}` (#2558): their tags and filters resolve on any `TEMPLATES` shape once the template loads the library — see "Internationalization" below for what that covers and the residues it does not. The three `tz` *filters* (`localtime`, `timezone`, `utc`) are the exception — they need a datetime object the Rust engine cannot carry (#2216) and are refused loudly at load rather than rendering blank (#2541)
 - A project's own `{% load %}` tag libraries ARE loaded (#2547, see "Loading a project's template libraries" below); a raw `@register.tag` that consumes a body is the one shape that is refused
 
 ### Loading a project's template libraries
@@ -205,6 +205,66 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 - **`OPTIONS['builtins']`** (dotted library paths) are bridged when the backend is constructed, so their tags and filters need no `{% load %}` — Django's meaning. Django's three default builtins are the Rust natives and are skipped.
 - **Scoping differs from Django.** Django scopes a loaded library to the template that loaded it; djust's registries are process-global, so once any render loads a library every later template on either engine path (plain backend or LiveView) sees its tags, `{% load %}` or not. A missing library is still refused. A test suite that clears the Rust tag registries must call `djust.template_libraries.reassert()` afterwards (the framework's own `djust.test_isolation` does): the Rust template cache is keyed by source, so a template parsed while the tags were registered is served from cache and never re-runs its `{% load %}`.
 - **Known gaps:** `context.use_l10n` / `autoescape` are not carried into a bridged tag's `Context` (#2586); the scoreboard's `test_no_render_side_effect` reads `template.nodelist`, a Django-internal attribute the backend does not have — a deliberate, documented ERROR (#2587).
+
+### Internationalization
+
+`{% load i18n %}` (and `l10n` / `tz`) brings Django's own i18n tags into the
+Rust engine (#2558). The catalogs, the plural rules and the escaping are
+Django's — the bridge runs Django's compile functions and nodes rather than
+reimplementing them — so `{% translate %}`, `{% blocktranslate %}`, the
+`_("…")` literal, the five `get_*` tags and the four `language_*` filters
+render byte-for-byte what Django renders, on the plain backend and inside a
+LiveView alike. All 116 cells of Django's own `syntax_tests/i18n` pass.
+
+```django
+{% load i18n %}
+{% translate "Page not found" %}
+{% translate "May" context "month name" as month %}
+{% blocktranslate count n=items|length trimmed %}
+  {{ n }} item
+{% plural %}
+  {{ n }} items
+{% endblocktranslate %}
+{{ _("Password") }}
+{% language "de" %}{{ price }} — {% translate "Yes" %}{% endlanguage %}
+```
+
+Three things are worth knowing about how it works:
+
+- **The active language is read per render, on the render thread.** Nothing is
+  captured at registration, so `translation.override(...)`, a
+  `LocaleMiddleware`-set language and a per-user language all work as they do
+  on Django — including inside a WebSocket event, where each render re-reads it.
+- **`{% blocktranslate %}`'s body crosses to Django as SOURCE, not as
+  rendered output.** The body is the msgid: Django's own lexer turns
+  `{{ var }}` into `%(var)s` and doubles every literal `%`, and it is Django's
+  parser that refuses a `{% block %}` or `{% for %}` inside the block, with its
+  own message. That is why the tag needed a fourth registration kind rather
+  than the existing block-tag bridge, which pre-renders bodies.
+- **`{% language %}`, `{% localize %}`, `{% localtime %}` and `{% timezone %}`
+  are native Rust nodes.** They wrap children the Rust engine renders, so they
+  switch Python's thread-local (that is where `gettext` and
+  `get_current_timezone` read from) and re-push the locale/zone state to Rust
+  around the block — which is what makes `{{ n }}` inside
+  `{% language "de" %}` format as German. The switch is restored on the way
+  out, including when a child raises.
+
+Escaping follows Django's rule that a node's output is final: a catalog string
+and a template literal are author content and render raw (`{% translate "<b>" %}`
+→ `<b>`), while an interpolated VARIABLE is escaped (`{% translate hostile %}`
+and `{% blocktranslate %}{{ hostile }}{% endblocktranslate %}` both escape).
+Nothing user-controlled can become a msgid except through
+`{% translate var %}`, whose output is escaped whatever the catalog answers.
+
+Residues, all of them named tests rather than silent gaps:
+
+| shape | djust | why |
+|---|---|---|
+| `{% autoescape off %}{% translate var %}` | refuses the `autoescape` tag | `{% autoescape %}` is not implemented yet (#2556); until it is, the bridge builds its `Context` with `autoescape=True` |
+| `{{ dt\|localtime }}`, `\|utc`, `\|timezone:"…"` | raises, naming the filter | a datetime crosses the wire as its ISO string (#2216), so the filter has no datetime object; use `{{ dt\|date:"…" }}`, which converts to the active zone (#2209) |
+| `{% localize off %}{{ some_date }}` | ISO, not the raw `DATE_FORMAT` | same date-wire residue (#2221 piece 3); the NUMBER half of `{% localize %}` is exact |
+| `{% localtime on %}` under `USE_TZ = False` | no conversion | Django's `on` forces conversion even with `USE_TZ` off; djust's `on` keeps whatever the render env pushed. `off` and the whole `USE_TZ = True` matrix agree |
+| `OPTIONS['string_if_invalid']` | not honoured by the plain backend | engine-wide (#2518), not i18n-specific: the raw-block handler reads the value it is given, and the scoreboard's engine (a real Django `Engine`) does carry it |
 
 ### Supported and unsupported tags and filters
 
@@ -246,13 +306,13 @@ Refused loudly on `{% load %}` (3): tz `localtime`, `timezone`, `utc` — each n
 
 The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
 
-- **47.09%** of the Django template tests that reach the engine pass (493 of 1047) <!-- django-suite-claim -->
-- Over the whole `template_tests` label the figure is 62.08% (907 of 1461, 9 skipped). That is not the headline: 414 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them.
+- **58.17%** of the Django template tests that reach the engine pass (609 of 1047) <!-- django-suite-claim -->
+- Over the whole `template_tests` label the figure is 69.92% (1018 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
 
 Two result kinds are counted separately because they are different work:
 
-- **ERROR**: the test could not run to an assertion. An unsupported tag, an attribute the backend cannot express, or a crash. Top classes in the baseline (ERROR lines naming the tag): `autoescape` (77), `blocktrans` (27), `ifchanged` (25), `trans` (15), `querystring` (14), `cache` (13). Since #2549 an unsupported tag is refused at `get_template`/`from_string` as `DjustTemplateSyntaxError`, so these lines read `DjustTemplateSyntaxError: Template error: Unsupported template tag …` rather than `Exception: Error rendering template …`. Every Django built-in or library tag in those classes appears in the generated unsupported list above; `scripts/generate-template-backend-lists.py --cross-check .django-src/last-run.txt` reconciles the two. Four generated-unsupported names never appear on the scoreboard because no `template_tests` case reaches them as a tag error — `get_current_timezone`, `localize`, `localtime`, `timezone` — and for those the generator is the authority (a test pins that this is the whole never-exercised set).
-- **FAIL**: the test ran and the output was wrong. The largest class was a `TemplateSyntaxError` that Django raises at parse time and djust did not (111 cells); #2549 moved the parse to construction and that class is now 75 cells, every one an engine-grammar gap where djust parses what Django refuses (`{% if %}` operator grammar, `{% url %}` argument parsing, `{{ a b }}`-style variable syntax, `{% include %}` arguments — #2576, #2577, #2578, #2579, #2580) rather than a timing question. A further 32 cells now raise the right type at the right time and fail only on Django's verbatim message text (#2581). The rest are output mismatches such as `string_if_invalid` not honoured (#2518) and `{% if x|default_if_none:y %}` evaluating false when `x` is undefined (#2528). The `<!--dj-if-->` marker that leaked into plain-backend output was fixed in #2519; it accounted for five of the six cases it broke, and the sixth is the #2528 shape.
+- **ERROR**: the test could not run to an assertion. An unsupported tag, an attribute the backend cannot express, or a crash. Top classes in the baseline (ERROR lines naming the tag): `autoescape` (77), `ifchanged` (25), `querystring` (14), `cache` (13), `resetcycle` (7), then `debug` / `filter` / `lorem` (5 each). `blocktrans` (27) and `trans` (15) left the board in #2558, along with every other `i18n` / `l10n` / `tz` tag error. Since #2549 an unsupported tag is refused at `get_template`/`from_string` as `DjustTemplateSyntaxError`, so these lines read `DjustTemplateSyntaxError: Template error: Unsupported template tag …` rather than `Exception: Error rendering template …`. Every Django built-in or library tag in those classes appears in the generated unsupported list above; `scripts/generate-template-backend-lists.py --cross-check .django-src/last-run.txt` reconciles the two. Until #2558 four generated-unsupported names never appeared on the scoreboard because no `template_tests` case reached them as a tag error — `get_current_timezone`, `localize`, `localtime`, `timezone`. All four are supported now, so the never-exercised set is empty and every generated-unsupported name is one the suite actually reaches (a test pins that, and a fifth such name appearing must move this sentence).
+- **FAIL**: the test ran and the output was wrong. The largest class was a `TemplateSyntaxError` that Django raises at parse time and djust did not (111 cells); #2549 moved the parse to construction and that class is now 79 cells, every one an engine-grammar gap where djust parses what Django refuses (`{% if %}` operator grammar, `{% url %}` argument parsing, `{{ a b }}`-style variable syntax, `{% include %}` arguments — #2576, #2577, #2578, #2579, #2580) rather than a timing question. A further 28 cells now raise the right type at the right time and fail only on Django's verbatim message text (#2581) — 47 before #2558, whose tags carry Django's own text because Django's own compile functions produce it. The rest are output mismatches such as `string_if_invalid` not honoured (#2518) and `{% if x|default_if_none:y %}` evaluating false when `x` is undefined (#2528). The `<!--dj-if-->` marker that leaked into plain-backend output was fixed in #2519; it accounted for five of the six cases it broke, and the sixth is the #2528 shape.
 
 Seven `template_tests` cases segfault the interpreter (a `DjustTemplate` or a type object placed in the context, the #2516 reference-cycle class). The runner isolates each one: a crash records the in-flight test as `ERROR: process crashed`, skips it and every finished test, and relaunches, so nothing after a crash is lost.
 
