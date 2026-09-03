@@ -11,6 +11,26 @@ pub enum DjangoRustError {
     #[error("Template error: {0}")]
     TemplateError(String),
 
+    /// A template error that knows WHERE in the source it happened (#2557).
+    ///
+    /// `start`/`end` are BYTE offsets of the offending token in the template
+    /// source — Django's `Token.position`, which `Template.get_exception_info`
+    /// turns into the `template_debug` dict the technical-500 page renders
+    /// (`name`, `line`, `during`, `source_lines`, `top`, `bottom`). Without a
+    /// position, a template error reaches the developer with no location at
+    /// all, which on a large template is a bisect by hand.
+    ///
+    /// `Display` is deliberately IDENTICAL to [`Self::TemplateError`]: the
+    /// span is carried beside the message, never inside it, so every existing
+    /// assertion on an error string keeps passing and the only observable
+    /// difference is the extra location a caller can now ask for.
+    #[error("Template error: {message}")]
+    TemplateErrorAt {
+        message: String,
+        start: usize,
+        end: usize,
+    },
+
     /// Django's `VariableDoesNotExist`, kept as its own variant because ONE
     /// construct treats it differently from every other render error (#2328).
     ///
@@ -66,6 +86,38 @@ impl From<DjangoRustError> for PyErr {
             // `Http404` / a custom exception and dispatches on its type.
             DjangoRustError::PythonException(e) => e,
             other => PyRuntimeError::new_err(other.to_string()),
+        }
+    }
+}
+
+impl DjangoRustError {
+    /// The byte span of the offending token, when this error knows one (#2557).
+    pub fn span(&self) -> Option<(usize, usize)> {
+        match self {
+            DjangoRustError::TemplateErrorAt { start, end, .. } => Some((*start, *end)),
+            _ => None,
+        }
+    }
+
+    /// Attach `span` to a plain [`Self::TemplateError`], leaving every other
+    /// variant — an already-located error included — untouched (#2557).
+    ///
+    /// The "already-located wins" rule is what makes the INNERMOST enclosing
+    /// token the one reported: the deepest `parse_token` frame attaches first
+    /// and each outer frame declines to overwrite it, so a bad tag nested in
+    /// three `{% if %}` blocks still points at the bad tag rather than at the
+    /// outermost `{% if %}`.
+    #[must_use]
+    pub fn at(self, span: Option<(usize, usize)>) -> Self {
+        match (self, span) {
+            (DjangoRustError::TemplateError(message), Some((start, end))) => {
+                DjangoRustError::TemplateErrorAt {
+                    message,
+                    start,
+                    end,
+                }
+            }
+            (other, _) => other,
         }
     }
 }

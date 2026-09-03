@@ -29,12 +29,86 @@ pub enum Token {
     },
 }
 
-fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Token> {
+/// A char cursor over the template source that also knows the BYTE offset of
+/// the character it is about to yield.
+///
+/// This is the position information Django's `Token.position` carries and
+/// that `Template.get_exception_info` turns into `template_debug` — the
+/// `name` / `line` / `during` / `source_lines` a technical-500 page shows
+/// (#2557). The lexer used a bare `Peekable<Chars>`, which throws the offset
+/// away, so every parse error reached Python with no location at all.
+///
+/// `pos()` reports the offset of the NEXT character (the source length once
+/// the input is exhausted), so a token's span is `pos()` sampled before its
+/// first character and again after its last.
+#[derive(Clone)]
+struct Cursor<'a> {
+    inner: std::iter::Peekable<std::str::CharIndices<'a>>,
+    end: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            inner: source.char_indices().peekable(),
+            end: source.len(),
+        }
+    }
+
+    /// Byte offset of the next character, or the source length at EOF.
+    fn pos(&mut self) -> usize {
+        self.inner.peek().map_or(self.end, |&(i, _)| i)
+    }
+
+    fn next(&mut self) -> Option<char> {
+        self.inner.next().map(|(_, c)| c)
+    }
+
+    fn peek(&mut self) -> Option<char> {
+        self.inner.peek().map(|&(_, c)| c)
+    }
+
+    /// Does the not-yet-consumed input contain the closing pair `a`+`b`?
+    ///
+    /// Django's lexer finds tags by scanning a regex — `{%.*?%}|{{.*?}}|{#.*?#}`
+    /// — over the whole source, so an opener with NO closer anywhere after it is
+    /// not a tag at all: it is plain text, and a WELL-FORMED tag later in the
+    /// source still lexes normally (#2558). A sequential lexer that consumes from
+    /// the opener to end-of-input instead swallows every later tag, which is how
+    /// `{% blocktranslate %}a {{ unclosed b{% endblocktranslate %}` — a template
+    /// Django renders verbatim — became an `Unclosed raw-block tag` failure, and
+    /// how a bare `a {{ unclosed b` silently rendered as `a `.
+    ///
+    /// Checking BEFORE consuming keeps that behaviour: no closer means emit only
+    /// the FIRST opener character as text and let the second be re-examined on
+    /// the next iteration — which is what a regex scanner does when it fails to
+    /// match and advances by one. That is why `{% if a %}x{{% endif %}` renders
+    /// `x{` on both engines: the second `{` starts the real `{% endif %}`.
+    ///
+    /// The cursor is positioned ON the second opener character, and the scan
+    /// starts AFTER it, so the opener can never supply half the closer: `{%}`
+    /// has no `%}` of its own and is plain text, exactly as Django's regex
+    /// sees it.
+    fn has_closer(&self, a: char, b: char) -> bool {
+        let mut it = self.inner.clone();
+        it.next(); // the second opener character is not part of a closer
+        let mut prev = None;
+        for (_, c) in it {
+            if prev == Some(a) && c == b {
+                return true;
+            }
+            prev = Some(c);
+        }
+        false
+    }
+}
+
+fn parse_jsx_component(chars: &mut Cursor<'_>) -> Result<Token> {
     let mut name = String::new();
     let mut props = Vec::new();
 
     // Parse component name
-    while let Some(&ch) = chars.peek() {
+    while let Some(ch) = chars.peek() {
         if ch.is_alphanumeric() || ch == '_' {
             name.push(ch);
             chars.next();
@@ -44,12 +118,12 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
     }
 
     // Skip whitespace
-    while chars.peek() == Some(&' ') || chars.peek() == Some(&'\n') || chars.peek() == Some(&'\t') {
+    while chars.peek() == Some(' ') || chars.peek() == Some('\n') || chars.peek() == Some('\t') {
         chars.next();
     }
 
     // Parse props
-    while let Some(&ch) = chars.peek() {
+    while let Some(ch) = chars.peek() {
         if ch == '/' || ch == '>' {
             break;
         }
@@ -59,7 +133,7 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
             let mut prop_value = String::new();
 
             // Parse prop name
-            while let Some(&ch) = chars.peek() {
+            while let Some(ch) = chars.peek() {
                 if ch == '=' || ch.is_whitespace() {
                     break;
                 }
@@ -68,24 +142,24 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
             }
 
             // Skip whitespace and =
-            while chars.peek() == Some(&' ') || chars.peek() == Some(&'=') {
+            while chars.peek() == Some(' ') || chars.peek() == Some('=') {
                 chars.next();
             }
 
             // Parse prop value
-            if chars.peek() == Some(&'"') || chars.peek() == Some(&'\'') {
+            if chars.peek() == Some('"') || chars.peek() == Some('\'') {
                 let quote = chars.next().unwrap();
-                for ch in chars.by_ref() {
+                while let Some(ch) = chars.next() {
                     if ch == quote {
                         break;
                     }
                     prop_value.push(ch);
                 }
-            } else if chars.peek() == Some(&'{') {
+            } else if chars.peek() == Some('{') {
                 // Handle {expression} props
                 chars.next(); // consume {
                 let mut depth = 1;
-                for ch in chars.by_ref() {
+                while let Some(ch) = chars.next() {
                     if ch == '{' {
                         depth += 1;
                     } else if ch == '}' {
@@ -103,9 +177,9 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
             }
 
             // Skip whitespace
-            while chars.peek() == Some(&' ')
-                || chars.peek() == Some(&'\n')
-                || chars.peek() == Some(&'\t')
+            while chars.peek() == Some(' ')
+                || chars.peek() == Some('\n')
+                || chars.peek() == Some('\t')
             {
                 chars.next();
             }
@@ -115,7 +189,7 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
     }
 
     // Check if self-closing
-    if chars.peek() == Some(&'/') {
+    if chars.peek() == Some('/') {
         chars.next(); // consume /
         chars.next(); // consume >
         return Ok(Token::JsxComponent {
@@ -134,14 +208,14 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
     let mut child_text = String::new();
 
     while let Some(ch) = chars.next() {
-        if ch == '<' && chars.peek() == Some(&'/') {
+        if ch == '<' && chars.peek() == Some('/') {
             // Potential closing tag - verify it matches our component name
             // Save position by peeking ahead
             let mut tag_name = String::new();
             let mut temp_chars = chars.clone();
             temp_chars.next(); // consume / in temp iterator
 
-            while let Some(&ch) = temp_chars.peek() {
+            while let Some(ch) = temp_chars.peek() {
                 if ch == '>' || ch.is_whitespace() {
                     break;
                 }
@@ -156,8 +230,10 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
                     children.push(Token::Text(child_text.trim().to_string()));
                 }
                 // Skip to >
-                while chars.peek() != Some(&'>') {
-                    chars.next();
+                while chars.peek() != Some('>') {
+                    if chars.next().is_none() {
+                        break;
+                    }
                 }
                 chars.next(); // consume >
                 break;
@@ -222,87 +298,121 @@ fn split_tag_args(content: &str) -> Vec<String> {
     parts
 }
 
-/// Does the not-yet-consumed input contain the closing pair `a`+`b`?
+/// The `[start, end)` BYTE span of one token in the template source.
 ///
-/// Django's lexer finds tags by scanning a regex — `{%.*?%}|{{.*?}}|{#.*?#}`
-/// — over the whole source, so an opener with NO closer anywhere after it is
-/// not a tag at all: it is plain text, and a WELL-FORMED tag later in the
-/// source still lexes normally (#2558). A sequential lexer that consumes from
-/// the opener to end-of-input instead swallows every later tag, which is how
-/// `{% blocktranslate %}a {{ unclosed b{% endblocktranslate %}` — a template
-/// Django renders verbatim — became an `Unclosed raw-block tag` failure, and
-/// how a bare `a {{ unclosed b` silently rendered as `a `.
-///
-/// Checking BEFORE consuming keeps that behaviour: no closer means emit only
-/// the FIRST opener character as text and let the second be re-examined on
-/// the next iteration — which is what a regex scanner does when it fails to
-/// match and advances by one. That is why `{% if a %}x{{% endif %}` renders
-/// `x{` on both engines: the second `{` starts the real `{% endif %}`.
-///
-/// `rest` is positioned ON the second opener character, and the scan starts
-/// AFTER it, so the opener can never supply half the closer: `{%}` has no
-/// `%}` of its own and is plain text, exactly as Django's regex sees it.
-fn has_closer(rest: &std::iter::Peekable<std::str::Chars>, a: char, b: char) -> bool {
-    let mut it = rest.clone();
-    it.next(); // the second opener character is not part of a closer
-    let mut prev = None;
-    for c in it {
-        if prev == Some(a) && c == b {
-            return true;
+/// Parallel to the token vector `tokenize_spanned` returns: `spans[i]` is the
+/// span of `tokens[i]`. Django carries the same pair on `Token.position` and
+/// hands it to `Template.get_exception_info`, which is what fills the
+/// `template_debug` dict a technical-500 page renders (#2557).
+pub type Span = (usize, usize);
+
+/// Tokens plus the source span of each, collected side by side.
+struct Spanned {
+    tokens: Vec<Token>,
+    spans: Vec<Span>,
+}
+
+impl Spanned {
+    fn new() -> Self {
+        Self {
+            tokens: Vec::new(),
+            spans: Vec::new(),
         }
-        prev = Some(c);
     }
-    false
+
+    fn push(&mut self, token: Token, start: usize, end: usize) {
+        self.tokens.push(token);
+        self.spans.push((start, end));
+    }
 }
 
 pub fn tokenize(source: &str) -> Result<Vec<Token>> {
-    let mut tokens = Vec::new();
-    let mut chars = source.chars().peekable();
-    let mut current = String::new();
+    tokenize_spanned(source).map(|(tokens, _)| tokens)
+}
 
-    while let Some(ch) = chars.next() {
+/// Tokenize, also returning each token's byte span in `source` (#2557).
+///
+/// `tokenize` is this function with the spans dropped, so there is one
+/// tokenizer and no parallel-path drift (#1646) — a lexer change reaches both
+/// callers or neither.
+pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
+    let mut out = Spanned::new();
+    let mut chars = Cursor::new(source);
+    let mut current = String::new();
+    // Byte offset where the run of literal text in `current` began. Only
+    // meaningful while `current` is non-empty.
+    let mut text_start = 0usize;
+
+    macro_rules! flush_text {
+        ($end:expr) => {
+            if !current.is_empty() {
+                out.push(Token::Text(current.clone()), text_start, $end);
+                current.clear();
+            }
+        };
+    }
+
+    loop {
+        let tok_start = chars.pos();
+        let Some(ch) = chars.next() else { break };
+        if current.is_empty() {
+            text_start = tok_start;
+        }
         if ch == '<' {
             // Check if this is a JSX component (starts with uppercase)
-            if let Some(&next_ch) = chars.peek() {
+            if let Some(next_ch) = chars.peek() {
                 if next_ch.is_uppercase() {
                     // JSX component detected
-                    if !current.is_empty() {
-                        tokens.push(Token::Text(current.clone()));
-                        current.clear();
-                    }
+                    flush_text!(tok_start);
                     match parse_jsx_component(&mut chars) {
-                        Ok(token) => tokens.push(token),
-                        Err(_) => current.push(ch), // Fallback to text if parsing fails
+                        Ok(token) => {
+                            let end = chars.pos();
+                            out.push(token, tok_start, end);
+                        }
+                        Err(_) => {
+                            // Fallback to text if parsing fails
+                            text_start = tok_start;
+                            current.push(ch);
+                        }
                     }
                     continue;
                 }
             }
             current.push(ch);
         } else if ch == '{' {
-            if let Some(&next) = chars.peek() {
+            if let Some(next) = chars.peek() {
                 match next {
                     '{' => {
                         // Variable start {{
-                        if !has_closer(&chars, '}', '}') {
+                        if !chars.has_closer('}', '}') {
                             // No `}}` after: literal text, as in Django.
                             // Only the FIRST `{` is consumed — the second is
                             // re-examined next iteration and may open a real
-                            // tag. See `has_closer`.
+                            // tag. See `Cursor::has_closer`.
                             current.push(ch);
                             continue;
                         }
                         chars.next(); // consume second {
-                        if !current.is_empty() {
-                            tokens.push(Token::Text(current.clone()));
-                            current.clear();
-                        }
+                        flush_text!(tok_start);
 
                         let mut var_content = String::new();
 
                         while let Some(ch) = chars.next() {
-                            if ch == '}' && chars.peek() == Some(&'}') {
+                            if ch == '}' && chars.peek() == Some('}') {
                                 chars.next(); // consume second }
-                                tokens.push(Token::Variable(var_content.trim().to_string()));
+                                let content = var_content.trim().to_string();
+                                // An EMPTY `{{ }}` is emitted, not refused.
+                                // Django's `Lexer.create_token` returns
+                                // `Token(TokenType.VAR, "")` here and the
+                                // refusal lives one layer up, in
+                                // `Parser.parse` (`django/template/base.py`
+                                // 483-486) — which is what lets
+                                // `{% verbatim %}{{ }}{% endverbatim %}` and
+                                // `{% comment %}{{ }}{% endcomment %}` render
+                                // (their bodies never reach the parser loop).
+                                // djust mirrors that placement in
+                                // `parser::parse_token_inner` (#2557).
+                                out.push(Token::Variable(content), tok_start, chars.pos());
                                 break;
                             } else {
                                 var_content.push(ch);
@@ -311,27 +421,38 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                     }
                     '%' => {
                         // Tag start {%
-                        if !has_closer(&chars, '%', '}') {
+                        if !chars.has_closer('%', '}') {
                             // No `%}` after: literal text. See the `{{` arm.
                             current.push(ch);
                             continue;
                         }
                         chars.next(); // consume %
-                        if !current.is_empty() {
-                            tokens.push(Token::Text(current.clone()));
-                            current.clear();
-                        }
+                        flush_text!(tok_start);
 
                         let mut tag_content = String::new();
 
                         while let Some(ch) = chars.next() {
-                            if ch == '%' && chars.peek() == Some(&'}') {
+                            if ch == '%' && chars.peek() == Some('}') {
                                 chars.next(); // consume }
                                 let parts: Vec<String> = split_tag_args(&tag_content);
 
-                                if let Some(tag_name) = parts.first() {
-                                    tokens.push(Token::Tag(tag_name.clone(), parts[1..].to_vec()));
-                                }
+                                // An empty `{% %}` yields a Tag with an EMPTY
+                                // name rather than nothing at all. Django's
+                                // lexer does the same — `create_token` builds
+                                // `Token(TokenType.BLOCK, "")` — and
+                                // `Parser.parse` refuses it with
+                                // `Empty block tag on line %d`
+                                // (`django/template/base.py:497`). Dropping
+                                // the token here made the refusal
+                                // unreachable, so `{% %}` rendered as
+                                // nothing (#2557).
+                                let tag_name = parts.first().cloned().unwrap_or_default();
+                                let args = if parts.is_empty() {
+                                    Vec::new()
+                                } else {
+                                    parts[1..].to_vec()
+                                };
+                                out.push(Token::Tag(tag_name, args), tok_start, chars.pos());
                                 break;
                             } else {
                                 tag_content.push(ch);
@@ -340,24 +461,25 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                     }
                     '#' => {
                         // Comment start {#
-                        if !has_closer(&chars, '#', '}') {
+                        if !chars.has_closer('#', '}') {
                             // No `#}` after: literal text. See the `{{` arm.
                             current.push(ch);
                             continue;
                         }
                         chars.next(); // consume #
-                        if !current.is_empty() {
-                            tokens.push(Token::Text(current.clone()));
-                            current.clear();
-                        }
+                        flush_text!(tok_start);
 
                         // Collect until `#}`. The text is kept so a raw-block
                         // body can re-emit the comment verbatim (#2558).
                         let mut comment_content = String::new();
                         while let Some(ch) = chars.next() {
-                            if ch == '#' && chars.peek() == Some(&'}') {
+                            if ch == '#' && chars.peek() == Some('}') {
                                 chars.next(); // consume }
-                                tokens.push(Token::Comment(comment_content.clone()));
+                                out.push(
+                                    Token::Comment(comment_content.clone()),
+                                    tok_start,
+                                    chars.pos(),
+                                );
                                 break;
                             }
                             comment_content.push(ch);
@@ -375,11 +497,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
         }
     }
 
-    if !current.is_empty() {
-        tokens.push(Token::Text(current));
-    }
+    let eof = chars.pos();
+    flush_text!(eof);
 
-    Ok(tokens)
+    Ok((out.tokens, out.spans))
 }
 
 #[cfg(test)]
@@ -663,6 +784,164 @@ mod tests {
             assert_eq!(args, &vec![r#"name="My App""#]);
         } else {
             panic!("Expected Tag token, got {:?}", tokens[0]);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // token spans (#2557)
+    // -----------------------------------------------------------------------
+
+    /// Every span must slice its own token back out of the source.
+    ///
+    /// This is the property `template_debug`'s `during` field depends on: a
+    /// span off by one produces an excerpt Django would never show.
+    #[test]
+    fn every_span_slices_its_own_token_out_of_the_source() {
+        for source in [
+            "plain text only",
+            "{{ x }}",
+            "a{{ x }}b",
+            "{% if x %}y{% endif %}",
+            "{# a comment #}",
+            "before {# c #} between {% tag a b %} after {{ v }} end",
+            "line one\n{% nosuchtag %}\nline three",
+            "caf\u{e9} \u{2615} {{ na\u{ef}ve }} tail",
+            "{% if a %}{{ b }}{% else %}{{ c }}{% endif %}",
+        ] {
+            let (tokens, spans) = tokenize_spanned(source).expect("tokenize");
+            assert_eq!(tokens.len(), spans.len(), "one span per token: {source:?}");
+            for (i, (start, end)) in spans.iter().copied().enumerate() {
+                assert!(
+                    start <= end && end <= source.len(),
+                    "{source:?} span {i} = ({start},{end})"
+                );
+                let slice = &source[start..end];
+                match &tokens[i] {
+                    Token::Text(t) => assert_eq!(slice, t, "text span {i} of {source:?}"),
+                    Token::Variable(_) => {
+                        assert!(
+                            slice.starts_with("{{") && slice.ends_with("}}"),
+                            "{slice:?}"
+                        )
+                    }
+                    Token::Tag(name, _) => {
+                        assert!(
+                            slice.starts_with("{%") && slice.ends_with("%}"),
+                            "{slice:?}"
+                        );
+                        assert!(
+                            slice.contains(name.as_str()),
+                            "{slice:?} should name {name}"
+                        );
+                    }
+                    Token::Comment(_) => {
+                        assert!(
+                            slice.starts_with("{#") && slice.ends_with("#}"),
+                            "{slice:?}"
+                        )
+                    }
+                    Token::JsxComponent { .. } => {}
+                }
+            }
+        }
+    }
+
+    /// Spans are contiguous and ordered: they tile the source with no gap.
+    #[test]
+    fn spans_tile_the_source_in_order() {
+        let source = "a{{ x }}b{% t %}c{# k #}d";
+        let (_, spans) = tokenize_spanned(source).expect("tokenize");
+        let mut upto = 0usize;
+        for (start, end) in spans {
+            assert_eq!(start, upto, "gap or overlap before ({start},{end})");
+            upto = end;
+        }
+        assert_eq!(upto, source.len(), "the spans must reach the end");
+    }
+
+    /// A multi-byte character before a token must not shift that token's span.
+    #[test]
+    fn a_multibyte_prefix_does_not_shift_a_later_span() {
+        let source = "caf\u{e9}\n{% nosuchtag %}";
+        let (tokens, spans) = tokenize_spanned(source).expect("tokenize");
+        let idx = tokens
+            .iter()
+            .position(|t| matches!(t, Token::Tag(n, _) if n == "nosuchtag"))
+            .expect("the tag token");
+        let (start, end) = spans[idx];
+        assert_eq!(&source[start..end], "{% nosuchtag %}");
+        assert_eq!(start, source.find("{% nosuchtag %}").unwrap());
+        // The byte offset is genuinely larger than the CHARACTER offset here,
+        // which is the difference the Python side has to convert away.
+        let char_offset = source.chars().take_while(|c| *c != '{').count();
+        assert!(start > char_offset, "expected a byte/char divergence");
+    }
+
+    /// `tokenize` is `tokenize_spanned` with the spans dropped — one
+    /// tokenizer, so a lexer change cannot reach one caller and not the other.
+    #[test]
+    fn tokenize_agrees_with_tokenize_spanned() {
+        for source in [
+            "plain",
+            "{{ x }}{% y %}{# z #}",
+            "a {{ unclosed b",
+            "{% if a %}x{{% endif %}",
+        ] {
+            let plain = tokenize(source).expect("tokenize");
+            let (spanned, _) = tokenize_spanned(source).expect("tokenize_spanned");
+            assert_eq!(plain, spanned, "{source:?}");
+        }
+    }
+
+    /// The lexer EMITS an empty `{{ }}` / `{% %}` rather than refusing it —
+    /// Django's `Lexer.create_token` returns `Token(TokenType.VAR, "")` /
+    /// `Token(TokenType.BLOCK, "")` and the refusal lives in `Parser.parse`
+    /// (`django/template/base.py:483-486` and `:497`).
+    ///
+    /// The placement is what lets a raw block hold `{{ }}` literally, so this
+    /// is not a stylistic choice: refusing here regresses
+    /// `{% verbatim %}{{ }}{% endverbatim %}`. The refusals themselves are
+    /// pinned in `parser::tests` (#2557).
+    #[test]
+    fn an_empty_tag_lexes_to_an_empty_token_not_an_error() {
+        for source in ["{{ }}", "{{}}", "{{    }}", "a\nb\n{{ }}"] {
+            let (tokens, _) = tokenize_spanned(source).expect("the lexer must not refuse");
+            assert!(
+                tokens.contains(&Token::Variable(String::new())),
+                "{source:?} gave {tokens:?}"
+            );
+        }
+        for source in ["{% %}", "{%  %}"] {
+            let (tokens, _) = tokenize_spanned(source).expect("the lexer must not refuse");
+            assert!(
+                tokens.contains(&Token::Tag(String::new(), Vec::new())),
+                "{source:?} gave {tokens:?}"
+            );
+        }
+    }
+
+    /// The empty token still carries its span, so the parser's refusal can
+    /// report a location like every other located parse error (#2557).
+    #[test]
+    fn an_empty_tag_carries_its_span() {
+        let (tokens, spans) = tokenize_spanned("a\nb\n{{ }}").expect("tokenize");
+        let i = tokens
+            .iter()
+            .position(|t| t == &Token::Variable(String::new()))
+            .expect("the empty variable token");
+        assert_eq!(spans[i], (4, 9));
+    }
+
+    /// A non-empty variable is untouched, and so is a `{{` with no closer —
+    /// which `has_closer` keeps as literal text (#2558).
+    #[test]
+    fn the_empty_variable_token_reaches_nothing_else() {
+        for source in ["{{ x }}", "a {{ unclosed b"] {
+            let (tokens, _) = tokenize_spanned(source).expect("tokenize");
+            assert!(
+                !tokens.contains(&Token::Variable(String::new())),
+                "{source:?} gave {tokens:?}"
+            );
         }
     }
 }

@@ -103,14 +103,18 @@ pub struct Template {
 
 impl Template {
     pub fn new(source: &str) -> Result<Self> {
-        let tokens = lexer::tokenize(source)?;
-        // Use `parse_with_source` so the boundary-marker ID prefix
+        // Spanned so a parse failure carries the byte position of the token
+        // that caused it — the position Django keeps on `Token.position` and
+        // turns into the `template_debug` its technical-500 page renders
+        // (#2557). `tokenize` is this same tokenizer with the spans dropped.
+        let (tokens, spans) = lexer::tokenize_spanned(source)?;
+        // Use `parse_with_source*` so the boundary-marker ID prefix
         // (`<!--dj-if id="if-<prefix>-N"-->`) is derived from this
         // template's own source. Prevents ID collisions when a
         // parent template via `{% extends %}` or a child template
         // via `{% include %}` is parsed independently with its own
         // counter (Stage 11 finding on PR #1363, #1358 Iter 1).
-        let nodes = parser::parse_with_source(&tokens, source)?;
+        let nodes = parser::parse_with_source_spanned(&tokens, &spans, source)?;
         let node_deps = parser::extract_per_node_deps(&nodes);
 
         Ok(Self {

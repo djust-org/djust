@@ -626,7 +626,7 @@ impl RustLiveViewBackend {
             let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
                 cached.clone()
             } else {
-                let template = Template::new(&self.template_source)?;
+                let template = Template::new(&self.template_source).map_err(span_aware_pyerr)?;
                 let arc = Arc::new(template);
                 TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
                 arc
@@ -669,7 +669,7 @@ impl RustLiveViewBackend {
             let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
                 cached.clone()
             } else {
-                let template = Template::new(&self.template_source)?;
+                let template = Template::new(&self.template_source).map_err(span_aware_pyerr)?;
                 let arc = Arc::new(template);
                 TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
                 arc
@@ -1096,7 +1096,7 @@ impl RustLiveViewBackend {
             let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
                 cached.clone()
             } else {
-                let template = Template::new(&self.template_source)?;
+                let template = Template::new(&self.template_source).map_err(span_aware_pyerr)?;
                 let arc = Arc::new(template);
                 TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
                 arc
@@ -2106,7 +2106,7 @@ fn render_template(
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
             cached.clone()
         } else {
-            let template = Template::new(&template_source)?;
+            let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
             let arc = Arc::new(template);
             TEMPLATE_CACHE.insert(template_source.clone(), arc.clone());
             arc
@@ -2141,15 +2141,52 @@ fn render_template(
 /// render entry points: a successful parse is cached, so the render that
 /// follows does not pay for it twice; a failed parse is never cached (same
 /// as today), so a handler registered afterwards is honoured.
+/// The attribute a located parse error carries its `(start, end)` byte span
+/// on (#2557).
+///
+/// Set on the `RuntimeError` instance rather than folded into the message, so
+/// `str(exc)` is byte-identical to what it has always been and a caller that
+/// does not know about the span sees no change at all.
+/// `python/djust/template/rendering.py` reads it with `getattr(..., None)` and
+/// turns it into Django's `template_debug` dict.
+///
+/// EVERY `Template::new` call in this crate goes through `span_aware_pyerr`,
+/// not just the backend's `compile_template`. The first version attached the
+/// span at one of six sites, so `render_template` /
+/// `render_template_with_dirs` — the entry `SimpleLiveView` and the plain
+/// backend render use — raised a span-less `RuntimeError` and got the
+/// pre-#2557 experience. That is the parallel-path-drift shape (#1646); the
+/// cure is one wrapper on all six, pinned by
+/// `every_template_new_is_span_aware` below.
+pub const SPAN_ATTR: &str = "djust_token_span";
+
 #[pyfunction]
 fn compile_template(template_source: String) -> PyResult<()> {
     guard_panic("compile_template", move || {
         if TEMPLATE_CACHE.get(&template_source).is_none() {
-            let template = Template::new(&template_source)?;
+            let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
             TEMPLATE_CACHE.insert(template_source, Arc::new(template));
         }
         Ok(())
     })
+}
+
+/// Convert a template error to a `PyErr`, preserving its source span (#2557).
+///
+/// `From<DjangoRustError> for PyErr` stringifies, which throws the position
+/// away; this keeps the same message and hangs the span off the exception
+/// instance so Python can build `template_debug` from it. A failure to set the
+/// attribute is swallowed on purpose: the ORIGINAL error is what the caller
+/// must see, and a missing span degrades to exactly the pre-#2557 behaviour.
+fn span_aware_pyerr(err: djust_core::DjangoRustError) -> PyErr {
+    let span = err.span();
+    let py_err: PyErr = err.into();
+    if let Some((start, end)) = span {
+        Python::attach(|py| {
+            let _ = py_err.value(py).setattr(SPAN_ATTR, (start, end));
+        });
+    }
+    py_err
 }
 
 /// Whether `TEMPLATE_CACHE` already holds a parse of this exact source.
@@ -2195,7 +2232,7 @@ fn render_template_with_dirs(
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
             cached.clone()
         } else {
-            let template = Template::new(&template_source)?;
+            let template = Template::new(&template_source).map_err(span_aware_pyerr)?;
             let arc = Arc::new(template);
             TEMPLATE_CACHE.insert(template_source.clone(), arc.clone());
             arc
@@ -4808,6 +4845,35 @@ mod retain_state_keys_rust_2592 {
         assert!(
             !out.contains("<img"),
             "the grant outlived the removed key: {out:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod span_aware_call_sites_2557 {
+    //! Structural pin: EVERY `Template::new` in this crate attaches the
+    //! parse error's source span (#2557).
+    //!
+    //! Not a semantic test — a caller-SET pin (#1125). The first version of
+    //! #2557 wrapped one of six sites, so `render_template` /
+    //! `render_template_with_dirs` still raised a span-less `RuntimeError`
+    //! and the debug page fell back to the pre-#2557 experience. A count
+    //! floor would not have caught that (it was already >= 1); asserting the
+    //! two counts are EQUAL is what makes a future unwrapped call site fail.
+
+    const SRC: &str = include_str!("lib.rs");
+
+    #[test]
+    fn every_template_new_is_span_aware() {
+        let total = SRC.matches("Template::new(&").count();
+        let wrapped = SRC.matches(").map_err(span_aware_pyerr)?").count();
+        assert!(total > 0, "the grep found no `Template::new` at all");
+        assert_eq!(
+            total,
+            wrapped,
+            "{} `Template::new` call(s) do not go through `span_aware_pyerr` \
+             — a parse error there reaches Python with no location (#1646)",
+            total - wrapped
         );
     }
 }
