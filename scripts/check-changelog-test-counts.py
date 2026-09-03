@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Validate test-count phrases in CHANGELOG.md ``[Unreleased]`` against reality.
 
-Scans the ``[Unreleased]`` section of ``CHANGELOG.md`` and, for each phrase
+Scans the ``[Unreleased]`` section of ``CHANGELOG.md`` — and every pending
+fragment in ``changelog.d/`` next to it (see ``scripts/changelog-fragments.py``;
+a fragment is the bullet that will be folded into ``[Unreleased]`` at the
+release cut, so its claims are checked the same way) — and, for each phrase
 like ``N JSDOM cases``, ``N regression tests``, ``N test cases``,
 ``N unit tests``, or ``N parameterized cases`` that also names a concrete
 test file path (``tests/js/<name>.test.js`` or
@@ -209,6 +212,31 @@ def find_mismatches(
     return mismatches
 
 
+FRAGMENT_DIR_NAME = "changelog.d"
+
+
+def find_fragment_mismatches(repo_root: Path) -> list[tuple[str, Mismatch]]:
+    """Run the same claim check over every ``changelog.d/*.md`` fragment.
+
+    Returns ``(fragment_name, mismatch)`` pairs. ``README.md`` is skipped; a
+    malformed fragment is left to ``changelog-fragments.py check`` to report.
+    """
+    fragment_dir = repo_root / FRAGMENT_DIR_NAME
+    if not fragment_dir.is_dir():
+        return []
+    out: list[tuple[str, Mismatch]] = []
+    for path in sorted(fragment_dir.glob("*.md")):
+        if path.name == "README.md":
+            continue
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for mm in find_mismatches(body, 1, repo_root):
+            out.append((path.name, mm))
+    return out
+
+
 def main(argv: list[str]) -> int:
     changelog_path = Path(argv[1]) if len(argv) > 1 else DEFAULT_CHANGELOG
     if not changelog_path.exists():
@@ -217,21 +245,26 @@ def main(argv: list[str]) -> int:
     repo_root = changelog_path.resolve().parent
     text = changelog_path.read_text(encoding="utf-8")
     body, body_start_line = extract_unreleased(text)
-    if not body.strip():
-        # No Unreleased section or it's empty — nothing to validate.
-        return 0
-    mismatches = find_mismatches(body, body_start_line, repo_root)
-    if not mismatches:
+    mismatches = find_mismatches(body, body_start_line, repo_root) if body.strip() else []
+    fragment_mismatches = find_fragment_mismatches(repo_root)
+    if not mismatches and not fragment_mismatches:
         return 0
     print(
-        "CHANGELOG test-count drift — [Unreleased] claims do not match test files:\n",
+        "CHANGELOG test-count drift — [Unreleased] / changelog.d/ claims do not "
+        "match test files:\n",
         file=sys.stderr,
     )
     for mm in mismatches:
         print(mm.format(), file=sys.stderr)
+    for name, mm in fragment_mismatches:
+        print(
+            f"  {mm.file}: {FRAGMENT_DIR_NAME}/{name} says {mm.claimed} "
+            f"({mm.phrase!r}) but file has {mm.actual} ({mm.actual - mm.claimed:+d})",
+            file=sys.stderr,
+        )
     print(
-        "\nFix: update CHANGELOG.md to match the actual test count, "
-        "or add the missing tests.",
+        "\nFix: update CHANGELOG.md / the changelog.d/ fragment to match the actual "
+        "test count, or add the missing tests.",
         file=sys.stderr,
     )
     return 1

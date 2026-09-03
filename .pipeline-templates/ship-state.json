@@ -172,7 +172,7 @@
           "done": false
         },
         {
-          "action": "update CHANGELOG.md if one exists (CANONICAL CHANGELOG COMMIT BOUNDARY for ship-pipelines — defer all [Unreleased] hunks to this Stage 5 docs commit per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
+          "action": "write `changelog.d/<issue>.<section>.md` — NEVER edit CHANGELOG.md [Unreleased] directly; the release cut compiles the fragments (see changelog.d/README.md). CANONICAL CHANGELOG COMMIT BOUNDARY for ship-pipelines — defer the fragment to this Stage 5 docs commit per v0.9.1 retro / Action Tracker #181 / GitHub #1173",
           "done": false,
           "mandatory": true
         },
@@ -181,7 +181,7 @@
           "done": false
         },
         {
-          "action": "this Stage 5 docs commit must include ONLY docs + CHANGELOG hunks; no implementation code (the two-commit shape gate — applies even when ship-pipelines start from pre-existing implementation, so the new commit at this stage is docs-only)",
+          "action": "this Stage 5 docs commit must include ONLY docs + changelog.d/ hunks (allowed paths: changelog.d/, CHANGELOG.md, ROADMAP.md, docs/, README.md); no implementation code (the two-commit shape gate — applies even when ship-pipelines start from pre-existing implementation, so the new commit at this stage is docs-only)",
           "done": false,
           "mandatory": true
         },
