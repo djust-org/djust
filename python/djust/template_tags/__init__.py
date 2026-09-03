@@ -150,6 +150,22 @@ class TagHandler:
     #: ``args[-2] == "as"`` on its resolved arguments (#2563 review).
     ACCEPTS_AS_VAR: ClassVar[bool] = False
 
+    #: With ``RETURNS_BINDINGS``, receive the surrounding ``{% autoescape %}``
+    #: policy as an ``autoescape=`` keyword: ``render(args, [content,]
+    #: context, autoescape=bool)`` (#2556). Declare it ONLY when the handler
+    #: applies the policy itself — the ``{% load %}`` bridge does, because it
+    #: renders through Django's own node on a Django ``Context`` and returns
+    #: ``mark_safe``'d output.
+    #:
+    #: The default is ``False`` and every other handler wants it: a handler
+    #: that returns a bare ``str`` has the policy applied to its return by the
+    #: registry's own ``escape_handler_return`` (Django's
+    #: ``if context.autoescape:``), so naming the parameter would only be a
+    #: second place for the two to disagree. It is opt-in rather than part of
+    #: ``RETURNS_BINDINGS`` because passing an unexpected keyword is a
+    #: ``TypeError`` on EVERY render, not a wrong answer under ``off``.
+    WANTS_AUTOESCAPE: ClassVar[bool] = False
+
     def render(
         self, args: List[str], context: Dict[str, Any]
     ) -> Union[str, Tuple[str, Dict[str, Any]]]:

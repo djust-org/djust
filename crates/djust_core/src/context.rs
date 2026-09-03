@@ -215,6 +215,15 @@ pub struct Context {
     /// whichever path parsed first decide for both. Mirrors `auto_call`;
     /// `{% include … only %}` builds a fresh `Context` and must copy it.
     emit_dj_if_markers: bool,
+    /// Django's `Context.autoescape` (#2556). Default `true`; flipped ONLY by
+    /// the `{% autoescape off %}` render arm on a per-block clone, and copied
+    /// into the fresh `Context` an `{% include … only %}` builds — never from
+    /// data (a context key spelled `autoescape` has no effect). It is an
+    /// EMIT-time term and the `needs_autoescape` argument, not a safety
+    /// grant: `renderer::filter_output_is_safe` never reads it. Render-time on
+    /// the `Context` for the same reason as `emit_dj_if_markers` — the parsed
+    /// template is cached and shared by both paths.
+    autoescape: bool,
     /// Per-RENDER state for `{% cycle %}` / `{% resetcycle %}` (#2556):
     /// `cycle node id -> number of times it has advanced`. Django keeps this
     /// in `context.render_context[node]`, an `itertools.cycle` per
@@ -247,6 +256,7 @@ impl Clone for Context {
             raw_py_objects: self.raw_py_objects.clone(),
             auto_call: self.auto_call,
             emit_dj_if_markers: self.emit_dj_if_markers,
+            autoescape: self.autoescape,
             // SHARED, not copied: Django's `Context.__copy__` shallow-copies
             // `render_context`, so a `{% for %}` / `{% with %}` clone
             // advances the same `{% cycle %}` iterators as its parent.
@@ -309,6 +319,7 @@ impl Context {
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            autoescape: true,
             cycle_state: std::sync::Arc::default(),
         }
     }
@@ -329,6 +340,7 @@ impl Context {
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            autoescape: true,
             cycle_state: std::sync::Arc::default(),
         }
     }
@@ -350,6 +362,20 @@ impl Context {
     /// Should the renderer emit `<!--dj-if-->` markers under this context?
     pub fn emit_dj_if_markers(&self) -> bool {
         self.emit_dj_if_markers
+    }
+
+    /// Set Django's `Context.autoescape` for renders under this context
+    /// (#2556). Production writers are exactly the `{% autoescape %}` render
+    /// arm and the `{% include … only %}` fresh-context copy — pinned by a
+    /// source grep in `python/tests/test_autoescape_tag_2556.py`.
+    pub fn set_autoescape(&mut self, on: bool) {
+        self.autoescape = on;
+    }
+
+    /// Django's `Context.autoescape`: should the renderer's emit sites and
+    /// the `needs_autoescape` filters escape under this context?
+    pub fn autoescape(&self) -> bool {
+        self.autoescape
     }
 
     /// Advance one `{% cycle %}` node's per-render iterator and return the

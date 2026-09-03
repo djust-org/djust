@@ -117,6 +117,13 @@ pub enum Node {
     Spaceless {
         nodes: Vec<Node>,
     },
+    /// `{% autoescape on|off %}…{% endautoescape %}` — Django's
+    /// `AutoEscapeControlNode` (#2556). Sets `Context::autoescape` for the
+    /// body on a per-block clone; nesting restores the outer setting for free.
+    AutoEscape {
+        on: bool,
+        nodes: Vec<Node>,
+    },
     /// `{% cycle v1 v2 … [as name [silent]] %}` and the reference form
     /// `{% cycle name %}` (#2556).
     ///
@@ -467,7 +474,7 @@ pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &m
             Node::With { nodes: body, .. } => {
                 assign_if_marker_ids(body, prefix, counter);
             }
-            Node::Spaceless { nodes: body, .. } => {
+            Node::Spaceless { nodes: body, .. } | Node::AutoEscape { nodes: body, .. } => {
                 assign_if_marker_ids(body, prefix, counter);
             }
             Node::Filter { nodes: body, .. } => {
@@ -585,6 +592,7 @@ fn resolve_cycle_nodes(
             Node::Block { nodes: body, .. }
             | Node::With { nodes: body, .. }
             | Node::Spaceless { nodes: body, .. }
+            | Node::AutoEscape { nodes: body, .. }
             | Node::Filter { nodes: body, .. } => {
                 resolve_cycle_nodes(body, prefix, state)?;
             }
@@ -1077,6 +1085,34 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
 
                 "endspaceless" => {
                     // Handled by spaceless tag
+                    Ok(None)
+                }
+
+                "autoescape" => {
+                    // {% autoescape on|off %} ... {% endautoescape %} (#2556).
+                    // Django's `do_autoescape`, message for message: exactly
+                    // one argument, and it is `on` or `off`.
+                    if args.len() != 1 {
+                        return Err(DjangoRustError::TemplateError(
+                            "'autoescape' tag requires exactly one argument.".to_string(),
+                        ));
+                    }
+                    let on = match args[0].as_str() {
+                        "on" => true,
+                        "off" => false,
+                        _ => {
+                            return Err(DjangoRustError::TemplateError(
+                                "'autoescape' argument should be 'on' or 'off'".to_string(),
+                            ));
+                        }
+                    };
+                    let (nodes, end_pos) = parse_block_custom_tag(tokens, *i + 1, "endautoescape")?;
+                    *i = end_pos;
+                    Ok(Some(Node::AutoEscape { on, nodes }))
+                }
+
+                "endautoescape" => {
+                    // Handled by autoescape tag
                     Ok(None)
                 }
 
@@ -1647,6 +1683,7 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
             Node::Block { nodes: body, .. }
             | Node::With { nodes: body, .. }
             | Node::Spaceless { nodes: body, .. }
+            | Node::AutoEscape { nodes: body, .. }
             | Node::Filter { nodes: body, .. } => {
                 collect_dj_model_fields_depth(body, loader, fields, depth);
             }
@@ -2039,7 +2076,7 @@ fn extract_from_nodes(
                     variables.entry("*".to_string()).or_default();
                 }
             }
-            Node::Spaceless { nodes } => {
+            Node::Spaceless { nodes } | Node::AutoEscape { nodes, .. } => {
                 extract_from_nodes(nodes, variables);
             }
             Node::Filter { filters, nodes } => {
@@ -2543,6 +2580,26 @@ pub fn strip_filter_arg_quotes(arg: &str) -> &str {
     } else {
         arg
     }
+}
+
+/// [`strip_filter_arg_quotes`] plus Django's `unescape_string_literal`
+/// (`s[1:-1].replace(r"\<quote>", quote).replace(r"\\", "\\")`) for a quoted
+/// literal (#2556, `autoescape-tag08`). The `{% if %}`/`{% for %}` operand path
+/// (`renderer::get_value_safe_inner`) already unescaped; the `{{ x|f:"…" }}`
+/// argument path did not, and `{{ var|default_if_none:" endquote\" hah" }}`
+/// kept the backslash (#1646, the filter-argument axis). Borrows unless a
+/// backslash is present.
+pub fn unescape_filter_arg_literal(arg: &str) -> std::borrow::Cow<'_, str> {
+    let stripped = strip_filter_arg_quotes(arg);
+    if std::ptr::eq(stripped, arg) || !stripped.contains('\\') {
+        return std::borrow::Cow::Borrowed(stripped);
+    }
+    let quote = &arg[..1];
+    std::borrow::Cow::Owned(
+        stripped
+            .replace(&format!("\\{quote}"), quote)
+            .replace("\\\\", "\\"),
+    )
 }
 
 #[cfg(test)]
@@ -3819,6 +3876,7 @@ mod dep_tests {
             Node::FirstOf { .. } => "FirstOf",
             Node::TemplateTag(_) => "TemplateTag",
             Node::Spaceless { .. } => "Spaceless",
+            Node::AutoEscape { .. } => "AutoEscape",
             Node::Cycle { .. } => "Cycle",
             Node::ResetCycle { .. } => "ResetCycle",
             Node::Filter { .. } => "Filter",
@@ -3899,6 +3957,10 @@ mod dep_tests {
             },
             Node::TemplateTag("openblock".into()),
             Node::Spaceless {
+                nodes: vec![Node::Variable("a".into(), vec![], false)],
+            },
+            Node::AutoEscape {
+                on: false,
                 nodes: vec![Node::Variable("a".into(), vec![], false)],
             },
             Node::Cycle {
