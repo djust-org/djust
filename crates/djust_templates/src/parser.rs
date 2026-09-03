@@ -1371,6 +1371,22 @@ fn parse_token_inner(
                 }
 
                 _ => {
+                    // `{% url %}`'s argument grammar, compiled at PARSE time as
+                    // Django's `do_url` does (#2577). This only REFUSES a
+                    // malformed argument list; a well-formed `{% url %}` falls
+                    // through to the handler dispatch below and compiles to the
+                    // same `CustomTag` as before. It must run here, before the
+                    // node is built and before any render, so it wins the race
+                    // against the render-time `NoReverseMatch` the unquoted
+                    // `named_url` spelling raises (#2607). The refusal lives in
+                    // the Rust parser — the shared compile chokepoint for both
+                    // the `DjustTemplateBackend` and the LiveView path — rather
+                    // than in the render-time `_resolve_url_tags` pre-pass, so
+                    // the check is not duplicated across the two url grammars
+                    // (#1646).
+                    if tag_name == "url" {
+                        validate_url_args(args)?;
+                    }
                     // Native scope tags (#2558) — armed only when their library
                     // has actually been `{% load %}`-ed, so an UNLOADED
                     // `{% language %}` still falls through to the
@@ -2899,6 +2915,119 @@ pub(crate) fn validate_if_operands(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Compile one `{% url %}` operand the way Django's `compile_filter` does, at
+/// PARSE time (#2577).
+///
+/// # Why this is not `validate_tag_operand`
+///
+/// `validate_tag_operand` (#2411/#2418/#2419) checks a `{% if %}`/`{% for %}`/
+/// `{% with %}` operand's filter CHAIN and the operand name's underscore rule —
+/// but it does NOT check that the HEAD atom tiles its token, because for those
+/// tags djust had no need to: a leftover after the head resolves to an ordinary
+/// `VariableDoesNotExist` that `{% if %}` legitimately swallows. `{% url %}`
+/// is different — Django's `do_url` runs `parser.compile_filter(bits[1])` and
+/// `parser.compile_filter(value)` on EVERY argument at parse time, so
+/// `FilterExpression.__init__`'s "Could not parse the remainder" fires for
+/// `id,`, `id=`, `a.id=id`, `a.id!id` and the unterminated-string forms BEFORE
+/// the view name is ever reversed. djust reached `{% url %}` only at render
+/// (as a `CustomTag`), so the refusal arrived after — and for the unquoted
+/// `named_url` spelling, never, because the missing view raised `NoReverseMatch`
+/// first (#2607). The head-atom tiling check is the only piece
+/// `validate_tag_operand` is missing, and it is the whole of this defect; the
+/// filter-chain check below is the shared `parse_filter_specs`.
+///
+/// The head-atom test is `filter_lexer::argument_end` — Django's own
+/// `constant | var | num` head grammar — rather than a second copy of it
+/// (#1646). A leftover is the remainder; nothing consumable at all (an
+/// unterminated quote) is the whole token as the remainder, which is what
+/// Django's finditer reports when no alternative matches at position 0.
+fn validate_url_operand(expr: &str) -> Result<()> {
+    let parts: Vec<&str> = crate::filter_lexer::split_pipes(expr);
+    let head = parts[0].trim();
+    match crate::filter_lexer::argument_end(head) {
+        Some(n) if n == head.len() => {}
+        Some(n) => {
+            return Err(DjangoRustError::TemplateError(format!(
+                "Could not parse the remainder: '{}' from '{}'",
+                &head[n..],
+                expr
+            )));
+        }
+        None => {
+            return Err(DjangoRustError::TemplateError(format!(
+                "Could not parse the remainder: '{head}' from '{expr}'"
+            )));
+        }
+    }
+    // The head atom's underscore rule, then its filter chain — Django's order
+    // inside `FilterExpression.__init__`, the same two calls `validate_tag_operand`
+    // makes, so a `{% url %}` operand and an `{% if %}` operand refuse an
+    // underscore lookup and a malformed filter identically (#2418/#2419).
+    validate_variable_name(head)?;
+    let filter_specs: Vec<String> = parts[1..].iter().map(|s| s.trim().to_string()).collect();
+    parse_filter_specs(&filter_specs, expr).map(|_| ())
+}
+
+/// The value half of one `{% url %}` argument, per Django's
+/// `kwarg_re = (?:(\w+)=)?(.+)`.
+///
+/// `do_url` matches each bit against `kwarg_re` and `compile_filter`s the
+/// VALUE group. When the bit is `name=value` (a leading `\w+` immediately
+/// followed by `=` and at least one more character) the value is everything
+/// after the `=`; otherwise the whole bit is the value (`(?:(\w+)=)?` is
+/// optional and `(.+)` swallows the rest). `id=` therefore has value `id=`
+/// (the `=` is not a separator because nothing follows it), which is exactly
+/// why it reaches the remainder check as `id=` rather than as an empty value.
+fn url_kwarg_value(bit: &str) -> &str {
+    let name_len: usize = bit
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .map(char::len_utf8)
+        .sum();
+    let bytes = bit.as_bytes();
+    if name_len > 0 && name_len + 1 < bytes.len() && bytes[name_len] == b'=' {
+        &bit[name_len + 1..]
+    } else {
+        bit
+    }
+}
+
+/// Refuse a malformed `{% url %}` argument list at PARSE time, reproducing the
+/// refusals Django's `do_url` raises while the template is compiled (#2577).
+///
+/// `args` is `token.split_contents()[1:]` — everything after `url`. Django's
+/// `do_url` raises for three parse-time shapes, and this reproduces each:
+///
+/// 1. **no arguments** — `if len(bits) < 2` → "'url' takes at least one
+///    argument, a URL pattern name." Here `args.is_empty()` is that condition.
+/// 2. **an unparseable view name** — `compile_filter(bits[1])`.
+/// 3. **an unparseable argument value** — `compile_filter(value)` for each
+///    remaining bit, after the trailing `as var` (if any) is stripped exactly
+///    as `do_url` strips it (`bits[-2] == "as"`).
+///
+/// It runs at parse and so wins the race against the render-time
+/// `NoReverseMatch` the unquoted `named_url` spelling raises (#2607): the
+/// template never reaches render. The `{% url %}` node itself is still built by
+/// the existing handler dispatch below — this only refuses, it does not change
+/// what a WELL-FORMED `{% url %}` compiles to.
+pub(crate) fn validate_url_args(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        return Err(DjangoRustError::TemplateError(
+            "'url' takes at least one argument, a URL pattern name.".to_string(),
+        ));
+    }
+    validate_url_operand(&args[0])?;
+    let mut rest = &args[1..];
+    let n = rest.len();
+    if n >= 2 && rest[n - 2] == "as" {
+        rest = &rest[..n - 2];
+    }
+    for bit in rest {
+        validate_url_operand(url_kwarg_value(bit))?;
+    }
+    Ok(())
+}
+
 /// Strip surrounding single/double quotes from a filter argument when it
 /// was a literal at parse time. Called at render time so the extractor
 /// can still distinguish bare identifiers from quoted literals.
@@ -2937,6 +3066,100 @@ pub fn unescape_filter_arg_literal(arg: &str) -> std::borrow::Cow<'_, str> {
 mod tests {
     use super::*;
     use crate::lexer::tokenize;
+
+    // ---- {% url %} argument grammar (#2577) -------------------------------
+
+    /// Each malformed argument LIST Django's `do_url` refuses at parse time,
+    /// keyed by the argument shape the issue names. `args` is
+    /// `split_contents()[1:]` — everything after `url` — exactly what the
+    /// `Token::Tag` arm hands `validate_url_args`.
+    fn s(items: &[&str]) -> Vec<String> {
+        items.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn url_no_arguments_is_refused() {
+        // fail01: `{% url %}`
+        let err = validate_url_args(&[]).unwrap_err();
+        assert!(
+            format!("{err}").contains("'url' takes at least one argument"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn url_malformed_argument_shapes_are_refused() {
+        // fail04-09 (quoted `"view"`) and fail14-19 (`named_url`) share these
+        // argument shapes — the second element of each pair is the token after
+        // the view name. Both view-name spellings reach the SAME
+        // `validate_url_args`, so one table pins both groups.
+        for (label, args) in [
+            ("id,", s(&["\"view\"", "id,"])),
+            ("id=", s(&["\"view\"", "id="])),
+            ("a.id=id", s(&["\"view\"", "a.id=id"])),
+            ("a.id!id", s(&["\"view\"", "a.id!id"])),
+            (
+                "id=\"unterminated",
+                s(&["\"view\"", "id=\"unterminatedstring"]),
+            ),
+            ("id=\",", s(&["\"view\"", "id=\","])),
+            // the `named_url` spelling of the same shapes (fail14-19)
+            ("named id,", s(&["named_url", "id,"])),
+            ("named id=", s(&["named_url", "id="])),
+            ("named a.id=id", s(&["named_url", "a.id=id"])),
+            ("named a.id!id", s(&["named_url", "a.id!id"])),
+            (
+                "named id=\"unterm",
+                s(&["named_url", "id=\"unterminatedstring"]),
+            ),
+            ("named id=\",", s(&["named_url", "id=\","])),
+        ] {
+            let err = validate_url_args(&args).unwrap_err();
+            assert!(
+                format!("{err}").contains("Could not parse the remainder"),
+                "{label}: expected a remainder refusal, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn well_formed_url_argument_lists_are_accepted() {
+        // The forms `test_url.py` compiles cleanly must NOT regress.
+        for args in [
+            s(&["\"view\""]),                    // url01-style, positional-less
+            s(&["\"view\"", "pk=1"]),            // kwarg
+            s(&["\"view\"", "1", "2"]),          // positional args
+            s(&["\"view\"", "obj.pk"]),          // attribute lookup value
+            s(&["named_url", "client.id"]),      // url19: unquoted view var
+            s(&["\"view\"", "x=obj.pk"]),        // kwarg with attribute value
+            s(&["\"view\"", "as", "u"]),         // {% url "view" as u %}
+            s(&["\"view\"", "pk=1", "as", "u"]), // {% url "view" pk=1 as u %}
+            s(&["\"view\"", "v|lower"]),         // a filtered value
+        ] {
+            assert!(
+                validate_url_args(&args).is_ok(),
+                "well-formed args wrongly refused: {args:?} -> {:?}",
+                validate_url_args(&args)
+            );
+        }
+    }
+
+    #[test]
+    fn url_kwarg_value_splits_like_django_kwarg_re() {
+        // `name=value` splits on the first `=` after a leading \w+; everything
+        // else is the whole bit (Django's `(?:(\w+)=)?(.+)`).
+        assert_eq!(url_kwarg_value("pk=1"), "1");
+        assert_eq!(
+            url_kwarg_value("id=\"unterminatedstring"),
+            "\"unterminatedstring"
+        );
+        // `id=` has nothing after the `=`, so the whole bit is the value and the
+        // `=` is a remainder, not a separator.
+        assert_eq!(url_kwarg_value("id="), "id=");
+        // `a.id=id`: the leading \w+ run stops at the dot, so no separator.
+        assert_eq!(url_kwarg_value("a.id=id"), "a.id=id");
+        assert_eq!(url_kwarg_value("id,"), "id,");
+    }
 
     // ---- dj-model allowlist (CWE-915, finding #3) -------------------------
 
