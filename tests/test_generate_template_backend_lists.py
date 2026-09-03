@@ -272,9 +272,9 @@ class TestExtractionMatchesTheRegistries:
         assert not (native & handler)
         assert not (native & unsupported)
         assert not (handler & unsupported)
-        # The two Python-handler tags and the native collision rule
+        # The five Python-handler tags (#2556 added three) and the native collision rule
         # (`templatetag` has both an arm and a handler; the arm wins).
-        assert handler == {"regroup", "url"}
+        assert handler == {"debug", "lorem", "querystring", "regroup", "url"}
         assert "templatetag" in native
 
     def test_native_tag_extraction_sees_an_injected_arm(self, gen, tmp_path):
@@ -347,13 +347,19 @@ class TestCheckMode:
 
     def test_hand_edited_unsupported_list_fails_the_check(self, tmp_path):
         text = _DOC.read_text(encoding="utf-8")
-        needle = "`querystring`, "
-        assert text.count(needle) == 1, "the unsupported line is the mutation target"
+        # Mutate the unsupported-tags line itself — pick its first entry
+        # rather than hard-coding a tag name, so the test keeps targeting
+        # that line as tags graduate out of it (#2556 moved three).
+        m = re.search(r"^\*\*Built-in tags — unsupported \(\d+\):\*\* `(\w+)`, ", text, re.M)
+        assert m, "the unsupported line is the mutation target"
+        first_tag = m.group(1)
+        needle = f"`{first_tag}`, "
+        assert text.count(needle) == 1, needle
         edited = tmp_path / "TEMPLATE_BACKEND.md"
         edited.write_text(text.replace(needle, "", 1), encoding="utf-8")
         code, out = _run("--doc", str(edited))
         assert code == 1, out
-        assert "querystring" in out
+        assert first_tag in out
         assert "run: make template-backend-lists" in out
 
     def test_hand_edited_count_fails_the_check(self, tmp_path):
@@ -657,8 +663,11 @@ class TestGeneratedTagBucketsMatchTheEngine:
         success — ``extends``/``include``/``url`` fail for other reasons."""
         for shape, rendered in rendered_tags.items():
             assert _direction_findings(report, rendered) == [], shape
-        # The buckets are not vacuous.
-        assert _UNSUPPORTED_TAG_TEXT in rendered_tags["djust_only"]["filter"]
+        # The buckets are not vacuous. `ifchanged` is the last Django
+        # built-in the engine still refuses; `filter` left this side in #2596
+        # and `autoescape` in #2556, so both are asserted SUPPORTED below.
+        assert _UNSUPPORTED_TAG_TEXT in rendered_tags["djust_only"]["ifchanged"]
+        assert rendered_tags["djust_only"]["filter"] == "OK:X"
         assert rendered_tags["djust_only"]["autoescape"] == "OK:1234"
         assert rendered_tags["djust_only"]["with"] == "OK:1"
         assert rendered_tags["djust_only"]["regroup"] == "OK:2"

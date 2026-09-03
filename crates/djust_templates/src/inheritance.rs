@@ -156,6 +156,10 @@ impl InheritanceChain {
                 on: *on,
                 nodes: self.apply_block_overrides(nodes),
             },
+            Node::Filter { filters, nodes } => Node::Filter {
+                filters: filters.clone(),
+                nodes: self.apply_block_overrides(nodes),
+            },
             // Skip extends nodes in the output
             Node::Extends(_) => Node::Comment,
             // Everything else passes through unchanged
@@ -196,7 +200,10 @@ fn extract_blocks_recursive(node: &Node, blocks: &mut HashMap<String, Vec<Node>>
                 extract_blocks_recursive(child, blocks);
             }
         }
-        Node::For { nodes, .. } | Node::With { nodes, .. } | Node::AutoEscape { nodes, .. } => {
+        Node::For { nodes, .. }
+        | Node::With { nodes, .. }
+        | Node::AutoEscape { nodes, .. }
+        | Node::Filter { nodes, .. } => {
             for child in nodes {
                 extract_blocks_recursive(child, blocks);
             }
@@ -626,12 +633,44 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str("{% endautoescape %}");
             result
         }
-        Node::Cycle { values, name } => {
+        Node::Cycle {
+            values,
+            name,
+            silent,
+            reference,
+            ..
+        } => {
+            // A reference re-serializes as the reference it was, so the
+            // re-parse binds it to the ONE definition again (#2556); the
+            // state id is reassigned by that re-parse.
+            if *reference {
+                return format!("{{% cycle {} %}}", name.as_deref().unwrap_or_default());
+            }
             let mut result = format!("{{% cycle {}", values.join(" "));
             if let Some(n) = name {
                 result.push_str(&format!(" as {n}"));
+                if *silent {
+                    result.push_str(" silent");
+                }
             }
             result.push_str(" %}");
+            result
+        }
+        Node::ResetCycle { name, .. } => match name {
+            Some(n) => format!("{{% resetcycle {n} %}}"),
+            None => "{% resetcycle %}".to_string(),
+        },
+        Node::Filter { filters, nodes } => {
+            let chain: Vec<String> = filters
+                .iter()
+                .map(|(name, arg)| match arg {
+                    Some(arg) => format!("{name}:{arg}"),
+                    None => name.clone(),
+                })
+                .collect();
+            let mut result = format!("{{% filter {} %}}", chain.join("|"));
+            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str("{% endfilter %}");
             result
         }
         Node::Now(format) => {

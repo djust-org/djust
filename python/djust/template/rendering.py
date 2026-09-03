@@ -89,6 +89,8 @@ def _is_user_raised(exc: BaseException) -> bool:
     from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
     from django.http import Http404
     from django.http.multipartparser import MultiPartParserError
+    from django.template import TemplateSyntaxError
+    from django.urls import NoReverseMatch
 
     # An exception that came out of a bridged Django template library — the
     # library's own code (`RuntimeError("I am a bad tag")`), Django's
@@ -99,9 +101,37 @@ def _is_user_raised(exc: BaseException) -> bool:
     # ``template_libraries._raised_by_library``.
     from ..template_libraries import raised_by_library
 
+    # `NoReverseMatch` (#2563): `{% url %}` on a missing pattern is a
+    # project-code condition Django reports BY TYPE — its own suite asserts
+    # `assertRaises(NoReverseMatch)` — and the DEBUG page names the pattern
+    # only if the type survives. Reached from BOTH url paths: the Python
+    # pre-pass raises it directly, and the Rust `CustomTag` handler's raise
+    # crosses the boundary whole (`DjangoRustError::PythonException`).
+    #
+    # `TemplateSyntaxError` (#2563 review) is user-raised BY CONSTRUCTION, not
+    # by allow-list judgement: the Rust engine never constructs one — its own
+    # failures are `DjangoRustError`, which reaches here as the untyped
+    # `Exception` this function is deciding whether to wrap — so a Django
+    # `TemplateSyntaxError` arriving out of a djust render can only have come
+    # from Python code the render CALLED: a bridged library's `parse_bits`
+    # (already whole via `raised_by_library`) or a tag handler's own raise,
+    # such as `UrlTagHandler`'s `'url' takes at least one argument`. Django
+    # never wraps one either. This is the same structural rule #2605 will
+    # generalize to the whole list — "it arrived through
+    # `DjangoRustError::PythonException`, therefore it is user-raised" — which
+    # is why it is stated as a rule here rather than added as one more type
+    # someone thought of.
     return raised_by_library(exc) or isinstance(
         exc,
-        (Http404, PermissionDenied, MultiPartParserError, BadRequest, SuspiciousOperation),
+        (
+            Http404,
+            PermissionDenied,
+            MultiPartParserError,
+            BadRequest,
+            SuspiciousOperation,
+            NoReverseMatch,
+            TemplateSyntaxError,
+        ),
     )
 
 
@@ -715,7 +745,15 @@ class DjustTemplate:
                 )
                 return match.group(0)
 
-            # Resolve the URL
+            # Resolve the URL — Django's `URLNode.render` shape (#2563):
+            # `url = ""`, reverse, and on `NoReverseMatch` re-raise UNLESS
+            # `as var` was given, in which case the variable holds the empty
+            # string. Until #2563 this raised even under `as var` (Django's
+            # `test_url_asvar03` was an ERROR) and re-wrapped the message,
+            # losing Django's "with no arguments not found. N pattern(s)
+            # tried: […]" text. A bare `raise` keeps Django's exception and
+            # Django's message.
+            url = ""
             try:
                 url = cast(
                     str,
@@ -723,20 +761,16 @@ class DjustTemplate:
                         url_name, args=args if args else None, kwargs=kwargs if kwargs else None
                     ),
                 )
+            except NoReverseMatch:
+                if as_variable is None:
+                    raise
 
-                if as_variable:
-                    # Store in context and return empty string
-                    # We'll handle this by adding to context_dict
-                    context_dict[as_variable] = url
-                    return ""
-                else:
-                    return url
-            except NoReverseMatch as e:
-                # Re-raise to match Django's behavior
-                raise NoReverseMatch(
-                    f"Reverse for '{url_name}' not found. "
-                    f"'{url_name}' is not a valid view function or pattern name."
-                ) from e
+            if as_variable:
+                # Store in context and return empty string
+                # We'll handle this by adding to context_dict
+                context_dict[as_variable] = url
+                return ""
+            return url
 
         # Replace all {% url %} tags
         return self._URL_TAG_RE.sub(replace_url_tag, template_source)
@@ -771,6 +805,14 @@ class DjustTemplate:
             context_dict = context.flatten()
         else:
             context_dict = dict(context)
+
+        # A `RequestContext` carries its request as an ATTRIBUTE, and
+        # `flatten()` drops it (#2556, the request slice of #2550): Django's
+        # `Template.render(RequestContext(request))` can reach
+        # `context.request` (`{% querystring %}` reads it), so this path must
+        # too when the caller did not pass `request=` separately.
+        if request is None:
+            request = getattr(context, "request", None)
 
         # Add request to context if provided
         if request is not None:

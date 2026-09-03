@@ -41,7 +41,7 @@ compatibility with Django's URL resolution and static file handling.
 
 import logging
 import re
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Type
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,32 @@ _VAR_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*(\.\w+)*$")  # dotted-identifier path
 
 # Track registered handlers for debugging
 _registered_handlers: Dict[str, "TagHandler"] = {}
+
+
+class AsVarName(str):
+    """The NAME half of a trailing ``as <name>``, as the ENGINE decided it.
+
+    Django's ``url()`` asks ``bits[-2] == "as"`` ONCE, of the raw token stream,
+    at compile time. djust's engine asks the same question of the same raw
+    tokens in ``renderer.rs::resolve_custom_tag_args`` and then hands the NAME
+    over wearing this class, so a handler that declared
+    :attr:`TagHandler.ACCEPTS_AS_VAR` CONSUMES that answer::
+
+        if args and isinstance(args[-1], AsVarName):
+            as_variable, args = str(args[-1]), args[:-2]
+
+    A handler must NOT re-derive the answer with ``args[-2] == "as"``: by then
+    the other positions have been RESOLVED, so ``{% url named 'as' v %}`` and
+    ``{% url named sep v %}`` with ``sep = "as"`` both manufacture the string
+    the test looks for. Django treats both as ordinary arguments and raises
+    ``NoReverseMatch``; the second test made djust swallow it and render ``''``
+    — the fail-soft #2563 exists to remove (#2563 review, #1646).
+
+    A plain ``str`` subclass so every ``str`` operation, and every handler that
+    does not care, behaves exactly as before.
+    """
+
+    __slots__ = ()
 
 
 class TagHandler:
@@ -107,9 +133,48 @@ class TagHandler:
     #: ``read_resolve_positions`` the assign registry uses (#2041).
     RESOLVE_ARG_POSITIONS: ClassVar[Optional[Set[int]]] = None
 
-    def render(self, args: List[str], context: Dict[str, Any]) -> str:
+    #: Opt in to the ``(output, bindings)`` return (#2547): ``render`` then
+    #: returns a 2-tuple whose dict binds names for the sibling nodes that
+    #: follow the tag (Django's ``as var``), and a Python exception the
+    #: handler raises crosses the Rust boundary WHOLE, with its type. The
+    #: default keeps the historical ``str`` contract.
+    RETURNS_BINDINGS: ClassVar[bool] = False
+
+    #: With ``RETURNS_BINDINGS``, take Django's trailing ``as <name>`` as two
+    #: literal TOKENS (``"as"``, ``"<name>"``) instead of two resolved
+    #: variables — Django's ``bits[-2] == "as"`` rule (#2563). The
+    #: registry refuses this without ``RETURNS_BINDINGS``.
+    #:
+    #: The engine applies that rule to the RAW tokens and marks the NAME as
+    #: :class:`AsVarName`; the handler must test for that class, never
+    #: ``args[-2] == "as"`` on its resolved arguments (#2563 review).
+    ACCEPTS_AS_VAR: ClassVar[bool] = False
+
+    #: With ``RETURNS_BINDINGS``, receive the surrounding ``{% autoescape %}``
+    #: policy as an ``autoescape=`` keyword: ``render(args, [content,]
+    #: context, autoescape=bool)`` (#2556). Declare it ONLY when the handler
+    #: applies the policy itself — the ``{% load %}`` bridge does, because it
+    #: renders through Django's own node on a Django ``Context`` and returns
+    #: ``mark_safe``'d output.
+    #:
+    #: The default is ``False`` and every other handler wants it: a handler
+    #: that returns a bare ``str`` has the policy applied to its return by the
+    #: registry's own ``escape_handler_return`` (Django's
+    #: ``if context.autoescape:``), so naming the parameter would only be a
+    #: second place for the two to disagree. It is opt-in rather than part of
+    #: ``RETURNS_BINDINGS`` because passing an unexpected keyword is a
+    #: ``TypeError`` on EVERY render, not a wrong answer under ``off``.
+    WANTS_AUTOESCAPE: ClassVar[bool] = False
+
+    def render(
+        self, args: List[str], context: Dict[str, Any]
+    ) -> Union[str, Tuple[str, Dict[str, Any]]]:
         """
         Render the template tag and return the output string.
+
+        A handler that declares ``RETURNS_BINDINGS = True`` returns
+        ``(output, bindings)`` instead (#2547); every other handler returns
+        the output ``str``.
 
         Parameters
         ----------
@@ -134,7 +199,8 @@ class TagHandler:
         Returns
         -------
         str
-            The rendered output to insert in the template.
+            The rendered output to insert in the template — or, under
+            ``RETURNS_BINDINGS``, ``(output, {name: value})``.
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement render(args, context)")
 
@@ -413,6 +479,15 @@ def _register_builtins() -> None:
         from . import client_config  # noqa: F401
         from . import live_render  # noqa: F401  # #1145
         from . import regroup  # noqa: F401  # Django {% regroup %} parity
+        from . import debug  # noqa: F401  # Django {% debug %} (#2556)
+        from . import lorem  # noqa: F401  # Django {% lorem %} (#2556)
+
+        # `{% querystring %}` exists on Django >= 5.1 only; below that the tag
+        # is unsupported on BOTH engines and the generated doc lists agree.
+        import django
+
+        if django.VERSION >= (5, 1):
+            from . import querystring  # noqa: F401  # Django {% querystring %} (#2556)
     except ImportError as e:
         logger.debug("Could not import built-in handlers: %s", e)
     # The `{% load app_tags %}` library loader (#2547) — installed alongside

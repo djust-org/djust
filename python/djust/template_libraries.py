@@ -46,7 +46,12 @@ Two contract points the handler relies on (the Rust side of #2547):
 ``render`` also receives the renderer's ``{% autoescape %}`` policy as the
 ``autoescape=`` keyword (#2556) and hands it to the Django ``Context`` the
 node renders on, so a ``simple_tag``'s plain-``str`` return is inserted raw
-under ``{% autoescape off %}`` exactly where Django inserts it raw.
+under ``{% autoescape off %}`` exactly where Django inserts it raw. That
+kwarg is OPT-IN, declared by ``WANTS_AUTOESCAPE = True``: the bridge is the
+only handler that needs it, because its ``mark_safe``'d return makes the
+registry's own ``escape_handler_return`` — Django's ``if context.autoescape:``
+for every OTHER handler — a no-op. A bare-string handler that does not
+declare it keeps ``render(args, context)`` unchanged.
 
 Every ``node.render()`` return crosses back ``mark_safe``'d. Django never
 re-escapes a node's output: ``SimpleNode.render`` has already applied
@@ -631,6 +636,16 @@ class LibraryTagHandler:
     RESOLVE_ARG_POSITIONS: frozenset = frozenset()
     RETURNS_BINDINGS = True
 
+    #: Hand ``render`` the surrounding ``{% autoescape %}`` policy as the
+    #: ``autoescape=`` keyword (#2556). The bridge is the one handler kind
+    #: that needs it: the node renders on a Django ``Context``, and the
+    #: ``mark_safe``'d return makes the registry's own ``escape_handler_return``
+    #: a no-op, so ``Context(autoescape=…)`` is the only place the policy can
+    #: land. An opt-in flag rather than a term of ``RETURNS_BINDINGS``, which
+    #: is public: passing the kwarg unconditionally is a ``TypeError`` for
+    #: every handler that does not name the parameter (``{% url %}``, #2563).
+    WANTS_AUTOESCAPE = True
+
     def __init__(self, label: str, name: str, compile_func: Callable[..., Any]) -> None:
         self.label = label
         self.name = name
@@ -669,6 +684,7 @@ class RefusedTagHandler:
     """
 
     RETURNS_BINDINGS = True
+    WANTS_AUTOESCAPE = True
 
     def __init__(self, label: str, name: str) -> None:
         self.label = label

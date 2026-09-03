@@ -34,7 +34,7 @@
 //!
 //! * `Node::If` inside the body — emits a `<!--dj-if id="if-<hash>-N-<index>"-->`
 //!   marker whose `<index>` is the loop position (#1832).
-//! * `Node::Cycle` — `{% cycle %}` advances by `__djust_cycle_counter`.
+//! * `Node::Cycle` / `Node::ResetCycle` — `{% cycle %}` state is per node per render (#2556).
 //! * a nested `Node::For` — composes `__djust_if_loop_path` from the outer
 //!   index, so any dj-if inside the nested loop is position-dependent.
 //! * a `{{ forloop.* }}` reference (counter/index/first/last/parentloop/…).
@@ -749,7 +749,8 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
 /// any of:
 ///
 /// * `Node::If` — emits a position-indexed dj-if marker id (#1832).
-/// * `Node::Cycle` — `{% cycle %}` advances by loop position.
+/// * `Node::Cycle` / `Node::ResetCycle` — `{% cycle %}` advances on every render
+///   of the node and `{% resetcycle %}` rewinds it (#2556).
 /// * a nested `Node::For` — composes the dj-if loop path from the outer index.
 /// * a `{{ forloop.* }}` variable reference (defensive — see module docs).
 /// * `Node::CustomTag` / `Node::BlockCustomTag` / `Node::AssignTag` /
@@ -768,7 +769,7 @@ fn node_is_position_dependent(node: &Node) -> bool {
     match node {
         // Direct position-dependent constructs.
         Node::If { .. } => true,
-        Node::Cycle { .. } => true,
+        Node::Cycle { .. } | Node::ResetCycle { .. } => true,
         Node::For { .. } => true, // nested loop composes the if-loop-path
         // Opaque / Python-backed nodes — we cannot prove position-independence.
         Node::CustomTag { .. }
@@ -799,6 +800,7 @@ fn node_is_position_dependent(node: &Node) -> bool {
         Node::With { nodes, .. } => body_is_position_dependent(nodes),
         Node::Spaceless { nodes, .. } => body_is_position_dependent(nodes),
         Node::AutoEscape { nodes, .. } => body_is_position_dependent(nodes),
+        Node::Filter { nodes, .. } => body_is_position_dependent(nodes),
         // Leaf / position-independent nodes.
         Node::Text(_)
         | Node::Comment

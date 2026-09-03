@@ -9,11 +9,12 @@ import json
 import logging
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, FrozenSet, List, Optional, Union, cast
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Union, cast
 from uuid import UUID
 
 from django.core.serializers.json import DjangoJSONEncoder as _DjangoJSONEncoder
 from django.db import models
+from django.utils.datastructures import MultiValueDict
 from django.utils.functional import Promise
 
 logger = logging.getLogger(__name__)
@@ -1202,7 +1203,24 @@ def _protect_sidecar_tree(
     _active.add(id(value))
 
     result: Any
-    if isinstance(value, dict):
+    if isinstance(value, MultiValueDict):
+        # A `QueryDict` / `MultiValueDict` is a dict subclass whose VALUES are
+        # lists behind a last-value `items()`, and whose TYPE is the point: a
+        # `{% querystring my_qd a=2 %}` handler calls `.copy()` / `.setlist()`
+        # / `.urlencode()` on it (#2556). The `dict` arm below would rebuild it
+        # as a plain `dict`, dropping every repeated key and every one of those
+        # methods — so it gets its own arm that walks `.lists()` and rebuilds
+        # THROUGH the type.
+        #
+        # Handing it over raw instead (the first version of #2556) reopened the
+        # floor: this container is not always request data. Anything can be put
+        # in one, and `MultiValueDict({"u": [user]})` handed a tag handler the
+        # live `User` — `.password` read the hash — where the plain-dict arm
+        # gives it a `_SidecarModelProxy`.
+        result = _protect_multi_value_dict(
+            value, lambda v: _protect_sidecar_tree(v, _depth + 1, _memo, _active)
+        )
+    elif isinstance(value, dict):
         result = {}
         for k, v in value.items():
             protected_key = _protect_sidecar_value(k)
@@ -1255,6 +1273,60 @@ def _protect_sidecar_tree(
     _active.discard(id(value))
     _memo[memo_key] = (value, result)
     return result
+
+
+def _protect_multi_value_dict(value: Any, protect_one: Callable[[Any], Any]) -> Any:
+    """Apply ``protect_one`` to every value inside a ``MultiValueDict``, KEEPING
+    the container's type (#2556 re-review).
+
+    The type is load-bearing: ``{% querystring %}`` calls ``.copy()`` /
+    ``.setlist()`` / ``.urlencode()`` on the object it is handed, and
+    ``{{ qd.key }}`` wants ``MultiValueDict.__getitem__``'s last-value
+    semantics. So this walks ``.lists()`` — the ONLY view that sees every
+    repeated value, since ``items()`` shows just the last one — and rebuilds
+    through ``copy()`` + ``setlist``, never through ``dict(...)``.
+
+    Returns the ORIGINAL object untouched when nothing under it needed
+    protecting, which is every real request `QueryDict` (strings and uploads).
+    That keeps identity, immutability and the hot path exactly as they were
+    before the floor descended here; only a container that actually holds a
+    model/manager/queryset pays for a rebuild.
+
+    ``_mutable`` is carried over because ``QueryDict.copy()`` always returns a
+    MUTABLE copy: without this a rebuilt ``request.GET`` would silently start
+    accepting writes Django refuses.
+    """
+    try:
+        original_lists = [(k, list(vs)) for k, vs in value.lists()]
+    except Exception:
+        # A subclass whose `lists()` is not a well-behaved iterable. Falling
+        # back to the plain-`dict` arm would destroy its type, so it is handed
+        # over as it is — logged, because a silent floor is the failure mode
+        # this function exists to close.
+        logger.debug(
+            "[djust] sidecar floor could not read .lists() on a %s; it is unprotected",
+            type(value).__name__,
+        )
+        return value
+
+    protected_lists = []
+    changed = False
+    for key, values in original_lists:
+        new_values = [protect_one(v) for v in values]
+        if any(new is not old for new, old in zip(new_values, values)):
+            changed = True
+        protected_lists.append((key, new_values))
+
+    if not changed:
+        return value
+
+    rebuilt = value.copy()
+    for key, values in protected_lists:
+        rebuilt.setlist(key, values)
+    mutable = getattr(value, "_mutable", None)
+    if mutable is not None:
+        rebuilt._mutable = mutable
+    return rebuilt
 
 
 def _protect_sidecar_value(value: Any) -> Any:
@@ -1377,6 +1449,13 @@ class _SidecarModelProxy:
         # key; this covers the case where a proxied related model is the
         # terminal value of a walk.
         return str(object.__getattribute__(self, "_obj"))
+
+    def __repr__(self) -> str:
+        # ``{% debug %}`` (#2556) ``pformat``s the context, and Django's
+        # ``Model.__repr__`` is ``<Class: str(self)>`` — the same text
+        # ``__str__`` above already hands out, so delegating leaks nothing
+        # the proxy did not already expose.
+        return repr(object.__getattribute__(self, "_obj"))
 
 
 class _SidecarQuerySetProxy:
@@ -1586,6 +1665,20 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
 
     if isinstance(value, str):
         return value
+
+    # A `QueryDict` / `MultiValueDict` becomes `dict(value.items())` — the
+    # LAST value per key, which is `QueryDict.__getitem__`'s rule and what
+    # Django renders for `{{ qd.a }}` on `?a=1&a=2` (#2556). Handing the raw
+    # object over instead does NOT read that way: the Rust `Value` extractor
+    # walks the underlying `dict` storage and sees the LISTS, so `{{ qd.a }}`
+    # rendered `['1', '2']`, `{{ qd.page|add:1 }}` `''` and
+    # `{% if qd.page == '3' %}` false (PR #2596 Stage 11). The multi-values
+    # and `.urlencode()` that `{% querystring my_qd a=2 %}` needs ride the raw
+    # sidecar (`_protect_sidecar_tree` / the `rust_bridge` sidecar), which
+    # keeps the object's type; this is the Value side only. Request data holds
+    # strings, never a model, so nothing below it needs normalizing.
+    if isinstance(value, MultiValueDict):
+        return dict(value.items())
 
     # Containers -- recurse
     if isinstance(value, dict):

@@ -1016,6 +1016,62 @@ class TestDocClaimMatchesBaseline:
         assert baseline["percent"] == percent(baseline["ok"], baseline["ran"])
         assert baseline["untouched_failures"] == 0
 
+    def test_baseline_matches_the_local_run_when_there_is_one(self) -> None:
+        """The doc line is pinned to the baseline — so the pair can go stale
+        TOGETHER and stay green (#2563 review).
+
+        `test_doc_percentage_equals_the_baseline` compares the doc to the
+        baseline, and nothing compares the baseline to the ENGINE. A PR that
+        moves 34 cells and forgets `--write-baseline` passes both; so would a
+        PR that DROPS 34, because `compare` needs a Django checkout and a
+        multi-minute run, so neither CI nor the pre-push hook calls it.
+
+        The cheapest thing that closes the loop is the artefact the developer
+        already produced: `make django-template-suite` writes
+        `.django-src/last-run.json`. When it exists and was measured against
+        the same Django tag, the committed baseline must EQUAL it. Equality,
+        not `>=`, because both directions are bugs and they need different
+        messages:
+
+        * committed < measured — the baseline (and therefore the doc figure)
+          is stale; re-run with `--write-baseline`. This is the case this
+          test was written for: the run said 527, the file said 493.
+        * committed > measured — a real drop, which is what the ratchet
+          exists to catch and what `compare` would have said.
+
+        Skipped when there is no local run (CI, a fresh clone), so it never
+        demands a Django checkout — it only refuses to let one be ignored.
+        `.django-src/` is gitignored, so this reads a local artefact only.
+        """
+        run_json = REPO / ".django-src" / "last-run.json"
+        if not run_json.exists():
+            pytest.skip("no local scoreboard run — `make django-template-suite` writes one")
+        run = json.loads(run_json.read_text(encoding="utf-8"))
+        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+        if run.get("tag") != baseline.get("tag"):
+            pytest.skip(
+                f"local run is Django {run.get('tag')}, baseline is {baseline.get('tag')} — "
+                "not comparable"
+            )
+        if not run.get("ran"):
+            pytest.skip("local run reached no engine cells (a gate-off or an aborted run)")
+        if baseline["ok"] < run["ok"]:
+            raise AssertionError(
+                f"the committed baseline is STALE: it records {baseline['ok']} passing engine "
+                f"cells but the local run measured {run['ok']}. The doc's "
+                f"{DOC_MARKER} figure is pinned to the baseline, so both are wrong together. "
+                "Re-run `scripts/run-django-template-suite.py run --write-baseline` and update "
+                "the doc line to the new percentage."
+            )
+        if baseline["ok"] > run["ok"]:
+            raise AssertionError(
+                f"the local run DROPPED: {run['ok']} passing engine cells against the "
+                f"baseline's {baseline['ok']}. This is the regression the ratchet exists to "
+                "catch — run `scripts/run-django-template-suite.py compare --json "
+                ".django-src/last-run.json` for the per-figure breakdown."
+            )
+        assert baseline["ran"] == run["ran"]
+
 
 # --------------------------------------------------------------------------- #
 # (4) the real checkout — skipped unless it is present

@@ -531,9 +531,11 @@ class TestFirstofCycleRuntimeSafe_1672:
         assert "&lt;script&gt;" in out
 
     def test_cycle_runtime_safe_filter_not_escaped(self):
-        """``{% cycle name|md_runtime %}`` outside a loop resolves the first
-        value, a runtime SafeString that must NOT be double-escaped."""
-        out = render_template("{% cycle name|md_runtime %}", {"name": "Hi"})
+        """``{% cycle name|md_runtime other %}`` outside a loop resolves the
+        first value, a runtime SafeString that must NOT be double-escaped.
+        (Two operands: one operand is Django's `{% cycle name %}` reference
+        form, #2556.)"""
+        out = render_template("{% cycle name|md_runtime other %}", {"name": "Hi", "other": "X"})
         assert "<em>Hi</em>" in out
         assert "&lt;em&gt;" not in out
 
@@ -550,7 +552,9 @@ class TestFirstofCycleRuntimeSafe_1672:
     def test_cycle_plain_filter_still_escaped(self):
         """A plain (non-safe) custom filter inside cycle MUST still be
         escaped — fail-safe parity guard."""
-        out = render_template("{% cycle name|exclaim %}", {"name": "<script>"})
+        out = render_template(
+            "{% cycle name|exclaim name %}", {"name": "<script>"}
+        )  # two operands (#2556)
         assert "<script>" not in out
         assert "&lt;script&gt;" in out
 

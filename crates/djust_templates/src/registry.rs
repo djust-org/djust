@@ -136,6 +136,10 @@ pub struct TagArg {
     pub text: String,
     /// Django would have handed this argument `SafeData`.
     pub safe: bool,
+    /// This position is the NAME half of a trailing `as <name>` that the
+    /// ENGINE identified on the RAW token (#2563 review). See
+    /// [`TagArg::as_var_name`].
+    pub as_var: bool,
 }
 
 impl TagArg {
@@ -143,12 +147,49 @@ impl TagArg {
     /// #2416, and the one every unresolved / composite / non-string operand
     /// keeps.
     pub fn plain(text: String) -> Self {
-        Self { text, safe: false }
+        Self {
+            text,
+            safe: false,
+            as_var: false,
+        }
     }
 
     /// An argument Django would have handed `SafeData`.
     pub fn marked(text: String) -> Self {
-        Self { text, safe: true }
+        Self {
+            text,
+            safe: true,
+            as_var: false,
+        }
+    }
+
+    /// The NAME half of the `as <name>` tail, carrying the engine's decision
+    /// across the boundary (#2563 review).
+    ///
+    /// # Why the decision has to travel, not be re-taken
+    ///
+    /// Django's `url()` asks `bits[-2] == "as"` ONCE, of the raw token stream,
+    /// at compile time. djust asked it twice: the renderer asked it of the RAW
+    /// token (to decide the passthrough), and the Python handler asked it again
+    /// of the RESOLVED argument list. Two implementations of one invariant, and
+    /// they disagree wherever resolution can MANUFACTURE the string `as`:
+    ///
+    /// * `{% url named 'as' v %}` — the raw token is `'as'` (quoted), so the
+    ///   renderer resolves it, and the handler then sees the bare `as` its own
+    ///   test is looking for.
+    /// * `{% url named sep v %}` with `sep = "as"` — same shape via a variable.
+    ///
+    /// Django raises `NoReverseMatch` for both (they are ordinary arguments);
+    /// djust rendered `''`, silently, which is the exact fail-soft #2563
+    /// closed for the plain case. Marking the position here means the handler
+    /// CONSUMES the engine's answer instead of recomputing it, so the
+    /// invariant has one implementation (#1646).
+    pub fn as_var_name(text: String) -> Self {
+        Self {
+            text,
+            safe: false,
+            as_var: true,
+        }
     }
 }
 
@@ -165,7 +206,10 @@ fn build_py_args<'py>(
 ) -> Result<Bound<'py, pyo3::types::PyList>, String> {
     let list = pyo3::types::PyList::empty(py);
     for arg in args {
-        let item = if arg.safe {
+        let item = if arg.as_var {
+            as_var_name_str(py, &arg.text)
+                .map_err(|e| format!("Failed to mark the `as` name: {e}"))?
+        } else if arg.safe {
             mark_safe_str(py, &arg.text)
                 .map_err(|e| format!("Failed to mark an argument safe: {e}"))?
         } else {
@@ -175,6 +219,22 @@ fn build_py_args<'py>(
             .map_err(|e| format!("Failed to create args list: {e}"))?;
     }
     Ok(list)
+}
+
+/// `djust.template_tags.AsVarName(text)` — the `str` subclass that carries the
+/// engine's `as <name>` decision to the handler (#2563 review).
+///
+/// Fails HARD, unlike [`mark_safe_str`]. The soft degrade there is safe because
+/// a handler that sees a plain `str` instead of a `SafeString` merely escapes
+/// something Django would not have; a handler that sees a plain `str` here
+/// cannot tell an `as` tail from an ordinary argument, which is the silent
+/// `''` this change exists to remove. The marker class lives in djust's own
+/// package beside the `ACCEPTS_AS_VAR` policy that requests it, so a handler
+/// can only have declared the policy in a process where the import succeeds.
+fn as_var_name_str<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAny>> {
+    py.import("djust.template_tags")?
+        .getattr("AsVarName")?
+        .call1((pyo3::types::PyString::new(py, text),))
 }
 
 /// Global registry mapping tag names to Python handler objects.
@@ -199,6 +259,8 @@ struct BlockHandlerEntry {
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
     returns_bindings: bool,
+    /// See [`read_wants_autoescape`] (#2556).
+    wants_autoescape: bool,
 }
 
 /// Global registry for block tag handlers (tags with children).
@@ -263,6 +325,55 @@ fn read_returns_bindings(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     handler.getattr("RETURNS_BINDINGS")?.is_truthy()
 }
 
+/// The handler's opt-in "I take Django's `as var` tail" declaration (#2563).
+///
+/// `{% url named as v %}`: Django's `url` compile function reads
+/// `bits[-2] == "as"` off the RAW token list. The renderer resolves every
+/// inline-tag operand before the handler sees it, so `as` and `v` arrived as
+/// two missing variables — two empty strings — and the handler could not
+/// tell `{% url named as v %}` from `{% url named "" "" %}`. A handler that
+/// sets `ACCEPTS_AS_VAR = True` gets the last two operands as literal TOKENS
+/// (`"as"`, `"v"`) whenever the second-last token is `as`; it must also
+/// declare `RETURNS_BINDINGS` so it can bind the name itself. Every other
+/// operand is resolved exactly as before — filter expressions included.
+///
+/// Absent or falsy = the historical contract. ONE reader for both
+/// registries, like [`read_returns_bindings`].
+fn read_accepts_as_var(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("ACCEPTS_AS_VAR")? {
+        return Ok(false);
+    }
+    handler.getattr("ACCEPTS_AS_VAR")?.is_truthy()
+}
+
+/// The handler's opt-in "hand me the `{% autoescape %}` policy" declaration
+/// (#2556).
+///
+/// A handler that sets `WANTS_AUTOESCAPE = True` (with `RETURNS_BINDINGS`)
+/// is called as `render(args, [content,] context, autoescape=bool)`.
+///
+/// Opt-IN rather than a new term of the `RETURNS_BINDINGS` contract, because
+/// the kwarg is a signature change and `RETURNS_BINDINGS` is public: passing
+/// it unconditionally is a `TypeError` for every handler that does not name
+/// the parameter — which is exactly what `{% url %}`'s `UrlTagHandler`
+/// (#2563) became the moment the two branches met, on EVERY render, not only
+/// under `{% autoescape off %}`.
+///
+/// Only the `{% load %}` bridge needs it: a bridged tag renders through
+/// Django's OWN node on a Django `Context`, and it is that context's
+/// `autoescape` — not [`escape_handler_return`], which the bridge's
+/// `mark_safe`d return makes a no-op — that decides whether a `simple_tag`'s
+/// plain-`str` return is inserted raw. Every other handler returns a bare
+/// string and has the policy applied to it by `escape_handler_return`, which
+/// is Django's `if context.autoescape:` in the one place both registries
+/// share. ONE reader for both registries, like [`read_returns_bindings`].
+fn read_wants_autoescape(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("WANTS_AUTOESCAPE")? {
+        return Ok(false);
+    }
+    handler.getattr("WANTS_AUTOESCAPE")?.is_truthy()
+}
+
 /// A registered inline-tag handler plus its arg-resolution policy (#2423).
 ///
 /// Same shape as [`AssignHandlerEntry`], and for the same reason one registry
@@ -276,6 +387,10 @@ struct TagHandlerEntry {
     resolve_positions: Option<HashSet<usize>>,
     /// See [`read_returns_bindings`] (#2547).
     returns_bindings: bool,
+    /// See [`read_accepts_as_var`] (#2563).
+    accepts_as_var: bool,
+    /// See [`read_wants_autoescape`] (#2556).
+    wants_autoescape: bool,
     /// `Some(message)` when the parser must REFUSE this tag with Django's
     /// `TemplateSyntaxError` the moment a template uses it (#2547): a raw
     /// `@register.tag` that consumes a body cannot be bridged, and the
@@ -360,6 +475,14 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     // (#2041, extended to inline tags in #2423).
     let resolve_positions = read_resolve_positions(handler_ref)?;
     let returns_bindings = read_returns_bindings(handler_ref)?;
+    let accepts_as_var = read_accepts_as_var(handler_ref)?;
+    let wants_autoescape = read_wants_autoescape(handler_ref)?;
+    if accepts_as_var && !returns_bindings {
+        return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+            "Handler '{name}' declares ACCEPTS_AS_VAR but not RETURNS_BINDINGS — \
+             the `as var` tail can only be bound through the bindings return"
+        )));
+    }
     let parse_refusal = read_parse_refusal(handler_ref)?;
 
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
@@ -372,6 +495,8 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
             handler,
             resolve_positions,
             returns_bindings,
+            accepts_as_var,
+            wants_autoescape,
             parse_refusal,
         },
     );
@@ -473,11 +598,12 @@ pub fn register_block_tag_handler(
         ));
     }
 
-    // The SAME two readers the inline registry uses (#2547): the block
+    // The SAME readers the inline registry uses (#2547): the block
     // registry ignoring `RESOLVE_ARG_POSITIONS` was the #1646 drift the
     // #2547 plan measured.
     let resolve_positions = read_resolve_positions(handler_ref)?;
     let returns_bindings = read_returns_bindings(handler_ref)?;
+    let wants_autoescape = read_wants_autoescape(handler_ref)?;
 
     let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -490,6 +616,7 @@ pub fn register_block_tag_handler(
             handler,
             resolve_positions,
             returns_bindings,
+            wants_autoescape,
         },
     );
     Ok(())
@@ -552,7 +679,7 @@ pub fn call_block_handler(
     args: &[TagArg],
     content: &str,
     context: &HashMap<String, djust_core::Value>,
-) -> Result<String, String> {
+) -> Result<String, DjangoRustError> {
     call_block_handler_with_py_sidecar(name, args, content, context, None, true)
 }
 
@@ -568,6 +695,9 @@ pub fn call_block_handler(
 /// so a Python model instance wins over a normalized dict snapshot.
 ///
 /// Existing block handlers that ignore the extra keys are unaffected.
+///
+/// A Python exception the handler raises crosses WHOLE as
+/// [`DjangoRustError::PythonException`] — see [`handler_exception`].
 pub fn call_block_handler_with_py_sidecar(
     name: &str,
     args: &[TagArg],
@@ -575,21 +705,21 @@ pub fn call_block_handler_with_py_sidecar(
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     autoescape: bool,
-) -> Result<String, String> {
+) -> Result<String, DjangoRustError> {
     let handler = {
         let registry = BLOCK_TAG_HANDLERS
             .read()
-            .map_err(|e| format!("Registry lock error: {e}"))?;
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
 
-        let entry = registry
-            .get(name)
-            .ok_or_else(|| format!("No block handler registered for tag: {name}"))?;
+        let entry = registry.get(name).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
+        })?;
 
         Python::attach(|py| entry.handler.clone_ref(py))
     };
 
     Python::attach(|py| {
-        let py_args = build_py_args(py, args)?;
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
 
         // The block body reaches Python as a `SafeString`, not a bare `str`
         // (#2379). Django's `simple_block_tag` hands the handler
@@ -608,30 +738,22 @@ pub fn call_block_handler_with_py_sidecar(
         // Fails SOFT: a missing `django.utils.safestring` (Django absent, as
         // in a pure-Rust embedding) falls back to the bare string rather than
         // failing the render — the handler then sees what it saw before.
-        let py_content =
-            mark_safe_str(py, content).map_err(|e| format!("Failed to convert content: {e}"))?;
+        let py_content = mark_safe_str(py, content).map_err(|e| {
+            DjangoRustError::TemplateError(format!("Failed to convert content: {e}"))
+        })?;
 
         // Context dict with the raw-Python sidecar (``request``, ``view``)
         // on top, through the one builder every registry shares.
-        let py_context = build_py_context(py, context, raw_py_objects)?;
+        let py_context = build_py_context(py, context, raw_py_objects)
+            .map_err(DjangoRustError::TemplateError)?;
 
         let handler_ref = handler.bind(py);
         let result = handler_ref
             .call_method1("render", (py_args, py_content, py_context))
-            .map_err(|e| {
-                let traceback = e
-                    .traceback(py)
-                    .map(|tb| tb.format().unwrap_or_default())
-                    .unwrap_or_default();
-                format!(
-                    "Block handler '{}' raised exception: {}\n{}",
-                    name,
-                    e.value(py),
-                    traceback
-                )
-            })?;
+            .map_err(handler_exception)?;
 
         escape_handler_return(&result, "Block handler", name, autoescape)
+            .map_err(DjangoRustError::TemplateError)
     })
 }
 
@@ -666,8 +788,28 @@ pub fn call_handler(
     name: &str,
     args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
-) -> Result<String, String> {
+) -> Result<String, DjangoRustError> {
     call_handler_with_py_sidecar(name, args, context, None, true)
+}
+
+/// A Python exception raised by a handler's `render`, carried WHOLE (#2563).
+///
+/// The ONE mapping for the three `call_*_with_py_sidecar` functions (#1646).
+/// Until #2563 each of them `format!`ted the exception into a string —
+/// `"Handler 'url' raised exception: …"` plus the traceback — which
+/// [`crate::renderer`] wrapped as `TemplateError` and
+/// `From<DjangoRustError> for PyErr` turned into a `RuntimeError`. The type
+/// was gone by the time Python saw it: a `NoReverseMatch` from `{% url %}`
+/// could not be asserted (Django's own suite does), a `PermissionDenied`
+/// from a project's handler was a 500 instead of a 403. This is the tag
+/// handler twin of the attribute-walk fix in #2508 and of the bindings
+/// path #2547 opened, which already crossed whole; the sidecar paths now
+/// do the same, so there is one contract, not two.
+///
+/// The traceback is not lost: it travels with the `PyErr`, exactly as it
+/// does on Django's own engine.
+fn handler_exception(err: PyErr) -> DjangoRustError {
+    DjangoRustError::PythonException(err)
 }
 
 /// Variant of [`call_handler`] that additionally injects raw Python
@@ -684,23 +826,26 @@ pub fn call_handler(
 /// Sidecar values overwrite same-named JSON keys so that a Python
 /// model instance wins over a normalized dict snapshot — the Python
 /// handler nearly always wants the live object, not the projection.
+///
+/// A Python exception the handler raises crosses WHOLE as
+/// [`DjangoRustError::PythonException`] — see [`handler_exception`].
 pub fn call_handler_with_py_sidecar(
     name: &str,
     args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
     autoescape: bool,
-) -> Result<String, String> {
+) -> Result<String, DjangoRustError> {
     // Get handler from registry
     let handler = {
         let registry = TAG_HANDLERS
             .read()
-            .map_err(|e| format!("Registry lock error: {e}"))?;
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
 
         // Clone the Py<PyAny> using Python::attach
-        let entry = registry
-            .get(name)
-            .ok_or_else(|| format!("No handler registered for tag: {name}"))?;
+        let entry = registry.get(name).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!("No handler registered for tag: {name}"))
+        })?;
 
         Python::attach(|py| entry.handler.clone_ref(py))
     };
@@ -708,31 +853,21 @@ pub fn call_handler_with_py_sidecar(
     // Acquire GIL and call Python handler
     Python::attach(|py| {
         // Convert args to Python list
-        let py_args = build_py_args(py, args)?;
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
 
         // Convert context to Python dict, raw-Python sidecar (``request``,
         // ``view`` — notably the ``live_render`` lazy=True path) on top.
-        let py_context = build_py_context(py, context, raw_py_objects)?;
+        let py_context = build_py_context(py, context, raw_py_objects)
+            .map_err(DjangoRustError::TemplateError)?;
 
         // Call handler.render(args, context)
         let handler_ref = handler.bind(py);
         let result = handler_ref
             .call_method1("render", (py_args, py_context))
-            .map_err(|e| {
-                // Extract Python exception details
-                let traceback = e
-                    .traceback(py)
-                    .map(|tb| tb.format().unwrap_or_default())
-                    .unwrap_or_default();
-                format!(
-                    "Handler '{}' raised exception: {}\n{}",
-                    name,
-                    e.value(py),
-                    traceback
-                )
-            })?;
+            .map_err(handler_exception)?;
 
         escape_handler_return(&result, "Handler", name, autoescape)
+            .map_err(DjangoRustError::TemplateError)
     })
 }
 
@@ -894,6 +1029,16 @@ pub fn tag_handler_returns_bindings(name: &str) -> bool {
         .read()
         .ok()
         .and_then(|registry| registry.get(name).map(|entry| entry.returns_bindings))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the inline handler for `name` declare
+/// `ACCEPTS_AS_VAR` (#2563)? `false` for an unregistered name.
+pub fn tag_handler_accepts_as_var(name: &str) -> bool {
+    TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.accepts_as_var))
         .unwrap_or(false)
 }
 
@@ -1083,17 +1228,23 @@ fn split_bindings_result(
     Ok((html, bindings))
 }
 
-/// The `autoescape=` keyword a bindings handler's `render` receives (#2556);
-/// see [`read_returns_bindings`].
+/// The `autoescape=` keyword a bindings handler that declared
+/// `WANTS_AUTOESCAPE` receives (#2556); `None` for every other handler, whose
+/// `render` signature does not name the parameter. See
+/// [`read_wants_autoescape`].
 fn autoescape_kwargs(
     py: Python<'_>,
+    wants: bool,
     autoescape: bool,
-) -> Result<Bound<'_, pyo3::types::PyDict>, String> {
+) -> Result<Option<Bound<'_, pyo3::types::PyDict>>, String> {
+    if !wants {
+        return Ok(None);
+    }
     let kwargs = pyo3::types::PyDict::new(py);
     kwargs
         .set_item("autoescape", autoescape)
         .map_err(|e| format!("Failed to set autoescape kwarg: {e}"))?;
-    Ok(kwargs)
+    Ok(Some(kwargs))
 }
 
 /// Call an inline handler that declared `RETURNS_BINDINGS` (#2547).
@@ -1112,24 +1263,28 @@ pub fn call_handler_with_bindings(
     safe_paths: &[String],
     autoescape: bool,
 ) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
-    let handler = {
+    let (handler, wants) = {
         let registry = TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
         let entry = registry.get(name).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("No handler registered for tag: {name}"))
         })?;
-        Python::attach(|py| entry.handler.clone_ref(py))
+        (
+            Python::attach(|py| entry.handler.clone_ref(py)),
+            entry.wants_autoescape,
+        )
     };
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
         let py_context = build_py_context(py, context, raw_py_objects)
             .map_err(DjangoRustError::TemplateError)?;
         remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
-        let kwargs = autoescape_kwargs(py, autoescape).map_err(DjangoRustError::TemplateError)?;
+        let kwargs =
+            autoescape_kwargs(py, wants, autoescape).map_err(DjangoRustError::TemplateError)?;
         let result = handler
             .bind(py)
-            .call_method("render", (py_args, py_context), Some(&kwargs))
+            .call_method("render", (py_args, py_context), kwargs.as_ref())
             .map_err(DjangoRustError::PythonException)?;
         split_bindings_result(&result, "Handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)
@@ -1149,14 +1304,17 @@ pub fn call_block_handler_with_bindings(
     safe_paths: &[String],
     autoescape: bool,
 ) -> Result<(String, Vec<HandlerBinding>), DjangoRustError> {
-    let handler = {
+    let (handler, wants) = {
         let registry = BLOCK_TAG_HANDLERS
             .read()
             .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
         let entry = registry.get(name).ok_or_else(|| {
             DjangoRustError::TemplateError(format!("No block handler registered for tag: {name}"))
         })?;
-        Python::attach(|py| entry.handler.clone_ref(py))
+        (
+            Python::attach(|py| entry.handler.clone_ref(py)),
+            entry.wants_autoescape,
+        )
     };
     Python::attach(|py| {
         let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
@@ -1166,10 +1324,11 @@ pub fn call_block_handler_with_bindings(
         let py_context = build_py_context(py, context, raw_py_objects)
             .map_err(DjangoRustError::TemplateError)?;
         remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
-        let kwargs = autoescape_kwargs(py, autoescape).map_err(DjangoRustError::TemplateError)?;
+        let kwargs =
+            autoescape_kwargs(py, wants, autoescape).map_err(DjangoRustError::TemplateError)?;
         let result = handler
             .bind(py)
-            .call_method("render", (py_args, py_content, py_context), Some(&kwargs))
+            .call_method("render", (py_args, py_content, py_context), kwargs.as_ref())
             .map_err(DjangoRustError::PythonException)?;
         split_bindings_result(&result, "Block handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)
@@ -1279,7 +1438,7 @@ pub fn call_assign_handler(
     name: &str,
     args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
-) -> Result<HashMap<String, djust_core::Value>, String> {
+) -> Result<HashMap<String, djust_core::Value>, DjangoRustError> {
     call_assign_handler_with_py_sidecar(name, args, context, None)
 }
 
@@ -1295,44 +1454,37 @@ pub fn call_assign_handler(
 ///
 /// Existing assign handlers that ignore the extra keys are
 /// unaffected.
+///
+/// A Python exception the handler raises crosses WHOLE as
+/// [`DjangoRustError::PythonException`] — see [`handler_exception`].
 pub fn call_assign_handler_with_py_sidecar(
     name: &str,
     args: &[TagArg],
     context: &HashMap<String, djust_core::Value>,
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
-) -> Result<HashMap<String, djust_core::Value>, String> {
+) -> Result<HashMap<String, djust_core::Value>, DjangoRustError> {
     let handler = {
         let registry = ASSIGN_TAG_HANDLERS
             .read()
-            .map_err(|e| format!("Registry lock error: {e}"))?;
-        let entry = registry
-            .get(name)
-            .ok_or_else(|| format!("No assign handler registered for tag: {name}"))?;
+            .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+        let entry = registry.get(name).ok_or_else(|| {
+            DjangoRustError::TemplateError(format!("No assign handler registered for tag: {name}"))
+        })?;
         Python::attach(|py| entry.handler.clone_ref(py))
     };
 
     Python::attach(|py| {
-        let py_args = build_py_args(py, args)?;
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
 
         // Context dict with the raw-Python sidecar (``request``, ``view``)
         // on top, through the one builder every registry shares.
-        let py_context = build_py_context(py, context, raw_py_objects)?;
+        let py_context = build_py_context(py, context, raw_py_objects)
+            .map_err(DjangoRustError::TemplateError)?;
 
         let handler_ref = handler.bind(py);
         let result = handler_ref
             .call_method1("render", (py_args, py_context))
-            .map_err(|e| {
-                let traceback = e
-                    .traceback(py)
-                    .map(|tb| tb.format().unwrap_or_default())
-                    .unwrap_or_default();
-                format!(
-                    "Assign handler '{}' raised exception: {}\n{}",
-                    name,
-                    e.value(py),
-                    traceback
-                )
-            })?;
+            .map_err(handler_exception)?;
 
         // Handlers may legitimately return None or something dict-like
         // but not a dict. Treat any extraction failure as an empty

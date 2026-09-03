@@ -77,6 +77,7 @@ CLOSERS = frozenset(
         "endwith",
         "endspaceless",
         "endautoescape",
+        "endfilter",
     }
 )
 

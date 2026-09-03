@@ -1470,6 +1470,30 @@ impl RustLiveViewBackend {
         self.apply_state_update(updates)
     }
 
+    /// Full-context truth for pure-Rust callers (#2592, the actor twin of
+    /// #2564): drop every state key absent from `keys`, returning the removed
+    /// keys.
+    ///
+    /// Same core as the Python `retain_state_keys` (state removal + safe-grant
+    /// revocation), plus the second half the Python bridge does for itself in
+    /// `rust_bridge.py` — joining the removed keys to the changed set so a
+    /// partial `render_with_diff` re-renders their regions instead of serving
+    /// the OLD text from the node cache. A Rust caller (the `ViewActor`) has
+    /// no Python step after this call, so the join lives here.
+    ///
+    /// The join is into a PENDING changed set only. Creating one from nothing
+    /// would flip the next `render_with_diff` onto the partial path with the
+    /// removed keys as the only "changes", skipping every region the caller
+    /// actually changed; with no pending set the next render is a full one,
+    /// which re-renders the removed regions without any hint.
+    pub fn retain_state_keys_rust(&mut self, keys: Vec<String>) -> Vec<String> {
+        let removed = self.retain_state_keys(keys);
+        if let Some(changed) = &mut self.changed_keys {
+            changed.extend(removed.iter().cloned());
+        }
+        removed
+    }
+
     /// Shared core of `update_state` (the Python entry point) and
     /// `update_state_rust` (the pure-Rust entry point, used by other Rust
     /// crates like djust_actors, which have no Python object at all — the
@@ -2279,6 +2303,15 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
             vec.push(python_to_json_value(py, &item)?);
         }
         Ok(JsonValue::Array(vec))
+    } else if let Some(pairs) = djust_core::multi_value_dict_pairs(obj) {
+        // A Django `QueryDict` / `MultiValueDict`: last value per key, the
+        // same rule as the two `Value` converters (#2556, #1646).
+        let mut map = serde_json::Map::with_capacity(pairs.len());
+        for (key, value) in pairs {
+            let key_str = key.extract::<String>()?;
+            map.insert(key_str, python_to_json_value(py, &value)?);
+        }
+        Ok(JsonValue::Object(map))
     } else if let Ok(dict) = obj.cast::<PyDict>() {
         // Same snapshot-before-recurse fix, dict side (#2510 sibling).
         let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
@@ -2776,6 +2809,18 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
             vec.push(python_to_value(&item)?);
         }
         return Ok(Value::List(vec));
+    }
+
+    // A Django `QueryDict` / `MultiValueDict` BEFORE the dict arm: last value
+    // per key, through the ONE helper `FromPyObject for Value` uses (#2556,
+    // #1646).
+    if let Some(pairs) = djust_core::multi_value_dict_pairs(obj) {
+        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> =
+            indexmap::IndexMap::with_capacity(pairs.len());
+        for (key, value) in pairs {
+            map.insert(djust_core::py_object_key(&key), python_to_value(&value)?);
+        }
+        return Ok(Value::Object(map));
     }
 
     // Dict - recursively convert nested values
@@ -4622,6 +4667,105 @@ mod fast_path_flag_tests {
                 .iter()
                 .any(|p| matches!(p, djust_vdom::Patch::SetAttr { .. })),
             "patches: {patches:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod retain_state_keys_rust_2592 {
+    //! The pure-Rust truth entry (#2592, the actor twin of #2564). The
+    //! `ViewActor` calls this before every merge in `sync_state_from_python`;
+    //! these pin the half the Python bridge does for itself — the removed
+    //! keys joining the changed set — and the landmine the join must not
+    //! step on (creating a changed set from nothing).
+    use super::*;
+
+    const SECRET: &str = "SECRET-A";
+    const TEMPLATE: &str =
+        "<div><span>{{ n }}</span><p>{% if secret %}{{ secret }}{% endif %}</p></div>";
+
+    fn state(n: i64, with_secret: bool) -> HashMap<String, Value> {
+        let mut s = HashMap::new();
+        s.insert("n".to_string(), Value::Integer(n));
+        if with_secret {
+            s.insert("secret".to_string(), Value::String(SECRET.to_string()));
+        }
+        s
+    }
+
+    /// A backend after one diff render, so the node cache is populated and
+    /// a pending changed set would take the PARTIAL path.
+    fn mounted() -> RustLiveViewBackend {
+        Python::initialize();
+        let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
+        view.update_state_rust(state(0, true));
+        let (html, _, _) = view.render_with_diff().expect("initial render");
+        assert!(html.contains(SECRET), "premise: {html:?}");
+        view
+    }
+
+    #[test]
+    fn joins_the_removed_keys_to_a_pending_changed_set() {
+        let mut view = mounted();
+        view.set_changed_keys(vec!["n".to_string()]);
+        let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
+        assert_eq!(removed, vec!["secret".to_string()]);
+        view.update_state_rust(state(1, false));
+        let (html, patches, _) = view.render_with_diff().expect("re-render");
+        assert!(
+            html.contains(">1</span>"),
+            "premise: the other change rendered: {html:?}"
+        );
+        assert!(
+            !html.contains(SECRET),
+            "the partial render served the removed key's region from the node cache: {html:?}"
+        );
+        let patches = patches.expect("a diff render returns patches");
+        assert!(!patches.contains(SECRET), "patches: {patches}");
+    }
+
+    #[test]
+    fn does_not_create_a_changed_set_from_nothing() {
+        // No pending changed set: the next render must stay a FULL render.
+        // A join that created `Some(["secret"])` would flip it onto the
+        // partial path with the removed key as the only "change", and the
+        // region for `n` — which the caller changed — would be served stale.
+        let mut view = mounted();
+        let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
+        assert_eq!(removed, vec!["secret".to_string()]);
+        assert!(
+            view.changed_keys.is_none(),
+            "a changed set was created from nothing"
+        );
+        view.update_state_rust(state(1, false));
+        let (html, _, _) = view.render_with_diff().expect("re-render");
+        assert!(
+            html.contains(">1</span>"),
+            "the changed key was served stale: {html:?}"
+        );
+        assert!(!html.contains(SECRET), "{html:?}");
+    }
+
+    #[test]
+    fn revokes_the_safe_grant_through_the_rust_entry() {
+        Python::initialize();
+        let mut view = RustLiveViewBackend::new_rust("{{ p }}".to_string());
+        let mut s = HashMap::new();
+        s.insert("p".to_string(), Value::String("<b>x</b>".to_string()));
+        view.update_state_rust(s);
+        view.mark_safe_keys(vec!["p".to_string()]);
+        assert_eq!(view.render().unwrap(), "<b>x</b>");
+        assert_eq!(view.retain_state_keys_rust(vec![]), vec!["p".to_string()]);
+        let mut s = HashMap::new();
+        s.insert(
+            "p".to_string(),
+            Value::String("<img src=x onerror=alert(1)>".to_string()),
+        );
+        view.update_state_rust(s);
+        let out = view.render().unwrap();
+        assert!(
+            !out.contains("<img"),
+            "the grant outlived the removed key: {out:?}"
         );
     }
 }
