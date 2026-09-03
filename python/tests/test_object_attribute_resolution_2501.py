@@ -61,6 +61,8 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
+from adr027_flag import resolve_lazy  # noqa: E402
+
 from djust import _rust  # noqa: E402
 from djust.components.base import Component  # noqa: E402
 
@@ -205,8 +207,25 @@ class TestCarrierPremises:
         assert _rust.crosses_as_encoded(component) is True
 
     def test_a_plain_object_with_a_public_attr_does_take_the_dict_arm(self):
-        """The second table's objects DO take the arm #2501 names."""
-        assert _rust.crosses_as_encoded(Plain()) is False
+        """The second table's objects DO take the arm #2501 names — on the
+        HATCH, which is the only place that arm is still selected.
+
+        ``crosses_as_encoded`` is a probe over ``opaque_gate``, and the gate's
+        attribute-bearing DECLINE is one of the two sites that read ADR-027's
+        flag. Since #2539 movement 3 the shipped default declines to decline:
+        the object crosses as ``Encoded`` carrying a live handle, which is the
+        whole mechanism of the flip. Both answers are asserted so this stays a
+        premise test rather than a record of whichever way the flag happened to
+        point (#1200).
+        """
+        with resolve_lazy(False):
+            assert _rust.crosses_as_encoded(Plain()) is False, (
+                "the hatch no longer routes a public-attr object to the __dict__ arm"
+            )
+        assert _rust.crosses_as_encoded(Plain()) is True, (
+            "under the shipped default a plain object must cross as Encoded and carry a "
+            "handle — that is ADR-027's mechanism, not an incidental gate answer"
+        )
 
 
 class TestAutoCallGuards:
@@ -219,17 +238,22 @@ class TestAutoCallGuards:
         assert obj.mutated is False, "alters_data method was CALLED by a template lookup"
         assert rendered == django_render("{{ o.mutate }}", {"o": Mutating()})
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "#2502: a bound method takes the `__dict__` bulk-dump arm and arrives "
-            "as a mapping of the marker attribute instead of its `str()`. The "
-            "guard itself holds — see `test_the_do_not_call_guard_is_load_bearing`."
-        ),
-    )
     @pytest.mark.parametrize("render", PATHS)
     def test_do_not_call_in_templates_is_used_as_is(self, render):
-        """The GUARD holds — the method is not called — but the value the
+        """Django's bytes, since #2539 movement 3 flipped ADR-027 on.
+
+        This carried ``xfail(strict=True)`` for #2502 until the flip, and its
+        own docstring named the condition for removing the mark: "``strict=True``
+        so #2502 has to delete this mark." The flip is what deleted it — under
+        the shipped default the lookup walks the LIVE object, so the bound
+        method is rendered as ``str(it)`` and never reaches the ``__dict__``
+        bulk-dump arm that was mangling it. The historical account is kept
+        below because the mechanism it names is still reachable through the
+        escape hatch, which the sibling test pins.
+
+        --- what the mark used to say ---
+
+        The GUARD holds — the method is not called — but the value the
         lookup lands on is not rendered the way Django renders it.
 
         Django's ``_resolve_lookup`` keeps the bound method and renders
@@ -252,6 +276,24 @@ class TestAutoCallGuards:
         """
         obj = Mutating()
         assert render("{{ o.keep }}", {"o": obj}) == django_render("{{ o.keep }}", {"o": obj})
+
+    @pytest.mark.parametrize("render", PATHS)
+    def test_the_bulk_dump_arm_is_still_what_the_hatch_selects(self, render):
+        """The mechanism the test above used to characterize, on the HATCH.
+
+        Kept because the arm is not deleted yet — movement 4 removes it with
+        the flag — and because it is what makes the sibling non-vacuous: if
+        both flag states rendered Django's bytes, "the flip fixed #2502" would
+        be unfalsifiable from this file (#1468).
+        """
+        obj = Mutating()
+        with resolve_lazy(False):
+            rendered = render("{{ o.keep }}", {"o": obj})
+        assert rendered == "{&#x27;do_not_call_in_templates&#x27;: True}", (
+            f"the hatch no longer selects the __dict__ bulk-dump arm: {rendered!r}"
+        )
+        assert rendered != django_render("{{ o.keep }}", {"o": Mutating()})
+        assert obj.mutated is False, "the guard must hold on BOTH axes"
 
 
 # ---------------------------------------------------------------------------

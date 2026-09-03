@@ -564,6 +564,73 @@ template auto-calls an ORM method). Kill-switch:
 `LIVEVIEW_CONFIG["template_auto_call"] = False` restores the old
 no-call behavior.
 
+### Objects resolve like Django (ADR-027)
+
+Since djust 1.2.0 a dotted lookup on an ordinary Python object resolves
+against the **live object**, one segment at a time, exactly as Django's
+`Variable._resolve_lookup` does. Before that, djust converted the whole
+object up front and walked the conversion, which is where a family of
+divergences lived.
+
+Four things follow, all of them Django's answers:
+
+```django
+{{ presenter }}          {# str(presenter), not a dict of its attributes #}
+{{ SomeClass }}          {# the class is INSTANTIATED, as Django does #}
+{{ obj.method }}         {# called; do_not_call_in_templates / alters_data honoured #}
+{% for r in rows|slice:":3" %}{{ r.label }}{% endfor %}   {# reaches attributes #}
+```
+
+The third one is the same rule the section above describes — the
+difference is only that it is now applied by the segment walk rather
+than by a conversion that ran before it, so it holds at every segment
+and for values bound by `{% for %}` and `{% with %}`.
+
+**What to check when upgrading.**
+
+1. **A class placed in a context is now instantiated — its `__init__`
+   runs.** This is the headline. `{"MyForm": MyForm}` in a context is a
+   common spelling, and a class that previously rendered as an inert
+   repr now runs its constructor on every render. Django has always done
+   this; djust did not. If a class in one of your contexts has a
+   constructor with side effects or required arguments, either pass an
+   instance or set `do_not_call_in_templates = True` on the class.
+2. **`{{ obj }}` now renders `str(obj)`.** A template that relied on an
+   object rendering its attribute mapping will show its `__str__`
+   instead. Give such a class a `__str__`, or spell the attribute you
+   meant.
+3. **`{{ obj|json_script }}` changes shape for the same reason — and the
+   direction depends on the object, so audit rather than assume.** It
+   now emits `str(obj)` rather than a JSON object built from every
+   public instance attribute. The old dump filtered underscore-prefixed
+   attributes and `str(obj)` filters nothing, so an object with no
+   `__str__` discloses *less* (`<Foo object at 0x…>`) while a
+   `@dataclass` — whose generated repr prints every field, `_private`
+   included — or any object whose `__str__` names private state
+   discloses *more*. Check what the `__str__` of anything you place bare
+   in a template, or pass to `json_script`, actually says.
+
+Django **models** are unaffected by all of this: they stay on djust's
+eager, floored path on both settings, and the serialization floor keeps
+`{{ user.password }}` empty either way.
+
+**Kill-switch:** `LIVEVIEW_CONFIG["template_resolve_lazy"] = False`
+restores the pre-1.2.0 behaviour exactly. It is a rollback, not a
+supported mode — the machinery it keeps alive is removed in 1.3.0, so
+treat it as time to fix templates rather than a setting to leave in
+place.
+
+Two details worth knowing if you hit them:
+
+- **The setting is read per render, per thread, and applied by djust's
+  own render entries.** Code that calls `djust._rust.render_template`
+  directly does not push it and inherits whatever that thread last
+  rendered with; on a thread that never rendered, that is the shipped
+  default.
+- **A standalone component rendered outside any djust render caches the
+  setting for its thread**, so changing the flag at runtime does not
+  reach it. Restart to apply.
+
 ### Comparison operators inside `{% if %}`
 
 The Rust template engine accepts the full set of Python comparison

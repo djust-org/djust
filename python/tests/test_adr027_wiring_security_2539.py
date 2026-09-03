@@ -818,10 +818,13 @@ class TestIgnoreFailuresSubstitutesNone2539:
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db
 class TestTheSwitch2539:
-    def test_the_flag_defaults_off_and_round_trips(self) -> None:
+    def test_the_flag_defaults_on_and_round_trips(self) -> None:
+        """Was ``..._defaults_off_...`` through movement 2; #2539 movement 3
+        flipped the shipped default and this is one of the two lines that
+        state it (the other is the net's ``test_the_default_is_on``)."""
         from djust.config import config, template_resolve_lazy_enabled
 
-        assert config._defaults["template_resolve_lazy"] is False
+        assert config._defaults["template_resolve_lazy"] is True
         with resolve_lazy(True):
             assert template_resolve_lazy_enabled() is True
             assert _rust.resolve_lazy_enabled() is True
@@ -829,26 +832,46 @@ class TestTheSwitch2539:
             assert template_resolve_lazy_enabled() is False
             assert _rust.resolve_lazy_enabled() is False
 
-    def test_a_thread_that_never_pushed_reads_off(self) -> None:
+    def test_a_thread_that_never_pushed_reads_the_default(self) -> None:
         """The Rust default, which is what an embedder and any not-yet-rendered
         worker thread get. A `sync_to_async` pool thread that has never called
-        `apply_render_env` must not inherit another thread's flag."""
+        `apply_render_env` must not inherit another thread's flag.
+
+        Two claims in one assertion, and #2539 movement 3 is why they are
+        stated separately below: the flag is THREAD-LOCAL (the worker does not
+        see the ON pushed on this thread) and the Rust default TRACKS the
+        Python one. Asserting the literal `False` conflated them while the
+        shipped default happened to be OFF; against `_defaults` the test is
+        about the coupling rather than the value (#1200), so it keeps working
+        whichever way a future movement points the default.
+        """
         import threading
 
+        from djust.config import LiveViewConfig
+
+        shipped = LiveViewConfig._defaults["template_resolve_lazy"]
         seen: list = []
 
         def worker():
             seen.append(_rust.resolve_lazy_enabled())
 
-        with resolve_lazy(True):
+        # Push the OPPOSITE of the shipped default on this thread, so "the
+        # worker read the default" cannot be "the worker inherited this one".
+        with resolve_lazy(not shipped):
+            assert _rust.resolve_lazy_enabled() is (not shipped)
             thread = threading.Thread(target=worker)
             thread.start()
             thread.join()
-        assert seen == [False], "the flag is not thread-local"
+        assert seen == [shipped], (
+            f"a thread that never pushed read {seen!r}; expected the shipped default "
+            f"{shipped!r}. Either the flag is not thread-local, or the Rust `Cell` default "
+            f"has drifted from config.py's."
+        )
 
-    def test_a_failed_config_read_pushes_the_flag_OFF(self, monkeypatch) -> None:
-        """The kill-switch fails CLOSED, and that is where it differs from the
-        two ambient settings beside it.
+    @pytest.mark.parametrize("shipped_default", [True, False])
+    def test_a_failed_config_read_pushes_the_DEFAULT(self, monkeypatch, shipped_default) -> None:
+        """The kill-switch fails to the SHIPPED DEFAULT, and that is where it
+        differs from the two ambient settings beside it.
 
         The timezone and number-format handoffs return early on a failed read,
         keeping the thread's previous value — right for a FORMAT, because the
@@ -856,24 +879,117 @@ class TestTheSwitch2539:
         resolution MECHANISM, and the thread is reused: returning early would
         let a render whose config read failed inherit the previous render's
         mechanism, which is the opposite of what a kill-switch is for.
+
+        Parametrized over BOTH possible defaults (#2539 movement 3), with
+        ``_defaults`` monkeypatched, so the test asserts the COUPLING —
+        "a failed read lands on whatever is shipped" — rather than the literal
+        value. Pinning the literal is what made the movement-2 version of this
+        test (``..._pushes_the_flag_OFF``) go red on the flip for a reason that
+        had nothing to do with the behaviour it was guarding (#1200).
         """
         from djust import config as config_module
+        from djust.config import LiveViewConfig
         from djust.render_env import apply_resolve_lazy
 
-        # Start with the flag genuinely ON, so "OFF afterwards" cannot be the
-        # state it was already in.
-        with resolve_lazy(True):
-            assert _rust.resolve_lazy_enabled() is True
+        monkeypatch.setitem(LiveViewConfig._defaults, "template_resolve_lazy", shipped_default)
+
+        # Start from the OPPOSITE of the default, so landing on the default
+        # cannot be the state the thread was already in.
+        with resolve_lazy(not shipped_default):
+            assert _rust.resolve_lazy_enabled() is (not shipped_default)
 
             def exploding() -> bool:
                 raise RuntimeError("settings unreadable")
 
             monkeypatch.setattr(config_module, "template_resolve_lazy_enabled", exploding)
             apply_resolve_lazy()
-            assert _rust.resolve_lazy_enabled() is False, (
-                "a config read that raised left the previous value in place — the flag "
-                "must fail CLOSED to the shipped default"
+            assert _rust.resolve_lazy_enabled() is shipped_default, (
+                f"a config read that raised left the previous value in place, or landed on a "
+                f"hardcoded literal — it must fail to the shipped default "
+                f"({shipped_default!r})"
             )
+
+    @pytest.mark.parametrize("shipped_default", [True, False])
+    def test_the_READER_also_falls_to_the_default_when_get_config_raises(
+        self, monkeypatch, shipped_default
+    ) -> None:
+        """The OTHER fallback, which the test above cannot reach.
+
+        There are two, and they answer different failures.
+        :func:`djust.render_env.apply_resolve_lazy`'s arm covers "the reader
+        itself blew up"; :func:`djust.config.template_resolve_lazy_enabled`'s
+        covers "``get_config()`` blew up" — a broken ``settings`` module, a
+        Django ``ImproperlyConfigured`` during startup. The sibling above
+        monkeypatches the reader, so the reader's own arm never runs and a
+        hardcoded literal there would go unnoticed.
+
+        Found by gate-off, not by inspection: mutating
+        ``default = template_resolve_lazy_default()`` back to
+        ``default = False`` left the whole suite green (#1468). Two mechanisms,
+        one test — the shadowing shape (#2233). Kept as two tests rather than
+        collapsed, because the two failures are genuinely different and each
+        needs the coupling asserted; parametrized over both defaults for the
+        same reason the sibling is, so this is about the coupling and not the
+        value (#1200).
+        """
+        from djust import config as config_module
+        from djust.config import LiveViewConfig
+
+        monkeypatch.setitem(LiveViewConfig._defaults, "template_resolve_lazy", shipped_default)
+
+        def exploding() -> dict:
+            raise RuntimeError("settings unreadable")
+
+        monkeypatch.setattr(config_module, "get_config", exploding)
+        assert config_module.template_resolve_lazy_enabled() is shipped_default, (
+            f"the reader landed on a hardcoded literal rather than the shipped default "
+            f"({shipped_default!r}) when get_config() raised"
+        )
+
+    def test_the_unimportable_config_arm_still_answers_the_shipped_default(
+        self, monkeypatch
+    ) -> None:
+        """The THIRD fallback, and the only one that must state a literal.
+
+        :func:`djust.render_env._resolve_lazy_default` asks ``config.py`` for
+        the default; if ``config.py`` itself will not import there is nothing
+        left to ask, so its ``except`` arm hardcodes ``True``. The #2620 review
+        gate-off (D2c) found that literal survived mutation with **0 failed** —
+        an uncovered hardcoded default two functions below the one movement 3
+        was filed to remove, and carrying the same ``# pragma: no cover`` that
+        made the first one invisible.
+
+        The remedy is not to delete the literal — it cannot be deleted, because
+        the module it would read from is the broken one — but to COUPLE it. The
+        shipped default is captured BEFORE the import is broken, so this asserts
+        "the third statement agrees with the first" rather than re-stating
+        ``True``: a movement that flips ``_defaults`` turns this red and forces
+        the literal to move with it, which is the drift the arm's own comment
+        warns about. Not parametrized over both defaults for that reason — the
+        coupling IS the assertion here, and half the parametrization would be
+        asserting that a hardcoded literal is not hardcoded.
+        """
+        import sys
+
+        from djust import render_env
+        from djust.config import LiveViewConfig
+
+        shipped = LiveViewConfig._defaults["template_resolve_lazy"]
+
+        # `None` in `sys.modules` is what CPython leaves behind for a module
+        # whose import failed, and `from .config import ...` raises
+        # `ImportError` against it — a faithful "the config module is broken"
+        # rather than a stubbed-out shape (#1037).
+        monkeypatch.setitem(sys.modules, "djust.config", None)
+        with pytest.raises(ImportError):
+            from djust.config import template_resolve_lazy_default  # noqa: F401
+
+        assert render_env._resolve_lazy_default() is shipped, (
+            f"the unimportable-config arm answered "
+            f"{render_env._resolve_lazy_default()!r} but the shipped default is "
+            f"{shipped!r} — the third statement of the default has drifted from "
+            f"config.py's `_defaults`"
+        )
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_the_switch_is_what_gates_the_behaviour(self, render) -> None:

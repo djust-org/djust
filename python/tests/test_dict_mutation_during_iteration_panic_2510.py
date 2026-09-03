@@ -35,6 +35,8 @@ from pathlib import Path
 
 import pytest
 
+from adr027_flag import resolve_lazy
+
 from djust import _rust
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -81,9 +83,35 @@ class TestPublicDictAttrsArm:
         assert html == "/"
 
     def test_the_mutation_still_happens_but_does_not_corrupt_the_result(self):
+        """On the ESCAPE-HATCH axis since #2539 movement 3 — the mutation is
+        the bulk dump touching an attribute the template never asked for, and
+        only the hatch still bulk-dumps."""
         req = _RequestLike()
-        _rust.render_template("{{ c.path }}", {"c": req})
+        with resolve_lazy(False):
+            _rust.render_template("{{ c.path }}", {"c": req})
         assert req.newly_added_key == "mutated mid-iteration"
+
+    def test_under_the_default_the_hazard_is_never_reached(self):
+        """The structural cure, not a second guard (#2539 movement 3).
+
+        The whole #2510 hazard is that `public_dict_attrs` dumps the ENTIRE
+        `__dict__` whichever attribute the template needs, so a lazy attribute
+        with a side effect fires on a template that never mentions it. Under
+        the shipped default the lookup walks the live object ONE SEGMENT AT A
+        TIME, so `{{ c.path }}` touches `path` and nothing else: the dict is
+        never iterated, so it cannot resize mid-iteration and the unrelated
+        attribute is never evaluated.
+
+        Asserted as "the side effect did not happen" rather than "no panic",
+        because not-panicking is also what a successful guard looks like and
+        the two are worth telling apart (#1200).
+        """
+        req = _RequestLike()
+        assert _rust.render_template("{{ c.path }}", {"c": req}) == "/"
+        assert not hasattr(req, "newly_added_key"), (
+            "the shipped default evaluated an attribute the template never named — "
+            "the segment walk is bulk-dumping again"
+        )
 
     def test_cached_property_is_not_actually_the_same_hazard(self):
         """Checked, not assumed (#1468): `cached_property.__get__` writes
@@ -166,6 +194,14 @@ class TestReentrancyDoesNotOverreach:
     unrelated dict must keep working exactly as it does today."""
 
     def test_mutating_an_unrelated_dict_is_unaffected(self):
+        """On the ESCAPE-HATCH axis since #2539 movement 3.
+
+        The premise is that the bulk dump evaluates `b` (calling `__bool__`)
+        while rendering `{{ c.a }}`. Under the shipped default nothing
+        evaluates `b` at all — which is the point of the sibling in
+        `TestPublicDictAttrsArm`, and would make this test measure the absence
+        of the reentrancy rather than its harmlessness.
+        """
         unrelated: dict = {}
 
         class MutatesElsewhere:
@@ -182,7 +218,8 @@ class TestReentrancyDoesNotOverreach:
                 return True
 
         obj = MutatesElsewhere()
-        html = _rust.render_template("{{ c.a }}", {"c": obj})
+        with resolve_lazy(False):
+            html = _rust.render_template("{{ c.a }}", {"c": obj})
         assert html == "a-value"
         assert unrelated == {"touched": True}
 
