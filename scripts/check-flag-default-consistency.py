@@ -118,6 +118,20 @@ def claim_of(match: re.Match) -> bool | None:
     return None
 
 
+def production_source(path: pathlib.Path) -> str:
+    """The file with any `#[cfg(test)]` module cut off.
+
+    A pin must read the PRODUCTION statement. If a test module happens to
+    contain the same sentence — a fixture, a doc-comment copied into an
+    assertion — then deleting the production statement leaves the pin matching
+    the test's copy and passing green, which is the decorative-pin failure
+    (#1859) one level down. `re.search` returns the first match, so today's
+    layout (production first, tests last) hides the hazard rather than removing
+    it; cutting at the test boundary removes it.
+    """
+    return path.read_text().split("#[cfg(test)]", 1)[0]
+
+
 def main() -> int:
     problems: list[str] = []
 
@@ -129,7 +143,7 @@ def main() -> int:
                 problems.append(f"{rel}: registered doc site for `{flag}` does not exist")
                 continue
 
-            m = re.search(pattern, path.read_text())
+            m = re.search(pattern, production_source(path))
             if not m:
                 # A silently-unmatched pattern is the failure mode that made the
                 # previous version useless. Treat it as a hard error, never a pass.
