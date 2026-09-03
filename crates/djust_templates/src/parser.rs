@@ -402,6 +402,34 @@ fn parse_internal(
     while i < tokens.len() {
         let node = parse_token(tokens, spans, source, &mut i)?;
         if let Some(n) = node {
+            // Django's `ExtendsNode.must_be_first` (`loader_tags.py`) refuses
+            // the moment a SECOND non-text node is about to be appended
+            // while an `Extends` is anywhere in the accumulated list, and
+            // refuses an `Extends` node itself the moment it is about to be
+            // appended after ANY non-text content already exists (#2580).
+            // Checked here as one post-hoc scan over the completed
+            // top-level list rather than threaded through every
+            // `parse_token` call site: the OBSERVABLE fact — is there
+            // non-text content before the (first) `Extends`, and is there
+            // more than one `Extends` — is identical either way, and this
+            // is the ONLY place with full visibility into "everything
+            // parsed so far at the top level" without invasive plumbing.
+            // Covers both `test_extends_not_first_tag_in_extended_template`
+            // (content before extends) and `test_exception03` (a second
+            // extends after a block already opened).
+            if matches!(n, Node::Extends(_)) {
+                let already_has_extends = nodes
+                    .iter()
+                    .any(|existing| matches!(existing, Node::Extends(_)));
+                let already_has_nontext = nodes
+                    .iter()
+                    .any(|existing| !matches!(existing, Node::Text(_)));
+                if already_has_extends || already_has_nontext {
+                    return Err(DjangoRustError::TemplateError(
+                        "'extends' must be the first tag in the template".to_string(),
+                    ));
+                }
+            }
             nodes.push(n);
         }
         i += 1;
@@ -713,6 +741,26 @@ fn line_at(spans: &[Span], source: &str, i: usize) -> usize {
         + 1
 }
 
+/// A closer keyword (`endverbatim`/`endwith`/`endspaceless`/`endautoescape`/
+/// `endfilter`/`endif`/`endfor`/`endblock`/`else`/`elif`) reached where it is
+/// not the awaited terminator: either at the top level with nothing open, or
+/// inside a DIFFERENT block that was watching for a DIFFERENT terminator
+/// (#2580). Every one of these is ONLY ever legitimately consumed by its own
+/// opening tag's dedicated body-loop, which checks for its specific
+/// terminator BEFORE ever falling through to `parse_token` — so reaching
+/// this helper at all means the token is a stray. Django's parser hits the
+/// same fact from the other direction: none of these are independently-
+/// registered tags (`self.tags[command]` raises `KeyError`), so
+/// `Parser.parse` refuses with "Invalid block tag" the moment one appears
+/// where it is not the awaited terminator.
+fn stray_closer_error(spans: &[Span], source: &str, i: usize, tag_name: &str) -> DjangoRustError {
+    DjangoRustError::TemplateError(format!(
+        "Invalid block tag on line {}: '{}'",
+        line_at(spans, source, i),
+        tag_name
+    ))
+}
+
 fn parse_token(
     tokens: &[Token],
     spans: &[Span],
@@ -979,7 +1027,7 @@ fn parse_token_inner(
                         ));
                     }
                     let name = args[0].clone();
-                    let (nodes, end_pos) = parse_block(tokens, spans, source, *i + 1)?;
+                    let (nodes, end_pos) = parse_block(tokens, spans, source, *i + 1, &name)?;
                     *i = end_pos;
                     Ok(Some(Node::Block { name, nodes }))
                 }
@@ -1150,10 +1198,7 @@ fn parse_token_inner(
                     Ok(Some(Node::Text(content)))
                 }
 
-                "endverbatim" => {
-                    // Handled by verbatim tag
-                    Ok(None)
-                }
+                "endverbatim" => Err(stray_closer_error(spans, source, *i, tag_name)),
 
                 "with" => {
                     // {% with var=value var2=value2 %} ... {% endwith %}
@@ -1171,15 +1216,28 @@ fn parse_token_inner(
                         }
                     }
 
+                    // Django's `do_with` refuses when `token_kwargs` finds
+                    // zero valid `key=value` assignments — `{% with dict.key
+                    // xx key %}` and `{% with dict.key as %}` both have no
+                    // `=` anywhere in their args, so `assignments` is empty
+                    // here exactly when Django's `extra_context` is empty
+                    // there (#2580). Argument tokens with no `=` (a bare
+                    // word, or the legacy `expr as key` form djust does not
+                    // parse) are silently dropped by the loop above rather
+                    // than counted, so this check is the smallest fix that
+                    // matches djust's own currently-supported grammar.
+                    if assignments.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "'with' expected at least one variable assignment".to_string(),
+                        ));
+                    }
+
                     let (nodes, end_pos) = parse_with_block(tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::With { assignments, nodes }))
                 }
 
-                "endwith" => {
-                    // Handled by with tag
-                    Ok(None)
-                }
+                "endwith" => Err(stray_closer_error(spans, source, *i, tag_name)),
 
                 "load" => {
                     // {% load static %} — preserve library names so inheritance
@@ -1201,13 +1259,34 @@ fn parse_token_inner(
 
                 "widthratio" => {
                     // {% widthratio value max_value max_width [as name] %}
-                    let (operands, asvar) = split_asvar(args);
-                    if operands.len() < 3 {
+                    //
+                    // Django's `widthratio` (`defaulttags.py`) checks the
+                    // TOTAL token count directly rather than the generic
+                    // trailing-`as`-pair shape `split_asvar` assumes: exactly
+                    // 3 operands, or exactly 3 operands + "as" + a name — 4
+                    // or 5 non-empty args. `split_asvar` only fires when the
+                    // SECOND-TO-LAST token is literally "as", so a 4-arg
+                    // form ending in a bare "as" (`{% widthratio a b 100 as
+                    // %}`) or a 5-arg form with the wrong keyword
+                    // (`{% widthratio a b 100 not_as variable %}`) both fall
+                    // through as if every token were a plain operand, and
+                    // djust rendered instead of refusing (#2580).
+                    if args.len() != 3 && args.len() != 5 {
                         return Err(DjangoRustError::TemplateError(
-                            "widthratio tag requires 3 arguments: {% widthratio value max_value max_width %}"
-                                .to_string(),
+                            "widthratio takes at least three arguments".to_string(),
                         ));
                     }
+                    let (operands, asvar) = if args.len() == 5 {
+                        if args[3] != "as" {
+                            return Err(DjangoRustError::TemplateError(
+                                "Invalid syntax in widthratio tag. Expecting 'as' keyword"
+                                    .to_string(),
+                            ));
+                        }
+                        (args[..3].to_vec(), Some(args[4].clone()))
+                    } else {
+                        (args.to_vec(), None)
+                    };
                     // Each of the three is a TAG OPERAND: `do_widthratio` runs
                     // all three through `compile_filter` at COMPILE time, so
                     // `{% widthratio q 10 _x %}` refuses on Django (#2418).
@@ -1269,10 +1348,7 @@ fn parse_token_inner(
                     Ok(Some(Node::Spaceless { nodes }))
                 }
 
-                "endspaceless" => {
-                    // Handled by spaceless tag
-                    Ok(None)
-                }
+                "endspaceless" => Err(stray_closer_error(spans, source, *i, tag_name)),
 
                 "autoescape" => {
                     // {% autoescape on|off %} ... {% endautoescape %} (#2556).
@@ -1298,10 +1374,7 @@ fn parse_token_inner(
                     Ok(Some(Node::AutoEscape { on, nodes }))
                 }
 
-                "endautoescape" => {
-                    // Handled by autoescape tag
-                    Ok(None)
-                }
+                "endautoescape" => Err(stray_closer_error(spans, source, *i, tag_name)),
 
                 "filter" => {
                     // {% filter f1|f2:arg %}...{% endfilter %} (#2556).
@@ -1331,10 +1404,7 @@ fn parse_token_inner(
                     Ok(Some(Node::Filter { filters, nodes }))
                 }
 
-                "endfilter" => {
-                    // Handled by filter tag
-                    Ok(None)
-                }
+                "endfilter" => Err(stray_closer_error(spans, source, *i, tag_name)),
 
                 "cycle" => {
                     // Django's `cycle()` grammar, `defaulttags.py` (#2556).
@@ -1425,8 +1495,40 @@ fn parse_token_inner(
                 }
 
                 "endif" | "endfor" | "endblock" | "else" | "elif" => {
-                    // These are handled by their opening tags
-                    Ok(None)
+                    // Every one of these closer keywords is ONLY ever
+                    // legitimately consumed by its OWN opening tag's
+                    // dedicated body-loop (`parse_if_block`,
+                    // `parse_for_block`, `parse_block`), which checks for
+                    // its specific terminator BEFORE ever falling through
+                    // to `parse_token`. So reaching this arm at all means
+                    // the token is a STRAY closer — either at the top
+                    // level with nothing open, or inside a DIFFERENT block
+                    // that was watching for a DIFFERENT terminator
+                    // (#2580). `Ok(None)` here silently discarded a stray
+                    // closer instead of refusing — the mechanism behind
+                    // `tests.py::test_invalid_block_suggestion` (an
+                    // `{% endblock %}` inside an unclosed `{% if %}`).
+                    // `endverbatim`/`endwith`/`endspaceless`/
+                    // `endautoescape`/`endfilter` get the SAME helper
+                    // ([`stray_closer_error`]) from arms placed right
+                    // after their own opening tags, deliberately NOT
+                    // folded into this multi-name arm: this one already
+                    // sat immediately before the match's `_ => { ... }`
+                    // catch-all, and `scripts/filter-parity-differential.py`'s
+                    // `_required_mask_positions` scans for `"word" =>`
+                    // literally, with no notion of Rust arm boundaries —
+                    // a name whose `=>` sits right before that catch-all
+                    // has its captured body run PAST the entire catch-all
+                    // to the next quoted arm, picking up whatever operand-
+                    // validator call happens to live in between and
+                    // misattributing it. Confirmed empirically: adding a
+                    // sixth name here reads as `"endfilter"` capturing a
+                    // 66,000-character body reaching a `validate_if_operands(`
+                    // call deep inside an unrelated later arm. Positioning
+                    // the other five arms elsewhere in the match avoids
+                    // creating that adjacency rather than fixing the
+                    // scanner's regex.
+                    Err(stray_closer_error(spans, source, *i, tag_name))
                 }
 
                 _ => {
@@ -1558,7 +1660,38 @@ fn parse_token_inner(
                             args: args.clone(),
                         }))
                     } else if crate::registry::assign_handler_exists(tag_name) {
-                        // Context-mutating assign tag (register_assign_tag_handler)
+                        // Context-mutating assign tag (register_assign_tag_handler).
+                        //
+                        // `{% regroup %}` gets its own PARSE-time grammar
+                        // check here (#2580) rather than at the Python
+                        // handler: `RegroupTagHandler.render` degraded a
+                        // malformed call to a silent no-op merge, since
+                        // "the Rust parser has no such hook" (its own
+                        // comment) — no longer true. Django's `regroup`
+                        // (`defaulttags.py`) checks `len(bits) != 6`
+                        // (`bits` includes the tag name, so `args.len() !=
+                        // 5` here), `bits[2] != "by"` (`args[1]`), and
+                        // `bits[4] != "as"` (`args[3]`) — all at compile
+                        // time. Every other assign-tag handler keeps its
+                        // generic passthrough; this is `regroup`-specific.
+                        if tag_name == "regroup" {
+                            if args.len() != 5 {
+                                return Err(DjangoRustError::TemplateError(
+                                    "'regroup' tag takes five arguments".to_string(),
+                                ));
+                            }
+                            if args[1] != "by" {
+                                return Err(DjangoRustError::TemplateError(
+                                    "second argument to 'regroup' tag must be 'by'".to_string(),
+                                ));
+                            }
+                            if args[3] != "as" {
+                                return Err(DjangoRustError::TemplateError(
+                                    "next-to-last argument to 'regroup' tag must be 'as'"
+                                        .to_string(),
+                                ));
+                            }
+                        }
                         Ok(Some(Node::AssignTag {
                             name: tag_name.clone(),
                             args: args.clone(),
@@ -1743,13 +1876,31 @@ fn parse_block(
     spans: &[Span],
     source: &str,
     start: usize,
+    block_name: &str,
 ) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
     let mut i = start;
 
     while i < tokens.len() {
-        if let Token::Tag(name, _) = &tokens[i] {
+        if let Token::Tag(name, endblock_args) = &tokens[i] {
             if name == "endblock" {
+                // Django keeps this check "for backwards-compatibility"
+                // (`loader_tags.py` #3100): the closing tag's OWN cited
+                // name, if any, must be bare or match the block it is
+                // closing — `{% endblock %}` or `{% endblock <name> %}`,
+                // never a DIFFERENT block's name (#2580). djust discarded
+                // `endblock`'s args entirely, so `{% block a %}{% block b
+                // %}…{% endblock a %}…{% endblock b %}` silently closed
+                // whichever block came first, cross-wiring nested blocks
+                // instead of refusing.
+                if let Some(cited) = endblock_args.first() {
+                    if cited != block_name {
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "'endblock' tag with name '{cited}' does not match \
+                             the enclosing block's name ('{block_name}')"
+                        )));
+                    }
+                }
                 return Ok((nodes, i));
             }
         }
@@ -3038,6 +3189,37 @@ pub(crate) fn validate_tag_operand(expr: &str) -> Result<()> {
         .into_iter()
         .map(|s| s.trim().to_string())
         .collect();
+    let head = parts[0].trim();
+    // Django's `compile_filter` tiles the head with `filter_re`
+    // (constant | quoted string | `_(…)` | `[\w.]+`) and refuses whatever is
+    // left over as "Could not parse the remainder" — a FULL-CONSUMPTION
+    // check, not just "does the head start with something valid" (#2580).
+    // `{% cycle a,b,c as foo %}` tiles "a" and leaves ",b,c" unconsumed;
+    // djust's `values` loop only ran `validate_variable_name`'s underscore
+    // check on the whole "a,b,c" string, which has no underscore issue, so
+    // it passed and rendered instead of refusing. Same fix shape as
+    // `validate_url_operand` (#2577) — deliberately generalized here rather
+    // than left as a `{% url %}`-only mechanism, since every caller of
+    // `validate_tag_operand` (cycle, if/elif, with, widthratio, firstof)
+    // shares this exact grammar. NOT applied to `validate_variable_name`
+    // itself: that function's OTHER caller is the `{{ }}` head, checked
+    // BEFORE djust's inline-if branch has a chance to claim a genuinely
+    // multi-word `{{ a if c else b }}` (#2578) — tiling would regress that.
+    match crate::filter_lexer::argument_end(head) {
+        Some(n) if n == head.len() => {}
+        Some(n) => {
+            return Err(DjangoRustError::TemplateError(format!(
+                "Could not parse the remainder: '{}' from '{}'",
+                &head[n..],
+                expr
+            )));
+        }
+        None => {
+            return Err(DjangoRustError::TemplateError(format!(
+                "Could not parse the remainder: '{head}' from '{expr}'"
+            )));
+        }
+    }
     // The operand's own name, then its filter chain — Django's order inside
     // `FilterExpression.__init__` (#2418). This is the third and last caller
     // of `validate_variable_name`; between them they cover every place djust
@@ -3073,6 +3255,18 @@ pub(crate) fn validate_tag_operand(expr: &str) -> Result<()> {
 /// checks the claim against Django rather than against this comment.
 pub(crate) fn validate_if_operands(args: &[String]) -> Result<()> {
     for arg in args {
+        // #2580 gave `validate_tag_operand` a full-consumption tiling check,
+        // which is correct for a genuine OPERAND but wrong for an operator
+        // word — `==`/`and`/`is not`/etc. don't tile as a constant/var/num
+        // atom and would refuse a perfectly valid `{% if a == b %}`. The
+        // OLD (pre-#2580) `validate_tag_operand` was a no-op on operator
+        // words by accident (no pipe, no underscore); that accident is what
+        // this skip now does on purpose, reusing `classify_if_token` — the
+        // SAME classification `IfGrammar` already computes — rather than a
+        // second operator-word list.
+        if classify_if_token(arg).kind != IfTokKind::Operand {
+            continue;
+        }
         validate_tag_operand(arg)?;
     }
     Ok(())
