@@ -1004,23 +1004,46 @@ fn call_raw_block_tag(
 }
 
 /// Resolve a scope node's operand (`"de"`, a variable, a filter chain) to
-/// the STRING the Python scope hook receives (#2558).
+/// the value the Python scope hook receives (#2558): a string, or `None`.
 ///
 /// Literals FIRST through the ONE literal recogniser (`django_literal`,
 /// #2376): `{% language "de" %}` is a quoted literal, and the resolver
 /// channels do not strip quotes — a miss here would hand the override an
 /// empty string and silently deactivate instead of switching (fixed in the
 /// first pass of this row after the probe showed `{% timezone
-/// "Europe/Paris" %}` rendering UTC). A miss resolves to `""`, which
-/// `translation.override("")` maps to `None` — Django's deactivate-all
-/// semantics for a missing operand.
-fn scope_operand_string(expr: &str, context: &Context) -> String {
+/// "Europe/Paris" %}` rendering UTC).
+///
+/// `None` and `""` are DIFFERENT operands to Django and stay different
+/// here. `{% language None %}` resolves the context builtin to Python
+/// `None`, and `translation.override(None)` DEACTIVATES (`get_language()`
+/// is then `None`); a missing variable resolves to `string_if_invalid`,
+/// `""`, and `translation.override("")` activates the fallback language
+/// (`en-us` on the default settings). Measured on Django 5.2: `[None]`
+/// against `[en-us]`. The first pass collapsed both to `""` and the Python
+/// hook mapped `""` to `None` — two wrongs that happened to agree on the
+/// scoreboard's one `{% language %}` cell. For `{% timezone %}` the split is
+/// sharper still: `override(None)` deactivates while `override("")` raises
+/// Django's own `ValueError` (`ZoneInfo keys must be normalized …`).
+fn scope_operand_string(expr: &str, context: &Context) -> Option<String> {
     if let Some((value, _)) = django_literal(expr) {
-        return value_to_arg_string(&value);
+        return Some(value_to_arg_string(&value));
     }
     match resolve_tag_operand_value(expr, context) {
-        Some(Value::Missing) | None => String::new(),
-        Some(value) => value_to_arg_string(&value),
+        Some(Value::None) => None,
+        Some(Value::Missing) | None => Some(String::new()),
+        Some(value) => Some(value_to_arg_string(&value)),
+    }
+}
+
+/// A scope hook's failure as the renderer reports it (#2558): a Python
+/// exception raised INSIDE the hook (`ZoneInfoNotFoundError` for
+/// `{% timezone "Bogus/Zone" %}`, Django's `ValueError` for `""`) crosses
+/// WHOLE with its type, exactly as a bridged library tag's does (#2547);
+/// only a registry failure is re-labelled as an engine error.
+fn scope_hook_error(what: &str, err: DjangoRustError) -> DjangoRustError {
+    match err {
+        DjangoRustError::PythonException(_) => err,
+        other => DjangoRustError::TemplateError(format!("{what} failed: {other}")),
     }
 }
 
@@ -1034,14 +1057,12 @@ fn render_language_scope<L: TemplateLoader>(
     loader: Option<&L>,
 ) -> Result<String> {
     let lang = scope_operand_string(expr, context);
-    let token = crate::registry::language_scope_enter(&lang)
-        .map_err(|e| DjangoRustError::TemplateError(format!("language scope enter failed: {e}")))?;
+    let token = crate::registry::language_scope_enter(lang.as_deref())
+        .map_err(|e| scope_hook_error("language scope enter", e))?;
     let result = render_nodes_with_loader(children, context, loader);
     if let Err(exit_err) = crate::registry::language_scope_exit(token.as_ref()) {
         if result.is_ok() {
-            return Err(DjangoRustError::TemplateError(format!(
-                "language scope exit failed: {exit_err}"
-            )));
+            return Err(scope_hook_error("language scope exit", exit_err));
         }
     }
     result
@@ -1056,14 +1077,12 @@ fn render_timezone_scope<L: TemplateLoader>(
     loader: Option<&L>,
 ) -> Result<String> {
     let zone = scope_operand_string(expr, context);
-    let token = crate::registry::timezone_scope_enter(&zone)
-        .map_err(|e| DjangoRustError::TemplateError(format!("timezone scope enter failed: {e}")))?;
+    let token = crate::registry::timezone_scope_enter(zone.as_deref())
+        .map_err(|e| scope_hook_error("timezone scope enter", e))?;
     let result = render_nodes_with_loader(children, context, loader);
     if let Err(exit_err) = crate::registry::timezone_scope_exit(token.as_ref()) {
         if result.is_ok() {
-            return Err(DjangoRustError::TemplateError(format!(
-                "timezone scope exit failed: {exit_err}"
-            )));
+            return Err(scope_hook_error("timezone scope exit", exit_err));
         }
     }
     result
