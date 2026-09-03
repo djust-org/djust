@@ -1677,6 +1677,23 @@ pub fn arm_scope_tags(names: Vec<String>) -> PyResult<()> {
     Ok(())
 }
 
+/// Disarm every native scope tag (#2558) — the symmetric twin of
+/// [`arm_scope_tags`], alongside the other `clear_*` registry functions.
+///
+/// Arming is process-global and a `{% load i18n %}` re-arms on the next
+/// parse, so nothing in the framework's own reset path needs to call this:
+/// it exists so a test that must observe the UNARMED parse (an unloaded
+/// `{% language %}` falling through to `UnsupportedTag`) can restore the
+/// process to that state.
+#[pyfunction]
+pub fn clear_scope_tags() -> PyResult<()> {
+    let mut set = ARMED_SCOPE_TAGS.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    set.clear();
+    Ok(())
+}
+
 /// Is the native scope node for `name` armed (#2558)?
 pub fn scope_tag_armed(name: &str) -> bool {
     ARMED_SCOPE_TAGS
@@ -1895,6 +1912,71 @@ mod tests {
             1,
             "the context-dict loop lives only inside `build_py_context`"
         );
+    }
+
+    // ---- the #2558 raw-block registry and scope arming --------------------
+    //
+    // Registering a handler needs a Python object, so these cover the halves
+    // that are pure Rust: the lookup contract the PARSER depends on, and the
+    // arming gate. The Python side of both is covered end-to-end in
+    // `python/tests/test_i18n_tags_bridge_2558.py`.
+
+    /// Serializes the tests that mutate the process-global scope-tag set.
+    static SCOPE_TAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn an_unregistered_raw_block_tag_has_no_end_tag() {
+        // What the parser asks before it collects a body as SOURCE. `None`
+        // is what keeps every non-raw tag on its existing arm.
+        clear_raw_block_tag_handlers().unwrap();
+        assert!(raw_block_handler_exists("blocktranslate").is_none());
+        assert!(!raw_block_handler_returns_bindings("blocktranslate"));
+        assert!(!has_raw_block_tag_handler("blocktranslate").unwrap());
+    }
+
+    #[test]
+    fn raw_block_handlers_are_a_registry_of_their_own() {
+        // The fourth kind is NOT reachable through the other three lookups —
+        // a name registered as raw-block must not answer to the inline or
+        // block registries, or the parser would render the body (#2558).
+        clear_tag_handlers().unwrap();
+        clear_block_tag_handlers().unwrap();
+        clear_raw_block_tag_handlers().unwrap();
+        assert!(!handler_exists("blocktranslate"));
+        assert!(block_handler_exists("blocktranslate").is_none());
+        assert!(raw_block_handler_exists("blocktranslate").is_none());
+    }
+
+    #[test]
+    fn scope_tags_are_armed_by_name_and_cleared_together() {
+        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_scope_tags().unwrap();
+        assert!(!scope_tag_armed("language"));
+        arm_scope_tags(vec!["language".to_string(), "timezone".to_string()]).unwrap();
+        assert!(scope_tag_armed("language"));
+        assert!(scope_tag_armed("timezone"));
+        // Arming `i18n`'s names must not arm `l10n`'s — the loader arms per
+        // LIBRARY, so a project that loads only `i18n` keeps `{% localize %}`
+        // unsupported exactly as before this row.
+        assert!(!scope_tag_armed("localize"));
+        assert!(!scope_tag_armed("localtime"));
+        // Arming is additive (a second `{% load %}` of another library).
+        arm_scope_tags(vec!["localize".to_string()]).unwrap();
+        assert!(scope_tag_armed("language"));
+        assert!(scope_tag_armed("localize"));
+        clear_scope_tags().unwrap();
+        assert!(!scope_tag_armed("language"));
+        assert!(!scope_tag_armed("localize"));
+    }
+
+    #[test]
+    fn arming_the_same_name_twice_is_idempotent() {
+        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_scope_tags().unwrap();
+        arm_scope_tags(vec!["language".to_string()]).unwrap();
+        arm_scope_tags(vec!["language".to_string()]).unwrap();
+        assert!(scope_tag_armed("language"));
+        clear_scope_tags().unwrap();
     }
 
     #[test]

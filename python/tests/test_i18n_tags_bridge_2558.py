@@ -418,6 +418,51 @@ def test_type_only_rows_raise_the_same_type(shape):
     assert ours is not None and issubclass(ours, theirs)
 
 
+def test_string_if_invalid_reaches_a_blocktranslate_placeholder():
+    """Django resolves a MISSING `blocktranslate` placeholder to
+    `context.template.engine.string_if_invalid` (`i18n.py:178`) — that is how
+    the scoreboard's i18n34 / invalidstr07 cells render `INVALID` under its
+    `DjustEngine` (a real Django `Engine`, so it carries the attribute).
+
+    The mechanism is the handler reading the CURRENT backend's value onto the
+    synthetic `Context`'s stub template, so it is exercised at that seam: a
+    stub backend through `rendering_with_backend`. The plain
+    `DjustTemplateBackend` does NOT carry `string_if_invalid` — that is the
+    engine-wide #2518 gap, asserted below so this row is not blamed for it and
+    so the day #2518 lands, this test says which half changed.
+    """
+
+    class _Backend:
+        string_if_invalid = "INVALID"
+        debug = False
+
+    plain_render(L + "{% blocktranslate %}x{% endblocktranslate %}", CTX)
+    handler = template_libraries._owned_tags["blocktranslate"][1]
+    with translation.override(None):
+        with template_libraries.rendering_with_backend(_Backend()):
+            assert handler.render([], "{{ missing }}", dict(CTX))[0] == "INVALID"
+            assert handler.render([], "[{{ missing }}]", dict(CTX))[0] == "[INVALID]"
+            assert handler.render(["asvar", "o"], "{{ missing }}", dict(CTX))[1]["o"] == "INVALID"
+            # A PRESENT variable is unaffected by the setting.
+            assert handler.render([], "{{ anton }}", dict(CTX))[0] == "α"
+        # No backend in scope (a direct `render_template_with_dirs` call):
+        # `""`, Django's own default.
+        assert handler.render([], "{{ missing }}", dict(CTX))[0] == ""
+
+    # The engine-wide gap (#2518): the plain backend ignores the OPTION, so
+    # the same template renders `""` where Django renders `INVALID`.
+    options = {"string_if_invalid": "INVALID"}
+    django_engine = DjangoTemplates(
+        {"NAME": "django2558si", "DIRS": [], "APP_DIRS": False, "OPTIONS": options}
+    )
+    djust_engine = DjustTemplateBackend(
+        {"NAME": "djust2558si", "DIRS": [], "APP_DIRS": False, "OPTIONS": options}
+    )
+    source = L + "{% blocktranslate %}{{ missing }}{% endblocktranslate %}"
+    assert str(django_engine.from_string(source).render(dict(CTX))) == "INVALID"
+    assert str(djust_engine.from_string(source).render(dict(CTX))) == ""
+
+
 def test_the_differential_is_not_tautological():
     """#1200 / plan §8.6: a harness without ``contrib.admin`` renders English on
     BOTH sides and every parity row passes for the wrong reason. At least one
@@ -933,9 +978,13 @@ def test_install_sites_are_pinned():
 
 
 def test_collect_raw_source_is_the_one_collector_for_verbatim_and_raw_blocks():
-    parser = (CRATE / "parser.rs").read_text(encoding="utf-8")
+    whole = (CRATE / "parser.rs").read_text(encoding="utf-8")
+    # Scan the PRODUCTION half only — the crate's own unit tests call the
+    # collector directly, and counting those would make the pin unfalsifiable.
+    parser, tests = whole.split("\n#[cfg(test)]\n", 1)
+    assert "collect_raw_source" in tests, "the test-module split landed in the wrong place"
     assert parser.count("fn collect_raw_source(") == 1
-    # Two callers: the `verbatim` arm and the raw-block arm.
+    # Two production callers: the `verbatim` arm and the raw-block arm.
     assert len(re.findall(r"= collect_raw_source\(", parser)) == 2
     # The raw-block check sits BEFORE the block-handler dispatch in the
     # fallthrough arm: the body must reach Django un-rendered.
