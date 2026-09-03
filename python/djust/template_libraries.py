@@ -228,16 +228,28 @@ def install_loader() -> bool:
     return True
 
 
-def install_translator() -> bool:
-    """Install the ``_("…")`` translator hook (#2558).
+def translate_msgid(msgid: str) -> str:
+    """The ``_("…")`` translator (#2558): the callable ``install_translator``
+    registers, module-level so a caller that re-asserts it (the filter-parity
+    differential's entry-point ledger) registers the SAME object rather than
+    a copy that could drift (#1646).
 
-    The callable receives the %-DOUBLED msgid and returns the string the
-    ACTIVE language renders — read per RENDER, on the render thread, which
-    is the issue's "no registration-time capture" requirement: gettext
-    resolves ``translation.get_language()`` live. ``mark_safe`` on the msgid
-    keeps Django's ``SafeData``-preserving ``gettext`` path
-    (``trans_real.py:387-388``) — a quoted literal translates to raw bytes
-    exactly as ``{{ _("<") }}`` must render ``<``.
+    Receives the %-DOUBLED msgid and returns the string the ACTIVE language
+    renders — read per RENDER, on the render thread, which is the issue's
+    "no registration-time capture" requirement: gettext resolves
+    ``translation.get_language()`` live. ``mark_safe`` on the msgid keeps
+    Django's ``SafeData``-preserving ``gettext`` path (``trans_real.py:387-388``)
+    — a quoted literal translates to raw bytes exactly as ``{{ _("<") }}`` must
+    render ``<``.
+    """
+    from django.utils import translation
+    from django.utils.safestring import mark_safe
+
+    return str(translation.gettext(mark_safe(msgid)))
+
+
+def install_translator() -> bool:
+    """Install :func:`translate_msgid` as the ``_("…")`` translator hook (#2558).
 
     Idempotent; ``False`` without the Rust extension.
     """
@@ -245,13 +257,7 @@ def install_translator() -> bool:
         from djust._rust import register_translator
     except ImportError:
         return False
-    from django.utils import translation
-    from django.utils.safestring import mark_safe
-
-    def translate(msgid: str) -> str:
-        return str(translation.gettext(mark_safe(msgid)))
-
-    register_translator(translate)
+    register_translator(translate_msgid)
     return True
 
 
@@ -427,8 +433,7 @@ def _bridge_library(label: str, library: Any) -> None:
     from .template_filters import bridge_library_filters
 
     _arm_scope_tags(module)
-    refuse = _TZ_FILTER_REFUSALS if module == "django.templatetags.tz" else frozenset()
-    bridge_library_filters(library, refuse=refuse)
+    bridge_library_filters(library, refuse=refused_filters(module))
     native = _NATIVE_SCOPE_TAGS.get(module, ())
     for name, compile_func in library.tags.items():
         if name in _RAW_BLOCK_TAGS:
@@ -438,6 +443,16 @@ def _bridge_library(label: str, library: Any) -> None:
         else:
             _bridge_tag(label, name, compile_func)
     _loaded[label] = library
+
+
+def refused_filters(module: str) -> frozenset:
+    """The filters ``{% load %}`` bridges as LOUD refusals for ``module``
+    (#2216 / #2558): the ``tz`` three. One producer, so the generator that
+    lists them (``scripts/generate-template-backend-lists.py``) reads the
+    same answer :func:`_bridge_library` applies (#1646)."""
+    if module == "django.templatetags.tz":
+        return _TZ_FILTER_REFUSALS
+    return frozenset()
 
 
 def _arm_scope_tags(module: str) -> None:

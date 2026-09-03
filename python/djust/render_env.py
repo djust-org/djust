@@ -256,32 +256,49 @@ def install_scope_hooks() -> bool:
         )
     except ImportError:  # pragma: no cover - Rust build predates #2558
         return False
-    from django.utils import timezone as dj_timezone
+    register_language_scope_hooks(language_scope_enter, language_scope_exit)
+    register_timezone_scope_hooks(timezone_scope_enter, timezone_scope_exit)
+    return True
+
+
+# The four scope hooks (#2558), module-level so a caller that re-asserts them
+# (the filter-parity differential's entry-point ledger) registers the SAME
+# objects ``install_scope_hooks`` does rather than a copy that could drift
+# (#1646). Each is the ``enter(arg) -> token`` / ``exit(token)`` pair the Rust
+# scope node calls around its body — on the error path too.
+
+
+def language_scope_enter(lang: str) -> Any:
+    """Enter ``{% language lang %}``: switch Django's thread-local and re-push
+    the render env, so the Rust locale state follows the switch."""
     from django.utils import translation
 
-    def language_enter(lang: str) -> Any:
-        override = translation.override(lang or None)
-        override.__enter__()
-        apply_render_env()
-        return override
+    override = translation.override(lang or None)
+    override.__enter__()
+    apply_render_env()
+    return override
 
-    def language_exit(token: Any) -> None:
-        token.__exit__(None, None, None)
-        apply_render_env()
 
-    def timezone_enter(name: str) -> Any:
-        override = dj_timezone.override(name or None)
-        override.__enter__()
-        apply_render_env()
-        return override
+def language_scope_exit(token: Any) -> None:
+    """Leave ``{% language %}``: restore the thread-local, re-push the env."""
+    token.__exit__(None, None, None)
+    apply_render_env()
 
-    def timezone_exit(token: Any) -> None:
-        token.__exit__(None, None, None)
-        apply_render_env()
 
-    register_language_scope_hooks(language_enter, language_exit)
-    register_timezone_scope_hooks(timezone_enter, timezone_exit)
-    return True
+def timezone_scope_enter(name: str) -> Any:
+    """Enter ``{% timezone name %}``: same shape as the language pair."""
+    from django.utils import timezone as dj_timezone
+
+    override = dj_timezone.override(name or None)
+    override.__enter__()
+    apply_render_env()
+    return override
+
+
+def timezone_scope_exit(token: Any) -> None:
+    """Leave ``{% timezone %}``: restore the thread-local, re-push the env."""
+    token.__exit__(None, None, None)
+    apply_render_env()
 
 
 def apply_render_env() -> None:
