@@ -245,6 +245,15 @@ fn read_resolve_positions(handler: &Bound<'_, PyAny>) -> PyResult<Option<HashSet
 /// `(output, {name: value})` and its exceptions cross as
 /// `DjangoRustError::PythonException` instead of being flattened to a string.
 ///
+/// A bindings handler is also handed the surrounding `{% autoescape %}`
+/// policy as a keyword argument, `render(args, [content,] context,
+/// autoescape=bool)` (#2556): a bridged tag renders through Django's OWN node
+/// on a Django `Context`, and it is that context's `autoescape` — not the
+/// registry's output escape, which the bridge's `mark_safe`d return makes a
+/// no-op — that decides whether a `simple_tag`'s return is inserted raw. The
+/// bare-string contract keeps `render(args, context)`; the renderer applies
+/// the policy to its return instead.
+///
 /// Absent or falsy = the historical contract, untouched for every existing
 /// handler. ONE reader for both registries, like [`read_resolve_positions`].
 fn read_returns_bindings(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -1074,6 +1083,19 @@ fn split_bindings_result(
     Ok((html, bindings))
 }
 
+/// The `autoescape=` keyword a bindings handler's `render` receives (#2556);
+/// see [`read_returns_bindings`].
+fn autoescape_kwargs(
+    py: Python<'_>,
+    autoescape: bool,
+) -> Result<Bound<'_, pyo3::types::PyDict>, String> {
+    let kwargs = pyo3::types::PyDict::new(py);
+    kwargs
+        .set_item("autoescape", autoescape)
+        .map_err(|e| format!("Failed to set autoescape kwarg: {e}"))?;
+    Ok(kwargs)
+}
+
 /// Call an inline handler that declared `RETURNS_BINDINGS` (#2547).
 ///
 /// Differs from [`call_handler_with_py_sidecar`] in exactly the two ways
@@ -1104,9 +1126,10 @@ pub fn call_handler_with_bindings(
         let py_context = build_py_context(py, context, raw_py_objects)
             .map_err(DjangoRustError::TemplateError)?;
         remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
+        let kwargs = autoescape_kwargs(py, autoescape).map_err(DjangoRustError::TemplateError)?;
         let result = handler
             .bind(py)
-            .call_method1("render", (py_args, py_context))
+            .call_method("render", (py_args, py_context), Some(&kwargs))
             .map_err(DjangoRustError::PythonException)?;
         split_bindings_result(&result, "Handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)
@@ -1143,9 +1166,10 @@ pub fn call_block_handler_with_bindings(
         let py_context = build_py_context(py, context, raw_py_objects)
             .map_err(DjangoRustError::TemplateError)?;
         remint_safe_context(py, &py_context, safe_paths).map_err(DjangoRustError::TemplateError)?;
+        let kwargs = autoescape_kwargs(py, autoescape).map_err(DjangoRustError::TemplateError)?;
         let result = handler
             .bind(py)
-            .call_method1("render", (py_args, py_content, py_context))
+            .call_method("render", (py_args, py_content, py_context), Some(&kwargs))
             .map_err(DjangoRustError::PythonException)?;
         split_bindings_result(&result, "Block handler", name, autoescape)
             .map_err(DjangoRustError::TemplateError)

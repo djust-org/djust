@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import random
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -45,12 +46,19 @@ from django.template import Engine, Library  # noqa: E402
 from django.utils.html import format_html  # noqa: E402
 from django.utils.safestring import mark_safe  # noqa: E402
 
-from djust import _rust  # noqa: E402
+from djust import _rust, template_libraries  # noqa: E402
 from djust.mixins.rust_bridge import _collect_safe_keys  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
 from djust.template.backend import DjustTemplateBackend  # noqa: E402
 
-REPO = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+REPO = HERE.parents[1]
+# A `{% load %}`-bridged library (#2547): its `simple_tag` / `simple_block_tag`
+# render through Django's OWN node, so the block policy must reach the Django
+# `Context` the bridge builds — a #1646 twin of the `register_tag_handler` row.
+LIBRARIES = {"ae2556_lib": "lib2556.templatetags.ae2556_lib"}
 CRATES = REPO / "crates"
 RENDERER_RS = CRATES / "djust_templates" / "src" / "renderer.rs"
 CONTEXT_RS = CRATES / "djust_core" / "src" / "context.rs"
@@ -117,8 +125,12 @@ def tpl_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="module")
 def engines(tpl_dir: Path):
-    django_engine = Engine(dirs=[str(tpl_dir)])
+    django_engine = Engine(dirs=[str(tpl_dir)], libraries=LIBRARIES)
     django_engine.template_builtins.append(_LIB)
+    # No `OPTIONS['libraries']` here on purpose: that registers the name in
+    # the process-global `{% load %}` map, which the #2547 message tests pin
+    # to THEIR library set. `_bridged` scopes the name to this module's
+    # renders through the Engine's own `template_libraries` instead.
     backend = DjustTemplateBackend(
         {"NAME": "djust_2556", "DIRS": [str(tpl_dir)], "APP_DIRS": False, "OPTIONS": {}}
     )
@@ -138,28 +150,38 @@ def django_render(engines, source: str, ctx: dict) -> str:
     return django_engine.from_string(source).render(DjangoContext(dict(ctx)))
 
 
+def _bridged(engines):
+    """``{% load %}`` resolves against the Django ``Engine``'s ``LIBRARIES``
+    for this render — parse-time, where the loader hook runs (#2547)."""
+    django_engine, _, _ = engines
+    return template_libraries.rendering_with_backend(django_engine)
+
+
 def djust_raw(engines, source: str, ctx: dict) -> str:
     """The ``_rust`` entry the plain backend calls, with the ``safe_keys`` channel."""
     _, _, tpl_dir = engines
     normalized, safe_keys = _normalized_with_safe_keys(ctx)
-    return _rust.render_template_with_dirs(source, normalized, [str(tpl_dir)], safe_keys)
+    with _bridged(engines):
+        return _rust.render_template_with_dirs(source, normalized, [str(tpl_dir)], safe_keys)
 
 
 def djust_backend(engines, source: str, ctx: dict) -> str:
     """``DjustTemplateBackend`` — what a Django ``TEMPLATES`` entry renders."""
     _, backend, _ = engines
-    return str(backend.from_string(source).render(dict(ctx)))
+    with _bridged(engines):
+        return str(backend.from_string(source).render(dict(ctx)))
 
 
 def djust_live(engines, source: str, ctx: dict) -> str:
     """``RustLiveView`` — the LiveView path, via ``mark_safe_keys`` (#2287)."""
     _, _, tpl_dir = engines
-    view = _rust.RustLiveView(source, [str(tpl_dir)])
-    normalized, safe_keys = _normalized_with_safe_keys(ctx)
-    view.update_state(normalized)
-    if safe_keys:
-        view.mark_safe_keys(safe_keys)
-    return view.render()
+    with _bridged(engines):
+        view = _rust.RustLiveView(source, [str(tpl_dir)])
+        normalized, safe_keys = _normalized_with_safe_keys(ctx)
+        view.update_state(normalized)
+        if safe_keys:
+            view.mark_safe_keys(safe_keys)
+        return view.render()
 
 
 PATHS = [
@@ -224,8 +246,17 @@ SINK_ROWS = {
     "10-escapeseq": '{{ l|escapeseq|join:"," }}|{{ ls|escapeseq|join:"," }}',
     # 11 custom `needs_autoescape` filter — the bridge passes the flag
     "11-custom-needs_autoescape": "{{ x|ae2556_needs }}|{{ s|ae2556_needs }}",
+    # 11 `{% load %}`-bridged `needs_autoescape` filter — same bridge, via
+    # `register_django_filter` (#2547)
+    "11-library-needs_autoescape": "{% load ae2556_lib %}{{ x|lib2556_needs }}|{{ s|lib2556_needs }}",
     # 12 custom tag handler — escape_handler_return honours the flag
     "12-custom-tag": "{% ae2556_tag x %}",
+    # 12 `{% load %}`-bridged library tags — Django's own SimpleNode /
+    # SimpleBlockNode read the flag off the Context the bridge hands them
+    "12-library-simple_tag": "{% load ae2556_lib %}{% lib2556_tag x %}|{% lib2556_safe_tag x %}",
+    "12-library-block_tag": (
+        "{% load ae2556_lib %}{% lib2556_block x %}{{ x }}{% endlib2556_block %}"
+    ),
     # 13 include … only — the fresh Context copies the flag
     "13-include-only": '{% include "inc.html" with first=var1 only %}',
     # 14 clone-carrying blocks
@@ -272,7 +303,10 @@ class TestSinkTable:
             "8-join",
             "9-unordered_list",
             "11-custom-needs_autoescape",
+            "11-library-needs_autoescape",
             "12-custom-tag",
+            "12-library-simple_tag",
+            "12-library-block_tag",
             "13-include-only",
             "14-include",
         ):

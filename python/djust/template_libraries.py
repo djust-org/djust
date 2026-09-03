@@ -43,6 +43,11 @@ Two contract points the handler relies on (the Rust side of #2547):
   operands as TOKENS (``Token.split_contents()[1:]``), never pre-resolved
   values, because Django's node resolves them itself.
 
+``render`` also receives the renderer's ``{% autoescape %}`` policy as the
+``autoescape=`` keyword (#2556) and hands it to the Django ``Context`` the
+node renders on, so a ``simple_tag``'s plain-``str`` return is inserted raw
+under ``{% autoescape off %}`` exactly where Django inserts it raw.
+
 Every ``node.render()`` return crosses back ``mark_safe``'d. Django never
 re-escapes a node's output: ``SimpleNode.render`` has already applied
 ``conditional_escape`` to a ``simple_tag``'s return, a ``TextNode``'s bytes
@@ -592,15 +597,22 @@ def _template_backend() -> Any:
     return _LoaderBackend()
 
 
-def _render_node(node: Any, context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+def _render_node(
+    node: Any, context: Dict[str, Any], autoescape: bool = True
+) -> Tuple[Any, Dict[str, Any]]:
     """``node.render`` on a Django ``Context`` over ``context``; the output
     ``mark_safe``'d (see the module docstring) and the context writes the
-    node made, as the diff of ``ctx.dicts[-1]``."""
+    node made, as the diff of ``ctx.dicts[-1]``.
+
+    ``autoescape`` is the renderer's current ``{% autoescape %}`` policy
+    (#2556), handed to the Django ``Context`` so Django's own node applies
+    it: ``SimpleNode.render`` skips its ``conditional_escape`` under ``off``
+    and an ``InclusionNode``'s ``context.new()`` copies the flag."""
     from django.template import Context
     from django.utils.safestring import mark_safe
 
     before = dict(context)
-    ctx = Context(context, autoescape=True)
+    ctx = Context(context, autoescape=autoescape)
     ctx.template = _STUB_TEMPLATE
     output = node.render(ctx)
     after = ctx.dicts[-1]
@@ -636,9 +648,11 @@ class LibraryTagHandler:
             self._nodes[key] = node
         return node
 
-    def render(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    def render(
+        self, args: List[str], context: Dict[str, Any], autoescape: bool = True
+    ) -> Tuple[Any, Dict[str, Any]]:
         try:
-            return _render_node(self._compile(args), context)
+            return _render_node(self._compile(args), context, autoescape)
         except BaseException as exc:
             _stamp(exc)
             raise
@@ -666,7 +680,9 @@ class RefusedTagHandler:
             "or wait for the raw-body registration kind (#2558)." % (name, label)
         )
 
-    def render(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    def render(
+        self, args: List[str], context: Dict[str, Any], autoescape: bool = True
+    ) -> Tuple[Any, Dict[str, Any]]:
         from django.template import TemplateSyntaxError
 
         exc = TemplateSyntaxError(self.REFUSE_AT_PARSE)
@@ -690,14 +706,14 @@ class LibraryBlockTagHandler(LibraryTagHandler):
         self.end_name = _end_name(compile_func, name)
 
     def render(  # type: ignore[override]
-        self, args: List[str], content: Any, context: Dict[str, Any]
+        self, args: List[str], content: Any, context: Dict[str, Any], autoescape: bool = True
     ) -> Tuple[Any, Dict[str, Any]]:
         from django.template.base import Token, TokenType
 
         try:
             tokens = [Token(TokenType.TEXT, content), Token(TokenType.BLOCK, self.end_name)]
             node = self.compile_func(_parser(tokens), _token(self.name, args))
-            return _render_node(node, context)
+            return _render_node(node, context, autoescape)
         except BaseException as exc:
             _stamp(exc)
             raise

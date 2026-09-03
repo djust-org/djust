@@ -479,7 +479,9 @@ class TestScoreboardParity:
     def test_every_scoreboard_django_tag_is_in_the_generated_unsupported_set(self, gen, report):
         board = gen.scoreboard_unsupported_tags(_SCOREBOARD)
         assert board, "the scoreboard regex found no `Unsupported template tag` lines"
-        assert "autoescape" in board
+        # A tag the engine still refuses; `autoescape` left this set in #2556.
+        assert "ifchanged" in board
+        assert "autoescape" not in report.all_unsupported_tags
         known = report.django_tags | report.library_tags
         django_names_on_the_board = board & known
         assert django_names_on_the_board, "the scoreboard names no Django tag at all?"
