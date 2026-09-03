@@ -41,8 +41,11 @@ import pytest
 
 pytest.importorskip("django")
 
+from django.http import HttpResponse  # noqa: E402
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Engine, Library  # noqa: E402
+from django.test import override_settings  # noqa: E402
+from django.urls import path  # noqa: E402
 from django.utils.html import format_html  # noqa: E402
 from django.utils.safestring import mark_safe  # noqa: E402
 
@@ -632,3 +635,137 @@ class TestEveryWalkerKnowsTheNewNode:
             line for line in block.splitlines() if "unsupported (" in line and "tags" in line
         )
         assert "`autoescape`" not in unsupported
+
+
+# ---------------------------------------------------------------------------
+# The `autoescape=` kwarg is OPT-IN (#2556 x #2563, PR #2595)
+# ---------------------------------------------------------------------------
+#
+# `{% url %}`'s `UrlTagHandler` declares `RETURNS_BINDINGS` (#2563) and its
+# `render` signature is `(args, context)`. The first version of the bridge fix
+# handed the `{% autoescape %}` policy to EVERY bindings handler as an
+# `autoescape=` keyword, which is a `TypeError` for any handler that does not
+# name the parameter — so `{% url %}` did not render *at all*, in every mode,
+# not merely with the wrong escaping under `off`. The kwarg is therefore a
+# declared opt-in, `WANTS_AUTOESCAPE`, read at registration beside
+# `RETURNS_BINDINGS` / `ACCEPTS_AS_VAR` / `RESOLVE_ARG_POSITIONS`.
+
+
+def _view(_request, **_kwargs):
+    return HttpResponse("")
+
+
+urlpatterns = [path("u/<str:v>/", _view, name="ae2556_u")]
+
+
+class _RecordingBindingsHandler:
+    """Accepts the kwarg but does not declare it — so it must NOT arrive."""
+
+    RETURNS_BINDINGS = True
+
+    def __init__(self):
+        self.seen = []
+
+    def render(self, args, context, **kwargs):
+        self.seen.append(dict(kwargs))
+        return ("[" + str(args[0]) + "]", {})
+
+
+class _DeclaringBindingsHandler(_RecordingBindingsHandler):
+    """Declares it — so it must arrive, carrying the block's policy."""
+
+    WANTS_AUTOESCAPE = True
+
+
+class TestTheKwargIsOptIn:
+    """Both arms of the opt-in are independently reachable (#2129/#2135): a
+    handler that declares the flag is called WITH the keyword, one that does
+    not is called WITHOUT it. Neither test can pass for the other's reason —
+    they assert on opposite contents of the same recorded call."""
+
+    @pytest.fixture
+    def declaring(self):
+        h = _DeclaringBindingsHandler()
+        _rust.register_tag_handler("ae2556_wants", h)
+        yield h
+        _rust.unregister_tag_handler("ae2556_wants")
+
+    @pytest.fixture
+    def silent(self):
+        h = _RecordingBindingsHandler()
+        _rust.register_tag_handler("ae2556_silent", h)
+        yield h
+        _rust.unregister_tag_handler("ae2556_silent")
+
+    @pytest.mark.parametrize(
+        "body,on", [("{% autoescape on %}", True), ("{% autoescape off %}", False)]
+    )
+    def test_a_declaring_handler_receives_the_block_policy(self, declaring, body, on):
+        _rust.render_template(body + "{% ae2556_wants 'x' %}{% endautoescape %}", {})
+        assert declaring.seen == [{"autoescape": on}]
+
+    def test_a_handler_that_did_not_declare_it_is_called_without_the_keyword(self, silent):
+        """The `{% url %}` shape. Were the kwarg unconditional this would not
+        merely record it — a handler whose signature does not absorb `**kwargs`
+        raises `TypeError` on EVERY render, which is what the merge of #2607
+        into this branch did to `{% url %}`."""
+        _rust.render_template("{% autoescape off %}{% ae2556_silent 'x' %}{% endautoescape %}", {})
+        assert silent.seen == [{}]
+
+
+class TestUrlIsDjangoEqualUnderEveryMode:
+    """The regression the opt-in exists for, on the real tag rather than a
+    probe. A value that survives `reverse()` AND carries an escapable
+    character is what the divergence needs — `<script>` raises
+    `NoReverseMatch` and `%3Cscript%3E` has nothing to escape."""
+
+    @pytest.mark.parametrize(
+        "wrap,expected",
+        [
+            ("%s", "/u/a&amp;b/"),
+            ("{%% autoescape on %%}%s{%% endautoescape %%}", "/u/a&amp;b/"),
+            ("{%% autoescape off %%}%s{%% endautoescape %%}", "/u/a&b/"),
+        ],
+    )
+    def test_matches_django(self, engines, wrap, expected):
+        src = wrap % "{% url 'ae2556_u' v %}"
+        ctx = {"v": "a&b"}
+        with override_settings(ROOT_URLCONF=__name__):
+            assert django_render(engines, src, ctx) == expected
+            assert djust_raw(engines, src, ctx) == expected
+            assert djust_live(engines, src, ctx) == expected
+
+
+# ---------------------------------------------------------------------------
+# `{% cycle %}` state inside an `{% autoescape %}` body (PR #2595)
+# ---------------------------------------------------------------------------
+
+
+class TestCycleStateSurvivesTheBlock:
+    """`resolve_cycle_nodes` assigns each `{% cycle %}` node its per-render
+    state id by walking the tree. It listed every other block node but not
+    `Node::AutoEscape`, so two cycles inside an `{% autoescape %}` body kept
+    NO id and collided on one shared counter — a merge artefact of #2596's
+    cycle rewrite meeting this branch's node, invisible to the compiler."""
+
+    @pytest.mark.parametrize("mode", ["on", "off"])
+    def test_two_cycles_in_one_block_advance_independently(self, engines, mode):
+        body = "{% for i in xs %}{% cycle 'a' 'b' %}{% cycle '1' '2' '3' %}{% endfor %}"
+        src = "{%% autoescape %s %%}%s{%% endautoescape %%}" % (mode, body)
+        ctx = {"xs": [0, 1, 2, 3]}
+        expected = django_render(engines, src, ctx)
+        assert expected == "a1b2a3b1"
+        for name, render in PATHS:
+            assert render(engines, src, ctx) == expected, name
+
+    def test_a_cycle_inside_the_block_does_not_share_one_outside_it(self, engines):
+        src = (
+            "{% for i in xs %}{% cycle 'a' 'b' %}"
+            "{% autoescape off %}{% cycle '1' '2' '3' %}{% endautoescape %}"
+            "{% endfor %}"
+        )
+        ctx = {"xs": [0, 1, 2, 3]}
+        expected = django_render(engines, src, ctx)
+        assert expected == "a1b2a3b1"
+        for name, render in PATHS:
+            assert render(engines, src, ctx) == expected, name
