@@ -337,10 +337,19 @@ _PKG = Path(__file__).resolve().parents[1] / "djust"
 
 
 def test_every_framework_update_state_caller_is_decided() -> None:
-    """Two callers. The per-view bridge (long-lived state, MUST retain first);
-    the page-shell ``temp_rust`` in template.py (a fresh ``RustLiveView`` per
-    request with nothing to retain — no call). A third caller is a decision
-    someone has to make."""
+    """Two Python callers. The per-view bridge (long-lived state, MUST retain
+    first); the page-shell ``temp_rust`` in template.py (a fresh ``RustLiveView``
+    per request with nothing to retain — no call). A third caller is a decision
+    someone has to make.
+
+    And the actor's Rust merge (#2592): ``use_actors=True`` bypasses the bridge
+    entirely — the ``ViewActor`` pulls the full ``get_context_data()`` itself in
+    ``sync_state_from_python`` and merges with ``update_state_rust``. Decided in
+    Rust: it calls ``retain_state_keys_rust`` with the full context's keys
+    BEFORE that merge. The detailed pins are in
+    ``test_actor_state_retains_full_context_2592.py``; this one keeps the
+    actor site in the SAME caller ledger so it is never again "pure-Rust,
+    unchanged"."""
     callers = {}
     for path in _PKG.rglob("*.py"):
         if "tests" in path.parts:
@@ -357,3 +366,13 @@ def test_every_framework_update_state_caller_is_decided() -> None:
     assert retain_at < update_at, "retain_state_keys must run before update_state"
     shell = (_PKG / "mixins" / "template.py").read_text()
     assert "retain_state_keys" not in shell, "temp_rust is per-request; decided: no call"
+
+    actor = (_PKG.parents[1] / "crates" / "djust_live" / "src" / "actors" / "view.rs").read_text()
+    sync_at = actor.index("fn sync_state_from_python(")
+    actor_retain_at = actor.index(
+        "retain_state_keys_rust(state.keys().cloned().collect())", sync_at
+    )
+    actor_update_at = actor.index("update_state_rust(state)", sync_at)
+    assert actor_retain_at < actor_update_at, (
+        "the actor's full-context merge must retain first (#2592)"
+    )
