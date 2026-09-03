@@ -60,7 +60,12 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "run-django-template-suite.py"
 BASELINE = REPO / "scripts" / "django-template-suite-baseline.json"
 DOC = REPO / "docs" / "TEMPLATE_BACKEND.md"
+README_DOC = REPO / "README.md"
 DOC_MARKER = "<!-- django-suite-claim -->"
+# Every doc that quotes the scoreboard headline carries the marker; adding a
+# third quoting doc means adding it here, not inventing a second mechanism
+# (#2561 — the README headline reuses this pin rather than a new one).
+DOC_PATHS = (DOC, README_DOC)
 
 
 def _env() -> dict[str, str]:
@@ -993,20 +998,38 @@ class TestAdapterInSubprocess:
 
 
 class TestDocClaimMatchesBaseline:
-    def test_doc_percentage_equals_the_baseline(self) -> None:
+    @pytest.mark.parametrize("doc", DOC_PATHS, ids=lambda p: p.name)
+    def test_doc_percentage_equals_the_baseline(self, doc: pathlib.Path) -> None:
         assert BASELINE.exists(), "the baseline file is committed by the runner's --write-baseline"
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
         claim_lines = [
-            line for line in DOC.read_text(encoding="utf-8").splitlines() if DOC_MARKER in line
+            line for line in doc.read_text(encoding="utf-8").splitlines() if DOC_MARKER in line
         ]
         if not claim_lines:
             pytest.skip(
-                f"{DOC.name} has no {DOC_MARKER} line yet (Stage 9 adds it); "
+                f"{doc.name} has no {DOC_MARKER} line yet (Stage 9 adds it); "
                 "the test pins the claim to the baseline once it exists"
             )
-        m = re.search(r"(\d+\.\d{2})\s?%", claim_lines[0])
-        assert m, f"no NN.NN% figure on the marker line: {claim_lines[0]!r}"
-        assert float(m.group(1)) == baseline["percent"]
+        for claim_line in claim_lines:
+            m = re.search(r"(\d+\.\d{2})\s?%", claim_line)
+            assert m, f"{doc.name}: no NN.NN% figure on the marker line: {claim_line!r}"
+            assert float(m.group(1)) == baseline["percent"], (
+                f"{doc.name}: {claim_line!r} disagrees with the baseline ({baseline['percent']}%)"
+            )
+
+    def test_at_least_one_doc_carries_the_claim(self) -> None:
+        """A regression guard for the parametrize above: if every DOC_PATHS
+        entry lost its marker line at once (e.g. a careless doc rewrite), the
+        parametrized test would skip every case and report all-green. This
+        asserts presence across the whole set, not per file, so that failure
+        mode cannot hide behind the per-file skip.
+        """
+        found = [
+            doc.name
+            for doc in DOC_PATHS
+            if any(DOC_MARKER in line for line in doc.read_text(encoding="utf-8").splitlines())
+        ]
+        assert found, f"none of {[d.name for d in DOC_PATHS]} carries a {DOC_MARKER} line"
 
     def test_baseline_schema(self) -> None:
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
