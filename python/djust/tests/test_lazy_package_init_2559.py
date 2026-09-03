@@ -48,6 +48,7 @@ ALLOWLIST_PACKAGE = frozenset(
         "djust._html",
         "djust._rust",
         "djust.template_tags",
+        "djust.template_libraries",
         "djust.template_tags._django_expr",
         "djust.template_tags.client_config",
         "djust.template_tags.debug",
@@ -64,7 +65,7 @@ ALLOWLIST_PACKAGE = frozenset(
         "djust.utils",
     }
 )
-assert len(ALLOWLIST_PACKAGE) == 18
+assert len(ALLOWLIST_PACKAGE) == 19
 
 ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
     {
@@ -82,7 +83,7 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
         "djust.template.serialization",
     }
 )
-assert len(ALLOWLIST_BACKEND) == 30
+assert len(ALLOWLIST_BACKEND) == 31
 
 
 # The compat shim (``djust/template_backend.py``) is one extra module.

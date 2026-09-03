@@ -292,6 +292,28 @@ def _reset_builtin_template_tags() -> None:
         pass
 
 
+def _reset_template_libraries() -> None:
+    """Re-assert every ``{% load %}``-bridged Django library tag (#2547).
+
+    Sibling to ``_reset_builtin_template_tags`` for the tags
+    ``djust.template_libraries`` registered on a ``{% load %}``. A test that
+    cleared the Rust registries (the #1928 class above) leaves them gone —
+    and because the Rust ``TEMPLATE_CACHE`` is keyed by source, a template
+    parsed while they were registered is served from cache with nodes that
+    no longer resolve and never re-runs its ``{% load %}``. Re-registering
+    the same handler objects BEFORE each test restores every cached
+    template. The loader hook itself is re-armed by ``reregister_builtins``.
+    """
+    try:
+        from djust.template_libraries import reassert
+    except Exception:  # noqa: BLE001 — optional; never break the fixture.
+        return
+    try:
+        reassert()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _reset_django_thread_locals() -> None:
     """Normalise Django's ACTIVE language and timezone (#2234).
 
@@ -356,6 +378,7 @@ def reset_djust_globals() -> None:
     _reset_bug_capture_store_cache()
     _reset_id_counters()
     _reset_rust_tag_handlers()
+    _reset_template_libraries()
     _reset_builtin_template_tags()
     _reset_django_thread_locals()
 

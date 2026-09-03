@@ -421,6 +421,17 @@ impl Context {
         self.safe_keys.insert(key);
     }
 
+    /// Every dotted path currently marked safe, in no particular order (#2547).
+    ///
+    /// The bridged-library tag path hands a Python handler the context as a
+    /// dict and lets Django's OWN node resolve the operands against it, so
+    /// the `SafeData` bit `{{ p }}` would honour has to be re-minted on the
+    /// dict's values — `{% echo_arg safe %}` over a `mark_safe`d value must
+    /// not escape it, as it does not on Django.
+    pub fn safe_key_paths(&self) -> Vec<String> {
+        self.safe_keys.iter().cloned().collect()
+    }
+
     /// Bind `name` to `value`, **REPLACING** whatever safety grant `name`
     /// carried (#2361, #2363).
     ///
