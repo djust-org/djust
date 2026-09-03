@@ -43,6 +43,16 @@ Two contract points the handler relies on (the Rust side of #2547):
   operands as TOKENS (``Token.split_contents()[1:]``), never pre-resolved
   values, because Django's node resolves them itself.
 
+``render`` also receives the renderer's ``{% autoescape %}`` policy as the
+``autoescape=`` keyword (#2556) and hands it to the Django ``Context`` the
+node renders on, so a ``simple_tag``'s plain-``str`` return is inserted raw
+under ``{% autoescape off %}`` exactly where Django inserts it raw. That
+kwarg is OPT-IN, declared by ``WANTS_AUTOESCAPE = True``: the bridge is the
+only handler that needs it, because its ``mark_safe``'d return makes the
+registry's own ``escape_handler_return`` — Django's ``if context.autoescape:``
+for every OTHER handler — a no-op. A bare-string handler that does not
+declare it keeps ``render(args, context)`` unchanged.
+
 Every ``node.render()`` return crosses back ``mark_safe``'d. Django never
 re-escapes a node's output: ``SimpleNode.render`` has already applied
 ``conditional_escape`` to a ``simple_tag``'s return, a ``TextNode``'s bytes
@@ -766,10 +776,17 @@ def _materialize_lazy(value: Any) -> Any:
     return value
 
 
-def _render_node(node: Any, context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+def _render_node(
+    node: Any, context: Dict[str, Any], autoescape: bool = True
+) -> Tuple[Any, Dict[str, Any]]:
     """``node.render`` on a Django ``Context`` over ``context``; the output
     ``mark_safe``'d (see the module docstring) and the context writes the
-    node made, as the diff of ``ctx.dicts[-1]``."""
+    node made, as the diff of ``ctx.dicts[-1]``.
+
+    ``autoescape`` is the renderer's current ``{% autoescape %}`` policy
+    (#2556), handed to the Django ``Context`` so Django's own node applies
+    it: ``SimpleNode.render`` skips its ``conditional_escape`` under ``off``
+    and an ``InclusionNode``'s ``context.new()`` copies the flag."""
     from django.template import Context
     from django.utils.safestring import mark_safe
 
@@ -779,7 +796,7 @@ def _render_node(node: Any, context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any
     # (#1646). `Context(d)` keeps `d` as `dicts[-1]`, so passing the CALLER's
     # dict lets a node's `context[var] =` write through to it; the copy keeps
     # the node's writes inside the returned `bindings` diff, where they belong.
-    ctx = Context(dict(context), autoescape=True)
+    ctx = Context(dict(context), autoescape=autoescape)
     ctx.template = _STUB_TEMPLATE
     output = node.render(ctx)
     after = ctx.dicts[-1]
@@ -805,6 +822,16 @@ class LibraryTagHandler:
     RESOLVE_ARG_POSITIONS: frozenset = frozenset()
     RETURNS_BINDINGS = True
 
+    #: Hand ``render`` the surrounding ``{% autoescape %}`` policy as the
+    #: ``autoescape=`` keyword (#2556). The bridge is the one handler kind
+    #: that needs it: the node renders on a Django ``Context``, and the
+    #: ``mark_safe``'d return makes the registry's own ``escape_handler_return``
+    #: a no-op, so ``Context(autoescape=…)`` is the only place the policy can
+    #: land. An opt-in flag rather than a term of ``RETURNS_BINDINGS``, which
+    #: is public: passing the kwarg unconditionally is a ``TypeError`` for
+    #: every handler that does not name the parameter (``{% url %}``, #2563).
+    WANTS_AUTOESCAPE = True
+
     def __init__(self, label: str, name: str, compile_func: Callable[..., Any]) -> None:
         self.label = label
         self.name = name
@@ -822,9 +849,11 @@ class LibraryTagHandler:
             self._nodes[key] = node
         return node
 
-    def render(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    def render(
+        self, args: List[str], context: Dict[str, Any], autoescape: bool = True
+    ) -> Tuple[Any, Dict[str, Any]]:
         try:
-            return _render_node(self._compile(args), context)
+            return _render_node(self._compile(args), context, autoescape)
         except BaseException as exc:
             _stamp(exc)
             raise
@@ -841,6 +870,7 @@ class RefusedTagHandler:
     """
 
     RETURNS_BINDINGS = True
+    WANTS_AUTOESCAPE = True
 
     def __init__(self, label: str, name: str) -> None:
         self.label = label
@@ -852,7 +882,9 @@ class RefusedTagHandler:
             "or wait for the raw-body registration kind (#2558)." % (name, label)
         )
 
-    def render(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
+    def render(
+        self, args: List[str], context: Dict[str, Any], autoescape: bool = True
+    ) -> Tuple[Any, Dict[str, Any]]:
         from django.template import TemplateSyntaxError
 
         exc = TemplateSyntaxError(self.REFUSE_AT_PARSE)
@@ -876,14 +908,14 @@ class LibraryBlockTagHandler(LibraryTagHandler):
         self.end_name = _end_name(compile_func, name)
 
     def render(  # type: ignore[override]
-        self, args: List[str], content: Any, context: Dict[str, Any]
+        self, args: List[str], content: Any, context: Dict[str, Any], autoescape: bool = True
     ) -> Tuple[Any, Dict[str, Any]]:
         from django.template.base import Token, TokenType
 
         try:
             tokens = [Token(TokenType.TEXT, content), Token(TokenType.BLOCK, self.end_name)]
             node = self.compile_func(_parser(tokens), _token(self.name, args))
-            return _render_node(node, context)
+            return _render_node(node, context, autoescape)
         except BaseException as exc:
             _stamp(exc)
             raise
@@ -957,17 +989,26 @@ class LibraryRawBlockTagHandler:
             bool(getattr(backend, "debug", False)),
         )
 
+    #: The same opt-in the inline bridge declares (#2556). `{% blocktranslate %}`
+    #: resolves its `%(var)s` placeholders INSIDE `BlockTranslateNode`, against
+    #: this `Context`, so `Context(autoescape=…)` is the only place the
+    #: surrounding policy can land — the `mark_safe`'d return makes the
+    #: registry's own escape a no-op. Without it,
+    #: `{% autoescape off %}{% blocktranslate %}{{ hostile }}{% endblocktranslate %}`
+    #: escaped where Django inserts raw. Unreachable until #2556 implemented
+    #: `{% autoescape %}` (the tag was refused before), which is why the two
+    #: landed together.
+    WANTS_AUTOESCAPE = True
+
     def render(  # type: ignore[override]
-        self, args: List[str], body: str, context: Dict[str, Any]
+        self, args: List[str], body: str, context: Dict[str, Any], autoescape: bool = True
     ) -> Tuple[Any, Dict[str, Any]]:
         from django.template import Context
         from django.utils.safestring import mark_safe
 
         try:
             before = dict(context)
-            # autoescape=True until #2556 wires the engine's flag through
-            # (§3 of the #2558 plan); the kwarg below is where it lands.
-            ctx = Context(dict(context), autoescape=True)
+            ctx = Context(dict(context), autoescape=autoescape)
             string_if_invalid, debug = self._string_if_invalid()
             ctx.template = _stub_template_with(string_if_invalid, debug)
             output = self._compile(list(args), body).render(ctx)

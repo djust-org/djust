@@ -216,32 +216,23 @@ def test_capabilities_probe_is_not_vacuous():
 # ---------------------------------------------------------------------------
 
 
-class TestAutoescapeBlockIsStillUnsupported:
-    """``{% autoescape %}`` is NOT implemented, deliberately (#2284).
+class TestAutoescapeBlockPolicyReachesTheFilters:
+    """``{% autoescape %}`` IS implemented now (#2556, v1.2.0-3).
 
-    Django's ``needs_autoescape`` expression has two terms. #2284 implements
-    the ``SafeData`` one because it is reachable; the ``autoescape`` one is
-    pinned ``True`` because there is no way to make it ``False``. Implementing
-    the block tag was considered and declined — it is a much larger change
-    (block-scoped policy through every render arm) whose only effect would be
-    to let templates turn escaping OFF, and no divergence today needs it.
-
-    These two tests are what makes that decision falsifiable rather than
-    assumed: if someone adds the tag, the first goes red and is a direct
-    instruction to thread the real block policy into
-    ``apply_filter_full_safe``'s ``input_was_safe`` sibling instead of the
-    pinned ``true``.
+    Until #2556 this class pinned the tag as REJECTED, with the docstring
+    instruction that the day it landed the real block policy must be threaded
+    into ``apply_filter_full_safe`` beside ``input_was_safe`` instead of the
+    pinned ``true``. That is what #2556 did; this is the test its docstring
+    asked for. The full sink table is in ``test_autoescape_tag_2556.py``.
     """
 
-    def test_the_tag_is_rejected_by_the_parser(self):
-        for source in (
-            "{% autoescape off %}{{ p }}{% endautoescape %}",
-            "{% autoescape on %}{{ p }}{% endautoescape %}",
-        ):
-            with pytest.raises(Exception) as exc:
-                djust_render(source, "<b>x</b>")
-            assert "autoescape" in str(exc.value), (
-                f"{source} no longer raises for the expected reason: {exc.value}"
+    @pytest.mark.parametrize("name", FOUR + ALREADY_CORRECT)
+    def test_the_block_policy_is_the_first_term_of_needs_autoescape(self, name):
+        for payload in NO_URL_PAYLOADS:
+            source = "{% autoescape off %}" + cell(name, False) + "{% endautoescape %}"
+            assert djust_render(source, payload) == django_render(source, payload), (
+                name,
+                payload,
             )
 
     def test_django_does_support_it_which_is_why_this_is_a_gap_and_not_parity(self):
@@ -641,8 +632,13 @@ class TestEveryRenderSiteThreadsTheInputSafety:
         # Whitespace-insensitive, so a `cargo fmt` that rewraps the call does
         # not false-fail this. The LAST argument is the one under test.
         args = [a.strip() for a in body[start : end - 1].split(",") if a.strip()]
-        assert args[-1] == "InputSafety::default()", (
-            f"apply_filter_full must pass the SAFE default; it passes {args[-1]!r}"
+        # Since #2556 the LAST argument is Django's `context.autoescape`, whose
+        # safe default is `true` (escape); the safety struct sits before it.
+        assert args[-1] == "true", (
+            f"apply_filter_full must pass autoescape=true (the escaping default); got {args[-1]!r}"
+        )
+        assert args[-2] == "InputSafety::default()", (
+            f"apply_filter_full must pass the SAFE default; it passes {args[-2]!r}"
         )
         # …and the default must actually BE the closed one. A `Default` impl
         # that set a field `true` would satisfy the line above and undo it.

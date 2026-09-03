@@ -649,6 +649,7 @@ pub fn apply_filter_full(
         context,
         arg_was_quoted,
         InputSafety::default(),
+        true,
     )
     .map(|(v, _)| v)
 }
@@ -713,6 +714,12 @@ pub fn apply_filter_full_safe(
     context: Option<&Context>,
     arg_was_quoted: bool,
     input_safety: InputSafety,
+    // Django's `context.autoescape` (#2556) — the FIRST term of
+    // `autoescape = autoescape and not isinstance(value, SafeData)`, and the
+    // `autoescape=` kwarg a `needs_autoescape` custom filter receives. An
+    // input to the seven `needs_autoescape` built-ins only; it never touches
+    // the safety the tuple's second element reports.
+    autoescape: bool,
 ) -> Result<(Value, bool)> {
     // An `_()` filter argument is translated BEFORE anything touches it
     // (#2558): `{{ absent|default:_("Password") }}` must see the msgid the
@@ -892,6 +899,7 @@ pub fn apply_filter_full_safe(
         arg_was_quoted,
         arg_type,
         input_safety,
+        autoescape,
     ) {
         return builtin.map(|v| {
             let safe = builtin_produced_safe(
@@ -911,10 +919,9 @@ pub fn apply_filter_full_safe(
     // ``apply_custom_filter`` returns ``Some(Ok|Err)`` on hit (the ``Ok`` now
     // carries the result's runtime ``__html__``-ness, #1660), ``None`` on miss.
     //
-    // ``autoescape=true`` is supplied here as the engine's current (pinned)
-    // policy. When ``{% autoescape %}`` block tracking lands in a future PR,
-    // the renderer will thread the surrounding policy through this call site
-    // (#1162).
+    // ``autoescape`` is the surrounding ``{% autoescape %}`` block policy,
+    // threaded from the renderer (#2556; it was a pinned ``true`` until the
+    // tag landed).
     //
     // ``input_safety`` is the OTHER half of Django's `needs_autoescape`
     // contract and was the whole of #2290: the `autoescape` kwarg was already
@@ -928,7 +935,7 @@ pub fn apply_filter_full_safe(
         arg,
         context,
         arg_was_quoted,
-        true,
+        autoescape,
         input_safety,
     ) {
         return result.map_err(DjangoRustError::TemplateError);
@@ -1046,6 +1053,12 @@ pub fn is_known_filter(name: &str) -> bool {
 /// runtime-safe variant and the plain variant share ONE dispatch table — a
 /// single source of truth, with no parallel built-in-name list that could
 /// drift (#1660; cf. the #1640 parallel-path-drift class).
+///
+/// Eight parameters since #2556 added `autoescape`: it is kept a separate
+/// `bool` rather than folded into [`InputSafety`] on purpose — that struct is
+/// Django's `SafeData` term, and the block policy must stay visibly distinct
+/// from it (the plan's §2.3: an emit-time term, never a grant).
+#[allow(clippy::too_many_arguments)]
 fn apply_builtin_filter(
     filter_name: &str,
     value: &Value,
@@ -1056,6 +1069,7 @@ fn apply_builtin_filter(
     // longer carries. See [`ArgType`].
     arg_type: ArgType,
     input_safety: InputSafety,
+    autoescape: bool,
 ) -> Option<Result<Value>> {
     // Rebound rather than read through the struct at each site: `int_arg!`'s
     // call shape is pinned mechanically by
@@ -1245,7 +1259,10 @@ fn apply_builtin_filter(
         "join" => {
             let raw_sep = arg.unwrap_or(", ");
             // `conditional_escape(arg)`: a template LITERAL is already safe.
-            let separator = if arg_was_quoted {
+            // Under `{% autoescape off %}` Django takes the other branch —
+            // `arg.join(value)` — and neither the items nor the separator
+            // are escaped (#2556, `test_join_autoescape_off`).
+            let separator = if arg_was_quoted || !autoescape {
                 raw_sep.to_string()
             } else {
                 html_escape(raw_sep)
@@ -1254,7 +1271,13 @@ fn apply_builtin_filter(
                 Some(items) => {
                     let strings: Vec<String> = items
                         .iter()
-                        .map(|v| conditional_escape(v, input_safety.items))
+                        .map(|v| {
+                            if autoescape {
+                                conditional_escape(v, input_safety.items)
+                            } else {
+                                v.to_string()
+                            }
+                        })
                         .collect();
                     Ok(Value::String(strings.join(&separator)))
                 }
@@ -1534,7 +1557,7 @@ fn apply_builtin_filter(
             // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
             Ok(Value::String(linebreaks(
                 &value.to_string(),
-                !input_safety.container,
+                autoescape && !input_safety.container,
             )))
         }
         "linebreaksbr" => {
@@ -1542,7 +1565,7 @@ fn apply_builtin_filter(
             // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
             Ok(Value::String(linebreaksbr(
                 &value.to_string(),
-                !input_safety.container,
+                autoescape && !input_safety.container,
             )))
         }
         "cut" => {
@@ -2110,7 +2133,7 @@ fn apply_builtin_filter(
             // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
             Ok(Value::String(add_linenumbers(
                 &value.to_string(),
-                !input_safety.container,
+                autoescape && !input_safety.container,
             )))
         }
         "get_digit" => {
@@ -2302,7 +2325,7 @@ fn apply_builtin_filter(
             Ok(Value::String(urlize(
                 &value.to_string(),
                 None,
-                !input_safety.container,
+                autoescape && !input_safety.container,
             )))
         }
         "urlizetrunc" => {
@@ -2337,7 +2360,7 @@ fn apply_builtin_filter(
             Ok(Value::String(urlize(
                 &value.to_string(),
                 limit,
-                !input_safety.container,
+                autoescape && !input_safety.container,
             )))
         }
         // Django's `list_formatter` wraps each item in `<li>` through
@@ -2351,7 +2374,13 @@ fn apply_builtin_filter(
         // `iter(item_list)` under no `try`, so the `TypeError` is the filter's
         // answer and there is no output left to protect.
         "unordered_list" => match python_iter(value) {
-            Ok(items) => Ok(Value::String(unordered_list(&items, 1, input_safety.items))),
+            // `escaper = conditional_escape if autoescape else lambda x: x`
+            // (#2556): items already safe OR the block policy off → identity.
+            Ok(items) => Ok(Value::String(unordered_list(
+                &items,
+                1,
+                input_safety.items || !autoescape,
+            ))),
             Err(err) => Err(value_op_error(filter_name, value, &err)),
         },
         "truncatechars_html" => {
@@ -7888,6 +7917,7 @@ mod tests {
                 container: true,
                 items: false,
             },
+            true,
         )
         .unwrap();
         assert_eq!(got.to_string(), "<b>hi</b>");
@@ -7903,6 +7933,7 @@ mod tests {
                 container: true,
                 items: false,
             },
+            true,
         )
         .unwrap();
         assert_eq!(got.to_string(), "&lt;b&gt;hi&lt;/b&gt;");

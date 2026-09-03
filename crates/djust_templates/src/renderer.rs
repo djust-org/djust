@@ -512,6 +512,7 @@ fn node_is_element_bearing(node: &Node) -> bool {
         Node::Block { nodes, .. } => nodes_contain_elements(nodes),
         Node::With { nodes, .. } => nodes_contain_elements(nodes),
         Node::Spaceless { nodes, .. } => nodes_contain_elements(nodes),
+        Node::AutoEscape { nodes, .. } => nodes_contain_elements(nodes),
         Node::Filter { nodes, .. } => nodes_contain_elements(nodes),
         // Conservative: tags that may or do produce HTML are treated
         // as element-bearing. Includes templates, components, and
@@ -722,7 +723,7 @@ fn sibling_updates<L: TemplateLoader>(
             let html = if *silent {
                 String::new()
             } else {
-                cycle_emit(&value, runtime_safe)
+                cycle_emit(&value, runtime_safe, context.autoescape())
             };
             let bound = if matches!(value, Value::Missing) {
                 // Django's `string_if_invalid`, bound as a plain `str`.
@@ -777,10 +778,16 @@ fn format_filter_chain(filters: &[(String, Option<String>)]) -> String {
 /// `render_value_in_context` for a cycle value: raw when the LAST filter
 /// produced a genuine `SafeString`, escaped otherwise; a missing operand
 /// renders nothing (#2355).
-fn cycle_emit(value: &Value, runtime_safe: bool) -> String {
+///
+/// `autoescape` is Django's `if context.autoescape:` guard in
+/// `render_value_in_context` (#2556, `cycle27`) — under
+/// `{% autoescape off %}` the value is emitted raw. The ONE cycle emit, so
+/// both the render arm and the `as name` sibling arm get the same decision
+/// (#1646).
+fn cycle_emit(value: &Value, runtime_safe: bool, autoescape: bool) -> String {
     if matches!(value, Value::Missing) {
         String::new()
-    } else if runtime_safe {
+    } else if runtime_safe || !autoescape {
         value.to_string()
     } else {
         filters::html_escape(&value.to_string())
@@ -847,12 +854,18 @@ fn call_custom_tag(
             &context_map,
             raw_py,
             &context.safe_key_paths(),
+            context.autoescape(),
         )?;
         return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
     }
-    let html =
-        crate::registry::call_handler_with_py_sidecar(name, &resolved_args, &context_map, raw_py)
-            .map_err(|e| handler_call_error("Custom tag", name, e))?;
+    let html = crate::registry::call_handler_with_py_sidecar(
+        name,
+        &resolved_args,
+        &context_map,
+        raw_py,
+        context.autoescape(),
+    )
+    .map_err(|e| handler_call_error("Custom tag", name, e))?;
     Ok((html, Vec::new()))
 }
 
@@ -928,6 +941,7 @@ fn call_block_custom_tag<L: TemplateLoader>(
             &context_map,
             raw_py,
             &context.safe_key_paths(),
+            context.autoescape(),
         )?;
         return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
     }
@@ -937,6 +951,7 @@ fn call_block_custom_tag<L: TemplateLoader>(
         &content,
         &context_map,
         raw_py,
+        context.autoescape(),
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
     Ok((html, Vec::new()))
@@ -964,6 +979,7 @@ fn call_raw_block_tag(
         &context_map,
         raw_py,
         &context.safe_key_paths(),
+        context.autoescape(),
     )?;
     Ok((html, bindings.into_iter().map(sibling_binding).collect()))
 }
@@ -1994,7 +2010,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // identifier should be context-resolved.
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
-                let stripped = original.map(crate::parser::strip_filter_arg_quotes);
+                let unescaped = original.map(crate::parser::unescape_filter_arg_literal);
+                let stripped = unescaped.as_deref();
                 let (new_value, produced_safe) = filters::apply_filter_full_safe(
                     filter_name,
                     &value,
@@ -2010,6 +2027,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                         container: runtime_safe,
                         items: items_safe,
                     },
+                    // Django's `needs_autoescape` OTHER term (#2556): the
+                    // surrounding `{% autoescape %}` policy.
+                    context.autoescape(),
                 )?;
                 value = new_value;
                 // Captured BEFORE the reassignment below: both rules read the
@@ -2066,8 +2086,11 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // re-taint it exactly as Django's `obj = new_obj` branch does.
             // OR-ing it back here would make the flag un-re-taintable and leave
             // `{{ marked_safe|upper }}` MORE permissive than Django.
+            // Row 1 of #2556: `{% autoescape off %}` is an EMIT-time term, OR-ed
+            // in HERE and nowhere upstream — `runtime_safe` is exactly what it
+            // was, so the flag never becomes a grant a later filter could read.
             let is_safe = runtime_safe;
-            if is_safe {
+            if is_safe || !context.autoescape() {
                 Ok(text)
             } else if *in_attr {
                 // Attribute-context escape: handles `"` → `&quot;`
@@ -2113,7 +2136,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             for (filter_name, arg) in filters {
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
-                let stripped = original.map(crate::parser::strip_filter_arg_quotes);
+                let unescaped = original.map(crate::parser::unescape_filter_arg_literal);
+                let stripped = unescaped.as_deref();
                 let (new_value, produced_safe) = filters::apply_filter_full_safe(
                     filter_name,
                     &value,
@@ -2126,6 +2150,9 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                         container: runtime_safe,
                         items: items_safe,
                     },
+                    // Django's `needs_autoescape` OTHER term (#2556): the
+                    // surrounding `{% autoescape %}` policy.
+                    context.autoescape(),
                 )?;
                 value = new_value;
                 // Captured BEFORE the reassignment below: both rules read the
@@ -2165,7 +2192,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Same shape as the Variable arm — see `filter_output_is_safe`.
             // Seeded, not OR-ed — see the Variable arm (#2274).
             let is_safe = runtime_safe;
-            if is_safe {
+            // Row 2 of #2556 — same shape as the Variable arm.
+            if is_safe || !context.autoescape() {
                 Ok(text)
             } else {
                 Ok(filters::html_escape(&text))
@@ -2974,6 +3002,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // follow-up issue.)
                     let mut fresh = Context::new();
                     fresh.set_emit_dj_if_markers(context.emit_dj_if_markers());
+                    // Django's `context.new()` is `copy(self)`, so the
+                    // `{% autoescape %}` policy crosses an `only` include
+                    // (#2556, `include14`).
+                    fresh.set_autoescape(context.autoescape());
                     // Django's `context.new()` keeps the parent's
                     // `render_context`, so a `{% cycle %}` in an `only`
                     // include advances the parent render's iterator (#2556).
@@ -3251,6 +3283,19 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             Ok(output.to_string())
         }
 
+        Node::AutoEscape { on, nodes } => {
+            // {% autoescape on|off %}…{% endautoescape %} (#2556): Django's
+            // `AutoEscapeControlNode` saves, sets and restores
+            // `context.autoescape` around the body. A per-block clone is the
+            // same thing — the outer context is untouched, so nesting
+            // (`autoescape-tag04`) restores the outer setting for free. This
+            // arm and the `{% include … only %}` copy are the ONLY production
+            // writers of `set_autoescape`; the flag is never read from data.
+            let mut inner = context.clone();
+            inner.set_autoescape(*on);
+            render_nodes_with_loader(nodes, &inner, loader)
+        }
+
         Node::Spaceless { nodes } => {
             // {% spaceless %}...{% endspaceless %} → remove whitespace between HTML tags
             let content = render_nodes_with_loader(nodes, context, loader)?;
@@ -3312,7 +3357,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // and its binding live; this arm is only ever reached for a
             // cycle that binds nothing.
             let (value, runtime_safe) = cycle_step(values, id, context)?;
-            Ok(cycle_emit(&value, runtime_safe))
+            Ok(cycle_emit(&value, runtime_safe, context.autoescape()))
         }
 
         Node::Cycle { name: Some(_), .. } => {
@@ -4664,6 +4709,7 @@ fn get_value_safe_inner(
                     container: runtime_safe,
                     items: items_safe,
                 },
+                context.autoescape(),
             )?;
             value = new_value;
             // Captured before the reassignment — see the Variable arm (#2283).
@@ -5353,7 +5399,8 @@ fn first_of(args: &[String], context: &Context) -> Result<Option<String>> {
         let (val, runtime_safe) = get_value_safe_ignoring_failures(arg.trim(), context)?;
         if val.is_truthy() {
             let text = val.to_string();
-            return Ok(Some(if runtime_safe {
+            // Row 4 of #2556 (`firstof13`).
+            return Ok(Some(if runtime_safe || !context.autoescape() {
                 text
             } else {
                 filters::html_escape(&text)

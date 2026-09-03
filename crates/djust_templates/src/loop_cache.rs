@@ -804,6 +804,7 @@ fn node_is_position_dependent(node: &Node) -> bool {
         Node::Block { nodes, .. } => body_is_position_dependent(nodes),
         Node::With { nodes, .. } => body_is_position_dependent(nodes),
         Node::Spaceless { nodes, .. } => body_is_position_dependent(nodes),
+        Node::AutoEscape { nodes, .. } => body_is_position_dependent(nodes),
         Node::Filter { nodes, .. } => body_is_position_dependent(nodes),
         // Leaf / position-independent nodes.
         Node::Text(_)

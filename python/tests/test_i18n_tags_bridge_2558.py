@@ -720,23 +720,37 @@ def test_catalog_markup_renders_raw_because_it_is_author_content(fixture_locale)
                 catalog._catalog["Time"] = original
 
 
-class TestAutoescapeOffIsNamedNotFixed:
-    """Plan §3(4): the bridge builds ``Context(autoescape=True)`` until #2556
-    wires the engine's flag through. The row is a NAMED divergence: this
-    test fails the day djust parses ``{% autoescape off %}``, which is the
-    signal to replace it with a parity row."""
+class TestAutoescapeOffIsAParityRowNow:
+    """Was ``TestAutoescapeOffIsNamedNotFixed``: the bridge built
+    ``Context(autoescape=True)`` unconditionally, and the row asserted djust
+    still REFUSED ``{% autoescape off %}`` — with an instruction to replace
+    itself with a parity row "the day djust parses the tag". #2556 (PR #2595)
+    is that day, so this is the parity row.
+
+    Both bridge kinds are covered because they reach the policy differently:
+    the inline handler receives ``autoescape=`` as a kwarg it forwards to
+    ``_render_node``, while the raw-body handler had to be given the same
+    ``WANTS_AUTOESCAPE`` opt-in the other three registries already read — it
+    was the fourth registry, and the only one that did not (#1646). See
+    ``test_autoescape_off_reaches_a_blocktranslate_body`` for the
+    ``{% blocktranslate %}`` half."""
 
     SOURCE = "{% autoescape off %}{% load i18n %}{% translate amp %}{% endautoescape %}"
+    ON = "{% autoescape on %}{% load i18n %}{% translate amp %}{% endautoescape %}"
 
     def test_django_renders_unescaped(self):
         assert django_render(self.SOURCE, CTX) == "a & b"
 
-    def test_djust_still_refuses_the_tag(self):
-        outcome = _outcome(plain_render, self.SOURCE)
-        assert outcome.startswith("TSE:") and "autoescape" in outcome, (
-            "djust now handles {% autoescape off %} — replace this named "
-            "divergence with a parity row (#2556)"
-        )
+    def test_both_djust_paths_match_django(self):
+        theirs = _outcome(django_render, self.SOURCE)
+        assert _outcome(plain_render, self.SOURCE) == theirs
+        assert _outcome(liveview_render, self.SOURCE) == theirs
+
+    def test_autoescape_on_still_escapes_on_both(self):
+        theirs = _outcome(django_render, self.ON)
+        assert _outcome(plain_render, self.ON) == theirs
+        # Not a tautology (#1200): `off` and `on` must genuinely differ.
+        assert theirs != _outcome(django_render, self.SOURCE)
 
 
 # ---------------------------------------------------------------------------
@@ -1387,6 +1401,61 @@ def test_verbatim_now_keeps_a_comment_like_django():
         theirs = _outcome(django_render, source, {})
         assert _outcome(plain_render, source, {}) == theirs, source
         assert _outcome(liveview_render, source, {}) == theirs, source
+
+
+def test_cycle_inside_every_scope_tag_advances_like_django():
+    """`resolve_cycle_nodes` must descend into all four #2558 scope nodes.
+
+    A walker that does not descend leaves the inner `{% cycle name %}`
+    reference unbound, so it re-renders the FIRST value forever — `a` where
+    Django gives `ab`. #2556 hit the identical shape and had to add
+    `Node::AutoEscape` to the same match arm, which is the control row here
+    (#1646: one arm per container, decided explicitly).
+    """
+    body = '{% cycle "a" "b" as c %}{% cycle c %}'
+    for source in (
+        L + '{% language "en" %}' + body + "{% endlanguage %}",
+        LT + '{% timezone "UTC" %}' + body + "{% endtimezone %}",
+        LT + "{% localize off %}" + body + "{% endlocalize %}",
+        LT + "{% localtime off %}" + body + "{% endlocaltime %}",
+        # The #2556 arm, as the control: this one was already correct.
+        "{% autoescape off %}" + body + "{% endautoescape %}",
+    ):
+        theirs = _outcome(django_render, source, {})
+        assert theirs == "OK:ab", source
+        assert _outcome(plain_render, source, {}) == theirs, source
+        assert _outcome(liveview_render, source, {}) == theirs, source
+
+
+def test_autoescape_off_reaches_a_blocktranslate_body():
+    """`{% blocktranslate %}` resolves its `%(var)s` placeholders INSIDE
+    `BlockTranslateNode`, against the `Context` the raw-block bridge builds —
+    so the surrounding `{% autoescape %}` policy has to reach that `Context`
+    or the body escapes where Django inserts raw.
+
+    Unreachable until #2556 implemented `{% autoescape %}` (the tag was
+    refused before), which is why this row could only be written once both
+    landed. The inline `{% translate %}` row is the control: its handler
+    already declared `WANTS_AUTOESCAPE`, so it was never wrong — the gap was
+    the FOURTH registry disagreeing with the other three (#1646).
+    """
+    ctx = {"hostile": "<b>x</b>"}
+    rows = [
+        L
+        + "{% autoescape off %}{% blocktranslate %}{{ hostile }}{% endblocktranslate %}{% endautoescape %}",
+        # `on` and the default must still escape.
+        L
+        + "{% autoescape on %}{% blocktranslate %}{{ hostile }}{% endblocktranslate %}{% endautoescape %}",
+        L + "{% blocktranslate %}{{ hostile }}{% endblocktranslate %}",
+        # The inline-handler control.
+        L + "{% autoescape off %}{% translate hostile %}{% endautoescape %}",
+    ]
+    for source in rows:
+        theirs = _outcome(django_render, source, ctx)
+        assert _outcome(plain_render, source, ctx) == theirs, source
+        assert _outcome(liveview_render, source, ctx) == theirs, source
+    # Not a tautology: `off` and `on` must actually differ (#1200).
+    assert _outcome(django_render, rows[0], ctx) != _outcome(django_render, rows[1], ctx)
 
 
 def test_the_sweep_is_not_vacuous():
