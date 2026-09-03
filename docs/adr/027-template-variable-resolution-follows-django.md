@@ -322,6 +322,57 @@ come off. Two-gate treatment: worktree-isolated adversarial review with gate-off
 Downstream browser check per #1849 (djust.org, docs.djust.org): the `{{ o }}` flip for presenter
 objects is the thing to look for.
 
+### Step status
+
+The machine-readable form of the above. `scripts/check-flag-default-consistency.py` reads row 4
+and requires it to agree with `LiveViewConfig._defaults["template_resolve_lazy"]`, so this table
+cannot drift from the shipped default the way #2017's prose did.
+
+| step | status |
+|---|---|
+| 1. characterization net | **shipped** (PR #2553) |
+| 2. wire behind a flag, off | **shipped** |
+| 3. hold — prerequisites #2564, #2570 | **shipped** (PRs #2588, #2586) |
+| 4. flip the default | **shipped** |
+| 5. delete the enumeration arms | **not shipped** |
+
+### Erratum (movement 3, 2026-09-03)
+
+Four claims above were falsified by measuring the flip rather than reasoning about it. They are
+corrected here rather than edited away, because what the ADR expected and what happened is the
+useful record.
+
+1. **"should gain the ~7 cells + 1 crash" (Step 4).** Measured: **6** cells move to OK and **all
+   seven** crashes stop crashing, not one. The five `DjustTemplate` reference-cycle cases fall out
+   for free because nothing walks a `__dict__` any more, so the cycle has no unbounded recursion to
+   overflow — a second mechanism the step description did not anticipate. Six of the seven remain
+   ERROR for unrelated reasons; only `test_subscriptable_class` reaches OK.
+
+2. **"the `xfail(strict=True)` markers come off" (Step 4) — right, and the movement-2 plan's
+   correction of it was wrong.** That plan read only the movement-1 net, found stated sets rather
+   than xfails, and concluded the claim described a mechanism that did not exist. Two real
+   `xfail(strict=True)` markers did come off, both outside the net:
+   `test_object_attribute_resolution_2501.py::test_do_not_call_in_templates_is_used_as_is` (whose
+   own docstring named this flip as its removal condition) and
+   `test_sidecar_on_all_render_paths_2501.py`'s alias-less-operand case. The lesson is the narrow
+   grep, not the claim.
+
+3. **"~7 scoreboard cells and one crash; six open issues close by pointer" (Consequences).** The
+   issue closures are the larger half and were understated: #2502, #2504, #2505 and #2510 close
+   **outright, on both render paths, against Django's own bytes** — verified per row, not by
+   pointer. #2510's panic class closes structurally: the segment walk touches only the attribute
+   the template names, so the `__dict__` it used to iterate is never iterated and cannot resize.
+
+4. **"the `{{ o }}` flip for presenter objects is the thing to look for" (Step 4) — true, and
+   incomplete.** `{{ o|json_script }}` moves too, and in the same direction: an arbitrary object
+   contributes `str(o)` to the page rather than a JSON object built from every public instance
+   attribute. That is a reduction in what an unreviewed spelling can put in front of a reader, so
+   it is worth naming as a security-relevant improvement rather than only as a parity change.
+
+One decision the steps left open is settled here: **Step 5 deletes the flag and the enumeration
+arms together, in the first minor after a full release has soaked (1.3.0), superseding "removal at
+2.0."** A hatch whose arms have been deleted is not a hatch, so they cannot be separated.
+
 **Step 5 — delete.** `public_dict_attrs`, `has_public_dict_attrs`, the `lib.rs:3228` decline, the
 alias fallback (`context.rs:938-988`; `Context::aliases`' XSS `is_safe` use stays — a different
 consumer), `build_render_sidecar`/`_protect_sidecar_tree`/`_SIDECAR_MAX_DEPTH`, the

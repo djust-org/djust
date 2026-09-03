@@ -63,6 +63,42 @@ SITES: dict[str, list[tuple[str, str]]] = {
             r"///\s*Default (ON|OFF) since|///\s*Default (ON|OFF)\b",
         ),
     ],
+    # ADR-027's kill-switch (#2539). Registered by movement 3, which flipped it
+    # — the flip touched six prose statements of the default across four files
+    # plus two Rust literals, which is the shape #2017 needed five sweeps for.
+    "template_resolve_lazy": [
+        # The ADR's sequencing table — the canonical status of the flip.
+        (
+            "docs/adr/027-template-variable-resolution-follows-django.md",
+            r"\|\s*4\.\s*flip the default\s*\|\s*\*\*(shipped|not shipped)",
+        ),
+        # The config key's own comment block, immediately above the default.
+        (
+            "python/djust/config.py",
+            r"[Dd]efault \*\*(True|False)\*\* since\n\s*#\s*movement 3 \(#2539\)",
+        ),
+        # `apply_resolve_lazy`'s docstring — the module every render path uses.
+        (
+            "python/djust/render_env.py",
+            r"Default \*\*(ON|OFF)\*\* since movement 3",
+        ),
+        # The type stub, which is what an editor shows a caller.
+        (
+            "python/djust/_rust.pyi",
+            r"`LIVEVIEW_CONFIG\[\"template_resolve_lazy\"\]`, default \*\*(True|False)\*\*",
+        ),
+        # The Rust thread-local's doc comment — the OTHER literal, and the one
+        # a fresh thread actually answers.
+        (
+            "crates/djust_core/src/lib.rs",
+            r"ADR-027's kill-switch, per THREAD \(#2539\)\. Default `(true|false)`",
+        ),
+        # The PyO3 setter's doc comment, one crate over.
+        (
+            "crates/djust_live/src/lib.rs",
+            r"/// `LIVEVIEW_CONFIG\[\"template_resolve_lazy\"\]`, default \*\*(ON|OFF)\*\*",
+        ),
+    ],
 }
 
 TRUTHY = {"shipped", "on", "true"}
