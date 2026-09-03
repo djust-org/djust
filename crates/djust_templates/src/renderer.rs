@@ -8,6 +8,7 @@ use crate::registry::TagArg;
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
+use pyo3::{Py, PyAny};
 use regex::Regex;
 use std::collections::HashSet;
 
@@ -522,6 +523,11 @@ fn node_is_element_bearing(node: &Node) -> bool {
         | Node::RustComponent { .. }
         | Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
+        | Node::RawBlockCustomTag { .. }
+        | Node::Language { .. }
+        | Node::Timezone { .. }
+        | Node::Localize { .. }
+        | Node::LocalTime { .. }
         | Node::UnsupportedTag { .. } => true,
     }
 }
@@ -628,6 +634,13 @@ fn sibling_updates<L: TemplateLoader>(
             children,
         } if crate::registry::block_handler_returns_bindings(name) => {
             let (html, bindings) = call_block_custom_tag(name, args, children, context, loader)?;
+            Ok(Some(SiblingEffect { html, bindings }))
+        }
+        Node::RawBlockCustomTag { name, args, body } => {
+            // Every raw-block handler declares RETURNS_BINDINGS by
+            // construction (the kind exists for the #2547 bridge), so there
+            // is no non-bindings twin to shadow this arm (#2129).
+            let (html, bindings) = call_raw_block_tag(name, args, body, context)?;
             Ok(Some(SiblingEffect { html, bindings }))
         }
         Node::AssignTag { name, args } => {
@@ -942,6 +955,171 @@ fn call_block_custom_tag<L: TemplateLoader>(
     )
     .map_err(|e| handler_call_error("Block tag", name, e))?;
     Ok((html, Vec::new()))
+}
+
+/// Call a [`Node::RawBlockCustomTag`]'s handler — the ONE site for both the
+/// standalone arm and `sibling_updates` (#2558).
+///
+/// The args cross as literal TOKENS (`TagArg::plain` — Django resolves them
+/// itself, the `RESOLVE_ARG_POSITIONS = frozenset()` contract of every
+/// bridged handler, #2547) and the body as the un-rendered source string.
+fn call_raw_block_tag(
+    name: &str,
+    args: &[String],
+    body: &str,
+    context: &Context,
+) -> Result<(String, Vec<SiblingBinding>)> {
+    let plain: Vec<TagArg> = args.iter().map(|a| TagArg::plain(a.clone())).collect();
+    let context_map = context.to_hashmap();
+    let raw_py = context.raw_py_objects();
+    let (html, bindings) = crate::registry::call_raw_block_handler_with_bindings(
+        name,
+        &plain,
+        body,
+        &context_map,
+        raw_py,
+        &context.safe_key_paths(),
+        context.autoescape(),
+    )?;
+    Ok((html, bindings.into_iter().map(sibling_binding).collect()))
+}
+
+/// Resolve a scope node's operand (`"de"`, a variable, a filter chain) to
+/// the value the Python scope hook receives (#2558): a string, or `None`.
+///
+/// Literals FIRST through the ONE literal recogniser (`django_literal`,
+/// #2376): `{% language "de" %}` is a quoted literal, and the resolver
+/// channels do not strip quotes — a miss here would hand the override an
+/// empty string and silently deactivate instead of switching (fixed in the
+/// first pass of this row after the probe showed `{% timezone
+/// "Europe/Paris" %}` rendering UTC).
+///
+/// `None` and `""` are DIFFERENT operands to Django and stay different
+/// here. `{% language None %}` resolves the context builtin to Python
+/// `None`, and `translation.override(None)` DEACTIVATES (`get_language()`
+/// is then `None`); a missing variable resolves to `string_if_invalid`,
+/// `""`, and `translation.override("")` activates the fallback language
+/// (`en-us` on the default settings). Measured on Django 5.2: `[None]`
+/// against `[en-us]`. The first pass collapsed both to `""` and the Python
+/// hook mapped `""` to `None` — two wrongs that happened to agree on the
+/// scoreboard's one `{% language %}` cell. For `{% timezone %}` the split is
+/// sharper still: `override(None)` deactivates while `override("")` raises
+/// Django's own `ValueError` (`ZoneInfo keys must be normalized …`).
+fn scope_operand_string(expr: &str, context: &Context) -> Option<String> {
+    if let Some((value, _)) = django_literal(expr) {
+        return Some(value_to_arg_string(&value));
+    }
+    match resolve_tag_operand_value(expr, context) {
+        Some(Value::None) => None,
+        Some(Value::Missing) | None => Some(String::new()),
+        Some(value) => Some(value_to_arg_string(&value)),
+    }
+}
+
+/// A scope hook's failure as the renderer reports it (#2558): a Python
+/// exception raised INSIDE the hook (`ZoneInfoNotFoundError` for
+/// `{% timezone "Bogus/Zone" %}`, Django's `ValueError` for `""`) crosses
+/// WHOLE with its type, exactly as a bridged library tag's does (#2547);
+/// only a registry failure is re-labelled as an engine error.
+fn scope_hook_error(what: &str, err: DjangoRustError) -> DjangoRustError {
+    match err {
+        DjangoRustError::PythonException(_) => err,
+        other => DjangoRustError::TemplateError(format!("{what} failed: {other}")),
+    }
+}
+
+/// A `{% language %}` / `{% timezone %}` exit hook, run on the way out of the
+/// block — on the `Ok` path, the `Err` path AND the panic-unwind path (#2597).
+type ScopeExitFn = fn(Option<&Py<PyAny>>) -> Result<()>;
+
+/// Runs a scope exit hook exactly once on the way out of a `{% language %}` or
+/// `{% timezone %}` block.
+///
+/// [`release`](ScopeExitGuard::release) is the ordinary path and hands the
+/// hook's own `Result` back to the caller, so a failing exit can still be
+/// reported. `Drop` is the PANIC path: a child node that unwinds skips every
+/// statement after the render call, and these overrides live on a POOLED
+/// worker thread — a leaked `translation.override` serves the wrong language
+/// to whatever renders on that thread next. Nothing can be returned while
+/// unwinding, so the hook's own error is swallowed there; leaving the override
+/// installed would be strictly worse.
+///
+/// The two `Localize`/`LocalTime` siblings in the same match get the same
+/// treatment from [`UseL10nGuard`] and [`ActiveTimezoneGuard`]. Fixing two of
+/// the four arms would be the parallel-path drift, not the cure (#1646).
+struct ScopeExitGuard {
+    token: Option<Py<PyAny>>,
+    exit: ScopeExitFn,
+    armed: bool,
+}
+
+impl ScopeExitGuard {
+    fn new(token: Option<Py<PyAny>>, exit: ScopeExitFn) -> Self {
+        Self {
+            token,
+            exit,
+            armed: true,
+        }
+    }
+
+    /// The non-panicking exit. Disarms `Drop` first, so the hook runs exactly
+    /// once whichever way the frame leaves.
+    fn release(mut self) -> Result<()> {
+        self.armed = false;
+        (self.exit)(self.token.as_ref())
+    }
+}
+
+impl Drop for ScopeExitGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = (self.exit)(self.token.as_ref());
+        }
+    }
+}
+
+/// Render a [`Node::Language`] (#2558): enter the Python-side override,
+/// render the children in Rust, exit on ALL THREE paths — `Ok`, `Err` and a
+/// panicking child (#2597). A leak here installs the WRONG LANGUAGE on the
+/// pooled worker thread, which then serves the next render.
+fn render_language_scope<L: TemplateLoader>(
+    expr: &str,
+    children: &[Node],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    let lang = scope_operand_string(expr, context);
+    let token = crate::registry::language_scope_enter(lang.as_deref())
+        .map_err(|e| scope_hook_error("language scope enter", e))?;
+    let guard = ScopeExitGuard::new(token, crate::registry::language_scope_exit);
+    let result = render_nodes_with_loader(children, context, loader);
+    if let Err(exit_err) = guard.release() {
+        if result.is_ok() {
+            return Err(scope_hook_error("language scope exit", exit_err));
+        }
+    }
+    result
+}
+
+/// Render a [`Node::Timezone`] (#2558) — the timezone twin of
+/// [`render_language_scope`], panic-guarded the same way (#2597).
+fn render_timezone_scope<L: TemplateLoader>(
+    expr: &str,
+    children: &[Node],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    let zone = scope_operand_string(expr, context);
+    let token = crate::registry::timezone_scope_enter(zone.as_deref())
+        .map_err(|e| scope_hook_error("timezone scope enter", e))?;
+    let guard = ScopeExitGuard::new(token, crate::registry::timezone_scope_exit);
+    let result = render_nodes_with_loader(children, context, loader);
+    if let Err(exit_err) = guard.release() {
+        if result.is_ok() {
+            return Err(scope_hook_error("timezone scope exit", exit_err));
+        }
+    }
+    result
 }
 
 /// A registry [`crate::registry::HandlerBinding`] as a [`SiblingBinding`].
@@ -1446,33 +1624,47 @@ fn strip_quotes(token: &str) -> Option<&str> {
     None
 }
 
-/// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared
-/// `RESOLVE_ARG_POSITIONS` policy (#2041).
-///
-/// Django never resolves an assign tag's keyword/name operands (e.g.
-/// `{% regroup <source> by <attr> as <var> %}`'s `by` / `<attr>` / `as` /
-/// `<var>`) against the outer context — only the source *expression*. The
-/// Rust engine historically resolved *every* arg via [`resolve_tag_arg`],
-/// so a context variable named like the `<attr>` token (djust auto-exposes
-/// public view attrs) shadowed the per-item lookup: `<attr>` arrived as
-/// that variable's value instead of the literal attribute name, and the
-/// grouping was silently wrong.
-///
-/// A handler opts into literal operands by declaring a
-/// `RESOLVE_ARG_POSITIONS` set (`{0}` for `regroup` — resolve only the
-/// source). Positions in the set are resolved via [`resolve_tag_arg`]
-/// (JSON-encoding structured values); every other position is passed
-/// through as a raw token. When the handler declares no policy the set is
-/// `None` and every arg is resolved — the historical default, unchanged
-/// for any future assign tag that doesn't opt in.
-///
-/// This is the single arg-resolution entry point for ALL FOUR assign-tag
-/// dispatch sites (`render_nodes_with_loader`, `render_nodes_collecting`,
-/// `render_nodes_partial`, and the individual `render_node_with_loader`
-/// arm) — the #1646 parallel-path cure, so the operand-mask can never drift
-/// between them.
-/// Localize a bare number for output, leaving every other value untouched.
-///
+// Localize a bare number for output, leaving every other value untouched.
+thread_local! {
+    /// The `{% localize %}` scope stack (#2558): the innermost
+    /// `{% localize on|off %}` block's flag, mirroring Django's
+    /// `Context.use_l10n` flag. Entered/exited lexically by the
+    /// `Node::Localize` arm in the same call frame.
+    static USE_L10N_STACK: std::cell::RefCell<Vec<bool>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Pops [`USE_L10N_STACK`] on the way out of a `{% localize %}` block —
+/// including when a child node PANICS and the stack unwinds. Without the
+/// `Drop`, a panic leaks the flag onto the thread-local, and the next render
+/// on that (pooled) worker thread inherits a stale `localize` scope (#2558).
+struct UseL10nGuard;
+
+impl Drop for UseL10nGuard {
+    fn drop(&mut self) {
+        USE_L10N_STACK.with(|s| {
+            s.borrow_mut().pop();
+        });
+    }
+}
+
+/// Restores the active timezone on the way out of a `{% localtime off %}`
+/// block, on the panic path too. See [`UseL10nGuard`].
+struct ActiveTimezoneGuard {
+    prev: Option<String>,
+}
+
+impl Drop for ActiveTimezoneGuard {
+    fn drop(&mut self) {
+        crate::timezone::set_active_timezone(self.prev.as_deref());
+    }
+}
+
+/// Is the innermost `{% localize %}` scope (if any) forcing l10n OFF?
+fn use_l10n_forced_off() -> bool {
+    USE_L10N_STACK.with(|s| s.borrow().last().copied() == Some(false))
+}
+
 /// One function rather than the expression inlined twice, so the two
 /// variable-output sites cannot drift (#1646).
 fn localize_if_number(value: &Value) -> String {
@@ -1532,7 +1724,15 @@ fn localize_if_number(value: &Value) -> String {
         // digits-and-a-point guard rejects `Infinity`/`NaN`, so no locale can
         // put a thousand separator inside one.
         Value::Integer(_) | Value::Float(_) | Value::Decimal(_) | Value::BigInt(_) => {
-            djust_core::locale::localize_number(&value.to_string())
+            // Inside `{% localize off %}` (#2558) the raw triple is used —
+            // Django's `render_value_in_context` localizes only when
+            // `context.use_l10n` is on. The date half of the same block
+            // (bare `{{ date }}`) is the #2221 piece-3 residue.
+            if use_l10n_forced_off() {
+                djust_core::locale::localize_number_unlocalized(&value.to_string(), false)
+            } else {
+                djust_core::locale::localize_number(&value.to_string())
+            }
         }
         _ => value.to_string(),
     }
@@ -1559,6 +1759,31 @@ fn plain_args(texts: Vec<String>) -> Vec<TagArg> {
     texts.into_iter().map(TagArg::plain).collect()
 }
 
+/// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared
+/// `RESOLVE_ARG_POSITIONS` policy (#2041).
+///
+/// Django never resolves an assign tag's keyword/name operands (e.g.
+/// `{% regroup <source> by <attr> as <var> %}`'s `by` / `<attr>` / `as` /
+/// `<var>`) against the outer context — only the source *expression*. The
+/// Rust engine historically resolved *every* arg via [`resolve_tag_arg`],
+/// so a context variable named like the `<attr>` token (djust auto-exposes
+/// public view attrs) shadowed the per-item lookup: `<attr>` arrived as
+/// that variable's value instead of the literal attribute name, and the
+/// grouping was silently wrong.
+///
+/// A handler opts into literal operands by declaring a
+/// `RESOLVE_ARG_POSITIONS` set (`{0}` for `regroup` — resolve only the
+/// source). Positions in the set are resolved via [`resolve_tag_arg`]
+/// (JSON-encoding structured values); every other position is passed
+/// through as a raw token. When the handler declares no policy the set is
+/// `None` and every arg is resolved — the historical default, unchanged
+/// for any future assign tag that doesn't opt in.
+///
+/// This is the single arg-resolution entry point for ALL FOUR assign-tag
+/// dispatch sites (`render_nodes_with_loader`, `render_nodes_collecting`,
+/// `render_nodes_partial`, and the individual `render_node_with_loader`
+/// arm) — the #1646 parallel-path cure, so the operand-mask can never drift
+/// between them.
 fn resolve_assign_tag_args(name: &str, args: &[String], context: &Context) -> Vec<String> {
     let resolve_positions = crate::registry::assign_handler_resolve_positions(name);
     args.iter()
@@ -3239,6 +3464,51 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let (html, _bindings) = call_custom_tag(name, args, context)?;
             Ok(html)
         }
+
+        Node::RawBlockCustomTag { name, args, body } => {
+            // The raw-body kind (#2558). A standalone render has no sibling
+            // to hand bindings to, so they are dropped here, exactly as the
+            // `Node::CustomTag` arm above drops its own.
+            let (html, _bindings) = call_raw_block_tag(name, args, body, context)?;
+            Ok(html)
+        }
+
+        Node::Language { expr, children } => render_language_scope(expr, children, context, loader),
+
+        Node::Timezone { expr, children } => render_timezone_scope(expr, children, context, loader),
+
+        Node::Localize { use_l10n, children } => {
+            // Django's `LocalizeNode` toggles `context.use_l10n` and
+            // restores it after (`l10n.py:31-36`); the restore runs on the
+            // error path too. A lexical scope entered and exited in the
+            // same call frame needs no Context plumbing — one thread-local
+            // stack is the whole mechanism (#2558).
+            // The pop runs from `Drop`, so it also runs when a child PANICS
+            // and the stack unwinds. A plain push/render/pop leaks the flag
+            // onto the thread on the panic path, and these are thread-locals
+            // on a pooled worker thread — the next render on that thread
+            // would inherit a stale `localize` state.
+            USE_L10N_STACK.with(|s| s.borrow_mut().push(*use_l10n));
+            let _guard = UseL10nGuard;
+            render_nodes_with_loader(children, context, loader)
+        }
+
+        Node::LocalTime { use_tz, children } => {
+            // Django's `LocalTimeNode` toggles `context.use_tz` (`tz.py:92-106`).
+            // `off` clears the active zone so aware datetimes stop converting
+            // inside the block; `on` leaves whatever the render env pushed
+            // (the restore is the saved value either way).
+            // Restored from `Drop` so the saved zone comes back on the PANIC
+            // path too — see the `Localize` arm above.
+            let _guard = if *use_tz {
+                None
+            } else {
+                let prev = crate::timezone::active_timezone_name();
+                crate::timezone::set_active_timezone(None);
+                Some(ActiveTimezoneGuard { prev })
+            };
+            render_nodes_with_loader(children, context, loader)
+        }
     }
 }
 
@@ -4159,6 +4429,27 @@ fn bare_dotted_path(expr: &str) -> Option<&str> {
 /// existed — narrower is the direction a literal recognizer may fail in,
 /// because the alternative is inventing a value Django would not.
 pub(crate) fn django_literal(expr: &str) -> Option<(Value, bool)> {
+    // The `_("…")` translatable literal (#2558, `base.py:833-840`). Django
+    // marks the inner literal SAFE and translates at resolve time, doubling
+    // `%` first — `{{ _("100%") }}` renders `100%%` on Django, its own quirk
+    // (`base.py:862`: the doubling is undone by `TranslateNode`, not by the
+    // variable). Reproduced, not "fixed". The translator is consulted per
+    // RENDER so the active language is read live; with none installed the
+    // %-doubled msgid comes back, which is Django's `USE_I18N=False`
+    // answer (`gettext_lazy` with no activation).
+    if expr.starts_with("_(") && expr.ends_with(')') && expr.len() > 4 {
+        let inner = &expr[2..expr.len() - 1];
+        let quote = inner.chars().next()?;
+        if (quote == '"' || quote == '\'') && inner.len() >= 2 && inner.ends_with(quote) {
+            let unescaped = inner[quote.len_utf8()..inner.len() - quote.len_utf8()]
+                .replace(&format!("\\{quote}"), &quote.to_string())
+                .replace("\\\\", "\\");
+            let msgid = unescaped.replace('%', "%%");
+            let translated =
+                crate::registry::translate_msgid(&msgid).unwrap_or_else(|| msgid.clone());
+            return Some((Value::String(translated), true));
+        }
+    }
     if expr.contains('.') || expr.contains(['e', 'E']) {
         // `"2."` is invalid — Django re-raises after the successful `float()`.
         if !expr.ends_with('.') {
@@ -4205,6 +4496,30 @@ pub(crate) fn django_literal(expr: &str) -> Option<(Value, bool)> {
         .replace(&format!("\\{quote}"), &quote.to_string())
         .replace("\\\\", "\\");
     Some((Value::String(unescaped), true))
+}
+
+/// A filter ARGUMENT that is an `_()` literal, translated (#2558).
+///
+/// The filter-argument channel strips surrounding quotes before it reaches
+/// the filters, so `_("Password")` arrives WHOLE and never hits
+/// [`django_literal`] the way a `{{ }}` expression does. ONE helper, called
+/// at the ONE entry every builtin filter's argument flows through
+/// (`filters::apply_filter_full_safe`) plus the custom-filter literal arm
+/// (`filter_registry.rs`, which already consults `django_literal`) — so a
+/// fourth arg site cannot appear blind (the #1125 count-pin in
+/// `test_i18n_tags_bridge_2558.py` enforces the call).
+///
+/// `Some(translated)` only for the exact `_(`…`)` shape; every other
+/// argument (quoted literal, bare name, number) passes through unchanged.
+pub(crate) fn translate_underscore_arg(arg: &str) -> Option<String> {
+    if !arg.starts_with("_(") || !arg.ends_with(')') || arg.len() <= 4 {
+        return None;
+    }
+    match django_literal(arg) {
+        // The `safe` grant is irrelevant on this channel; only the value is.
+        Some((Value::String(translated), _)) => Some(translated),
+        _ => None,
+    }
 }
 
 /// `[-]digits` too large for `i64`, as [`Value::BigInt`] requires (#2260).
@@ -5455,6 +5770,235 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::parse;
     use indexmap::IndexMap;
+
+    // ---- #2597: the scope stacks unwind on PANIC, not just on `Err` -------
+
+    /// `{% localize %}` pushes a thread-local flag and pops it on the way
+    /// out. The pop used to be a plain statement after the render call, so a
+    /// PANIC in a child skipped it and leaked the flag onto the thread — and
+    /// these are pooled worker threads, so the next render inherited a stale
+    /// `localize` scope. `UseL10nGuard` moves the pop into `Drop`.
+    #[test]
+    fn the_localize_stack_unwinds_when_a_child_panics() {
+        assert!(!use_l10n_forced_off(), "stack must start clean");
+
+        let panicked = std::panic::catch_unwind(|| {
+            USE_L10N_STACK.with(|s| s.borrow_mut().push(false));
+            let _guard = UseL10nGuard;
+            assert!(
+                use_l10n_forced_off(),
+                "the scope is active inside the block"
+            );
+            panic!("a child node blew up");
+        });
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        assert!(
+            !use_l10n_forced_off(),
+            "UseL10nGuard must have popped the stack while unwinding"
+        );
+    }
+
+    /// The `{% localtime off %}` sibling: the saved zone comes back on the
+    /// panic path too.
+    #[test]
+    fn the_active_timezone_is_restored_when_a_child_panics() {
+        crate::timezone::set_active_timezone(Some("Europe/Paris"));
+
+        let panicked = std::panic::catch_unwind(|| {
+            let prev = crate::timezone::active_timezone_name();
+            crate::timezone::set_active_timezone(None);
+            let _guard = ActiveTimezoneGuard { prev };
+            panic!("a child node blew up");
+        });
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        assert_eq!(
+            crate::timezone::active_timezone_name().as_deref(),
+            Some("Europe/Paris"),
+            "ActiveTimezoneGuard must have restored the zone while unwinding"
+        );
+        crate::timezone::set_active_timezone(None);
+    }
+
+    // ---- #2597: and the RENDERER's use of them is pinned too --------------
+    //
+    // The two tests above construct the guards by hand, so they pin the
+    // `Drop` impls and nothing else: reverting the `Node::Localize` /
+    // `Node::LocalTime` arms to a plain push/render/pop leaves them green.
+    // That is the decorative-pin class (#1859/#1860). The two below drive
+    // the REAL `render_node_with_loader` dispatch with a child that panics,
+    // so they go red the moment an arm stops binding its guard.
+
+    /// A loader whose `load_template` panics — the smallest way to make a
+    /// child node unwind through the real render dispatch. `{% include %}`
+    /// is the one arm that calls out to the loader.
+    struct PanickingLoader;
+
+    impl TemplateLoader for PanickingLoader {
+        fn load_template(&self, _name: &str) -> Result<Vec<Node>> {
+            panic!("a child node blew up mid-render");
+        }
+    }
+
+    fn panicking_child() -> Node {
+        Node::Include {
+            template: "boom.html".to_string(),
+            with_vars: Vec::new(),
+            only: false,
+        }
+    }
+
+    /// Drives `Node::Localize` through `render_node_with_loader` with a
+    /// panicking child and asserts the thread-local `use_l10n` scope is
+    /// clean afterwards. Reverting the arm to `push / render / pop` makes
+    /// this fail.
+    #[test]
+    fn the_render_path_unwinds_the_localize_scope_when_a_child_panics() {
+        assert!(!use_l10n_forced_off(), "stack must start clean");
+        let node = Node::Localize {
+            use_l10n: false,
+            children: vec![panicking_child()],
+        };
+        let context = Context::new();
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_node_with_loader(&node, &context, Some(&PanickingLoader))
+        }));
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        assert!(
+            !use_l10n_forced_off(),
+            "the Node::Localize arm must bind UseL10nGuard — a plain pop after \
+             the render call leaks the scope onto this pooled thread"
+        );
+    }
+
+    /// The `{% localtime off %}` twin, through the same real dispatch.
+    #[test]
+    fn the_render_path_restores_the_timezone_when_a_child_panics() {
+        crate::timezone::set_active_timezone(Some("Europe/Paris"));
+        let node = Node::LocalTime {
+            use_tz: false,
+            children: vec![panicking_child()],
+        };
+        let context = Context::new();
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_node_with_loader(&node, &context, Some(&PanickingLoader))
+        }));
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        let restored = crate::timezone::active_timezone_name();
+        crate::timezone::set_active_timezone(None);
+        assert_eq!(
+            restored.as_deref(),
+            Some("Europe/Paris"),
+            "the Node::LocalTime arm must bind ActiveTimezoneGuard — a plain \
+             restore after the render call leaks the cleared zone"
+        );
+    }
+
+    // ---- #2597: the `{% language %}` / `{% timezone %}` exit guard --------
+    //
+    // These two arms' observable state lives on the PYTHON side
+    // (`translation.override` / `timezone._active`), and `cargo test` runs
+    // with no interpreter, so the render-path equivalent of the two tests
+    // above is unreachable from here. What IS reachable: the guard runs its
+    // hook exactly once on each of the three ways out. The renderer's USE of
+    // it is pinned structurally in `tests/test_scope_guard_pins_2597.rs`, and
+    // end-to-end on the `Err` path by
+    // `python/tests/test_i18n_tags_bridge_2558.py`'s
+    // `test_language_scope_restores_after_a_raising_child` /
+    // `test_timezone_scope_restores_on_exit_and_after_a_raising_child`, which
+    // assert the ACTIVE LANGUAGE and ZONE afterwards.
+
+    thread_local! {
+        static SCOPE_EXIT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn counting_exit(_token: Option<&Py<PyAny>>) -> Result<()> {
+        SCOPE_EXIT_CALLS.with(|c| c.set(c.get() + 1));
+        Ok(())
+    }
+
+    fn failing_exit(_token: Option<&Py<PyAny>>) -> Result<()> {
+        SCOPE_EXIT_CALLS.with(|c| c.set(c.get() + 1));
+        Err(DjangoRustError::TemplateError("exit blew up".to_string()))
+    }
+
+    #[test]
+    fn the_scope_exit_guard_runs_the_hook_while_unwinding() {
+        SCOPE_EXIT_CALLS.with(|c| c.set(0));
+
+        let panicked = std::panic::catch_unwind(|| {
+            let _guard = ScopeExitGuard::new(None, counting_exit);
+            panic!("a child node blew up");
+        });
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        assert_eq!(
+            SCOPE_EXIT_CALLS.with(|c| c.get()),
+            1,
+            "Drop must run the exit hook once while unwinding"
+        );
+    }
+
+    #[test]
+    fn the_scope_exit_guard_releases_exactly_once_and_reports_failure() {
+        SCOPE_EXIT_CALLS.with(|c| c.set(0));
+        let guard = ScopeExitGuard::new(None, counting_exit);
+        assert!(guard.release().is_ok());
+        assert_eq!(
+            SCOPE_EXIT_CALLS.with(|c| c.get()),
+            1,
+            "release() disarms Drop, so the hook runs exactly once"
+        );
+
+        SCOPE_EXIT_CALLS.with(|c| c.set(0));
+        let guard = ScopeExitGuard::new(None, failing_exit);
+        assert!(
+            guard.release().is_err(),
+            "release() hands the hook's own error back to the caller"
+        );
+        assert_eq!(SCOPE_EXIT_CALLS.with(|c| c.get()), 1);
+    }
+
+    // ---- #2558: the scope-node operand ------------------------------------
+
+    #[test]
+    fn a_scope_operand_resolves_literals_variables_and_none_distinctly() {
+        let mut context = Context::new();
+        context.set("lang".to_string(), Value::String("fr".to_string()));
+        context.set("nothing".to_string(), Value::None);
+
+        // A quoted literal loses its quotes through the ONE literal
+        // recogniser — `{% language "de" %}` must switch to `de`, not to
+        // the six-character string `"de"` (#2376).
+        assert_eq!(
+            scope_operand_string("\"de\"", &context),
+            Some("de".to_string())
+        );
+        assert_eq!(
+            scope_operand_string("'de'", &context),
+            Some("de".to_string())
+        );
+        // A variable resolves.
+        assert_eq!(
+            scope_operand_string("lang", &context),
+            Some("fr".to_string())
+        );
+        // Python `None` crosses as `None` — `translation.override(None)`
+        // DEACTIVATES, which is not what `""` does.
+        assert_eq!(scope_operand_string("nothing", &context), None);
+        // A missing variable is `string_if_invalid`, i.e. `""` — and `""`
+        // must stay distinguishable from `None` (measured on Django 5.2:
+        // `[en-us]` against `[None]`).
+        assert_eq!(
+            scope_operand_string("absent", &context),
+            Some(String::new())
+        );
+    }
 
     #[test]
     fn test_render_text() {

@@ -10,7 +10,16 @@ pub enum Token {
     Text(String),
     Variable(String),         // {{ var }}
     Tag(String, Vec<String>), // {% tag args %}
-    Comment,                  // {# comment #}
+    /// `{# comment #}`, carrying the RAW inner text (between `{#` and `#}`,
+    /// unstripped). The normal parse path discards it — a comment renders as
+    /// nothing on both engines. It is carried because `collect_raw_source`
+    /// must re-emit the comment VERBATIM into a raw-block body (#2558): a
+    /// `{% blocktranslate %}` body crosses to Django as source, and Django's
+    /// `do_block_translate` refuses a comment inside it
+    /// (`doesn't allow other block tags (seen 'c')`). Dropping the text here
+    /// silently deleted the comment from the body, so Django never saw it and
+    /// rendered a mangled msgid instead of raising.
+    Comment(String),
     JsxComponent {
         // <Button prop="value">children</Button>
         name: String,
@@ -213,6 +222,39 @@ fn split_tag_args(content: &str) -> Vec<String> {
     parts
 }
 
+/// Does the not-yet-consumed input contain the closing pair `a`+`b`?
+///
+/// Django's lexer finds tags by scanning a regex — `{%.*?%}|{{.*?}}|{#.*?#}`
+/// — over the whole source, so an opener with NO closer anywhere after it is
+/// not a tag at all: it is plain text, and a WELL-FORMED tag later in the
+/// source still lexes normally (#2558). A sequential lexer that consumes from
+/// the opener to end-of-input instead swallows every later tag, which is how
+/// `{% blocktranslate %}a {{ unclosed b{% endblocktranslate %}` — a template
+/// Django renders verbatim — became an `Unclosed raw-block tag` failure, and
+/// how a bare `a {{ unclosed b` silently rendered as `a `.
+///
+/// Checking BEFORE consuming keeps that behaviour: no closer means emit only
+/// the FIRST opener character as text and let the second be re-examined on
+/// the next iteration — which is what a regex scanner does when it fails to
+/// match and advances by one. That is why `{% if a %}x{{% endif %}` renders
+/// `x{` on both engines: the second `{` starts the real `{% endif %}`.
+///
+/// `rest` is positioned ON the second opener character, and the scan starts
+/// AFTER it, so the opener can never supply half the closer: `{%}` has no
+/// `%}` of its own and is plain text, exactly as Django's regex sees it.
+fn has_closer(rest: &std::iter::Peekable<std::str::Chars>, a: char, b: char) -> bool {
+    let mut it = rest.clone();
+    it.next(); // the second opener character is not part of a closer
+    let mut prev = None;
+    for c in it {
+        if prev == Some(a) && c == b {
+            return true;
+        }
+        prev = Some(c);
+    }
+    false
+}
+
 pub fn tokenize(source: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut chars = source.chars().peekable();
@@ -241,6 +283,14 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                 match next {
                     '{' => {
                         // Variable start {{
+                        if !has_closer(&chars, '}', '}') {
+                            // No `}}` after: literal text, as in Django.
+                            // Only the FIRST `{` is consumed — the second is
+                            // re-examined next iteration and may open a real
+                            // tag. See `has_closer`.
+                            current.push(ch);
+                            continue;
+                        }
                         chars.next(); // consume second {
                         if !current.is_empty() {
                             tokens.push(Token::Text(current.clone()));
@@ -248,13 +298,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                         }
 
                         let mut var_content = String::new();
-                        let _depth = 0;
 
                         while let Some(ch) = chars.next() {
                             if ch == '}' && chars.peek() == Some(&'}') {
                                 chars.next(); // consume second }
                                 tokens.push(Token::Variable(var_content.trim().to_string()));
-                                var_content.clear();
                                 break;
                             } else {
                                 var_content.push(ch);
@@ -263,6 +311,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                     }
                     '%' => {
                         // Tag start {%
+                        if !has_closer(&chars, '%', '}') {
+                            // No `%}` after: literal text. See the `{{` arm.
+                            current.push(ch);
+                            continue;
+                        }
                         chars.next(); // consume %
                         if !current.is_empty() {
                             tokens.push(Token::Text(current.clone()));
@@ -279,7 +332,6 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                                 if let Some(tag_name) = parts.first() {
                                     tokens.push(Token::Tag(tag_name.clone(), parts[1..].to_vec()));
                                 }
-                                tag_content.clear();
                                 break;
                             } else {
                                 tag_content.push(ch);
@@ -288,19 +340,27 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                     }
                     '#' => {
                         // Comment start {#
+                        if !has_closer(&chars, '#', '}') {
+                            // No `#}` after: literal text. See the `{{` arm.
+                            current.push(ch);
+                            continue;
+                        }
                         chars.next(); // consume #
                         if !current.is_empty() {
                             tokens.push(Token::Text(current.clone()));
                             current.clear();
                         }
 
-                        // Skip until #}
+                        // Collect until `#}`. The text is kept so a raw-block
+                        // body can re-emit the comment verbatim (#2558).
+                        let mut comment_content = String::new();
                         while let Some(ch) = chars.next() {
                             if ch == '#' && chars.peek() == Some(&'}') {
                                 chars.next(); // consume }
-                                tokens.push(Token::Comment);
+                                tokens.push(Token::Comment(comment_content.clone()));
                                 break;
                             }
+                            comment_content.push(ch);
                         }
                     }
                     _ => {
@@ -398,9 +458,110 @@ mod tests {
             tokens,
             vec![
                 Token::Text("Hello ".to_string()),
-                Token::Comment,
+                Token::Comment(" comment ".to_string()),
                 Token::Text(" World".to_string()),
             ]
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Unterminated markers are literal text, as in Django (#2558/#2597).
+    // Django's lexer scans `{%.*?%}|{{.*?}}|{#.*?#}` over the source, so an
+    // opener with no closer is not a tag and does not shadow a later one.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_unterminated_variable_marker_is_text() {
+        assert_eq!(
+            tokenize("a {{ unclosed b").unwrap(),
+            vec![Token::Text("a {{ unclosed b".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_unterminated_tag_marker_is_text() {
+        assert_eq!(
+            tokenize("a {% unclosed b").unwrap(),
+            vec![Token::Text("a {% unclosed b".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_unterminated_comment_marker_is_text() {
+        assert_eq!(
+            tokenize("a {# unclosed b").unwrap(),
+            vec![Token::Text("a {# unclosed b".to_string())]
+        );
+    }
+
+    /// The load-bearing case: an unterminated `{{` must NOT swallow the
+    /// well-formed tag after it. Consuming to end-of-input turned
+    /// `{% blocktranslate %}a {{ x{% endblocktranslate %}` — which Django
+    /// renders verbatim — into an `Unclosed raw-block tag` parse failure.
+    #[test]
+    fn test_unterminated_marker_does_not_swallow_a_later_tag() {
+        assert_eq!(
+            tokenize("a {{ unclosed b{% endblocktranslate %}").unwrap(),
+            vec![
+                Token::Text("a {{ unclosed b".to_string()),
+                Token::Tag("endblocktranslate".to_string(), vec![]),
+            ]
+        );
+    }
+
+    /// A closer that IS present later keeps the marker a real tag — the
+    /// lookahead must not turn well-formed syntax into text.
+    #[test]
+    fn test_marker_with_a_later_closer_is_still_a_tag() {
+        assert_eq!(
+            tokenize("a {{ x }} b").unwrap(),
+            vec![
+                Token::Text("a ".to_string()),
+                Token::Variable("x".to_string()),
+                Token::Text(" b".to_string()),
+            ]
+        );
+    }
+
+    /// A failed lookahead consumes only the FIRST brace, so the second can
+    /// still open a real tag — `{{%` is text plus whatever follows, and
+    /// `x{{% endif %}` is `x{` + the `endif` tag, as in Django.
+    #[test]
+    fn a_failed_opener_lets_the_second_brace_start_a_real_tag() {
+        assert_eq!(
+            tokenize("x{{% endif %}").unwrap(),
+            vec![
+                Token::Text("x{".to_string()),
+                Token::Tag("endif".to_string(), vec![]),
+            ]
+        );
+    }
+
+    /// The opener cannot supply half its own closer: `{%}` has no `%}` after
+    /// the `{%`, so it is plain text — Django's regex reads it the same way.
+    #[test]
+    fn an_opener_does_not_supply_half_of_its_own_closer() {
+        assert_eq!(
+            tokenize("{%}").unwrap(),
+            vec![Token::Text("{%}".to_string())]
+        );
+        assert_eq!(
+            tokenize("{#}").unwrap(),
+            vec![Token::Text("{#}".to_string())]
+        );
+        assert_eq!(
+            tokenize("{{%").unwrap(),
+            vec![Token::Text("{{%".to_string())]
+        );
+    }
+
+    /// A comment carries its RAW inner text so `collect_raw_source` can
+    /// re-emit it verbatim into a raw-block body (#2558).
+    #[test]
+    fn test_comment_token_carries_its_raw_text() {
+        assert_eq!(
+            tokenize("{# Translators: hi #}").unwrap(),
+            vec![Token::Comment(" Translators: hi ".to_string())]
         );
     }
 
