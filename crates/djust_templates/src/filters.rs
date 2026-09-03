@@ -721,6 +721,23 @@ pub fn apply_filter_full_safe(
     // the safety the tuple's second element reports.
     autoescape: bool,
 ) -> Result<(Value, bool)> {
+    // An `_()` filter argument is translated BEFORE anything touches it
+    // (#2558): `{{ absent|default:_("Password") }}` must see the msgid the
+    // active language renders, not the literal source. The `_(` shape
+    // cannot be a quoted arg (it does not start with a quote) nor a bare
+    // identifier (parentheses), so this cannot rewire any existing input.
+    // And because Django's `Variable` for `_("…")` carries `self.literal`
+    // — a LITERAL, never a context lookup (`base.py:838`) — the translation
+    // also forces the quoting hint TRUE, routing the translated text
+    // through the literal channel rather than the #2202 variable
+    // resolution, which would raise VariableDoesNotExist for a translated
+    // word no context key holds.
+    let translated = arg.and_then(crate::renderer::translate_underscore_arg);
+    let arg_was_quoted = arg_was_quoted || translated.is_some();
+    let arg: Option<&str> = match &translated {
+        Some(t) => Some(t.as_str()),
+        None => arg,
+    };
     // The ARGUMENT COUNT, before anything else touches the argument (#2400).
     //
     // FIRST, and that is Django's order rather than a convenience: `args_check`
@@ -3719,6 +3736,18 @@ struct Stamped {
 /// the default zone's abbreviation and offset for it. Shifting naive values
 /// would break every project on `USE_TZ = False`, which is the configuration
 /// where naive datetimes are the norm.
+/// `datetime.timezone(offset).tzname(None)`: `UTC` for zero, else
+/// `UTC±HH:MM` (Python's own `_name_from_offset`; seconds never on the wire).
+fn fixed_offset_name(offset: &chrono::FixedOffset) -> String {
+    let secs = offset.local_minus_utc();
+    if secs == 0 {
+        return "UTC".to_string();
+    }
+    let sign = if secs < 0 { '-' } else { '+' };
+    let abs = secs.unsigned_abs();
+    format!("UTC{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60)
+}
+
 fn apply_active_timezone(
     dt: DateTime<chrono::FixedOffset>,
     aware: bool,
@@ -3727,11 +3756,21 @@ fn apply_active_timezone(
     use chrono::TimeZone;
 
     let Some(tz) = crate::timezone::active_timezone() else {
-        // No active zone: `USE_TZ = False`, or this crate embedded without
-        // Django settings. Pre-#2209 behaviour exactly — format what arrived.
+        // No active zone: `USE_TZ = False`, `{% localtime off %}` (#2558), or
+        // this crate embedded without Django settings. The wall clock is
+        // formatted as it arrived (pre-#2209 behaviour). An AWARE value still
+        // names its own zone for `T`/`e`, as Django's `tzname()` does when no
+        // conversion happens: the wire carries only the offset (#2216), so
+        // the name is the one `datetime.timezone` gives that offset — `UTC`,
+        // or `UTC+02:00` — and a `ZoneInfo` value's `CEST` is the documented
+        // residue. A naive value keeps reporting nothing, as before.
         return Stamped {
             dt,
-            abbrev: None,
+            abbrev: if aware {
+                Some(fixed_offset_name(dt.offset()))
+            } else {
+                None
+            },
             aware,
             timestamp: dt.timestamp(),
             time_only,
@@ -6881,6 +6920,25 @@ mod parse_shape_tests_2227 {
 mod tests {
     use super::*;
     use indexmap::IndexMap;
+
+    // ---- #2558: the zone name of an unconverted aware value ---------------
+
+    #[test]
+    fn a_fixed_offset_names_itself_the_way_python_does() {
+        use chrono::FixedOffset;
+        // `datetime.timezone(offset).tzname(None)` — what Django's `T`/`e`
+        // read for an aware value that was NOT converted (inside
+        // `{% localtime off %}`, or under `USE_TZ = False`).
+        assert_eq!(fixed_offset_name(&FixedOffset::east_opt(0).unwrap()), "UTC");
+        assert_eq!(
+            fixed_offset_name(&FixedOffset::east_opt(2 * 3600).unwrap()),
+            "UTC+02:00"
+        );
+        assert_eq!(
+            fixed_offset_name(&FixedOffset::west_opt(5 * 3600 + 30 * 60).unwrap()),
+            "UTC-05:30"
+        );
+    }
 
     /// Every `Value` variant, so a new one cannot be added without a decision.
     fn every_variant() -> Vec<Value> {

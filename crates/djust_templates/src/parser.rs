@@ -202,6 +202,48 @@ pub enum Node {
         false_expr: String,
         filters: Vec<(String, Option<String>)>,
     },
+    /// Raw-block custom tag whose body crosses to Python as UN-rendered
+    /// source (#2558). `blocktranslate` is the whole reason this kind
+    /// exists: the body is DATA — the msgid Django's `render_token_list`
+    /// builds from the tokens (`{{ var }}` → `%(var)s`, every other `%`
+    /// doubled) and the catalog lookup keys on — so pre-rendering it (the
+    /// [`Node::BlockCustomTag`] contract) would destroy the message.
+    /// Reconstructed and handed over by [`collect_raw_source`].
+    RawBlockCustomTag {
+        name: String,
+        args: Vec<String>,
+        body: String,
+    },
+    /// `{% language "de" %}…{% endlanguage %}` (#2558). The children keep
+    /// rendering in Rust — handing the body to Django would be the #1051
+    /// dual-engine bug — while the language switch itself happens in
+    /// Python's thread-local through the registered scope hooks, because a
+    /// bridged `{% translate %}` inside the block reads
+    /// `translation.get_language()` there.
+    Language {
+        expr: String,
+        children: Vec<Node>,
+    },
+    /// `{% timezone "Europe/Paris" %}…{% endtimezone %}` (#2558) — the
+    /// timezone twin of [`Node::Language`].
+    Timezone {
+        expr: String,
+        children: Vec<Node>,
+    },
+    /// `{% localize on|off %}…{% endlocalize %}` (#2558): a render-side
+    /// `use_l10n` flag, mirroring Django's `Context.use_l10n` flag
+    /// (`l10n.py:31-36`) — consumed only by variable-output localization.
+    Localize {
+        use_l10n: bool,
+        children: Vec<Node>,
+    },
+    /// `{% localtime on|off %}…{% endlocaltime %}` (#2558): Django's
+    /// `Context.use_tz` flag (`tz.py:92-106`) — saves/restores the active
+    /// zone around the children.
+    LocalTime {
+        use_tz: bool,
+        children: Vec<Node>,
+    },
 }
 
 /// Returns true if `text` ends inside an unclosed HTML opening tag.
@@ -483,6 +525,14 @@ pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &m
             Node::BlockCustomTag { children, .. } => {
                 assign_if_marker_ids(children, prefix, counter);
             }
+            // Scope nodes (#2558) carry children; `RawBlockCustomTag` does
+            // not (its body is a source string, never parsed here).
+            Node::Language { children, .. }
+            | Node::Timezone { children, .. }
+            | Node::Localize { children, .. }
+            | Node::LocalTime { children, .. } => {
+                assign_if_marker_ids(children, prefix, counter);
+            }
             Node::ReactComponent { children, .. } => {
                 assign_if_marker_ids(children, prefix, counter);
             }
@@ -595,6 +645,18 @@ fn resolve_cycle_nodes(
             | Node::AutoEscape { nodes: body, .. }
             | Node::Filter { nodes: body, .. } => {
                 resolve_cycle_nodes(body, prefix, state)?;
+            }
+            // The four #2558 scope tags are containers like every arm above,
+            // and #2556 had to add `Node::AutoEscape` here for exactly this
+            // reason: a walker that does not descend leaves an inner
+            // `{% cycle name %}` reference unbound, so it re-renders the
+            // FIRST value forever (`a` where Django gives `ab`) instead of
+            // advancing. One arm per container, decided explicitly (#1646).
+            Node::Language { children, .. }
+            | Node::Timezone { children, .. }
+            | Node::Localize { children, .. }
+            | Node::LocalTime { children, .. } => {
+                resolve_cycle_nodes(children, prefix, state)?;
             }
             Node::BlockCustomTag { children, .. } | Node::ReactComponent { children, .. } => {
                 resolve_cycle_nodes(children, prefix, state)?;
@@ -927,41 +989,17 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
 
                 "verbatim" => {
                     // {% verbatim %} tag - output content literally without template processing
-                    // Collect all content between {% verbatim %} and {% endverbatim %}
-                    let mut content = String::new();
-                    let mut j = *i + 1;
-
-                    while j < tokens.len() {
-                        match &tokens[j] {
-                            Token::Tag(name, _) if name == "endverbatim" => {
-                                *i = j; // Point to endverbatim tag
-                                return Ok(Some(Node::Text(content)));
-                            }
-                            Token::Text(text) => content.push_str(text),
-                            Token::Variable(var) => {
-                                // Output the raw variable syntax
-                                content.push_str(&format!("{{{{ {var} }}}}"));
-                            }
-                            Token::Tag(name, args) => {
-                                // Output the raw tag syntax
-                                let args_str = if args.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" {}", args.join(" "))
-                                };
-                                content.push_str(&format!("{{% {name}{args_str} %}}"));
-                            }
-                            Token::Comment => {
-                                // Skip comments
-                            }
-                            _ => {}
-                        }
-                        j += 1;
-                    }
-
-                    Err(DjangoRustError::TemplateError(
+                    // through the ONE raw-source collector (#2558): the raw-block
+                    // arm reconstructs the body the same way, so the two
+                    // re-emitters cannot drift (#1646).
+                    let (content, end_pos) = collect_raw_source(
+                        tokens,
+                        *i + 1,
+                        &["endverbatim"],
                         "Unclosed verbatim tag".to_string(),
-                    ))
+                    )?;
+                    *i = end_pos; // Point to endverbatim tag
+                    Ok(Some(Node::Text(content)))
                 }
 
                 "endverbatim" => {
@@ -1242,6 +1280,93 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 }
 
                 _ => {
+                    // Native scope tags (#2558) — armed only when their library
+                    // has actually been `{% load %}`-ed, so an UNLOADED
+                    // `{% language %}` still falls through to the
+                    // UnsupportedTag arm exactly as before this row. Argument
+                    // errors carry Django's exact text (`i18n.py:599-616`,
+                    // `l10n.py:39-60`, `tz.py:138-178`).
+                    if tag_name == "language" && crate::registry::scope_tag_armed("language") {
+                        if args.len() != 1 {
+                            return Err(crate::registry::library_syntax_error(
+                                "'language' takes one argument (language)",
+                            ));
+                        }
+                        let (children, end_pos) =
+                            parse_block_custom_tag(tokens, *i + 1, "endlanguage")?;
+                        *i = end_pos;
+                        return Ok(Some(Node::Language {
+                            expr: args[0].clone(),
+                            children,
+                        }));
+                    }
+                    if tag_name == "localize" && crate::registry::scope_tag_armed("localize") {
+                        let use_l10n = match args.len() {
+                            0 => true,
+                            1 if args[0] == "on" => true,
+                            1 if args[0] == "off" => false,
+                            _ => {
+                                return Err(crate::registry::library_syntax_error(
+                                    "'localize' argument should be 'on' or 'off'",
+                                ));
+                            }
+                        };
+                        let (children, end_pos) =
+                            parse_block_custom_tag(tokens, *i + 1, "endlocalize")?;
+                        *i = end_pos;
+                        return Ok(Some(Node::Localize { use_l10n, children }));
+                    }
+                    if tag_name == "localtime" && crate::registry::scope_tag_armed("localtime") {
+                        let use_tz = match args.len() {
+                            0 => true,
+                            1 if args[0] == "on" => true,
+                            1 if args[0] == "off" => false,
+                            _ => {
+                                return Err(crate::registry::library_syntax_error(
+                                    "'localtime' argument should be 'on' or 'off'",
+                                ));
+                            }
+                        };
+                        let (children, end_pos) =
+                            parse_block_custom_tag(tokens, *i + 1, "endlocaltime")?;
+                        *i = end_pos;
+                        return Ok(Some(Node::LocalTime { use_tz, children }));
+                    }
+                    if tag_name == "timezone" && crate::registry::scope_tag_armed("timezone") {
+                        if args.len() != 1 {
+                            return Err(crate::registry::library_syntax_error(
+                                "'timezone' takes one argument (timezone)",
+                            ));
+                        }
+                        let (children, end_pos) =
+                            parse_block_custom_tag(tokens, *i + 1, "endtimezone")?;
+                        *i = end_pos;
+                        return Ok(Some(Node::Timezone {
+                            expr: args[0].clone(),
+                            children,
+                        }));
+                    }
+                    // A RAW-BLOCK handler (#2558) consumes the body as SOURCE.
+                    // Checked before every other dispatch in this arm: the body
+                    // must reach Django un-rendered — Django must be the one to
+                    // see `{% block b %}` / `{% for … %}` / a second
+                    // `{% blocktranslate %}` inside it and raise its own
+                    // `doesn't allow other block tags` error, which it can only
+                    // do if the raw tokens arrive.
+                    if let Some(end_tag) = crate::registry::raw_block_handler_exists(tag_name) {
+                        let (body, end_pos) = collect_raw_source(
+                            tokens,
+                            *i + 1,
+                            &[end_tag.as_str()],
+                            format!("Unclosed raw-block tag, expected {{% {end_tag} %}}"),
+                        )?;
+                        *i = end_pos;
+                        return Ok(Some(Node::RawBlockCustomTag {
+                            name: tag_name.clone(),
+                            args: args.clone(),
+                            body,
+                        }));
+                    }
                     // Check if a Python block tag handler is registered (tags with children)
                     if let Some(end_tag) = crate::registry::block_handler_exists(tag_name) {
                         let (children, end_pos) = parse_block_custom_tag(tokens, *i + 1, &end_tag)?;
@@ -1320,7 +1445,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
             }
         }
 
-        Token::Comment => Ok(Some(Node::Comment)),
+        Token::Comment(_) => Ok(Some(Node::Comment)),
     }
 }
 
@@ -1504,6 +1629,68 @@ fn parse_spaceless_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, u
     Err(DjangoRustError::TemplateError(
         "Unclosed spaceless tag".to_string(),
     ))
+}
+
+/// Reconstruct raw template SOURCE from the token stream (#2558).
+///
+/// The lexer keeps no source offsets, so the only way to hand a body to a
+/// raw-block handler — or to `{% verbatim %}`, which always did this
+/// inline — is to re-emit it from the tokens. Fidelity, against Django's
+/// own lexer: `Token::Text` is byte-exact; a variable re-emitted as
+/// `{{ var }}` re-lexes to the same VAR contents (Django strips variable
+/// contents too); a tag re-joined on single spaces is exactly the
+/// `token.contents` Django quotes in its `doesn't allow other block tags`
+/// error. Comments are RE-EMITTED verbatim as `{# … #}` (#2597): dropping
+/// them silently changed the body Django reads back — visibly so through
+/// `{% verbatim %}`, which shares this collector and whose output now
+/// matches Django's for `{% verbatim %}{# hi #}{% endverbatim %}`.
+///
+/// Returns the reconstructed source and the index of the END-TAG token
+/// (the caller points `i` at it; its loop then steps past).
+fn collect_raw_source(
+    tokens: &[Token],
+    start: usize,
+    end_names: &[&str],
+    unclosed_error: String,
+) -> Result<(String, usize)> {
+    let mut content = String::new();
+    let mut j = start;
+    while j < tokens.len() {
+        match &tokens[j] {
+            Token::Tag(name, _) if end_names.contains(&name.as_str()) => {
+                return Ok((content, j));
+            }
+            Token::Text(text) => content.push_str(text),
+            Token::Variable(var) => {
+                // Output the raw variable syntax
+                content.push_str(&format!("{{{{ {var} }}}}"));
+            }
+            Token::Tag(name, args) => {
+                // Output the raw tag syntax
+                let args_str = if args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", args.join(" "))
+                };
+                content.push_str(&format!("{{% {name}{args_str} %}}"));
+            }
+            Token::Comment(text) => {
+                // Re-emit the comment VERBATIM (#2558). A raw-block body is
+                // SOURCE for Django, and Django's `do_block_translate` refuses
+                // a comment inside `{% blocktranslate %}` with
+                // `doesn't allow other block tags (seen 'c')`. Dropping it here
+                // deleted the comment from the body, so Django saw a clean
+                // msgid and rendered `a  b` where it should have raised —
+                // silently mangling author content.
+                content.push_str("{#");
+                content.push_str(text);
+                content.push_str("#}");
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    Err(DjangoRustError::TemplateError(unclosed_error))
 }
 
 /// Parse a custom block tag body until a matching end tag.
@@ -1690,6 +1877,12 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
             Node::BlockCustomTag { children, .. } | Node::ReactComponent { children, .. } => {
                 collect_dj_model_fields_depth(children, loader, fields, depth);
             }
+            Node::Language { children, .. }
+            | Node::Timezone { children, .. }
+            | Node::Localize { children, .. }
+            | Node::LocalTime { children, .. } => {
+                collect_dj_model_fields_depth(children, loader, fields, depth);
+            }
 
             // `{% include "child.html" %}` — load and walk the included
             // template's own text so its `dj-model` bindings are covered. The
@@ -1827,8 +2020,19 @@ pub fn extract_per_node_deps(nodes: &[Node]) -> Vec<HashSet<String>> {
             if matches!(node, Node::Include { .. }) {
                 deps.insert("*".to_string());
             }
-            // CustomTag / BlockCustomTag nodes may also have unpredictable deps
-            if matches!(node, Node::CustomTag { .. } | Node::BlockCustomTag { .. }) {
+            // CustomTag / BlockCustomTag / RawBlockCustomTag nodes may also
+            // have unpredictable deps (#2558: the raw body is re-parsed by
+            // Django, so anything in it is a dependency).
+            if matches!(
+                node,
+                Node::CustomTag { .. }
+                    | Node::BlockCustomTag { .. }
+                    | Node::RawBlockCustomTag { .. }
+                    | Node::Language { .. }
+                    | Node::Timezone { .. }
+                    | Node::Localize { .. }
+                    | Node::LocalTime { .. }
+            ) {
                 deps.insert("*".to_string());
             }
             deps
@@ -2010,6 +2214,11 @@ fn extract_from_nodes(
                 args,
                 name: _,
                 children: _,
+            }
+            | Node::RawBlockCustomTag {
+                args,
+                name: _,
+                body: _,
             } => {
                 // Extract variables from custom/block tag arguments
                 for arg in args {
@@ -2649,6 +2858,220 @@ mod tests {
 
     fn fields(source: &str) -> Vec<String> {
         extract_dj_model_fields::<NoIncludeLoader>(source, None).unwrap()
+    }
+
+    // ---- #2558: the raw-body collector and the native scope arms ----------
+
+    /// Serializes the tests that mutate the process-global scope-tag set.
+    static SCOPE_TAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn parse_src(source: &str) -> Vec<Node> {
+        let tokens = tokenize(source).expect("tokenize failed");
+        parse(&tokens).expect("parse failed")
+    }
+
+    /// The body a raw-block tag would hand Django, reconstructed from the
+    /// token stream. Calls the collector directly: registering a real
+    /// raw-block handler needs a Python object, which a `cargo test` has no
+    /// interpreter for.
+    fn collected(source: &str, end: &str) -> String {
+        let tokens = tokenize(source).expect("tokenize failed");
+        let (body, end_pos) = collect_raw_source(
+            &tokens,
+            0,
+            &[end],
+            format!("Unclosed raw-block tag, expected {{% {end} %}}"),
+        )
+        .expect("collect failed");
+        // The collector stops ON the end tag, never past it.
+        assert!(matches!(&tokens[end_pos], Token::Tag(name, _) if name == end));
+        body
+    }
+
+    /// A comment re-emits VERBATIM. The collector used to drop it, so Django
+    /// never saw it: `{% blocktranslate %}a {# c #} b{% endblocktranslate %}`
+    /// rendered `a  b` where Django raises `doesn't allow other block tags
+    /// (seen 'c')`. Silently mangling author content is the worse failure, so
+    /// the body must carry the comment and let Django refuse it (#2597).
+    #[test]
+    fn raw_source_re_emits_a_comment_verbatim() {
+        assert_eq!(
+            collected("a {# c #} b{% endblocktranslate %}", "endblocktranslate"),
+            "a {# c #} b"
+        );
+    }
+
+    /// The whole inner text survives, not just a single word — Django reports
+    /// the comment's stripped text as the `seen` payload.
+    #[test]
+    fn raw_source_re_emits_a_multiword_comment_verbatim() {
+        assert_eq!(
+            collected(
+                "a {# Translators: hi #} b{% endblocktranslate %}",
+                "endblocktranslate"
+            ),
+            "a {# Translators: hi #} b"
+        );
+    }
+
+    /// An unterminated `{{` inside the body is TEXT, and the end tag after it
+    /// still closes the block — the pre-#2597 lexer consumed to end-of-input
+    /// and swallowed the end tag, so this raised `Unclosed raw-block tag` on
+    /// a template Django renders verbatim.
+    #[test]
+    fn raw_source_keeps_an_unterminated_marker_and_still_finds_the_end_tag() {
+        assert_eq!(
+            collected(
+                "a {{ unclosed b{% endblocktranslate %}",
+                "endblocktranslate"
+            ),
+            "a {{ unclosed b"
+        );
+    }
+
+    #[test]
+    fn raw_source_reconstructs_a_variable_with_django_spacing() {
+        // `{{anton}}` and `{{ berta  }}` both re-emit as `{{ name }}`: Django
+        // re-LEXES this string, and its `Variable` grammar ignores the
+        // spacing, so the msgid placeholder (`%(anton)s`) is unaffected.
+        assert_eq!(
+            collected(
+                "{{anton}}{{ berta  }}{% endblocktranslate %}",
+                "endblocktranslate"
+            ),
+            "{{ anton }}{{ berta }}"
+        );
+    }
+
+    #[test]
+    fn raw_source_reconstructs_text_tags_and_comments_verbatim() {
+        // The comment re-emits too (#2597). This assertion used to expect it
+        // DROPPED, which is what let a comment inside a `{% blocktranslate %}`
+        // body silently vanish instead of reaching Django to be refused.
+        assert_eq!(
+            collected(
+                "a %(x)s {% plural %}b{# c #}{% endblocktranslate %}",
+                "endblocktranslate"
+            ),
+            "a %(x)s {% plural %}b{# c #}"
+        );
+        // A tag's arguments survive, space-joined — `{% templatetag openblock %}`
+        // must reach Django as a tag, not as its rendered output.
+        assert_eq!(
+            collected(
+                "{% templatetag openblock %}{% endblocktrans %}",
+                "endblocktrans"
+            ),
+            "{% templatetag openblock %}"
+        );
+    }
+
+    #[test]
+    fn raw_source_is_not_rendered_so_a_nested_block_tag_reaches_django() {
+        // The whole point of the fourth registration kind: Django must SEE
+        // `{% block b %}` in the body to raise its own "doesn't allow other
+        // block tags" error (#2558 §2).
+        let body = collected(
+            "Hello {% block b %}world{% endblock %}{% endblocktranslate %}",
+            "endblocktranslate",
+        );
+        assert!(body.contains("{% block b %}"), "{body}");
+        assert!(body.contains("{% endblock %}"), "{body}");
+    }
+
+    #[test]
+    fn raw_source_without_its_end_tag_is_an_error_not_a_truncated_body() {
+        let tokens = tokenize("x").expect("tokenize failed");
+        let err = collect_raw_source(&tokens, 0, &["endblocktranslate"], "boom".to_string());
+        assert!(
+            err.is_err(),
+            "an unclosed raw block must not silently close"
+        );
+    }
+
+    #[test]
+    fn an_unarmed_scope_tag_still_falls_through_to_unsupported() {
+        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::registry::clear_scope_tags().unwrap();
+        // Before any `{% load i18n %}`, `{% language %}` is exactly as
+        // unsupported as it was before this row — the arming gate is what
+        // keeps a project that never loads the library on its old behaviour.
+        // Since #2549 an unsupported tag is REFUSED at parse, so the arm is
+        // observed as that refusal rather than as an `UnsupportedTag` node.
+        let tokens = tokenize("{% language \"de\" %}x{% endlanguage %}").expect("tokenize failed");
+        let err = parse(&tokens).expect_err("an unarmed scope tag must be refused");
+        assert!(
+            err.to_string().contains("Unsupported template tag"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn armed_scope_tags_parse_as_native_nodes_with_their_children() {
+        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::registry::clear_scope_tags().unwrap();
+        crate::registry::arm_scope_tags(vec![
+            "language".to_string(),
+            "localize".to_string(),
+            "localtime".to_string(),
+            "timezone".to_string(),
+        ])
+        .unwrap();
+
+        let nodes = parse_src("{% language \"de\" %}{{ n }}{% endlanguage %}");
+        match &nodes[0] {
+            Node::Language { expr, children } => {
+                // The operand keeps its QUOTES: the renderer resolves it
+                // through `django_literal`, which is what strips them (#2376).
+                assert_eq!(expr, "\"de\"");
+                assert_eq!(children.len(), 1);
+            }
+            other => panic!("expected Language, got {other:?}"),
+        }
+
+        match &parse_src("{% timezone tzname %}x{% endtimezone %}")[0] {
+            Node::Timezone { expr, children } => {
+                assert_eq!(expr, "tzname");
+                assert_eq!(children.len(), 1);
+            }
+            other => panic!("expected Timezone, got {other:?}"),
+        }
+
+        // `on` / `off` / bare, for both flag nodes.
+        for (src, expected) in [
+            ("{% localize %}x{% endlocalize %}", true),
+            ("{% localize on %}x{% endlocalize %}", true),
+            ("{% localize off %}x{% endlocalize %}", false),
+        ] {
+            match &parse_src(src)[0] {
+                Node::Localize { use_l10n, .. } => assert_eq!(*use_l10n, expected, "{src}"),
+                other => panic!("expected Localize for {src}, got {other:?}"),
+            }
+        }
+        for (src, expected) in [
+            ("{% localtime %}x{% endlocaltime %}", true),
+            ("{% localtime on %}x{% endlocaltime %}", true),
+            ("{% localtime off %}x{% endlocaltime %}", false),
+        ] {
+            match &parse_src(src)[0] {
+                Node::LocalTime { use_tz, .. } => assert_eq!(*use_tz, expected, "{src}"),
+                other => panic!("expected LocalTime for {src}, got {other:?}"),
+            }
+        }
+
+        // Nesting: a scope node's children are parsed, so an inner scope is
+        // a child node rather than a flattened sibling.
+        match &parse_src(
+            "{% language \"de\" %}{% language \"fr\" %}x{% endlanguage %}{% endlanguage %}",
+        )[0]
+        {
+            Node::Language { children, .. } => {
+                assert!(matches!(children[0], Node::Language { .. }), "{children:?}");
+            }
+            other => panic!("expected Language, got {other:?}"),
+        }
+
+        crate::registry::clear_scope_tags().unwrap();
     }
 
     #[test]
@@ -3872,6 +4295,11 @@ mod dep_tests {
             Node::RustComponent { .. } => "RustComponent",
             Node::CustomTag { .. } => "CustomTag",
             Node::BlockCustomTag { .. } => "BlockCustomTag",
+            Node::RawBlockCustomTag { .. } => "RawBlockCustomTag",
+            Node::Language { .. } => "Language",
+            Node::Timezone { .. } => "Timezone",
+            Node::Localize { .. } => "Localize",
+            Node::LocalTime { .. } => "LocalTime",
             Node::WidthRatio { .. } => "WidthRatio",
             Node::FirstOf { .. } => "FirstOf",
             Node::TemplateTag(_) => "TemplateTag",
@@ -3943,6 +4371,27 @@ mod dep_tests {
             Node::BlockCustomTag {
                 name: "modal".into(),
                 args: vec![],
+                children: vec![],
+            },
+            Node::RawBlockCustomTag {
+                name: "blocktranslate".into(),
+                args: vec![],
+                body: "x".into(),
+            },
+            Node::Language {
+                expr: "de".into(),
+                children: vec![],
+            },
+            Node::Timezone {
+                expr: "UTC".into(),
+                children: vec![],
+            },
+            Node::Localize {
+                use_l10n: false,
+                children: vec![],
+            },
+            Node::LocalTime {
+                use_tz: false,
                 children: vec![],
             },
             Node::WidthRatio {

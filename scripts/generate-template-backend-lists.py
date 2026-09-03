@@ -15,14 +15,14 @@ The lists are derived from the engine's own registries, never written by hand:
 * Django's sets — ``django.template.defaultfilters`` / ``defaulttags`` /
   ``loader_tags`` (the engine's ``default_builtins``) and the ``i18n``, ``l10n``,
   ``tz``, ``static`` and ``cache`` libraries, at the installed Django version.
-* Bridged library filters — detected, not assumed: the generator configures a
-  ``DjangoTemplates`` engine next to the djust backend, runs the real
-  Django→Rust filter bridge (``template_filters.bootstrap_django_filters``,
-  #1121, the same call ``DjustConfig.ready()`` and the backend's render path
-  make) and reads back ``djust._rust.get_registered_custom_filters()``. A
-  library filter that lands in the Rust registry is *bridged*: it resolves
-  only when a ``DjangoTemplates`` engine is configured alongside djust and
-  raises ``Unknown filter`` on a djust-only ``TEMPLATES``.
+* Bridged library tags and filters — detected, not assumed: the generator runs
+  the real ``{% load %}`` hook (``template_libraries.load_libraries``, #2547 /
+  #2558, the same call the parser makes) for each of Django's libraries on a
+  djust-only ``TEMPLATES`` and reads back what landed in ``djust._rust``'s
+  registries. A library tag or filter that lands there is *bridged on
+  ``{% load``*: it resolves on any ``TEMPLATES`` shape once the template loads
+  its library. The ``tz`` filters the bridge refuses by name (#2216: they need a
+  datetime object the Rust ``Value`` cannot carry) are listed unsupported.
 
 Modes::
 
@@ -153,9 +153,11 @@ def _setup_django() -> None:
     from django.conf import settings
 
     if not settings.configured:
-        # Both engines, the doc's recommended shape: bridging detection
-        # (``bridged_library_filters``) needs a ``DjangoTemplates`` engine
-        # to be present, exactly as a project does.
+        # Both engines, the doc's recommended shape. The library buckets are
+        # detected on the djust backend alone (``load_bridged_library_entries``
+        # runs the ``{% load %}`` hook, which needs no other engine); the
+        # ``DjangoTemplates`` fallback is here so the registries match a
+        # project's, exactly as the Quick Start configures them.
         settings.configure(
             INSTALLED_APPS=["django.contrib.staticfiles"],
             STATIC_URL="/static/",
@@ -218,36 +220,78 @@ def djust_python_handlers() -> tuple[set[str], set[str]]:
     return inline, assign
 
 
-def bridged_library_filters(library_filters: set[str]) -> set[str]:
-    """Library filters the Django→Rust bridge forwards into the Rust registry.
+def scope_tags(parser_rs: Path = DEFAULT_PARSER_RS) -> set[str]:
+    """Tag names with a native scope node the parser arms on ``{% load %}`` (#2558).
 
-    Runs the real bridge (``bootstrap_django_filters``: walks every configured
-    ``DjangoTemplates`` engine's ``template_libraries`` and forwards each
-    non-built-in filter to ``djust._rust``) and reads back what registered.
-    Detected rather than asserted so the list follows the bridge if it ever
-    changes what it forwards. Requires a ``DjangoTemplates`` engine in
-    ``TEMPLATES`` — the generator's own settings provide one; an ambient
-    configuration without one is a structural error, never an empty list.
+    ``{% language %}``, ``{% localize %}``, ``{% localtime %}`` and
+    ``{% timezone %}`` are not match arms (``djust_native_tags`` cannot see
+    them): each is a guard ``tag_name == "<name>" && scope_tag_armed("<name>")``
+    that the library loader arms. Read off the ``scope_tag_armed("…")`` sites.
+    """
+    src = parser_rs.read_text(encoding="utf-8")
+    names = set(re.findall(r'scope_tag_armed\("([a-z_0-9]+)"\)', src))
+    if not names:
+        raise ExtractionError(f'{parser_rs}: no `scope_tag_armed("…")` site — the regex is stale')
+    return names
+
+
+def load_bridged_library_entries(
+    libraries: dict[str, tuple[set[str], set[str]]],
+    parser_rs: Path = DEFAULT_PARSER_RS,
+) -> tuple[set[str], set[str], set[str]]:
+    """``(tags, filters, refused_filters)`` that ``{% load <lib> %}`` bridges (#2558).
+
+    Runs the real ``{% load %}`` hook (``template_libraries.load_libraries``,
+    the call the parser makes) for each library on the configured djust
+    backend and reads back what landed in ``djust._rust``'s registries: the
+    inline / block / raw-block tag registries, the scope nodes the loader
+    arms (declared in ``template_libraries._NATIVE_SCOPE_TAGS`` and
+    cross-checked against ``parser.rs``'s ``scope_tag_armed`` sites — a
+    declared name with no parser arm, or an arm no library declares, is a
+    structural error), and the custom-filter registry. ``refused_filters`` are
+    the names the bridge registers as LOUD refusals rather than callables
+    (``_TZ_FILTER_REFUSALS``, #2216): they parse, then raise. Detected rather
+    than asserted so the buckets follow the loader if it changes what it
+    bridges; a ``{% load %}`` that fails is a structural error, never an
+    empty bucket.
     """
     _setup_django()
-    from django.template import engines
-    from django.template.backends.django import DjangoTemplates
-
-    if not any(isinstance(engine, DjangoTemplates) for engine in engines.all()):
-        raise ExtractionError(
-            "bridging detection needs a `django.template.backends.django.DjangoTemplates` "
-            "engine in TEMPLATES next to the djust backend; none is configured"
-        )
     try:
-        from djust import _rust
-        from djust.template_filters import bootstrap_django_filters
+        from djust import _rust, template_libraries
     except ImportError as exc:  # pragma: no cover — environment, not logic
         raise ExtractionError(
             "djust._rust is not importable — build the extension (`make dev-build`) "
             f"before running this check ({exc})"
         ) from exc
-    bootstrap_django_filters()
-    return library_filters & set(_rust.get_registered_custom_filters())
+    armed_sites = scope_tags(parser_rs)
+    declared = {n for names in template_libraries._NATIVE_SCOPE_TAGS.values() for n in names}
+    if declared != armed_sites:
+        raise ExtractionError(
+            "scope-node drift: template_libraries._NATIVE_SCOPE_TAGS declares "
+            f"{sorted(declared)} but parser.rs arms {sorted(armed_sites)}"
+        )
+    tags: set[str] = set()
+    filters: set[str] = set()
+    refused: set[str] = set()
+    for lib, (lib_tags, lib_filters) in libraries.items():
+        try:
+            template_libraries.load_libraries([lib])
+        except Exception as exc:  # noqa: BLE001 — surfaced as a structural error
+            raise ExtractionError(f"`{{% load {lib} %}}` failed: {exc}") from exc
+        registered = set(_rust.get_registered_tags())
+        tags |= {
+            name
+            for name in lib_tags
+            if name in registered
+            or _rust.has_block_tag_handler(name)
+            or _rust.has_raw_block_tag_handler(name)
+        }
+        module = f"django.templatetags.{lib}"
+        if module in template_libraries._DJANGO_LIBRARIES_BRIDGED:
+            tags |= lib_tags & set(template_libraries._NATIVE_SCOPE_TAGS.get(module, ()))
+            refused |= lib_filters & template_libraries.refused_filters(module)
+        filters |= (lib_filters & set(_rust.get_registered_custom_filters())) - refused
+    return tags, filters, refused
 
 
 # --------------------------------------------------------------------------- #
@@ -264,7 +308,11 @@ class SupportReport:
     djust_filters: set[str]
     native_tags: set[str]
     handler_tags: set[str]
-    bridged_filters: set[str] = field(default_factory=set)
+    #: What ``{% load <lib> %}`` bridges into the Rust registries (#2558):
+    #: tags, filters, and the filters it registers as loud refusals.
+    load_bridged_tags: set[str] = field(default_factory=set)
+    load_bridged_filters: set[str] = field(default_factory=set)
+    refused_filters: set[str] = field(default_factory=set)
     scoreboard: set[str] = field(default_factory=set)
 
     # -- filters ---------------------------------------------------------- #
@@ -310,11 +358,12 @@ class SupportReport:
 
     @property
     def supported_library_tags(self) -> set[str]:
-        return self.library_tags & self.djust_tags
+        """Library tags the engine handles natively OR bridges on ``{% load %}``."""
+        return self.library_tags & (self.djust_tags | self.load_bridged_tags)
 
     @property
     def unsupported_library_tags(self) -> set[str]:
-        return self.library_tags - self.djust_tags
+        return self.library_tags - self.supported_library_tags
 
     @property
     def supported_library_filters(self) -> set[str]:
@@ -323,13 +372,15 @@ class SupportReport:
 
     @property
     def bridged_library_filters(self) -> set[str]:
-        """Library filters that resolve only via the Django→Rust bridge, i.e.
-        only when a ``DjangoTemplates`` engine is configured alongside djust."""
-        return (self.library_filters & self.bridged_filters) - self.djust_filters
+        """Library filters that resolve once the template ``{% load %}``s
+        their library (#2558) — on any ``TEMPLATES`` shape."""
+        return (self.library_filters & self.load_bridged_filters) - self.djust_filters
 
     @property
     def unsupported_library_filters(self) -> set[str]:
-        return self.library_filters - self.djust_filters - self.bridged_filters
+        """Never resolve to a value: unknown to both, or bridged as a loud
+        refusal (the ``tz`` three, #2216)."""
+        return self.library_filters - self.djust_filters - self.load_bridged_filters
 
     @property
     def all_unsupported_tags(self) -> set[str]:
@@ -343,8 +394,10 @@ def build_report(
     parser_rs: Path = DEFAULT_PARSER_RS,
 ) -> SupportReport:
     version, dj_filters, dj_tags, libraries = django_sets()
+    # Read the handler registries BEFORE the `{% load %}` pass below, so a
+    # bridged library tag is bucketed as bridged and not as a Python handler.
     inline, assign = djust_python_handlers()
-    library_filters = {f for _, filters in libraries.values() for f in filters}
+    load_tags, load_filters, refused = load_bridged_library_entries(libraries, parser_rs)
     return SupportReport(
         django_version=version,
         django_filters=dj_filters,
@@ -353,7 +406,9 @@ def build_report(
         djust_filters=djust_arity_filters(arity_rs),
         native_tags=djust_native_tags(parser_rs),
         handler_tags=inline | assign,
-        bridged_filters=bridged_library_filters(library_filters),
+        load_bridged_tags=load_tags,
+        load_bridged_filters=load_filters,
+        refused_filters=refused,
     )
 
 
@@ -414,26 +469,37 @@ def render_block(report: SupportReport) -> str:
         f"{_codes(report.unsupported_tags)}",
         "",
         f"**Library tags (`{{% load … %}}`) — supported ({len(report.supported_library_tags)}):** "
-        f"{_codes(report.supported_library_tags)}",
+        f"{_by_library(report, 'tags', report.supported_library_tags)}",
         "",
         f"**Library tags — unsupported ({len(report.unsupported_library_tags)}):** "
         f"{_by_library(report, 'tags', report.unsupported_library_tags)}",
         "",
+        "A supported library tag is either a native Rust node or bridged on `{% load %}` "
+        "(#2547 / #2558): the load imports Django's library and registers its tags with the "
+        "Rust engine, so the tag is rendered by Django's own compile function and node — "
+        "`{% blocktranslate %}` crosses its body as raw source; `{% language %}`, "
+        "`{% localize %}`, `{% localtime %}` and `{% timezone %}` are native scope nodes "
+        "the load arms.",
+        "",
         f"**Library filters — native ({len(report.supported_library_filters)}):** "
         f"{_codes(report.supported_library_filters)}",
         "",
-        f"**Library filters — bridged from a configured `DjangoTemplates` engine "
+        f"**Library filters — bridged on `{{% load %}}` "
         f"({len(report.bridged_library_filters)}):** "
         f"{_by_library(report, 'filters', report.bridged_library_filters)}",
         "",
         "Bridged filters are Django's own callables, forwarded to the Rust engine by the "
-        "filter bridge (#1121) from the `template_libraries` of a "
-        "`django.template.backends.django.DjangoTemplates` engine in `TEMPLATES` — the "
-        "fallback engine the recommended configuration above includes. On a djust-only "
-        "`TEMPLATES` there is nothing to forward and each raises `Unknown filter`.",
+        "filter bridge when the template loads their library (#2558) — on any `TEMPLATES` "
+        "shape, a `DjangoTemplates` engine beside djust or not.",
         "",
         f"**Library filters — unsupported ({len(report.unsupported_library_filters)}):** "
         f"{_by_library(report, 'filters', report.unsupported_library_filters)}",
+        "",
+        f"Refused loudly on `{{% load %}}` ({len(report.refused_filters)}): "
+        f"{_by_library(report, 'filters', report.refused_filters)} — each needs a datetime "
+        "object on the wire, which the Rust `Value` cannot carry (#2216), so the load "
+        "registers it as a filter that raises `TemplateSyntaxError` naming the filter and "
+        "pointing at `date` with the active zone (#2209) — never a silent blank (#2541).",
         "",
         f"**djust extensions (not Django tags, not scored):** {_codes(report.djust_only_tags)}",
         MARKER_CLOSE,

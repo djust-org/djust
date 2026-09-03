@@ -774,6 +774,11 @@ fn node_is_position_dependent(node: &Node) -> bool {
         // Opaque / Python-backed nodes — we cannot prove position-independence.
         Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
+        | Node::RawBlockCustomTag { .. }
+        | Node::Language { .. }
+        | Node::Timezone { .. }
+        | Node::Localize { .. }
+        | Node::LocalTime { .. }
         | Node::AssignTag { .. }
         | Node::Include { .. }
         | Node::RustComponent { .. }

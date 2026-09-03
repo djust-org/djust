@@ -33,7 +33,7 @@ store; Django resolves the name from a thread-local it already maintains.
 
 import logging
 import threading
-from typing import Optional, Set
+from typing import Any, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,104 @@ def apply_render_env_once() -> None:
     if getattr(_PUSHED, "done", False):
         return
     _PUSHED.done = True
+    apply_render_env()
+
+
+def install_scope_hooks() -> bool:
+    """Install the ``{% language %}`` / ``{% timezone %}`` hook pairs (#2558).
+
+    The switch MUST happen in Python's thread-locals — a bridged
+    ``{% translate %}`` inside the block reads
+    ``translation.get_language()`` here, and ``get_current_timezone`` reads
+    ``timezone._active`` — so the Rust scope nodes cross INTO Python to
+    enter/exit rather than keeping a Rust-side copy (the #1646 parallel
+    path). Each half re-pushes the render env afterwards, so the Rust
+    locale/zone state follows the switch and is restored after — which is
+    what makes ``{{ n }}`` inside ``{% language "de" %}`` format as ``de``
+    while the outer render stays put.
+
+    Idempotent in effect (re-registering the same closures); ``False``
+    without the Rust extension.
+    """
+    try:
+        from djust._rust import (
+            register_language_scope_hooks,
+            register_timezone_scope_hooks,
+        )
+    except ImportError:  # pragma: no cover - Rust build predates #2558
+        return False
+    register_language_scope_hooks(language_scope_enter, language_scope_exit)
+    register_timezone_scope_hooks(timezone_scope_enter, timezone_scope_exit)
+    return True
+
+
+# The four scope hooks (#2558), module-level so a caller that re-asserts them
+# (the filter-parity differential's entry-point ledger) registers the SAME
+# objects ``install_scope_hooks`` does rather than a copy that could drift
+# (#1646). Each is the ``enter(arg) -> token`` / ``exit(token)`` pair the Rust
+# scope node calls around its body — on the error path too.
+
+
+def _stamp_hook_error(exc: BaseException) -> None:
+    """Mark an exception raised inside a scope hook as user-raised, so it
+    crosses back WHOLE with its type (``ZoneInfoNotFoundError`` for
+    ``{% timezone "Bogus/Zone" %}``) instead of being re-wrapped as a bare
+    ``Exception`` by ``DjustTemplate.render`` — the #2547 contract for a
+    bridged library tag's exception, applied to the scope nodes."""
+    from .template_libraries import _stamp
+
+    _stamp(exc)
+
+
+def language_scope_enter(lang: Optional[str]) -> Any:
+    """Enter ``{% language lang %}``: switch Django's thread-local and re-push
+    the render env, so the Rust locale state follows the switch.
+
+    ``lang`` arrives VERBATIM — ``None`` for a ``None`` operand, ``""`` for a
+    missing variable — because ``translation.override(None)`` deactivates
+    (``get_language()`` becomes ``None``) while ``override("")`` activates
+    the fallback language; Django's ``LanguageNode`` makes the same call
+    with the same value, and collapsing the two would render ``[None]``
+    where Django renders ``[en-us]`` (measured, 5.2.16).
+    """
+    from django.utils import translation
+
+    override = translation.override(lang)
+    try:
+        override.__enter__()
+    except BaseException as exc:
+        _stamp_hook_error(exc)
+        raise
+    apply_render_env()
+    return override
+
+
+def language_scope_exit(token: Any) -> None:
+    """Leave ``{% language %}``: restore the thread-local, re-push the env."""
+    token.__exit__(None, None, None)
+    apply_render_env()
+
+
+def timezone_scope_enter(name: Optional[str]) -> Any:
+    """Enter ``{% timezone name %}``: same shape as the language pair, and
+    the same verbatim operand — ``override(None)`` deactivates, ``override("")``
+    raises Django's own ``ValueError``, an unknown zone its
+    ``ZoneInfoNotFoundError``; each crosses back with its type."""
+    from django.utils import timezone as dj_timezone
+
+    override = dj_timezone.override(name)
+    try:
+        override.__enter__()
+    except BaseException as exc:
+        _stamp_hook_error(exc)
+        raise
+    apply_render_env()
+    return override
+
+
+def timezone_scope_exit(token: Any) -> None:
+    """Leave ``{% timezone %}``: restore the thread-local, re-push the env."""
+    token.__exit__(None, None, None)
     apply_render_env()
 
 

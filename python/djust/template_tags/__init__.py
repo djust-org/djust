@@ -493,6 +493,8 @@ def _register_builtins() -> None:
     # The `{% load app_tags %}` library loader (#2547) — installed alongside
     # the built-ins so a bare ``import djust.template_tags`` arms it.
     _install_library_loader()
+    # The `_("…")` translator and the language/timezone scope hooks (#2558).
+    _install_i18n_hooks()
 
 
 def _install_library_loader() -> None:
@@ -504,6 +506,19 @@ def _install_library_loader() -> None:
         logger.debug("Could not import the library loader: %s", e)
         return
     install_loader()
+
+
+def _install_i18n_hooks() -> None:
+    """Install the #2558 i18n hooks (translator + scope hooks). No-op
+    without the Rust extension."""
+    try:
+        from ..render_env import install_scope_hooks
+        from ..template_libraries import install_translator
+    except ImportError as e:  # pragma: no cover — defensive
+        logger.debug("Could not import the #2558 i18n hooks: %s", e)
+        return
+    install_translator()
+    install_scope_hooks()
 
 
 def reregister_builtins() -> None:
@@ -558,8 +573,11 @@ def reregister_builtins() -> None:
             logger.debug("Could not re-register built-in tag handler '%s': %s", name, e)
     # A test that cleared the registries also cleared every bridged library
     # tag; the loader re-bridges on the next `{% load %}` (#2547). Re-arm the
-    # hook itself in case ``clear_library_loader()`` ran too.
+    # hook itself in case ``clear_library_loader()`` ran too — and the #2558
+    # translator / scope hooks, which a ``clear_translator()`` or a stubbed
+    # hook pair would otherwise leave gone for every later test.
     _install_library_loader()
+    _install_i18n_hooks()
 
 
 # Register on module load

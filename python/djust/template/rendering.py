@@ -377,8 +377,17 @@ class DjustTemplate:
                 # Parent template not found
                 raise TemplateDoesNotExist(f"Parent template '{parent_name}' not found")
 
-        # Strip all remaining block wrappers after inheritance is fully resolved
-        template_source = self._strip_block_wrappers(template_source)
+        # Strip all remaining block wrappers after inheritance is fully
+        # resolved. ONLY when an `{% extends %}` chain was actually resolved
+        # (#2558): the unconditional strip deleted top-level `{% block %}`
+        # wrappers from every template before the engine parsed it, so a
+        # `{% block %}` inside a `{% blocktranslate %}` body vanished and
+        # Django's own "doesn't allow other block tags" error could never
+        # fire. A template without `{% extends %}` now keeps its wrappers;
+        # the engine parses `{% block %}` natively and renders the content in
+        # place, which is the same bytes the strip produced.
+        if depth > 0:
+            template_source = self._strip_block_wrappers(template_source)
 
         return template_source
 
