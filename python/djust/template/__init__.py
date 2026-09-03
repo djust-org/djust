@@ -6,12 +6,14 @@ utilities for djust's high-performance Rust template engine.
 """
 
 from .backend import DjustTemplateBackend
+from .exceptions import DjustTemplateSyntaxError
 from .rendering import DjustTemplate
-from .serialization import serialize_value, serialize_context
+from .serialization import serialize_context, serialize_value
 
 __all__ = [
-    "DjustTemplateBackend",
     "DjustTemplate",
-    "serialize_value",
+    "DjustTemplateBackend",
+    "DjustTemplateSyntaxError",
     "serialize_context",
+    "serialize_value",
 ]

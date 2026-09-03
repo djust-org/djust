@@ -155,7 +155,20 @@ repos:
         name: check CHANGELOG test counts
         entry: python scripts/check-changelog-test-counts.py
         language: python
-        files: ^CHANGELOG\.md$
+        files: ^(CHANGELOG\.md|changelog\.d/.*\.md)$
+        pass_filenames: false
+
+      # changelog.d/ fragments (one file per PR, folded into [Unreleased] at the
+      # release cut by `make changelog-compile`). Validates every fragment's
+      # section suffix + bullet body + test-count claims, and refuses a commit
+      # that edits CHANGELOG.md's [Unreleased] body directly — that section is
+      # written only by the compile now, so parallel PRs stop conflicting on it.
+      # See scripts/changelog-fragments.py and tests/test_changelog_fragments.py.
+      - id: check-changelog-fragments
+        name: check changelog.d/ fragments (+ no direct [Unreleased] edits)
+        entry: python scripts/changelog-fragments.py check --cached
+        language: python
+        files: ^(changelog\.d/|CHANGELOG\.md$)
         pass_filenames: false
 
       # Pin already-shipped CHANGELOG sections against the newest release tag —
