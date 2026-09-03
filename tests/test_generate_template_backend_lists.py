@@ -504,25 +504,36 @@ class TestScoreboardParity:
         assert code == 0, out
         assert "NOT in generated set: []" in out
 
-    def test_never_exercised_set_is_exactly_the_four_the_doc_names(self, gen, report):
+    def test_the_never_exercised_set_is_empty_and_the_doc_says_so(self, gen, report):
         """The generator is the authority for names the suite never reaches as
-        a tag error; the doc's Conformance sentence names them, and this pins
-        that the sentence names the WHOLE set — a fifth never-exercised name
-        (or one the suite starts reaching) must move the sentence."""
+        a tag error. Until #2558 that set was four names — the `tz` / `l10n`
+        tags, which had no scoreboard cell — and the doc's Conformance
+        sentence listed them. All four are supported now, so the set is EMPTY:
+        every generated-unsupported name is one the suite actually reaches.
+        A fifth such name appearing (a new unsupported tag with no cell) must
+        move the sentence, which is what this pins."""
         board = gen.scoreboard_unsupported_tags(_SCOREBOARD)
         never_exercised = report.all_unsupported_tags - board
-        assert never_exercised == {"get_current_timezone", "localize", "localtime", "timezone"}
+        assert never_exercised == set(), (
+            "a generated-unsupported name the suite never reaches is back: %s — "
+            "update the Conformance sentence in docs/TEMPLATE_BACKEND.md" % sorted(never_exercised)
+        )
         text = _DOC.read_text(encoding="utf-8")
-        # The names sit between the two em-dashes of the sentence; the prose
-        # around them cites `template_tests`, which is not a tag.
+        # The doc must SAY the set is empty; the four historical names stay in
+        # the sentence as the record of what #2558 closed.
         sentence = re.search(
-            r"never appear on the scoreboard[^\n]*?as a tag error — ([^—\n]+) —", text
+            r"Until #2558 four generated-unsupported names never appeared on the "
+            r"scoreboard[^\n]*?as a tag error — ([^—\n]+)\. All four are supported now, "
+            r"so the never-exercised set is empty",
+            text,
         )
-        assert sentence is not None
-        assert set(re.findall(r"`([a-z_]+)`", sentence.group(1))) == never_exercised
-        assert sentence.group(0).startswith(
-            "never appear on the scoreboard because no `template_tests`"
-        )
+        assert sentence is not None, "the Conformance never-exercised sentence moved"
+        assert set(re.findall(r"`([a-z_]+)`", sentence.group(1))) == {
+            "get_current_timezone",
+            "localize",
+            "localtime",
+            "timezone",
+        }
 
 
 class TestCrossCheckDetectsDisagreement:
