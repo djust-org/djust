@@ -495,6 +495,7 @@ fn node_is_element_bearing(node: &Node) -> bool {
         | Node::FirstOf { .. }
         | Node::TemplateTag(_)
         | Node::Cycle { .. }
+        | Node::ResetCycle { .. }
         | Node::Load(_)
         | Node::Extends(_)
         | Node::AssignTag { .. } => false,
@@ -510,6 +511,7 @@ fn node_is_element_bearing(node: &Node) -> bool {
         Node::Block { nodes, .. } => nodes_contain_elements(nodes),
         Node::With { nodes, .. } => nodes_contain_elements(nodes),
         Node::Spaceless { nodes, .. } => nodes_contain_elements(nodes),
+        Node::Filter { nodes, .. } => nodes_contain_elements(nodes),
         // Conservative: tags that may or do produce HTML are treated
         // as element-bearing. Includes templates, components, and
         // any custom-rendered output the framework can't introspect.
@@ -598,7 +600,11 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
 /// Django's assignment tags and `{% … as var %}` the HTML is empty; a bridged
 /// library tag (#2547) may do both — `{% counter %}` emits, `{% one_param 37
 /// as out %}` binds, and Django's own node decides which — so the effect
-/// carries both rather than the call sites assuming "binds ⇒ silent".
+/// carries both rather than the call sites assuming "binds ⇒ silent". The
+/// same is true of a non-silent `{% cycle … as name %}` (#2556), which
+/// Django renders AND binds in one `CycleNode.render`: the call sites push
+/// `effect.html` where they would have rendered the node, so the advance
+/// happens ONCE per render and the bound value is the emitted value.
 fn sibling_updates<L: TemplateLoader>(
     node: &Node,
     context: &Context,
@@ -685,7 +691,86 @@ fn sibling_updates<L: TemplateLoader>(
             // `&amp;lt;b&amp;gt;` where Django renders `&lt;b&gt;`.
             safe: true,
         }]))),
+        // `{% cycle … as name [silent] %}` (#2556): `CycleNode.render` does
+        // `context.set_upward(name, value)` and then returns either `""`
+        // (`silent`) or `render_value_in_context(value)`. One advance serves
+        // both, which is why this is a sibling update and not a render arm
+        // with a second advance — `{% cycle 'a' 'b' as x %}{{ x }}` is `aa`.
+        // The bound value is the RESOLVED value with its runtime safety, so
+        // `{{ x }}` escapes it exactly as Django does (`cycle26`, `cycle28`).
+        Node::Cycle {
+            values,
+            name: Some(name),
+            silent,
+            id,
+            ..
+        } => {
+            let (value, runtime_safe) = cycle_step(values, id, context)?;
+            let html = if *silent {
+                String::new()
+            } else {
+                cycle_emit(&value, runtime_safe)
+            };
+            let bound = if matches!(value, Value::Missing) {
+                // Django's `string_if_invalid`, bound as a plain `str`.
+                Value::String(String::new())
+            } else {
+                value
+            };
+            Ok(Some(SiblingEffect {
+                html,
+                bindings: vec![SiblingBinding {
+                    name: name.clone(),
+                    value: bound,
+                    safe: runtime_safe,
+                }],
+            }))
+        }
         _ => Ok(None),
+    }
+}
+
+/// Advance a `{% cycle %}` node's per-render iterator ONCE and resolve the
+/// value it lands on (#2556) — Django's `next(cycle_iter).resolve(context)`.
+///
+/// The ONE place a cycle advances; both the render arm (unnamed cycles) and
+/// the sibling-update arm (`as name`) call it, so there is no second
+/// counter to drift from this one. Resolution is `ignore_failures`
+/// (Django compiles each operand with `compile_filter` and a missing
+/// variable is `string_if_invalid`, not an error), and the runtime-safe
+/// flag rides along for the emit (#1672).
+fn cycle_step(values: &[String], id: &str, context: &Context) -> Result<(Value, bool)> {
+    if values.is_empty() {
+        return Ok((Value::Missing, false));
+    }
+    let idx = context.cycle_advance(id) % values.len();
+    get_value_safe_ignoring_failures(values[idx].trim(), context)
+}
+
+/// The parsed filter specs of a `{% filter %}` block, back as the `f1|f2:arg`
+/// text `get_value_safe` lexes — the specs kept their argument quotes at
+/// parse time, so the round trip is exact (a `cut:"a|b"` stays one filter).
+fn format_filter_chain(filters: &[(String, Option<String>)]) -> String {
+    filters
+        .iter()
+        .map(|(name, arg)| match arg {
+            Some(arg) => format!("{name}:{arg}"),
+            None => name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// `render_value_in_context` for a cycle value: raw when the LAST filter
+/// produced a genuine `SafeString`, escaped otherwise; a missing operand
+/// renders nothing (#2355).
+fn cycle_emit(value: &Value, runtime_safe: bool) -> String {
+    if matches!(value, Value::Missing) {
+        String::new()
+    } else if runtime_safe {
+        value.to_string()
+    } else {
+        filters::html_escape(&value.to_string())
     }
 }
 
@@ -2166,9 +2251,6 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                         indexmap::IndexMap::with_capacity(7);
                     loop_dict.insert("parentloop".into(), parentloop);
 
-                    // Save outer cycle counter for nested loop support
-                    let saved_cycle_counter = ctx.get("__djust_cycle_counter").cloned();
-
                     // Save outer dj-if loop path for nested-loop composition
                     // and per-iteration uniqueness of `{% if %}` marker ids
                     // (#1832). The parent path (empty outside any loop) is
@@ -2207,13 +2289,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     })
                     .unwrap_or(false);
 
+                    // No per-iteration `{% cycle %}` counter here any more (#2556):
+                    // cycle state is per NODE per RENDER on the `Context`'s
+                    // shared store, which the `ctx` clone above already
+                    // shares, so a cycle inside the body advances on every
+                    // render of the node — Django's model — and a
+                    // `{% resetcycle %}` in the body can reach it.
                     for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
-                        // Set __djust_cycle_counter for {% cycle %} tag support
-                        ctx.set(
-                            "__djust_cycle_counter".to_string(),
-                            Value::Integer(counter as i64),
-                        );
-
                         // Set the per-iteration dj-if loop path (#1832).
                         // Composes for nested loops: an inner For reads this
                         // (non-empty) path and appends its own `-<index>`,
@@ -2565,11 +2647,6 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                         }
                     }
 
-                    // Restore outer cycle counter (for nested loops)
-                    if let Some(saved) = saved_cycle_counter {
-                        ctx.set("__djust_cycle_counter".to_string(), saved);
-                    }
-
                     // Restore outer dj-if loop path (#1832). There is no
                     // public Context::remove for an arbitrary key, so when
                     // there was no parent path we reset to the empty string,
@@ -2673,6 +2750,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // follow-up issue.)
                     let mut fresh = Context::new();
                     fresh.set_emit_dj_if_markers(context.emit_dj_if_markers());
+                    // Django's `context.new()` keeps the parent's
+                    // `render_context`, so a `{% cycle %}` in an `only`
+                    // include advances the parent render's iterator (#2556).
+                    fresh.share_cycle_state_from(context);
                     fresh
                 } else {
                     // Start with parent context
@@ -2953,51 +3034,77 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             Ok(SPACELESS_RE.replace_all(&content, "><").to_string())
         }
 
-        Node::Cycle { values, name: _ } => {
-            // {% cycle val1 val2 ... %} → cycles through values using __djust_cycle_counter
-            // Named cycles (as name) are parsed but silent references are unsupported
-            // (renderer receives &Context, can't store cycle state).
-            // Note: cycle outside a for loop always returns the first value (no counter).
-            if values.is_empty() {
-                return Ok(String::new());
-            }
-            let counter = context
-                .get("__djust_cycle_counter")
-                .and_then(|v| match v {
-                    Value::Integer(i) => Some(*i as usize),
-                    _ => None,
-                })
-                .unwrap_or(0);
-            let idx = counter % values.len();
-            let val = &values[idx];
-            // Resolve via get_value_safe for dotted path and literal support
-            // AND to thread the runtime-safe flag (#1672, parallel-path per
-            // CLAUDE.md #1646): a custom filter that `mark_safe()`s at runtime
-            // (e.g. `{% cycle a|md ... %}`) must NOT be re-escaped, matching the
-            // Variable/InlineIf arms (#1660). `runtime_safe` is true ONLY when
-            // the LAST filter produced a genuine SafeString → fail-safe.
-            let (resolved, runtime_safe) = get_value_safe_ignoring_failures(val.trim(), context)?;
-            let output = if matches!(resolved, Value::Missing) {
-                // An unresolved operand renders NOTHING, and the comment this
-                // replaces claimed the opposite ("output the raw name (Django
-                // behavior)"). Django compiles each `{% cycle %}` operand with
-                // `compile_filter`, and a `FilterExpression` whose variable is
-                // missing resolves to `string_if_invalid` — `""` by default.
-                // Measured: `{% cycle nope 'z' %}` renders `""` in Django and
-                // rendered `nope` here, putting the template's own source text
-                // on the page. That is the #2325 echo symptom, in the one tag
-                // whose operands the corpus did not build a cell for (#2355).
+        Node::Filter { filters, nodes } => {
+            // {% filter f1|f2 %}…{% endfilter %} (#2556). Django's
+            // `FilterNode.render`: `output = self.nodelist.render(context)`
+            // — a `SafeString` — then `with context.push(var=output):
+            // return self.filter_expr.resolve(context)` where
+            // `filter_expr = compile_filter("var|" + rest)`.
+            //
+            // The body renders with `<!--dj-if-->` markers OFF: marker bytes
+            // that go through `upper` or `cut` are not a VDOM boundary the
+            // client could match, so a `{% if %}` inside a `{% filter %}`
+            // block is text, not a keyed subtree (documented limitation).
+            let mut body_ctx = context.clone();
+            body_ctx.set_emit_dj_if_markers(false);
+            let body = render_nodes_with_loader(nodes, &body_ctx, loader)?;
+            // `bind`, SAFE: `NodeList.render` returns `SafeString`, which is
+            // what the chain's `needs_autoescape` / `is_safe` filters read as
+            // their input term — `cycle21`'s `force_escape` re-escapes the
+            // already-escaped body because that is what `force_escape` does
+            // to any input, safe or not.
+            let mut ctx = context.clone();
+            ctx.push();
+            ctx.bind("var".to_string(), Value::String(body), true);
+            // ONE pipe loop: `get_value_safe` is the resolver `{{ }}`,
+            // `{% firstof %}` and `{% cycle %}` share, so every filter rule
+            // is the one they have — never a second copy.
+            //
+            // And NO emit-time escape, measured against Django 5.2.16: a
+            // `FilterNode`'s return is joined into the `NodeList` output
+            // as-is — only `VariableNode` calls `render_value_in_context`.
+            // `{% filter upper %}{{ p }}{% endfilter %}` is `&LT;SCRIPT&GT;`
+            // on Django (the body's own escape, upper-cased), not the
+            // `&amp;LT;` a second escape would make of it. The block's
+            // output is therefore exactly the chain's output.
+            let expr = format!("var|{}", format_filter_chain(filters));
+            let (value, _runtime_safe) = get_value_safe(&expr, &ctx)?;
+            Ok(if matches!(value, Value::Missing) {
                 String::new()
-            } else if runtime_safe {
-                resolved.to_string()
             } else {
-                filters::html_escape(&resolved.to_string())
-            };
-            // Named cycles ({% cycle ... as name %}) are parsed but the name is not
-            // stored in context — the renderer receives &Context (immutable). The cycle
-            // value is still computed correctly each iteration; only the "silent reference"
-            // form ({% cycle name %} outside the cycle definition) is unsupported.
-            Ok(output)
+                value.to_string()
+            })
+        }
+
+        Node::Cycle {
+            values,
+            name: None,
+            id,
+            ..
+        } => {
+            // {% cycle v1 v2 … %} without a name (#2556): advance this node's
+            // per-render iterator and emit. The `as name` form is a sibling
+            // update (`sibling_updates`), which is where its single advance
+            // and its binding live; this arm is only ever reached for a
+            // cycle that binds nothing.
+            let (value, runtime_safe) = cycle_step(values, id, context)?;
+            Ok(cycle_emit(&value, runtime_safe))
+        }
+
+        Node::Cycle { name: Some(_), .. } => {
+            // Unreachable through the sibling-aware loops (every loop asks
+            // `sibling_updates` first); a direct caller gets the same bytes
+            // as the loop would have emitted, with the same single advance.
+            match sibling_updates(node, context, loader)? {
+                Some(effect) => Ok(effect.html),
+                None => Ok(String::new()),
+            }
+        }
+
+        Node::ResetCycle { id, .. } => {
+            // {% resetcycle [name] %} → `CycleNode.reset(context)`, "" (#2556).
+            context.cycle_reset(id);
+            Ok(String::new())
         }
 
         Node::Now(format) => {
@@ -6082,8 +6189,11 @@ mod tests {
             ]),
         );
         let result = render_nodes(&nodes, &context).unwrap();
-        // Outer: A(0), B(1). Inner always: 1(0), 2(1)
-        assert_eq!(result, "A12B12");
+        // Django's per-node state (#2556): the inner cycle is ONE node and
+        // keeps advancing across the outer iterations — `A12B31`, measured
+        // on Django 5.2.16. The pre-#2556 per-iteration counter rendered
+        // `A12B12`, which Django never does.
+        assert_eq!(result, "A12B31");
     }
 
     #[test]
@@ -6115,9 +6225,11 @@ mod tests {
 
     #[test]
     fn test_cycle_urlize_filter_not_double_escaped() {
-        // {% cycle x|urlize %} — urlize produces its own <a href=...> HTML; it
+        // {% cycle x|urlize y %} — urlize produces its own <a href=...> HTML; it
         // must not be re-escaped (urlize is a name-based safe_output_filter).
-        let tokens = tokenize("{% cycle x|urlize %}").unwrap();
+        // Two operands: a one-operand `{% cycle x|urlize %}` is Django's
+        // REFERENCE form and raises `No named cycles in template` (#2556).
+        let tokens = tokenize("{% cycle x|urlize y %}").unwrap();
         let nodes = parse(&tokens).unwrap();
         let mut context = Context::new();
         context.set(

@@ -6,6 +6,7 @@ Converts Django/Python types to JSON-compatible values for the Rust engine.
 
 from datetime import date, datetime, time
 from decimal import Decimal
+from django.utils.datastructures import MultiValueDict
 from typing import Any, Dict, List, Union, cast
 from uuid import UUID
 
@@ -87,6 +88,19 @@ def serialize_value(
     form_result = render_form_value(value)
     if form_result is not None:
         return cast(str, form_result)
+
+    # A `QueryDict` / `MultiValueDict` stays RAW here, and only here (#2556).
+    # On this path the raw-Python sidecar is derived in Rust from this very
+    # dict (`entry_sidecar` -> `build_render_sidecar`), so a rebuilt plain
+    # dict would leave `{% querystring my_qd a=2 %}` with no `.urlencode()`
+    # and no multi-values. The converters read the raw object the way Django
+    # resolves it — LAST value per key (`djust_core::multi_value_dict_pairs`),
+    # so `{{ qd.a }}` on `?a=1&a=2` is `2`, not the `['1', '2']` storage the
+    # plain-dict arm used to see (PR #2596 Stage 11). The LiveView path
+    # differs: `normalize_django_value` feeds JSON state, so it rebuilds the
+    # dict and `rust_bridge` carries the raw object in its own sidecar.
+    if isinstance(value, MultiValueDict):
+        return cast(JSONValue, value)
 
     # Handle dict - recursively serialize
     if isinstance(value, dict):

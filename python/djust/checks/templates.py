@@ -634,14 +634,15 @@ def _check_view_root_same_element(
 
 
 # Tags still unsupported by the Rust renderer (after implementing widthratio,
-# firstof, templatetag, spaceless, cycle, now in v0.3.3).
+# firstof, templatetag, spaceless, cycle, now in v0.3.3; `filter`,
+# `resetcycle`, `lorem`, `debug` and `querystring` in #2556).
 # Only opening tags are matched — end tags always accompany their openers.
 #
 # NOTE: {% extends %} and {% block %} are FULLY SUPPORTED since template
 # inheritance was implemented (PR #272). {% regroup %} is FULLY SUPPORTED
 # since the built-in assign-tag handler was added (djust.template_tags.regroup).
 # Do not add either here.
-_UNSUPPORTED_TAGS_RE = re.compile(r"\{%\s*(ifchanged|resetcycle|lorem|debug|filter|autoescape)\b")
+_UNSUPPORTED_TAGS_RE = re.compile(r"\{%\s*(ifchanged|autoescape)\b")
 
 
 def _check_unsupported_tags(

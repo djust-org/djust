@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from django.db import models
 from django.test.signals import setting_changed
+from django.utils.datastructures import MultiValueDict
 
 from ..serialization import normalize_django_value
 from ..utils import is_model_list
@@ -311,6 +312,15 @@ class ContextMixin:
         tc = template_content
         for key, value in list(context.items()):
             if key in jit_serialized_keys:
+                continue
+            if isinstance(value, MultiValueDict):
+                # A `QueryDict` / `MultiValueDict` stays raw (#2556): the
+                # `dict` rebuild below would keep only the last value per
+                # key, and `{% querystring my_qd a=2 %}` needs the object —
+                # its multi-values and `.urlencode()`. `_sync_state_to_rust`
+                # carries it in the raw sidecar and hands the template the
+                # last-value dict (`normalize_django_value`), the same split
+                # `build_render_sidecar` gives the non-LiveView paths.
                 continue
             if isinstance(value, dict):
                 context[key] = self._deep_serialize_dict(value, tc, key)

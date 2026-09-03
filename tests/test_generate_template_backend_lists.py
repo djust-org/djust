@@ -272,9 +272,9 @@ class TestExtractionMatchesTheRegistries:
         assert not (native & handler)
         assert not (native & unsupported)
         assert not (handler & unsupported)
-        # The two Python-handler tags and the native collision rule
+        # The five Python-handler tags (#2556 added three) and the native collision rule
         # (`templatetag` has both an arm and a handler; the arm wins).
-        assert handler == {"regroup", "url"}
+        assert handler == {"debug", "lorem", "querystring", "regroup", "url"}
         assert "templatetag" in native
 
     def test_native_tag_extraction_sees_an_injected_arm(self, gen, tmp_path):
@@ -346,13 +346,19 @@ class TestCheckMode:
 
     def test_hand_edited_unsupported_list_fails_the_check(self, tmp_path):
         text = _DOC.read_text(encoding="utf-8")
-        needle = "`querystring`, "
-        assert text.count(needle) == 1, "the unsupported line is the mutation target"
+        # Mutate the unsupported-tags line itself — pick its first entry
+        # rather than hard-coding a tag name, so the test keeps targeting
+        # that line as tags graduate out of it (#2556 moved three).
+        m = re.search(r"^\*\*Built-in tags — unsupported \(\d+\):\*\* `(\w+)`, ", text, re.M)
+        assert m, "the unsupported line is the mutation target"
+        first_tag = m.group(1)
+        needle = f"`{first_tag}`, "
+        assert text.count(needle) == 1, needle
         edited = tmp_path / "TEMPLATE_BACKEND.md"
         edited.write_text(text.replace(needle, "", 1), encoding="utf-8")
         code, out = _run("--doc", str(edited))
         assert code == 1, out
-        assert "querystring" in out
+        assert first_tag in out
         assert "run: make template-backend-lists" in out
 
     def test_hand_edited_count_fails_the_check(self, tmp_path):

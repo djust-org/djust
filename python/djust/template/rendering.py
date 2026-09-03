@@ -806,6 +806,14 @@ class DjustTemplate:
         else:
             context_dict = dict(context)
 
+        # A `RequestContext` carries its request as an ATTRIBUTE, and
+        # `flatten()` drops it (#2556, the request slice of #2550): Django's
+        # `Template.render(RequestContext(request))` can reach
+        # `context.request` (`{% querystring %}` reads it), so this path must
+        # too when the caller did not pass `request=` separately.
+        if request is None:
+            request = getattr(context, "request", None)
+
         # Add request to context if provided
         if request is not None:
             context_dict["request"] = request

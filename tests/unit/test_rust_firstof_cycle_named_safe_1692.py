@@ -25,7 +25,9 @@ def test_firstof_safe_filter_not_double_escaped():
 
 def test_cycle_urlize_filter_not_double_escaped():
     # urlize produces its own <a href=...> HTML; must not be re-escaped.
-    out = render_template("{% cycle x|urlize %}", {"x": "Visit https://example.com"})
+    out = render_template(
+        "{% cycle x|urlize x %}", {"x": "Visit https://example.com"}
+    )  # two operands: one is the reference form (#2556)
     assert '<a href="https://example.com"' in out
     assert "&lt;a" not in out
 

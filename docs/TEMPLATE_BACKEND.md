@@ -203,6 +203,8 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 ⚠️ **Not all Django features supported yet:**
 - Several Django built-in tags and most of Django's `{% load %}` library tags (`i18n`, `l10n`, `tz`, `cache`) are not implemented; the generated lists below are the authority
 - Django's `{% load %}` library *filters* (`unlocalize`, `language_name`, `utc`, …) are not implemented natively; they resolve only through the filter bridge, which needs a `DjangoTemplates` engine in `TEMPLATES` next to djust (the fallback engine in the Quick Start). The bridged `tz` filters resolve but currently render empty output (#2541)
+- `{% debug %}` renders `""` unless `settings.DEBUG` (Django's own gate), and what it dumps has already been through djust's serialization floor and sidecar proxies — protected model fields never reach it. On the plain backend a model shows as its serialized dict rather than its repr (#2590)
+- `{% querystring %}` reads `request.GET` from the render: the plain backend carries a `RequestContext`'s request or the `request=` argument, and the LiveView WebSocket path carries the mount-time request; the LiveView GET page-shell wires no request into the render (pre-existing, #2589), so pass an explicit `QueryDict` there. `{% querystring … as var %}` is refused until #2591
 - A project's own `{% load %}` tag libraries ARE loaded (#2547, see "Loading a project's template libraries" below); a raw `@register.tag` that consumes a body is the one shape that is refused
 - `{% url %}` raises `NoReverseMatch` on a failed reverse, as Django does, and `{% url … as var %}` stores `''` in the variable instead of raising (#2563). Both hold on the plain backend and on the LiveView path, for a quoted name and for a variable name, and the message is Django's (`Reverse for 'x' with no arguments not found. 1 pattern(s) tried: […]`). There is no fail-soft switch: a blank `href` is exactly the broken link the exception exists to surface, and `as var` is the escape hatch. Three differences remain:
   - a `{% url 'quoted-name' … %}` is resolved by a pre-pass BEFORE the template is parsed, so one inside a never-taken `{% if %}` branch or a `{% comment %}` block still raises;
@@ -232,11 +234,11 @@ Reference: Django 5.2.16 — `django.template.defaultfilters`, `defaulttags` and
 
 **Built-in filters — unsupported (0):** none
 
-**Built-in tags — 18 of 25 supported:**
-- native Rust (16): `block`, `comment`, `csrf_token`, `cycle`, `extends`, `firstof`, `for`, `if`, `include`, `load`, `now`, `spaceless`, `templatetag`, `verbatim`, `widthratio`, `with`
-- via Python handler (2): `regroup`, `url`
+**Built-in tags — 23 of 25 supported:**
+- native Rust (18): `block`, `comment`, `csrf_token`, `cycle`, `extends`, `filter`, `firstof`, `for`, `if`, `include`, `load`, `now`, `resetcycle`, `spaceless`, `templatetag`, `verbatim`, `widthratio`, `with`
+- via Python handler (5): `debug`, `lorem`, `querystring`, `regroup`, `url`
 
-**Built-in tags — unsupported (7):** `autoescape`, `debug`, `filter`, `ifchanged`, `lorem`, `querystring`, `resetcycle`
+**Built-in tags — unsupported (2):** `autoescape`, `ifchanged`
 
 **Library tags (`{% load … %}`) — supported (1):** `static`
 
@@ -257,8 +259,8 @@ Bridged filters are Django's own callables, forwarded to the Rust engine by the 
 
 The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
 
-- **50.33%** of the Django template tests that reach the engine pass (527 of 1047) <!-- django-suite-claim -->
-- Over the whole `template_tests` label the figure is 64.29% (936 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them.
+- **55.68%** of the Django template tests that reach the engine pass (583 of 1047) <!-- django-suite-claim -->
+- Over the whole `template_tests` label the figure is 68.13% (992 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them.
 
 Two result kinds are counted separately because they are different work:
 
