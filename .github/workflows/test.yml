@@ -132,13 +132,36 @@ jobs:
   # not "never". Historical evidence the matrix has value: PRs #450 / #452
   # shipped real 3.14-support fixes. Tradeoff accepted because the absolute
   # cost (~8 min/PR × dependabot volume) outweighed the latency.
+  #
+  # SHARDED 4-way with pytest-split. Measured on the last completed run
+  # before sharding (run 33681681995): this job was 1191s, of which 1005s
+  # was the pytest step (21773 items on the runner's 4 xdist workers), 139s
+  # was `uv sync` + `maturin develop` (rust-cache full hit; the ~67s of cargo
+  # is the workspace crates, which rust-cache does not keep), and ~25s was the
+  # lint/type/doc checks. Every other job in this workflow is <= 4 min, so
+  # the whole workflow's wall-clock WAS this one step.
+  #
+  # Each shard runs `--splits 4 --group N` against the committed
+  # `.test_durations` (pytest-split balances the groups by recorded
+  # duration; `-n auto` still parallelises inside the shard). When the file
+  # is missing or stale, pytest-split falls back to splitting by test COUNT
+  # — still correct, just less balanced — so a stale file degrades wall-clock,
+  # never coverage. Regenerate with `make test-durations` when the suite grows
+  # by more than ~10% (see CONTRIBUTING.md "CI shards").
+  #
+  # Every shard collects the FULL suite and deselects the other groups, so the
+  # union of the four is exactly the unsharded collection (pinned by
+  # tests/test_ci_python_test_shards.py). The non-pytest steps (fixture
+  # freshness, ruff, mypy, ADR/doc/lockfile checks) run on shard 1 only —
+  # they are per-checkout, not per-shard, and would be 4x duplicated work.
   python-tests:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
-    name: python-tests (py${{ matrix.python-version }})
+        group: [1, 2, 3, 4]
+    name: python-tests (py${{ matrix.python-version }}, shard ${{ matrix.group }}/4)
     # NOT given rust-tests' CARGO_PROFILE_* override — measured, and it is a
     # LOSS here. Tried on this job and reverted: the build step did drop
     # 118s -> 89s, but the test steps rose 104 -> 112s and 72 -> 91s, so the
@@ -162,10 +185,17 @@ jobs:
           toolchain: stable
           override: true
 
-      # Matrix-aware: Swatinem/rust-cache automatically scopes the cache
-      # to the python-version matrix dimension, so 3.12 / 3.13 / 3.14
-      # builds keep separate caches and don't invalidate each other.
+      # One cache per python-version, SHARED across the four shards: the
+      # extension they build is identical, so `shared-key` (which replaces
+      # the automatic job-id key) keeps them on one entry instead of four
+      # copies. The interpreter version is in the key because pyo3's
+      # build-script output in target/ is interpreter-specific. Only shard 1
+      # saves; the others restore-only, so four post-steps don't race to
+      # write the same key.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: python-tests-py${{ matrix.python-version }}
+          save-if: ${{ matrix.group == 1 }}
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v7
@@ -191,8 +221,12 @@ jobs:
           uv sync --extra dev
           uv run maturin develop --release
 
+      # pytest-split is also in the [dev] extra; installing it here as well
+      # mirrors the existing pytest-xdist belt-and-braces so a stale uv.lock
+      # cannot leave a shard without the plugin (pytest would then reject
+      # `--splits` as an unknown option and the shard would fail loudly).
       - name: Install test tools
-        run: uv pip install pytest-xdist mypy
+        run: uv pip install pytest-xdist pytest-split mypy
 
       # Freshness gate for the client-faithful VDOM diff fixtures (#1979): the
       # committed JSON must equal a fresh regen, or the harness pins stale patch
@@ -200,6 +234,7 @@ jobs:
       # already uses demo_project.settings, so a diff here is a genuine
       # stale-fixture signal, not env drift.
       - name: VDOM diff fixtures are fresh (#1979)
+        if: matrix.group == 1
         run: |
           PYTHONPATH=. .venv/bin/python scripts/gen_vdom_diff_fixtures.py
           # --porcelain (not `git diff --exit-code`) so a NEW scenario's
@@ -240,11 +275,16 @@ jobs:
       # Merging the steps preserves that — same invocation, same gate — and
       # tests/test_ci_python_test_roots.py pins all three roots so the omission
       # cannot silently return.
-      - name: Run Python tests (parallel with pytest-xdist)
+      #
+      # Sharded: `--splits 4 --group N` selects this shard's quarter of that
+      # ONE collection; all three roots stay in the single invocation, so the
+      # #2032 pin above still holds per shard.
+      - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
         run: |
-          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --splits 4 --group ${{ matrix.group }} --durations-path .test_durations
 
       - name: Run Python linter
+        if: matrix.group == 1
         run: uv run ruff check python/
 
       # mypy type-check — incremental enforcement gate (ADR-023).
@@ -257,24 +297,29 @@ jobs:
       # strict island, or a future module flipped to strict that doesn't pass,
       # fails this step → fails python-tests → fails the test-summary AND-gate.
       - name: Run mypy type-check (ADR-023 strict islands)
+        if: matrix.group == 1
         run: .venv/bin/python -m mypy python/djust
 
       - name: ADR status/version-line consistency (#1501)
+        if: matrix.group == 1
         run: .venv/bin/python scripts/check-adr-status.py
 
       - name: Doc-snippet smoke test + claim assertions (#1500, #1707)
+        if: matrix.group == 1
         # Also scans docs/website/guides/*.md for symbol/import resolvability
         # (#1707) — the guard for #1559/#1699's hallucinated djust.tenants
         # symbols. Guides are scanned by default; --no-guides disables.
         run: .venv/bin/python scripts/check-doc-snippets.py
 
       - name: Generated template-backend support lists are current (#2533)
+        if: matrix.group == 1
         # docs/TEMPLATE_BACKEND.md's tag/filter lists are generated from the
         # engine's registries against the installed Django; a stale block
         # fails here. Regenerate with `make template-backend-lists`.
         run: PYTHONPATH=. .venv/bin/python scripts/generate-template-backend-lists.py
 
       - name: Lockfile self-entry version sync (#1498)
+        if: matrix.group == 1
         run: .venv/bin/python scripts/check-lockfile-versions.py
 
   # Free-threaded (no-GIL) smoke leg - #1534 / follow-up to #1432.
@@ -791,6 +836,13 @@ jobs:
     needs: [benchmarks, rust-tests, python-tests, javascript-tests, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks]
     if: always()
     steps:
+      # `needs.python-tests.result` is the MATRIX-WIDE result: GitHub reports
+      # `success` only when every cell (3 interpreters on push x 4 shards)
+      # succeeded, and `failure` if any cell failed — `fail-fast: false` lets
+      # the other cells finish but does not soften the aggregate. The gate
+      # therefore does not need to enumerate shards: one `needs` entry + one
+      # `== "success"` clause covers all of them, exactly as it already
+      # covered the 3.12/3.13/3.14 dimension before sharding.
       - name: Check test results
         run: |
           echo "Test Results Summary:"

@@ -1548,9 +1548,21 @@ impl<'de> Deserialize<'de> for Value {
                                 eq_class: decode_eq_class(eq_class),
                                 // The handle is TRANSIENT (#2539): the wire
                                 // never carried it, so a restored value has
-                                // none. `{{ o.a }}` on a state entry that came
-                                // back from the backend re-acquires one at the
-                                // next conversion, or resolves through `attrs`.
+                                // none — and under the lazy flag its `attrs`
+                                // map is EMPTY too (the handle REPLACES the
+                                // eager map, #2570). A restored handle-bearing
+                                // value therefore answers NOTHING for a dotted
+                                // lookup until the next full sync re-converts
+                                // it (`update_state` from Python). Every
+                                // framework render path runs that sync before
+                                // the first render of a clone (the clone is
+                                // only attached in `_initialize_rust_view`,
+                                // behind `_rust_view is None`, on a Python view
+                                // that has no change-detection baseline yet);
+                                // a `RustLiveView` clone rendered WITHOUT one —
+                                // the API-level contract — renders `''` for
+                                // `{{ o.a }}`. See
+                                // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                             })));
                         }
@@ -1598,9 +1610,21 @@ impl<'de> Deserialize<'de> for Value {
                                 eq_class: None,
                                 // The handle is TRANSIENT (#2539): the wire
                                 // never carried it, so a restored value has
-                                // none. `{{ o.a }}` on a state entry that came
-                                // back from the backend re-acquires one at the
-                                // next conversion, or resolves through `attrs`.
+                                // none — and under the lazy flag its `attrs`
+                                // map is EMPTY too (the handle REPLACES the
+                                // eager map, #2570). A restored handle-bearing
+                                // value therefore answers NOTHING for a dotted
+                                // lookup until the next full sync re-converts
+                                // it (`update_state` from Python). Every
+                                // framework render path runs that sync before
+                                // the first render of a clone (the clone is
+                                // only attached in `_initialize_rust_view`,
+                                // behind `_rust_view is None`, on a Python view
+                                // that has no change-detection baseline yet);
+                                // a `RustLiveView` clone rendered WITHOUT one —
+                                // the API-level contract — renders `''` for
+                                // `{{ o.a }}`. See
+                                // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                             })));
                         }
@@ -1642,9 +1666,21 @@ impl<'de> Deserialize<'de> for Value {
                                 eq_class: None,
                                 // The handle is TRANSIENT (#2539): the wire
                                 // never carried it, so a restored value has
-                                // none. `{{ o.a }}` on a state entry that came
-                                // back from the backend re-acquires one at the
-                                // next conversion, or resolves through `attrs`.
+                                // none — and under the lazy flag its `attrs`
+                                // map is EMPTY too (the handle REPLACES the
+                                // eager map, #2570). A restored handle-bearing
+                                // value therefore answers NOTHING for a dotted
+                                // lookup until the next full sync re-converts
+                                // it (`update_state` from Python). Every
+                                // framework render path runs that sync before
+                                // the first render of a clone (the clone is
+                                // only attached in `_initialize_rust_view`,
+                                // behind `_rust_view is None`, on a Python view
+                                // that has no change-detection baseline yet);
+                                // a `RustLiveView` clone rendered WITHOUT one —
+                                // the API-level contract — renders `''` for
+                                // `{{ o.a }}`. See
+                                // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                             })));
                         }
@@ -1688,9 +1724,21 @@ impl<'de> Deserialize<'de> for Value {
                                 eq_class: None,
                                 // The handle is TRANSIENT (#2539): the wire
                                 // never carried it, so a restored value has
-                                // none. `{{ o.a }}` on a state entry that came
-                                // back from the backend re-acquires one at the
-                                // next conversion, or resolves through `attrs`.
+                                // none — and under the lazy flag its `attrs`
+                                // map is EMPTY too (the handle REPLACES the
+                                // eager map, #2570). A restored handle-bearing
+                                // value therefore answers NOTHING for a dotted
+                                // lookup until the next full sync re-converts
+                                // it (`update_state` from Python). Every
+                                // framework render path runs that sync before
+                                // the first render of a clone (the clone is
+                                // only attached in `_initialize_rust_view`,
+                                // behind `_rust_view is None`, on a Python view
+                                // that has no change-detection baseline yet);
+                                // a `RustLiveView` clone rendered WITHOUT one —
+                                // the API-level contract — renders `''` for
+                                // `{{ o.a }}`. See
+                                // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                             })));
                         }
@@ -1732,9 +1780,21 @@ impl<'de> Deserialize<'de> for Value {
                                 eq_class: None,
                                 // The handle is TRANSIENT (#2539): the wire
                                 // never carried it, so a restored value has
-                                // none. `{{ o.a }}` on a state entry that came
-                                // back from the backend re-acquires one at the
-                                // next conversion, or resolves through `attrs`.
+                                // none — and under the lazy flag its `attrs`
+                                // map is EMPTY too (the handle REPLACES the
+                                // eager map, #2570). A restored handle-bearing
+                                // value therefore answers NOTHING for a dotted
+                                // lookup until the next full sync re-converts
+                                // it (`update_state` from Python). Every
+                                // framework render path runs that sync before
+                                // the first render of a clone (the clone is
+                                // only attached in `_initialize_rust_view`,
+                                // behind `_rust_view is None`, on a Python view
+                                // that has no change-detection baseline yet);
+                                // a `RustLiveView` clone rendered WITHOUT one —
+                                // the API-level contract — renders `''` for
+                                // `{{ o.a }}`. See
+                                // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                             })));
                         }
@@ -1767,9 +1827,21 @@ impl<'de> Deserialize<'de> for Value {
                                 eq_class: None,
                                 // The handle is TRANSIENT (#2539): the wire
                                 // never carried it, so a restored value has
-                                // none. `{{ o.a }}` on a state entry that came
-                                // back from the backend re-acquires one at the
-                                // next conversion, or resolves through `attrs`.
+                                // none — and under the lazy flag its `attrs`
+                                // map is EMPTY too (the handle REPLACES the
+                                // eager map, #2570). A restored handle-bearing
+                                // value therefore answers NOTHING for a dotted
+                                // lookup until the next full sync re-converts
+                                // it (`update_state` from Python). Every
+                                // framework render path runs that sync before
+                                // the first render of a clone (the clone is
+                                // only attached in `_initialize_rust_view`,
+                                // behind `_rust_view is None`, on a Python view
+                                // that has no change-detection baseline yet);
+                                // a `RustLiveView` clone rendered WITHOUT one —
+                                // the API-level contract — renders `''` for
+                                // `{{ o.a }}`. See
+                                // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                             })));
                         }
@@ -1800,9 +1872,21 @@ impl<'de> Deserialize<'de> for Value {
                                 eq_class: None,
                                 // The handle is TRANSIENT (#2539): the wire
                                 // never carried it, so a restored value has
-                                // none. `{{ o.a }}` on a state entry that came
-                                // back from the backend re-acquires one at the
-                                // next conversion, or resolves through `attrs`.
+                                // none — and under the lazy flag its `attrs`
+                                // map is EMPTY too (the handle REPLACES the
+                                // eager map, #2570). A restored handle-bearing
+                                // value therefore answers NOTHING for a dotted
+                                // lookup until the next full sync re-converts
+                                // it (`update_state` from Python). Every
+                                // framework render path runs that sync before
+                                // the first render of a clone (the clone is
+                                // only attached in `_initialize_rust_view`,
+                                // behind `_rust_view is None`, on a Python view
+                                // that has no change-detection baseline yet);
+                                // a `RustLiveView` clone rendered WITHOUT one —
+                                // the API-level contract — renders `''` for
+                                // `{{ o.a }}`. See
+                                // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
                             })));
                         }

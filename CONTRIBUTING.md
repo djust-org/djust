@@ -213,6 +213,32 @@ Catches the two classes of bugs `make test` can miss:
   coverage; only caught by CI)
 - xdist-ordering issues that pass under sequential runs
 
+### CI shards — `.test_durations`
+
+CI runs the Python suite as **four `pytest-split` shards** (`--splits 4
+--group N`), each a separate `python-tests (pyX.Y, shard N/4)` job with
+`-n auto` inside it. The shards are balanced by the per-test durations in the
+committed `.test_durations` file, not by test count. Every shard collects the
+full suite and deselects the other groups, so the union of the four is exactly
+one unsharded run (`tests/test_ci_python_test_shards.py` pins this).
+
+- **A missing or stale entry never drops a test.** pytest-split falls back to
+  splitting by count for tests it has no timing for, so staleness only
+  unbalances the shards (one runs longer than the others). You do not need to
+  regenerate the file for every PR.
+- **Regenerate it when the suite grows or shifts by more than ~10%** (a large
+  new test module, a big deletion, a change that makes many tests much
+  slower/faster), or when one shard is visibly the straggler in CI:
+
+  ```bash
+  make test-durations   # one full run, ~7-10 min; writes .test_durations
+  git add .test_durations
+  ```
+
+- `make test-shard GROUP=2` runs a single shard exactly as CI does.
+- The lint/type/doc checks (ruff, mypy, ADR/doc-snippet/lockfile checks)
+  run on shard 1 only; they are per-checkout, not per-shard.
+
 ### Benchmarks
 ```bash
 cd benchmarks
