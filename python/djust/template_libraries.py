@@ -774,7 +774,12 @@ def _render_node(node: Any, context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any
     from django.utils.safestring import mark_safe
 
     before = dict(context)
-    ctx = Context(context, autoescape=True)
+    # `dict(context)`, NOT `context` — identical to the raw-block handler's
+    # `render` below, which is the same construction on a parallel path
+    # (#1646). `Context(d)` keeps `d` as `dicts[-1]`, so passing the CALLER's
+    # dict lets a node's `context[var] =` write through to it; the copy keeps
+    # the node's writes inside the returned `bindings` diff, where they belong.
+    ctx = Context(dict(context), autoescape=True)
     ctx.template = _STUB_TEMPLATE
     output = node.render(ctx)
     after = ctx.dicts[-1]

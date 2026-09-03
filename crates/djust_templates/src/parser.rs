@@ -1164,7 +1164,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
             }
         }
 
-        Token::Comment => Ok(Some(Node::Comment)),
+        Token::Comment(_) => Ok(Some(Node::Comment)),
     }
 }
 
@@ -1393,8 +1393,17 @@ fn collect_raw_source(
                 };
                 content.push_str(&format!("{{% {name}{args_str} %}}"));
             }
-            Token::Comment => {
-                // Skip comments
+            Token::Comment(text) => {
+                // Re-emit the comment VERBATIM (#2558). A raw-block body is
+                // SOURCE for Django, and Django's `do_block_translate` refuses
+                // a comment inside `{% blocktranslate %}` with
+                // `doesn't allow other block tags (seen 'c')`. Dropping it here
+                // deleted the comment from the body, so Django saw a clean
+                // msgid and rendered `a  b` where it should have raised —
+                // silently mangling author content.
+                content.push_str("{#");
+                content.push_str(text);
+                content.push_str("#}");
             }
             _ => {}
         }
@@ -2555,6 +2564,47 @@ mod tests {
         body
     }
 
+    /// A comment re-emits VERBATIM. The collector used to drop it, so Django
+    /// never saw it: `{% blocktranslate %}a {# c #} b{% endblocktranslate %}`
+    /// rendered `a  b` where Django raises `doesn't allow other block tags
+    /// (seen 'c')`. Silently mangling author content is the worse failure, so
+    /// the body must carry the comment and let Django refuse it (#2597).
+    #[test]
+    fn raw_source_re_emits_a_comment_verbatim() {
+        assert_eq!(
+            collected("a {# c #} b{% endblocktranslate %}", "endblocktranslate"),
+            "a {# c #} b"
+        );
+    }
+
+    /// The whole inner text survives, not just a single word — Django reports
+    /// the comment's stripped text as the `seen` payload.
+    #[test]
+    fn raw_source_re_emits_a_multiword_comment_verbatim() {
+        assert_eq!(
+            collected(
+                "a {# Translators: hi #} b{% endblocktranslate %}",
+                "endblocktranslate"
+            ),
+            "a {# Translators: hi #} b"
+        );
+    }
+
+    /// An unterminated `{{` inside the body is TEXT, and the end tag after it
+    /// still closes the block — the pre-#2597 lexer consumed to end-of-input
+    /// and swallowed the end tag, so this raised `Unclosed raw-block tag` on
+    /// a template Django renders verbatim.
+    #[test]
+    fn raw_source_keeps_an_unterminated_marker_and_still_finds_the_end_tag() {
+        assert_eq!(
+            collected(
+                "a {{ unclosed b{% endblocktranslate %}",
+                "endblocktranslate"
+            ),
+            "a {{ unclosed b"
+        );
+    }
+
     #[test]
     fn raw_source_reconstructs_a_variable_with_django_spacing() {
         // `{{anton}}` and `{{ berta  }}` both re-emit as `{{ name }}`: Django
@@ -2570,13 +2620,16 @@ mod tests {
     }
 
     #[test]
-    fn raw_source_reconstructs_text_and_tags_verbatim_and_drops_comments() {
+    fn raw_source_reconstructs_text_tags_and_comments_verbatim() {
+        // The comment re-emits too (#2597). This assertion used to expect it
+        // DROPPED, which is what let a comment inside a `{% blocktranslate %}`
+        // body silently vanish instead of reaching Django to be refused.
         assert_eq!(
             collected(
                 "a %(x)s {% plural %}b{# c #}{% endblocktranslate %}",
                 "endblocktranslate"
             ),
-            "a %(x)s {% plural %}b"
+            "a %(x)s {% plural %}b{# c #}"
         );
         // A tag's arguments survive, space-joined — `{% templatetag openblock %}`
         // must reach Django as a tag, not as its rendered output.

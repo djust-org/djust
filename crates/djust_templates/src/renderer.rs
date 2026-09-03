@@ -1569,6 +1569,32 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Pops [`USE_L10N_STACK`] on the way out of a `{% localize %}` block —
+/// including when a child node PANICS and the stack unwinds. Without the
+/// `Drop`, a panic leaks the flag onto the thread-local, and the next render
+/// on that (pooled) worker thread inherits a stale `localize` scope (#2558).
+struct UseL10nGuard;
+
+impl Drop for UseL10nGuard {
+    fn drop(&mut self) {
+        USE_L10N_STACK.with(|s| {
+            s.borrow_mut().pop();
+        });
+    }
+}
+
+/// Restores the active timezone on the way out of a `{% localtime off %}`
+/// block, on the panic path too. See [`UseL10nGuard`].
+struct ActiveTimezoneGuard {
+    prev: Option<String>,
+}
+
+impl Drop for ActiveTimezoneGuard {
+    fn drop(&mut self) {
+        crate::timezone::set_active_timezone(self.prev.as_deref());
+    }
+}
+
 /// Is the innermost `{% localize %}` scope (if any) forcing l10n OFF?
 fn use_l10n_forced_off() -> bool {
     USE_L10N_STACK.with(|s| s.borrow().last().copied() == Some(false))
@@ -3351,12 +3377,14 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // error path too. A lexical scope entered and exited in the
             // same call frame needs no Context plumbing — one thread-local
             // stack is the whole mechanism (#2558).
+            // The pop runs from `Drop`, so it also runs when a child PANICS
+            // and the stack unwinds. A plain push/render/pop leaks the flag
+            // onto the thread on the panic path, and these are thread-locals
+            // on a pooled worker thread — the next render on that thread
+            // would inherit a stale `localize` state.
             USE_L10N_STACK.with(|s| s.borrow_mut().push(*use_l10n));
-            let result = render_nodes_with_loader(children, context, loader);
-            USE_L10N_STACK.with(|s| {
-                s.borrow_mut().pop();
-            });
-            result
+            let _guard = UseL10nGuard;
+            render_nodes_with_loader(children, context, loader)
         }
 
         Node::LocalTime { use_tz, children } => {
@@ -3364,15 +3392,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // `off` clears the active zone so aware datetimes stop converting
             // inside the block; `on` leaves whatever the render env pushed
             // (the restore is the saved value either way).
-            let prev = crate::timezone::active_timezone_name();
-            if !*use_tz {
+            // Restored from `Drop` so the saved zone comes back on the PANIC
+            // path too — see the `Localize` arm above.
+            let _guard = if *use_tz {
+                None
+            } else {
+                let prev = crate::timezone::active_timezone_name();
                 crate::timezone::set_active_timezone(None);
-            }
-            let result = render_nodes_with_loader(children, context, loader);
-            if !*use_tz {
-                crate::timezone::set_active_timezone(prev.as_deref());
-            }
-            result
+                Some(ActiveTimezoneGuard { prev })
+            };
+            render_nodes_with_loader(children, context, loader)
         }
     }
 }
@@ -5633,6 +5662,56 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::parse;
     use indexmap::IndexMap;
+
+    // ---- #2597: the scope stacks unwind on PANIC, not just on `Err` -------
+
+    /// `{% localize %}` pushes a thread-local flag and pops it on the way
+    /// out. The pop used to be a plain statement after the render call, so a
+    /// PANIC in a child skipped it and leaked the flag onto the thread — and
+    /// these are pooled worker threads, so the next render inherited a stale
+    /// `localize` scope. `UseL10nGuard` moves the pop into `Drop`.
+    #[test]
+    fn the_localize_stack_unwinds_when_a_child_panics() {
+        assert!(!use_l10n_forced_off(), "stack must start clean");
+
+        let panicked = std::panic::catch_unwind(|| {
+            USE_L10N_STACK.with(|s| s.borrow_mut().push(false));
+            let _guard = UseL10nGuard;
+            assert!(
+                use_l10n_forced_off(),
+                "the scope is active inside the block"
+            );
+            panic!("a child node blew up");
+        });
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        assert!(
+            !use_l10n_forced_off(),
+            "UseL10nGuard must have popped the stack while unwinding"
+        );
+    }
+
+    /// The `{% localtime off %}` sibling: the saved zone comes back on the
+    /// panic path too.
+    #[test]
+    fn the_active_timezone_is_restored_when_a_child_panics() {
+        crate::timezone::set_active_timezone(Some("Europe/Paris"));
+
+        let panicked = std::panic::catch_unwind(|| {
+            let prev = crate::timezone::active_timezone_name();
+            crate::timezone::set_active_timezone(None);
+            let _guard = ActiveTimezoneGuard { prev };
+            panic!("a child node blew up");
+        });
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        assert_eq!(
+            crate::timezone::active_timezone_name().as_deref(),
+            Some("Europe/Paris"),
+            "ActiveTimezoneGuard must have restored the zone while unwinding"
+        );
+        crate::timezone::set_active_timezone(None);
+    }
 
     // ---- #2558: the scope-node operand ------------------------------------
 

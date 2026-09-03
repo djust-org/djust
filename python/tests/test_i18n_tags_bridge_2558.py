@@ -380,15 +380,42 @@ SHAPES = {
     "localize-nested": LT
     + "{% localize off %}{% localize on %}{{ n }}{% endlocalize %}|{{ n }}{% endlocalize %}|{{ n }}",
     "localize-filters": LT + "{{ i|localize }}|{{ n|unlocalize }}",
+    # --- raw-body residues, both fixed in the #2597 review pass -------------
+    # A comment inside a `{% blocktranslate %}` body. The body crosses to
+    # Django as SOURCE, so Django's own `do_block_translate` must see the
+    # comment and refuse it. The Rust lexer used to DROP a comment's text,
+    # so the body reached Django without it and rendered `a  b` — silently
+    # mangling author content where Django raises. `Token::Comment` now
+    # carries the raw text and `collect_raw_source` re-emits it verbatim, so
+    # the message (including the `seen` payload) is Django's own.
+    "bt-comment-in-body": L + "{% blocktranslate %}a {# c #} b{% endblocktranslate %}",
+    # The same, with a payload Django reports differently — `seen` is the
+    # comment's whole stripped text, not a single token.
+    "bt-comment-in-body-multiword": L
+    + "{% blocktranslate %}a {# Translators: hi #} b{% endblocktranslate %}",
+    # An unterminated `{{` inside the body. Django's lexer finds tags by
+    # regex, so the `{{` is plain text and the LATER `{% endblocktranslate %}`
+    # still lexes; the template renders verbatim. The Rust lexer consumed
+    # from the opener to end-of-input, swallowing the end tag, so this raised
+    # `Unclosed raw-block tag` on a template Django renders (#2549 turned the
+    # pre-existing swallow into a parse-time hard failure).
+    "bt-unclosed-var-in-body": L + "{% blocktranslate %}a {{ unclosed b{% endblocktranslate %}",
+    # The bare form of the same lexer bug, one row per marker. Not i18n —
+    # every template with an unterminated marker silently lost every byte
+    # after it (`a {{ unclosed b` rendered `a `). Django renders all three
+    # as literal text.
+    "unclosed-var-marker": "a {{ unclosed b",
+    "unclosed-tag-marker": "a {% unclosed b",
+    "unclosed-comment-marker": "a {# unclosed b",
+    # The closer IS found later, so these stay real tags — the lookahead
+    # must not turn a well-formed marker into text.
+    "closed-comment-still-a-comment": "a {# c #} b",
+    "unclosed-var-then-real-tag": L + "a {{ unclosed b {% translate 'Password' %}",
 }
 
 #: Shapes where Django's error TEXT is unreachable by construction and only
 #: the exception TYPE is pinned — named, not silent.
 TYPE_ONLY = {
-    # Django's lexer sees `{# c #}` as a COMMENT token and `do_block_translate`
-    # refuses it as "other block tags (seen 'c')"; the Rust lexer drops a
-    # comment's text, so the body reaches Django without it and renders.
-    # Both engines agree this is not a sane msgid; djust renders it.
     "bt-unclosed": (
         L + "{% blocktranslate %}x",
         # Django walks off the end of the token list and reports the LAST
@@ -435,6 +462,34 @@ def test_type_only_rows_raise_the_same_type(shape):
     # djust raises the `DjustTemplateSyntaxError` SUBCLASS at construction
     # (#2549); Django's `except TemplateSyntaxError` catches both.
     assert ours is not None and issubclass(ours, theirs)
+
+
+def test_neither_bridge_path_writes_through_to_the_callers_context():
+    """Both bridge paths build their ``Context`` over a COPY (#1646).
+
+    ``_render_node`` used to pass the caller's dict straight to ``Context``,
+    which keeps it as ``dicts[-1]``, so a node's ``context[var] =`` wrote
+    through to the caller — while the raw-block handler beside it already
+    copied. The node's writes belong in the returned ``bindings`` diff, which
+    the caller applies deliberately; they must not appear by side effect.
+    """
+
+    class _Writer:
+        """Stands in for a node whose ``render`` binds a variable."""
+
+        def render(self, ctx):
+            ctx.dicts[-1]["planted"] = "by the node"
+            return ""
+
+    caller_ctx = {"already": "here"}
+    _, bindings = template_libraries._render_node(_Writer(), caller_ctx)
+
+    assert bindings == {"planted": "by the node"}, (
+        "the node's write must still be REPORTED as a binding"
+    )
+    assert caller_ctx == {"already": "here"}, (
+        "but it must not have been written through to the caller's dict"
+    )
 
 
 def test_string_if_invalid_reaches_a_blocktranslate_placeholder():
@@ -1288,17 +1343,29 @@ def test_decimal_formatting_is_a_preexisting_divergence():
         assert plain_render("{{ dec }}", {"dec": Decimal("2")}) == "2,0"
 
 
-def test_brace_before_a_tag_is_a_preexisting_lexer_divergence():
-    """`{{%` is tokenized as a variable start by djust's lexer and as text +
-    a tag by Django's. NOT introduced by #2558 and NOT fixed by it (#1079
-    scope discipline): the same divergence is visible with no i18n tag in
-    sight, which is what these two rows pin. The sweep's alphabet avoids the
-    shape so the differential measures the bridge rather than the lexer."""
-    assert django_render("{% if a %}x{{% endif %}", {"a": 1}) == "x{"
-    with pytest.raises(TemplateSyntaxError, match="Unclosed if tag"):
-        plain_render("{% if a %}x{{% endif %}", {"a": 1})
-    assert django_render("{{%", {}) == "{{%"
-    assert plain_render("{{%", {}) == ""
+def test_a_brace_before_a_tag_now_matches_django():
+    """`{{%` used to tokenize as a variable start on djust's lexer and as
+    text + a tag on Django's — djust raised ``Unclosed if tag`` on the first
+    row and silently rendered ``""`` on the second.
+
+    Both are the same root cause as the two #2597 raw-body residues: the
+    lexer consumed from an opener to end-of-input instead of checking whether
+    a closer exists at all. The closer lookahead consumes only the FIRST
+    brace when it fails, so the second still opens the real ``{% endif %}``
+    — which is exactly how Django's regex scanner advances. The sweep's
+    alphabet still avoids the shape, so the differential keeps measuring the
+    bridge rather than the lexer.
+    """
+    for source, context in (
+        ("{% if a %}x{{% endif %}", {"a": 1}),
+        ("{{%", {}),
+        # The opener cannot supply half its own closer.
+        ("{%}", {}),
+        ("{#}", {}),
+    ):
+        assert _outcome(plain_render, source, context) == _outcome(
+            django_render, source, context
+        ), source
 
 
 def test_the_sweep_is_not_vacuous():
