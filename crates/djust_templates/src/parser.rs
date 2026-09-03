@@ -353,7 +353,7 @@ pub const TEMPLATETAG_NAMES: [&str; 8] = [
 ];
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
-    parse_internal(tokens, &[], hash_tokens(tokens))
+    parse_internal(tokens, &[], "", hash_tokens(tokens))
 }
 
 /// Parse a token stream into an AST, deriving the boundary-marker
@@ -371,7 +371,7 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
 /// re-parses. Different sources → different prefix (with extremely
 /// high probability — collision rate is ~1/4 billion).
 pub fn parse_with_source(tokens: &[Token], source: &str) -> Result<Vec<Node>> {
-    parse_internal(tokens, &[], hash_source(source))
+    parse_internal(tokens, &[], source, hash_source(source))
 }
 
 /// [`parse_with_source`] with the lexer's per-token byte spans, so a parse
@@ -387,15 +387,20 @@ pub fn parse_with_source_spanned(
     spans: &[Span],
     source: &str,
 ) -> Result<Vec<Node>> {
-    parse_internal(tokens, spans, hash_source(source))
+    parse_internal(tokens, spans, source, hash_source(source))
 }
 
-fn parse_internal(tokens: &[Token], spans: &[Span], identity_hash: u64) -> Result<Vec<Node>> {
+fn parse_internal(
+    tokens: &[Token],
+    spans: &[Span],
+    source: &str,
+    identity_hash: u64,
+) -> Result<Vec<Node>> {
     let mut nodes = Vec::new();
     let mut i = 0;
 
     while i < tokens.len() {
-        let node = parse_token(tokens, spans, &mut i)?;
+        let node = parse_token(tokens, spans, source, &mut i)?;
         if let Some(n) = node {
             nodes.push(n);
         }
@@ -690,16 +695,61 @@ fn resolve_cycle_nodes(
 /// frame is the first to attach a span and [`DjangoRustError::at`] declines
 /// to overwrite it — which is how the reported position ends up on the
 /// offending tag rather than on the outermost block that contains it.
-fn parse_token(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<Option<Node>> {
-    let at = *i;
-    parse_token_inner(tokens, spans, i).map_err(|e| e.at(spans.get(at).copied()))
+/// 1-based line of `tokens[i]` in `source` — Django's `Token.lineno`, for the
+/// two `on line N` refusals in [`parse_token_inner`] (#2557).
+///
+/// Counts newline BYTES rather than slicing, so a span that is somehow not on
+/// a character boundary cannot panic (the #2552 class). Falls back to line 1
+/// when the caller has no span table — the span-less entry points
+/// ([`parse`], [`parse_with_source`]) pass an empty one, and line 1 is the
+/// only honest answer there.
+fn line_at(spans: &[Span], source: &str, i: usize) -> usize {
+    let start = spans.get(i).map_or(0, |(s, _)| *s);
+    let upto = start.min(source.len());
+    source.as_bytes()[..upto]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count()
+        + 1
 }
 
-fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<Option<Node>> {
+fn parse_token(
+    tokens: &[Token],
+    spans: &[Span],
+    source: &str,
+    i: &mut usize,
+) -> Result<Option<Node>> {
+    let at = *i;
+    parse_token_inner(tokens, spans, source, i).map_err(|e| e.at(spans.get(at).copied()))
+}
+
+fn parse_token_inner(
+    tokens: &[Token],
+    spans: &[Span],
+    source: &str,
+    i: &mut usize,
+) -> Result<Option<Node>> {
     match &tokens[*i] {
         Token::Text(text) => Ok(Some(Node::Text(text.clone()))),
 
         Token::Variable(var) => {
+            // Django refuses an empty `{{ }}` HERE, in `Parser.parse`
+            // (`django/template/base.py:483-486`), NOT in the lexer —
+            // `Lexer.create_token` happily returns `Token(TokenType.VAR, "")`.
+            // The placement is load-bearing, not incidental: a
+            // `{% verbatim %}` body is turned into TEXT by the lexer and a
+            // `{% comment %}` body is skipped by the parser, so both reach
+            // this arm never and legitimately render `{{ }}` verbatim. djust's
+            // raw-block collector (`collect_raw_source`) consumes those tokens
+            // without calling `parse_token` for exactly the same reason, so
+            // refusing here — and only here — matches Django on every context
+            // (#2557).
+            if var.trim().is_empty() {
+                return Err(DjangoRustError::TemplateError(format!(
+                    "Empty variable tag on line {}",
+                    line_at(spans, source, *i)
+                )));
+            }
             // Parse variable and filters: {{ var|filter1:arg1|filter2 }}
             // Quote-aware (#2409): `str::split('|')` cut `{{ p|cut:"a|b" }}`
             // into two filters and raised `Unknown filter` where Django
@@ -746,6 +796,16 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
         }
 
         Token::Tag(tag_name, args) => {
+            // The sibling refusal, from the same `Parser.parse` loop
+            // (`django/template/base.py:497`). Same reasoning as the empty
+            // `{{ }}` above: refusing here keeps `{% %}` legal inside a raw
+            // block, exactly as Django does (#2557).
+            if tag_name.is_empty() {
+                return Err(DjangoRustError::TemplateError(format!(
+                    "Empty block tag on line {}",
+                    line_at(spans, source, *i)
+                )));
+            }
             match tag_name.as_str() {
                 "if" => {
                     // Django compiles every `{% if %}` operand with
@@ -763,7 +823,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                     // where Variable tokens separate the tag opening from the {% if %}.
                     let in_tag_context = is_inside_html_tag_at(tokens, *i);
                     let (true_nodes, false_nodes, end_pos) =
-                        parse_if_block(tokens, spans, *i + 1, in_tag_context)?;
+                        parse_if_block(tokens, spans, source, *i + 1, in_tag_context)?;
                     *i = end_pos;
                     Ok(Some(Node::If {
                         condition,
@@ -887,7 +947,8 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                     // — a branch that never renders — refused on Django and
                     // rendered here.
                     validate_tag_operand(&iterable)?;
-                    let (nodes, empty_nodes, end_pos) = parse_for_block(tokens, spans, *i + 1)?;
+                    let (nodes, empty_nodes, end_pos) =
+                        parse_for_block(tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::For {
                         var_names,
@@ -905,7 +966,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                         ));
                     }
                     let name = args[0].clone();
-                    let (nodes, end_pos) = parse_block(tokens, spans, *i + 1)?;
+                    let (nodes, end_pos) = parse_block(tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::Block { name, nodes }))
                 }
@@ -1051,7 +1112,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                         }
                     }
 
-                    let (nodes, end_pos) = parse_with_block(tokens, spans, *i + 1)?;
+                    let (nodes, end_pos) = parse_with_block(tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::With { assignments, nodes }))
                 }
@@ -1144,7 +1205,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
 
                 "spaceless" => {
                     // {% spaceless %} ... {% endspaceless %}
-                    let (nodes, end_pos) = parse_spaceless_block(tokens, spans, *i + 1)?;
+                    let (nodes, end_pos) = parse_spaceless_block(tokens, spans, source, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::Spaceless { nodes }))
                 }
@@ -1173,7 +1234,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                         }
                     };
                     let (nodes, end_pos) =
-                        parse_block_custom_tag(tokens, spans, *i + 1, "endautoescape")?;
+                        parse_block_custom_tag(tokens, spans, source, *i + 1, "endautoescape")?;
                     *i = end_pos;
                     Ok(Some(Node::AutoEscape { on, nodes }))
                 }
@@ -1206,7 +1267,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                         }
                     }
                     let (nodes, end_pos) =
-                        parse_block_custom_tag(tokens, spans, *i + 1, "endfilter")?;
+                        parse_block_custom_tag(tokens, spans, source, *i + 1, "endfilter")?;
                     *i = end_pos;
                     Ok(Some(Node::Filter { filters, nodes }))
                 }
@@ -1323,7 +1384,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                             ));
                         }
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, *i + 1, "endlanguage")?;
+                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlanguage")?;
                         *i = end_pos;
                         return Ok(Some(Node::Language {
                             expr: args[0].clone(),
@@ -1342,7 +1403,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                             }
                         };
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, *i + 1, "endlocalize")?;
+                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlocalize")?;
                         *i = end_pos;
                         return Ok(Some(Node::Localize { use_l10n, children }));
                     }
@@ -1358,7 +1419,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                             }
                         };
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, *i + 1, "endlocaltime")?;
+                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endlocaltime")?;
                         *i = end_pos;
                         return Ok(Some(Node::LocalTime { use_tz, children }));
                     }
@@ -1369,7 +1430,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                             ));
                         }
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, *i + 1, "endtimezone")?;
+                            parse_block_custom_tag(tokens, spans, source, *i + 1, "endtimezone")?;
                         *i = end_pos;
                         return Ok(Some(Node::Timezone {
                             expr: args[0].clone(),
@@ -1400,7 +1461,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
                     // Check if a Python block tag handler is registered (tags with children)
                     if let Some(end_tag) = crate::registry::block_handler_exists(tag_name) {
                         let (children, end_pos) =
-                            parse_block_custom_tag(tokens, spans, *i + 1, &end_tag)?;
+                            parse_block_custom_tag(tokens, spans, source, *i + 1, &end_tag)?;
                         *i = end_pos;
                         Ok(Some(Node::BlockCustomTag {
                             name: tag_name.clone(),
@@ -1483,6 +1544,7 @@ fn parse_token_inner(tokens: &[Token], spans: &[Span], i: &mut usize) -> Result<
 fn parse_if_block(
     tokens: &[Token],
     spans: &[Span],
+    source: &str,
     start: usize,
     in_tag_context: bool,
 ) -> Result<(Vec<Node>, Vec<Node>, usize)> {
@@ -1515,7 +1577,7 @@ fn parse_if_block(
                 validate_if_operands(args)?;
                 let elif_condition = args.join(" ");
                 let (elif_true, elif_false, end_pos) =
-                    parse_if_block(tokens, spans, i + 1, in_tag_context)?;
+                    parse_if_block(tokens, spans, source, i + 1, in_tag_context)?;
                 false_nodes.push(Node::If {
                     condition: elif_condition,
                     true_nodes: elif_true,
@@ -1530,7 +1592,7 @@ fn parse_if_block(
                 return Ok((true_nodes, false_nodes, i));
             }
             _ => {
-                if let Some(node) = parse_token(tokens, spans, &mut i)? {
+                if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
                     if in_else {
                         false_nodes.push(node);
                     } else {
@@ -1550,6 +1612,7 @@ fn parse_if_block(
 fn parse_for_block(
     tokens: &[Token],
     spans: &[Span],
+    source: &str,
     start: usize,
 ) -> Result<(Vec<Node>, Vec<Node>, usize)> {
     let mut nodes = Vec::new();
@@ -1569,7 +1632,7 @@ fn parse_for_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
             if in_empty_block {
                 empty_nodes.push(node);
             } else {
@@ -1584,7 +1647,12 @@ fn parse_for_block(
     ))
 }
 
-fn parse_block(tokens: &[Token], spans: &[Span], start: usize) -> Result<(Vec<Node>, usize)> {
+fn parse_block(
+    tokens: &[Token],
+    spans: &[Span],
+    source: &str,
+    start: usize,
+) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
     let mut i = start;
 
@@ -1595,7 +1663,7 @@ fn parse_block(tokens: &[Token], spans: &[Span], start: usize) -> Result<(Vec<No
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -1606,7 +1674,12 @@ fn parse_block(tokens: &[Token], spans: &[Span], start: usize) -> Result<(Vec<No
     ))
 }
 
-fn parse_with_block(tokens: &[Token], spans: &[Span], start: usize) -> Result<(Vec<Node>, usize)> {
+fn parse_with_block(
+    tokens: &[Token],
+    spans: &[Span],
+    source: &str,
+    start: usize,
+) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
     let mut i = start;
 
@@ -1617,7 +1690,7 @@ fn parse_with_block(tokens: &[Token], spans: &[Span], start: usize) -> Result<(V
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -1648,6 +1721,7 @@ fn split_asvar(args: &[String]) -> (Vec<String>, Option<String>) {
 fn parse_spaceless_block(
     tokens: &[Token],
     spans: &[Span],
+    source: &str,
     start: usize,
 ) -> Result<(Vec<Node>, usize)> {
     let mut nodes = Vec::new();
@@ -1660,7 +1734,7 @@ fn parse_spaceless_block(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -1740,6 +1814,7 @@ fn collect_raw_source(
 fn parse_block_custom_tag(
     tokens: &[Token],
     spans: &[Span],
+    source: &str,
     start: usize,
     end_tag: &str,
 ) -> Result<(Vec<Node>, usize)> {
@@ -1753,7 +1828,7 @@ fn parse_block_custom_tag(
             }
         }
 
-        if let Some(node) = parse_token(tokens, spans, &mut i)? {
+        if let Some(node) = parse_token(tokens, spans, source, &mut i)? {
             nodes.push(node);
         }
         i += 1;
@@ -4643,5 +4718,104 @@ mod dep_tests {
         let at = find_if_keyword(expr).expect("the keyword is there");
         assert_eq!(&expr[..at], "caf\u{e9}");
         assert_eq!(&expr[at..at + 4], " if ");
+    }
+
+    // -----------------------------------------------------------------------
+    // the empty-tag refusals, at Django's layer (#2557)
+    // -----------------------------------------------------------------------
+
+    /// Render a source through the spanned parse path, returning `Ok(nodes)`
+    /// or the error text — the shape the context-axis cases below compare on.
+    fn parse_source(source: &str) -> std::result::Result<Vec<Node>, String> {
+        let (tokens, spans) = crate::lexer::tokenize_spanned(source).expect("tokenize");
+        parse_with_source_spanned(&tokens, &spans, source).map_err(|e| e.to_string())
+    }
+
+    /// Both refusals live in `parse_token_inner`, mirroring `Parser.parse`
+    /// (`django/template/base.py:483-486` and `:497`), and report Django's
+    /// message and line.
+    #[test]
+    fn an_empty_tag_is_refused_with_djangos_message_and_line() {
+        for (source, expected) in [
+            ("{{ }}", "Empty variable tag on line 1"),
+            ("{{}}", "Empty variable tag on line 1"),
+            ("{{    }}", "Empty variable tag on line 1"),
+            ("a\nb\n{{ }}", "Empty variable tag on line 3"),
+            ("{% %}", "Empty block tag on line 1"),
+            ("{%  %}", "Empty block tag on line 1"),
+            ("a\nb\n{% %}", "Empty block tag on line 3"),
+        ] {
+            let err = parse_source(source).expect_err("this source must be refused");
+            assert!(err.contains(expected), "{source:?} gave {err:?}");
+        }
+    }
+
+    /// The refusal carries the offending token's span, like every other
+    /// located parse error — this is what feeds `template_debug`.
+    #[test]
+    fn an_empty_tag_refusal_is_located() {
+        for (source, expected) in [("a\n{{ }}", "{{ }}"), ("a\n{% %}", "{% %}")] {
+            let (_, span) = located(source);
+            let (start, end) = span.expect("the refusal must be located");
+            assert_eq!(&source[start..end], expected, "{source:?}");
+        }
+    }
+
+    /// THE CONTEXT AXIS (#2557 review, red 1). The refusal must not reach a
+    /// raw-block body. Django's lexer turns a `{% verbatim %}` body into TEXT
+    /// and its parser skips a `{% comment %}` body, so both render an empty
+    /// `{{ }}` literally; djust's `collect_raw_source` consumes those tokens
+    /// without calling `parse_token`, which is why the refusal has to sit in
+    /// `parse_token_inner` and NOT in the lexer.
+    ///
+    /// The first version of #2557 refused in `tokenize_spanned` — below
+    /// `collect_raw_source` — and so raised on every row here, a regression
+    /// against `main` on a shape `{% verbatim %}` exists precisely to serve
+    /// (Vue / Alpine / Handlebars braces, and djust's own docs pages).
+    #[test]
+    fn a_raw_block_body_is_exempt_from_both_refusals() {
+        for source in [
+            "{% verbatim %}{{ }}{% endverbatim %}",
+            "{% comment %}{{ }}{% endcomment %}",
+            "<pre>{% verbatim %}Vue: {{ }} and {{ msg }}{% endverbatim %}</pre>",
+            "{% verbatim %}{% %}{% endverbatim %}",
+            "{% comment %}{% %}{% endcomment %}",
+        ] {
+            assert!(
+                parse_source(source).is_ok(),
+                "{source:?} must parse — Django renders it"
+            );
+        }
+    }
+
+    /// The exemption is scoped to the body: the same template with a bare
+    /// `{{ }}` OUTSIDE the raw block is still refused, so the raw-block arm
+    /// cannot be mistaken for a blanket switch-off.
+    #[test]
+    fn the_raw_block_exemption_does_not_leak_outside_the_block() {
+        for source in [
+            "{% verbatim %}{{ }}{% endverbatim %}{{ }}",
+            "{{ }}{% verbatim %}{{ }}{% endverbatim %}",
+            "{% comment %}{{ }}{% endcomment %}{% %}",
+        ] {
+            assert!(
+                parse_source(source).is_err(),
+                "{source:?} has an empty tag outside the raw block"
+            );
+        }
+    }
+
+    /// A non-empty tag, and a `{{` with no closer (literal text per #2558),
+    /// are untouched by either refusal.
+    #[test]
+    fn the_empty_tag_refusals_reach_nothing_else() {
+        for source in [
+            "{{ x }}",
+            "a {{ unclosed b",
+            "{% if a %}x{% endif %}",
+            "{#  #}",
+        ] {
+            assert!(parse_source(source).is_ok(), "{source:?}");
+        }
     }
 }

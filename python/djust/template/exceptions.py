@@ -25,11 +25,16 @@ from typing import Any
 
 from django.template import TemplateSyntaxError
 
-__all__ = ["DjustTemplateSyntaxError", "build_template_debug"]
+__all__ = ["DjustTemplateSyntaxError", "build_template_debug", "UNKNOWN_SOURCE"]
 
 #: Django's own window: ``get_exception_info`` shows this many source lines
 #: either side of the offending one (``django/template/base.py:243``).
 CONTEXT_LINES = 10
+
+#: Django's ``django.template.base.UNKNOWN_SOURCE`` — the origin name a
+#: template built with ``from_string`` carries, and what the debug page's
+#: "In template ..." heading shows instead of a literal ``None``.
+UNKNOWN_SOURCE = "<unknown source>"
 
 
 def _linebreak_iter(source: str):
@@ -82,6 +87,13 @@ def build_template_debug(
     ``start``/``end`` arrive from the Rust lexer as BYTE offsets and are
     converted to character offsets here — the unit Django's ``self.source``
     slicing uses.
+
+    A ``None`` ``name`` becomes ``<unknown source>``. ``get_template()`` always
+    supplies a real path, but ``from_string()`` supplies no origin at all, and
+    the debug page interpolates the value straight into its heading — so the
+    ``None`` rendered literally as ``In template None, error at line 1``.
+    Django's ``Template.__init__`` defaults the same case to
+    ``Origin(UNKNOWN_SOURCE)`` (``django/template/base.py``).
     """
     start = _byte_offset_to_char(source, start)
     end = _byte_offset_to_char(source, end)
@@ -100,6 +112,38 @@ def build_template_debug(
         upto = next_break
     total = len(source_lines)
 
+    # Django's loop above can only locate a token that lies WITHIN one line,
+    # because its ``tag_re`` has no ``re.DOTALL`` — a Django token never spans
+    # a newline, so ``end <= next_break`` always holds for the line ``start``
+    # is on. djust's lexer has no such bound and the engine accepts a
+    # multi-line tag (``{% if x\n %}``, ``{% include "a.html"\n with b=1 %}``),
+    # and an unterminated ``{%`` scans to the next ``%}`` anywhere in the file.
+    # For those the ported condition never fires and the loop falls through
+    # with its initial values — ``line: 0``, an empty ``during`` and the
+    # excerpt clamped to lines 1..11, which on a long template points a
+    # developer at the wrong ten lines with false confidence. Re-locate on the
+    # line ``start`` is on and clamp the highlight to that line's break, which
+    # is the line ``Token.lineno`` names and the one a human would point at.
+    #
+    # Guarded on ``end > start`` so a degenerate empty span at offset 0 — which
+    # the loop above DOES match, at line 0 — keeps Django's answer untouched.
+    if line == 0 and end > start:
+        upto = 0
+        for num, next_break in enumerate(_linebreak_iter(source)):
+            if upto <= start < next_break:
+                clamped = min(end, next_break)
+                line = num
+                before = source[upto:start]
+                during = source[start:clamped]
+                after = source[clamped:next_break]
+                # Keep the line's own newline OUT of the highlight: Django's
+                # ``during`` can never contain one, and
+                # ``before + during + after`` still reassembles the line.
+                if during.endswith("\n"):
+                    during, after = during[:-1], "\n" + after
+                break
+            upto = next_break
+
     top = max(1, line - CONTEXT_LINES)
     bottom = min(total, line + 1 + CONTEXT_LINES)
 
@@ -113,7 +157,7 @@ def build_template_debug(
         "bottom": bottom,
         "total": total,
         "line": line,
-        "name": name,
+        "name": name if name is not None else UNKNOWN_SOURCE,
         "start": start,
         "end": end,
     }

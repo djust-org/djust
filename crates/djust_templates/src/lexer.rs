@@ -3,7 +3,7 @@
 //! Tag arguments are split with [`split_tag_args`], which respects quoted
 //! strings so that values like `name="My App"` remain a single token.
 
-use djust_core::{DjangoRustError, Result};
+use djust_core::Result;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -401,21 +401,17 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
                             if ch == '}' && chars.peek() == Some('}') {
                                 chars.next(); // consume second }
                                 let content = var_content.trim().to_string();
-                                // Django's `Lexer.create_token` refuses an
-                                // empty variable tag here, at LEX time, with
-                                // this exact message (#2557). djust used to
-                                // build a `Variable("")` that rendered as
-                                // nothing, so `{{ }}` was silently accepted.
-                                if content.is_empty() {
-                                    return Err(DjangoRustError::TemplateErrorAt {
-                                        message: format!(
-                                            "Empty variable tag on line {}",
-                                            line_of(source, tok_start)
-                                        ),
-                                        start: tok_start,
-                                        end: chars.pos(),
-                                    });
-                                }
+                                // An EMPTY `{{ }}` is emitted, not refused.
+                                // Django's `Lexer.create_token` returns
+                                // `Token(TokenType.VAR, "")` here and the
+                                // refusal lives one layer up, in
+                                // `Parser.parse` (`django/template/base.py`
+                                // 483-486) — which is what lets
+                                // `{% verbatim %}{{ }}{% endverbatim %}` and
+                                // `{% comment %}{{ }}{% endcomment %}` render
+                                // (their bodies never reach the parser loop).
+                                // djust mirrors that placement in
+                                // `parser::parse_token_inner` (#2557).
                                 out.push(Token::Variable(content), tok_start, chars.pos());
                                 break;
                             } else {
@@ -440,13 +436,23 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
                                 chars.next(); // consume }
                                 let parts: Vec<String> = split_tag_args(&tag_content);
 
-                                if let Some(tag_name) = parts.first() {
-                                    out.push(
-                                        Token::Tag(tag_name.clone(), parts[1..].to_vec()),
-                                        tok_start,
-                                        chars.pos(),
-                                    );
-                                }
+                                // An empty `{% %}` yields a Tag with an EMPTY
+                                // name rather than nothing at all. Django's
+                                // lexer does the same — `create_token` builds
+                                // `Token(TokenType.BLOCK, "")` — and
+                                // `Parser.parse` refuses it with
+                                // `Empty block tag on line %d`
+                                // (`django/template/base.py:497`). Dropping
+                                // the token here made the refusal
+                                // unreachable, so `{% %}` rendered as
+                                // nothing (#2557).
+                                let tag_name = parts.first().cloned().unwrap_or_default();
+                                let args = if parts.is_empty() {
+                                    Vec::new()
+                                } else {
+                                    parts[1..].to_vec()
+                                };
+                                out.push(Token::Tag(tag_name, args), tok_start, chars.pos());
                                 break;
                             } else {
                                 tag_content.push(ch);
@@ -495,11 +501,6 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
     flush_text!(eof);
 
     Ok((out.tokens, out.spans))
-}
-
-/// 1-based line number of `offset` in `source` — Django's `Token.lineno`.
-fn line_of(source: &str, offset: usize) -> usize {
-    source[..offset.min(source.len())].matches('\n').count() + 1
 }
 
 #[cfg(test)]
@@ -892,32 +893,55 @@ mod tests {
         }
     }
 
-    /// Django's `Lexer.create_token` refuses an empty variable tag (#2557).
+    /// The lexer EMITS an empty `{{ }}` / `{% %}` rather than refusing it —
+    /// Django's `Lexer.create_token` returns `Token(TokenType.VAR, "")` /
+    /// `Token(TokenType.BLOCK, "")` and the refusal lives in `Parser.parse`
+    /// (`django/template/base.py:483-486` and `:497`).
+    ///
+    /// The placement is what lets a raw block hold `{{ }}` literally, so this
+    /// is not a stylistic choice: refusing here regresses
+    /// `{% verbatim %}{{ }}{% endverbatim %}`. The refusals themselves are
+    /// pinned in `parser::tests` (#2557).
     #[test]
-    fn an_empty_variable_tag_is_refused_with_djangos_message() {
-        for (source, line) in [
-            ("{{ }}", 1),
-            ("{{}}", 1),
-            ("{{    }}", 1),
-            ("a\nb\n{{ }}", 3),
-        ] {
-            let err = tokenize_spanned(source).expect_err("empty variable tag must be refused");
+    fn an_empty_tag_lexes_to_an_empty_token_not_an_error() {
+        for source in ["{{ }}", "{{}}", "{{    }}", "a\nb\n{{ }}"] {
+            let (tokens, _) = tokenize_spanned(source).expect("the lexer must not refuse");
             assert!(
-                err.to_string()
-                    .contains(&format!("Empty variable tag on line {line}")),
-                "{source:?} gave {err}"
+                tokens.contains(&Token::Variable(String::new())),
+                "{source:?} gave {tokens:?}"
             );
-            let (start, end) = err.span().expect("the refusal must carry its position");
-            assert!(source[start..end].starts_with("{{"), "{source:?}");
         }
+        for source in ["{% %}", "{%  %}"] {
+            let (tokens, _) = tokenize_spanned(source).expect("the lexer must not refuse");
+            assert!(
+                tokens.contains(&Token::Tag(String::new(), Vec::new())),
+                "{source:?} gave {tokens:?}"
+            );
+        }
+    }
+
+    /// The empty token still carries its span, so the parser's refusal can
+    /// report a location like every other located parse error (#2557).
+    #[test]
+    fn an_empty_tag_carries_its_span() {
+        let (tokens, spans) = tokenize_spanned("a\nb\n{{ }}").expect("tokenize");
+        let i = tokens
+            .iter()
+            .position(|t| t == &Token::Variable(String::new()))
+            .expect("the empty variable token");
+        assert_eq!(spans[i], (4, 9));
     }
 
     /// A non-empty variable is untouched, and so is a `{{` with no closer —
     /// which `has_closer` keeps as literal text (#2558).
     #[test]
-    fn the_empty_variable_refusal_reaches_nothing_else() {
-        assert!(tokenize_spanned("{{ x }}").is_ok());
-        assert!(tokenize_spanned("a {{ unclosed b").is_ok());
-        assert!(tokenize_spanned("{{ x }}{{ }}").is_err());
+    fn the_empty_variable_token_reaches_nothing_else() {
+        for source in ["{{ x }}", "a {{ unclosed b"] {
+            let (tokens, _) = tokenize_spanned(source).expect("tokenize");
+            assert!(
+                !tokens.contains(&Token::Variable(String::new())),
+                "{source:?} gave {tokens:?}"
+            );
+        }
     }
 }
