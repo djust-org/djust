@@ -1010,34 +1010,80 @@ fn parse_token_inner(
                     let template = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
                     let mut with_vars = Vec::new();
                     let mut only = false;
+                    let mut with_seen = false;
+                    let mut only_seen = false;
 
-                    // Parse remaining args for 'with' and 'only' keywords
+                    // Parse remaining args for 'with' and 'only' keywords,
+                    // mirroring Django's `do_include` word-by-word (#2579):
+                    // each remaining bit must be exactly 'with' (followed by
+                    // at least one key=value pair) or exactly 'only', neither
+                    // option may repeat, and any other word is refused.
                     let mut i = 1;
                     while i < args.len() {
                         if args[i] == "with" {
-                            // Parse key=value pairs after 'with'
+                            if with_seen {
+                                return Err(DjangoRustError::TemplateError(
+                                    "Include tag's 'with' option was specified more than once"
+                                        .to_string(),
+                                ));
+                            }
+                            with_seen = true;
                             i += 1;
-                            while i < args.len() && args[i] != "only" {
-                                if args[i].contains('=') {
-                                    let parts: Vec<&str> = args[i].splitn(2, '=').collect();
-                                    if parts.len() == 2 {
-                                        // Same shape as `{% with %}`: `do_include`
-                                        // runs each RHS through `token_kwargs` →
-                                        // `compile_filter` at COMPILE time, so the
-                                        // value is a TAG OPERAND and the key is a
-                                        // BINDING (#2411, #2418).
-                                        validate_tag_operand(parts[1])?;
-                                        with_vars
-                                            .push((parts[0].to_string(), parts[1].to_string()));
-                                    }
+                            // Parse key=value pairs after 'with' — stop at
+                            // the first bit that isn't a `\w+=value` pair,
+                            // same as Django's `token_kwargs` (#2579): a
+                            // dotted or otherwise non-identifier key (e.g.
+                            // `dotted.arg=`) isn't a valid kwarg bit, so it
+                            // is not consumed here.
+                            let mut found_kwarg = false;
+                            while i < args.len() {
+                                let Some(eq_pos) = args[i].find('=') else {
+                                    break;
+                                };
+                                let key = &args[i][..eq_pos];
+                                if key.is_empty()
+                                    || !key.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                {
+                                    break;
                                 }
+                                let value = &args[i][eq_pos + 1..];
+                                // Same shape as `{% with %}`: `do_include`
+                                // runs each RHS through `token_kwargs` →
+                                // `compile_filter` at COMPILE time, so the
+                                // value is a TAG OPERAND and the key is a
+                                // BINDING (#2411, #2418).
+                                validate_tag_operand(value)?;
+                                with_vars.push((key.to_string(), value.to_string()));
+                                found_kwarg = true;
                                 i += 1;
                             }
+                            if !found_kwarg {
+                                // Django: '"with" in %r tag needs at least
+                                // one keyword argument.' — djust's own
+                                // wording (#2579; #2581 message-text parity
+                                // has not landed).
+                                return Err(DjangoRustError::TemplateError(
+                                    "Include tag's 'with' clause requires at least one key=value pair"
+                                        .to_string(),
+                                ));
+                            }
                         } else if args[i] == "only" {
+                            if only_seen {
+                                return Err(DjangoRustError::TemplateError(
+                                    "Include tag's 'only' option was specified more than once"
+                                        .to_string(),
+                                ));
+                            }
+                            only_seen = true;
                             only = true;
                             i += 1;
                         } else {
-                            i += 1;
+                            // Django: 'Unknown argument for %r tag: %r.' —
+                            // djust's own wording (#2579; #2581 not landed).
+                            return Err(DjangoRustError::TemplateError(format!(
+                                "Include tag received an unrecognized argument: '{}'",
+                                args[i]
+                            )));
                         }
                     }
 
