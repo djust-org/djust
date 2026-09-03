@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pre-push pytest wrapper that says WHOSE failures these are (#2139).
 #
-# The pre-push hook runs the full suite. When `main` is red — as it was for
+# The pre-push hook runs the suite (scoped to the pushed range since #2526,
+# see below). When `main` is red — as it was for
 # three doc-snippet tests until #2134 — every branch's push is rejected for a
 # reason that has nothing to do with the branch. The failing test names are
 # buried under ~40 passing hook lines, and nothing distinguishes "your change
@@ -23,6 +24,35 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 PATHS=(tests/ python/tests/ python/djust/tests/)
 WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath 2>/dev/null || true)"
 export PYTHONPATH="${WT:+$WT:}."
+
+# Scope the run to what the pushed range can affect (#2526). The full suite
+# is 20,000 tests in ~8.5 minutes and a PR pushes three or four times; CI is
+# the authoritative full run. scripts/select-tests.py picks the test files
+# from the diff (changed tests; tests named after / importing a changed
+# module; tests whose text mentions a changed file's basename — the source-pin
+# tests that read renderer.rs etc.) and answers FULL for anything with
+# whole-suite blast radius (conftest/pyproject/hook changes, djust_core,
+# the package roots, a routing/flip/convergence branch, an empty selection).
+# When the selector is absent or cannot run, the full suite runs: a narrower
+# run that was never chosen is worse than a slow one. DJUST_PREPUSH_FULL=1
+# forces the full suite by hand.
+if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
+    SEL_OUT="$(mktemp)"
+    if bash scripts/run-with-venv-python.sh scripts/select-tests.py >"$SEL_OUT"; then
+        if [ "$(head -n 1 "$SEL_OUT")" != "FULL" ]; then
+            SELECTED=()
+            while IFS= read -r _sel; do
+                [ -n "$_sel" ] && SELECTED+=("$_sel")
+            done < "$SEL_OUT"
+            if [ "${#SELECTED[@]}" -gt 0 ]; then
+                PATHS=("${SELECTED[@]}")
+            fi
+        fi
+    else
+        echo "select-tests.py could not run — running the full suite."
+    fi
+    rm -f "$SEL_OUT"
+fi
 
 # Checking more than this many ids serially costs more than it is worth: each
 # pytest start is ~1.5s here, and `git push` is blocked with no output while it

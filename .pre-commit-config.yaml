@@ -304,7 +304,10 @@ repos:
         # python-build-standalone, embedded-PyO3 test binaries deterministically
         # fail bootstrap (`init_fs_encoding`, baked `sys.prefix='/install'`).
         # scripts/embeddable-python.sh resolves a safe interpreter (closes #2072).
-        entry: bash -c 'PYO3_PYTHON="$(bash scripts/embeddable-python.sh)" cargo test --workspace --exclude djust_live --release -q'
+        # Scoped (#2526) to the crates the pushed range touches (+ their
+        # dependents); the whole workspace when Cargo.toml/Cargo.lock/djust_core
+        # changed. See scripts/pre-push-cargo-test.sh and scripts/select-tests.py.
+        entry: bash scripts/pre-push-cargo-test.sh
         language: system
         types: [rust]
         pass_filenames: false
