@@ -946,6 +946,51 @@ class TestTheSwitch2539:
             f"({shipped_default!r}) when get_config() raised"
         )
 
+    def test_the_unimportable_config_arm_still_answers_the_shipped_default(
+        self, monkeypatch
+    ) -> None:
+        """The THIRD fallback, and the only one that must state a literal.
+
+        :func:`djust.render_env._resolve_lazy_default` asks ``config.py`` for
+        the default; if ``config.py`` itself will not import there is nothing
+        left to ask, so its ``except`` arm hardcodes ``True``. The #2620 review
+        gate-off (D2c) found that literal survived mutation with **0 failed** —
+        an uncovered hardcoded default two functions below the one movement 3
+        was filed to remove, and carrying the same ``# pragma: no cover`` that
+        made the first one invisible.
+
+        The remedy is not to delete the literal — it cannot be deleted, because
+        the module it would read from is the broken one — but to COUPLE it. The
+        shipped default is captured BEFORE the import is broken, so this asserts
+        "the third statement agrees with the first" rather than re-stating
+        ``True``: a movement that flips ``_defaults`` turns this red and forces
+        the literal to move with it, which is the drift the arm's own comment
+        warns about. Not parametrized over both defaults for that reason — the
+        coupling IS the assertion here, and half the parametrization would be
+        asserting that a hardcoded literal is not hardcoded.
+        """
+        import sys
+
+        from djust import render_env
+        from djust.config import LiveViewConfig
+
+        shipped = LiveViewConfig._defaults["template_resolve_lazy"]
+
+        # `None` in `sys.modules` is what CPython leaves behind for a module
+        # whose import failed, and `from .config import ...` raises
+        # `ImportError` against it — a faithful "the config module is broken"
+        # rather than a stubbed-out shape (#1037).
+        monkeypatch.setitem(sys.modules, "djust.config", None)
+        with pytest.raises(ImportError):
+            from djust.config import template_resolve_lazy_default  # noqa: F401
+
+        assert render_env._resolve_lazy_default() is shipped, (
+            f"the unimportable-config arm answered "
+            f"{render_env._resolve_lazy_default()!r} but the shipped default is "
+            f"{shipped!r} — the third statement of the default has drifted from "
+            f"config.py's `_defaults`"
+        )
+
     @pytest.mark.parametrize("render", ENTRIES)
     def test_the_switch_is_what_gates_the_behaviour(self, render) -> None:
         """The in-suite gate-off: the SAME template and the SAME context

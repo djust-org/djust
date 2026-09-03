@@ -203,7 +203,13 @@ def apply_resolve_lazy() -> None:
         from .config import template_resolve_lazy_enabled
 
         enabled = template_resolve_lazy_enabled()
-    except Exception:  # pragma: no cover - config access is defensive
+    except Exception:
+        # Covered by `test_a_failed_config_read_pushes_the_DEFAULT` — it
+        # carried `# pragma: no cover` until the #2620 review, whose gate-off
+        # (D2b) proved the arm goes red when mutated. `config.py`'s equivalent
+        # marker was removed for the same reason one movement earlier; this
+        # sibling kept its, and an uncovered marker is precisely what made the
+        # #2539 movement-2 fallback's hardcoded literal invisible.
         logger.debug("[djust] resolve-lazy read failed; pushing the shipped default")
         enabled = _resolve_lazy_default()
     set_resolve_lazy(enabled)
@@ -221,12 +227,26 @@ def _resolve_lazy_default() -> bool:
     ``test_the_config_reader_is_the_only_one`` greps for exactly that. If even
     that import fails the module is too broken to hold a project-level
     opinion, and the shipped behaviour is the honest answer.
+
+    The literal below is the **third** statement of the default and the only
+    one that cannot read `config.py`, because `config.py` is what has just
+    failed to import. It is therefore accepted rather than removed — but it is
+    PINNED, not left invisible: ``test_the_unimportable_config_arm_still_answers
+    _the_shipped_default`` forces this arm and asserts the literal equals the
+    entry :attr:`djust.config.LiveViewConfig._defaults` carries for this flag,
+    so a movement that flips the default turns that test red instead of leaving
+    a stale ``True`` here. (The assertion is written in the TEST rather than
+    here for the same reason the rest of this module never spells the settings
+    key: ``test_the_config_reader_is_the_only_one`` greps the package for it.)
+    The #2620 review found this arm surviving gate-off (D2c) with a
+    ``# pragma: no cover`` on it — the same shape as the movement-2 fallback
+    the marker had been hiding two functions above.
     """
     try:
         from .config import template_resolve_lazy_default
 
         return template_resolve_lazy_default()
-    except Exception:  # pragma: no cover - the config module itself is broken
+    except Exception:
         return True
 
 
