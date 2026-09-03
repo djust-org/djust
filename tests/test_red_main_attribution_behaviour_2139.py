@@ -21,7 +21,6 @@ test is byte-identical to what ships.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -29,6 +28,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from tests.git_env import isolated_git_env
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/pre-push-pytest.sh"
@@ -68,13 +68,14 @@ def _git(cwd: Path, *args: str) -> None:
         cwd=cwd,
         check=True,
         capture_output=True,
-        env={
-            **os.environ,
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
-        },
+        # Never inherit git's execution variables: under a hook they point at
+        # the REAL repository and this fixture would re-init it (#2608).
+        env=isolated_git_env(
+            GIT_AUTHOR_NAME="t",
+            GIT_AUTHOR_EMAIL="t@t",
+            GIT_COMMITTER_NAME="t",
+            GIT_COMMITTER_EMAIL="t@t",
+        ),
     )
 
 
@@ -146,7 +147,12 @@ def _run(repo: Path, merge_base: str | None = None) -> str:
         cwd=repo,
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_ADDOPTS": ""},
+        # The script under test runs `git`; give it the same isolation the
+        # fixtures use so an ambient GIT_DIR cannot redirect it (#2608).
+        env=isolated_git_env(
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+            PYTEST_ADDOPTS="",
+        ),
     )
     return r.stdout + r.stderr
 
