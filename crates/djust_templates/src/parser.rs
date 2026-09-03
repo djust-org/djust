@@ -246,6 +246,35 @@ fn is_inside_html_tag_at(tokens: &[Token], pos: usize) -> bool {
 /// is available — it yields a more reproducible prefix derived from
 /// the source string itself, which keeps IDs stable across cosmetic
 /// token-stream representation changes (e.g. lexer refactors).
+/// The refusal text for a tag with no registered handler — one producer
+/// for the parser (parse-time, #2549) and the `Node::UnsupportedTag` render
+/// arm (hand-built nodes only), so the two can never drift (#1646).
+pub fn unsupported_tag_message(name: &str, args: &[String]) -> String {
+    let args_str = if args.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", args.join(" "))
+    };
+    format!(
+        "Unsupported template tag '{{% {name}{args_str} %}}'. \
+         Register a handler via djust._rust.register_tag_handler(), \
+         or use Django's template engine instead."
+    )
+}
+
+/// `{% templatetag X %}` accepts exactly Django's eight names; anything
+/// else is `TemplateSyntaxError` at parse time (#2549).
+pub const TEMPLATETAG_NAMES: [&str; 8] = [
+    "openblock",
+    "closeblock",
+    "openvariable",
+    "closevariable",
+    "openbrace",
+    "closebrace",
+    "opencomment",
+    "closecomment",
+];
+
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
     parse_internal(tokens, hash_tokens(tokens))
 }
@@ -880,6 +909,13 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             "templatetag requires an argument".to_string(),
                         ));
                     }
+                    if !TEMPLATETAG_NAMES.contains(&args[0].as_str()) {
+                        // Django: parse-time `TemplateSyntaxError` (#2549).
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "Unknown templatetag argument: '{}'",
+                            args[0]
+                        )));
+                    }
                     Ok(Some(Node::TemplateTag(args[0].clone())))
                 }
 
@@ -967,11 +1003,19 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             args: args.clone(),
                         }))
                     } else {
-                        // Unknown tag with no handler - create warning node
-                        Ok(Some(Node::UnsupportedTag {
-                            name: tag_name.clone(),
-                            args: args.clone(),
-                        }))
+                        // Unknown tag with no handler: refuse at PARSE time,
+                        // where Django raises `Invalid block tag` (#2549).
+                        // Until #2549 this built `Node::UnsupportedTag` and
+                        // the renderer raised the same message when — and
+                        // only if — the node was reached, so a defect in a
+                        // branch that never rendered was silently accepted.
+                        // The message text is a published contract
+                        // (`rendering.py` keys a hint on it; the scoreboard
+                        // list generator parses it) and is byte-identical to
+                        // the render arm's.
+                        Err(DjangoRustError::TemplateError(unsupported_tag_message(
+                            tag_name, args,
+                        )))
                     }
                 }
             }
@@ -2942,15 +2986,29 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_react_component() {
-        // Note: Current parser extracts from tag body but not tag arguments
-        // This is a known limitation that will be addressed in future phases
-        let template = r#"{% react "Button" props=button.props %}{{ button.label }}{% endreact %}"#;
+    fn test_extract_inside_block_tag_body() {
+        // Variables inside a block tag's body are extracted. (This used to
+        // wrap the body in an unregistered `{% react %}` tag, which the
+        // parser now refuses outright — #2549 — so it uses a built-in.)
+        let template = r#"{% spaceless %}{{ button.label }}{% endspaceless %}"#;
         let vars = extract_template_variables(template).unwrap();
         assert!(vars.contains_key("button"));
         let button_paths = vars.get("button").unwrap();
         assert!(button_paths.contains(&"label".to_string()));
-        // Note: button.props is not currently extracted from tag arguments
+    }
+
+    #[test]
+    fn test_extract_refuses_unregistered_tag_at_parse() {
+        // #2549: an unregistered tag is a parse error everywhere the parser
+        // runs, variable extraction included — no `Node::UnsupportedTag`
+        // is built for the renderer to trip over later.
+        let err = extract_template_variables(r#"{% react "Button" %}{% endreact %}"#)
+            .expect_err("an unregistered tag must refuse at parse");
+        assert!(
+            err.to_string()
+                .contains("Unsupported template tag '{% react \"Button\" %}'"),
+            "got: {err}"
+        );
     }
 
     #[test]

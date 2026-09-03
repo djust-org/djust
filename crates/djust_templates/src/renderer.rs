@@ -2962,23 +2962,12 @@ pub fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::UnsupportedTag { name, args } => {
-            // Build tag signature for error message
-            let args_str = if args.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", args.join(" "))
-            };
-            let tag_sig = format!("{{% {name}{args_str} %}}");
-
-            // Return an error so callers can fall back to Django's template engine.
-            // Previously this output an HTML comment, which produced silently wrong
-            // output. Raising an error allows Python wrappers with Django fallback
-            // (e.g. _render_template_with_fallback) to recover gracefully.
-            Err(DjangoRustError::TemplateError(format!(
-                "Unsupported template tag '{tag_sig}'. \
-                 Register a handler via djust._rust.register_tag_handler(), \
-                 or use Django's template engine instead."
-            )))
+            // Since #2549 the parser refuses an unregistered tag itself, so
+            // no parsed template contains this node; it is reachable only
+            // from a hand-built tree. Same message, one producer.
+            Err(DjangoRustError::TemplateError(
+                crate::parser::unsupported_tag_message(name, args),
+            ))
         }
 
         Node::BlockCustomTag {
