@@ -41,6 +41,8 @@ built-in to its correct registry AND strips it from the other one.
 import pytest
 from unittest.mock import patch
 
+from djust.template_tags import AsVarName
+
 
 @pytest.fixture(autouse=True)
 def _isolate_tag_registries():
@@ -177,7 +179,13 @@ class TestTagHandlerBase:
 
 
 class TestUrlTagHandler:
-    """Tests for the URL tag handler."""
+    """Tests for the URL tag handler.
+
+    Since #2563 `render` returns `(output, bindings)` (`RETURNS_BINDINGS`,
+    #2547) and a failed reverse RAISES `NoReverseMatch` as Django's
+    `URLNode` does; only the `as var` form stores `''`. The Django-parity
+    differential lives in `python/tests/test_url_noreversematch_2563.py`.
+    """
 
     def test_url_handler_simple(self):
         """{% url 'home' %} resolves correctly."""
@@ -187,7 +195,7 @@ class TestUrlTagHandler:
 
         with patch("django.urls.reverse", return_value="/"):
             result = handler.render(["'home'"], {})
-            assert result == "/"
+            assert result == ("/", {})
 
     def test_url_handler_with_arg(self):
         """{% url 'post_detail' post.id %} resolves with args."""
@@ -198,7 +206,7 @@ class TestUrlTagHandler:
         # Rust already resolves post.id to the actual value
         with patch("django.urls.reverse", return_value="/posts/42/") as mock_reverse:
             result = handler.render(["'post_detail'", "42"], {})
-            assert result == "/posts/42/"
+            assert result == ("/posts/42/", {})
             mock_reverse.assert_called_once_with("post_detail", args=[42])
 
     def test_url_handler_with_kwarg(self):
@@ -209,27 +217,52 @@ class TestUrlTagHandler:
 
         with patch("django.urls.reverse", return_value="/users/alice/") as mock_reverse:
             result = handler.render(["'user_profile'", "username='alice'"], {})
-            assert result == "/users/alice/"
+            assert result == ("/users/alice/", {})
             mock_reverse.assert_called_once_with("user_profile", kwargs={"username": "alice"})
 
+    def test_url_handler_as_var(self):
+        """{% url 'home' as home_url %} binds the name and emits nothing."""
+        from djust.template_tags.url import UrlTagHandler
+
+        handler = UrlTagHandler()
+
+        with patch("django.urls.reverse", return_value="/"):
+            assert handler.render(["'home'", "as", AsVarName("home_url")], {}) == (
+                "",
+                {"home_url": "/"},
+            )
+
     def test_url_handler_no_reverse_match(self):
-        """NoReverseMatch returns empty string."""
+        """NoReverseMatch RAISES — Django's behaviour (#2563)."""
+        from django.urls import NoReverseMatch
+        from djust.template_tags.url import UrlTagHandler
+
+        handler = UrlTagHandler()
+
+        planted = NoReverseMatch("not found")
+        with patch("django.urls.reverse", side_effect=planted):
+            with pytest.raises(NoReverseMatch) as excinfo:
+                handler.render(["'nonexistent'"], {})
+            assert excinfo.value is planted
+
+    def test_url_handler_no_reverse_match_as_var_stores_empty(self):
+        """{% url 'nonexistent' as v %} stores '' instead of raising (#2563)."""
         from django.urls import NoReverseMatch
         from djust.template_tags.url import UrlTagHandler
 
         handler = UrlTagHandler()
 
         with patch("django.urls.reverse", side_effect=NoReverseMatch("not found")):
-            result = handler.render(["'nonexistent'"], {})
-            assert result == ""
+            assert handler.render(["'nonexistent'", "as", AsVarName("v")], {}) == ("", {"v": ""})
 
     def test_url_handler_empty_args(self):
-        """Empty args returns empty string."""
+        """Empty args is Django's TemplateSyntaxError (#2563)."""
+        from django.template import TemplateSyntaxError
         from djust.template_tags.url import UrlTagHandler
 
         handler = UrlTagHandler()
-        result = handler.render([], {})
-        assert result == ""
+        with pytest.raises(TemplateSyntaxError):
+            handler.render([], {})
 
 
 class TestStaticTagHandler:
