@@ -323,13 +323,13 @@ Refused loudly on `{% load %}` (3): tz `localtime`, `timezone`, `utc` — each n
 
 The backend is scored against Django's own template test suite: `tests/template_tests` from the `django/django` checkout at the tag matching the installed Django (5.2.16 for the baseline below). An in-process `Engine` subclass routes every engine the suite builds through `DjustTemplateBackend`. Nothing in Django's checkout is edited, and the `TEMPLATES`-configured backend stays Django's own. The engine is reached through the plain-backend path only, not the LiveView path.
 
-- **70.39%** of the Django template tests that reach the engine pass (737 of 1047) <!-- django-suite-claim -->
-- Over the whole `template_tests` label the figure is 78.71% (1146 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
+- **70.58%** of the Django template tests that reach the engine pass (739 of 1047) <!-- django-suite-claim -->
+- Over the whole `template_tests` label the figure is 78.85% (1148 of 1456, 14 skipped). That is not the headline: 409 of those tests never reach any engine (`test_parser`, `test_context`, `test_smartif`, ...) and measure Django against itself, so no engine work can move them. (The skip count follows the environment: five of the fourteen are `jinja2` tests, and `jinja2` is not in the lockfile.)
 
 Two result kinds are counted separately because they are different work:
 
 - **ERROR**: the test could not run to an assertion. An unsupported tag, an attribute the backend cannot express, or a crash. Top classes in the baseline (ERROR lines naming the tag): `ifchanged` (25), `cache` (13), then `get_static_prefix` and `get_media_prefix` (2 each) — and that is the whole list, 42 of the 127 ERROR cells. `autoescape` (77 cells) left it in #2556; `blocktrans` (27) and `trans` (15) left it in #2558, along with every other `i18n` / `l10n` / `tz` tag error; `querystring` (14), `resetcycle` (7) and `debug` / `filter` / `lorem` (5 each) left it in #2596. Since #2549 an unsupported tag is refused at `get_template`/`from_string` as `DjustTemplateSyntaxError`, so these lines read `DjustTemplateSyntaxError: Template error: Unsupported template tag …` rather than `Exception: Error rendering template …`. Every Django built-in or library tag in those classes appears in the generated unsupported list above; `scripts/generate-template-backend-lists.py --cross-check .django-src/last-run.txt` reconciles the two. Until #2558 four generated-unsupported names never appeared on the scoreboard because no `template_tests` case reached them as a tag error — `get_current_timezone`, `localize`, `localtime`, `timezone`. All four are supported now, so the never-exercised set is empty and every generated-unsupported name is one the suite actually reaches (a test pins that, and a fifth such name appearing must move this sentence).
-- **FAIL**: the test ran and the output was wrong. The largest class was a `TemplateSyntaxError` that Django raises at parse time and djust did not (111 cells); #2549 moved the parse to construction and that class is now 69 cells, every one an engine-grammar gap where djust parses what Django refuses (`{% if %}` operator grammar, `{% url %}` argument parsing, `{{ a b }}`-style variable syntax, `{% include %}` arguments — #2576, #2577, #2578, #2579, #2580) rather than a timing question. Grepping `… not raised` returns 76, not 69: the other **7 are a different class** — a RENDER-time exception Django propagates and djust swallows (`RuntimeError` ×3, `ZeroDivisionError` ×2, `NoReverseMatch` ×2, in `TemplateTests` / `DebugTemplateTests` `test_compile_tag_error`, `test_no_wrapped_exception`, `test_super_errors`, and `IncludeTagTests.test_include_fail1`) — not a grammar gap, and tracked separately (#2617). A further 20 cells raise the right type at the right time and fail only on Django's verbatim message text (#2581) — the FAIL lines whose assertion reads `"<expected>" not found in <actual>`; #2558's tags are not among them, because they carry Django's own text, produced by Django's own compile functions. The rest are output mismatches such as `string_if_invalid` not honoured (#2518) and `{% if x|default_if_none:y %}` evaluating false when `x` is undefined (#2528). The `<!--dj-if-->` marker that leaked into plain-backend output was fixed in #2519; it accounted for five of the six cases it broke, and the sixth is the #2528 shape.
+- **FAIL**: the test ran and the output was wrong. The largest class was a `TemplateSyntaxError` that Django raises at parse time and djust did not (111 cells); #2549 moved the parse to construction and that class is now 67 cells (#2557 took the two empty-variable-tag cells, `{{ }}` and `{{        }}`, which Django refuses in its LEXER), every one an engine-grammar gap where djust parses what Django refuses (`{% if %}` operator grammar, `{% url %}` argument parsing, `{{ a b }}`-style variable syntax, `{% include %}` arguments — #2576, #2577, #2578, #2579, #2580) rather than a timing question. Grepping `… not raised` returns 74, not 67: the other **7 are a different class** — a RENDER-time exception Django propagates and djust swallows (`RuntimeError` ×3, `ZeroDivisionError` ×2, `NoReverseMatch` ×2, in `TemplateTests` / `DebugTemplateTests` `test_compile_tag_error`, `test_no_wrapped_exception`, `test_super_errors`, and `IncludeTagTests.test_include_fail1`) — not a grammar gap, and tracked separately (#2617). A further 20 cells raise the right type at the right time and fail only on Django's verbatim message text (#2581) — the FAIL lines whose assertion reads `"<expected>" not found in <actual>`; #2558's tags are not among them, because they carry Django's own text, produced by Django's own compile functions. The rest are output mismatches such as `string_if_invalid` not honoured (#2518) and `{% if x|default_if_none:y %}` evaluating false when `x` is undefined (#2528). The `<!--dj-if-->` marker that leaked into plain-backend output was fixed in #2519; it accounted for five of the six cases it broke, and the sixth is the #2528 shape.
 
 Seven `template_tests` cases segfault the interpreter (a `DjustTemplate` or a type object placed in the context, the #2516 reference-cycle class). The runner isolates each one: a crash records the in-flight test as `ERROR: process crashed`, skips it and every finished test, and relaunches, so nothing after a crash is lost.
 
@@ -553,6 +553,53 @@ class DjustTemplate:
 ```
 
 ## Troubleshooting
+
+### Where a template error happened
+
+A template the engine cannot parse is refused where Django refuses it — at
+`get_template()` / `from_string()`, not at the first `render()` (#2549) — and
+the exception carries Django's `template_debug` dict, so with `DEBUG = True`
+the technical-500 page shows the template name, the line number and a source
+excerpt with the offending token highlighted (#2557):
+
+```
+In template /app/templates/broken.html, error at line 3
+Template error: Unsupported template tag '{% badtagname %}'. …
+
+   1 : line one
+   2 : line two
+   3 : {% badtagname %}     <- highlighted
+   4 : line four
+```
+
+The dict is the one Django builds in `Template.get_exception_info`, key for
+key — `name`, `line`, `during`, `before`, `after`, `source_lines`, `top`,
+`bottom`, `total`, `start`, `end`, `message` — so any tool that reads
+`exc.template_debug` (Django's own debug view, `ExceptionReporter`, a custom
+500 handler) works unchanged. To read it yourself:
+
+```python
+from django.template import TemplateSyntaxError
+
+try:
+    engine.get_template("broken.html")
+except TemplateSyntaxError as exc:
+    debug = exc.template_debug          # None if the engine could not locate it
+    print(debug["name"], debug["line"], debug["during"])
+```
+
+`template_debug` is `None` — never absent — when the engine cannot say where
+the failure was. Two cases do that today: `{% cycle %}` / `{% resetcycle %}`
+binding errors, which are raised while walking the parsed AST rather than the
+token stream, and every error raised during `render()` rather than during the
+parse. Django's debug view renders the plain traceback for a `None`, which is
+what those cases get. Render-time locations need the per-node origin Django
+keeps on `Node.origin` / `Node.token`; that is tracked separately.
+
+Two other things follow from parsing at construction: the *message* text is
+djust's own, not Django's (it names the tag and the registration API), and an
+error in a branch that never renders — `{% if False %}{% unknown %}{% endif %}`
+— is refused, as on Django.
 
 ### Template Not Found
 
