@@ -5634,6 +5634,42 @@ mod tests {
     use crate::parser::parse;
     use indexmap::IndexMap;
 
+    // ---- #2558: the scope-node operand ------------------------------------
+
+    #[test]
+    fn a_scope_operand_resolves_literals_variables_and_none_distinctly() {
+        let mut context = Context::new();
+        context.set("lang".to_string(), Value::String("fr".to_string()));
+        context.set("nothing".to_string(), Value::None);
+
+        // A quoted literal loses its quotes through the ONE literal
+        // recogniser — `{% language "de" %}` must switch to `de`, not to
+        // the six-character string `"de"` (#2376).
+        assert_eq!(
+            scope_operand_string("\"de\"", &context),
+            Some("de".to_string())
+        );
+        assert_eq!(
+            scope_operand_string("'de'", &context),
+            Some("de".to_string())
+        );
+        // A variable resolves.
+        assert_eq!(
+            scope_operand_string("lang", &context),
+            Some("fr".to_string())
+        );
+        // Python `None` crosses as `None` — `translation.override(None)`
+        // DEACTIVATES, which is not what `""` does.
+        assert_eq!(scope_operand_string("nothing", &context), None);
+        // A missing variable is `string_if_invalid`, i.e. `""` — and `""`
+        // must stay distinguishable from `None` (measured on Django 5.2:
+        // `[en-us]` against `[None]`).
+        assert_eq!(
+            scope_operand_string("absent", &context),
+            Some(String::new())
+        );
+    }
+
     #[test]
     fn test_render_text() {
         let nodes = vec![Node::Text("Hello".to_string())];

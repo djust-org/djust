@@ -2527,6 +2527,176 @@ mod tests {
         extract_dj_model_fields::<NoIncludeLoader>(source, None).unwrap()
     }
 
+    // ---- #2558: the raw-body collector and the native scope arms ----------
+
+    /// Serializes the tests that mutate the process-global scope-tag set.
+    static SCOPE_TAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn parse_src(source: &str) -> Vec<Node> {
+        let tokens = tokenize(source).expect("tokenize failed");
+        parse(&tokens).expect("parse failed")
+    }
+
+    /// The body a raw-block tag would hand Django, reconstructed from the
+    /// token stream. Calls the collector directly: registering a real
+    /// raw-block handler needs a Python object, which a `cargo test` has no
+    /// interpreter for.
+    fn collected(source: &str, end: &str) -> String {
+        let tokens = tokenize(source).expect("tokenize failed");
+        let (body, end_pos) = collect_raw_source(
+            &tokens,
+            0,
+            &[end],
+            format!("Unclosed raw-block tag, expected {{% {end} %}}"),
+        )
+        .expect("collect failed");
+        // The collector stops ON the end tag, never past it.
+        assert!(matches!(&tokens[end_pos], Token::Tag(name, _) if name == end));
+        body
+    }
+
+    #[test]
+    fn raw_source_reconstructs_a_variable_with_django_spacing() {
+        // `{{anton}}` and `{{ berta  }}` both re-emit as `{{ name }}`: Django
+        // re-LEXES this string, and its `Variable` grammar ignores the
+        // spacing, so the msgid placeholder (`%(anton)s`) is unaffected.
+        assert_eq!(
+            collected(
+                "{{anton}}{{ berta  }}{% endblocktranslate %}",
+                "endblocktranslate"
+            ),
+            "{{ anton }}{{ berta }}"
+        );
+    }
+
+    #[test]
+    fn raw_source_reconstructs_text_and_tags_verbatim_and_drops_comments() {
+        assert_eq!(
+            collected(
+                "a %(x)s {% plural %}b{# c #}{% endblocktranslate %}",
+                "endblocktranslate"
+            ),
+            "a %(x)s {% plural %}b"
+        );
+        // A tag's arguments survive, space-joined — `{% templatetag openblock %}`
+        // must reach Django as a tag, not as its rendered output.
+        assert_eq!(
+            collected(
+                "{% templatetag openblock %}{% endblocktrans %}",
+                "endblocktrans"
+            ),
+            "{% templatetag openblock %}"
+        );
+    }
+
+    #[test]
+    fn raw_source_is_not_rendered_so_a_nested_block_tag_reaches_django() {
+        // The whole point of the fourth registration kind: Django must SEE
+        // `{% block b %}` in the body to raise its own "doesn't allow other
+        // block tags" error (#2558 §2).
+        let body = collected(
+            "Hello {% block b %}world{% endblock %}{% endblocktranslate %}",
+            "endblocktranslate",
+        );
+        assert!(body.contains("{% block b %}"), "{body}");
+        assert!(body.contains("{% endblock %}"), "{body}");
+    }
+
+    #[test]
+    fn raw_source_without_its_end_tag_is_an_error_not_a_truncated_body() {
+        let tokens = tokenize("x").expect("tokenize failed");
+        let err = collect_raw_source(&tokens, 0, &["endblocktranslate"], "boom".to_string());
+        assert!(
+            err.is_err(),
+            "an unclosed raw block must not silently close"
+        );
+    }
+
+    #[test]
+    fn an_unarmed_scope_tag_still_falls_through_to_unsupported() {
+        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::registry::clear_scope_tags().unwrap();
+        // Before any `{% load i18n %}`, `{% language %}` is exactly as
+        // unsupported as it was before this row — the arming gate is what
+        // keeps a project that never loads the library on its old behaviour.
+        // Since #2549 an unsupported tag is REFUSED at parse, so the arm is
+        // observed as that refusal rather than as an `UnsupportedTag` node.
+        let tokens = tokenize("{% language \"de\" %}x{% endlanguage %}").expect("tokenize failed");
+        let err = parse(&tokens).expect_err("an unarmed scope tag must be refused");
+        assert!(
+            err.to_string().contains("Unsupported template tag"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn armed_scope_tags_parse_as_native_nodes_with_their_children() {
+        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::registry::clear_scope_tags().unwrap();
+        crate::registry::arm_scope_tags(vec![
+            "language".to_string(),
+            "localize".to_string(),
+            "localtime".to_string(),
+            "timezone".to_string(),
+        ])
+        .unwrap();
+
+        let nodes = parse_src("{% language \"de\" %}{{ n }}{% endlanguage %}");
+        match &nodes[0] {
+            Node::Language { expr, children } => {
+                // The operand keeps its QUOTES: the renderer resolves it
+                // through `django_literal`, which is what strips them (#2376).
+                assert_eq!(expr, "\"de\"");
+                assert_eq!(children.len(), 1);
+            }
+            other => panic!("expected Language, got {other:?}"),
+        }
+
+        match &parse_src("{% timezone tzname %}x{% endtimezone %}")[0] {
+            Node::Timezone { expr, children } => {
+                assert_eq!(expr, "tzname");
+                assert_eq!(children.len(), 1);
+            }
+            other => panic!("expected Timezone, got {other:?}"),
+        }
+
+        // `on` / `off` / bare, for both flag nodes.
+        for (src, expected) in [
+            ("{% localize %}x{% endlocalize %}", true),
+            ("{% localize on %}x{% endlocalize %}", true),
+            ("{% localize off %}x{% endlocalize %}", false),
+        ] {
+            match &parse_src(src)[0] {
+                Node::Localize { use_l10n, .. } => assert_eq!(*use_l10n, expected, "{src}"),
+                other => panic!("expected Localize for {src}, got {other:?}"),
+            }
+        }
+        for (src, expected) in [
+            ("{% localtime %}x{% endlocaltime %}", true),
+            ("{% localtime on %}x{% endlocaltime %}", true),
+            ("{% localtime off %}x{% endlocaltime %}", false),
+        ] {
+            match &parse_src(src)[0] {
+                Node::LocalTime { use_tz, .. } => assert_eq!(*use_tz, expected, "{src}"),
+                other => panic!("expected LocalTime for {src}, got {other:?}"),
+            }
+        }
+
+        // Nesting: a scope node's children are parsed, so an inner scope is
+        // a child node rather than a flattened sibling.
+        match &parse_src(
+            "{% language \"de\" %}{% language \"fr\" %}x{% endlanguage %}{% endlanguage %}",
+        )[0]
+        {
+            Node::Language { children, .. } => {
+                assert!(matches!(children[0], Node::Language { .. }), "{children:?}");
+            }
+            other => panic!("expected Language, got {other:?}"),
+        }
+
+        crate::registry::clear_scope_tags().unwrap();
+    }
+
     #[test]
     fn dj_model_basic_attribute_collected() {
         assert_eq!(

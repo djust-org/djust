@@ -4280,6 +4280,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
+        djust_templates::registry::clear_scope_tags,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
         djust_templates::registry::register_language_scope_hooks,
         m
     )?)?;

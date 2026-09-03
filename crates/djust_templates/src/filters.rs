@@ -6892,6 +6892,25 @@ mod tests {
     use super::*;
     use indexmap::IndexMap;
 
+    // ---- #2558: the zone name of an unconverted aware value ---------------
+
+    #[test]
+    fn a_fixed_offset_names_itself_the_way_python_does() {
+        use chrono::FixedOffset;
+        // `datetime.timezone(offset).tzname(None)` — what Django's `T`/`e`
+        // read for an aware value that was NOT converted (inside
+        // `{% localtime off %}`, or under `USE_TZ = False`).
+        assert_eq!(fixed_offset_name(&FixedOffset::east_opt(0).unwrap()), "UTC");
+        assert_eq!(
+            fixed_offset_name(&FixedOffset::east_opt(2 * 3600).unwrap()),
+            "UTC+02:00"
+        );
+        assert_eq!(
+            fixed_offset_name(&FixedOffset::west_opt(5 * 3600 + 30 * 60).unwrap()),
+            "UTC-05:30"
+        );
+    }
+
     /// Every `Value` variant, so a new one cannot be added without a decision.
     fn every_variant() -> Vec<Value> {
         let mut map = IndexMap::new();
