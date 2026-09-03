@@ -724,8 +724,15 @@ def template_resolve_lazy_enabled() -> bool:
     of this docstring claimed. The eager sidecar walk that OFF selects keeps
     ``protect_sidecar``'s ``Err(_) => obj`` arm (an exception during a lookup
     hands the raw object back) and the unguarded ``get_item`` that SEGFAULTS on
-    a class object; the sink has neither. Those are the failure-mode arguments,
-    and they hold.
+    a class object; the sink drops the first outright and narrows the second.
+    Those are the failure-mode arguments, and they hold in that form.
+
+    "The sink has neither" would be too strong: the numeric-index form
+    ``{{ v.0 }}`` on a ``do_not_call_in_templates`` container-subclass CLASS
+    still exits 139, identically on both settings, through the backend as well
+    as the raw entry. The flip fixes row P's string-key form and not that one.
+    Tracked at #2624; it is not a held cell the characterization net declares,
+    which is itself the gap.
 
     What does NOT hold is the tempting extra step of calling ON monotonically
     less disclosing. The eager walk also does the ``__dict__`` dump, which
