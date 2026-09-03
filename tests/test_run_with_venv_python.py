@@ -71,6 +71,9 @@ def _make_repo_with_venv(tmp: Path) -> tuple[Path, Path]:
     # Copy the resolver into the repo so it's callable by its in-repo path.
     (main / "scripts").mkdir()
     shutil.copy(RESOLVER, main / "scripts" / RESOLVER.name)
+    # Like the real repo: a venv is never committed, so a linked worktree does
+    # not inherit one (#2526 — a worktree that OWNS a `.venv` is preferred).
+    (main / ".gitignore").write_text(".venv/\n")
     _git(main, "add", "-A").check_returncode()
     _git(main, "commit", "-q", "-m", "init").check_returncode()
 
@@ -209,6 +212,38 @@ def test_makefile_routes_through_resolver() -> None:
     )
 
 
+def _give_worktree_own_venv(worktree: Path) -> Path:
+    """A `make worktree-env` result: the worktree's own fake interpreter."""
+    venv_bin = worktree / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    own = venv_bin / "python"
+    own.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "$1" = "--marker" ]; then echo "WORKTREE_OWN_VENV_PYTHON"; exit 0; fi\n'
+        "exit 0\n"
+    )
+    own.chmod(0o755)
+    return own
+
+
+def test_worktree_own_venv_wins_over_main(tmp_path: Path) -> None:
+    """`make worktree-env` (#2526): a checkout that owns a `.venv` is resolved
+    to THAT interpreter, not the main checkout's — its own `djust.pth` points
+    at itself, so the build it made is the one its tests must run against."""
+    main, _ = _make_repo_with_venv(tmp_path)
+    worktree = tmp_path / "wt"
+    _git(main, "worktree", "add", "-q", "-b", "feature", str(worktree)).check_returncode()
+    own = _give_worktree_own_venv(worktree)
+
+    res = _run_resolver(worktree, "--marker")
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == "WORKTREE_OWN_VENV_PYTHON", res.stdout
+    printed = _run_resolver(worktree, "--print")
+    assert printed.stdout.strip() == str(own), printed.stdout
+    # The main checkout is unaffected.
+    assert _run_resolver(main, "--marker").stdout.strip() == "MAIN_VENV_PYTHON"
+
+
 class TestWorktreePythonpath:
     """`--worktree-pythonpath` mode (closes #1810).
 
@@ -255,6 +290,25 @@ class TestWorktreePythonpath:
             "Expected empty output in the main checkout — emitting a path here "
             "would needlessly double-add python/ to PYTHONPATH."
         )
+
+    def test_emits_nothing_when_worktree_owns_a_venv(self, tmp_path: Path) -> None:
+        """A `make worktree-env` checkout (#2526) needs no shadow: its own
+        `djust.pth` already points at its `python/`, and symlinking the MAIN
+        tree's `.so` in would clobber the extension it built for itself."""
+        main, _ = _make_repo_with_venv(tmp_path)
+        self._seed_python_pkg(main)
+        _git(main, "add", "-A").check_returncode()
+        _git(main, "commit", "-q", "-m", "add pkg").check_returncode()
+        worktree = tmp_path / "wt"
+        _git(main, "worktree", "add", "-q", "-b", "feature", str(worktree)).check_returncode()
+        _give_worktree_own_venv(worktree)
+        own_so = worktree / "python" / "djust" / "_rust.cpython-000-x.so"
+        own_so.write_text("built here")
+
+        res = _run_resolver(worktree, "--worktree-pythonpath")
+        assert res.returncode == 0, res.stderr
+        assert res.stdout.strip() == "", res.stdout
+        assert not own_so.is_symlink() and own_so.read_text() == "built here"
 
     def test_emits_nothing_when_worktree_has_no_python_pkg(self, tmp_path: Path) -> None:
         """A worktree without a ``python/djust`` package has nothing to shadow
@@ -360,6 +414,9 @@ class TestWorktreePythonpath:
         so_name = f"_rust.{cache_tag}-fake.so"
         (main / "python" / "djust" / so_name).write_bytes(b"\x00fake-so\x00")
 
+        # The venv is never committed (as in the real repo), so the worktree
+        # does not inherit it and reads as one WITHOUT its own venv (#2526).
+        (main / ".gitignore").write_text(".venv/\n")
         _git(main, "add", "-A").check_returncode()
         _git(main, "commit", "-q", "-m", "init").check_returncode()
 
