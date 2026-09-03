@@ -3483,6 +3483,12 @@ ENTRY_POINTS_NOT_SWEPT = {
         "settings would double the corpus for one boolean"
     ),
     "set_virtual_keyed_ops": "a VDOM keyed-ops flag; nothing to do with template rendering",
+    "register_library_loader": (
+        "the `{% load app_tags %}` hook (#2547). It changes rendering only for a "
+        "template that loads a PROJECT library, which this corpus has none of; the "
+        "randomized differential over a scratch library lives in "
+        "python/tests/test_load_imports_django_libraries_2547.py"
+    ),
 }
 
 

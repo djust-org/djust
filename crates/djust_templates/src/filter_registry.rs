@@ -527,10 +527,28 @@ pub fn apply_custom_filter(
                 )
             }
             Some(s) => {
+                // A NUMERIC literal first (#2547): Django's `Variable("5")`
+                // is `int 5` and `Variable("1.5")` is `float 1.5` before any
+                // context lookup happens, so `{{ s|trim:5 }}` hands the
+                // filter an `int` and `value[:num]` slices. Before this arm
+                // the token fell through to context resolution, found no
+                // binding, and arrived as the `str` `"5"` — `slice indices
+                // must be integers`. The ONE literal recogniser
+                // (`renderer::django_literal`, #2376) decides; the `false`
+                // in the pattern is "not a quoted string", which cannot
+                // reach here anyway (`arg_was_quoted` took it above).
+                if let Some((literal, false)) = crate::renderer::django_literal(s) {
+                    Some(
+                        literal
+                            .into_pyobject(py)
+                            .map_err(|e| format!("Failed to convert literal filter arg: {e}"))?
+                            .into_any(),
+                    )
+                }
                 // Bare identifier — try context resolution first. An
                 // exception raised inside an auto-called method (ADR-024)
                 // surfaces as a filter error rather than being swallowed.
-                if let Some(ctx) = context {
+                else if let Some(ctx) = context {
                     if let Some(resolved) = ctx
                         .resolve(s)
                         .map_err(|e| format!("Failed to resolve filter arg '{s}': {e}"))?

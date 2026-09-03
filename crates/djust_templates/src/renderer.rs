@@ -551,14 +551,14 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
             None => context,
         };
 
-        match sibling_updates(node, active_ctx)? {
-            Some(updates) => {
+        match sibling_updates(node, active_ctx, loader)? {
+            Some(effect) => {
                 // Promote to owned context if we haven't already, then merge.
                 if mutated.is_none() {
                     mutated = Some(active_ctx.clone());
                 }
                 if let Some(ctx) = mutated.as_mut() {
-                    for binding in updates {
+                    for binding in effect.bindings {
                         // `bind`, not `set` + `mark_safe`: `bind` REVOKES any
                         // stale grant on the name first, so a `{% … as x %}`
                         // landing on a name the context had marked cannot
@@ -572,7 +572,9 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
                         ctx.bind(binding.name, binding.value, binding.safe);
                     }
                 }
-                // A context-mutating tag emits no HTML.
+                // A context-mutating tag emits no HTML — except a bridged
+                // library tag, which may emit AND bind (#2547).
+                output.push_str(&effect.html);
             }
             None => {
                 output.push_str(&render_node_with_loader(node, active_ctx, loader)?);
@@ -592,10 +594,35 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
 /// context-mutating node would have made that four copies of two arms each, so
 /// the copies are retired rather than extended (CLAUDE.md #1646).
 ///
-/// `Some(updates)` also means "emits no HTML", which is what all three call
-/// sites do with it and what Django's assignment tags do.
-fn sibling_updates(node: &Node, context: &Context) -> Result<Option<Vec<SiblingBinding>>> {
+/// `Some(effect)` carries the bindings AND the HTML the node emits. For
+/// Django's assignment tags and `{% … as var %}` the HTML is empty; a bridged
+/// library tag (#2547) may do both — `{% counter %}` emits, `{% one_param 37
+/// as out %}` binds, and Django's own node decides which — so the effect
+/// carries both rather than the call sites assuming "binds ⇒ silent".
+fn sibling_updates<L: TemplateLoader>(
+    node: &Node,
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<Option<SiblingEffect>> {
     match node {
+        // A bridged Django library tag that declared `RETURNS_BINDINGS`
+        // (#2547). Both arms below call the SAME helper the standalone
+        // `render_node_with_loader` arms call — the helper decides between
+        // the bindings-returning and the plain registry call, so a
+        // library tag renders identically whether or not it has a sibling
+        // to hand its bindings to.
+        Node::CustomTag { name, args } if crate::registry::tag_handler_returns_bindings(name) => {
+            let (html, bindings) = call_custom_tag(name, args, context)?;
+            Ok(Some(SiblingEffect { html, bindings }))
+        }
+        Node::BlockCustomTag {
+            name,
+            args,
+            children,
+        } if crate::registry::block_handler_returns_bindings(name) => {
+            let (html, bindings) = call_block_custom_tag(name, args, children, context, loader)?;
+            Ok(Some(SiblingEffect { html, bindings }))
+        }
         Node::AssignTag { name, args } => {
             // Resolve variable references in args, mirroring only the JSON
             // *encoding* of `Node::CustomTag` (structured list/object values
@@ -620,7 +647,7 @@ fn sibling_updates(node: &Node, context: &Context) -> Result<Option<Vec<SiblingB
             .map_err(|e| {
                 DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
             })?;
-            Ok(Some(
+            Ok(Some(SiblingEffect::silent(
                 updates
                     .into_iter()
                     .map(|(name, value)| SiblingBinding {
@@ -629,7 +656,7 @@ fn sibling_updates(node: &Node, context: &Context) -> Result<Option<Vec<SiblingB
                         safe: false,
                     })
                     .collect(),
-            ))
+            )))
         }
         // `{% widthratio a b c as name %}` and `{% firstof a b as name %}`
         // (#2355). Django binds the SAME string it would otherwise have
@@ -641,17 +668,17 @@ fn sibling_updates(node: &Node, context: &Context) -> Result<Option<Vec<SiblingB
             max_value,
             max_width,
             asvar: Some(name),
-        } => Ok(Some(vec![SiblingBinding {
+        } => Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
             name: name.clone(),
             value: Value::String(width_ratio(value, max_value, max_width, context)?),
             // Django binds `str(round(...))` — a PLAIN `str`, not a
             // `SafeString`. Measured, and it differs from `firstof` below.
             safe: false,
-        }])),
+        }]))),
         Node::FirstOf {
             args,
             asvar: Some(name),
-        } => Ok(Some(vec![SiblingBinding {
+        } => Ok(Some(SiblingEffect::silent(vec![SiblingBinding {
             name: name.clone(),
             value: Value::String(first_of(args, context)?.unwrap_or_default()),
             // `FirstOfNode` binds `render_value_in_context(...)`, which is a
@@ -659,7 +686,7 @@ fn sibling_updates(node: &Node, context: &Context) -> Result<Option<Vec<SiblingB
             // `{{ v }}` escapes an already-escaped string and renders
             // `&amp;lt;b&amp;gt;` where Django renders `&lt;b&gt;`.
             safe: true,
-        }])),
+        }]))),
         _ => Ok(None),
     }
 }
@@ -670,6 +697,146 @@ struct SiblingBinding {
     value: Value,
     /// Django bound a `SafeString` here, so `{{ name }}` must not re-escape.
     safe: bool,
+}
+
+/// What a sibling-aware node contributes: the HTML it emits and the names it
+/// binds for the siblings that follow it (#2547).
+struct SiblingEffect {
+    html: String,
+    bindings: Vec<SiblingBinding>,
+}
+
+impl SiblingEffect {
+    /// Binds and emits nothing — Django's assignment tags and `{% … as var %}`.
+    fn silent(bindings: Vec<SiblingBinding>) -> Self {
+        Self {
+            html: String::new(),
+            bindings,
+        }
+    }
+}
+
+/// Call the inline handler for a [`Node::CustomTag`] — the ONE site that
+/// resolves its args and picks the registry call (#2547).
+///
+/// A handler that declared `RETURNS_BINDINGS` (a bridged Django library tag)
+/// is called through the bindings-returning entry, whose Python exceptions
+/// cross WHOLE; every other handler takes the historical path, bytes
+/// unchanged. Both `render_node_with_loader`'s standalone arm and
+/// `sibling_updates`' binding arm come through here, so the two cannot
+/// resolve an argument differently (#1646).
+fn call_custom_tag(
+    name: &str,
+    args: &[String],
+    context: &Context,
+) -> Result<(String, Vec<SiblingBinding>)> {
+    // Resolve any variable references in args. Scalars inline; lists and
+    // objects are JSON-encoded through the shared `value_to_arg_string`
+    // (#1646, #2042). This path keeps its own filter-aware `get_value`
+    // resolver (e.g. `x|upper`), unlike the plain-context-lookup
+    // `resolve_tag_arg` shared by AssignTag / BlockCustomTag. A handler may
+    // DECLARE `RESOLVE_ARG_POSITIONS` and take some positions as literal
+    // TOKENS instead (#2423); both rules apply, in that order, through
+    // `resolve_custom_tag_args`.
+    let resolved_args = resolve_custom_tag_args(name, args, context);
+    let context_map = context.to_hashmap();
+    // The optional raw-Python sidecar (``request``, ``view``, …) so handlers
+    // like ``live_render`` (#1145) can reach Python objects from the parent's
+    // render context. Existing handlers ignore extra keys.
+    let raw_py = context.raw_py_objects();
+    if crate::registry::tag_handler_returns_bindings(name) {
+        let (html, bindings) = crate::registry::call_handler_with_bindings(
+            name,
+            &resolved_args,
+            &context_map,
+            raw_py,
+            &context.safe_key_paths(),
+        )?;
+        return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
+    }
+    let html =
+        crate::registry::call_handler_with_py_sidecar(name, &resolved_args, &context_map, raw_py)
+            .map_err(|e| {
+            DjangoRustError::TemplateError(format!("Custom tag '{}' error: {}", name, e))
+        })?;
+    Ok((html, Vec::new()))
+}
+
+/// Resolve a [`Node::BlockCustomTag`]'s args, honouring the handler's
+/// declared `RESOLVE_ARG_POSITIONS` policy (#2547).
+///
+/// The block twin of [`resolve_custom_tag_args`]. Until #2547 the block
+/// registry resolved EVERY position unconditionally — the #1646 drift that
+/// handed a bridged `{% div id=name %}` Django's parser the resolved VALUE of
+/// `name`. A passthrough position is `TagArg::plain(token)` — no `SafeData`
+/// grant, for the reason `resolve_custom_tag_args` documents at length (a
+/// token is a NAME the handler will resolve, not bytes bound for the page).
+/// Every block handler djust ships declares no policy → resolve all →
+/// bytes unchanged.
+fn resolve_block_tag_args(name: &str, args: &[String], context: &Context) -> Vec<TagArg> {
+    let resolve_positions = crate::registry::block_handler_resolve_positions(name);
+    args.iter()
+        .enumerate()
+        .map(|(position, arg)| {
+            if resolve_positions
+                .as_ref()
+                .is_some_and(|declared| !declared.contains(&position))
+            {
+                return TagArg::plain(arg.clone());
+            }
+            // Through the SAME shared helper as `Node::AssignTag`, which
+            // JSON-encodes structured values (#2042).
+            TagArg::plain(resolve_tag_arg(arg, context))
+        })
+        .collect()
+}
+
+/// Render a [`Node::BlockCustomTag`]'s body and call its handler — the ONE
+/// site for both the standalone arm and `sibling_updates` (#2547).
+fn call_block_custom_tag<L: TemplateLoader>(
+    name: &str,
+    args: &[String],
+    children: &[Node],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<(String, Vec<SiblingBinding>)> {
+    // Render children first to get block content
+    let content = render_nodes_with_loader(children, context, loader)?;
+    let resolved_args = resolve_block_tag_args(name, args, context);
+    let context_map = context.to_hashmap();
+    // Forward raw-Python sidecar so block handlers can reach Python-only
+    // context (request, view) the same way ``Node::CustomTag`` handlers do
+    // (#1167).
+    let raw_py = context.raw_py_objects();
+    if crate::registry::block_handler_returns_bindings(name) {
+        let (html, bindings) = crate::registry::call_block_handler_with_bindings(
+            name,
+            &resolved_args,
+            &content,
+            &context_map,
+            raw_py,
+            &context.safe_key_paths(),
+        )?;
+        return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
+    }
+    let html = crate::registry::call_block_handler_with_py_sidecar(
+        name,
+        &resolved_args,
+        &content,
+        &context_map,
+        raw_py,
+    )
+    .map_err(|e| DjangoRustError::TemplateError(format!("Block tag '{}' error: {}", name, e)))?;
+    Ok((html, Vec::new()))
+}
+
+/// A registry [`crate::registry::HandlerBinding`] as a [`SiblingBinding`].
+fn sibling_binding(binding: crate::registry::HandlerBinding) -> SiblingBinding {
+    SiblingBinding {
+        name: binding.name,
+        value: binding.value,
+        safe: binding.safe,
+    }
 }
 
 /// Serialize a resolved template-tag argument [`Value`] to the string a
@@ -1287,13 +1454,13 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
             None => context,
         };
 
-        let frag = match sibling_updates(node, active_ctx)? {
-            Some(updates) => {
+        let frag = match sibling_updates(node, active_ctx, loader)? {
+            Some(effect) => {
                 if mutated.is_none() {
                     mutated = Some(active_ctx.clone());
                 }
                 if let Some(ctx) = mutated.as_mut() {
-                    for binding in updates {
+                    for binding in effect.bindings {
                         // `bind`, not `set` + `mark_safe`: `bind` REVOKES any
                         // stale grant on the name first, so a `{% … as x %}`
                         // landing on a name the context had marked cannot
@@ -1307,7 +1474,7 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
                         ctx.bind(binding.name, binding.value, binding.safe);
                     }
                 }
-                String::new()
+                effect.html
             }
             None => render_node_with_loader(node, active_ctx, loader)?,
         };
@@ -1352,20 +1519,20 @@ pub fn render_nodes_partial<L: TemplateLoader>(
         };
 
         if needs_render {
-            let html = match sibling_updates(node, active_ctx)? {
-                Some(updates) => {
+            let html = match sibling_updates(node, active_ctx, loader)? {
+                Some(effect) => {
                     if mutated.is_none() {
                         mutated = Some(active_ctx.clone());
                     }
                     if let Some(ctx) = mutated.as_mut() {
-                        for binding in updates {
+                        for binding in effect.bindings {
                             // See the sibling loop above: `bind` revokes a
                             // stale grant on the name first, and the flag is
                             // per binding (#2361 + #2355).
                             ctx.bind(binding.name, binding.value, binding.safe);
                         }
                     }
-                    String::new()
+                    effect.html
                 }
                 None => render_node_with_loader(node, active_ctx, loader)?,
             };
@@ -2808,39 +2975,18 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             args,
             children,
         } => {
-            // Render children first to get block content
-            let content = render_nodes_with_loader(children, context, loader)?;
-
-            // Resolve variable references in args through the SAME shared
-            // helper as `Node::AssignTag`. This inline resolver used to be a
-            // hand-copied twin of `resolve_tag_arg` that (crucially) skipped
-            // the JSON encoding, so a list/object arg collapsed to the opaque
-            // "[List]" / "[Object]" placeholder. Routing through
-            // `resolve_tag_arg` (which encodes via `value_to_arg_string`)
-            // retires that parallel-path-drift class (CLAUDE.md #1646, #2042):
-            // block handlers now receive the structured payload like the
-            // CustomTag and AssignTag paths already do.
-            let resolved_args: Vec<TagArg> = args
-                .iter()
-                .map(|arg| TagArg::plain(resolve_tag_arg(arg, context)))
-                .collect();
-
-            let context_map = context.to_hashmap();
-
-            // Forward raw-Python sidecar so block handlers can reach
-            // Python-only context (request, view) the same way
-            // ``Node::CustomTag`` handlers do (#1167).
-            let raw_py = context.raw_py_objects();
-            crate::registry::call_block_handler_with_py_sidecar(
-                name,
-                &resolved_args,
-                &content,
-                &context_map,
-                raw_py,
-            )
-            .map_err(|e| {
-                DjangoRustError::TemplateError(format!("Block tag '{}' error: {}", name, e))
-            })
+            // Body render + arg resolution + the registry call live in ONE
+            // helper shared with `sibling_updates` (#2547). Arg resolution
+            // goes through the SAME shared `resolve_tag_arg` as
+            // `Node::AssignTag` — this arm used to carry a hand-copied twin
+            // that skipped the JSON encoding, collapsing list/object args to
+            // "[List]" / "[Object]" (CLAUDE.md #1646, #2042) — and honours
+            // the handler's `RESOLVE_ARG_POSITIONS` policy like the other two
+            // registries. A standalone render has no sibling to hand
+            // bindings to, so they are dropped here, as the AssignTag arm
+            // below drops its updates.
+            let (html, _bindings) = call_block_custom_tag(name, args, children, context, loader)?;
+            Ok(html)
         }
 
         Node::AssignTag { name, args } => {
@@ -2891,29 +3037,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             //
             // A handler may DECLARE `RESOLVE_ARG_POSITIONS` and take some
             // positions as literal TOKENS instead (#2423). Both rules apply,
-            // in that order, through `resolve_custom_tag_args`.
-            let resolved_args = resolve_custom_tag_args(name, args, context);
-
-            // Convert context to HashMap for the handler
-            let context_map = context.to_hashmap();
-
-            // Call the Python handler. We forward the optional
-            // raw-Python sidecar (``request``, ``view``, …) so handlers
-            // like ``live_render`` (#1145) that need access to Python
-            // objects in the parent's render context can pick them up
-            // from the ``context`` dict alongside the JSON-friendly
-            // values. Existing handlers ignore extra keys so this is
-            // backward compatible.
-            let raw_py = context.raw_py_objects();
-            crate::registry::call_handler_with_py_sidecar(
-                name,
-                &resolved_args,
-                &context_map,
-                raw_py,
-            )
-            .map_err(|e| {
-                DjangoRustError::TemplateError(format!("Custom tag '{}' error: {}", name, e))
-            })
+            // in that order, through `resolve_custom_tag_args` — inside
+            // `call_custom_tag`, the ONE site shared with `sibling_updates`
+            // (#2547). A standalone render has no sibling to hand bindings
+            // to, so they are dropped here, as the AssignTag arm above drops
+            // its updates.
+            let (html, _bindings) = call_custom_tag(name, args, context)?;
+            Ok(html)
         }
     }
 }
@@ -3834,7 +3964,7 @@ fn bare_dotted_path(expr: &str) -> Option<&str> {
 /// lookups and render empty, which is what they did before this function
 /// existed — narrower is the direction a literal recognizer may fail in,
 /// because the alternative is inventing a value Django would not.
-fn django_literal(expr: &str) -> Option<(Value, bool)> {
+pub(crate) fn django_literal(expr: &str) -> Option<(Value, bool)> {
     if expr.contains('.') || expr.contains(['e', 'E']) {
         // `"2."` is invalid — Django re-raises after the successful `float()`.
         if !expr.ends_with('.') {
@@ -6546,10 +6676,17 @@ mod tests {
         // branch entirely, taking the policy with it — passes every behavioural
         // test `render_slot` has, because `render_slot` does not read its
         // argument's marker.
+        // Two since #2547: the inline resolver and its block twin
+        // (`resolve_block_tag_args`) — and NEITHER may mint a grant.
         assert_eq!(
             src.matches("return TagArg::plain(arg.clone());").count(),
-            1,
-            "the literal-passthrough position must hand back an UNMARKED arg"
+            2,
+            "the literal-passthrough positions (inline + block) must hand back an UNMARKED arg"
+        );
+        assert_eq!(
+            src.matches("TagArg::marked(arg.clone())").count(),
+            0,
+            "a passthrough token must never carry a grant"
         );
         assert!(
             src.contains("tag_handler_resolve_positions(name)"),

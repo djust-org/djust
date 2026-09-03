@@ -26,8 +26,14 @@ class DjustTemplateBackend(BaseEngine):
 
     Limitations:
     - Not all Django template tags/filters supported yet
-    - Custom template tags not supported
     - See djust documentation for supported features
+
+    ``{% load app_tags %}`` imports the project's Django template library and
+    bridges its tags and filters into the Rust engine (#2547). ``OPTIONS``
+    accepts Django's ``libraries`` (label → dotted path, added to the
+    installed-app discovery) and ``builtins`` (dotted paths bridged at
+    construction, no ``{% load %}`` needed), with the same meaning they have
+    on ``DjangoTemplates``.
     """
 
     app_dirname = "templates"
@@ -39,6 +45,15 @@ class DjustTemplateBackend(BaseEngine):
         super().__init__(params)
 
         self.context_processors = options.pop("context_processors", [])
+
+        # Django's `OPTIONS['libraries']` / `OPTIONS['builtins']`, with the
+        # meaning `DjangoTemplates` gives them (#2547). `libraries` extends
+        # the `{% load %}` name map; `builtins` are bridged now.
+        self.template_libraries: Dict[str, str] = dict(options.pop("libraries", {}) or {})
+        self.template_builtins: List[str] = list(options.pop("builtins", []) or [])
+        from ..template_libraries import register_backend_libraries
+
+        register_backend_libraries(self.template_libraries, self.template_builtins)
 
         # Build list of template directories
         self.template_dirs = self._get_template_dirs(
