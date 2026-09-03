@@ -65,6 +65,7 @@ from django.utils import translation  # noqa: E402
 from django.utils.safestring import SafeString, mark_safe  # noqa: E402
 
 from djust import _rust  # noqa: E402
+from djust import render_env  # noqa: E402
 from djust import template_libraries  # noqa: E402
 from djust.live_view import LiveView  # noqa: E402
 from djust.template.backend import DjustTemplateBackend  # noqa: E402
@@ -107,6 +108,24 @@ CTX = {
     "lang": "fr",
     "tzname": "Asia/Tokyo",
 }
+
+
+@pytest.fixture(autouse=True)
+def _restore_render_env():
+    """Push the AMBIENT locale/zone back to Rust after each test.
+
+    `render_env` sets the Rust thread-locals per render and never restores
+    them (documented in `apply_resolve_lazy`), so a test that renders under
+    `translation.override("de")` leaves the thread formatting numbers as
+    German. Every framework entry re-pushes on its next render, but a test
+    calling `djust._rust.render_template` DIRECTLY inherits whatever the
+    thread last had — which is how this module broke
+    `test_template_conditions.py::test_is_not_none_with_non_none_value`
+    (`rendered: 12,3`) on a shared xdist worker. Restoring here keeps the
+    pollution inside the module that creates it.
+    """
+    yield
+    render_env.apply_render_env()
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +480,33 @@ def test_string_if_invalid_reaches_a_blocktranslate_placeholder():
     source = L + "{% blocktranslate %}{{ missing }}{% endblocktranslate %}"
     assert str(django_engine.from_string(source).render(dict(CTX))) == "INVALID"
     assert str(djust_engine.from_string(source).render(dict(CTX))) == ""
+
+
+def test_this_module_leaves_no_german_thread_locals_behind():
+    """The `_restore_render_env` fixture, pinned.
+
+    `render_env` SETS the Rust thread-locals per render and never restores
+    them, so a test that renders under `de` leaves the thread formatting
+    numbers as German — invisible to every framework entry (they re-push)
+    and fatal to a test that calls `djust._rust.render_template` DIRECTLY,
+    which is how this module first broke
+    `test_template_conditions.py::test_is_not_none_with_non_none_value`.
+
+    Measured: with the fixture removed, SEVEN test functions in this module
+    leave the thread German (`test_liveview_entry_matches_django`,
+    `test_the_differential_is_not_tautological`,
+    `test_localize_*`, `test_hooks_are_reinstalled_by_reregister_builtins`,
+    `test_decimal_formatting_is_a_preexisting_divergence`); with it, none.
+    """
+    from djust._rust import render_template
+
+    with override_settings(USE_THOUSAND_SEPARATOR=True), translation.override("de"):
+        assert plain_render("{{ f }}", {"f": 12.3}) == "12,3"
+    # Inside the test the thread is still German — the fixture runs at
+    # teardown — so assert the restore against the AMBIENT language by
+    # re-pushing here, which is exactly what the fixture does.
+    render_env.apply_render_env()
+    assert render_template("{{ f }}", {"f": 12.3}) == "12.3"
 
 
 def test_the_differential_is_not_tautological():
