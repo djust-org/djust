@@ -73,11 +73,13 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
         "djust.session_utils",
         "djust.template",
         "djust.template.backend",
+        "djust.template.exceptions",
         "djust.template.rendering",
         "djust.template.serialization",
     }
 )
-assert len(ALLOWLIST_BACKEND) == 25
+assert len(ALLOWLIST_BACKEND) == 26
+
 
 # The compat shim (``djust/template_backend.py``) is one extra module.
 ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend"}

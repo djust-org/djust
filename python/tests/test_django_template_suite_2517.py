@@ -508,8 +508,9 @@ class TestEmpiricalCanary:
             "TemplateSyntaxError not raised"
         )
         assert lines["canary_tests.Canary.test_3_ifchanged"].startswith(
-            "ERROR canary_tests.Canary.test_3_ifchanged | Exception: "
+            "ERROR canary_tests.Canary.test_3_ifchanged | DjustTemplateSyntaxError: "
         )
+
         assert "Unsupported template tag" in lines["canary_tests.Canary.test_3_ifchanged"]
 
     def test_engine_percent_and_touched(self, djust_run: tuple[str, dict]) -> None:

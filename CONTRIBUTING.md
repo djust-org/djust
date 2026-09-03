@@ -254,6 +254,21 @@ python benchmark.py
 - Ensure all tests pass
 - Add yourself to CONTRIBUTORS.md
 
+## Changelog fragments
+
+Do not edit `CHANGELOG.md`'s `## [Unreleased]` section in a PR — pre-commit
+refuses it. Add one file per PR instead:
+
+```
+changelog.d/<issue-or-slug>.<section>.md   # section: added | changed | fixed | security | documentation | removed | deprecated
+```
+
+The body is exactly the bullet you would have written under that heading
+(`- **…**`, multi-paragraph allowed). The release cut runs
+`make changelog-compile`, which folds every fragment into `[Unreleased]` in
+canonical section order and deletes it. `make changelog-preview` shows the
+result without writing. Shape and rules: `changelog.d/README.md`.
+
 ## Documentation
 
 - Code comments for complex logic

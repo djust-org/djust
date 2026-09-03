@@ -176,7 +176,7 @@ console.error(error); // ❌ Won't be captured in production
 ### User Documentation
 - [ ] **New features documented** - User-facing changes have guide updates
 - [ ] **Breaking changes documented** - Migration path provided
-- [ ] **CHANGELOG.md updated** - All changes properly categorized (mandatory for `feat:` and `fix:` PRs)
+- [ ] **Changelog fragment added** - `changelog.d/<issue-or-slug>.<section>.md` with the bullet (mandatory for `feat:` and `fix:` PRs). Do NOT edit `CHANGELOG.md`'s `[Unreleased]` directly; the release cut compiles fragments. See `changelog.d/README.md`
 - [ ] **API references updated** - If public API changes
 - [ ] **No internal tracking documents** - Completion checklists, internal status docs (e.g., `*_COMPLETE.md`), and private planning docs must not be committed to the public repo
 
@@ -398,7 +398,7 @@ If the PR modifies any file listed in [Security Hot Spot Files](SECURITY_GUIDELI
 - `|safe` template filter used on user-controlled variables (bypasses Rust auto-escaping)
 - `@csrf_exempt` on endpoints without documented justification
 - No documentation for user-facing changes
-- CHANGELOG.md not updated for `feat:` or `fix:` PRs
+- No `changelog.d/` fragment for `feat:` or `fix:` PRs, or `CHANGELOG.md` `[Unreleased]` edited directly
 - Internal tracking documents (e.g., `*_COMPLETE.md`) included in public repo
 - Placeholder/stub implementations shipped as production code (e.g., `return True`, hardcoded fake data)
 - Untracked files that tests depend on are missing from the PR
