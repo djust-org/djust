@@ -163,17 +163,27 @@ def apply_resolve_lazy() -> None:
     it; one thread-local read from both sites is one mechanism rather than two
     seeded from one reader (#1646).
 
-    Default **OFF**, both here and in Rust.
+    Default **ON** since movement 3 (#2539), both here and in Rust — the two
+    literals live at :attr:`djust.config.LiveViewConfig._defaults` and at
+    ``RESOLVE_LAZY`` in ``crates/djust_core/src/lib.rs``, and they move
+    together. Setting the key to ``False`` in ``LIVEVIEW_CONFIG`` is the escape
+    hatch — spelled out in :func:`djust.config.template_resolve_lazy_enabled`,
+    which is the one place in the package that names it (an anti-drift pin
+    greps for the literal, so this module must not repeat it even in prose).
 
-    **A failed read pushes OFF rather than leaving the previous value**, and
-    that is the one place this differs from the timezone and number-format
-    handoffs above. Those two describe how a value is FORMATTED, so keeping the
-    last good format through a transient settings failure is the conservative
-    answer. This one selects which RESOLUTION MECHANISM runs, and the thread is
-    reused: leaving it alone would let a render whose config read failed
-    silently inherit the previous render's mechanism — the opposite of a
-    kill-switch. Pushed OFF, a failed read gets the shipped default, which is
-    the behaviour a project that never heard of ADR-027 has.
+    **A failed read pushes the shipped DEFAULT rather than leaving the previous
+    value**, and that is the one place this differs from the timezone and
+    number-format handoffs above. Those two describe how a value is FORMATTED,
+    so keeping the last good format through a transient settings failure is the
+    conservative answer. This one selects which RESOLUTION MECHANISM runs, and
+    the thread is reused: leaving it alone would let a render whose config read
+    failed silently inherit the previous render's mechanism — the opposite of a
+    kill-switch. Pushed to the default, a failed read gets the behaviour a
+    project that never configured ADR-027 has. The default is read, never
+    re-stated as a literal here, so this fallback cannot drift from the shipped
+    value (#1646) — :func:`djust.config.template_resolve_lazy_enabled` already
+    fails to the same place, so the `except` below is reached only when the
+    import itself fails.
 
     **The thread-local is SET, not scoped.** Nothing restores it at the end of
     a render, so a thread keeps the last value pushed. Every framework entry
@@ -182,8 +192,8 @@ def apply_resolve_lazy() -> None:
     render, so they always reset it. The exception is a caller reaching
     ``_rust.render_template`` / ``render_template_with_dirs`` DIRECTLY: it
     inherits whatever the thread last rendered with, which for a fresh thread
-    is the Rust default OFF and for a reused one is the previous framework
-    render's setting.
+    is the Rust default (ON since movement 3, matching the shipped Python
+    default) and for a reused one is the previous framework render's setting.
     """
     try:
         from ._rust import set_resolve_lazy
@@ -193,10 +203,51 @@ def apply_resolve_lazy() -> None:
         from .config import template_resolve_lazy_enabled
 
         enabled = template_resolve_lazy_enabled()
-    except Exception:  # pragma: no cover - config access is defensive
-        logger.debug("[djust] resolve-lazy read failed; forcing ADR-027 resolution OFF")
-        enabled = False
+    except Exception:
+        # Covered by `test_a_failed_config_read_pushes_the_DEFAULT` — it
+        # carried `# pragma: no cover` until the #2620 review, whose gate-off
+        # (D2b) proved the arm goes red when mutated. `config.py`'s equivalent
+        # marker was removed for the same reason one movement earlier; this
+        # sibling kept its, and an uncovered marker is precisely what made the
+        # #2539 movement-2 fallback's hardcoded literal invisible.
+        logger.debug("[djust] resolve-lazy read failed; pushing the shipped default")
+        enabled = _resolve_lazy_default()
     set_resolve_lazy(enabled)
+
+
+def _resolve_lazy_default() -> bool:
+    """The shipped ADR-027 default, or ``True`` if the config module is
+    unimportable.
+
+    Split out so :func:`apply_resolve_lazy`'s ``except`` arm never re-states
+    the default as a literal. It asks :func:`djust.config.
+    template_resolve_lazy_default` rather than reading the settings key, which
+    is what keeps ``config.py`` the only file in the package that spells
+    ``template_resolve_lazy`` — the anti-drift pin
+    ``test_the_config_reader_is_the_only_one`` greps for exactly that. If even
+    that import fails the module is too broken to hold a project-level
+    opinion, and the shipped behaviour is the honest answer.
+
+    The literal below is the **third** statement of the default and the only
+    one that cannot read `config.py`, because `config.py` is what has just
+    failed to import. It is therefore accepted rather than removed — but it is
+    PINNED, not left invisible: ``test_the_unimportable_config_arm_still_answers
+    _the_shipped_default`` forces this arm and asserts the literal equals the
+    entry :attr:`djust.config.LiveViewConfig._defaults` carries for this flag,
+    so a movement that flips the default turns that test red instead of leaving
+    a stale ``True`` here. (The assertion is written in the TEST rather than
+    here for the same reason the rest of this module never spells the settings
+    key: ``test_the_config_reader_is_the_only_one`` greps the package for it.)
+    The #2620 review found this arm surviving gate-off (D2c) with a
+    ``# pragma: no cover`` on it — the same shape as the movement-2 fallback
+    the marker had been hiding two functions above.
+    """
+    try:
+        from .config import template_resolve_lazy_default
+
+        return template_resolve_lazy_default()
+    except Exception:
+        return True
 
 
 #: Threads that have pushed the render env at least once. See

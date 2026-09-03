@@ -82,6 +82,8 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
+from adr027_flag import resolve_lazy  # noqa: E402
+
 from djust import _rust  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -609,6 +611,11 @@ class TestWhatThisDeliberatelyDoesNOTClose:
         That is the pre-existing behaviour of ANY such object placed in a
         context — reached here through one more door, not created by it — and
         it is the class #2478 is about.
+
+        The divergence is now the ESCAPE HATCH's, and the test asserts both
+        halves: #2539 movement 3 closed it under the shipped default, exactly
+        as the class this test files it under predicted it would be closed —
+        by retiring the arm rather than by special-casing `tzinfo`.
         """
 
         class MyTz(datetime.tzinfo):
@@ -626,13 +633,28 @@ class TestWhatThisDeliberatelyDoesNOTClose:
 
         aware = datetime.datetime(2026, 3, 4, tzinfo=MyTz())
         assert "MyTz object at" in django_render("{{ p.tzinfo }}", {"p": aware})
-        assert (
-            djust_render("{{ p.tzinfo }}", {"p": aware})
-            == "{&#x27;label&#x27;: &#x27;custom&#x27;}"
+        with resolve_lazy(False):
+            assert (
+                djust_render("{{ p.tzinfo }}", {"p": aware})
+                == "{&#x27;label&#x27;: &#x27;custom&#x27;}"
+            )
+            # The same object placed DIRECTLY in the context answers
+            # identically, which is what makes this pre-existing rather than
+            # introduced.
+            assert (
+                djust_render("{{ p }}", {"p": MyTz()}) == "{&#x27;label&#x27;: &#x27;custom&#x27;}"
+            )
+
+        # ...and under the shipped default the divergence is GONE (#2539
+        # movement 3). Compared against Django's own bytes for the SAME object,
+        # because the default's answer is `str(o)` and carries the instance
+        # address — no literal can stand in for it.
+        same = MyTz()
+        assert djust_render("{{ p }}", {"p": same}) == django_render("{{ p }}", {"p": same})
+        aware_same = datetime.datetime(2026, 3, 4, tzinfo=same)
+        assert djust_render("{{ p.tzinfo }}", {"p": aware_same}) == django_render(
+            "{{ p.tzinfo }}", {"p": aware_same}
         )
-        # The same object placed DIRECTLY in the context answers identically,
-        # which is what makes this pre-existing rather than introduced.
-        assert djust_render("{{ p }}", {"p": MyTz()}) == "{&#x27;label&#x27;: &#x27;custom&#x27;}"
 
 
 class TestTheSinkHasExactlyTheReadersItClaims:

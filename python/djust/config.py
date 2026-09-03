@@ -234,11 +234,18 @@ class LiveViewConfig:
         # ADR-027 (#2539): resolve a dotted template lookup against the LIVE
         # Python object, one segment at a time, the way Django's
         # ``Variable._resolve_lookup`` does — instead of converting the whole
-        # object eagerly and walking the conversion. Default False: movement 2
-        # WIRES the path and proves the engine's bytes are unchanged with the
-        # flag off; movement 3 flips the default. A kill-switch, not a feature
-        # toggle (candidate for removal at 2.0).
-        "template_resolve_lazy": False,
+        # object eagerly and walking the conversion. Default **True** since
+        # movement 3 (#2539): movement 2 wired the path and proved the
+        # engine's bytes unchanged with the flag off; movement 3 flipped it.
+        # ``False`` is the escape hatch, not a feature toggle — the arms it
+        # keeps alive are deleted with the flag in movement 4.
+        #
+        # This literal is the ONE statement of the default on the Python side:
+        # ``template_resolve_lazy_enabled`` below reads it rather than
+        # repeating it, and ``crates/djust_core/src/lib.rs``'s ``RESOLVE_LAZY``
+        # thread-local carries the matching Rust literal for threads that never
+        # push (see the comment there for why the two must move together).
+        "template_resolve_lazy": True,
         # #1987: TYPE-based serialization floor (defense-in-depth over the
         # name/method floor). A list of Django field CLASS names (matched
         # anywhere in a field's MRO) to always exclude from client-bound
@@ -679,6 +686,24 @@ def template_auto_call_enabled() -> bool:
         return True
 
 
+def template_resolve_lazy_default() -> bool:
+    """The **shipped** ADR-027 default, ignoring project settings (#2539).
+
+    One statement of the default, for the two callers that need it when the
+    project's own answer is unavailable: this module's
+    :func:`template_resolve_lazy_enabled` fallback, and
+    :func:`djust.render_env.apply_resolve_lazy`'s. Exposed as a function so
+    ``config.py`` stays the only file in the package that spells the settings
+    key — the ``test_the_config_reader_is_the_only_one`` anti-drift pin greps
+    for the literal, and a caller reaching into ``_defaults`` itself would
+    trip it.
+
+    The Rust side carries the matching literal for threads that never push;
+    see ``RESOLVE_LAZY`` in ``crates/djust_core/src/lib.rs``.
+    """
+    return bool(LiveViewConfig._defaults["template_resolve_lazy"])
+
+
 def template_resolve_lazy_enabled() -> bool:
     """Whether ADR-027 lazy template resolution is on for this project (#2539).
 
@@ -688,12 +713,51 @@ def template_resolve_lazy_enabled() -> bool:
     the one place every render path acquires its ambient settings (#1646).
 
     A config read that raises must not take a render down, and this one fails
-    **OFF**: that matches the Rust default and is the conservative direction,
-    where ``template_auto_call`` fails ON because ON is Django's behaviour and
-    already the shipped one.
+    to the **shipped default** — read from
+    :attr:`LiveViewConfig._defaults` rather than repeated as a literal, so
+    there is one statement of the default on this side and a future flip
+    cannot move the default while leaving the fallback behind (#1646).
+
+    Before movement 3 that default was OFF and the argument was "OFF is the
+    conservative direction". Since the flip it is ON, and the two arguments
+    still point the same way — but for a narrower reason than the first draft
+    of this docstring claimed. The eager sidecar walk that OFF selects keeps
+    ``protect_sidecar``'s ``Err(_) => obj`` arm (an exception during a lookup
+    hands the raw object back) and the unguarded ``get_item`` that SEGFAULTS on
+    a class object; the sink drops the first outright and narrows the second.
+    Those are the failure-mode arguments, and they hold in that form.
+
+    "The sink has neither" would be too strong: the numeric-index form
+    ``{{ v.0 }}`` on a ``do_not_call_in_templates`` container-subclass CLASS
+    still exits 139, identically on both settings, through the backend as well
+    as the raw entry. The flip fixes row P's string-key form and not that one.
+    Tracked at #2624; it is not a held cell the characterization net declares,
+    which is itself the gap.
+
+    What does NOT hold is the tempting extra step of calling ON monotonically
+    less disclosing. The eager walk also does the ``__dict__`` dump, which
+    FILTERS underscore-prefixed attributes — where ``str(o)`` filters nothing.
+    So for a ``@dataclass``, or any object whose ``__str__`` names private
+    state, ON discloses MORE. The direction is shape-dependent, and the
+    falsifying cases are pinned in
+    ``test_json_script_refusal_decision_2429.py::TestTheDirectionIsShapeDependent``.
+    Django models are the case that IS unmoved: they stay on the eager, floored
+    path under both settings.
+
+    Either way, a render whose config read failed gets the mechanism a project
+    that never heard of ADR-027 has, which is the same one every other render
+    on the box is using.
     """
+    default = template_resolve_lazy_default()
     try:
-        return bool(get_config().get("template_resolve_lazy", False))
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("[djust] template_resolve_lazy flag read failed; defaulting OFF")
-        return False
+        return bool(get_config().get("template_resolve_lazy", default))
+    except Exception:
+        # Covered by `test_the_READER_also_falls_to_the_default_when_get_config_raises`
+        # — it carried `# pragma: no cover` until #2539 movement 3, and a
+        # gate-off found the uncovered arm was hiding a hardcoded literal.
+        logger.debug(
+            "[djust] template_resolve_lazy flag read failed; defaulting to the "
+            "shipped default (%s)",
+            default,
+        )
+        return default

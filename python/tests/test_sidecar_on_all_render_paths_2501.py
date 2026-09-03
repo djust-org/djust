@@ -66,6 +66,8 @@ from django.contrib.auth.models import User  # noqa: E402
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
+from adr027_flag import resolve_lazy  # noqa: E402
+
 from djust import _rust  # noqa: E402
 from djust.components.base import Component, LiveComponent  # noqa: E402
 
@@ -307,9 +309,32 @@ class TestBothCarriersOnEveryPath:
         """Not decoration: if both fixtures crossed the same way, every test in
         this class would measure one carrier twice and the other not at all —
         which is the exact failure the reproducer's `TestCarrierPremises`
-        corrected in #2501's own analysis."""
-        crosses_encoded = _rust.crosses_as_encoded(factory())
+        corrected in #2501's own analysis.
+
+        Asserted on the HATCH since #2539 movement 3. The two carriers differ
+        because `opaque_gate` DECLINES an attribute-bearing object (`Presenter`)
+        while admitting one whose instance dict is private (`Card`) — and that
+        decline is one of the two sites ADR-027's flag gates. Under the shipped
+        default the gate admits both, so the carriers no longer differ and this
+        premise stops holding: the sibling below states that, so the collapse
+        is recorded rather than silently making the class measure one carrier
+        twice.
+        """
+        with resolve_lazy(False):
+            crosses_encoded = _rust.crosses_as_encoded(factory())
         assert crosses_encoded is (factory is Card)
+
+    @pytest.mark.parametrize(("factory", "attrs"), CARRIERS)
+    def test_under_the_default_both_carriers_cross_the_same_way(self, factory, attrs):
+        """The premise above, INVERTED, under the shipped default (#2539).
+
+        ADR-027's whole point is that the two carriers converge: an ordinary
+        object crosses as `Encoded` with a live handle whether or not its
+        instance dict happens to be public, and ONE resolution sink answers
+        both. Recorded as its own test so "the carriers differ" reads as a
+        statement about the hatch rather than about djust.
+        """
+        assert _rust.crosses_as_encoded(factory()) is True
 
     @pytest.mark.parametrize("render", FIXED_PATHS)
     def test_the_three_paths_now_answer_what_the_liveview_path_answered(self, render):
@@ -778,36 +803,63 @@ class TestBindingConstructsReachTheSidecar:
         assert expected.strip(","), f"premise: Django renders {source} -> {expected!r}"
         assert render(source, dict(context)) == expected, source
 
-    @pytest.mark.parametrize("render", FIXED_PATHS)
-    @pytest.mark.parametrize(
-        ("source", "context"),
-        [
-            pytest.param(
-                "{% for r in rows|slice:':1' %}{{ r.cls_attr }},{% endfor %}",
-                {"rows": [Presenter(), Presenter()]},
-                id="filtered-operand",
-            ),
-            pytest.param(
-                "{% for r in dd.values %}{{ r.cls_attr }},{% endfor %}",
-                {"dd": {"a": Presenter()}},
-                id="dict-view-operand",
-            ),
-        ],
-    )
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "#2504 — the alias mechanism refuses these two operand shapes, and "
-            "its refusal is an XSS boundary rather than an oversight: `slice` "
-            "shifts indices and a dict's marks are spelled BY KEY while the "
-            "loop asserts an INDEX (#2334). Reaching them needs a "
-            "correspondence nothing currently asserts."
+    #: The two `{% for %}` operands the alias mechanism cannot register a name
+    #: for: `slice` shifts indices, and a dict view's marks are spelled BY KEY
+    #: while the loop asserts an INDEX (#2334). Named so both the default-axis
+    #: test and its hatch sibling run the same cells.
+    ALIAS_LESS_OPERANDS = [
+        pytest.param(
+            "{% for r in rows|slice:':1' %}{{ r.cls_attr }},{% endfor %}",
+            {"rows": [Presenter(), Presenter()]},
+            id="filtered-operand",
         ),
-    )
-    def test_an_alias_less_operand_does_not_reach_the_sidecar_yet(self, render, source, context):
+        pytest.param(
+            "{% for r in dd.values %}{{ r.cls_attr }},{% endfor %}",
+            {"dd": {"a": Presenter()}},
+            id="dict-view-operand",
+        ),
+    ]
+
+    @pytest.mark.parametrize("render", FIXED_PATHS)
+    @pytest.mark.parametrize(("source", "context"), ALIAS_LESS_OPERANDS)
+    def test_an_alias_less_operand_reaches_the_object_under_the_default(
+        self, render, source, context
+    ):
+        """Django's bytes, since #2539 movement 3 flipped ADR-027 on.
+
+        This carried ``xfail(strict=True)`` for #2504 until the flip. The mark
+        said the alias mechanism refuses these two operand shapes and that
+        "reaching them needs a correspondence nothing currently asserts" —
+        true of the alias mechanism, and the flip does not supply that
+        correspondence: it removes the need for one. Under the shipped default
+        the bound value CARRIES its own handle, so a `slice`-shifted index or a
+        dict view resolves against the object the loop is actually on, and no
+        name→object map has to be kept in step with the loop.
+
+        The alias mechanism's refusal is still the hatch's behaviour and is
+        still an XSS boundary there; the sibling below pins it.
+        """
         expected = django_render(source, dict(context))
         assert expected.strip(","), "premise: Django renders it"
         assert render(source, dict(context)) == expected
+
+    @pytest.mark.parametrize(("source", "context"), ALIAS_LESS_OPERANDS)
+    @pytest.mark.parametrize("render", FIXED_PATHS)
+    def test_the_alias_mechanism_still_refuses_these_operands_on_the_hatch(
+        self, render, source, context
+    ):
+        """#2504's refusal, on the axis where it still runs.
+
+        Keeps the sibling non-vacuous (#1468): if both flag states answered
+        Django, "the flip closed #2504" would be unfalsifiable from this file.
+        """
+        expected = django_render(source, dict(context))
+        with resolve_lazy(False):
+            actual = render(source, dict(context))
+        assert actual != expected, (
+            f"the hatch now reaches this operand ({actual!r}) — the alias mechanism's "
+            f"refusal is what #2504 recorded, and it is gone"
+        )
 
     @pytest.mark.parametrize("render", FIXED_PATHS)
     def test_the_bound_names_own_value_still_wins(self, render):
@@ -1100,11 +1152,36 @@ class TestTheSidecarOnlyEverADDSResolutions:
 
     @pytest.mark.parametrize("render", FIXED_PATHS)
     def test_the_bare_object_spelling_is_untouched(self, render):
-        """`{{ o }}` still renders the `__dict__` arm's mapping — a divergence
-        from Django, scoped out with the rest of that arm's defects (#2502)."""
-        rendered = render("{{ o }}", {"o": Presenter()})
+        """`{{ o }}` still renders the `__dict__` arm's mapping ON THE HATCH —
+        a divergence from Django, scoped out with the rest of that arm's
+        defects (#2502). Under the shipped default the arm is not reached and
+        `{{ o }}` is `str(o)`, which is Django's answer; the sibling below pins
+        that, because it is the flip's most user-visible behaviour change
+        (#2539 movement 3).
+        """
+        with resolve_lazy(False):
+            rendered = render("{{ o }}", {"o": Presenter()})
         assert "presenter-in-dict" in rendered
         assert rendered != django_render("{{ o }}", {"o": Presenter()})
+
+    @pytest.mark.parametrize("render", FIXED_PATHS)
+    def test_the_bare_object_spelling_is_django_under_the_default(self, render):
+        """`{{ o }}` renders `str(o)` under the shipped default (#2539).
+
+        The behaviour change every downstream template sees: an object that
+        used to render its attribute mapping now renders its ``__str__``.
+        Stated here by name so it is a decision on the record rather than a
+        surprise, and asserted against Django's own bytes rather than a
+        literal.
+
+        ONE `Presenter` for both engines: `Presenter` has no `__str__`, so its
+        default repr carries the instance ADDRESS and two instances can never
+        compare equal.
+        """
+        obj = Presenter()
+        rendered = render("{{ o }}", {"o": obj})
+        assert rendered == django_render("{{ o }}", {"o": obj})
+        assert "presenter-in-dict" not in rendered
 
 
 @pytest.mark.django_db

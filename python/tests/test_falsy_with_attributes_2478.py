@@ -98,6 +98,8 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
+from adr027_flag import resolve_lazy  # noqa: E402
+
 from djust import _rust  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -1000,12 +1002,47 @@ class TestTheAttributeStillResolves:
     def test_the_attribute_survives_a_state_round_trip(self) -> None:
         """`SerializableViewState.state` round-trips through msgpack on every
         read of the default backend, so an attribute that answered once and
-        went empty afterwards would be worse than not answering at all."""
+        went empty afterwards would be worse than not answering at all.
+
+        On the ESCAPE-HATCH axis since #2539 movement 3: with the eager
+        conversion the attribute map IS the serialized value, so it survives.
+        The default's answer is the #2570 contract, asserted by name below.
+        """
+        from djust._rust import RustLiveView
+
+        with resolve_lazy(False):
+            view = RustLiveView("{{ p.a }}|{% if p %}T{% else %}F{% endif %}|{{ p|length }}")
+            view.set_state("p", LenZeroWithAttrs())
+            clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+            assert clone.render() == "1|F|0"
+
+    def test_the_round_trip_under_the_default_is_the_2570_contract(self) -> None:
+        """The same clone under the shipped default, with its bytes NAMED.
+
+        Under ADR-027 the value carries a live handle instead of an eager
+        attribute map, and the handle is transient — `Deserialize` restores
+        `live: None` and `attrs` empty. So a `RustLiveView` clone rendered
+        WITHOUT a re-sync answers empty for a handle-only lookup, while the
+        facts recorded on the value (truthiness, `len`) still answer. That is
+        #2570's documented contract, not a regression: every framework path
+        runs a FULL sync before the first render after a restore
+        (`_force_full_html` empties `prev_refs`), which re-converts the value
+        and re-attaches the handle.
+
+        Asserted by name so a later change that silently moves these bytes —
+        an eager snapshot beside the handle, say — fails here rather than
+        quietly redefining the contract (#1125).
+        """
         from djust._rust import RustLiveView
 
         view = RustLiveView("{{ p.a }}|{% if p %}T{% else %}F{% endif %}|{{ p|length }}")
         view.set_state("p", LenZeroWithAttrs())
-        assert RustLiveView.deserialize_msgpack(view.serialize_msgpack()).render() == "1|F|0"
+        assert view.render() == "1|F|0", "the handle answers BEFORE the round trip"
+        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+        assert clone.render() == "|F|0", (
+            "the #2570 contract moved: a restored clone rendered without a sync must answer "
+            "empty for the handle-only lookup and keep the recorded facts (`F`, `0`)"
+        )
 
     def test_a_private_attribute_is_still_unreachable(self) -> None:
         """The `_`-prefix filter moved WITH the collection, so it still
@@ -1026,6 +1063,15 @@ class TestTheGateIsUNCHANGED:
     Recomputing "what Django says" here would make the test a second copy of
     the divergence table; recording djust's own answer is what catches the fix
     reaching past its gate.
+
+    On the ESCAPE-HATCH axis since #2539 movement 3. `PRE_FIX` records the
+    EAGER conversion's answers — the `__dict__` dump arm, `public_dict_attrs`,
+    the by-name sidecar — and the flip makes those dormant under the shipped
+    default, so an ambient comparison would be reading a table captured against
+    a mechanism that no longer runs. Pushed OFF, the table still measures what
+    it was built to measure, and it keeps measuring it for as long as the hatch
+    exists (movement 4 deletes the arms and the flag together, and this table
+    goes with them).
     """
 
     @pytest.mark.parametrize("shape", UNCHANGED)
@@ -1033,7 +1079,8 @@ class TestTheGateIsUNCHANGED:
     def test_an_unclaimed_shape_answers_the_pre_fix_way(self, shape: str, source: str) -> None:
         if source in PRE_FIX_UNASSERTABLE:
             pytest.skip("address-shredding cell — see PRE_FIX_UNASSERTABLE")
-        assert djust_render(source, _ctx(shape)) == PRE_FIX[(shape, source)]
+        with resolve_lazy(False):
+            assert djust_render(source, _ctx(shape)) == PRE_FIX[(shape, source)]
 
     def test_the_len_two_shape_that_used_to_iterate_its_ATTRIBUTES_now_agrees(
         self,
@@ -1197,14 +1244,15 @@ class TestThePreFixTableIsNOTVacuous:
     def test_the_unclaimed_shapes_moved_nothing(self) -> None:
         """The other half of the same measurement, and the one that makes
         "only the gate's admissions moved" a fact rather than a hope."""
-        for shape in UNCHANGED:
-            moved = [
-                source
-                for source in CELLS
-                if source not in PRE_FIX_UNASSERTABLE
-                and djust_render(source, _ctx(shape)) != PRE_FIX[(shape, source)]
-            ]
-            assert moved == [], (shape, moved)
+        with resolve_lazy(False):
+            for shape in UNCHANGED:
+                moved = [
+                    source
+                    for source in CELLS
+                    if source not in PRE_FIX_UNASSERTABLE
+                    and djust_render(source, _ctx(shape)) != PRE_FIX[(shape, source)]
+                ]
+                assert moved == [], (shape, moved)
 
     def test_every_shape_has_a_full_row(self) -> None:
         """A missing key makes the parametrized comparison raise `KeyError`

@@ -100,6 +100,7 @@ filed as **#2449**.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import decimal
 import enum
@@ -125,6 +126,8 @@ if not settings.configured:  # pragma: no cover — import-time bootstrap
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
+from adr027_flag import resolve_lazy, shipped_default  # noqa: E402
+
 from djust import _rust  # noqa: E402
 
 TPL = '{{ p|json_script:"d" }}'
@@ -142,10 +145,20 @@ class _Obj:
 
 
 class _WithDict:
-    """A populated `__dict__`, which the boundary turns into a mapping."""
+    """A populated `__dict__`, which the boundary turns into a mapping — on
+    the ADR-027 escape hatch. Under the shipped default the object crosses as
+    `Encoded` and the boundary sees its `str()` instead (#2539 movement 3).
+
+    ``__str__`` is defined for the same reason `_Obj`'s is: without it the
+    default's answer carries the instance ADDRESS, and no row of a recorded
+    table can compare against an address.
+    """
 
     def __init__(self) -> None:
         self.name = "n"
+
+    def __str__(self) -> str:
+        return "WITHDICT"
 
     def __hash__(self) -> int:  # hashable, so it can also be a KEY
         return 1
@@ -314,8 +327,29 @@ class TestTheDivergentSetReDerived:
 
         The boundary turns an arbitrary object into its `__dict__`, so
         `json_script` writes a real JSON object where Django raises.
+
+        On the ESCAPE-HATCH axis since #2539 movement 3 — see the sibling for
+        what the shipped default writes, and why it is the better answer.
         """
-        assert _body(_djust({"a": _WithDict()})) == '{"a": {"name": "n"}}'
+        with resolve_lazy(False):
+            assert _body(_djust({"a": _WithDict()})) == '{"a": {"name": "n"}}'
+
+    def test_under_the_default_it_emits_the_objects_string(self) -> None:
+        """The same cell under the shipped default (#2539 movement 3).
+
+        The `__dict__` bulk-dump arm is not reached, so `json_script` writes
+        `str(o)` rather than a JSON object built from the instance dict. Worth
+        pinning by name in THIS file rather than only in the ADR-027 net,
+        because `json_script` writes into the PAGE.
+
+        What this row does NOT say is which direction that is. `_WithDict`
+        has a `__str__` returning a constant, so it can only ever look like a
+        narrowing — which is exactly why it cannot be the only pin. See
+        `TestTheDirectionIsShapeDependent` below for the shapes that widen;
+        the honest summary is that the change swaps one disclosure surface for
+        another, and which is larger depends on the object.
+        """
+        assert _body(_djust({"a": _WithDict()})) == '{"a": "WITHDICT"}'
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +402,12 @@ class TestTheValuePositionCannotSeeTheTypeAtAll:
         "refused,stand_in",
         [
             ({"a": _Obj()}, {"a": "OBJ"}),
-            ({"a": _WithDict()}, {"a": {"name": "n"}}),
+            # Under the shipped default the object crosses as `Encoded` and
+            # the boundary sees `str(o)`, so the stand-in that is byte-identical
+            # to it is a STRING rather than the instance dict (#2539 movement
+            # 3). The dict stand-in is the hatch's, pinned by
+            # `test_an_object_with_attributes_emits_a_nested_OBJECT`.
+            ({"a": _WithDict()}, {"a": "WITHDICT"}),
             ({"a": frozenset({1})}, {"a": "frozenset({1})"}),
             ({"a": {1}}, {"a": "{1}"}),
             ({"a": complex(1, 2)}, {"a": "(1+2j)"}),
@@ -402,3 +441,133 @@ class TestTheValuePositionCannotSeeTheTypeAtAll:
         assert _rust.render_template('{{ p.keys|json_script:"i" }}', {"p": d}) == ""
         emitted = _rust.render_template('{{ p|json_script:"i" }}', {"p": d.keys()})
         assert _body(emitted) == "\"dict_keys(['a'])\""
+
+
+# ---------------------------------------------------------------------------
+# Measurement 4 — the DIRECTION of the movement-3 change, falsified
+# ---------------------------------------------------------------------------
+#
+# PR #2620 claimed, in four places including ADR-027's erratum and the
+# changelog fragment that ships to users, that the flip is a *reduction* in
+# what an unreviewed `{{ o }}` / `{{ o|json_script }}` puts on the page — a
+# security improvement. The Stage 11 review falsified that. It is not
+# monotone: the pre-flip `__dict__` dump FILTERED underscore-prefixed
+# attributes, and `str(o)` filters nothing.
+#
+# The claim had exactly one pin, `_WithDict`, whose `__str__` this PR ADDED
+# and which returns a constant — the one shape that structurally cannot
+# exhibit the widening (#1867: the citation is real, the invariant it asserts
+# is false, and the fixture was built so it could not notice). These are the
+# falsifying cases, so the next reader finds the direction measured rather
+# than hoped.
+
+
+@dataclasses.dataclass
+class _DataclassCreds:
+    """Python's own `@dataclass` repr prints EVERY field, `_private` included.
+
+    `attrs`, `pydantic` and any hand-written debug `__repr__` behave the same
+    way, so this is not an exotic shape — it is one of the most common ways a
+    presenter object is spelled.
+    """
+
+    user: str
+    password: str
+    _session_token: str
+    api_key: str
+
+
+class _StrNamesPrivateState:
+    """A `__str__` that interpolates an attribute the old dump filtered."""
+
+    def __init__(self) -> None:
+        self.label = "innocuous"
+        self._secret = "SSN-123-45-6789"
+
+    def __str__(self) -> str:
+        return f"{type(self).__name__}(label={self.label}, secret={self._secret})"
+
+
+class _AttributesButNoStr:
+    """Attributes and no `__str__` — the shape where the flip DOES narrow."""
+
+    def __init__(self) -> None:
+        self.password = "hunter2"
+        self.username = "u"
+
+
+class TestTheDirectionIsShapeDependent:
+    """The movement-3 change is a change of SHAPE, not a narrowing.
+
+    Each row asserts BOTH axes of the SAME object, so the direction is read
+    off a measurement rather than asserted as a summary. The ON arm pushes
+    ``shipped_default()`` rather than a literal ``True``: the default is read,
+    never re-stated (#1200), so a future movement that flips it back turns
+    these rows red for the right reason rather than leaving them green on a
+    stale literal.
+    """
+
+    def test_a_dataclass_emits_MORE_under_the_default(self) -> None:
+        """WIDER. The dump filtered `_session_token`; the dataclass repr does not."""
+        obj = _DataclassCreds("u", "pw", "TOK-abc123", "AK-9")
+
+        with resolve_lazy(False):
+            hatch = _body(_djust({"a": obj}))
+        with resolve_lazy(shipped_default()):
+            default = _body(_djust({"a": obj}))
+
+        assert hatch == '{"a": {"user": "u", "password": "pw", "api_key": "AK-9"}}', hatch
+        assert "_session_token" not in hatch, (
+            "this row proves nothing unless the escape hatch actually filtered the "
+            f"underscore-prefixed field: {hatch!r}"
+        )
+        assert "TOK-abc123" not in hatch
+
+        assert "_session_token" in default, default
+        assert "TOK-abc123" in default, (
+            "the shipped default no longer emits the private dataclass field — if the "
+            "sink learned to filter, ADR-027's erratum item 4 can be restated as a "
+            f"narrowing after all: {default!r}"
+        )
+
+    def test_a_leaky_str_emits_MORE_under_the_default(self) -> None:
+        """WIDER. The dump saw only `label`; `str(o)` names `_secret`."""
+        obj = _StrNamesPrivateState()
+
+        with resolve_lazy(False):
+            hatch = _body(_djust({"a": obj}))
+        with resolve_lazy(shipped_default()):
+            default = _body(_djust({"a": obj}))
+
+        assert hatch == '{"a": {"label": "innocuous"}}', hatch
+        assert "SSN-123-45-6789" not in hatch
+
+        assert "SSN-123-45-6789" in default, default
+
+    def test_the_same_widening_reaches_a_BARE_variable_not_only_json_script(self) -> None:
+        """`{{ o }}` moves with `{{ o|json_script }}`, and the erratum named
+        only the filter. The bare spelling is the more common one."""
+        obj = _StrNamesPrivateState()
+
+        with resolve_lazy(False):
+            hatch = _rust.render_template("{{ p }}", {"p": obj})
+        with resolve_lazy(shipped_default()):
+            default = _rust.render_template("{{ p }}", {"p": obj})
+
+        assert "SSN-123-45-6789" not in hatch, hatch
+        assert "SSN-123-45-6789" in default, default
+
+    def test_an_object_with_no_str_emits_LESS_under_the_default(self) -> None:
+        """NARROWER — the direction the PR claimed for every shape, true for
+        this one. Kept beside the two above so the row that supports the
+        original wording and the rows that refute it are read together."""
+        obj = _AttributesButNoStr()
+
+        with resolve_lazy(False):
+            hatch = _body(_djust({"a": obj}))
+        with resolve_lazy(shipped_default()):
+            default = _body(_djust({"a": obj}))
+
+        assert "hunter2" in hatch, hatch
+        assert "hunter2" not in default, default
+        assert "_AttributesButNoStr object at" in default, default
