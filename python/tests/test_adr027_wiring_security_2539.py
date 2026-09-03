@@ -909,6 +909,43 @@ class TestTheSwitch2539:
                 f"({shipped_default!r})"
             )
 
+    @pytest.mark.parametrize("shipped_default", [True, False])
+    def test_the_READER_also_falls_to_the_default_when_get_config_raises(
+        self, monkeypatch, shipped_default
+    ) -> None:
+        """The OTHER fallback, which the test above cannot reach.
+
+        There are two, and they answer different failures.
+        :func:`djust.render_env.apply_resolve_lazy`'s arm covers "the reader
+        itself blew up"; :func:`djust.config.template_resolve_lazy_enabled`'s
+        covers "``get_config()`` blew up" — a broken ``settings`` module, a
+        Django ``ImproperlyConfigured`` during startup. The sibling above
+        monkeypatches the reader, so the reader's own arm never runs and a
+        hardcoded literal there would go unnoticed.
+
+        Found by gate-off, not by inspection: mutating
+        ``default = template_resolve_lazy_default()`` back to
+        ``default = False`` left the whole suite green (#1468). Two mechanisms,
+        one test — the shadowing shape (#2233). Kept as two tests rather than
+        collapsed, because the two failures are genuinely different and each
+        needs the coupling asserted; parametrized over both defaults for the
+        same reason the sibling is, so this is about the coupling and not the
+        value (#1200).
+        """
+        from djust import config as config_module
+        from djust.config import LiveViewConfig
+
+        monkeypatch.setitem(LiveViewConfig._defaults, "template_resolve_lazy", shipped_default)
+
+        def exploding() -> dict:
+            raise RuntimeError("settings unreadable")
+
+        monkeypatch.setattr(config_module, "get_config", exploding)
+        assert config_module.template_resolve_lazy_enabled() is shipped_default, (
+            f"the reader landed on a hardcoded literal rather than the shipped default "
+            f"({shipped_default!r}) when get_config() raised"
+        )
+
     @pytest.mark.parametrize("render", ENTRIES)
     def test_the_switch_is_what_gates_the_behaviour(self, render) -> None:
         """The in-suite gate-off: the SAME template and the SAME context

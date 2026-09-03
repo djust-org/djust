@@ -732,7 +732,10 @@ def template_resolve_lazy_enabled() -> bool:
     default = template_resolve_lazy_default()
     try:
         return bool(get_config().get("template_resolve_lazy", default))
-    except Exception:  # pragma: no cover - defensive
+    except Exception:
+        # Covered by `test_the_READER_also_falls_to_the_default_when_get_config_raises`
+        # — it carried `# pragma: no cover` until #2539 movement 3, and a
+        # gate-off found the uncovered arm was hiding a hardcoded literal.
         logger.debug(
             "[djust] template_resolve_lazy flag read failed; defaulting to the "
             "shipped default (%s)",
