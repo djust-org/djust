@@ -7,8 +7,9 @@ that regeneration is idempotent, (4) that the generated unsupported-tag set
 agrees with the #2517 scoreboard, and (5) the generator→engine direction:
 every name the block calls unsupported is refused by the backend and every
 name it calls supported is not, and the library filters it calls *bridged*
-resolve with a ``DjangoTemplates`` engine configured and raise ``Unknown
-filter`` without one. Every ``*_fails`` case asserts BOTH the exit code AND a
+resolve once the template ``{% load %}``s their library — on a djust-only
+``TEMPLATES`` as much as beside a ``DjangoTemplates`` engine (#2558) — while
+the ones it calls unsupported never resolve to a value. Every ``*_fails`` case asserts BOTH the exit code AND a
 specific name in the output (#1200 / #254): the check cannot pass by exiting 1
 for an unrelated reason.
 
@@ -227,7 +228,10 @@ def _direction_findings(report, rendered: dict[str, str]) -> list[str]:
     return findings
 
 
-def _filter_sources(names: set[str]) -> dict[str, str]:
+def _filter_sources(names: set[str], *, load: bool = True) -> dict[str, str]:
+    """One source per library filter; ``load=False`` omits the ``{% load %}``,
+    which is how a *native* filter (resolves with no load) is told from a
+    *bridged* one (resolves only once its library is loaded, #2558)."""
     owner = {}
     for lib in ("i18n", "l10n", "tz"):
         mod = importlib.import_module(f"django.templatetags.{lib}")
@@ -241,7 +245,8 @@ def _filter_sources(names: set[str]) -> dict[str, str]:
         "language_name_translated": "c",
     }
     return {
-        name: f"{{% load {owner[name]} %}}{{{{ {value.get(name, 'x')}|{name}{arg.get(name, '')} }}}}"
+        name: (f"{{% load {owner[name]} %}}" if load else "")
+        + f"{{{{ {value.get(name, 'x')}|{name}{arg.get(name, '')} }}}}"
         for name in sorted(names)
     }
 
@@ -616,6 +621,7 @@ class TestDocAndWiring:
             "crates/djust_templates/src/filter_arity.rs",
             "python/djust/template_tags/regroup.py",
             "python/djust/template_filters.py",  # the bridge the bridged line is detected from
+            "python/djust/template_libraries.py",  # the `{% load %}` hook that runs it (#2558)
             "scripts/generate-template-backend-lists.py",
             "uv.lock",
         ):
@@ -634,8 +640,9 @@ class TestDocAndWiring:
 @pytest.fixture(scope="module")
 def rendered_tags(report):
     """Every listed tag rendered through the backend under BOTH ``TEMPLATES``
-    shapes. Tags are never bridged, so the two must agree — and they are the
-    same subprocesses the filter tests below reuse."""
+    shapes. A tag is bridged on its own ``{% load %}`` (#2547 / #2558), never
+    from the other engine, so the two must agree — and they are the same
+    subprocesses the filter tests below reuse."""
     sources = _tag_sources(report)
     return {
         "djust_only": _render_via_backend(sources, with_django_engine=False),
@@ -669,9 +676,14 @@ class TestGeneratedTagBucketsMatchTheEngine:
 
 
 class TestBridgedLibraryFilters:
-    """The block's library-filter lines are true for BOTH ``TEMPLATES`` shapes,
-    and say which one each name needs (#2533 review 🔴: the previous block
-    called all nine unsupported, false in the doc's own recommended config)."""
+    """The block's library-filter lines are true on BOTH ``TEMPLATES`` shapes.
+
+    #2533's review found the previous block false in the doc's own recommended
+    config (it called all nine unsupported); #2558 then retired the config axis
+    altogether: a library filter resolves once the template ``{% load %}``s its
+    library, with or without a ``DjangoTemplates`` engine beside djust. Each
+    bucket is pinned to the behaviour that defines it, measured through the
+    backend."""
 
     @pytest.fixture(scope="class")
     def rendered_filters(self, report):
@@ -679,41 +691,79 @@ class TestBridgedLibraryFilters:
         return {
             "djust_only": _render_via_backend(sources, with_django_engine=False),
             "with_django": _render_via_backend(sources, with_django_engine=True),
+            # A separate subprocess: a `{% load %}` bridges process-wide, so
+            # "resolves WITHOUT the load" can only be measured where none ran.
+            "no_load": _render_via_backend(
+                _filter_sources(report.library_filters, load=False), with_django_engine=False
+            ),
         }
 
-    def test_unlocalize_resolves_only_next_to_a_django_engine(self, rendered_filters):
+    def test_a_loaded_library_filter_resolves_on_a_djust_only_config(self, rendered_filters):
+        """The #2558 fact the old block contradicted: no Django engine needed."""
+        assert rendered_filters["djust_only"]["unlocalize"] == "OK:1234"
         assert rendered_filters["with_django"]["unlocalize"] == "OK:1234"
-        assert "Unknown filter: unlocalize" in rendered_filters["djust_only"]["unlocalize"]
-        assert rendered_filters["with_django"]["language_name"] == "OK:German"
+        assert rendered_filters["djust_only"]["language_name"] == "OK:German"
+
+    def test_filter_outcomes_do_not_depend_on_a_django_engine(self, rendered_filters):
+        """The bridge runs on the load, so the two ``TEMPLATES`` shapes agree
+        byte for byte — including the refusal text."""
+        assert rendered_filters["djust_only"] == rendered_filters["with_django"]
+
+    def test_a_refused_filter_raises_and_names_itself(self, rendered_filters):
+        """The `tz` three parse and then raise (#2216) — never a silent blank
+        (#2541) and never `Unknown filter`."""
+        for name in ("localtime", "timezone", "utc"):
+            result = rendered_filters["djust_only"][name]
+            assert result.startswith("ERR:"), (name, result)
+            assert "Unknown filter" not in result, (name, result)
+            assert f"filter '{name}' from 'django.templatetags.tz' needs a datetime" in result
 
     def test_bridged_line_names_exactly_the_filters_that_behave_that_way(
         self, gen, report, rendered_filters
     ):
-        """Wording pinned to behaviour: a name is on the *bridged* line iff it
-        raises ``Unknown filter`` djust-only AND resolves with a
-        ``DjangoTemplates`` engine; *native* iff it resolves both ways;
-        *unsupported* iff it raises both ways."""
-        only, with_dj = rendered_filters["djust_only"], rendered_filters["with_django"]
+        """Wording pinned to behaviour: a name is *native* iff it resolves with
+        no `{% load %}` at all; *bridged* iff it resolves only once its library
+        is loaded; *unsupported* iff it never resolves to a value — either
+        `Unknown filter`, or the loud refusal — and the refused subset is
+        named as such."""
+        loaded, no_load = rendered_filters["djust_only"], rendered_filters["no_load"]
+
+        def ok(result: str) -> bool:
+            return result.startswith("OK:")
 
         def unknown(result: str) -> bool:
             return "Unknown filter" in result
 
-        behaves_bridged = {n for n in only if unknown(only[n]) and not unknown(with_dj[n])}
-        behaves_native = {n for n in only if not unknown(only[n]) and not unknown(with_dj[n])}
-        behaves_unsupported = {n for n in only if unknown(only[n]) and unknown(with_dj[n])}
-        assert behaves_bridged | behaves_native | behaves_unsupported == report.library_filters
+        behaves_native = {n for n in loaded if ok(no_load[n])}
+        behaves_bridged = {n for n in loaded if ok(loaded[n]) and not ok(no_load[n])}
+        behaves_unknown = {n for n in loaded if unknown(loaded[n])}
+        behaves_refused = {n for n in loaded if not ok(loaded[n]) and not unknown(loaded[n])}
+        assert (
+            behaves_native | behaves_bridged | behaves_unknown | behaves_refused
+            == report.library_filters
+        )
 
-        assert report.bridged_library_filters == behaves_bridged
         assert report.supported_library_filters == behaves_native
-        assert report.unsupported_library_filters == behaves_unsupported
+        assert report.bridged_library_filters == behaves_bridged
+        assert report.unsupported_library_filters == behaves_unknown | behaves_refused
+        assert report.refused_filters == behaves_refused
         assert "unlocalize" in behaves_bridged
+        assert behaves_refused == {"localtime", "timezone", "utc"}
 
         block = gen.render_block(report)
-        line = next(ln for ln in block.splitlines() if ln.startswith("**Library filters — bridged"))
-        assert set(re.findall(r"`([a-z_]+)`", line)) - {"DjangoTemplates"} == behaves_bridged
-        assert f"({len(behaves_bridged)})" in line
-        assert "raises `Unknown filter`" in block
-        assert "**Library filters — unsupported (0):** none" in block
+        bridged_line = next(
+            ln for ln in block.splitlines() if ln.startswith("**Library filters — bridged")
+        )
+        assert set(re.findall(r"`([a-z_]+)`", bridged_line)) - {"load"} == behaves_bridged
+        assert f"({len(behaves_bridged)})" in bridged_line
+        unsupported_line = next(
+            ln for ln in block.splitlines() if ln.startswith("**Library filters — unsupported")
+        )
+        assert set(re.findall(r"`([a-z_]+)`", unsupported_line)) == (
+            behaves_unknown | behaves_refused
+        )
+        assert "raises `TemplateSyntaxError`" in block
+        assert f"Refused loudly on `{{% load %}}` ({len(behaves_refused)})" in block
         # The committed doc carries the same three filter lines. Compared via
         # the script's own process: the in-process registry also holds the
         # test settings' extension tags (theming), which the doc does not list.
@@ -727,12 +777,28 @@ class TestBridgedLibraryFilters:
         ]
         assert len(filter_lines) == 3
 
-    def test_bridging_detection_refuses_to_run_without_a_django_engine(self, gen, monkeypatch):
-        """An ambient ``TEMPLATES`` with no ``DjangoTemplates`` engine cannot
-        silently produce an empty bridged set (which would read as
-        "unsupported (9)" again); it is a structural error."""
-        from django.template import engines
+    def test_load_bridging_detection_refuses_a_failing_load(self, gen, monkeypatch):
+        """A `{% load %}` that fails cannot silently produce an empty bucket
+        (which would read as "unsupported (9)" again); it is a structural
+        error naming the library."""
+        from djust import template_libraries
 
-        monkeypatch.setattr(engines, "all", lambda: [])
-        with pytest.raises(gen.ExtractionError, match="DjangoTemplates"):
-            gen.bridged_library_filters({"unlocalize"})
+        def boom(args):
+            raise RuntimeError("no such library")
+
+        monkeypatch.setattr(template_libraries, "load_libraries", boom)
+        with pytest.raises(gen.ExtractionError, match=r"load i18n .* no such library"):
+            gen.load_bridged_library_entries({"i18n": (set(), set())})
+
+    def test_scope_node_drift_between_loader_and_parser_is_a_structural_error(
+        self, gen, monkeypatch
+    ):
+        """The loader's declared scope names and the parser's
+        `scope_tag_armed` sites are one set; a name on only one side (#1646)
+        is reported, not bucketed."""
+        from djust import template_libraries
+
+        monkeypatch.setattr(template_libraries, "_NATIVE_SCOPE_TAGS", {})
+        with pytest.raises(gen.ExtractionError, match="scope-node drift"):
+            gen.load_bridged_library_entries({"i18n": (set(), set())})
+        assert gen.scope_tags() == {"language", "localize", "localtime", "timezone"}

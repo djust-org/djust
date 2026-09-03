@@ -248,8 +248,17 @@ from django.template.defaultfilters import register  # noqa: E402
 from django.utils.html import conditional_escape  # noqa: E402
 from django.utils.safestring import SafeData, mark_safe  # noqa: E402
 
+from django.templatetags.i18n import register as _I18N_LIBRARY  # noqa: E402
+
 from djust import _rust  # noqa: E402
 from djust.mixins.rust_bridge import _collect_safe_keys  # noqa: E402
+from djust.render_env import (  # noqa: E402
+    language_scope_enter,
+    language_scope_exit,
+    timezone_scope_enter,
+    timezone_scope_exit,
+)
+from djust.template_libraries import LibraryRawBlockTagHandler, translate_msgid  # noqa: E402
 
 
 def _safe_keys_for(value) -> list[str]:
@@ -506,6 +515,82 @@ CUSTOM_TAG_SHAPES = {
 
 def custom_tag_cells():
     for shape in CUSTOM_TAG_SHAPES:
+        for key in INPUTS:
+            yield shape, key
+
+
+# ---------------------------------------------------------------------------
+# The I18N corpus (#2558)
+# ---------------------------------------------------------------------------
+#
+# The #2290 shape a fourth time over. The four `_rust` entry points #2558
+# added — `register_translator`, `register_language_scope_hooks`,
+# `register_timezone_scope_hooks` and `register_raw_block_tag_handler` — are
+# each a Python callable the RENDER crosses into: a `_("…")` literal resolves
+# through the translator, a `{% language %}` / `{% timezone %}` body runs
+# between an enter and an exit hook that switch Django's thread-locals, and a
+# `{% blocktranslate %}` body crosses to Django's own compile function as raw
+# SOURCE. No tag cell above reaches any of them, so a fix or a regression on
+# those crossings would move nothing here.
+#
+# The framework arms all four on its own: `djust.template_tags` (imported by
+# `djust.mixins.rust_bridge` above) installs the `{% load %}` loader, the
+# translator and the scope hooks, and a cell's `{% load i18n %}` then bridges
+# `blocktranslate` and arms the scope nodes through the real loader. The
+# registrations below re-assert the SAME framework objects —
+# `template_libraries.translate_msgid`, the `render_env` scope pairs, a
+# `LibraryRawBlockTagHandler` over Django's own `blocktranslate` compile
+# function — so the corpus measures the framework's hooks rather than a copy of
+# them, and the entry-point ledger (`_swept_entry_points`, a grep of this file
+# for `_rust.<name>(`) records that a cell reaches each. The loader itself stays
+# an `ENTRY_POINTS_NOT_SWEPT` row: it is the parse-time action these cells go
+# THROUGH, not a crossing the render measures.
+if not _rust.has_library_loader():  # pragma: no cover — an import reshuffle
+    raise SystemExit(
+        "the `{% load %}` loader is not installed, so every `{% load i18n %}` cell "
+        "below would parse as a no-op: import `djust.template_tags` before this point"
+    )
+_rust.register_translator(translate_msgid)
+_rust.register_language_scope_hooks(language_scope_enter, language_scope_exit)
+_rust.register_timezone_scope_hooks(timezone_scope_enter, timezone_scope_exit)
+_rust.arm_scope_tags(["language", "localize", "localtime", "timezone"])
+_BLOCKTRANSLATE = LibraryRawBlockTagHandler(
+    "i18n", "blocktranslate", _I18N_LIBRARY.tags["blocktranslate"]
+)
+_rust.register_raw_block_tag_handler("blocktranslate", _BLOCKTRANSLATE.end_name, _BLOCKTRANSLATE)
+
+#: One shape per crossing, rendered over every input like the custom-tag
+#: corpus. The settings above run with `USE_I18N=False` and no catalog, so a
+#: msgid translates to itself on both engines and a `{% language "de" %}`
+#: switch is Django's `trans_null` no-op — what a cell reads is the CROSSING
+#: (the literal's escaping across the translator, the body under and after a
+#: scope, the raw body reconstructed for Django's `BlockTranslateNode`), not
+#: a catalog. A localized sweep is the second corpus `set_number_format`'s
+#: exemption row already declines.
+I18N_SHAPES = {
+    # The translator: a hostile literal, so the cell reads whether the
+    # SafeData-preserving `gettext` path survives the crossing.
+    "tr-literal": '{{ _("Hi <b>") }}',
+    "tr-plain": '{{ _("Hi") }}{{ p }}',
+    # `_("…")` at the filter-argument site, which `django_literal` resolves.
+    "tr-filter-arg": '{{ p|default:_("D <b>") }}',
+    # The raw-body kind: the body crosses UN-rendered and Django's own node
+    # renders the placeholder against the context.
+    "bt-body": "{% load i18n %}{% blocktranslate %}Hi {{ p }}{% endblocktranslate %}",
+    "bt-with": "{% load i18n %}{% blocktranslate with v=p|upper %}[{{ v }}]{% endblocktranslate %}",
+    "bt-asvar": "{% load i18n %}{% blocktranslate asvar v %}{{ p }}{% endblocktranslate %}[{{ v }}]",
+    # The scope hooks: the body under the switch, and the render AFTER the
+    # block, which is the exit half.
+    "lang-body": '{% load i18n %}{% language "de" %}{{ p }}{% endlanguage %}',
+    "lang-after": '{% load i18n %}{% language "de" %}{% endlanguage %}{{ p }}',
+    "tz-body": '{% load tz %}{% timezone "Asia/Tokyo" %}{{ p }}{% endtimezone %}',
+    "tz-after": '{% load tz %}{% timezone "Asia/Tokyo" %}{% endtimezone %}{{ p }}',
+    "l10n-off": "{% load l10n %}{% localize off %}{{ p }}{% endlocalize %}",
+}
+
+
+def i18n_cells():
+    for shape in I18N_SHAPES:
         for key in INPUTS:
             yield shape, key
 
@@ -3484,10 +3569,12 @@ ENTRY_POINTS_NOT_SWEPT = {
     ),
     "set_virtual_keyed_ops": "a VDOM keyed-ops flag; nothing to do with template rendering",
     "register_library_loader": (
-        "the `{% load app_tags %}` hook (#2547). It changes rendering only for a "
-        "template that loads a PROJECT library, which this corpus has none of; the "
-        "randomized differential over a scratch library lives in "
-        "python/tests/test_load_imports_django_libraries_2547.py"
+        "the `{% load %}` hook (#2547). A parse-time registry action rather than a "
+        "render crossing: the `@i18n` cells go THROUGH the loader the framework "
+        "installs on import (`{% load i18n %}` bridges `blocktranslate` and arms "
+        "the scope nodes), and the four crossings it wires up are swept above. A "
+        "PROJECT library this corpus has none of; the randomized differential over "
+        "a scratch library lives in python/tests/test_load_imports_django_libraries_2547.py"
     ),
 }
 
@@ -3788,6 +3875,8 @@ def axis_of(cid: str) -> str:
         return "variable-name"
     if cid.startswith("@ctag "):
         return "ctag"
+    if cid.startswith("@i18n "):
+        return "i18n"
     if cid.startswith("@lazy "):
         return "resolution-mode"
     if cid.startswith("@path"):
@@ -3981,6 +4070,22 @@ def measure(out_path: str) -> None:
             continue
         dj, du = render_both(
             CUSTOM_TAG_SHAPES[shape],
+            {"p": INPUTS[key]},
+            CONTEXT_SAFE_KEYS.get(key),
+        )
+        result[cid] = [dj, du]
+
+    # The I18N axis (#2558): the translator, the raw-body kind and the scope
+    # hooks — the four Python crossings the custom-tag axis does not reach.
+    # `safe_keys` for the same reason as `@ctag`: a `blocktranslate` body's
+    # `{{ p }}` is rendered by Django's node from the crossed value, so the
+    # marker the context grants is half of what the cell asks.
+    for shape, key in i18n_cells():
+        cid = f"@i18n {shape}\t{key}\ti18n"
+        if cid in result:
+            continue
+        dj, du = render_both(
+            I18N_SHAPES[shape],
             {"p": INPUTS[key]},
             CONTEXT_SAFE_KEYS.get(key),
         )

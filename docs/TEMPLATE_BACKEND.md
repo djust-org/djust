@@ -190,8 +190,8 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 ### Limitations
 
 ⚠️ **Not all Django features supported yet:**
-- Several Django built-in tags and most of Django's `{% load %}` library tags (`i18n`, `l10n`, `tz`, `cache`) are not implemented; the generated lists below are the authority
-- Django's `{% load %}` library *filters* (`unlocalize`, `language_name`, `utc`, …) are not implemented natively; they resolve only through the filter bridge, which needs a `DjangoTemplates` engine in `TEMPLATES` next to djust (the fallback engine in the Quick Start). The bridged `tz` filters resolve but currently render empty output (#2541)
+- Several Django built-in tags and the `cache` library are not implemented; the generated lists below are the authority
+- Django's `i18n`, `l10n` and `tz` libraries are bridged on `{% load %}` (#2558): their tags and filters resolve on any `TEMPLATES` shape once the template loads the library. The three `tz` *filters* (`localtime`, `timezone`, `utc`) are the exception — they need a datetime object the Rust engine cannot carry (#2216) and are refused loudly at load rather than rendering blank (#2541)
 - A project's own `{% load %}` tag libraries ARE loaded (#2547, see "Loading a project's template libraries" below); a raw `@register.tag` that consumes a body is the one shape that is refused
 
 ### Loading a project's template libraries
@@ -201,7 +201,7 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 - **Filters** go through the same bridge as before (`is_safe` / `needs_autoescape` honoured; an `is_safe=True` filter keeps a safe input safe and never makes a hostile one safe).
 - **Tags** — `simple_tag`, `simple_block_tag`, `inclusion_tag`, and raw `@register.tag` functions that build a node from their own token — are rendered by the library's OWN compile function and Django node, so arguments, keyword arguments, `takes_context`, `as var`, escaping and inclusion-template rendering are Django's, byte for byte. A `takes_context` tag sees the template context as a plain dict.
 - **Refused, per tag:** a raw `@register.tag` whose compile function reads past its own token (`parser.parse((...))`, `next_token`, `skip_past`) has no token stream to consume here. The `{% load %}` succeeds and the rest of the library works; the moment a template uses that one tag the parser raises `TemplateSyntaxError: '<tag>' from library '<lib>' is a raw @register.tag that consumes a block … port it to @register.simple_block_tag, or wait for the raw-body registration kind (#2558)`. Port it to `simple_block_tag`.
-- **Not bridged, deliberately:** Django's own libraries (`i18n`, `l10n`, `tz`, `cache`, `static`) and djust's own `djust.templatetags.*`. They resolve — `{% load static %}` keeps parsing — but their tags come from the engine's native handlers, each its own row in the generated lists below.
+- **Django's own libraries:** `i18n`, `l10n` and `tz` are bridged the same way (#2558), except that `{% blocktranslate %}` crosses its body as raw source and `{% language %}` / `{% localize %}` / `{% localtime %}` / `{% timezone %}` are native scope nodes the load arms. `static`, `cache` and djust's own `djust.templatetags.*` are not bridged, deliberately: they resolve — `{% load static %}` keeps parsing — but their tags come from the engine's native handlers, each its own row in the generated lists below.
 - **`OPTIONS['builtins']`** (dotted library paths) are bridged when the backend is constructed, so their tags and filters need no `{% load %}` — Django's meaning. Django's three default builtins are the Rust natives and are skipped.
 - **Scoping differs from Django.** Django scopes a loaded library to the template that loaded it; djust's registries are process-global, so once any render loads a library every later template on either engine path (plain backend or LiveView) sees its tags, `{% load %}` or not. A missing library is still refused. A test suite that clears the Rust tag registries must call `djust.template_libraries.reassert()` afterwards (the framework's own `djust.test_isolation` does): the Rust template cache is keyed by source, so a template parsed while the tags were registered is served from cache and never re-runs its `{% load %}`.
 - **Known gaps:** `context.use_l10n` / `autoescape` are not carried into a bridged tag's `Context` (#2586); the scoreboard's `test_no_render_side_effect` reads `template.nodelist`, a Django-internal attribute the backend does not have — a deliberate, documented ERROR (#2587).
@@ -223,17 +223,21 @@ Reference: Django 5.2.16 — `django.template.defaultfilters`, `defaulttags` and
 
 **Built-in tags — unsupported (7):** `autoescape`, `debug`, `filter`, `ifchanged`, `lorem`, `querystring`, `resetcycle`
 
-**Library tags (`{% load … %}`) — supported (1):** `static`
+**Library tags (`{% load … %}`) — supported (15):** i18n `blocktrans`, `blocktranslate`, `get_available_languages`, `get_current_language`, `get_current_language_bidi`, `get_language_info`, `get_language_info_list`, `language`, `trans`, `translate`; l10n `localize`; tz `get_current_timezone`, `localtime`, `timezone`; static `static`
 
-**Library tags — unsupported (17):** i18n `blocktrans`, `blocktranslate`, `get_available_languages`, `get_current_language`, `get_current_language_bidi`, `get_language_info`, `get_language_info_list`, `language`, `trans`, `translate`; l10n `localize`; tz `get_current_timezone`, `localtime`, `timezone`; static `get_media_prefix`, `get_static_prefix`; cache `cache`
+**Library tags — unsupported (3):** static `get_media_prefix`, `get_static_prefix`; cache `cache`
+
+A supported library tag is either a native Rust node or bridged on `{% load %}` (#2547 / #2558): the load imports Django's library and registers its tags with the Rust engine, so the tag is rendered by Django's own compile function and node — `{% blocktranslate %}` crosses its body as raw source; `{% language %}`, `{% localize %}`, `{% localtime %}` and `{% timezone %}` are native scope nodes the load arms.
 
 **Library filters — native (0):** none
 
-**Library filters — bridged from a configured `DjangoTemplates` engine (9):** i18n `language_bidi`, `language_name`, `language_name_local`, `language_name_translated`; l10n `localize`, `unlocalize`; tz `localtime`, `timezone`, `utc`
+**Library filters — bridged on `{% load %}` (6):** i18n `language_bidi`, `language_name`, `language_name_local`, `language_name_translated`; l10n `localize`, `unlocalize`
 
-Bridged filters are Django's own callables, forwarded to the Rust engine by the filter bridge (#1121) from the `template_libraries` of a `django.template.backends.django.DjangoTemplates` engine in `TEMPLATES` — the fallback engine the recommended configuration above includes. On a djust-only `TEMPLATES` there is nothing to forward and each raises `Unknown filter`.
+Bridged filters are Django's own callables, forwarded to the Rust engine by the filter bridge when the template loads their library (#2558) — on any `TEMPLATES` shape, a `DjangoTemplates` engine beside djust or not.
 
-**Library filters — unsupported (0):** none
+**Library filters — unsupported (3):** tz `localtime`, `timezone`, `utc`
+
+Refused loudly on `{% load %}` (3): tz `localtime`, `timezone`, `utc` — each needs a datetime object on the wire, which the Rust `Value` cannot carry (#2216), so the load registers it as a filter that raises `TemplateSyntaxError` naming the filter and pointing at `date` with the active zone (#2209) — never a silent blank (#2541).
 
 **djust extensions (not Django tags, not scored):** `dj_flash`, `djust_client_config`, `djust_markdown`, `djust_offline_indicator`, `djust_pwa_head`, `djust_pwa_manifest`, `djust_sw_register`, `live_render`
 <!-- /generated:template-backend-lists -->
