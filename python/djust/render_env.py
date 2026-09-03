@@ -268,13 +268,36 @@ def install_scope_hooks() -> bool:
 # scope node calls around its body — on the error path too.
 
 
-def language_scope_enter(lang: str) -> Any:
+def _stamp_hook_error(exc: BaseException) -> None:
+    """Mark an exception raised inside a scope hook as user-raised, so it
+    crosses back WHOLE with its type (``ZoneInfoNotFoundError`` for
+    ``{% timezone "Bogus/Zone" %}``) instead of being re-wrapped as a bare
+    ``Exception`` by ``DjustTemplate.render`` — the #2547 contract for a
+    bridged library tag's exception, applied to the scope nodes."""
+    from .template_libraries import _stamp
+
+    _stamp(exc)
+
+
+def language_scope_enter(lang: Optional[str]) -> Any:
     """Enter ``{% language lang %}``: switch Django's thread-local and re-push
-    the render env, so the Rust locale state follows the switch."""
+    the render env, so the Rust locale state follows the switch.
+
+    ``lang`` arrives VERBATIM — ``None`` for a ``None`` operand, ``""`` for a
+    missing variable — because ``translation.override(None)`` deactivates
+    (``get_language()`` becomes ``None``) while ``override("")`` activates
+    the fallback language; Django's ``LanguageNode`` makes the same call
+    with the same value, and collapsing the two would render ``[None]``
+    where Django renders ``[en-us]`` (measured, 5.2.16).
+    """
     from django.utils import translation
 
-    override = translation.override(lang or None)
-    override.__enter__()
+    override = translation.override(lang)
+    try:
+        override.__enter__()
+    except BaseException as exc:
+        _stamp_hook_error(exc)
+        raise
     apply_render_env()
     return override
 
@@ -285,12 +308,19 @@ def language_scope_exit(token: Any) -> None:
     apply_render_env()
 
 
-def timezone_scope_enter(name: str) -> Any:
-    """Enter ``{% timezone name %}``: same shape as the language pair."""
+def timezone_scope_enter(name: Optional[str]) -> Any:
+    """Enter ``{% timezone name %}``: same shape as the language pair, and
+    the same verbatim operand — ``override(None)`` deactivates, ``override("")``
+    raises Django's own ``ValueError``, an unknown zone its
+    ``ZoneInfoNotFoundError``; each crosses back with its type."""
     from django.utils import timezone as dj_timezone
 
-    override = dj_timezone.override(name or None)
-    override.__enter__()
+    override = dj_timezone.override(name)
+    try:
+        override.__enter__()
+    except BaseException as exc:
+        _stamp_hook_error(exc)
+        raise
     apply_render_env()
     return override
 

@@ -3707,6 +3707,18 @@ struct Stamped {
 /// the default zone's abbreviation and offset for it. Shifting naive values
 /// would break every project on `USE_TZ = False`, which is the configuration
 /// where naive datetimes are the norm.
+/// `datetime.timezone(offset).tzname(None)`: `UTC` for zero, else
+/// `UTC±HH:MM` (Python's own `_name_from_offset`; seconds never on the wire).
+fn fixed_offset_name(offset: &chrono::FixedOffset) -> String {
+    let secs = offset.local_minus_utc();
+    if secs == 0 {
+        return "UTC".to_string();
+    }
+    let sign = if secs < 0 { '-' } else { '+' };
+    let abs = secs.unsigned_abs();
+    format!("UTC{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60)
+}
+
 fn apply_active_timezone(
     dt: DateTime<chrono::FixedOffset>,
     aware: bool,
@@ -3715,11 +3727,21 @@ fn apply_active_timezone(
     use chrono::TimeZone;
 
     let Some(tz) = crate::timezone::active_timezone() else {
-        // No active zone: `USE_TZ = False`, or this crate embedded without
-        // Django settings. Pre-#2209 behaviour exactly — format what arrived.
+        // No active zone: `USE_TZ = False`, `{% localtime off %}` (#2558), or
+        // this crate embedded without Django settings. The wall clock is
+        // formatted as it arrived (pre-#2209 behaviour). An AWARE value still
+        // names its own zone for `T`/`e`, as Django's `tzname()` does when no
+        // conversion happens: the wire carries only the offset (#2216), so
+        // the name is the one `datetime.timezone` gives that offset — `UTC`,
+        // or `UTC+02:00` — and a `ZoneInfo` value's `CEST` is the documented
+        // residue. A naive value keeps reporting nothing, as before.
         return Stamped {
             dt,
-            abbrev: None,
+            abbrev: if aware {
+                Some(fixed_offset_name(dt.offset()))
+            } else {
+                None
+            },
             aware,
             timestamp: dt.timestamp(),
             time_only,

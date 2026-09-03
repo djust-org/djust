@@ -1712,7 +1712,12 @@ pub fn register_language_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyRes
 /// Enter a `{% language %}` scope (#2558). Returns the exit token, `None`
 /// when no hooks are installed (pure-Rust embedding: children render
 /// untranslated, which is Django's `USE_I18N=False`).
-pub fn language_scope_enter(lang: &str) -> Result<Option<Py<PyAny>>, DjangoRustError> {
+///
+/// `lang` is `None` when the operand resolved to Python `None` — it
+/// crosses as `None`, because `translation.override(None)` (deactivate)
+/// and `translation.override("")` (the fallback language) are different
+/// things on Django.
+pub fn language_scope_enter(lang: Option<&str>) -> Result<Option<Py<PyAny>>, DjangoRustError> {
     let hooks = Python::attach(|py| {
         let slot = LANGUAGE_SCOPE_HOOKS
             .read()
@@ -1775,8 +1780,9 @@ pub fn register_timezone_scope_hooks(enter: Py<PyAny>, exit: Py<PyAny>) -> PyRes
 }
 
 /// Enter a `{% timezone %}` scope (#2558). Returns the exit token, `None`
-/// when no hooks are installed.
-pub fn timezone_scope_enter(zone: &str) -> Result<Option<Py<PyAny>>, DjangoRustError> {
+/// when no hooks are installed. `zone` is `None` for a Python `None`
+/// operand (deactivate), as for [`language_scope_enter`].
+pub fn timezone_scope_enter(zone: Option<&str>) -> Result<Option<Py<PyAny>>, DjangoRustError> {
     let hooks = Python::attach(|py| {
         let slot = TIMEZONE_SCOPE_HOOKS
             .read()
