@@ -814,6 +814,12 @@ fn parse_token_inner(
                     // step, a short-circuit or an untaken branch could all
                     // stop it short (#2411). See `validate_if_operands`.
                     validate_if_operands(args)?;
+                    // Django compiles the condition with `TemplateIfParser`
+                    // at COMPILE time, so a malformed operator arrangement
+                    // (`{% if foo and %}`, `{% if == %}`, `{% if a not b %}`)
+                    // raises before rendering; djust only checked operands
+                    // (#2576). See `validate_if_grammar`.
+                    validate_if_grammar(args)?;
                     let condition = args.join(" ");
                     // Capture attribute context BEFORE advancing i.
                     // Scan backwards through ALL preceding tokens (not just the
@@ -1555,7 +1561,20 @@ fn parse_if_block(
 
     while i < tokens.len() {
         match &tokens[i] {
-            Token::Tag(name, _) if name == "else" => {
+            Token::Tag(name, args) if name == "else" => {
+                // Django's `do_if` accepts the else clause only when
+                // `token.contents == "else"` exactly; any trailing content
+                // (`{% else if foo is not bar %}`) fails the following
+                // `!= "endif"` check and raises "Malformed template tag"
+                // (#2576). djust had ignored the else args entirely, so
+                // `{% else if ... %}` was silently treated as a plain else.
+                if !args.is_empty() {
+                    return Err(DjangoRustError::TemplateError(format!(
+                        "Malformed {{% else %}} tag on line {}: {{% else {} %}} takes no arguments",
+                        line_at(spans, source, i),
+                        args.join(" ")
+                    )));
+                }
                 in_else = true;
                 i += 1;
                 continue;
@@ -1575,6 +1594,9 @@ fn parse_if_block(
                 // a `Node::If` and is parsed at this site rather than through
                 // `parse_token`'s `"if"` arm, so it needs its own call.
                 validate_if_operands(args)?;
+                // Operator-arrangement grammar check, same rule/site as
+                // `{% if %}`'s (#2576). See `validate_if_grammar`.
+                validate_if_grammar(args)?;
                 let elif_condition = args.join(" ");
                 let (elif_true, elif_false, end_pos) =
                     parse_if_block(tokens, spans, source, i + 1, in_tag_context)?;
@@ -2897,6 +2919,201 @@ pub(crate) fn validate_if_operands(args: &[String]) -> Result<()> {
         validate_tag_operand(arg)?;
     }
     Ok(())
+}
+
+/// The kind of a single `{% if %}` token, after `smartif`'s `is`/`not` merging.
+///
+/// `smartif.OPERATORS` maps a fixed word set to operator classes and treats
+/// everything else as a variable/literal operand. We mirror that split: the
+/// binding power (`lbp`) and prefix/infix role come straight from
+/// `django/template/smartif.py`'s `OPERATORS` table.
+#[derive(Clone, PartialEq)]
+enum IfTokKind {
+    /// A variable or literal — `smartif.Literal`, `lbp = 0`, `nud` returns self.
+    Operand,
+    /// The prefix `not`, `lbp = 8`, `nud` consumes one right operand.
+    Prefix,
+    /// Any binary operator (`and`, `or`, `in`, `is`, `==`, `<`, …); `led`
+    /// consumes a right operand at its own binding power.
+    Infix,
+    /// The implicit end-of-stream token — `smartif.EndToken`, `lbp = 0`.
+    End,
+}
+
+/// One token in the `{% if %}` grammar walk.
+struct IfTok {
+    kind: IfTokKind,
+    lbp: i32,
+    /// The source word, used only for the diagnostic message.
+    display: String,
+}
+
+impl IfTok {
+    fn end() -> Self {
+        IfTok {
+            kind: IfTokKind::End,
+            lbp: 0,
+            display: String::new(),
+        }
+    }
+}
+
+/// Classify one already-merged `{% if %}` word exactly as
+/// `smartif.IfParser.translate_token` does: a word in `OPERATORS` becomes that
+/// operator, anything else becomes an operand (`create_var`). Binding powers
+/// are copied verbatim from `smartif.OPERATORS`.
+fn classify_if_token(word: &str) -> IfTok {
+    let (kind, lbp) = match word {
+        "or" => (IfTokKind::Infix, 6),
+        "and" => (IfTokKind::Infix, 7),
+        "not" => (IfTokKind::Prefix, 8),
+        "in" | "not in" => (IfTokKind::Infix, 9),
+        "is" | "is not" | "==" | "!=" | ">" | ">=" | "<" | "<=" => (IfTokKind::Infix, 10),
+        _ => (IfTokKind::Operand, 0),
+    };
+    IfTok {
+        kind,
+        lbp,
+        display: word.to_string(),
+    }
+}
+
+/// A port of `smartif.IfParser` used as a PARSE-TIME VALIDATOR (#2576).
+///
+/// Django compiles every `{% if %}`/`{% elif %}` condition with
+/// `TemplateIfParser(...).parse()` at compile time (`defaulttags.do_if`), so a
+/// malformed operator arrangement — a dangling `and`, a leading `==`, two
+/// adjacent operands, an infix `not` — raises `TemplateSyntaxError` before any
+/// rendering. djust's engine only ever validated the individual OPERANDS
+/// ([`validate_if_operands`]); the ARRANGEMENT of operators and operands was
+/// never checked, so all of those shapes parsed and rendered a branch.
+///
+/// This walks the same top-down operator-precedence grammar as
+/// `smartif.IfParser` (`nud`/`led`/`lbp`) but discards the tree — it only needs
+/// to reproduce which token streams `parse()` rejects, and it rejects exactly
+/// the same ones. It intentionally does NOT try to match Django's message text
+/// (that is the separate follow-up #2581); the wording here is djust's own
+/// descriptive style. The `is`/`not` → `is not` and `not`/`in` → `not in`
+/// merging is `IfParser.__init__`'s.
+struct IfGrammar {
+    tokens: Vec<IfTok>,
+    pos: usize,
+    current: IfTok,
+}
+
+impl IfGrammar {
+    fn new(args: &[String]) -> Self {
+        // `IfParser.__init__`: fold `is`+`not` → `is not`, `not`+`in` → `not in`.
+        let mut merged: Vec<IfTok> = Vec::with_capacity(args.len());
+        let mut i = 0;
+        while i < args.len() {
+            let w = args[i].as_str();
+            if w == "is" && i + 1 < args.len() && args[i + 1] == "not" {
+                merged.push(classify_if_token("is not"));
+                i += 2;
+            } else if w == "not" && i + 1 < args.len() && args[i + 1] == "in" {
+                merged.push(classify_if_token("not in"));
+                i += 2;
+            } else {
+                merged.push(classify_if_token(w));
+                i += 1;
+            }
+        }
+        let mut parser = IfGrammar {
+            tokens: merged,
+            pos: 0,
+            current: IfTok::end(),
+        };
+        // `self.current_token = self.next_token()` primes the first token.
+        parser.current = parser.next_token();
+        parser
+    }
+
+    fn next_token(&mut self) -> IfTok {
+        if self.pos >= self.tokens.len() {
+            IfTok::end()
+        } else {
+            let t = &self.tokens[self.pos];
+            let out = IfTok {
+                kind: t.kind.clone(),
+                lbp: t.lbp,
+                display: t.display.clone(),
+            };
+            self.pos += 1;
+            out
+        }
+    }
+
+    /// `smartif.IfParser.expression`. Returns `Ok` if the sub-expression
+    /// starting at `current` is well-formed at right binding power `rbp`.
+    fn expression(&mut self, rbp: i32) -> Result<()> {
+        let t = std::mem::replace(&mut self.current, IfTok::end());
+        self.current = self.next_token();
+        self.nud(&t)?;
+        while rbp < self.current.lbp {
+            let t = std::mem::replace(&mut self.current, IfTok::end());
+            self.current = self.next_token();
+            self.led(&t)?;
+        }
+        Ok(())
+    }
+
+    /// Null denotation — a token in PREFIX position.
+    fn nud(&mut self, t: &IfTok) -> Result<()> {
+        match t.kind {
+            IfTokKind::Operand => Ok(()),
+            // `not` consumes exactly one right operand at its own bp.
+            IfTokKind::Prefix => self.expression(t.lbp),
+            IfTokKind::Infix => Err(DjangoRustError::TemplateError(format!(
+                "Invalid {{% if %}} condition: operator '{}' has no left operand",
+                t.display
+            ))),
+            IfTokKind::End => Err(DjangoRustError::TemplateError(
+                "Invalid {% if %} condition: unexpected end of expression".to_string(),
+            )),
+        }
+    }
+
+    /// Left denotation — a token in INFIX position (an operand already parsed
+    /// to its left).
+    fn led(&mut self, t: &IfTok) -> Result<()> {
+        match t.kind {
+            IfTokKind::Infix => self.expression(t.lbp),
+            // A prefix `not`, an operand, or End can never sit in infix
+            // position. (Operand/End have `lbp = 0` so `led` is unreachable
+            // for them via `expression`; kept exhaustive for safety.)
+            _ => Err(DjangoRustError::TemplateError(format!(
+                "Invalid {{% if %}} condition: '{}' cannot be used as an infix operator",
+                t.display
+            ))),
+        }
+    }
+
+    /// `smartif.IfParser.parse`: parse one expression, then require the whole
+    /// token stream to be consumed.
+    fn parse(&mut self) -> Result<()> {
+        self.expression(0)?;
+        if self.current.kind != IfTokKind::End {
+            return Err(DjangoRustError::TemplateError(format!(
+                "Invalid {{% if %}} condition: unexpected '{}' at end of expression",
+                self.current.display
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Validate the operator/operand ARRANGEMENT of a `{% if %}` / `{% elif %}`
+/// condition, refusing exactly the malformed shapes Django's `smartif` parser
+/// refuses at compile time (#2576). See [`IfGrammar`] for the port details.
+///
+/// This is the ARRANGEMENT check; [`validate_if_operands`] is the per-OPERAND
+/// name/filter check. Django does both inside one `TemplateIfParser.parse()`
+/// (operands are compiled by `create_var` during the walk); djust keeps them as
+/// two passes over the same `args`, and both must run at the `{% if %}` and
+/// `{% elif %}` sites.
+pub(crate) fn validate_if_grammar(args: &[String]) -> Result<()> {
+    IfGrammar::new(args).parse()
 }
 
 /// Strip surrounding single/double quotes from a filter argument when it
