@@ -1145,10 +1145,10 @@ def test_scope_hook_operand_none_and_empty_are_kept_distinct():
 # ---------------------------------------------------------------------------
 
 # Braces are SPACE-PADDED: two adjacent `{` runs would spell `{{`, and a `{`
-# before a `%(x)s` run would spell `{%`, both of which djust's LEXER reads
-# differently from Django's — a pre-existing divergence pinned in
-# `test_brace_before_a_tag_is_a_preexisting_lexer_divergence` and deliberately
-# not measured by this differential.
+# before a `%(x)s` run would spell `{%`. Those shapes agree with Django as of
+# #2597 (the closer lookahead) and are pinned directly in
+# `test_a_brace_before_a_tag_now_matches_django`; the padding stays so this
+# differential keeps measuring the BRIDGE rather than re-measuring the lexer.
 _TEXT = [
     "The result",
     " was ",
@@ -1366,6 +1366,27 @@ def test_a_brace_before_a_tag_now_matches_django():
         assert _outcome(plain_render, source, context) == _outcome(
             django_render, source, context
         ), source
+
+
+def test_verbatim_now_keeps_a_comment_like_django():
+    """`collect_raw_source` is the single re-emitter for BOTH the raw-block
+    registry and `{% verbatim %}` (`parser.rs`), so #2597's comment re-emit
+    changed `{% verbatim %}` too — a user-visible change to a built-in tag,
+    not only a `blocktranslate` fix.
+
+    Before: `{% verbatim %}{# hi #}{% endverbatim %}` rendered `""`.
+    After (= Django): `{# hi #}`.
+    """
+    for source in (
+        "{% verbatim %}{# hi #}{% endverbatim %}",
+        "{% verbatim %}a{# hi #}b{% endverbatim %}",
+        # The comment holds the block's own end tag: the lexer still stops at
+        # the first `#}`, so the real end tag is found.
+        "{% verbatim %}{# {% endverbatim %} #}{% endverbatim %}",
+    ):
+        theirs = _outcome(django_render, source, {})
+        assert _outcome(plain_render, source, {}) == theirs, source
+        assert _outcome(liveview_render, source, {}) == theirs, source
 
 
 def test_the_sweep_is_not_vacuous():

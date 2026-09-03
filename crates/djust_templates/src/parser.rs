@@ -1592,10 +1592,10 @@ fn parse_spaceless_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, u
 /// `{{ var }}` re-lexes to the same VAR contents (Django strips variable
 /// contents too); a tag re-joined on single spaces is exactly the
 /// `token.contents` Django quotes in its `doesn't allow other block tags`
-/// error. Comments are dropped (as `{% verbatim %}` always dropped them);
-/// a `{# … #}` inside a raw block therefore re-raises through Django with
-/// contents-less text — a named error-bytes residue on malformed input,
-/// never a silent difference on well-formed templates.
+/// error. Comments are RE-EMITTED verbatim as `{# … #}` (#2597): dropping
+/// them silently changed the body Django reads back — visibly so through
+/// `{% verbatim %}`, which shares this collector and whose output now
+/// matches Django's for `{% verbatim %}{# hi #}{% endverbatim %}`.
 ///
 /// Returns the reconstructed source and the index of the END-TAG token
 /// (the caller points `i` at it; its loop then steps past).

@@ -8,6 +8,7 @@ use crate::registry::TagArg;
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
+use pyo3::{Py, PyAny};
 use regex::Regex;
 use std::collections::HashSet;
 
@@ -1011,9 +1012,60 @@ fn scope_hook_error(what: &str, err: DjangoRustError) -> DjangoRustError {
     }
 }
 
+/// A `{% language %}` / `{% timezone %}` exit hook, run on the way out of the
+/// block — on the `Ok` path, the `Err` path AND the panic-unwind path (#2597).
+type ScopeExitFn = fn(Option<&Py<PyAny>>) -> Result<()>;
+
+/// Runs a scope exit hook exactly once on the way out of a `{% language %}` or
+/// `{% timezone %}` block.
+///
+/// [`release`](ScopeExitGuard::release) is the ordinary path and hands the
+/// hook's own `Result` back to the caller, so a failing exit can still be
+/// reported. `Drop` is the PANIC path: a child node that unwinds skips every
+/// statement after the render call, and these overrides live on a POOLED
+/// worker thread — a leaked `translation.override` serves the wrong language
+/// to whatever renders on that thread next. Nothing can be returned while
+/// unwinding, so the hook's own error is swallowed there; leaving the override
+/// installed would be strictly worse.
+///
+/// The two `Localize`/`LocalTime` siblings in the same match get the same
+/// treatment from [`UseL10nGuard`] and [`ActiveTimezoneGuard`]. Fixing two of
+/// the four arms would be the parallel-path drift, not the cure (#1646).
+struct ScopeExitGuard {
+    token: Option<Py<PyAny>>,
+    exit: ScopeExitFn,
+    armed: bool,
+}
+
+impl ScopeExitGuard {
+    fn new(token: Option<Py<PyAny>>, exit: ScopeExitFn) -> Self {
+        Self {
+            token,
+            exit,
+            armed: true,
+        }
+    }
+
+    /// The non-panicking exit. Disarms `Drop` first, so the hook runs exactly
+    /// once whichever way the frame leaves.
+    fn release(mut self) -> Result<()> {
+        self.armed = false;
+        (self.exit)(self.token.as_ref())
+    }
+}
+
+impl Drop for ScopeExitGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = (self.exit)(self.token.as_ref());
+        }
+    }
+}
+
 /// Render a [`Node::Language`] (#2558): enter the Python-side override,
-/// render the children in Rust, exit on BOTH paths — a raising child must
-/// not leak the language into the thread's next render.
+/// render the children in Rust, exit on ALL THREE paths — `Ok`, `Err` and a
+/// panicking child (#2597). A leak here installs the WRONG LANGUAGE on the
+/// pooled worker thread, which then serves the next render.
 fn render_language_scope<L: TemplateLoader>(
     expr: &str,
     children: &[Node],
@@ -1023,8 +1075,9 @@ fn render_language_scope<L: TemplateLoader>(
     let lang = scope_operand_string(expr, context);
     let token = crate::registry::language_scope_enter(lang.as_deref())
         .map_err(|e| scope_hook_error("language scope enter", e))?;
+    let guard = ScopeExitGuard::new(token, crate::registry::language_scope_exit);
     let result = render_nodes_with_loader(children, context, loader);
-    if let Err(exit_err) = crate::registry::language_scope_exit(token.as_ref()) {
+    if let Err(exit_err) = guard.release() {
         if result.is_ok() {
             return Err(scope_hook_error("language scope exit", exit_err));
         }
@@ -1033,7 +1086,7 @@ fn render_language_scope<L: TemplateLoader>(
 }
 
 /// Render a [`Node::Timezone`] (#2558) — the timezone twin of
-/// [`render_language_scope`].
+/// [`render_language_scope`], panic-guarded the same way (#2597).
 fn render_timezone_scope<L: TemplateLoader>(
     expr: &str,
     children: &[Node],
@@ -1043,8 +1096,9 @@ fn render_timezone_scope<L: TemplateLoader>(
     let zone = scope_operand_string(expr, context);
     let token = crate::registry::timezone_scope_enter(zone.as_deref())
         .map_err(|e| scope_hook_error("timezone scope enter", e))?;
+    let guard = ScopeExitGuard::new(token, crate::registry::timezone_scope_exit);
     let result = render_nodes_with_loader(children, context, loader);
-    if let Err(exit_err) = crate::registry::timezone_scope_exit(token.as_ref()) {
+    if let Err(exit_err) = guard.release() {
         if result.is_ok() {
             return Err(scope_hook_error("timezone scope exit", exit_err));
         }
@@ -5718,6 +5772,149 @@ mod tests {
             "ActiveTimezoneGuard must have restored the zone while unwinding"
         );
         crate::timezone::set_active_timezone(None);
+    }
+
+    // ---- #2597: and the RENDERER's use of them is pinned too --------------
+    //
+    // The two tests above construct the guards by hand, so they pin the
+    // `Drop` impls and nothing else: reverting the `Node::Localize` /
+    // `Node::LocalTime` arms to a plain push/render/pop leaves them green.
+    // That is the decorative-pin class (#1859/#1860). The two below drive
+    // the REAL `render_node_with_loader` dispatch with a child that panics,
+    // so they go red the moment an arm stops binding its guard.
+
+    /// A loader whose `load_template` panics — the smallest way to make a
+    /// child node unwind through the real render dispatch. `{% include %}`
+    /// is the one arm that calls out to the loader.
+    struct PanickingLoader;
+
+    impl TemplateLoader for PanickingLoader {
+        fn load_template(&self, _name: &str) -> Result<Vec<Node>> {
+            panic!("a child node blew up mid-render");
+        }
+    }
+
+    fn panicking_child() -> Node {
+        Node::Include {
+            template: "boom.html".to_string(),
+            with_vars: Vec::new(),
+            only: false,
+        }
+    }
+
+    /// Drives `Node::Localize` through `render_node_with_loader` with a
+    /// panicking child and asserts the thread-local `use_l10n` scope is
+    /// clean afterwards. Reverting the arm to `push / render / pop` makes
+    /// this fail.
+    #[test]
+    fn the_render_path_unwinds_the_localize_scope_when_a_child_panics() {
+        assert!(!use_l10n_forced_off(), "stack must start clean");
+        let node = Node::Localize {
+            use_l10n: false,
+            children: vec![panicking_child()],
+        };
+        let context = Context::new();
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_node_with_loader(&node, &context, Some(&PanickingLoader))
+        }));
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        assert!(
+            !use_l10n_forced_off(),
+            "the Node::Localize arm must bind UseL10nGuard — a plain pop after \
+             the render call leaks the scope onto this pooled thread"
+        );
+    }
+
+    /// The `{% localtime off %}` twin, through the same real dispatch.
+    #[test]
+    fn the_render_path_restores_the_timezone_when_a_child_panics() {
+        crate::timezone::set_active_timezone(Some("Europe/Paris"));
+        let node = Node::LocalTime {
+            use_tz: false,
+            children: vec![panicking_child()],
+        };
+        let context = Context::new();
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_node_with_loader(&node, &context, Some(&PanickingLoader))
+        }));
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        let restored = crate::timezone::active_timezone_name();
+        crate::timezone::set_active_timezone(None);
+        assert_eq!(
+            restored.as_deref(),
+            Some("Europe/Paris"),
+            "the Node::LocalTime arm must bind ActiveTimezoneGuard — a plain \
+             restore after the render call leaks the cleared zone"
+        );
+    }
+
+    // ---- #2597: the `{% language %}` / `{% timezone %}` exit guard --------
+    //
+    // These two arms' observable state lives on the PYTHON side
+    // (`translation.override` / `timezone._active`), and `cargo test` runs
+    // with no interpreter, so the render-path equivalent of the two tests
+    // above is unreachable from here. What IS reachable: the guard runs its
+    // hook exactly once on each of the three ways out. The renderer's USE of
+    // it is pinned structurally in `tests/test_scope_guard_pins_2597.rs`, and
+    // end-to-end on the `Err` path by
+    // `python/tests/test_i18n_tags_bridge_2558.py`'s
+    // `test_language_scope_restores_after_a_raising_child` /
+    // `test_timezone_scope_restores_on_exit_and_after_a_raising_child`, which
+    // assert the ACTIVE LANGUAGE and ZONE afterwards.
+
+    thread_local! {
+        static SCOPE_EXIT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn counting_exit(_token: Option<&Py<PyAny>>) -> Result<()> {
+        SCOPE_EXIT_CALLS.with(|c| c.set(c.get() + 1));
+        Ok(())
+    }
+
+    fn failing_exit(_token: Option<&Py<PyAny>>) -> Result<()> {
+        SCOPE_EXIT_CALLS.with(|c| c.set(c.get() + 1));
+        Err(DjangoRustError::TemplateError("exit blew up".to_string()))
+    }
+
+    #[test]
+    fn the_scope_exit_guard_runs_the_hook_while_unwinding() {
+        SCOPE_EXIT_CALLS.with(|c| c.set(0));
+
+        let panicked = std::panic::catch_unwind(|| {
+            let _guard = ScopeExitGuard::new(None, counting_exit);
+            panic!("a child node blew up");
+        });
+
+        assert!(panicked.is_err(), "the panic must propagate");
+        assert_eq!(
+            SCOPE_EXIT_CALLS.with(|c| c.get()),
+            1,
+            "Drop must run the exit hook once while unwinding"
+        );
+    }
+
+    #[test]
+    fn the_scope_exit_guard_releases_exactly_once_and_reports_failure() {
+        SCOPE_EXIT_CALLS.with(|c| c.set(0));
+        let guard = ScopeExitGuard::new(None, counting_exit);
+        assert!(guard.release().is_ok());
+        assert_eq!(
+            SCOPE_EXIT_CALLS.with(|c| c.get()),
+            1,
+            "release() disarms Drop, so the hook runs exactly once"
+        );
+
+        SCOPE_EXIT_CALLS.with(|c| c.set(0));
+        let guard = ScopeExitGuard::new(None, failing_exit);
+        assert!(
+            guard.release().is_err(),
+            "release() hands the hook's own error back to the caller"
+        );
+        assert_eq!(SCOPE_EXIT_CALLS.with(|c| c.get()), 1);
     }
 
     // ---- #2558: the scope-node operand ------------------------------------
