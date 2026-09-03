@@ -788,6 +788,13 @@ fn parse_token_inner(
                 }));
             }
 
+            // This is a PLAIN variable — the inline-if branch above returned
+            // for the `{{ a if cond else b }}` extension, so the `[\w.]`-only
+            // head grammar can run here without refusing a legitimate
+            // inline-if (#2578). Placement is load-bearing: run this before
+            // the inline-if branch and a bare-variable inline-if is refused.
+            validate_plain_variable_expr(expr_part)?;
+
             // Detect whether this variable is inside an HTML opening
             // tag (attribute context). When true the renderer uses
             // the attribute-safe escape (see `html_escape_attr`).
@@ -1916,7 +1923,21 @@ pub fn extract_template_variables(
 ) -> Result<std::collections::HashMap<String, Vec<String>>> {
     use std::collections::HashMap;
 
-    // Tokenize and parse the template
+    // Tokenize and parse the template, propagating any parse error.
+    //
+    // Extraction shares `parse_token` with the render path (#1646) and shares
+    // its refusal contract: a genuine parse error is a parse error everywhere
+    // the parser runs, variable extraction included. This mirrors #2549 (an
+    // unregistered tag refuses here too — see
+    // `test_extract_refuses_unregistered_tag_at_parse`) and now extends to
+    // #2578's malformed `{{ … }}` variable expressions. A template that
+    // Django's `FilterExpression` would refuse is genuinely broken and will
+    // not render; extraction reports the same refusal rather than silently
+    // returning partial hints. (Malformed input that degrades to *text* at the
+    // lexer level — e.g. an unterminated `{% if x` — is not a parse error and
+    // still yields an empty map, per `test_malformed_template_graceful_fallback`.)
+    // The JIT caller (`jit.py::_cached_extract_template_variables`) catches the
+    // exception and falls back to full serialization.
     let tokens = crate::lexer::tokenize(template)?;
     let nodes = parse(&tokens)?;
 
@@ -2807,6 +2828,80 @@ pub(crate) fn validate_variable_name(atom: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Django's `FilterExpression` head-grammar, on a PLAIN `{{ … }}` variable
+/// expression — the part before any `|filter` (#2578).
+///
+/// # The defect this closes
+///
+/// Django's `FilterExpression.__init__` tiles a `{{ … }}` head with
+/// `filter_re`, whose only ways to match a bare head are a numeric constant, a
+/// quoted string constant, `_( … )`, or the variable pattern
+/// `var_re = [\w.]+` (`django/template/base.py:600-700`). Whatever those
+/// alternatives cannot tile is the *remainder*, and Django refuses the
+/// template with `Could not parse the remainder: '<rest>' from '<whole>'`.
+/// djust's engine had no such head check: it stored the whole string as a
+/// variable name, and at render time the name simply did not resolve, so
+/// `{{ va>r }}`, `{{ eggs! }}`, `{{ multi word variable }}`,
+/// `{{ (var.r) }}` and friends rendered `''` instead of refusing.
+///
+/// # Why this is a SECOND function, called from a DIFFERENT site than
+/// [`validate_variable_name`]
+///
+/// djust extends `{{ … }}` with a Jinja-style inline conditional
+/// (`{{ a if cond else b }}` → [`Node::InlineIf`]). Its head is genuinely
+/// several words separated by spaces, so this `[\w.]`-only check MUST NOT run
+/// on it. The call site is therefore the *plain-variable fallthrough* in
+/// `parse_token`, reached only AFTER [`find_if_keyword`] has had its chance to
+/// claim the expression as an inline-if — never the shared
+/// [`validate_variable_name`], which every tag operand and filter argument
+/// also flows through. Moving this before the inline-if branch reddens the
+/// bare-variable inline-if pin (`test_inline_if_bare_variable_expr_survives_grammar_check`).
+///
+/// # The literal exemption reuses the renderer's recogniser (#1646)
+///
+/// A quoted string, a number (including the `-`/`+`/`e` spellings that fall
+/// outside `[\w.]`) and `_( … )` are valid heads that this must NOT refuse.
+/// Rather than restate what a literal is, this asks the SAME
+/// [`crate::renderer::django_literal`] the render path uses — if it changes its
+/// mind about what a constant is, both paths change together. Everything else
+/// must tile fully as `[\w.]+`; the first char it cannot tile begins the
+/// remainder Django reports.
+fn validate_plain_variable_expr(expr: &str) -> Result<()> {
+    // The empty head cannot arrive from a non-empty `{{ … }}` (the empty-tag
+    // refusal fired earlier); a `{{ |upper }}`-style empty part 0 is left to
+    // its existing behaviour rather than widened here (#1079 — fix exactly the
+    // cited grammar cells).
+    if expr.is_empty() {
+        return Ok(());
+    }
+    // A recognised constant literal is a valid head even when it isn't `[\w.]`.
+    if crate::renderer::django_literal(expr).is_some() {
+        return Ok(());
+    }
+    // Django's `var_re = [\w.]+` (Unicode word characters and dots). Rust's
+    // `char::is_alphanumeric` is Unicode-aware, matching Python's `\w` for
+    // every letter/digit; add `_` and `.` explicitly.
+    let head_len: usize = expr
+        .char_indices()
+        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_' || *c == '.')
+        .map(|(i, c)| i + c.len_utf8())
+        .last()
+        .unwrap_or(0);
+    if head_len == expr.len() {
+        return Ok(());
+    }
+    // Django's `TemplateSyntaxError` wording, byte-for-byte identical to the
+    // sibling remainder refusal in `filter_lexer` (#2409) so the two grammar
+    // paths speak with one voice (#1646). It crosses to Python as a
+    // `RuntimeError`, as every djust template error does; the shared property
+    // is that the template does not compile.
+    Err(DjangoRustError::TemplateError(format!(
+        "Could not parse the remainder: '{}' from '{}'",
+        &expr[head_len..],
+        expr
+    )))
 }
 
 /// Run the PARSE-time half of Django's `compile_filter` over one TAG operand
@@ -4042,7 +4137,12 @@ mod tests {
 
     #[test]
     fn test_extract_special_characters_in_text() {
-        let template = r#"<div data-value="{{ value }}">{{ & < > }}</div>"#;
+        // Special characters in TEXT (outside `{{ }}`) must not break variable
+        // extraction. The `{{ & < > }}` this once used is refused as of #2578 —
+        // `& < >` is not a valid variable head, and Django refuses it identically
+        // (`Could not parse the remainder: '& < >' from '& < >'`), so putting the
+        // special characters where they are legal keeps the test's intent.
+        let template = r#"<div data-value="{{ value }}">& &lt; &gt; &amp;</div>"#;
         let vars = extract_template_variables(template).unwrap();
         assert!(vars.contains_key("value"));
     }
@@ -4401,6 +4501,126 @@ mod tests {
             Node::Variable(name, _, _) => assert_eq!(name, "notify_if_late"),
             _ => panic!("Expected Variable node"),
         }
+    }
+
+    // ---- #2578: `{{ … }}` head grammar (validate_plain_variable_expr) ----
+
+    /// Parse a template source and return the compile Result (Ok on parse,
+    /// Err when a node is refused). The sibling `parse_src` above unwraps; this
+    /// keeps the Result so refusals can be asserted.
+    fn parse_src_result(src: &str) -> Result<Vec<Node>> {
+        parse(&tokenize(src).unwrap())
+    }
+
+    /// Django's `FilterExpression` refuses each of these with
+    /// `Could not parse the remainder: '<rest>' from '<whole>'`. The remainders
+    /// are the LIVE-Django output for these exact sources (`test_basic_syntax06`
+    /// / 13-17 / 23 in Django's `template_tests`), pasted verbatim so the test
+    /// is a parity assertion, not a restatement of the implementation (#1046).
+    #[test]
+    fn test_malformed_variable_expressions_are_refused_django_parity_2578() {
+        let cases = [
+            // (source, expected remainder, expected whole)
+            (
+                "{{ multi word variable }}",
+                " word variable",
+                "multi word variable",
+            ),
+            ("{{ va>r }}", ">r", "va>r"),
+            ("{{ (var.r) }}", "(var.r)", "(var.r)"),
+            ("{{ sp%am }}", "%am", "sp%am"),
+            ("{{ eggs! }}", "!", "eggs!"),
+            ("{{ moo? }}", "?", "moo?"),
+            // Cell 23: djust's lexer takes the variable content up to the first
+            // `}}`, exactly like Django, so the head is `moo #} {{ cow` and the
+            // remainder is everything after `moo`.
+            ("{{ moo #} {{ cow }}", " #} {{ cow", "moo #} {{ cow"),
+        ];
+        for (src, remainder, whole) in cases {
+            let err =
+                parse_src_result(src).expect_err(&format!("{src} must be refused, not parsed"));
+            let msg = err.to_string();
+            let expected = format!("Could not parse the remainder: '{remainder}' from '{whole}'");
+            assert!(
+                msg.contains(&expected),
+                "for {src}: expected message to contain {expected:?}, got {msg:?}",
+            );
+        }
+    }
+
+    /// Heads that are outside `[\w.]` but are LEGITIMATE constants, plus the
+    /// ordinary dotted-variable and filtered forms, must still parse. This is
+    /// the gate-off counterweight to the refusal test above: it fails if the
+    /// grammar check is too eager (would false-refuse a valid literal).
+    #[test]
+    fn test_valid_variable_heads_still_parse_2578() {
+        for src in [
+            "{{ 'hello world' }}", // quoted string (spaces, quotes)
+            "{{ \"hi\" }}",        // double-quoted
+            "{{ 42 }}",            // int
+            "{{ 1.5 }}",           // float
+            "{{ -5 }}",            // negative int (leading `-` is outside [\\w.])
+            "{{ 1e-5 }}",          // scientific (`-` outside [\\w.])
+            // (`_("…")` is exercised at the Python level in the #2578 parity
+            // test; `django_literal` translates it, which needs an initialized
+            // interpreter this pure-Rust test does not have.)
+            "{{ a.b.c }}",          // dotted variable
+            "{{ items.0 }}",        // numeric attribute
+            "{{ myvar|upper }}",    // filtered variable
+            "{{ notify_if_late }}", // an `if`-containing name, not inline-if
+        ] {
+            parse_src_result(src).unwrap_or_else(|e| panic!("{src} must parse, got error: {e}"));
+        }
+    }
+
+    /// LOAD-BEARING placement pin. A djust inline-if whose true/false branches
+    /// are BARE variables (`a if cond else b`) has a head that is genuinely
+    /// several `[\w.]`-tiles separated by spaces. It must reach the inline-if
+    /// branch and parse to `Node::InlineIf` — which it only does because
+    /// `validate_plain_variable_expr` runs in the plain-variable fallthrough,
+    /// AFTER `find_if_keyword` has claimed the expression.
+    ///
+    /// GATE-OFF (documented, verified by the implementer, #1468): move the
+    /// `validate_plain_variable_expr(expr_part)?` call to before the inline-if
+    /// branch (the old `validate_variable_name` position) and this test goes
+    /// RED — the bare-variable head `active_class if is_active else
+    /// inactive_class` is refused as `Could not parse the remainder:
+    /// ' if is_active else inactive_class' from '…'`. The quoted-literal
+    /// inline-if forms (`test_inline_if_parses_to_inline_if_node`) do NOT prove
+    /// placement, because `django_literal` mis-accepts a whole quoted-looking
+    /// head as one string constant and so would not redden.
+    #[test]
+    fn test_inline_if_bare_variable_expr_survives_grammar_check() {
+        let nodes =
+            parse_src_result("{{ active_class if is_active else inactive_class }}").unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::InlineIf {
+                true_expr,
+                condition,
+                false_expr,
+                ..
+            } => {
+                assert_eq!(true_expr, "active_class");
+                assert_eq!(condition, "is_active");
+                assert_eq!(false_expr, "inactive_class");
+            }
+            other => panic!("Expected InlineIf node, got {other:?}"),
+        }
+    }
+
+    /// The underscore rule still fires first for a plain `_x` head — the new
+    /// grammar check does not shadow the existing `validate_variable_name`
+    /// refusal (which runs earlier and has its own, more specific message).
+    #[test]
+    fn test_underscore_refusal_precedes_grammar_check_2578() {
+        let err = parse_src_result("{{ _private }}").expect_err("underscore head must refuse");
+        assert!(
+            err.to_string()
+                .contains("Variables and attributes may not begin with underscores"),
+            "got {:?}",
+            err.to_string()
+        );
     }
 }
 
