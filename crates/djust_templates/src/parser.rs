@@ -761,6 +761,30 @@ fn stray_closer_error(spans: &[Span], source: &str, i: usize, tag_name: &str) ->
     ))
 }
 
+/// Django's `Parser.unclosed_block_tag` (`base.py:584`), verbatim: "Unclosed
+/// tag on line %d: '%s'. Looking for one of: %s." (#2581). `token.lineno` is
+/// the OPENING tag's own line — not the point where the token stream ran
+/// out — so `opening_pos` must be the index of the `{% if %}`/`{% for %}`/
+/// `{% block %}` token itself, i.e. `start - 1` at each of
+/// `parse_if_block`/`parse_for_block`/`parse_block`'s call sites (all three
+/// are invoked as `parse_X_block(tokens, spans, source, *i + 1, ...)`).
+/// `command` is the opening tag's own name ("if"/"for"/"block"); `parse_until`
+/// is the terminator set that ran out without being found.
+fn unclosed_tag_error(
+    spans: &[Span],
+    source: &str,
+    opening_pos: usize,
+    command: &str,
+    parse_until: &[&str],
+) -> DjangoRustError {
+    DjangoRustError::TemplateError(format!(
+        "Unclosed tag on line {}: '{}'. Looking for one of: {}.",
+        line_at(spans, source, opening_pos),
+        command,
+        parse_until.join(", ")
+    ))
+}
+
 fn parse_token(
     tokens: &[Token],
     spans: &[Span],
@@ -899,11 +923,15 @@ fn parse_token_inner(
                 }
 
                 "for" => {
+                    // Django's `do_for`: `bits = token.split_contents()`
+                    // includes the tag name, so `len(bits) < 4` is
+                    // `args.len() < 3` here; the message repeats the WHOLE
+                    // tag content, tag name included (#2581).
                     if args.len() < 3 {
-                        return Err(DjangoRustError::TemplateError(
-                            "Invalid for tag syntax. Expected: {% for var in iterable %} or {% for a, b in iterable %}"
-                                .to_string(),
-                        ));
+                        return Err(DjangoRustError::TemplateError(format!(
+                            "'for' statements should have at least four words: for {}",
+                            args.join(" ")
+                        )));
                     }
 
                     // Parse variable names - support tuple unpacking
@@ -920,11 +948,18 @@ fn parse_token_inner(
                     // 2. Tuple unpacking: {% for key, val in items %} → var_names = ["key", "val"]
                     //
                     // Find the "in" keyword to separate var names from iterable
+                    // Django's `do_for` checks `bits[in_index]` POSITIONALLY
+                    // (second-to-last, or third-to-last before a trailing
+                    // "reversed") rather than searching for "in" anywhere —
+                    // djust's lenient linear search is kept as-is (changing
+                    // it is a behavior change, not a message-text one,
+                    // #1079); only the NOT-FOUND message is Django's exact
+                    // text for this shape (#2581).
                     let in_pos = args.iter().position(|arg| arg == "in").ok_or_else(|| {
-                        DjangoRustError::TemplateError(
-                            "Invalid for tag syntax. Expected: {% for var in iterable %}"
-                                .to_string(),
-                        )
+                        DjangoRustError::TemplateError(format!(
+                            "'for' statements should use the format 'for x in y': for {}",
+                            args.join(" ")
+                        ))
                     })?;
 
                     if in_pos == 0 {
@@ -1034,9 +1069,13 @@ fn parse_token_inner(
 
                 "extends" => {
                     // {% extends "parent.html" %}
-                    if args.is_empty() {
+                    // Django's `do_extends`: `bits = token.split_contents()`
+                    // (includes the tag name), `len(bits) != 2` — EXACTLY one
+                    // argument, not merely "at least one" — message
+                    // `"'%s' takes one argument" % bits[0]` (#2581).
+                    if args.len() != 1 {
                         return Err(DjangoRustError::TemplateError(
-                            "Extends tag requires a template name".to_string(),
+                            "'extends' takes one argument".to_string(),
                         ));
                     }
                     // Remove quotes from template name
@@ -1148,10 +1187,17 @@ fn parse_token_inner(
                 }
 
                 "static" => {
-                    // {% static 'path/to/file' %} - generates static file URL
+                    // {% static 'path/to/file' %} - generates static file URL.
+                    // Django's `defaulttags.static`: "'static' takes at
+                    // least one argument (path to file)" (#2581). Note
+                    // `{% get_media_prefix %}` / `{% get_static_prefix %}`
+                    // (a SIBLING tag in Django's `static` library) are not
+                    // implemented here at all — their own message-mismatch
+                    // cell needs that tag built first, not a message swap;
+                    // out of #2581's scope.
                     if args.is_empty() {
                         return Err(DjangoRustError::TemplateError(
-                            "Static tag requires a file path".to_string(),
+                            "'static' takes at least one argument (path to file)".to_string(),
                         ));
                     }
                     // Remove quotes from path if present
@@ -1484,10 +1530,17 @@ fn parse_token_inner(
                 }
 
                 "now" => {
-                    // {% now "format_string" %}
+                    // {% now "format_string" %}. Django's `now` also
+                    // accepts `{% now "fmt" as var %}` (`defaulttags.py`)
+                    // and requires len(bits) == 2 after stripping that
+                    // trailing `as`-clause — djust does not support the
+                    // `as var` binding at all, a separate, pre-existing
+                    // feature gap outside #2581's message-text scope, so
+                    // only the EMPTY-args message is corrected here, not
+                    // widened to Django's exact `!= 1` check.
                     if args.is_empty() {
                         return Err(DjangoRustError::TemplateError(
-                            "now tag requires a format string argument".to_string(),
+                            "'now' statement takes one argument".to_string(),
                         ));
                     }
                     let format = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
@@ -1828,8 +1881,12 @@ fn parse_if_block(
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(
-        "Unclosed if tag".to_string(),
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        "if",
+        &["elif", "else", "endif"],
     ))
 }
 
@@ -1866,8 +1923,12 @@ fn parse_for_block(
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(
-        "Unclosed for tag".to_string(),
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        "for",
+        &["endfor"],
     ))
 }
 
@@ -1911,8 +1972,12 @@ fn parse_block(
         i += 1;
     }
 
-    Err(DjangoRustError::TemplateError(
-        "Unclosed block tag".to_string(),
+    Err(unclosed_tag_error(
+        spans,
+        source,
+        start - 1,
+        "block",
+        &["endblock"],
     ))
 }
 

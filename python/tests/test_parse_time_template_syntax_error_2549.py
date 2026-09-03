@@ -70,8 +70,13 @@ def django_refuses_at_construction(source: str) -> str:
 #: first four were already parse-time inside the engine; the last two are the
 #: render-time refusals promoted by #2549.
 PARSE_TIME_CLASSES = [
-    ("{% for x in %}", "Invalid for tag syntax"),
-    ("{% if x %}", "Unclosed if tag"),
+    # Both needles updated for #2581 (Django-verbatim message text): `for x
+    # in` now hits the "at least four words" check (args=["x","in"], len 2 <
+    # 3) before the missing-iterable shape is even reached, and the unclosed
+    # `{% if %}` now carries Django's own "Unclosed tag on line N" wording
+    # instead of djust's prior "Unclosed if tag".
+    ("{% for x in %}", "at least four words"),
+    ("{% if x %}", "Unclosed tag on line"),
     ("{{ x|nosuchfilter }}", "Unknown filter: nosuchfilter"),
     ("{{ x|upper:1 }}", "upper"),
     ("{% unknowntag a b %}", "Unsupported template tag '{% unknowntag a b %}'"),
