@@ -837,25 +837,66 @@ class TestTheDifferentialTable:
         )
 
     @pytest.mark.parametrize(("row", "path"), CELLS)
-    def test_the_djust_column_is_todays_bytes(self, row: Row, path: str) -> None:
+    def test_the_default_column_answers_django_outside_the_held_set(
+        self, row: Row, path: str
+    ) -> None:
+        """Movement 3's headline gate (#2539), and the one that changed hands.
+
+        Until the flip this was ``test_the_djust_column_is_todays_bytes`` and
+        asserted the RECORDED column with no context manager — i.e. the OFF
+        bytes, by default. The default is now ON, so the ambient claim is the
+        LAZY one: outside the held sets a cell answers Django. The recorded
+        column did not move and is still asserted, one test down, under an
+        EXPLICIT ``resolve_lazy(False)`` — the hatch axis.
+        """
         actual = observe(RENDER[path], row.source, row.make_ctx())
+        assert_lazy_column(row, path, actual)
+
+    @pytest.mark.parametrize(("row", "path"), CELLS)
+    def test_the_default_is_byte_identical_to_the_flag_pushed_on(self, row: Row, path: str) -> None:
+        """The flip's actual content, per cell: the SHIPPED DEFAULT and an
+        explicit ``resolve_lazy(True)`` render the same bytes.
+
+        The two tests either side of this one assert the default against
+        Django and the pushed flag against Django; both would stay green if
+        the default silently selected a THIRD behaviour that happened to agree
+        with Django on the rows under test. This asserts the two states are the
+        same state — which is the whole claim of movement 3 — and it is what
+        goes red if `config.py`'s default and the Rust `Cell` default ever
+        disagree again (#1646).
+        """
+        ambient = observe(RENDER[path], row.source, row.make_ctx())
+        with resolve_lazy(True):
+            pushed = observe(RENDER[path], row.source, row.make_ctx())
+        assert ambient == pushed, (
+            f"row {row.id} on {path}: the shipped default renders {ambient!r} but the flag "
+            f"pushed ON renders {pushed!r}. The default is no longer the ON path."
+        )
+
+    @pytest.mark.parametrize(("row", "path"), CELLS)
+    def test_the_flag_off_column_is_the_committed_bytes(self, row: Row, path: str) -> None:
+        """The ESCAPE HATCH: the switch OFF renders exactly what the table
+        records. Until movement 3 this was the same claim the ambient tests
+        made — the default was OFF — and its value was that it made the claim
+        EXPLICITLY. After the flip it is the only place the recorded column is
+        asserted, which is what keeps the hatch a real rollback rather than a
+        setting nothing exercises."""
+        with resolve_lazy(False):
+            actual = observe(RENDER[path], row.source, row.make_ctx())
         assert_column_is_todays_bytes(row, path, actual)
 
     @pytest.mark.parametrize(("row", "path"), CELLS)
     def test_wrong_rows_are_wrong_and_right_rows_are_right(self, row: Row, path: str) -> None:
-        actual = observe(RENDER[path], row.source, row.make_ctx())
-        assert_wrong_rows_are_wrong_and_right_rows_are_right(row, path, actual)
+        """The derived (non-stored) twin of the test above, on the hatch axis.
 
-    @pytest.mark.parametrize(("row", "path"), CELLS)
-    def test_the_flag_off_column_is_the_committed_bytes(self, row: Row, path: str) -> None:
-        """Movement 2's headline gate: the switch OFF renders exactly what the
-        table records, EXPLICITLY off rather than by default. The two tests
-        above are the same claim in the ambient state; this one is the claim
-        with the flag pushed, which is what a project that switched it off and
-        back on gets."""
+        Moved under an explicit ``resolve_lazy(False)`` by movement 3 for the
+        same reason its sibling was: it reads the recorded column, so ambiently
+        it now asserts the OFF bytes against an ON render. Its value is
+        unchanged — a fixed shape fails loudly by name rather than by a stored
+        byte comparison."""
         with resolve_lazy(False):
             actual = observe(RENDER[path], row.source, row.make_ctx())
-        assert_column_is_todays_bytes(row, path, actual)
+        assert_wrong_rows_are_wrong_and_right_rows_are_right(row, path, actual)
 
     @pytest.mark.parametrize(("row", "path"), CELLS)
     def test_the_flag_on_column_answers_django_outside_the_stated_set(
@@ -919,10 +960,22 @@ class TestThePlainEntriesAgree:
         ],
     )
     def test_a_raw_entry_answers_the_backends_bytes(self, row: Row, entry) -> None:
+        """The #1646 twin check, run in the AMBIENT state on purpose.
+
+        The backend pushes the ADR-027 flag per render; the two raw entries do
+        NOT — they inherit the thread-local, whose value on a thread that never
+        pushed is the Rust-side default. So this is the one test that fails if
+        `config.py`'s default and `RESOLVE_LAZY`'s default disagree: the
+        backend would resolve one way and the raw entries the other. Movement 3
+        flipped both together, which is why the first assertion still holds.
+        """
         via_backend = observe(plain_render, row.source, row.make_ctx())
         via_entry = observe(entry, row.source, row.make_ctx())
         assert via_entry == via_backend, f"row {row.id}: {entry.__name__} diverges from the backend"
-        assert via_backend == row.plain, f"row {row.id}: the backend column itself moved"
+        # The backend's own column, under the shipped default — the lazy one
+        # since movement 3. The recorded (OFF) column is asserted by
+        # `TestTheDifferentialTable::test_the_flag_off_column_is_the_committed_bytes`.
+        assert_lazy_column(row, "plain", via_backend)
 
 
 class TestTheTableIsSelfConsistent:
@@ -1108,7 +1161,10 @@ settings.configure(
         }
     ],
     # ADR-027's kill-switch, taken from argv so the child exercises the REAL
-    # config path (#2539). Absent -> the shipped default, which is OFF.
+    # config path (#2539). The key is always set EXPLICITLY, never left to the
+    # shipped default -- so `lazy` is the ON axis and its absence is the
+    # escape-hatch axis, whichever way the default points. (Before movement 3
+    # the default was OFF and the two coincided; they no longer do.)
     LIVEVIEW_CONFIG={"template_resolve_lazy": sys.argv[3:4] == ["lazy"]},
 )
 urlpatterns = []
@@ -1270,12 +1326,20 @@ class TestTheTwoCrashes:
     @pytest.mark.parametrize("path", PATHS)
     def test_the_child_renders_a_non_crash_row_like_the_in_process_entry(self, path: str) -> None:
         """The child harness is the same path and not a no-op: row A through
-        the child equals row A through the in-process column."""
+        the child equals row A through the in-process column.
+
+        BOTH sides run on the HATCH axis. ``run_child`` without ``lazy=True``
+        sets the key explicitly ``False`` in the child's ``LIVEVIEW_CONFIG``,
+        so after movement 3 the in-process side has to be pushed OFF too or
+        the two are compared across different flag states — which is a
+        harness-fidelity bug, not a finding (#1650).
+        """
         proc = run_child("A", path)
         assert proc.returncode == 0, proc.stderr[-2000:]
         row = ROW_BY_ID["A"]
         assert child_rendered(proc) == recorded(row, path) == MARKER_DICT
-        assert observe(RENDER[path], row.source, row.make_ctx()) == MARKER_DICT
+        with resolve_lazy(False):
+            assert observe(RENDER[path], row.source, row.make_ctx()) == MARKER_DICT
 
 
 # ---------------------------------------------------------------------------
@@ -1300,9 +1364,30 @@ class TestDoNotCallRendersTheMarkerDict2502:
     which the flip deletes."""
 
     def test_the_real_entry_renders_the_marker_dict(self) -> None:
+        """#2502's bug, pinned on the HATCH axis where it still lives."""
         row = ROW_BY_ID["A"]
-        assert liveview_render(row.source, row.make_ctx()) == MARKER_DICT
+        with resolve_lazy(False):
+            assert liveview_render(row.source, row.make_ctx()) == MARKER_DICT
         assert django_render(row.source, row.make_ctx()).startswith("&lt;bound method")
+
+    def test_the_shipped_default_closes_2502(self) -> None:
+        """...and the flip closes it (#2539 movement 3).
+
+        The pin above records the mechanism; this one records that the shipped
+        default no longer has it. Under the default the lookup walks the live
+        object, so ``do_not_call_in_templates`` is honoured by the SEGMENT
+        WALK — the bound method is rendered as-is, which is Django's answer —
+        instead of by a conversion that mangles the stamped method into the
+        marker dict on its way through.
+        """
+        row = ROW_BY_ID["A"]
+        django = django_render(row.source, row.make_ctx())
+        for path in PATHS:
+            actual = observe(RENDER[path], row.source, row.make_ctx())
+            assert actual == django, (
+                f"#2502 on {path}: the default renders {actual!r}, Django renders {django!r}"
+            )
+            assert actual != MARKER_DICT
 
     @pytest.mark.parametrize("render", ALL_FOUR)
     def test_the_guard_is_load_bearing(self, render) -> None:
@@ -1328,18 +1413,41 @@ class TestFilteredAndDictViewOperands2504:
 
     @pytest.mark.parametrize("row_id", ["N", "N2", "N0", "N0b"])
     def test_the_real_entry_reaches_no_attribute(self, row_id: str) -> None:
+        """#2504's bug, pinned on the HATCH axis where it still lives."""
         row = ROW_BY_ID[row_id]
-        assert liveview_render(row.source, row.make_ctx()) == row.liveview
+        with resolve_lazy(False):
+            assert liveview_render(row.source, row.make_ctx()) == row.liveview
         assert row.liveview.strip(",") == ""
         assert django_render(row.source, row.make_ctx()).strip(","), "premise: Django renders it"
+
+    @pytest.mark.parametrize("row_id", ["N", "N2", "N0", "N0b"])
+    def test_the_shipped_default_closes_2504(self, row_id: str) -> None:
+        """...and the flip closes it (#2539 movement 3).
+
+        The sidecar could not reach these because a `list` is `_JSON_FRIENDLY`
+        and never entered it. Under the default the object inside the list
+        carries its own handle, so the loop variable resolves against the live
+        object and the containing list stops mattering.
+        """
+        row = ROW_BY_ID[row_id]
+        django = django_render(row.source, row.make_ctx())
+        actual = liveview_render(row.source, row.make_ctx())
+        assert actual == django, (
+            f"#2504 row {row_id}: the default renders {actual!r}, Django renders {django!r}"
+        )
+        assert actual.strip(","), "the attribute is still unreachable under the default"
 
     def test_the_alias_mechanism_is_the_discriminating_one_on_the_plain_path(self) -> None:
         """Sibling: the UNFILTERED operand on the plain path resolves (an alias
         is registered), the filtered one does not — so the empty cells above
-        are the alias guard refusing, not the walk failing."""
+        are the alias guard refusing, not the walk failing.
+
+        On the HATCH axis: the alias mechanism is what the flip REPLACES, so
+        this discriminates only while the old walk is the one running."""
         unfiltered, filtered = ROW_BY_ID["N0"], ROW_BY_ID["N"]
-        assert plain_render(unfiltered.source, unfiltered.make_ctx()) == CLASS_LEVEL_2
-        assert plain_render(filtered.source, filtered.make_ctx()) == ","
+        with resolve_lazy(False):
+            assert plain_render(unfiltered.source, unfiltered.make_ctx()) == CLASS_LEVEL_2
+            assert plain_render(filtered.source, filtered.make_ctx()) == ","
 
 
 @pytest.mark.django_db
@@ -1351,21 +1459,47 @@ class TestShadowingResolvesAgainstTheOuterObject2505:
     @pytest.mark.parametrize("row_id", ["M2", "M3", "M6"])
     @pytest.mark.parametrize("path", PATHS)
     def test_the_outer_object_answers(self, row_id: str, path: str) -> None:
+        """#2505's bug, pinned on the HATCH axis where it still lives."""
         row = ROW_BY_ID[row_id]
-        actual = RENDER[path](row.source, row.make_ctx())
+        with resolve_lazy(False):
+            actual = RENDER[path](row.source, row.make_ctx())
         assert "OUTER" in actual and actual == recorded(row, path)
         assert "OUTER" not in django_render(row.source, row.make_ctx())
+
+    @pytest.mark.parametrize("row_id", ["M2", "M3", "M6"])
+    @pytest.mark.parametrize("path", PATHS)
+    def test_the_shipped_default_closes_2505(self, row_id: str, path: str) -> None:
+        """...and the flip closes it (#2539 movement 3).
+
+        The shadowing bug was the by-NAME sidecar answering the OUTER object
+        for a loop/`with` variable that reuses its name. Under the default the
+        bound value carries its own handle, so the name is never looked up in
+        a by-name map and cannot collide — the structural cure rather than a
+        shadowing rule.
+        """
+        row = ROW_BY_ID[row_id]
+        django = django_render(row.source, row.make_ctx())
+        actual = RENDER[path](row.source, row.make_ctx())
+        assert actual == django, (
+            f"#2505 row {row_id} on {path}: the default renders {actual!r}, "
+            f"Django renders {django!r}"
+        )
+        assert "OUTER" not in actual, "the outer object still answers under the default"
 
     def test_the_controls_pin_the_head_short_circuit(self) -> None:
         """M4/M5 with a SCALAR outer `x` (no sidecar entry for the head): the
         plain path is CORRECT unfiltered — the alias resolves — and empty
         filtered. This is the cell a fix to the `raw.contains_key(head)`
-        short-circuit that broke the alias path would redden."""
+        short-circuit that broke the alias path would redden.
+
+        On the HATCH axis: it pins the OLD walk's short-circuit, which the
+        default no longer routes through."""
         m4, m5 = ROW_BY_ID["M4"], ROW_BY_ID["M5"]
-        assert plain_render(m4.source, m4.make_ctx()) == CLASS_LEVEL_2
-        assert plain_render(m5.source, m5.make_ctx()) == ",,"
-        assert liveview_render(m4.source, m4.make_ctx()) == ",,"
-        assert liveview_render(m5.source, m5.make_ctx()) == ",,"
+        with resolve_lazy(False):
+            assert plain_render(m4.source, m4.make_ctx()) == CLASS_LEVEL_2
+            assert plain_render(m5.source, m5.make_ctx()) == ",,"
+            assert liveview_render(m4.source, m4.make_ctx()) == ",,"
+            assert liveview_render(m5.source, m5.make_ctx()) == ",,"
 
 
 def render_page_shell(template: str, *, with_serialized_context: bool, card_cls=ShellCard) -> str:
@@ -1448,8 +1582,13 @@ class TestTheHarnessIsTheRealPath:
             calls.append(1)
             return original(self, *args, **kwargs)
 
+        # Pushed OFF so the asserted bytes are the recorded ones regardless of
+        # which way the shipped default points; the CLAIM is the spy, and the
+        # render is here only to prove it was a real one (#2539 movement 3
+        # flipped the default, which is why this needs the explicit push).
         with mock.patch.object(RustBridgeMixin, "_sync_state_to_rust", spy):
-            assert liveview_render("{{ o.keep }}", {"o": Mutating()}) == MARKER_DICT
+            with resolve_lazy(False):
+                assert liveview_render("{{ o.keep }}", {"o": Mutating()}) == MARKER_DICT
         assert calls, "the LiveView column did not go through _sync_state_to_rust"
 
     def test_no_code_in_this_file_calls_the_stand_in(self) -> None:
@@ -1934,9 +2073,39 @@ class TestTheFlagReachesEveryRenderEntry2539:
             f"config.template_resolve_lazy_enabled(): {offenders}"
         )
 
-    def test_the_default_is_off(self) -> None:
-        """Movement 2's contract in one assertion. Movement 3 flips it, and
-        this line is what it has to come here and change."""
+    def test_the_default_is_on(self) -> None:
+        """Movement 3's contract in one assertion (#2539).
+
+        Was ``test_the_default_is_off`` through movement 2, whose docstring
+        said "movement 3 flips it, and this line is what it has to come here
+        and change". It came here and changed.
+        """
         from djust.config import LiveViewConfig
 
-        assert LiveViewConfig._defaults["template_resolve_lazy"] is False
+        assert LiveViewConfig._defaults["template_resolve_lazy"] is True
+
+    def test_the_rust_default_tracks_the_python_default(self) -> None:
+        """The two literals that must move together (#1646).
+
+        ``crates/djust_core/src/lib.rs``'s ``RESOLVE_LAZY`` thread-local is
+        what a thread answers when nothing pushed — a direct
+        ``_rust.render_template`` caller, or ``ComponentActor::render``. While
+        movement 2 shipped the Python default OFF the two agreed by accident;
+        after the flip a stale ``Cell::new(false)`` would mean a fresh thread
+        silently resolves by the OLD mechanism. Asserted on a thread that has
+        NEVER pushed, which is the only place the Rust literal is observable.
+        """
+        import threading
+
+        from djust import _rust
+        from djust.config import LiveViewConfig
+
+        seen: list[bool] = []
+        t = threading.Thread(target=lambda: seen.append(_rust.resolve_lazy_enabled()))
+        t.start()
+        t.join()
+        assert seen == [LiveViewConfig._defaults["template_resolve_lazy"]], (
+            f"a thread that never pushed reads {seen!r}, but the shipped default is "
+            f"{LiveViewConfig._defaults['template_resolve_lazy']!r} — the Rust `Cell` default "
+            f"in crates/djust_core/src/lib.rs has drifted from config.py's."
+        )

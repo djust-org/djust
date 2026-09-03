@@ -1831,10 +1831,11 @@ fn clear_live_handles_in(value: &mut Value) {
     }
 }
 
-/// Set the CALLING THREAD's ADR-027 lazy-resolution flag (#2539 movement 2).
+/// Set the CALLING THREAD's ADR-027 lazy-resolution flag (#2539).
 ///
-/// `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default **OFF** — with it off
-/// the engine's bytes are byte-identical to the pre-#2539 ones. Pushed by
+/// `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default **ON** since movement 3
+/// — `False` is the escape hatch, and with it off the engine's bytes are
+/// byte-identical to the pre-#2539 ones. Pushed by
 /// `djust.render_env.apply_render_env` beside the timezone (#2209) and the
 /// number format (#2221), for the reason that module exists: a render path
 /// cannot acquire one ambient setting and miss the other (#1646).

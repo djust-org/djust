@@ -818,10 +818,13 @@ class TestIgnoreFailuresSubstitutesNone2539:
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db
 class TestTheSwitch2539:
-    def test_the_flag_defaults_off_and_round_trips(self) -> None:
+    def test_the_flag_defaults_on_and_round_trips(self) -> None:
+        """Was ``..._defaults_off_...`` through movement 2; #2539 movement 3
+        flipped the shipped default and this is one of the two lines that
+        state it (the other is the net's ``test_the_default_is_on``)."""
         from djust.config import config, template_resolve_lazy_enabled
 
-        assert config._defaults["template_resolve_lazy"] is False
+        assert config._defaults["template_resolve_lazy"] is True
         with resolve_lazy(True):
             assert template_resolve_lazy_enabled() is True
             assert _rust.resolve_lazy_enabled() is True
@@ -829,26 +832,46 @@ class TestTheSwitch2539:
             assert template_resolve_lazy_enabled() is False
             assert _rust.resolve_lazy_enabled() is False
 
-    def test_a_thread_that_never_pushed_reads_off(self) -> None:
+    def test_a_thread_that_never_pushed_reads_the_default(self) -> None:
         """The Rust default, which is what an embedder and any not-yet-rendered
         worker thread get. A `sync_to_async` pool thread that has never called
-        `apply_render_env` must not inherit another thread's flag."""
+        `apply_render_env` must not inherit another thread's flag.
+
+        Two claims in one assertion, and #2539 movement 3 is why they are
+        stated separately below: the flag is THREAD-LOCAL (the worker does not
+        see the ON pushed on this thread) and the Rust default TRACKS the
+        Python one. Asserting the literal `False` conflated them while the
+        shipped default happened to be OFF; against `_defaults` the test is
+        about the coupling rather than the value (#1200), so it keeps working
+        whichever way a future movement points the default.
+        """
         import threading
 
+        from djust.config import LiveViewConfig
+
+        shipped = LiveViewConfig._defaults["template_resolve_lazy"]
         seen: list = []
 
         def worker():
             seen.append(_rust.resolve_lazy_enabled())
 
-        with resolve_lazy(True):
+        # Push the OPPOSITE of the shipped default on this thread, so "the
+        # worker read the default" cannot be "the worker inherited this one".
+        with resolve_lazy(not shipped):
+            assert _rust.resolve_lazy_enabled() is (not shipped)
             thread = threading.Thread(target=worker)
             thread.start()
             thread.join()
-        assert seen == [False], "the flag is not thread-local"
+        assert seen == [shipped], (
+            f"a thread that never pushed read {seen!r}; expected the shipped default "
+            f"{shipped!r}. Either the flag is not thread-local, or the Rust `Cell` default "
+            f"has drifted from config.py's."
+        )
 
-    def test_a_failed_config_read_pushes_the_flag_OFF(self, monkeypatch) -> None:
-        """The kill-switch fails CLOSED, and that is where it differs from the
-        two ambient settings beside it.
+    @pytest.mark.parametrize("shipped_default", [True, False])
+    def test_a_failed_config_read_pushes_the_DEFAULT(self, monkeypatch, shipped_default) -> None:
+        """The kill-switch fails to the SHIPPED DEFAULT, and that is where it
+        differs from the two ambient settings beside it.
 
         The timezone and number-format handoffs return early on a failed read,
         keeping the thread's previous value — right for a FORMAT, because the
@@ -856,23 +879,34 @@ class TestTheSwitch2539:
         resolution MECHANISM, and the thread is reused: returning early would
         let a render whose config read failed inherit the previous render's
         mechanism, which is the opposite of what a kill-switch is for.
+
+        Parametrized over BOTH possible defaults (#2539 movement 3), with
+        ``_defaults`` monkeypatched, so the test asserts the COUPLING —
+        "a failed read lands on whatever is shipped" — rather than the literal
+        value. Pinning the literal is what made the movement-2 version of this
+        test (``..._pushes_the_flag_OFF``) go red on the flip for a reason that
+        had nothing to do with the behaviour it was guarding (#1200).
         """
         from djust import config as config_module
+        from djust.config import LiveViewConfig
         from djust.render_env import apply_resolve_lazy
 
-        # Start with the flag genuinely ON, so "OFF afterwards" cannot be the
-        # state it was already in.
-        with resolve_lazy(True):
-            assert _rust.resolve_lazy_enabled() is True
+        monkeypatch.setitem(LiveViewConfig._defaults, "template_resolve_lazy", shipped_default)
+
+        # Start from the OPPOSITE of the default, so landing on the default
+        # cannot be the state the thread was already in.
+        with resolve_lazy(not shipped_default):
+            assert _rust.resolve_lazy_enabled() is (not shipped_default)
 
             def exploding() -> bool:
                 raise RuntimeError("settings unreadable")
 
             monkeypatch.setattr(config_module, "template_resolve_lazy_enabled", exploding)
             apply_resolve_lazy()
-            assert _rust.resolve_lazy_enabled() is False, (
-                "a config read that raised left the previous value in place — the flag "
-                "must fail CLOSED to the shipped default"
+            assert _rust.resolve_lazy_enabled() is shipped_default, (
+                f"a config read that raised left the previous value in place, or landed on a "
+                f"hardcoded literal — it must fail to the shipped default "
+                f"({shipped_default!r})"
             )
 
     @pytest.mark.parametrize("render", ENTRIES)

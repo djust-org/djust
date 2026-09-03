@@ -949,10 +949,11 @@ impl Context {
     /// of the several `Ok(None)` returns below — a per-branch fallback is the
     /// shape that leaves one branch behind.
     fn resolve_without_builtins(&self, key: &str) -> crate::Result<Option<Value>> {
-        // ADR-027's ONE routing point (#2539 movement 2). Behind
-        // `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default OFF — with the
-        // flag off this is a single thread-local `Cell<bool>` read and the
-        // engine's bytes are byte-identical to the pre-#2539 ones.
+        // ADR-027's ONE routing point (#2539). Behind
+        // `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default **ON** since
+        // movement 3 — with the flag off (the escape hatch) this is a single
+        // thread-local `Cell<bool>` read and the engine's bytes are
+        // byte-identical to the pre-#2539 ones.
         //
         // FIRST, not after `get` — and that placement is the whole of the
         // difference between "some dotted lookups resolve" and Django's

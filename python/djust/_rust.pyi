@@ -320,10 +320,10 @@ def django_value_repr_enabled() -> bool:
 def set_resolve_lazy(enabled: bool) -> None:
     """Set the CALLING THREAD's ADR-027 lazy-resolution flag (#2539).
 
-    `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default False. When on, a
-    dotted template lookup resolves against the LIVE Python object one segment
-    at a time — Django's `Variable._resolve_lookup` — instead of against an
-    eager conversion of it.
+    `LIVEVIEW_CONFIG["template_resolve_lazy"]`, default **True** since #2539
+    movement 3 (`False` is the escape hatch). When on, a dotted template lookup
+    resolves against the LIVE Python object one segment at a time — Django's
+    `Variable._resolve_lookup` — instead of against an eager conversion of it.
 
     Thread-local for the reason `set_active_timezone` below is, and NOT a
     per-`Context` field: half the behaviour it gates lives inside the
@@ -336,7 +336,8 @@ def set_resolve_lazy(enabled: bool) -> None:
     The thread-local is SET, not scoped: a thread keeps the last pushed value.
     Every framework render entry pushes on each render, so this only matters
     for a caller reaching `render_template` / `render_template_with_dirs`
-    directly — it inherits whatever the thread last rendered with.
+    directly — it inherits whatever the thread last rendered with, and on a
+    FRESH thread that is the Rust-side default, which tracks the Python one.
     """
 
 def resolve_lazy_enabled() -> bool:

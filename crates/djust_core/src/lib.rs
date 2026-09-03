@@ -2638,10 +2638,29 @@ pub fn django_value_repr() -> bool {
 }
 
 thread_local! {
-    /// ADR-027's kill-switch, per THREAD (#2539 movement 2). Default `false`,
-    /// so a build with no Python side — and any thread that never rendered —
-    /// behaves exactly as before.
-    static RESOLVE_LAZY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// ADR-027's kill-switch, per THREAD (#2539). Default `true` since
+    /// movement 3 (#2539) flipped the shipped default.
+    ///
+    /// # Why this default has to track `config.py`'s
+    ///
+    /// This value is what a thread that never called
+    /// `djust.render_env.apply_resolve_lazy` answers — a caller reaching
+    /// `_rust.render_template` / `render_template_with_dirs` DIRECTLY, and
+    /// `ComponentActor::render`, which never pushes. While movement 2 shipped
+    /// the Python default OFF the two agreed; after the flip a `false` here
+    /// would mean a fresh thread silently resolves by the OLD mechanism while
+    /// every framework entry resolves by the new one — two defaults seeded
+    /// from one intent, which is the #1646 shape. So the two literals move
+    /// together, and `TestThePlainEntriesAgree` in
+    /// `python/tests/test_adr027_characterization_net_2539.py` is what goes
+    /// red if they ever drift apart again.
+    ///
+    /// Fail-direction: `true` is also the *closed* direction for the
+    /// serialization floor. The old sidecar walk this replaces keeps
+    /// `protect_sidecar`'s `Err(_) => obj` arm, the unguarded `get_item` that
+    /// segfaults on a class object, and the `__dict__` dump; the sink has none
+    /// of those. See `python/djust/render_env.py::apply_resolve_lazy`.
+    static RESOLVE_LAZY: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// Set this thread's ADR-027 lazy-resolution flag (#2539).
@@ -2662,15 +2681,18 @@ thread_local! {
 /// ambient setting and miss the other".
 ///
 /// A nested render inherits the enclosing render's value, exactly as the
-/// timezone does; a thread that never called `apply_render_env` reads
-/// `false`. That is also what disposes of the `{% include … only %}`
+/// timezone does; a thread that never called `apply_render_env` reads the
+/// shipped default (`true` since #2539 movement 3). That is also what
+/// disposes of the `{% include … only %}`
 /// fresh-`Context` problem `auto_call` has (`renderer.rs`'s `Context::new()`
 /// there does not carry `auto_call`): a thread-local is not per-`Context`.
 pub fn set_resolve_lazy(enabled: bool) {
     RESOLVE_LAZY.with(|c| c.set(enabled));
 }
 
-/// This thread's ADR-027 lazy-resolution flag (#2539). `false` by default.
+/// This thread's ADR-027 lazy-resolution flag (#2539). `true` by default
+/// since movement 3; `LIVEVIEW_CONFIG["template_resolve_lazy"] = False` is
+/// the escape hatch.
 ///
 /// Read at exactly two sites, and that is the whole of the routing:
 /// [`opaque_gate`]'s attribute-bearing decline (which decides whether an

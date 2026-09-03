@@ -125,6 +125,8 @@ if not settings.configured:  # pragma: no cover — import-time bootstrap
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
+from adr027_flag import resolve_lazy  # noqa: E402
+
 from djust import _rust  # noqa: E402
 
 TPL = '{{ p|json_script:"d" }}'
@@ -142,10 +144,20 @@ class _Obj:
 
 
 class _WithDict:
-    """A populated `__dict__`, which the boundary turns into a mapping."""
+    """A populated `__dict__`, which the boundary turns into a mapping — on
+    the ADR-027 escape hatch. Under the shipped default the object crosses as
+    `Encoded` and the boundary sees its `str()` instead (#2539 movement 3).
+
+    ``__str__`` is defined for the same reason `_Obj`'s is: without it the
+    default's answer carries the instance ADDRESS, and no row of a recorded
+    table can compare against an address.
+    """
 
     def __init__(self) -> None:
         self.name = "n"
+
+    def __str__(self) -> str:
+        return "WITHDICT"
 
     def __hash__(self) -> int:  # hashable, so it can also be a KEY
         return 1
@@ -314,8 +326,26 @@ class TestTheDivergentSetReDerived:
 
         The boundary turns an arbitrary object into its `__dict__`, so
         `json_script` writes a real JSON object where Django raises.
+
+        On the ESCAPE-HATCH axis since #2539 movement 3 — see the sibling for
+        what the shipped default writes, and why it is the better answer.
         """
-        assert _body(_djust({"a": _WithDict()})) == '{"a": {"name": "n"}}'
+        with resolve_lazy(False):
+            assert _body(_djust({"a": _WithDict()})) == '{"a": {"name": "n"}}'
+
+    def test_under_the_default_it_emits_the_objects_string(self) -> None:
+        """The same cell under the shipped default (#2539 movement 3).
+
+        The `__dict__` bulk-dump arm is not reached, so `json_script` writes
+        `str(o)` rather than a JSON object built from the instance dict. Worth
+        pinning by name in THIS file rather than only in the ADR-027 net,
+        because `json_script` writes into the PAGE: the change narrows what an
+        arbitrary object contributes there from every public instance
+        attribute to one string the class chose. That is the fail-safe
+        direction, and it is a real reduction in what an unreviewed
+        `{{ o|json_script }}` can put in front of a reader.
+        """
+        assert _body(_djust({"a": _WithDict()})) == '{"a": "WITHDICT"}'
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +398,12 @@ class TestTheValuePositionCannotSeeTheTypeAtAll:
         "refused,stand_in",
         [
             ({"a": _Obj()}, {"a": "OBJ"}),
-            ({"a": _WithDict()}, {"a": {"name": "n"}}),
+            # Under the shipped default the object crosses as `Encoded` and
+            # the boundary sees `str(o)`, so the stand-in that is byte-identical
+            # to it is a STRING rather than the instance dict (#2539 movement
+            # 3). The dict stand-in is the hatch's, pinned by
+            # `test_an_object_with_attributes_emits_a_nested_OBJECT`.
+            ({"a": _WithDict()}, {"a": "WITHDICT"}),
             ({"a": frozenset({1})}, {"a": "frozenset({1})"}),
             ({"a": {1}}, {"a": "{1}"}),
             ({"a": complex(1, 2)}, {"a": "(1+2j)"}),

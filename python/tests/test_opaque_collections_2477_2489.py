@@ -54,6 +54,8 @@ pytest.importorskip("django")
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
 
+from adr027_flag import resolve_lazy  # noqa: E402
+
 from djust import _rust  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
 
@@ -175,10 +177,22 @@ DECLINED: dict[str, str] = {
     # Re-iterable, no `__len__`, unbounded. Declined at `OPAQUE_ITEM_CAP`
     # rather than truncated: a short collection is a silently wrong answer.
     "unbounded-reiterable": "an unsized iterable past OPAQUE_ITEM_CAP",
-    # The `__dict__` bulk-dump arm's cell. Retiring that arm is a separate,
-    # much larger decision.
+    # The `__dict__` bulk-dump arm's cell. Retiring that arm was "a separate,
+    # much larger decision" when this table was written; #2539 movement 3 is
+    # that decision, so this row is now declined only on the ESCAPE HATCH.
+    # See DECLINED_ONLY_ON_THE_HATCH.
     "truthy-attrs": "a TRUTHY non-iterable object with public attributes",
 }
+
+#: The subset of ``DECLINED`` that ADR-027's flag moves (#2539 movement 3).
+#:
+#: The other three rows are flag-INDEPENDENT and stay declined forever: a
+#: one-shot iterator must not be enumerated at CONVERSION whichever resolution
+#: mechanism runs (that decline is what keeps a generator from being consumed
+#: before ``{% for %}`` sees it), and the unbounded cap is a bound on reading,
+#: not a routing choice. Only the ``__dict__`` bulk-dump cell is a routing
+#: choice, and the flip makes it the other one.
+DECLINED_ONLY_ON_THE_HATCH = frozenset({"truthy-attrs"})
 
 EARLIER: dict[str, str] = {
     "bytes": "PyO3's sequence extraction — a Value::List of its ints",
@@ -468,12 +482,38 @@ class TestTheClassIsEnumeratedWithADecisionEach:
         assert set(_Members.build()) == CARRIED
 
     def test_every_declined_shape_keeps_the_string_path(self) -> None:
+        """On the ESCAPE-HATCH axis, where the whole table still holds."""
+        with resolve_lazy(False):
+            for key, value in declined_values().items():
+                assert key in DECLINED
+                assert not _rust.crosses_as_encoded(value), (
+                    f"{key} ({DECLINED[key]}) is now CARRIED on the hatch. That may be "
+                    f"right, but it is a decision: move its row and record what changed"
+                )
+
+    def test_under_the_default_only_the_bulk_dump_row_moves(self) -> None:
+        """The flip's effect on this table, per row (#2539 movement 3).
+
+        Both directions, so the split is a claim rather than a label: the
+        ``__dict__`` bulk-dump row IS carried under the shipped default, and
+        the three flag-independent rows are STILL declined. If the flip had
+        also lifted the one-shot decline it would enumerate a caller's
+        generator at conversion — a new wrong answer rather than a fix — and
+        this test is where that shows up.
+        """
         for key, value in declined_values().items():
-            assert key in DECLINED
-            assert not _rust.crosses_as_encoded(value), (
-                f"{key} ({DECLINED[key]}) is now CARRIED. That may be right, "
-                f"but it is a decision: move its row and record what changed"
-            )
+            carried = _rust.crosses_as_encoded(value)
+            if key in DECLINED_ONLY_ON_THE_HATCH:
+                assert carried, (
+                    f"{key} ({DECLINED[key]}) is still declined under the shipped default — "
+                    f"ADR-027 routes it to the sink, so the gate must admit it"
+                )
+            else:
+                assert not carried, (
+                    f"{key} ({DECLINED[key]}) is now CARRIED under the default. This decline "
+                    f"is flag-INDEPENDENT: enumerating it at conversion is a new wrong "
+                    f"answer, not progress"
+                )
 
     def test_every_earlier_arm_value_is_untouched_by_this_one(self) -> None:
         """The group the first version of the normalizer's gate got wrong.
@@ -545,14 +585,37 @@ class TestTheDeclinesAreRecordedInTheDivergingDirection:
         attributes, so this arm keeps it — and `{{ p }}` keeps rendering the
         dict repr rather than `str(o)`. That cell diverges from Django and did
         before; retiring the arm is a separate decision.
+
+        #2539 movement 3 is that decision, so this is now the HATCH's
+        behaviour. The default's is asserted below: `{{ p.name }}` still
+        answers (through the handle instead of the map) and `{{ p }}` becomes
+        Django's `str(o)`.
         """
         value = instance("Presenter")
         value.name = "ok"
-        assert not _rust.crosses_as_encoded(value)
+        with resolve_lazy(False):
+            assert not _rust.crosses_as_encoded(value)
+            assert _rust.render_template("{{ p.name }}", {"p": value}) == "ok"
+            assert (
+                _rust.render_template("{{ p }}", {"p": value})
+                == "{&#x27;name&#x27;: &#x27;ok&#x27;}"
+            )
+
+    def test_under_the_default_the_same_object_crosses_as_encoded(self) -> None:
+        """The same cell under the shipped default (#2539 movement 3).
+
+        The attribute keeps answering — that is the part a downstream template
+        depends on — and the BARE spelling stops being the attribute map. The
+        two are asserted together because "the arm was retired" is only good
+        news if the lookups it was carrying still resolve.
+        """
+        value = instance("Presenter")
+        value.name = "ok"
+        assert _rust.crosses_as_encoded(value)
         assert _rust.render_template("{{ p.name }}", {"p": value}) == "ok"
-        assert (
-            _rust.render_template("{{ p }}", {"p": value}) == "{&#x27;name&#x27;: &#x27;ok&#x27;}"
-        )
+        bare = _rust.render_template("{{ p }}", {"p": value})
+        assert bare != "{&#x27;name&#x27;: &#x27;ok&#x27;}"
+        assert "Presenter" in bare, bare
 
     def test_a_FALSY_attribute_object_is_claimed_by_this_arm_not_that_one(self) -> None:
         """#2478's cell, and the reason the decline needs BOTH qualifiers."""
@@ -575,9 +638,16 @@ class TestTheNormalizerCarriesExactlyTheModelledClass:
             )
 
     def test_a_declined_or_earlier_value_still_takes_its_old_route(self) -> None:
-        for key, value in declined_values().items():
-            got = normalize_django_value(value)
-            assert isinstance(got, str), (key, got)
+        """The declined half on the HATCH — `normalize_django_value`'s
+        stringification is driven by `crosses_as_encoded`, so the row ADR-027
+        moves (`truthy-attrs`) takes the carried route under the shipped
+        default. The flag-independent rows are asserted on both axes by
+        `test_under_the_default_only_the_bulk_dump_row_moves`.
+        """
+        with resolve_lazy(False):
+            for key, value in declined_values().items():
+                got = normalize_django_value(value)
+                assert isinstance(got, str), (key, got)
         # A `bytes` is NOT stringified by the normalizer — it has no branch and
         # is not `crosses_as_encoded`, so it reaches the `str()` fallback. That
         # is the behaviour `{{ p }}` == `b'ab'` depends on.
@@ -830,7 +900,15 @@ class TestThePredicateAgreesWithTheRealConversion:
         presenter.expensive = _Loud()
         # Truthy, not iterable, has a public attribute -> the `__dict__` arm's
         # cell, declined by the gate on the KEYS alone.
-        assert _rust.crosses_as_encoded(presenter) is False
+        with resolve_lazy(False):
+            assert _rust.crosses_as_encoded(presenter) is False
+            assert touched == [], touched
+
+        # The gate ANSWERS differently under the shipped default (#2539
+        # movement 3 — the object is carried), but the claim this test makes is
+        # about COST, not about the answer, and it holds on both axes: the
+        # default admits the object without looking at its attributes at all.
+        assert _rust.crosses_as_encoded(presenter) is True
         assert touched == [], touched
 
 
