@@ -350,6 +350,14 @@ useful record.
    overflow — a second mechanism the step description did not anticipate. Six of the seven remain
    ERROR for unrelated reasons; only `test_subscriptable_class` reaches OK.
 
+   "Crash" is the scoreboard's word and it understates the finding. Reproduced outside the Django
+   suite entirely, in a subprocess so a segfault could not be scored as a test failure: a plain
+   object whose `__dict__` forms a reference cycle, rendered by a bare `{{ o }}`, **kills the
+   process with SIGSEGV (exit 139)** under `template_resolve_lazy=False`, and returns normally
+   (exit 0) under the default. The pre-flip path — the one shipped through 1.1 — is therefore a
+   remotely-reachable worker kill for an ordinary cyclic object, and that, rather than the six
+   scoreboard cells, is the strongest argument for the flip.
+
 2. **"the `xfail(strict=True)` markers come off" (Step 4) — right, and the movement-2 plan's
    correction of it was wrong.** That plan read only the movement-1 net, found stated sets rather
    than xfails, and concluded the claim described a mechanism that did not exist. Two real
@@ -366,10 +374,43 @@ useful record.
    the template names, so the `__dict__` it used to iterate is never iterated and cannot resize.
 
 4. **"the `{{ o }}` flip for presenter objects is the thing to look for" (Step 4) — true, and
-   incomplete.** `{{ o|json_script }}` moves too, and in the same direction: an arbitrary object
-   contributes `str(o)` to the page rather than a JSON object built from every public instance
-   attribute. That is a reduction in what an unreviewed spelling can put in front of a reader, so
-   it is worth naming as a security-relevant improvement rather than only as a parity change.
+   incomplete.** `{{ o|json_script }}` moves with it: an arbitrary object contributes `str(o)` to
+   the page rather than a JSON object built from every public instance attribute.
+
+   The first version of this erratum item then called that "a reduction in what an unreviewed
+   spelling can put in front of a reader … worth naming as a security-relevant improvement." **That
+   was wrong, and the correction is the useful record.** The change is not monotone. The old
+   `__dict__` dump FILTERED underscore-prefixed attributes; `str(o)` filters nothing, and Python's
+   own `@dataclass` repr prints every field including `_private` ones — as do `attrs` and any
+   hand-written debug `__repr__`. Measured on the shipped build:
+
+   | shape | escape hatch (`__dict__` dump) | shipped default (`str(o)`) | direction |
+   |---|---|---|---|
+   | `@dataclass` with a `_session_token` field | `{user, password, api_key}` | `DataclassCreds(user=…, password=…, _session_token='TOK-abc123', api_key=…)` | **wider** |
+   | `__str__` interpolating `self._secret` | `{"label": "innocuous"}` | `ReprLeaks(label=innocuous, secret=SSN-123-45-6789)` | **wider** |
+   | attributes, no `__str__` | `{password, token, username}` | `<Foo object at 0x…>` | narrower |
+   | `__slots__`, no `__dict__` | `<Foo object at 0x…>` | unchanged | same |
+
+   So the accurate statement is: **the flip changes the SHAPE of what an unreviewed `{{ o }}` /
+   `{{ o|json_script }}` discloses, not its size.** It narrows for an object with no `__str__` and
+   widens for any object whose `__str__`/`__repr__` exposes more than its public `__dict__`. This is
+   Django's behaviour and therefore the intended target, but it must not be documented as a
+   monotone reduction — a reader who takes "security improvement" at face value will skip the
+   template audit that the widening direction requires.
+
+   **What IS monotone, and is the claim that matters for the floor:** Django models do not take this
+   route on either setting. They stay on the eager, floored path, and `{{ u }}`, `{{ u.password }}`,
+   `{{ u.username }}` and `{{ u|json_script }}` are byte-identical with the flag on and off —
+   including a proxy model with a deliberately leaky `__str__`. The serialization floor is unmoved
+   by this flip (net rows E1-E4).
+
+   The wording error survived to review because the claim had exactly one pinning fixture,
+   `_WithDict`, whose `__str__` movement 3 ADDED and which returns a constant — the one shape that
+   structurally cannot exhibit the widening. Citation exact, invariant false, fixture unable to
+   notice: the #1867 pattern. The falsifying cases now live in
+   `python/tests/test_json_script_refusal_decision_2429.py::TestTheDirectionIsShapeDependent`, which
+   asserts both axes of the same object so the direction is read off a measurement rather than a
+   summary.
 
 One decision the steps left open is settled here: **Step 5 deletes the flag and the enumeration
 arms together, in the first minor after a full release has soaked (1.3.0), superseding "removal at

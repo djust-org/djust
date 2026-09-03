@@ -586,13 +586,33 @@ difference is only that it is now applied by the segment walk rather
 than by a conversion that ran before it, so it holds at every segment
 and for values bound by `{% for %}` and `{% with %}`.
 
-**What to check when upgrading.** The `{{ obj }}` bare spelling is the
-one to grep for: a template that relied on an object rendering its
-attribute mapping will now show its `__str__`. Give such a class a
-`__str__`, or spell the attribute you meant. `{{ obj|json_script }}`
-changes for the same reason and in the same direction — it now emits
-`str(obj)` rather than a JSON object built from every public instance
-attribute.
+**What to check when upgrading.**
+
+1. **A class placed in a context is now instantiated — its `__init__`
+   runs.** This is the headline. `{"MyForm": MyForm}` in a context is a
+   common spelling, and a class that previously rendered as an inert
+   repr now runs its constructor on every render. Django has always done
+   this; djust did not. If a class in one of your contexts has a
+   constructor with side effects or required arguments, either pass an
+   instance or set `do_not_call_in_templates = True` on the class.
+2. **`{{ obj }}` now renders `str(obj)`.** A template that relied on an
+   object rendering its attribute mapping will show its `__str__`
+   instead. Give such a class a `__str__`, or spell the attribute you
+   meant.
+3. **`{{ obj|json_script }}` changes shape for the same reason — and the
+   direction depends on the object, so audit rather than assume.** It
+   now emits `str(obj)` rather than a JSON object built from every
+   public instance attribute. The old dump filtered underscore-prefixed
+   attributes and `str(obj)` filters nothing, so an object with no
+   `__str__` discloses *less* (`<Foo object at 0x…>`) while a
+   `@dataclass` — whose generated repr prints every field, `_private`
+   included — or any object whose `__str__` names private state
+   discloses *more*. Check what the `__str__` of anything you place bare
+   in a template, or pass to `json_script`, actually says.
+
+Django **models** are unaffected by all of this: they stay on djust's
+eager, floored path on both settings, and the serialization floor keeps
+`{{ user.password }}` empty either way.
 
 **Kill-switch:** `LIVEVIEW_CONFIG["template_resolve_lazy"] = False`
 restores the pre-1.2.0 behaviour exactly. It is a rollback, not a

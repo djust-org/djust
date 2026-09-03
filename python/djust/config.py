@@ -719,15 +719,27 @@ def template_resolve_lazy_enabled() -> bool:
     cannot move the default while leaving the fallback behind (#1646).
 
     Before movement 3 that default was OFF and the argument was "OFF is the
-    conservative direction". Since the flip it is ON, and the two arguments now
-    point the same way: ON is *also* the closed direction for the
-    serialization floor. The eager sidecar walk that OFF selects keeps
+    conservative direction". Since the flip it is ON, and the two arguments
+    still point the same way — but for a narrower reason than the first draft
+    of this docstring claimed. The eager sidecar walk that OFF selects keeps
     ``protect_sidecar``'s ``Err(_) => obj`` arm (an exception during a lookup
-    hands the raw object back), the unguarded ``get_item`` that segfaults on a
-    class object, and the ``__dict__`` dump; the sink has none of those. So a
-    render whose config read failed gets the mechanism a project that never
-    heard of ADR-027 has, which is the same one every other render on the box
-    is using.
+    hands the raw object back) and the unguarded ``get_item`` that SEGFAULTS on
+    a class object; the sink has neither. Those are the failure-mode arguments,
+    and they hold.
+
+    What does NOT hold is the tempting extra step of calling ON monotonically
+    less disclosing. The eager walk also does the ``__dict__`` dump, which
+    FILTERS underscore-prefixed attributes — where ``str(o)`` filters nothing.
+    So for a ``@dataclass``, or any object whose ``__str__`` names private
+    state, ON discloses MORE. The direction is shape-dependent, and the
+    falsifying cases are pinned in
+    ``test_json_script_refusal_decision_2429.py::TestTheDirectionIsShapeDependent``.
+    Django models are the case that IS unmoved: they stay on the eager, floored
+    path under both settings.
+
+    Either way, a render whose config read failed gets the mechanism a project
+    that never heard of ADR-027 has, which is the same one every other render
+    on the box is using.
     """
     default = template_resolve_lazy_default()
     try:
