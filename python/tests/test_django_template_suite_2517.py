@@ -443,10 +443,13 @@ CANARY_MODULE = textwrap.dedent(
             out = Engine().from_string("{{ x }}").render(Context({"x": "hi"}))
             self.assertEqual(out, "hi")
 
-        def test_2_incomplete_if_must_raise_at_parse(self):
-            # Django raises TemplateSyntaxError while parsing; djust renders "yes".
+        def test_2_with_missing_args_must_raise_at_parse(self):
+            # Django raises TemplateSyntaxError while parsing; djust renders "x".
+            # (`{% if foo == %}` was the canary until #2576 ported smartif's
+            # operator grammar; `{% with %}` with no assignment is the next
+            # still-open block-tag grammar gap.)
             with self.assertRaises(TemplateSyntaxError):
-                Engine().from_string("{% if foo == %}yes{% endif %}").render(Context({}))
+                Engine().from_string("{% with %}x{% endwith %}").render(Context({}))
 
         def test_3_ifchanged(self):
             # Django renders "ab"; djust raises on the unsupported tag
@@ -508,8 +511,8 @@ class TestEmpiricalCanary:
         text, _ = djust_run
         lines = parsed_lines(text)
         assert lines["canary_tests.Canary.test_1_variable_renders_the_same"].startswith("OK    ")
-        assert lines["canary_tests.Canary.test_2_incomplete_if_must_raise_at_parse"].startswith(
-            "FAIL  canary_tests.Canary.test_2_incomplete_if_must_raise_at_parse | AssertionError: "
+        assert lines["canary_tests.Canary.test_2_with_missing_args_must_raise_at_parse"].startswith(
+            "FAIL  canary_tests.Canary.test_2_with_missing_args_must_raise_at_parse | AssertionError: "
             "TemplateSyntaxError not raised"
         )
         assert lines["canary_tests.Canary.test_3_ifchanged"].startswith(
