@@ -97,15 +97,48 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-#: Libraries that resolve (so a template that loads ``static``, ``i18n`` or
-#: ``live_tags`` keeps parsing) but are NOT bridged. Django's own — each is
-#: its own row, and several carry raw block-consuming tags this bridge must
-#: refuse. And djust's own ``djust.templatetags.*`` — the Rust engine already
-#: has native handlers for their tags (``live_render``, ``dj_flash``, …), and
-#: ``live_tags`` carries a raw block tag (``colocated_hook``) that the loud
-#: refusal would otherwise turn into a parse error for every sticky-child
-#: template (measured: 15 suite failures).
-_UNBRIDGED_PREFIXES = ("django.templatetags.", "djust.templatetags.")
+#: Libraries that resolve but are NOT bridged: djust's own
+#: ``djust.templatetags.*`` — the Rust engine already has native handlers
+#: for their tags (``live_render``, ``dj_flash``, …), and ``live_tags``
+#: carries a raw block tag (``colocated_hook``) that the loud refusal would
+#: otherwise turn into a parse error for every sticky-child template
+#: (measured: 15 suite failures).
+_UNBRIDGED_PREFIXES = ("djust.templatetags.",)
+
+#: Django's own libraries this row bridges (#2558). Every OTHER
+#: ``django.templatetags.*`` (``static``, ``cache``, …) still resolves and
+#: parses exactly as #2547 left it — those rows have not shipped.
+_DJANGO_LIBRARIES_BRIDGED = frozenset(
+    {
+        "django.templatetags.i18n",
+        "django.templatetags.l10n",
+        "django.templatetags.tz",
+    }
+)
+
+#: Tags of the bridged Django libraries whose body must keep rendering in
+#: Rust — native parser scope nodes (#2558, §4 of the plan). Skipped at
+#: bridge time so a ``{% load i18n %}`` never installs a Python handler
+#: over the native node; the parser arms are gated on the loader having
+#: armed the names (``_rust.arm_scope_tags``).
+_NATIVE_SCOPE_TAGS = {
+    "django.templatetags.i18n": ("language",),
+    "django.templatetags.l10n": ("localize",),
+    "django.templatetags.tz": ("localtime", "timezone"),
+}
+
+#: The raw block-consuming tags (#2558, §2 of the plan): the body is DATA —
+#: the msgid Django's ``render_token_list`` builds from the SOURCE tokens —
+#: and crosses to Django un-rendered through ``LibraryRawBlockTagHandler``.
+_RAW_BLOCK_TAGS = frozenset({"blocktranslate", "blocktrans"})
+
+#: The ``tz`` FILTERS that need a datetime OBJECT on the wire (#2216: the
+#: Rust ``Value`` has no date variant, so a datetime arrives as its ISO
+#: string and Django's ``do_timezone`` answers ``""`` for a non-datetime —
+#: a silent blank). Refused by name at bridge time with a filter that
+#: raises: loud, not blank. The two ``l10n`` filters (``localize`` /
+#: ``unlocalize``) work on numbers and bridge normally.
+_TZ_FILTER_REFUSALS = frozenset({"localtime", "utc", "timezone"})
 
 #: ``Engine.default_builtins`` — the Rust natives. Never bridged as
 #: ``OPTIONS['builtins']`` entries.
@@ -195,6 +228,33 @@ def install_loader() -> bool:
     return True
 
 
+def install_translator() -> bool:
+    """Install the ``_("…")`` translator hook (#2558).
+
+    The callable receives the %-DOUBLED msgid and returns the string the
+    ACTIVE language renders — read per RENDER, on the render thread, which
+    is the issue's "no registration-time capture" requirement: gettext
+    resolves ``translation.get_language()`` live. ``mark_safe`` on the msgid
+    keeps Django's ``SafeData``-preserving ``gettext`` path
+    (``trans_real.py:387-388``) — a quoted literal translates to raw bytes
+    exactly as ``{{ _("<") }}`` must render ``<``.
+
+    Idempotent; ``False`` without the Rust extension.
+    """
+    try:
+        from djust._rust import register_translator
+    except ImportError:
+        return False
+    from django.utils import translation
+    from django.utils.safestring import mark_safe
+
+    def translate(msgid: str) -> str:
+        return str(translation.gettext(mark_safe(msgid)))
+
+    register_translator(translate)
+    return True
+
+
 def register_backend_libraries(libraries: Dict[str, str], builtins: List[str]) -> None:
     """A ``DjustTemplateBackend``'s ``OPTIONS['libraries']`` / ``['builtins']``.
 
@@ -261,6 +321,7 @@ def reassert() -> None:
         try:
             from djust._rust import (
                 register_block_tag_handler,
+                register_raw_block_tag_handler,
                 register_tag_handler,
                 unregister_block_tag_handler,
                 unregister_tag_handler,
@@ -268,7 +329,11 @@ def reassert() -> None:
         except ImportError:
             return
         for name, (_label, handler) in list(_owned_tags.items()):
-            if isinstance(handler, LibraryBlockTagHandler):
+            if isinstance(handler, LibraryRawBlockTagHandler):
+                register_raw_block_tag_handler(name, handler.end_name, handler)
+                unregister_tag_handler(name)
+                unregister_block_tag_handler(name)
+            elif isinstance(handler, LibraryBlockTagHandler):
                 register_block_tag_handler(name, handler.end_name, handler)
                 unregister_tag_handler(name)
             else:
@@ -352,16 +417,80 @@ def _library_module(library: Any) -> str:
 
 def _bridge_library(label: str, library: Any) -> None:
     """Register every filter and tag of ``library`` with the Rust engine."""
-    if _library_module(library).startswith(_UNBRIDGED_PREFIXES):
-        # ``{% load static %}`` / ``{% load i18n %}`` resolve and parse as
-        # they did before this module existed; their tags are separate rows.
+    module = _library_module(library)
+    if module.startswith(_UNBRIDGED_PREFIXES):
+        return
+    if module.startswith("django.templatetags.") and module not in _DJANGO_LIBRARIES_BRIDGED:
+        # ``{% load static %}`` resolves and parses as it did before this
+        # module existed; Django's other libraries are still separate rows.
         return
     from .template_filters import bridge_library_filters
 
-    bridge_library_filters(library)
+    _arm_scope_tags(module)
+    refuse = _TZ_FILTER_REFUSALS if module == "django.templatetags.tz" else frozenset()
+    bridge_library_filters(library, refuse=refuse)
+    native = _NATIVE_SCOPE_TAGS.get(module, ())
     for name, compile_func in library.tags.items():
-        _bridge_tag(label, name, compile_func)
+        if name in _RAW_BLOCK_TAGS:
+            _bridge_raw_block_tag(label, name, compile_func)
+        elif name in native:
+            continue
+        else:
+            _bridge_tag(label, name, compile_func)
     _loaded[label] = library
+
+
+def _arm_scope_tags(module: str) -> None:
+    """Arm the parser's native scope nodes for a bridged library (#2558)."""
+    names = _NATIVE_SCOPE_TAGS.get(module)
+    if not names:
+        return
+    try:
+        from djust._rust import arm_scope_tags
+    except ImportError:
+        logger.warning("djust._rust extension not available; scope tags stay unarmed")
+        return
+    arm_scope_tags(list(names))
+
+
+def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None:
+    """Register a raw block-consuming tag through the raw-body kind (#2558).
+
+    The collision policy is the SAME ``_may_override`` rule the inline
+    registry applies — a name djust itself owns is never displaced.
+
+    ``blocktranslate`` and ``blocktrans`` share ONE compile function, so the
+    ``_handlers`` dedup the inline path uses would give both names the FIRST
+    handler's ``end_name`` — ``{% blocktranslate %}`` hunting for
+    ``{% endblocktrans %}`` (measured in this row's first pass). A
+    raw-block handler is per-NAME by construction: one is minted per name
+    even when the compile function is shared.
+    """
+    if not _may_override(name):
+        logger.warning(
+            "Template library '%s' registers tag '%s', which djust already provides; "
+            "the library's version is not bridged (the built-in wins process-wide).",
+            label,
+            name,
+        )
+        return
+    try:
+        from djust._rust import register_raw_block_tag_handler, unregister_tag_handler
+    except ImportError:
+        logger.warning(
+            "djust._rust extension not available; tag '%s' from '%s' will not work "
+            "in the Rust engine",
+            name,
+            label,
+        )
+        return
+    handler = _handlers.get(compile_func)
+    if not isinstance(handler, LibraryRawBlockTagHandler) or handler.end_name != "end" + name:
+        handler = LibraryRawBlockTagHandler(label, name, compile_func)
+        _handlers[compile_func] = handler
+    register_raw_block_tag_handler(name, handler.end_name, handler)
+    unregister_tag_handler(name)
+    _owned_tags[name] = (label, handler)
 
 
 def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None:
@@ -391,7 +520,11 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         return
     handler = _handlers.get(compile_func)
     if kind == "simple_block_tag":
-        if not isinstance(handler, LibraryBlockTagHandler):
+        # Per-NAME, not per-compile-function (#2558): decorator aliases
+        # (`@register.simple_block_tag` + `@register.tag("other")`) share one
+        # compile function but each name needs its own end tag/token, exactly
+        # as the raw-block kind below needs its own end_name.
+        if not isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
             handler = LibraryBlockTagHandler(label, name, compile_func)
             _handlers[compile_func] = handler
         register_block_tag_handler(name, handler.end_name, handler)
@@ -406,7 +539,14 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         register_tag_handler(name, handler)
         unregister_block_tag_handler(name)
     else:
-        if handler is None or isinstance(handler, LibraryBlockTagHandler):
+        # Per-NAME, not per-compile-function (#2558): `translate`/`trans` are
+        # one compile function registered under two names, and Django's
+        # `do_translate` quotes `bits[0]` — the ACTUAL tag spelling — in
+        # every syntax error. A handler shared across names raised
+        # "'trans' takes at least one argument" for `{% translate %}` (6
+        # suite cells). The per-(name, args) node cache inside the handler
+        # already keys on the name, so this widens nothing.
+        if handler is None or isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
             handler = LibraryTagHandler(label, name, compile_func)
             _handlers[compile_func] = handler
         register_tag_handler(name, handler)
@@ -592,6 +732,25 @@ def _template_backend() -> Any:
     return _LoaderBackend()
 
 
+def _materialize_lazy(value: Any) -> Any:
+    """``str()`` every lazy ``Promise`` reachable in a binding value (#2558).
+
+    Walks dicts and lists; a ``SafeString`` proxy keeps its marker (``str``
+    of a ``SafeString`` is a ``SafeString``). Anything that is not a promise
+    crosses untouched.
+    """
+    from django.utils.functional import Promise
+
+    if isinstance(value, Promise):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _materialize_lazy(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        materialized = [_materialize_lazy(v) for v in value]
+        return type(value)(materialized) if isinstance(value, tuple) else materialized
+    return value
+
+
 def _render_node(node: Any, context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
     """``node.render`` on a Django ``Context`` over ``context``; the output
     ``mark_safe``'d (see the module docstring) and the context writes the
@@ -607,6 +766,13 @@ def _render_node(node: Any, context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any
     bindings = {
         key: value for key, value in after.items() if key not in before or before[key] is not value
     }
+    # A `gettext_lazy` proxy must cross the boundary as the STRING it
+    # renders as (#2558): `get_language_info` binds a dict whose
+    # `name_translated` is a lazy proxy, and the Rust `Value` extraction
+    # mangled the un-materialized proxy into a list of characters. Only
+    # lazy PROMISES are materialized — a list, a dict or a model instance a
+    # sibling might consume as an object must cross as itself.
+    bindings = {key: _materialize_lazy(value) for key, value in bindings.items()}
     if output is None:
         output = ""
     return mark_safe(str(output)), bindings
@@ -703,11 +869,112 @@ class LibraryBlockTagHandler(LibraryTagHandler):
             raise
 
 
+def _stub_template_with(string_if_invalid: str, debug: bool) -> Any:
+    """A ``_StubTemplate`` whose engine carries the CURRENT render's
+    ``string_if_invalid`` (#2558).
+
+    ``BlockTranslateNode.render`` resolves a MISSING placeholder variable to
+    ``context.template.engine.string_if_invalid`` — that is how the suite's
+    i18n34 / invalidstr07 cells render ``INVALID`` under the scoreboard's
+    second engine. The scoreboard's ``DjustEngine`` IS a real Django
+    ``Engine``, so its attribute is read directly; the plain
+    ``DjustTemplateBackend`` does not carry one and contributes ``""``.
+    """
+    engine = _StubEngine()
+    engine.string_if_invalid = string_if_invalid
+    engine.debug = debug
+    template = _StubTemplate()
+    template.engine = engine
+    return template
+
+
+class LibraryRawBlockTagHandler:
+    """The raw-body block handler (#2558): the body is Django's to parse.
+
+    The Rust parser hands over the body as UN-rendered template source (the
+    msgid data ``blocktranslate`` builds its catalog key from). This handler
+    re-lexes it with Django's OWN ``Lexer``, appends the end token Django's
+    compile function breaks on, and calls the library's OWN compile function
+    on a synthetic ``Parser`` — so ``with`` / ``count`` / ``plural`` /
+    ``context`` / ``trimmed`` / ``asvar``, both legacy spellings, and all
+    seven syntax errors are Django's code with Django's text, byte for byte.
+    Compiled once per ``(args, body)`` like Django compiles once per
+    template; ``BlockTranslateNode`` is stateless so the cache is sound.
+
+    ``count`` with a non-number raises Django's render-time
+    ``TemplateSyntaxError`` from inside the node; it crosses WHOLE through
+    the ``RETURNS_BINDINGS`` exception channel (#2547) — parity is the
+    point, a LiveView page 500s exactly as Django's does.
+    """
+
+    RETURNS_BINDINGS = True
+
+    def __init__(self, label: str, name: str, compile_func: Callable[..., Any]) -> None:
+        self.label = label
+        self.name = name
+        self.compile_func = compile_func
+        self.end_name = "end" + name
+        self._nodes: Dict[Tuple[Tuple[str, ...], str], Any] = {}
+
+    def _compile(self, args: List[str], body: str) -> Any:
+        from django.template.base import Lexer, Token, TokenType
+
+        key = (tuple(args), body)
+        node = self._nodes.get(key)
+        if node is None:
+            tokens = Lexer(body).tokenize()
+            tokens.append(Token(TokenType.BLOCK, self.end_name))
+            node = self.compile_func(_parser(tokens), _token(self.name, args))
+            self._nodes[key] = node
+        return node
+
+    def _string_if_invalid(self) -> Tuple[str, bool]:
+        backend = _current_backend.get()
+        if backend is None:
+            return "", False
+        return (
+            str(getattr(backend, "string_if_invalid", "") or ""),
+            bool(getattr(backend, "debug", False)),
+        )
+
+    def render(  # type: ignore[override]
+        self, args: List[str], body: str, context: Dict[str, Any]
+    ) -> Tuple[Any, Dict[str, Any]]:
+        from django.template import Context
+        from django.utils.safestring import mark_safe
+
+        try:
+            before = dict(context)
+            # autoescape=True until #2556 wires the engine's flag through
+            # (§3 of the #2558 plan); the kwarg below is where it lands.
+            ctx = Context(dict(context), autoescape=True)
+            string_if_invalid, debug = self._string_if_invalid()
+            ctx.template = _stub_template_with(string_if_invalid, debug)
+            output = self._compile(list(args), body).render(ctx)
+            after = ctx.dicts[-1]
+            bindings = {
+                key: value
+                for key, value in after.items()
+                if key not in before or before[key] is not value
+            }
+            if output is None:
+                output = ""
+            # Django never re-escapes a node's output (the module docstring):
+            # BlockTranslateNode escaped its placeholders INSIDE the node and
+            # the `%`-formatted result is final text.
+            return mark_safe(str(output)), bindings
+        except BaseException as exc:
+            _stamp(exc)
+            raise
+
+
 __all__ = [
     "LibraryBlockTagHandler",
+    "LibraryRawBlockTagHandler",
     "LibraryTagHandler",
     "RefusedTagHandler",
     "install_loader",
+    "install_translator",
     "load_libraries",
     "owned_tags",
     "raised_by_library",

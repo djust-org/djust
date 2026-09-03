@@ -519,6 +519,11 @@ fn node_is_element_bearing(node: &Node) -> bool {
         | Node::RustComponent { .. }
         | Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
+        | Node::RawBlockCustomTag { .. }
+        | Node::Language { .. }
+        | Node::Timezone { .. }
+        | Node::Localize { .. }
+        | Node::LocalTime { .. }
         | Node::UnsupportedTag { .. } => true,
     }
 }
@@ -623,6 +628,67 @@ fn sibling_updates<L: TemplateLoader>(
             let (html, bindings) = call_block_custom_tag(name, args, children, context, loader)?;
             Ok(Some(SiblingEffect { html, bindings }))
         }
+        Node::RawBlockCustomTag { name, args, body } => {
+            // Every raw-block handler declares RETURNS_BINDINGS by
+            // construction (the kind exists for the #2547 bridge), so there
+            // is no non-bindings twin to shadow this arm (#2129).
+            let (html, bindings) = call_raw_block_tag(name, args, body, context)?;
+            Ok(Some(SiblingEffect { html, bindings }))
+        }
+        Node::Cycle {
+            values,
+            name: Some(cycle_name),
+        } => {
+            // `{% cycle … as c %}` (#2558): render the current operand AND
+            // persist the named state so `{% cycle c %}` advances. First use
+            // seeds the state; later uses read it.
+            let (state_key, vals_key) = cycle_state_keys(cycle_name);
+            let idx = match context.get(&state_key) {
+                Some(Value::Integer(i)) => *i as usize,
+                _ => 0,
+            };
+            let idx = idx % values.len();
+            let (html, safe) = resolve_cycle_operand(&values[idx], context)?;
+            let current = Value::String(html.clone());
+            Ok(Some(SiblingEffect {
+                html,
+                bindings: vec![
+                    SiblingBinding {
+                        name: cycle_name.clone(),
+                        value: current,
+                        safe,
+                    },
+                    SiblingBinding {
+                        name: state_key,
+                        value: Value::Integer(((idx + 1) % values.len()) as i64),
+                        safe: false,
+                    },
+                    SiblingBinding {
+                        name: vals_key,
+                        value: Value::List(
+                            values
+                                .iter()
+                                .map(|v| Value::String(v.trim().to_string()))
+                                .collect(),
+                        ),
+                        safe: false,
+                    },
+                ],
+            }))
+        }
+        Node::Cycle { values, name: None }
+            if values.len() == 1 && django_literal(values[0].trim()).is_none() =>
+        {
+            // `{% cycle c %}` — Django's named-cycle REFERENCE (#2558).
+            // Advances the named cycle `c` when one is in flight; without
+            // one, falls through to the historical behaviour (resolve `c`
+            // as a variable → "" on a miss).
+            let reference = values[0].trim();
+            match advance_named_cycle(reference, context)? {
+                Some((html, bindings)) => Ok(Some(SiblingEffect { html, bindings })),
+                None => Ok(None),
+            }
+        }
         Node::AssignTag { name, args } => {
             // Resolve variable references in args, mirroring only the JSON
             // *encoding* of `Node::CustomTag` (structured list/object values
@@ -689,6 +755,87 @@ fn sibling_updates<L: TemplateLoader>(
         }]))),
         _ => Ok(None),
     }
+}
+
+/// The context keys a NAMED cycle (`{% cycle … as c %}`) persists through
+/// (#2558): the operand list and the next index, so a later bare
+/// `{% cycle c %}` — Django's named-cycle reference — advances instead of
+/// resolving `c` as an (empty) variable. Persisted through the SAME
+/// sibling-binding channel `Node::AssignTag` uses.
+fn cycle_state_keys(name: &str) -> (String, String) {
+    (
+        format!("__djust_cycle_state_{name}"),
+        format!("__djust_cycle_vals_{name}"),
+    )
+}
+
+/// Resolve ONE cycle operand — literals first (`django_literal`,
+/// #2558: `_("Password")` is a translatable literal, not a variable), then
+/// the failure-ignoring resolver, with the same escape rules the anonymous
+/// path has always applied. Returns the rendered text and whether it is a
+/// runtime `SafeString`.
+fn resolve_cycle_operand(val: &str, context: &Context) -> Result<(String, bool)> {
+    let val = val.trim();
+    let (resolved, runtime_safe) = match django_literal(val) {
+        Some((value, safe)) => (value, safe),
+        None => get_value_safe_ignoring_failures(val, context)?,
+    };
+    let output = if matches!(resolved, Value::Missing) {
+        // Django's `FilterExpression` miss under `ignore_failures` is `""`.
+        String::new()
+    } else if runtime_safe {
+        resolved.to_string()
+    } else {
+        filters::html_escape(&resolved.to_string())
+    };
+    Ok((output, runtime_safe))
+}
+
+/// Advance a NAMED cycle: read the persisted operand list + index, resolve
+/// the current operand, and return the html plus the bindings the NEXT
+/// sibling needs (the cycle var → the value, the persisted state).
+fn advance_named_cycle(
+    name: &str,
+    context: &Context,
+) -> Result<Option<(String, Vec<SiblingBinding>)>> {
+    let (state_key, vals_key) = cycle_state_keys(name);
+    let Some(vals) = context.get(&vals_key) else {
+        return Ok(None);
+    };
+    let list: Vec<String> = match vals {
+        Value::List(items) => items
+            .iter()
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .collect(),
+        _ => return Ok(None),
+    };
+    if list.is_empty() {
+        return Ok(None);
+    }
+    let idx = match context.get(&state_key) {
+        Some(Value::Integer(i)) => (*i as usize) % list.len(),
+        _ => 0,
+    };
+    let (html, safe) = resolve_cycle_operand(&list[idx], context)?;
+    let current = Value::String(html.clone());
+    Ok(Some((
+        html,
+        vec![
+            SiblingBinding {
+                name: name.to_string(),
+                value: current,
+                safe,
+            },
+            SiblingBinding {
+                name: state_key,
+                value: Value::Integer(((idx + 1) % list.len()) as i64),
+                safe: false,
+            },
+        ],
+    )))
 }
 
 /// One name a context-mutating node binds for the siblings that follow it.
@@ -828,6 +975,98 @@ fn call_block_custom_tag<L: TemplateLoader>(
     )
     .map_err(|e| DjangoRustError::TemplateError(format!("Block tag '{}' error: {}", name, e)))?;
     Ok((html, Vec::new()))
+}
+
+/// Call a [`Node::RawBlockCustomTag`]'s handler — the ONE site for both the
+/// standalone arm and `sibling_updates` (#2558).
+///
+/// The args cross as literal TOKENS (`TagArg::plain` — Django resolves them
+/// itself, the `RESOLVE_ARG_POSITIONS = frozenset()` contract of every
+/// bridged handler, #2547) and the body as the un-rendered source string.
+fn call_raw_block_tag(
+    name: &str,
+    args: &[String],
+    body: &str,
+    context: &Context,
+) -> Result<(String, Vec<SiblingBinding>)> {
+    let plain: Vec<TagArg> = args.iter().map(|a| TagArg::plain(a.clone())).collect();
+    let context_map = context.to_hashmap();
+    let raw_py = context.raw_py_objects();
+    let (html, bindings) = crate::registry::call_raw_block_handler_with_bindings(
+        name,
+        &plain,
+        body,
+        &context_map,
+        raw_py,
+        &context.safe_key_paths(),
+    )?;
+    Ok((html, bindings.into_iter().map(sibling_binding).collect()))
+}
+
+/// Resolve a scope node's operand (`"de"`, a variable, a filter chain) to
+/// the STRING the Python scope hook receives (#2558).
+///
+/// Literals FIRST through the ONE literal recogniser (`django_literal`,
+/// #2376): `{% language "de" %}` is a quoted literal, and the resolver
+/// channels do not strip quotes — a miss here would hand the override an
+/// empty string and silently deactivate instead of switching (fixed in the
+/// first pass of this row after the probe showed `{% timezone
+/// "Europe/Paris" %}` rendering UTC). A miss resolves to `""`, which
+/// `translation.override("")` maps to `None` — Django's deactivate-all
+/// semantics for a missing operand.
+fn scope_operand_string(expr: &str, context: &Context) -> String {
+    if let Some((value, _)) = django_literal(expr) {
+        return value_to_arg_string(&value);
+    }
+    match resolve_tag_operand_value(expr, context) {
+        Some(Value::Missing) | None => String::new(),
+        Some(value) => value_to_arg_string(&value),
+    }
+}
+
+/// Render a [`Node::Language`] (#2558): enter the Python-side override,
+/// render the children in Rust, exit on BOTH paths — a raising child must
+/// not leak the language into the thread's next render.
+fn render_language_scope<L: TemplateLoader>(
+    expr: &str,
+    children: &[Node],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    let lang = scope_operand_string(expr, context);
+    let token = crate::registry::language_scope_enter(&lang)
+        .map_err(|e| DjangoRustError::TemplateError(format!("language scope enter failed: {e}")))?;
+    let result = render_nodes_with_loader(children, context, loader);
+    if let Err(exit_err) = crate::registry::language_scope_exit(token.as_ref()) {
+        if result.is_ok() {
+            return Err(DjangoRustError::TemplateError(format!(
+                "language scope exit failed: {exit_err}"
+            )));
+        }
+    }
+    result
+}
+
+/// Render a [`Node::Timezone`] (#2558) — the timezone twin of
+/// [`render_language_scope`].
+fn render_timezone_scope<L: TemplateLoader>(
+    expr: &str,
+    children: &[Node],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
+    let zone = scope_operand_string(expr, context);
+    let token = crate::registry::timezone_scope_enter(&zone)
+        .map_err(|e| DjangoRustError::TemplateError(format!("timezone scope enter failed: {e}")))?;
+    let result = render_nodes_with_loader(children, context, loader);
+    if let Err(exit_err) = crate::registry::timezone_scope_exit(token.as_ref()) {
+        if result.is_ok() {
+            return Err(DjangoRustError::TemplateError(format!(
+                "timezone scope exit failed: {exit_err}"
+            )));
+        }
+    }
+    result
 }
 
 /// A registry [`crate::registry::HandlerBinding`] as a [`SiblingBinding`].
@@ -1301,33 +1540,21 @@ fn strip_quotes(token: &str) -> Option<&str> {
     None
 }
 
-/// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared
-/// `RESOLVE_ARG_POSITIONS` policy (#2041).
-///
-/// Django never resolves an assign tag's keyword/name operands (e.g.
-/// `{% regroup <source> by <attr> as <var> %}`'s `by` / `<attr>` / `as` /
-/// `<var>`) against the outer context — only the source *expression*. The
-/// Rust engine historically resolved *every* arg via [`resolve_tag_arg`],
-/// so a context variable named like the `<attr>` token (djust auto-exposes
-/// public view attrs) shadowed the per-item lookup: `<attr>` arrived as
-/// that variable's value instead of the literal attribute name, and the
-/// grouping was silently wrong.
-///
-/// A handler opts into literal operands by declaring a
-/// `RESOLVE_ARG_POSITIONS` set (`{0}` for `regroup` — resolve only the
-/// source). Positions in the set are resolved via [`resolve_tag_arg`]
-/// (JSON-encoding structured values); every other position is passed
-/// through as a raw token. When the handler declares no policy the set is
-/// `None` and every arg is resolved — the historical default, unchanged
-/// for any future assign tag that doesn't opt in.
-///
-/// This is the single arg-resolution entry point for ALL FOUR assign-tag
-/// dispatch sites (`render_nodes_with_loader`, `render_nodes_collecting`,
-/// `render_nodes_partial`, and the individual `render_node_with_loader`
-/// arm) — the #1646 parallel-path cure, so the operand-mask can never drift
-/// between them.
-/// Localize a bare number for output, leaving every other value untouched.
-///
+// Localize a bare number for output, leaving every other value untouched.
+thread_local! {
+    /// The `{% localize %}` scope stack (#2558): the innermost
+    /// `{% localize on|off %}` block's flag, mirroring Django's
+    /// `Context.use_l10n` flag. Entered/exited lexically by the
+    /// `Node::Localize` arm in the same call frame.
+    static USE_L10N_STACK: std::cell::RefCell<Vec<bool>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Is the innermost `{% localize %}` scope (if any) forcing l10n OFF?
+fn use_l10n_forced_off() -> bool {
+    USE_L10N_STACK.with(|s| s.borrow().last().copied() == Some(false))
+}
+
 /// One function rather than the expression inlined twice, so the two
 /// variable-output sites cannot drift (#1646).
 fn localize_if_number(value: &Value) -> String {
@@ -1387,7 +1614,15 @@ fn localize_if_number(value: &Value) -> String {
         // digits-and-a-point guard rejects `Infinity`/`NaN`, so no locale can
         // put a thousand separator inside one.
         Value::Integer(_) | Value::Float(_) | Value::Decimal(_) | Value::BigInt(_) => {
-            djust_core::locale::localize_number(&value.to_string())
+            // Inside `{% localize off %}` (#2558) the raw triple is used —
+            // Django's `render_value_in_context` localizes only when
+            // `context.use_l10n` is on. The date half of the same block
+            // (bare `{{ date }}`) is the #2221 piece-3 residue.
+            if use_l10n_forced_off() {
+                djust_core::locale::localize_number_unlocalized(&value.to_string(), false)
+            } else {
+                djust_core::locale::localize_number(&value.to_string())
+            }
         }
         _ => value.to_string(),
     }
@@ -1414,6 +1649,31 @@ fn plain_args(texts: Vec<String>) -> Vec<TagArg> {
     texts.into_iter().map(TagArg::plain).collect()
 }
 
+/// Resolve an [`Node::AssignTag`]'s args, honoring the handler's declared
+/// `RESOLVE_ARG_POSITIONS` policy (#2041).
+///
+/// Django never resolves an assign tag's keyword/name operands (e.g.
+/// `{% regroup <source> by <attr> as <var> %}`'s `by` / `<attr>` / `as` /
+/// `<var>`) against the outer context — only the source *expression*. The
+/// Rust engine historically resolved *every* arg via [`resolve_tag_arg`],
+/// so a context variable named like the `<attr>` token (djust auto-exposes
+/// public view attrs) shadowed the per-item lookup: `<attr>` arrived as
+/// that variable's value instead of the literal attribute name, and the
+/// grouping was silently wrong.
+///
+/// A handler opts into literal operands by declaring a
+/// `RESOLVE_ARG_POSITIONS` set (`{0}` for `regroup` — resolve only the
+/// source). Positions in the set are resolved via [`resolve_tag_arg`]
+/// (JSON-encoding structured values); every other position is passed
+/// through as a raw token. When the handler declares no policy the set is
+/// `None` and every arg is resolved — the historical default, unchanged
+/// for any future assign tag that doesn't opt in.
+///
+/// This is the single arg-resolution entry point for ALL FOUR assign-tag
+/// dispatch sites (`render_nodes_with_loader`, `render_nodes_collecting`,
+/// `render_nodes_partial`, and the individual `render_node_with_loader`
+/// arm) — the #1646 parallel-path cure, so the operand-mask can never drift
+/// between them.
 fn resolve_assign_tag_args(name: &str, args: &[String], context: &Context) -> Vec<String> {
     let resolve_positions = crate::registry::assign_handler_resolve_positions(name);
     args.iter()
@@ -2931,7 +3191,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // (e.g. `{% cycle a|md ... %}`) must NOT be re-escaped, matching the
             // Variable/InlineIf arms (#1660). `runtime_safe` is true ONLY when
             // the LAST filter produced a genuine SafeString → fail-safe.
-            let (resolved, runtime_safe) = get_value_safe_ignoring_failures(val.trim(), context)?;
+            // `_("…")` literals first (#2558): the translatable literal is
+            // not a variable, and the failure-ignoring resolver answers
+            // Missing for it — `{% cycle c %}` over `_()` operands rendered
+            // "" where Django renders the translated text (i18n14).
+            let (resolved, runtime_safe) = match django_literal(val.trim()) {
+                Some((value, true)) => (value, true),
+                Some((value, false)) => (value, false),
+                None => get_value_safe_ignoring_failures(val.trim(), context)?,
+            };
             let output = if matches!(resolved, Value::Missing) {
                 // An unresolved operand renders NOTHING, and the comment this
                 // replaces claimed the opposite ("output the raw name (Django
@@ -3055,6 +3323,48 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // its updates.
             let (html, _bindings) = call_custom_tag(name, args, context)?;
             Ok(html)
+        }
+
+        Node::RawBlockCustomTag { name, args, body } => {
+            // The raw-body kind (#2558). A standalone render has no sibling
+            // to hand bindings to, so they are dropped here, exactly as the
+            // `Node::CustomTag` arm above drops its own.
+            let (html, _bindings) = call_raw_block_tag(name, args, body, context)?;
+            Ok(html)
+        }
+
+        Node::Language { expr, children } => render_language_scope(expr, children, context, loader),
+
+        Node::Timezone { expr, children } => render_timezone_scope(expr, children, context, loader),
+
+        Node::Localize { use_l10n, children } => {
+            // Django's `LocalizeNode` toggles `context.use_l10n` and
+            // restores it after (`l10n.py:31-36`); the restore runs on the
+            // error path too. A lexical scope entered and exited in the
+            // same call frame needs no Context plumbing — one thread-local
+            // stack is the whole mechanism (#2558).
+            USE_L10N_STACK.with(|s| s.borrow_mut().push(*use_l10n));
+            let result = render_nodes_with_loader(children, context, loader);
+            USE_L10N_STACK.with(|s| {
+                s.borrow_mut().pop();
+            });
+            result
+        }
+
+        Node::LocalTime { use_tz, children } => {
+            // Django's `LocalTimeNode` toggles `context.use_tz` (`tz.py:92-106`).
+            // `off` clears the active zone so aware datetimes stop converting
+            // inside the block; `on` leaves whatever the render env pushed
+            // (the restore is the saved value either way).
+            let prev = crate::timezone::active_timezone_name();
+            if !*use_tz {
+                crate::timezone::set_active_timezone(None);
+            }
+            let result = render_nodes_with_loader(children, context, loader);
+            if !*use_tz {
+                crate::timezone::set_active_timezone(prev.as_deref());
+            }
+            result
         }
     }
 }
@@ -3976,6 +4286,27 @@ fn bare_dotted_path(expr: &str) -> Option<&str> {
 /// existed — narrower is the direction a literal recognizer may fail in,
 /// because the alternative is inventing a value Django would not.
 pub(crate) fn django_literal(expr: &str) -> Option<(Value, bool)> {
+    // The `_("…")` translatable literal (#2558, `base.py:833-840`). Django
+    // marks the inner literal SAFE and translates at resolve time, doubling
+    // `%` first — `{{ _("100%") }}` renders `100%%` on Django, its own quirk
+    // (`base.py:862`: the doubling is undone by `TranslateNode`, not by the
+    // variable). Reproduced, not "fixed". The translator is consulted per
+    // RENDER so the active language is read live; with none installed the
+    // %-doubled msgid comes back, which is Django's `USE_I18N=False`
+    // answer (`gettext_lazy` with no activation).
+    if expr.starts_with("_(") && expr.ends_with(')') && expr.len() > 4 {
+        let inner = &expr[2..expr.len() - 1];
+        let quote = inner.chars().next()?;
+        if (quote == '"' || quote == '\'') && inner.len() >= 2 && inner.ends_with(quote) {
+            let unescaped = inner[quote.len_utf8()..inner.len() - quote.len_utf8()]
+                .replace(&format!("\\{quote}"), &quote.to_string())
+                .replace("\\\\", "\\");
+            let msgid = unescaped.replace('%', "%%");
+            let translated =
+                crate::registry::translate_msgid(&msgid).unwrap_or_else(|| msgid.clone());
+            return Some((Value::String(translated), true));
+        }
+    }
     if expr.contains('.') || expr.contains(['e', 'E']) {
         // `"2."` is invalid — Django re-raises after the successful `float()`.
         if !expr.ends_with('.') {
@@ -4022,6 +4353,30 @@ pub(crate) fn django_literal(expr: &str) -> Option<(Value, bool)> {
         .replace(&format!("\\{quote}"), &quote.to_string())
         .replace("\\\\", "\\");
     Some((Value::String(unescaped), true))
+}
+
+/// A filter ARGUMENT that is an `_()` literal, translated (#2558).
+///
+/// The filter-argument channel strips surrounding quotes before it reaches
+/// the filters, so `_("Password")` arrives WHOLE and never hits
+/// [`django_literal`] the way a `{{ }}` expression does. ONE helper, called
+/// at the ONE entry every builtin filter's argument flows through
+/// (`filters::apply_filter_full_safe`) plus the custom-filter literal arm
+/// (`filter_registry.rs`, which already consults `django_literal`) — so a
+/// fourth arg site cannot appear blind (the #1125 count-pin in
+/// `test_i18n_tags_bridge_2558.py` enforces the call).
+///
+/// `Some(translated)` only for the exact `_(`…`)` shape; every other
+/// argument (quoted literal, bare name, number) passes through unchanged.
+pub(crate) fn translate_underscore_arg(arg: &str) -> Option<String> {
+    if !arg.starts_with("_(") || !arg.ends_with(')') || arg.len() <= 4 {
+        return None;
+    }
+    match django_literal(arg) {
+        // The `safe` grant is irrelevant on this channel; only the value is.
+        Some((Value::String(translated), _)) => Some(translated),
+        _ => None,
+    }
 }
 
 /// `[-]digits` too large for `i64`, as [`Value::BigInt`] requires (#2260).
