@@ -89,6 +89,7 @@ def _is_user_raised(exc: BaseException) -> bool:
     from django.core.exceptions import BadRequest, PermissionDenied, SuspiciousOperation
     from django.http import Http404
     from django.http.multipartparser import MultiPartParserError
+    from django.urls import NoReverseMatch
 
     # An exception that came out of a bridged Django template library — the
     # library's own code (`RuntimeError("I am a bad tag")`), Django's
@@ -99,9 +100,22 @@ def _is_user_raised(exc: BaseException) -> bool:
     # ``template_libraries._raised_by_library``.
     from ..template_libraries import raised_by_library
 
+    # `NoReverseMatch` (#2563): `{% url %}` on a missing pattern is a
+    # project-code condition Django reports BY TYPE — its own suite asserts
+    # `assertRaises(NoReverseMatch)` — and the DEBUG page names the pattern
+    # only if the type survives. Reached from BOTH url paths: the Python
+    # pre-pass raises it directly, and the Rust `CustomTag` handler's raise
+    # now crosses the boundary whole (`DjangoRustError::PythonException`).
     return raised_by_library(exc) or isinstance(
         exc,
-        (Http404, PermissionDenied, MultiPartParserError, BadRequest, SuspiciousOperation),
+        (
+            Http404,
+            PermissionDenied,
+            MultiPartParserError,
+            BadRequest,
+            SuspiciousOperation,
+            NoReverseMatch,
+        ),
     )
 
 
@@ -715,7 +729,15 @@ class DjustTemplate:
                 )
                 return match.group(0)
 
-            # Resolve the URL
+            # Resolve the URL — Django's `URLNode.render` shape (#2563):
+            # `url = ""`, reverse, and on `NoReverseMatch` re-raise UNLESS
+            # `as var` was given, in which case the variable holds the empty
+            # string. Until #2563 this raised even under `as var` (Django's
+            # `test_url_asvar03` was an ERROR) and re-wrapped the message,
+            # losing Django's "with no arguments not found. N pattern(s)
+            # tried: […]" text. A bare `raise` keeps Django's exception and
+            # Django's message.
+            url = ""
             try:
                 url = cast(
                     str,
@@ -723,20 +745,16 @@ class DjustTemplate:
                         url_name, args=args if args else None, kwargs=kwargs if kwargs else None
                     ),
                 )
+            except NoReverseMatch:
+                if as_variable is None:
+                    raise
 
-                if as_variable:
-                    # Store in context and return empty string
-                    # We'll handle this by adding to context_dict
-                    context_dict[as_variable] = url
-                    return ""
-                else:
-                    return url
-            except NoReverseMatch as e:
-                # Re-raise to match Django's behavior
-                raise NoReverseMatch(
-                    f"Reverse for '{url_name}' not found. "
-                    f"'{url_name}' is not a valid view function or pattern name."
-                ) from e
+            if as_variable:
+                # Store in context and return empty string
+                # We'll handle this by adding to context_dict
+                context_dict[as_variable] = url
+                return ""
+            return url
 
         # Replace all {% url %} tags
         return self._URL_TAG_RE.sub(replace_url_tag, template_source)

@@ -644,9 +644,7 @@ fn sibling_updates<L: TemplateLoader>(
                 &context_map,
                 raw_py,
             )
-            .map_err(|e| {
-                DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
-            })?;
+            .map_err(|e| handler_call_error("Assign tag", name, e))?;
             Ok(Some(SiblingEffect::silent(
                 updates
                     .into_iter()
@@ -756,10 +754,26 @@ fn call_custom_tag(
     }
     let html =
         crate::registry::call_handler_with_py_sidecar(name, &resolved_args, &context_map, raw_py)
-            .map_err(|e| {
-            DjangoRustError::TemplateError(format!("Custom tag '{}' error: {}", name, e))
-        })?;
+            .map_err(|e| handler_call_error("Custom tag", name, e))?;
     Ok((html, Vec::new()))
+}
+
+/// Attribute a registry call's failure to its tag — unless it is the
+/// handler's own Python exception, which crosses WHOLE (#2563).
+///
+/// The ONE mapping for the three sidecar call sites (custom, block, assign —
+/// #1646). A registry-side failure (no handler, a non-string return, a
+/// context that would not convert) is an ENGINE error and keeps the
+/// `"<kind> '<name>' error: …"` prefix `DjustTemplate.render` reads for its
+/// hint. A `DjangoRustError::PythonException` is the project's own exception
+/// — `NoReverseMatch`, `PermissionDenied`, a library's `RuntimeError` — and
+/// wrapping it would flatten the type Django's callers dispatch on; it is
+/// passed through untouched, as `call_handler_with_bindings` already did.
+fn handler_call_error(kind: &str, name: &str, err: DjangoRustError) -> DjangoRustError {
+    match err {
+        DjangoRustError::PythonException(_) => err,
+        other => DjangoRustError::TemplateError(format!("{kind} '{name}' error: {other}")),
+    }
 }
 
 /// Resolve a [`Node::BlockCustomTag`]'s args, honouring the handler's
@@ -826,7 +840,7 @@ fn call_block_custom_tag<L: TemplateLoader>(
         &context_map,
         raw_py,
     )
-    .map_err(|e| DjangoRustError::TemplateError(format!("Block tag '{}' error: {}", name, e)))?;
+    .map_err(|e| handler_call_error("Block tag", name, e))?;
     Ok((html, Vec::new()))
 }
 
@@ -926,12 +940,28 @@ fn value_to_arg_string(v: &Value) -> String {
 /// carried across the boundary.
 fn resolve_custom_tag_args(name: &str, args: &[String], context: &Context) -> Vec<TagArg> {
     let resolve_positions = crate::registry::tag_handler_resolve_positions(name);
+    // Django's `as var` tail (#2563): for a handler that declared
+    // `ACCEPTS_AS_VAR`, the last two tokens are `as` + a NAME when the
+    // second-last token is the literal `as` — exactly Django's
+    // `bits[-2] == "as"` test in `url()`. They are names, not values:
+    // resolving them handed the handler two empty strings and no way to tell
+    // `{% url named as v %}` from `{% url named "" "" %}`. Passed as tokens,
+    // with no grant, like every other passthrough position.
+    let as_tail_start = if crate::registry::tag_handler_accepts_as_var(name)
+        && args.len() >= 2
+        && args[args.len() - 2] == "as"
+    {
+        args.len() - 2
+    } else {
+        usize::MAX
+    };
     args.iter()
         .enumerate()
         .map(|(position, arg)| {
-            if resolve_positions
-                .as_ref()
-                .is_some_and(|declared| !declared.contains(&position))
+            if position >= as_tail_start
+                || resolve_positions
+                    .as_ref()
+                    .is_some_and(|declared| !declared.contains(&position))
             {
                 // A position the handler wants LITERAL. Passed exactly as the
                 // template wrote it — quotes, dots and all — and with NO
@@ -3008,9 +3038,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 &context_map,
                 raw_py,
             )
-            .map_err(|e| {
-                DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
-            })?;
+            .map_err(|e| handler_call_error("Assign tag", name, e))?;
             Ok(String::new())
         }
 

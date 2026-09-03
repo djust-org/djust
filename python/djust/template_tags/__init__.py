@@ -41,7 +41,7 @@ compatibility with Django's URL resolution and static file handling.
 
 import logging
 import re
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Type
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +107,28 @@ class TagHandler:
     #: ``read_resolve_positions`` the assign registry uses (#2041).
     RESOLVE_ARG_POSITIONS: ClassVar[Optional[Set[int]]] = None
 
-    def render(self, args: List[str], context: Dict[str, Any]) -> str:
+    #: Opt in to the ``(output, bindings)`` return (#2547): ``render`` then
+    #: returns a 2-tuple whose dict binds names for the sibling nodes that
+    #: follow the tag (Django's ``as var``), and a Python exception the
+    #: handler raises crosses the Rust boundary WHOLE, with its type. The
+    #: default keeps the historical ``str`` contract.
+    RETURNS_BINDINGS: ClassVar[bool] = False
+
+    #: With ``RETURNS_BINDINGS``, take Django's trailing ``as <name>`` as two
+    #: literal TOKENS (``"as"``, ``"<name>"``) instead of two resolved
+    #: variables — Django's ``bits[-2] == "as"`` rule (#2563). The
+    #: registry refuses this without ``RETURNS_BINDINGS``.
+    ACCEPTS_AS_VAR: ClassVar[bool] = False
+
+    def render(
+        self, args: List[str], context: Dict[str, Any]
+    ) -> Union[str, Tuple[str, Dict[str, Any]]]:
         """
         Render the template tag and return the output string.
+
+        A handler that declares ``RETURNS_BINDINGS = True`` returns
+        ``(output, bindings)`` instead (#2547); every other handler returns
+        the output ``str``.
 
         Parameters
         ----------
@@ -134,7 +153,8 @@ class TagHandler:
         Returns
         -------
         str
-            The rendered output to insert in the template.
+            The rendered output to insert in the template — or, under
+            ``RETURNS_BINDINGS``, ``(output, {name: value})``.
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement render(args, context)")
 
